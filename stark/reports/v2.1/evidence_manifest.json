@@ -1,0 +1,155 @@
+{
+  "report": "APEX_M0_v2.1_G4_capability_G7_rootcause_report",
+  "date": "2026-10-05",
+  "repository": "stark/ (STARK-006)",
+  "supersedes": ["reports/M0_FINAL_REPORT_v2.0.md"],
+  "preserves": ["reports/M0_FINAL_REPORT_v2.0.md", "reports/historical_artifact_inventory.json", "reports/evidence_manifest.json", "reports/sha256sums_v20.txt"],
+  "v2_0_evidence_modified": false,
+  "git_revision": "UNAVAILABLE - no .git directory; source identity via SHA-256",
+  "overall_decision": "FAIL",
+  "overall_reason": "G4 is corrected from PASS to FAIL (the host physically has an NVIDIA RTX 2050; the recovered records carry no physical-capability evidence and no measured VRAM). G7 remains FAIL (genuine, reproducible measurement variance). G1 and G3 now PASS over the separate v2.1 candidate evidence set, but the historical nine-record set still lacks PROFILE and E2/B4/B5. Historical completeness (24 observed / 9 recovered / 15 missing) is unresolved.",
+  "m1_status": "LOCKED - not started",
+
+  "g4_correction": {
+    "v2_0_result": "PASS",
+    "v2_1_result": "FAIL",
+    "root_cause": "device_capability() treated cuda_available=false (a build fact) as proof of CPU-only hardware. This host physically has an NVIDIA GeForce RTX 2050; the flag is false only because the binary was built without CUDA.",
+    "fix": "Added hardware.gpu_present (OS device-inventory physical presence, CUDA-build independent); device_capability now classifies CPU-only ONLY on gpu_present=false, and Unknown fails closed.",
+    "detail_file": "reports/v2.1/g4_hardware_capability_audit.json"
+  },
+
+  "physical_hardware_evidence": {
+    "host_gpu_capable": true,
+    "cim_inventory": ["Intel(R) UHD Graphics", "NVIDIA GeForce RTX 2050 (AdapterRAM 4293918720, driver 32.0.16.1714)"],
+    "production_profiler": "archive_recovery/v21_evidence/P1-PROFILE-24-0.json -> hardware.gpu_present=true, provenance lists NVIDIA GeForce RTX 2050",
+    "cuda_in_this_build": false,
+    "spec_target_confirmation": "design/V009_phase1_M0_specification.md names the target hardware as HP Victus i5-12450H + RTX 2050 4 GB"
+  },
+
+  "gate_results_over_v2_1_candidate_evidence": {
+    "input": "archive_recovery/v21_evidence/ (9 recovered records + genuine PROFILE/TELEMETRY + genuine E2/B4/B5 skip = 14 records)",
+    "G1": "PASS (genuine PROFILE record; cpu/ram/storage present; provenance complete)",
+    "G2": "PASS (E1 and E5 present, distinct, >=10 samples)",
+    "G3": "PASS (E2/B4/B5 present as SKIPPED with a precise, build-scoped reason)",
+    "G4": "FAIL (physical capability Unknown for the recovered records; and this GPU-capable host has no measured VRAM in them)",
+    "G5": "PASS",
+    "G6": "PASS",
+    "G7": "FAIL (B6 16.13%; B7 18.38%/21.26%; B9 27.65%/28.18%/48.04%; unchanged)"
+  },
+  "gate_results_over_recovered_nine_only": {
+    "G1": "FAIL (no PROFILE record)",
+    "G2": "PASS",
+    "G3": "FAIL (no E2/B4/B5 records)",
+    "G4": "FAIL (Unknown physical capability; fail closed)",
+    "G5": "PASS",
+    "G6": "PASS",
+    "G7": "FAIL"
+  },
+
+  "g7_root_cause": {
+    "verdict": "FAIL retained; genuine measurement variance, not data corruption or grouping error",
+    "detail_file": "reports/v2.1/g7_root_cause_analysis.md",
+    "fresh_repeats": {
+      "runs": "6x E1 + 6x E5 (Release build) in archive_recovery/v21_diagnostics/",
+      "B6": "12 runs, median spread 59.06%, 35/66 pairs > 15%",
+      "B7": "12 runs, median spread 19.03%, 5/66 pairs > 15%",
+      "B9": "12 runs, median spread 59.78%, 19/66 pairs > 15%"
+    },
+    "primary_cause": "n=10 samples with 5.8%-47% intra-run CV => median sampling error comparable to the 15% tolerance",
+    "contributors": ["scheduler/timer jitter at 200us-1ms scale", "no CPU affinity / power pinning (thread_count=0)", "warmup=3 (minimum)", "batch/time separation (~23s) between historical runs", "turbo/thermal drift on a laptop"],
+    "not_causes": ["stored medians all equal recomputed medians (0.001% check passes 9/9)", "identical serialized configuration within groups", "outputs_bit_identical=true for B6/B9"],
+    "frozen_rule_consequence": "The existing historical set permanently fails G7 under the frozen rule; no reanalysis can repair it.",
+    "remediation_choices_for_future": ["raise measurement_count (10 -> 100-200)", "longer warmup", "CPU affinity + fixed power plan", "batched timing", "explicitly REJECT loosening the +/-15% tolerance"],
+    "thresholds_or_grouping_changed": false
+  },
+
+  "g1_g3_evidence": {
+    "detail_file": "reports/v2.1/missing_gate_evidence.md",
+    "g1_record": "archive_recovery/v21_evidence/P1-PROFILE-24-0.json",
+    "g3_records": ["archive_recovery/v21_evidence/P1-E2-skip.json", "archive_recovery/v21_evidence/P1-B4-skip.json", "archive_recovery/v21_evidence/P1-B5-skip.json"],
+    "recovered_records_modified": false,
+    "fabricated_records": 0
+  },
+
+  "historical_completeness": {
+    "records_observed_in_original_archive": 24,
+    "records_currently_recovered": 9,
+    "records_missing": 15,
+    "recovered_validated": 9,
+    "missing_recovered_or_used": 0,
+    "completeness_status": "UNRESOLVED",
+    "source_archive_sha256": "cb5e85e8b446ef0a0c0acf64f4151142489a73c9a9cb0cb5c6f5d28e92fdc733",
+    "source_archive_sha256_verification": "manifest-asserted only (original .zip not present for independent re-hash)",
+    "note": "The 24-record count is a reviewer-supplied external observation; it is not re-derivable from the project. The nine recovered records are not claimed complete."
+  },
+
+  "aggregator_evidence": {
+    "inputs": 17,
+    "configs": ["debug", "release"],
+    "modes": ["normal", "--strict"],
+    "runs": 68,
+    "debug_release_agree": true,
+    "crashes": 0,
+    "matrix": "reports/v2.1-aggregator/matrix.txt",
+    "candidate_evidence_set": "archive_recovery/v21_evidence/",
+    "unchanged_recovered_input": "archive_recovery/aggregator_input/",
+    "new_fixtures": [
+      "fixtures/v21/controlled-gpu-cuda-off (G4 FAIL, exit 1)",
+      "fixtures/v21/controlled-gpu-vram-measured (all gates PASS, exit 0)",
+      "fixtures/v21/controlled-unknown-capability (G4 FAIL, exit 1)"
+    ],
+    "fresh_v21_binaries_match_v18_output": true
+  },
+
+  "build_evidence": {
+    "source_changed": true,
+    "fresh_build_dirs": ["stark/build-v21-debug", "stark/build-v21-release"],
+    "configure_exit": {"debug": 0, "release": 0},
+    "build_exit": {"debug": 0, "release": 0},
+    "targets": {"debug": "103/103", "release": "103/103"},
+    "compile_errors": {"debug": 0, "release": 0},
+    "ctest_exit": {"debug": 0, "release": 0},
+    "ctest_passed": {"debug": "6/6", "release": "6/6"},
+    "assertions": {"test_phase1_profiler": 35, "test_phase1_accounting": 67, "test_phase1_budget": 55, "test_phase1_records": 54, "test_phase1_reproducibility": 37, "test_phase1_gates": 340, "failures": 0},
+    "legacy_tests_not_in_ctest": ["test_neuron", "test_params", "test_synapse", "test_integration", "test_network", "test_stdp", "test_homeostasis", "test_three_factor", "test_serialization"],
+    "legacy_ctest_coverage_warning": "Only the 6 Phase-1 suites are registered with CTest; 9 legacy STARK test executables build and exit 0 but are not run by ctest."
+  },
+
+  "source_sha256_after_v2_1": {
+    "src/phase1/gates.cpp": "32d89a4fd02ddb302ab1747bcd8f5544284ca02994398ce8bed7c8f913e51849",
+    "src/phase1/common/HardwareProfiler.h": "44242286cf8c803c23c8f7184c1858984def2a840af44e1925407aadaeb3d358",
+    "src/phase1/common/HardwareProfiler.cpp": "43a795ed265ef5050dd53b9731ebd81976fade373db7c6ac47ce8ca3dfc98274",
+    "src/phase1/baselines/run_baseline.cpp": "0c06b778d496dd6663183893014e4b3299e2bc88863f2620227feb94dd93c226",
+    "tests/test_phase1_gates.cpp": "8c584a03136fb36fc4583d7ed1536b0752155ef7cf930ce1381d3b44768ecdb8",
+    "CMakeLists.txt": "cf8c7ad6c53c05b4e8180e063cdf9fa639f75fe8a752fa685883dc4f1d56e056"
+  },
+  "source_sha256_before_v2_1": {
+    "src/phase1/gates.cpp": "7fd240a8b486b9f85703fe6cf38966c4914794ccb0b4a829b455f03c43b070e2",
+    "tests/test_phase1_gates.cpp": "15110df5f78d9131a2e626ae7b834b4ee6a80958da274160d3edc70b818d44b5",
+    "src/phase1/common/HardwareProfiler.h": "not previously recorded",
+    "src/phase1/common/HardwareProfiler.cpp": "not previously recorded",
+    "src/phase1/baselines/run_baseline.cpp": "not previously recorded",
+    "CMakeLists.txt": "cf8c7ad6c53c05b4e8180e063cdf9fa639f75fe8a752fa685883dc4f1d56e056"
+  },
+
+  "sha256_evidence_list": {
+    "file": "reports/sha256sums_v21.txt",
+    "entries_in_list": 106,
+    "entries_verified": 106,
+    "entries_failed": 0
+  },
+
+  "compliance": {
+    "m1_started": false,
+    "thresholds_modified": false,
+    "g7_grouping_changed": false,
+    "historical_records_modified": false,
+    "historical_samples_modified": false,
+    "recovered_records_overwritten": false,
+    "external_archive_searched": false,
+    "missing_records_fabricated": false,
+    "v2_0_evidence_preserved": true,
+    "production_source_changed": true,
+    "generated_build_files_hand_edited": false
+  }
+}

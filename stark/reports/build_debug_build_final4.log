@@ -1,0 +1,3 @@
+ninja: Entering directory `build-debug-clean-2'
+[1/2] Building CXX object CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj
+[2/2] Linking CXX executable aggregate.exe

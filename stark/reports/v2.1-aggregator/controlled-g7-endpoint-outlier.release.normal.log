@@ -1,0 +1,37 @@
+=== STARK Phase 1 (M0) Aggregator ===
+records directory: fixtures/controlled-g7-endpoint-outlier
+records found: 10
+
+STATUS SUMMARY:
+  B2: 3 record(s)
+  B4: 1 record(s)
+  B5: 1 record(s)
+  E1: 1 record(s)
+  E2: 1 record(s)
+  E5: 1 record(s)
+  PROFILE: 1 record(s)
+  TELEMETRY: 1 record(s)
+  PASSED=7 FAILED=0 SKIPPED=3 NOT_ATTEMPTED=0
+
+GATE RESULTS:
+  [PASS] G1 hardware profile collected
+         cpu=12th Gen Intel(R) Core(TM) i5-12450H, ram_total=25392844800
+  [PASS] G2 CPU baselines present and complete
+         E1 and E5 present, distinct, each with >=10 samples
+  [PASS] G3 GPU branch complete-or-skipped with reason
+         B5: SKIPPED — skipped: no CUDA device / binary built without CUDA (spec G3 skipped-branch)
+  [PASS] G4 peak memory measured
+         E1 and E5 present, PASSED, RAM peak measured; VRAM source documented per schema
+  [PASS] G5 parameter accounting consistent
+         all accounting records pass G5 checks
+  [PASS] G6 budget evaluator rejects over-budget demands
+         VRAM-only violation detected; compute fields informational
+  [FAIL] G7 same-config medians reproducible across repeats
+         B2: stored median mismatch: stored=0.000255, recomputed=0.000284 (diff=10.000000%, allowed=0.001000%)
+B2: stored median mismatch: stored=0.000227, recomputed=0.000284 (diff=20.000000%, allowed=0.001000%)
+B2: record P1-B2-r2 rejected: B2: stored median mismatch: stored=0.000255, recomputed=0.000284 (diff=10.000000%, allowed=0.001000%)
+B2: record P1-B2-r3 rejected: B2: stored median mismatch: stored=0.000227, recomputed=0.000284 (diff=20.000000%, allowed=0.001000%)
+missing independent repeat for B2 (only 1 valid median execution(s)); insufficient evidence
+
+
+OVERALL: FAIL (1 gate(s) failed)

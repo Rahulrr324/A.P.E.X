@@ -1,0 +1,18 @@
+ninja: Entering directory `build-release-clean-3'
+[1/2] Building CXX object CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj
+FAILED: [code=1] CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -I"E:/My Local AI/stark/src/phase1" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj -MF CMakeFiles\aggregate.dir\src\phase1\aggregate.cpp.obj.d -o CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj -c "E:/My Local AI/stark/src/phase1/aggregate.cpp"
+E:/My Local AI/stark/src/phase1/aggregate.cpp: In function 'int {anonymous}::run(int, char**)':
+E:/My Local AI/stark/src/phase1/aggregate.cpp:260:46: error: 'Type' has not been declared; did you mean 'typeof'?
+  260 |                 } else if (!(ram_p.type() == Type::Number || ram_p.isObject())) {
+      |                                              ^~~~
+      |                                              typeof
+E:/My Local AI/stark/src/phase1/aggregate.cpp:263:44: error: 'Type' has not been declared; did you mean 'typeof'?
+  263 |                 } else if (ram_p.type() == Type::Number) {
+      |                                            ^~~~
+      |                                            typeof
+E:/My Local AI/stark/src/phase1/aggregate.cpp:289:91: error: 'Type' has not been declared; did you mean 'typeof'?
+  289 |                     if (!pm.has("vram_peak_bytes") || pm.get("vram_peak_bytes").type() != Type::Number) {
+      |                                                                                           ^~~~
+      |                                                                                           typeof
+ninja: build stopped: subcommand failed.

@@ -1,0 +1,52 @@
+{
+  "gate": "G7 same-config medians reproducible across repeats",
+  "implementation": "src/phase1/gates.cpp (evaluate_gates)",
+  "defects_fixed": [
+    "v1.4: a failed group previously set pass=false, but a later passing group overwrote it back to true; overall result is now initialised PASS and only ever assigned false",
+    "v1.5: comparison was adjacent-only; now EVERY repeat is compared with EVERY other repeat in its group (all-pairs max-spread)",
+    "v1.5: statistics must now exist, be computed, carry >=10 samples and a finite median; profiler/telemetry records (which may carry an informational benchmark_id) are never benchmark evidence"
+  ],
+  "grouping": "by serialized configuration block; independence requires distinct record_id, NOT a shared experiment_id; only kind benchmark|baseline and status PASSED form groups",
+  "formula": "abs(x1-x2)/max(abs(x1),abs(x2))*100",
+  "zero_semantics": "both zero -> 0 percent; exactly one zero -> 100 percent",
+  "tolerances": { "timing_percent": 15, "memory_bandwidth_percent": 20, "bandwidth_benchmarks": ["B3","B5"] },
+  "regression_test": "tests/test_phase1_gates.cpp",
+  "debug_result": "PASS (exit 0)",
+  "release_result": "PASS (exit 0)",
+  "cases_covered": [
+    "all groups pass -> pass",
+    "first group fails, later group passes -> fail (both sort orders)",
+    "first group passes, later group fails -> fail",
+    "single-run group beside a passing repeated group -> fail",
+    "missing repeat -> fail",
+    "duplicate-only repeat (shared record_id) -> fail",
+    "three repeats 100/90/80 (adjacent <=15 percent, endpoints 20 percent) -> fail (all-pairs)",
+    "three repeats all pairwise within tolerance (max 14 percent) -> pass",
+    "four repeats with one outlier -> fail",
+    "reordering the same records does not change the verdict",
+    "exact 15 percent timing boundary -> pass",
+    "just above 15 percent (16 percent) -> fail",
+    "exact 20 percent bandwidth boundary -> pass",
+    "just above 20 percent (21 percent) -> fail",
+    "18 percent on a timing benchmark -> fail",
+    "both zero -> pass; one zero -> fail",
+    "non-finite median (inf / nan) -> fail",
+    "missing statistics on one run -> fail",
+    "computed=false with non-empty samples -> fail",
+    "computed=true with empty samples -> fail",
+    "computed=true with <10 samples -> fail",
+    "PASSED telemetry record carrying benchmark_id is ignored -> pass",
+    "grouping by configuration (E1+E5) -> pass",
+    "grouping by configuration (two same-experiment repeats) -> pass",
+    "multiple groups with mixed outcomes -> fail"
+  ],
+  "real_data": {
+    "build/results": "FAIL (single run per config, no independent repeat)",
+    "build/historical-regen": "FAIL (B6 16.13 percent, B7 18.38 percent, B9 28.18 percent exceed 15 percent)",
+    "fixtures/v14-valid": "FAIL (fresh E1 vs E5 exceed 15 percent)",
+    "fixtures/controlled-valid": "PASS",
+    "fixtures/controlled-g7-endpoint-outlier": "FAIL (B2 endpoints 20 percent, adjacent 10 and 11.11 percent)"
+  },
+  "verdict": "Gate logic VERIFIED by tests; G7 as an M0 acceptance criterion is FAIL on all available real measurement data (see reproducibility_study.md)",
+  "aggregator_exit_on_fail": 1
+}

@@ -1,0 +1,142 @@
+B7 PAIRED-SAMPLE CAPTURE — PHASE 3 STOP REPORT
+date_utc: 2026-10-11T21:04:00Z
+project_root: /e/My Local AI
+status: Phase 3 complete. Awaiting explicit user authorization for the single authorized run (Phase 4).
+
+FILES
+  snapshot/bm_b7_diagnostic.cpp.before        : recoverable pre-change source snapshot
+  snapshot/CMakeLists.txt.before              : recoverable pre-change CMakeLists.txt snapshot
+  diff_source_final.txt                       : unified diff (snapshot -> current source)
+  cmake_configure*.log                        : cmake configure logs
+  ninja_build*.log                            : build logs
+  phase3_stop_report.txt                      : this report
+
+HASHS
+  snapshot/bm_b7_diagnostic.cpp.before sha256:
+    a00d0475c47ee8655100348d629894df16965d1b58a34af0ab1dcc0acd891863
+  snapshot/CMakeLists.txt.before sha256:
+    575fe264921512f41d30267c1c659e3662bbcfd92e71623720f9d047b7dddcc8
+  current stark/CMakeLists.txt sha256:
+    575fe264921512f41d30267c1c659e3662bbcfd92e71623720f9d047b7dddcc8  (unchanged)
+  current stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp sha256:
+    d09c0c29d27c3d42c4bff9fb9597af618fd58dda259c1048a1ef1d694e37ee53
+
+BUILD
+  toolchain:
+    g++  : MinGW-W64 x86_64-ucrt-posix-seh, built by Brecht Sanders, r1, 16.2.0
+    cmake: 4.4.2  (WinLibs bundle)
+    ninja: 1.13.2.git.kitware.jobserver-pipe-1
+  configure:
+    "/c/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/cmake" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_COMPILER=<winlibs g++.exe> \
+      -G Ninja -S stark -B stark/build-b7diag-20261011
+    cmake exit: 0
+  build:
+    "/c/Users/rahul/AppData/Roaming/Python/Python314/Scripts/ninja" -C stark/build-b7diag-20261011 -v bm_b7_diagnostic
+    ninja exit: 0  (after two fix passes; final build log = ninja_build7.log, exit 0)
+  artifact:
+    stark/build-b7diag-20261011/bm_b7_diagnostic.exe
+    sha256: 5894d2e23f17248692dcd17a2a7a7e3e4033dfb90d4ea24f046ae84df37dfcec
+  warnings on final build: 0  (the only cmake warning is the harmless "unused-cli" note for CMAKE_C_COMPILER)
+
+DIFF (snapshot -> current source)
+  Total changed lines: 161  (both additions and the unit-fix removal; file grew by ~140 net lines)
+  Kind 1 — UNIT FIX (already approved in the prior task; retained here):
+    Component-decomposition insertion block changed from
+      open.push_back(sec_to_us(c.open_sec));
+      read.push_back(sec_to_us(c.read_sec));
+      deser.push_back(sec_to_us(c.deser_sec));
+      resid.push_back(sec_to_us(c.residual_sec));
+    to
+      open.push_back(c.open_sec);
+      read.push_back(c.read_sec);
+      deser.push_back(c.deser_sec);
+      resid.push_back(c.residual_sec);
+    summarize() unchanged.
+  Kind 2 — NEW output-only paired-sample capture (added for one authorized run):
+    Added (new):
+      - PairedSample struct (replicate, iteration, minimal_sec, instrumented_sec,
+        signed_overhead_pct)
+      - make_paired_artifact_path(run_dir) -> ".../paired_samples.csv"
+      - PairedArtifact struct + write(run_dir, minimal, instrumented)
+      - write_paired_artifact_if_valid() wiring helper
+      - PairedArtifact paired; local in run_bm_b7_diagnostic
+      - call to write_paired_artifact_if_valid(paired, blob.run_dir, rep.minimal,
+        rep.instrumented) AFTER the schedule loop, BEFORE calibrate/classify/cleanup
+    Nothing removed except the four sec_to_us() calls (Kind 1) which were already
+    approved. No production benchmark, gate, calibrate, classify, threshold,
+    protocol, warmup/measurement/replicate count, or exit-code line changed.
+
+VERIFICATION — PROTOCOL / CALIBRATION UNCHANGED (vs snapshot)
+  calibrate() signature unchanged: line 733 in both snapshot and current.
+  Paired-overhead formula unchanged in calibrate(): line 782 in both snapshot and current.
+  Paired-overhead formula in new artifact writer (line 1205): identical to calibrate():
+    100.0 * (b[j] - a[j]) / a[j]
+  Thresholds unchanged: kCalibMeanOverheadThresholdPct=2.0, kCalibWorstOverheadThresholdPct=10.0,
+    kCalibMedianDeviationThresholdPct=2.0 (lines 157-159 in both).
+  Protocol unchanged: kWarmupIterations=10, kMeasuredIterations=50, kMinMacroReplicates=6
+    (lines 153-155 in both).
+  Exit codes unchanged: !rep.completed -> 2; INSUFFICIENT_REPLICATION -> 3; else 0.
+  No BenchmarkHarness / TinyDenseModel / gate / classify changes in the diff.
+
+VERIFICATION — ARTIFACT CANNOT OVERWRITE EXISTING EVIDENCE
+  1. Path scope: make_paired_artifact_path(run_dir) returns run_dir + "/paired_samples.csv",
+     and run_dir is the run-owned directory created by create_run_owned_blob() under
+     build/bm_b7_diagnostic/ (validated by validate_diagnostic_dir before creation).
+  2. Isolation: before opening for write, validate_diagnostic_path(path) is checked,
+     which enforces: under build/bm_b7_diagnostic/, no absolute paths, no "..", and
+     forbids any path containing campaign/historical/production markers
+     (g7-campaign, g7cam, reports, records, .jsonl, evidence_manifest, gate_results,
+     tiny_dense_2l_weights.bin). So the artifact cannot target historical/production
+     paths even if run_dir were somehow confused.
+  3. No-overwrite: the file is created with exclusive_create_file(path) (O_CREAT|O_EXCL
+     on POSIX; _O_WRONLY|_O_CREAT|_O_EXCL|_O_BINARY on Windows). If the file already
+     exists, fd < 0 and PairedArtifact::write records "cannot create paired artifact
+     (exists or exclusive creation unsupported); nothing overwritten" and returns
+     WITHOUT writing. So a name collision preserves the existing file and does not
+     overwrite it.
+  4. Validity gate: the artifact is written only when every replicate in BOTH conditions
+     is valid (same pre-condition calibrate() requires). If any replicate is invalid,
+     PairedArtifact::write records "refused to write paired artifact: a/an ...
+     replicate is invalid" and returns WITHOUT writing.
+  5. Timing: the write happens AFTER all pairing data exists (post-schedule loop) and
+     BEFORE cleanup.perform() and BEFORE main() renders stdout. So the run-owned blob
+     and run dir still exist when the artifact is written; the artifact itself is
+     NOT removed by BlobCleanup (cleanup.remove only the blob and run dir, never the
+     CSV). Therefore the artifact survives the run.
+  6. Failure mode: every write failure path sets PairedArtifact::note and returns
+     WITHOUT overwriting (fdopen failure, fflush failure, fsync/commit failure, or
+     pre-existing file). No retry-overwrite fallback exists.
+
+VERIFICATION — COMPILATION
+  Final build (ninja_build7.log) exit 0, artifact produced, no warnings on the
+  rebuilt object. Two earlier build failures were fixed in-band:
+    - stray '#' from #ifdef inside function body (RAII struct) -> replaced with
+      fdopen-based C stdio write.
+    - std::filebuf::open(fd,...) not supported in this library -> replaced with fdopen.
+    - _fclose not declared -> replaced with _close(_fileno(f)) on Windows.
+    - write_paired_artifact_if_valid used before declaration -> moved above
+      run_bm_b7_diagnostic.
+  These fixes are all within the output-only capture code; the benchmark operations,
+  timing boundaries, warmups, sampling, condition order, pairing, calibration,
+  classification, and exit codes were not touched to achieve them.
+
+CONCLUSION
+  Phase 3 is complete. The only changes to source are (1) the already-approved unit
+  fix and (2) a new output-only paired-sample CSV artifact that is written before
+  cleanup, is run-unique, cannot overwrite existing evidence, and uses the exact
+  same paired-overhead formula as calibrate(). Protocol, calibration, classification,
+  thresholds, and exit codes are unchanged. The diagnostic builds cleanly.
+
+NEXT STEP — REQUIRES EXPLICIT USER AUTHORIZATION
+  Phase 4: run the isolated diagnostic ONCE under the existing documented conditions
+  (CWD=stark/, default path build/bm_b7_diagnostic), capture stdout, stderr, exit
+  status, and the paired_samples.csv artifact, then compute from the artifact:
+    - top 10 largest absolute paired overheads (replicate, iteration, both timings,
+      signed pct)
+    - max positive and max negative overhead
+    - mean and median of per-pair overhead
+    - absolute-overhead concentration of the largest 1, 3, 5, and 10 pairs
+  and conclude concentrated vs broadly distributed. Do not claim causality beyond
+  what the data supports.

@@ -1,0 +1,9 @@
+{
+  "tool": "power_scheme_control",
+  "subcommand": "status",
+  "read_only": true,
+  "timestamp": "2026-10-06T13:55:09.209Z",
+  "query_status": 0,
+  "active_guid": "DFE97760-471C-4D01-BD06-B8B04C50ECD8",
+  "friendly_name": null
+}

@@ -1,0 +1,2 @@
+resolved: E:\My Local AI\stark\build-b7diag-20261011\bm_b7_diagnostic.exe
+sha256: a2e9e0ada6df0f10a91681e96349349166a081dcca0570312c6d175ad0691bd6

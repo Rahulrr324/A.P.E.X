@@ -1,0 +1,15 @@
+Test project E:/My Local AI/stark/build-debug-clean-2
+    Start 1: test_phase1_profiler
+1/5 Test #1: test_phase1_profiler .............   Passed    1.25 sec
+    Start 2: test_phase1_accounting
+2/5 Test #2: test_phase1_accounting ...........   Passed    0.87 sec
+    Start 3: test_phase1_budget
+3/5 Test #3: test_phase1_budget ...............   Passed    0.83 sec
+    Start 4: test_phase1_records
+4/5 Test #4: test_phase1_records ..............   Passed    0.82 sec
+    Start 5: test_phase1_reproducibility
+5/5 Test #5: test_phase1_reproducibility ......   Passed    0.86 sec
+
+100% tests passed out of 5
+
+Total Test time (real) =   4.65 sec

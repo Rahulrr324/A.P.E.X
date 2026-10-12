@@ -1,0 +1,1 @@
+CONTROLLED TEST INPUT. E1/E5-B6 match (so G1-G6 pass); a B2 group has three independent repeats with medians at 100%, 90% and 80% of the base value: adjacent differences are 10% and 11.11% (within 15%) but the endpoints differ by 20%. G7 is expected to FAIL, isolating the all-pairs requirement.

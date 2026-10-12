@@ -1,0 +1,216 @@
+{
+  "report": "APEX_M0_v2.2_independent_verification_of_v2.1",
+  "date": "2026-10-05",
+  "repository": "stark/ (STARK-006)",
+  "supersedes_for_audit": ["reports/M0_FINAL_REPORT_v2.1.md"],
+  "preserves": [
+    "reports/M0_FINAL_REPORT_v2.1.md",
+    "reports/v2.1/*",
+    "reports/v2.1-aggregator/*",
+    "reports/sha256sums_v21.txt",
+    "reports/M0_FINAL_REPORT_v2.0.md",
+    "reports/evidence_manifest.json",
+    "reports/sha256sums_v20.txt",
+    "reports/historical_artifact_inventory.json",
+    "archive_recovery/aggregator_input/* (nine frozen records)",
+    "archive_recovery/v21_evidence/*",
+    "archive_recovery/v21_diagnostics/*",
+    "fixtures/v21/*"
+  ],
+  "v2_1_evidence_modified": false,
+  "v2_0_evidence_modified": false,
+  "historical_records_modified": false,
+  "git_revision": "UNAVAILABLE - no .git directory; source identity via SHA-256",
+  "external_archive_searched": false,
+
+  "overall_decision": "FAIL",
+  "m1_status": "LOCKED - not started",
+  "overall_reason": "G4 = FAIL and G7 = FAIL over the evidence that matters. G1/G3 pass only over the separate v2.1 candidate evidence set, not over the recovered historical records. G3 pass (candidate set) is literally valid but evidentially weak. Historical completeness unresolved (24 observed / 9 recovered / 15 missing). No threshold, sample, record, or acceptance rule changed.",
+
+  "two_evidence_sets": {
+    "original_recovered_set": {
+      "location": "archive_recovery/aggregator_input/ (and archive_recovery/original_historical_records/)",
+      "records": 9,
+      "plus": "tiny_dense_2l_weights.bin (+ RECOVERY_MANIFEST.json in original_historical_records)",
+      "frozen": true,
+      "unchanged_since_v2_0": true
+    },
+    "v2_1_candidate_evidence_set": {
+      "location": "archive_recovery/v21_evidence/",
+      "records": 14,
+      "contents": "9 recovered + genuine PROFILE + TELEMETRY + new E2/B4/B5 SKIPPED receipts",
+      "authored_in": "v2.1",
+      "is_historical": false
+    },
+    "v2_1_fresh_diagnostics": {
+      "location": "archive_recovery/v21_diagnostics/",
+      "records": 36,
+      "authored_in": "v2.1",
+      "purpose": "G7 fresh-repeat diagnostic only"
+    }
+  },
+
+  "gate_results_over_recovered_nine_only": {
+    "input": "archive_recovery/aggregator_input/ (9 records)",
+    "G1": "FAIL (no PROFILE record)",
+    "G2": "PASS",
+    "G3": "FAIL (no E2/B4/B5 records)",
+    "G4": "FAIL (physical capability Unknown -> fail closed)",
+    "G5": "PASS",
+    "G6": "PASS",
+    "G7": "FAIL (B6 16.13%; B7 18.38%/21.26%; B9 27.65%/28.18%/48.04%)"
+  },
+  "gate_results_over_v2_1_candidate_set": {
+    "input": "archive_recovery/v21_evidence/ (14 records)",
+    "G1": "PASS (genuine PROFILE)",
+    "G2": "PASS",
+    "G3": "PASS (E2/B4/B5 SKIPPED with non-empty reasons) - literally valid, evidentially weak",
+    "G4": "FAIL (GPU-capable host; no physical-capability evidence and no measured VRAM)",
+    "G5": "PASS",
+    "G6": "PASS",
+    "G7": "FAIL (same historical medians)"
+  },
+
+  "g3_skip_semantics_audit": {
+    "file": "reports/v2.2/g3_skip_semantics_audit.md",
+    "frozen_spec_ref": "design/V009_phase1_M0_specification.md:324",
+    "production_ref": "src/phase1/gates.cpp:403-444",
+    "branch_selector": "HardwareProfiler::cudaRuntimeAvailable() of the aggregator binary",
+    "q1_requirement": "E2, B4, B5 must each satisfy the branch chosen by the local CUDA probe",
+    "q2_skip_e2_satisfies_g3": true,
+    "q3_distinguishes_missing_from_present": true,
+    "q3_distinguishes_legitimate_from_arbitrary_skip": false,
+    "q4_validates_reason_or_provenance": false,
+    "q5_arbitrary_skips_can_pass": true,
+    "q6_requires_gpu_execution_on_gpu_host": false,
+    "q7_e2_b4_b5": "three separate id requirements combined into one gate",
+    "tests": "reports/v2.2/tests/test_v22_g3_semantics.cpp (10 checks, 0 failures)",
+    "v2_1_g3_pass_assessment": "literally valid but near-vacuous; no hardware/execution weight",
+    "rule_changed": false
+  },
+
+  "gpu_detection_audit": {
+    "file": "reports/v2.2/gpu_detection_audit.md",
+    "implementation_ref": "src/phase1/common/HardwareProfiler.cpp:44-80; HardwareProfiler.h:52-62",
+    "consumer_ref": "src/phase1/gates.cpp:140-166 (device_capability)",
+    "tri_state": "std::optional<bool> gpu_present; true/false bare bool, unknown = {value:null,reason}",
+    "missing_or_null_preserves_unknown": true,
+    "cuda_disabled_build_retains_physical_info": true,
+    "backward_compatible_fail_closed": true,
+    "virtual_adapter_filter": "only 'Microsoft Basic', 'Remote', 'Basic Render'",
+    "multi_gpu_representation": "collapsed to one boolean; adapters over-counted per display output",
+    "enumeration_error_handling": "first FALSE terminates the loop; GetLastError not inspected; result fails closed to Unknown",
+    "host_inventory": {
+      "method": "Win32_VideoController",
+      "adapters": ["Intel(R) UHD Graphics", "NVIDIA GeForce RTX 2050 (AdapterRAM 4293918720)"],
+      "production_profiler": "archive_recovery/v21_evidence/P1-PROFILE-24-0.json -> gpu_present=true (Intel listed 4x, NVIDIA once)"
+    },
+    "verdict": "correct and conservative on this host; heuristic rather than inventory in general",
+    "smallest_safe_correction": "proposed, NOT applied (distinct-adapter counting + expanded virtual-adapter filter / SetupAPI display-class enumeration)",
+    "source_modified": false
+  },
+
+  "g7_statistical_verification": {
+    "file": "reports/v2.2/g7_statistical_verification.md",
+    "script": "reports/v2.2/verify_g7.py",
+    "stored_median_equals_recomputed": "9/9",
+    "historical_pairwise_all_pairs": {
+      "metric": "symmetric_rel_diff_pct = |a-b|/max(|a|,|b|)*100",
+      "tolerance_pct": 15.0,
+      "B6": {"group": 3, "pairs": 3, "fails": 1, "max_diff_pct": 16.13},
+      "B7": {"group": 3, "pairs": 3, "fails": 2, "diffs_pct": [18.38, 21.26]},
+      "B9": {"group": 3, "pairs": 3, "fails": 3, "diffs_pct": [27.65, 28.18, 48.04]}
+    },
+    "fresh_repeats": {
+      "runs_per_benchmark": 12,
+      "pairs_per_benchmark": 66,
+      "B6": {"spread_pct": 59.06, "pairs_over_15": 35, "v2_1_claim": 35, "match": true},
+      "B7": {"spread_pct": 19.03, "pairs_over_15": 5, "v2_1_claim": 5, "match": true},
+      "B9": {"spread_pct": 59.78, "pairs_over_15": 19, "v2_1_claim": 19, "match": true},
+      "spread_definition": "(max-min)/max of the 12 medians"
+    },
+    "documentation_discrepancy": "v2.1 g7_stats_raw.txt stdev/CV columns use population (ddof=0); stored statistics.stdev is sample (ddof=n-1). Medians/verdict unaffected.",
+    "permanently_fails_justified": "for the frozen historical dataset under the frozen rule: yes; for 'the methodology can never pass': not established",
+    "root_cause_proven": false,
+    "measured_vs_inferred": "measured: CV 6.1-28.6%, thread_count=0, warmup=3, n=10, ~23s batch separation, outputs_bit_identical=true (B6/B9); inferred (unproven): scheduler jitter, thermal/frequency drift, minimal warmup, small-n median error",
+    "thresholds_or_grouping_changed": false
+  },
+
+  "legacy_test_coverage": {
+    "file": "reports/v2.2/legacy_test_coverage.md",
+    "test_executables": 15,
+    "ctest_registered": 6,
+    "ctest_result": {"debug": "6/6 exit 0", "release": "6/6 exit 0"},
+    "test_phase1_gates_assertions": {"debug": 340, "release": 340},
+    "phase1_assertion_counts": {"profiler": 35, "accounting": 67, "budget": 55, "records": 54, "reproducibility": 37, "gates": 340},
+    "legacy_not_in_ctest": ["test_neuron", "test_params", "test_synapse", "test_integration", "test_network", "test_stdp", "test_homeostasis", "test_three_factor", "test_serialization"],
+    "legacy_assertion_counts": {"test_neuron": 38, "test_params": 0, "test_synapse": 38, "test_integration": 23, "test_network": 58, "test_stdp": 255, "test_homeostasis": 403, "test_three_factor": 80, "test_serialization": 98},
+    "diagnostic_only": ["test_params"],
+    "release_assertions_removed": ["test_neuron (uses <cassert> assert(); Release defines -DNDEBUG)"],
+    "exit_code_treated_as_coverage": false,
+    "full_project_coverage_claimed": false
+  },
+
+  "evidence_integrity": {
+    "v2_1_sha256_list": "reports/sha256sums_v21.txt",
+    "v2_1_entries": 106,
+    "v2_1_entries_verified": 106,
+    "v2_1_entries_failed": 0,
+    "v2_1_duplicate_paths": 0,
+    "v2_1_manifest_count_matches_list": true,
+    "debug_release_pairs": 36,
+    "debug_release_pairs_differing": 0,
+    "historical_records_changed": false,
+    "v2_0_evidence_preserved": {
+      "reports/M0_FINAL_REPORT_v2.0.md": "0b34de3a1143b407dd3c3a36de27f44f1a7158ddb69094f6954f3b576d7b4237",
+      "reports/evidence_manifest.json": "14975fa285362d4bb6f92f08840841de6edfad88b29dfd101107075731d473d3",
+      "reports/sha256sums_v20.txt": "fb84ae5e6eee73c04e33453873b584d14493546b4f6d142418d9e0900e59567d",
+      "reports/historical_artifact_inventory.json": "5f5532b47a5e620618cd8f029a70edcca5be2095f8c4f4e743fe125d13a391cf"
+    },
+    "v2_1_source_changes_intentional": true,
+    "v2_0_treated_as_corruption": false
+  },
+
+  "g4_interpretation_note": "Frozen G4 (V009:325) requires measured peak RAM/VRAM and fails if a peak field is estimated; it does not literally mandate measured VRAM on a CUDA-less GPU host. The v2.1 GPU-capable->require-measured-VRAM rule is a stricter, fail-closed interpretation. Retained because M0 requires all gates to pass and the recovered records carry no physical-capability evidence.",
+
+  "build_evidence": {
+    "fresh_build_dirs": ["stark/build-v21-debug", "stark/build-v21-release"],
+    "targets": {"debug": "103/103", "release": "103/103"},
+    "ninja_status_now": "no work to do (both)",
+    "ctest_exit": {"debug": 0, "release": 0}
+  },
+
+  "compliance": {
+    "m1_started": false,
+    "architecture_work_started": false,
+    "thresholds_modified": false,
+    "g7_grouping_changed": false,
+    "historical_records_modified": false,
+    "historical_samples_modified": false,
+    "v2_1_source_modified": false,
+    "v2_0_evidence_preserved": true,
+    "external_archive_searched": false,
+    "external_archive_referenced": false,
+    "records_fabricated_for_m0": false,
+    "acceptance_manufactured": false
+  },
+
+  "sha256_evidence_list": {
+    "file": "reports/sha256sums_v22.txt",
+    "entries_in_list": 246,
+    "entries_verified": 246,
+    "entries_failed": 0
+  },
+
+  "new_v2_2_artifacts": [
+    "reports/M0_FINAL_REPORT_v2.2.md",
+    "reports/v2.2/g3_skip_semantics_audit.md",
+    "reports/v2.2/gpu_detection_audit.md",
+    "reports/v2.2/g7_statistical_verification.md",
+    "reports/v2.2/legacy_test_coverage.md",
+    "reports/v2.2/evidence_manifest.json",
+    "reports/v2.2/verify_g7.py",
+    "reports/v2.2/tests/test_v22_g3_semantics.cpp",
+    "reports/sha256sums_v22.txt"
+  ]
+}

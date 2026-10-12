@@ -1,0 +1,289 @@
+cmake_minimum_required(VERSION 3.15)
+project(STARK-006 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Include directories
+include_directories(${CMAKE_SOURCE_DIR}/src)
+
+# STARK-002 simulation
+add_executable(stark_002
+    src/main.cpp
+    src/neural/NeuralCell.h
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.h
+    src/neural/Synapse.cpp
+)
+
+# STARK-001 tests
+add_executable(test_neuron
+    src/test_neuron.cpp
+    src/neural/NeuralCell.cpp
+)
+add_executable(test_params
+    src/test_params.cpp
+    src/neural/NeuralCell.cpp
+)
+
+# STARK-002 tests
+add_executable(test_synapse
+    src/test_synapse.cpp
+    src/neural/Synapse.cpp
+)
+add_executable(test_integration
+    src/test_integration.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+)
+add_executable(network_demo
+    src/network_demo.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+
+# STARK-004 STDP tests and demo
+add_executable(test_stdp
+    tests/test_stdp.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+add_executable(stdp_demo
+    tests/examples/stdp_demo.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+
+# STARK-005 Homeostasis tests
+add_executable(test_homeostasis
+    tests/test_homeostasis.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+add_executable(homeostasis_demo
+    tests/examples/homeostasis_demo.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+
+target_compile_features(stark_002 PUBLIC cxx_std_17)
+target_compile_features(test_neuron PUBLIC cxx_std_17)
+target_compile_features(test_params PUBLIC cxx_std_17)
+target_compile_features(test_synapse PUBLIC cxx_std_17)
+target_compile_features(test_integration PUBLIC cxx_std_17)
+
+# STARK-003 network test (pre-existing target in the archive; wired into the
+# build through the older CMakeLists). Kept here so the Phase-1 build is
+# self-contained.
+add_executable(test_network
+    src/test_network.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_network PUBLIC cxx_std_17)
+
+target_compile_features(network_demo PUBLIC cxx_std_17)
+target_compile_features(test_stdp PUBLIC cxx_std_17)
+target_compile_features(stdp_demo PUBLIC cxx_std_17)
+target_compile_features(test_homeostasis PUBLIC cxx_std_17)
+target_compile_features(homeostasis_demo PUBLIC cxx_std_17)
+
+# STARK-006 Three-factor modulator-gated plasticity tests and demo
+add_executable(test_three_factor
+    tests/test_three_factor.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_three_factor PUBLIC cxx_std_17)
+add_executable(three_factor_demo
+    tests/examples/three_factor_demo.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(three_factor_demo PUBLIC cxx_std_17)
+
+# STARK-007 Serialization & Experiment Harness tests
+add_executable(test_serialization
+    tests/test_serialization.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+    src/experiment/Recorder.cpp
+    src/experiment/Experiment.cpp
+)
+target_compile_features(test_serialization PUBLIC cxx_std_17)
+add_executable(serialization_demo
+    tests/examples/serialization_demo.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+    src/experiment/Recorder.cpp
+    src/experiment/Experiment.cpp
+)
+target_compile_features(serialization_demo PUBLIC cxx_std_17)
+
+# ============================================================
+# STARK Phase 1 (M0): measurement infrastructure
+# New targets only; existing STARK-001..007 targets are unchanged.
+# ============================================================
+
+# ---------------------------------------------------------------------------
+# Single production library.
+#
+# All Phase-1 implementation lives in exactly ONE static library and every
+# executable (CLIs and tests) LINKS it instead of recompiling the sources.
+# The previous layout compiled the same .cpp files into every executable
+# independently (the archive was built but never linked), which duplicated
+# code and, when a target also linked the archive, produced duplicate-symbol
+# link errors. Linking the single archive with no duplicate compilation is the
+# correct fix. No global linker flags are required: the g++ driver already
+# links libstdc++, libgcc and libgcc_eh for C++ targets.
+set(STARK_PHASE1_SOURCES
+    src/phase1/common/ExperimentRecord.cpp
+    src/phase1/common/HardwareProfiler.cpp
+    src/phase1/common/HardwareAffinity.cpp
+    src/phase1/bench/BudgetLedger.cpp
+    src/phase1/bench/ParameterAccounting.cpp
+    src/phase1/bench/BenchmarkHarness.cpp
+    src/phase1/bench/TinyDenseModel.cpp
+    src/phase1/gates.cpp
+)
+
+add_library(stark_phase1 STATIC ${STARK_PHASE1_SOURCES})
+target_compile_features(stark_phase1 PUBLIC cxx_std_17)
+target_include_directories(stark_phase1 PUBLIC
+    ${CMAKE_SOURCE_DIR}/src/phase1
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Make Phase-1 binaries self-contained w.r.t. the GCC runtime.
+#
+# Evidence (v1.4 investigation): on this host the WinLibs UCRT toolchain's
+# directory is at PATH position ~58, while Git-for-Windows' MSVCRT
+# libstdc++-6.dll is at position 1. A dynamically linked WinLibs UCRT binary
+# therefore loads the MSVCRT libstdc++-6.dll at runtime, producing an ABI
+# mismatch that segfaults inside std::string/IO paths (observed: fault inside
+# RecordStore::append -> libstdc++-6.dll from C:\Program Files\Git\mingw64).
+# Prepending the WinLibs bin to PATH makes the same binary pass, proving the
+# fault is DLL resolution, not code. Statically linking the GCC runtime removes
+# the PATH dependency for every Phase-1 executable. This is a concrete,
+# reproducible fix; it is unrelated to the previously removed speculative
+# global -lgcc -lgcc_eh -lstdc++ flags.
+if(WIN32)
+    target_link_options(stark_phase1 INTERFACE -static-libgcc -static-libstdc++)
+endif()
+if(STARK_ENABLE_CUDA)
+    target_compile_definitions(stark_phase1 PUBLIC STARK_ENABLE_CUDA)
+    target_include_directories(stark_phase1 PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
+    target_link_libraries(stark_phase1 PUBLIC ${CUDAToolkit_LIBRARY_DIR}/cudart.lib)
+endif()
+if(WIN32)
+    target_link_libraries(stark_phase1 PUBLIC psapi)
+endif()
+
+# ---- Production CLIs (aggregate, profiler_cli, run_baseline) ----
+add_executable(profiler_cli src/phase1/profiler_cli.cpp)
+target_link_libraries(profiler_cli PRIVATE stark_phase1)
+target_compile_features(profiler_cli PUBLIC cxx_std_17)
+
+add_executable(run_baseline src/phase1/baselines/run_baseline.cpp)
+target_link_libraries(run_baseline PRIVATE stark_phase1)
+target_compile_features(run_baseline PUBLIC cxx_std_17)
+
+add_executable(aggregate src/phase1/aggregate.cpp)
+target_link_libraries(aggregate PRIVATE stark_phase1)
+target_compile_features(aggregate PUBLIC cxx_std_17)
+
+# ---- G7 Resolution Campaign ----
+add_executable(g7_campaign src/phase1/campaign/G7Campaign.cpp)
+target_link_libraries(g7_campaign PRIVATE stark_phase1)
+target_compile_features(g7_campaign PUBLIC cxx_std_17)
+
+# ---- Phase-1 automated tests (spec §K) ----
+# Genuine automated tests that return nonzero on any failed assertion.
+# test_main.cpp provides the counting CHECK framework (active under NDEBUG).
+# Each test builds from the full Phase-1 source set (ExperimentRecord,
+# HardwareProfiler, BudgetLedger, ParameterAccounting, BenchmarkHarness,
+# TinyDenseModel) plus its own test source and test_main.cpp.
+foreach(t profiler accounting budget records reproducibility gates affinity)
+    add_executable(test_phase1_${t}
+        tests/test_phase1_${t}.cpp
+        tests/test_main.cpp)
+    target_link_libraries(test_phase1_${t} PRIVATE stark_phase1)
+    target_compile_features(test_phase1_${t} PUBLIC cxx_std_17)
+endforeach()
+
+# ---- Temporary Windows affinity root-cause diagnostic (investigation only) ----
+add_executable(test_windows_affinity_diag
+    tests/test_windows_affinity_diag.cpp)
+target_link_libraries(test_windows_affinity_diag PRIVATE stark_phase1)
+target_compile_features(test_windows_affinity_diag PUBLIC cxx_std_17)
+
+# ---- Production-path affinity evidence capture (investigation only) ----
+# Exercises the actual HardwareAffinity production path post-fix. Not a CTest test.
+add_executable(test_production_affinity_evidence
+    tests/test_production_affinity_evidence.cpp)
+target_link_libraries(test_production_affinity_evidence PRIVATE stark_phase1)
+target_compile_features(test_production_affinity_evidence PUBLIC cxx_std_17)
+
+# ---- Frequency/power-state evidence diagnostic (investigation only) ----
+# Records CPU frequency/power telemetry around unchanged production benchmark
+# execs. Not a CTest test; writes no STARKP1 records.
+add_executable(diag_frequency_evidence
+    tests/diag_frequency_evidence.cpp)
+target_link_libraries(diag_frequency_evidence PRIVATE stark_phase1 pdh powrprof)
+target_compile_features(diag_frequency_evidence PUBLIC cxx_std_17)
+
+# ---- Session-scoped power-scheme control (stability-gate validation) ----
+# Documented PowerGetActiveScheme/PowerSetActiveScheme only. Applies the High
+# performance scheme around a child command and ALWAYS restores the original.
+# Not a CTest test; writes no STARKP1 records.
+add_executable(power_scheme_control
+    tests/power_scheme_control.cpp)
+target_link_libraries(power_scheme_control PRIVATE powrprof)
+target_compile_features(power_scheme_control PUBLIC cxx_std_17)
+
+# ---- High-resolution frequency diagnostic (investigation only) ----
+# Per-iteration QPC brackets + tight-loop PDH collector thread around the
+# UNCHANGED production benchmark path. Not a CTest test; writes no STARKP1
+# records.
+add_executable(diag_highres_frequency
+    tests/diag_highres_frequency.cpp)
+target_link_libraries(diag_highres_frequency PRIVATE stark_phase1 pdh)
+target_compile_features(diag_highres_frequency PUBLIC cxx_std_17)
+
+# ---- CTest integration (M0 audit evidence) ----
+enable_testing()
+
+# Genuine automated test: returns nonzero on any failed assertion (CONFIG,
+# BUDGET, PROFILER, RECORDS, REPRODUCIBILITY). Diagnostic-only programs are
+# not registered as CTest tests.
+add_test(NAME test_phase1_profiler
+         COMMAND test_phase1_profiler
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME test_phase1_accounting
+         COMMAND test_phase1_accounting
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME test_phase1_budget
+         COMMAND test_phase1_budget
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME test_phase1_records
+         COMMAND test_phase1_records
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME test_phase1_reproducibility
+         COMMAND test_phase1_reproducibility
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME test_phase1_gates
+         COMMAND test_phase1_gates
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME test_phase1_affinity
+         COMMAND test_phase1_affinity
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

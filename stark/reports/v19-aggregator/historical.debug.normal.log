@@ -1,0 +1,35 @@
+=== STARK Phase 1 (M0) Aggregator ===
+records directory: ../archive_recovery/original_historical_records/
+records found: 10
+
+INVALID RECORDS (1):
+  ../archive_recovery/original_historical_records//RECOVERY_MANIFEST.json: json: missing key 'schema_version'
+
+STATUS SUMMARY:
+  E1: 6 record(s)
+  E5: 3 record(s)
+  PASSED=9 FAILED=0 SKIPPED=0 NOT_ATTEMPTED=0
+
+GATE RESULTS:
+  [FAIL] G1 hardware profile collected
+         no PROFILE record found (run profiler_cli)
+  [PASS] G2 CPU baselines present and complete
+         E1 and E5 present, distinct, each with >=10 samples
+  [FAIL] G3 GPU branch complete-or-skipped with reason
+         E2 record missing entirely (must record skipped status)
+  [PASS] G4 peak memory measured
+         E1 and E5 present, PASSED, RAM peak measured; VRAM source documented per schema
+  [PASS] G5 parameter accounting consistent
+         all accounting records pass G5 checks
+  [PASS] G6 budget evaluator rejects over-budget demands
+         VRAM-only violation detected; compute fields informational
+  [FAIL] G7 same-config medians reproducible across repeats
+         B6 medians differ 16.13% (allowed 15.00%) between runs 1 and 3
+B7 medians differ 18.38% (allowed 15.00%) between runs 1 and 3
+B7 medians differ 21.26% (allowed 15.00%) between runs 2 and 3
+B9 medians differ 27.65% (allowed 15.00%) between runs 1 and 2
+B9 medians differ 28.18% (allowed 15.00%) between runs 1 and 3
+B9 medians differ 48.04% (allowed 15.00%) between runs 2 and 3
+
+
+OVERALL: FAIL (3 gate(s) failed, 1 invalid record(s))

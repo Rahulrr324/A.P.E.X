@@ -1,0 +1,1 @@
+CONTROLLED TEST INPUT (not a measurement). E1/E5 carry NO hardware.gpu_present evidence and cuda_available=false (a CUDA-less build). Physical capability is UNKNOWN. G4 is expected to FAIL closed: unknown capability must never be silently treated as CPU-only.

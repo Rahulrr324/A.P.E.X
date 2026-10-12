@@ -1,0 +1,105 @@
+{
+  "accounting": null,
+  "budget": null,
+  "configuration": null,
+  "created_utc": "2026-10-08T15:17:09.624Z",
+  "determinism": {
+    "deterministic_mode_available": false,
+    "deterministic_mode_requested": true,
+    "outputs_bit_identical": null
+  },
+  "experiment_id": "E2",
+  "failures": [],
+  "hardware": {
+    "build_type": "Release",
+    "collected_utc": "2026-10-08T15:17:09.624Z",
+    "cpu_instruction_set_notes": "SSE4.2, OSXSAVE, AVX, SSE, SSE2, AVX2",
+    "cpu_model": "12th Gen Intel(R) Core(TM) i5-12450H",
+    "cuda_available": false,
+    "cuda_version": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_compute_capability_major": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_compute_capability_minor": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_model": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_present": true,
+    "logical_cores": 12,
+    "os_name": "Windows",
+    "os_version": "10.0 (build 26300)",
+    "physical_cores": 8,
+    "provenance": {
+      "cpu_model": "source: cpuid brand string (leaves 0x80000002..4)",
+      "cuda_available": "unavailable: binary built without CUDA (STARK_ENABLE_CUDA=OFF / no toolkit)",
+      "cuda_version": "unavailable: binary built without CUDA",
+      "gpu_model": "unavailable: binary built without CUDA",
+      "gpu_present": "source: OS display-adapter inventory (EnumDisplayDevices), deduped by PNP device id | physical: Intel(R) UHD Graphics | NVIDIA GeForce RTX 2050 | raw_entries: 5 | unique_adapters: 2",
+      "logical_cores": "source: std::thread::hardware_concurrency()",
+      "os_version": "source: ntdll RtlGetVersion (unmanifested true version)",
+      "physical_cores": "source: GetLogicalProcessorInformation (RelationProcessorCore count)",
+      "pytorch_cuda_available_note": "unavailable: PyTorch runtime out of scope for C++ Phase 1 (spec §A / §L.7)",
+      "ram_total_bytes": "source: GlobalMemoryStatusEx ullTotalPhys (installed)",
+      "storage_volumes": "source: GetDiskFreeSpaceExA over fixed drives"
+    },
+    "pytorch_cuda_available": null,
+    "ram_total_bytes": 25392844800,
+    "storage_volumes": [
+      {
+        "free_bytes": 10334445568,
+        "path": "C:\\",
+        "total_bytes": 247782699008
+      },
+      {
+        "free_bytes": 153755058176,
+        "path": "E:\\",
+        "total_bytes": 262883241984
+      }
+    ],
+    "theoretical_memory_bandwidth_gbps": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "toolchain": "GCC 16.1.0",
+    "vram_total_bytes": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    }
+  },
+  "kind": "baseline",
+  "measured_gflops": null,
+  "measured_memory_bandwidth_gbps": null,
+  "peak_memory": null,
+  "precision": null,
+  "provenance": {},
+  "record_id": "P1-E2-skip",
+  "schema_version": "STARKP1 1",
+  "skip_attestation": {
+    "capability_source": "cudaGetDeviceCount (HardwareProfiler::cudaRuntimeAvailable)",
+    "capability_state": "cuda_unavailable",
+    "cuda_available": false,
+    "execution_availability": "not_available",
+    "producer": "stark_p1::run_baseline (E2/B4/B5 GPU branch skip path)",
+    "reason_code": "cuda_unavailable",
+    "schema": "STARKP1 skip-attestation 1"
+  },
+  "software": {
+    "benchmark_libs": "standard library only (no external deps)",
+    "build_type": "Release",
+    "compiler": "GCC 16.1.0",
+    "cuda_runtime": null,
+    "os": "Windows 10.0 (build 26300)"
+  },
+  "stark_phase": "P1",
+  "statistics": null,
+  "status": "SKIPPED",
+  "status_reason": "skipped: CUDA unavailable in this build (STARK_ENABLE_CUDA=OFF / no CUDA toolkit); this does NOT imply the machine has no GPU -- physical GPU presence is recorded independently in hardware.gpu_present (spec G3 skipped-branch)"
+}

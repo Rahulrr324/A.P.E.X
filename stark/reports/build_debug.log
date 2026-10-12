@@ -1,0 +1,18 @@
+STARK M0 Debug build log (GCC 16.1.0, WinLibs)
+=================================================
+Commands:
+  $CMAKE -S . -B build-debug-clean-2 -G Ninja -DCMAKE_CXX_COMPILER=<compiler_path> -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_STANDARD=17
+  $NINJA -C build-debug-clean-2
+
+Output (configure+build rc=0):
+-- The CXX compiler identification is GNU 16.1.0
+-- Configuring done (0.1s)
+-- Generating done (0.1s)
+-- Build files written to: E:/My Local AI/stark/build-debug-clean-2
+ninja: no work to do.
+
+Compiler: c++.exe (MinGW-W64 x86_64-ucrt-posix-seh) 16.1.0
+CMake: 4.4.1
+Ninja: 1.13.2
+Clean Debug configure+build: OK (rc=0)
+Execution: Debug builds execute successfully (ctest_debug.log 5/5 passed).

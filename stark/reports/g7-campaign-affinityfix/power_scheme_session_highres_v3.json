@@ -1,0 +1,32 @@
+{
+  "tool": "power_scheme_control",
+  "subcommand": "run",
+  "command": "\"E:/My Local AI/stark/build-v24-release/diag_highres_frequency.exe\" --out reports/g7-campaign-affinityfix/highres_frequency_v3.json --idle 30",
+  "original": {
+    "query_status": 0,
+    "guid": "DFE97760-471C-4D01-BD06-B8B04C50ECD8",
+    "friendly_name": null,
+    "timestamp": "2026-10-06T15:22:02.285Z"
+  },
+  "apply": {
+    "requested_guid": "8C5E7FDA-E8BF-4A96-9A85-A6E23A8C635C",
+    "status": 0,
+    "timestamp": "2026-10-06T15:22:02.382Z",
+    "scheme_after": "8C5E7FDA-E8BF-4A96-9A85-A6E23A8C635C",
+    "ok": true
+  },
+  "child": {
+    "ran": true,
+    "exit_code": 0,
+    "begin": "2026-10-06T15:22:02.735Z",
+    "end": "2026-10-06T15:24:38.295Z",
+    "output": "=== High-resolution frequency diagnostic ===\naffinity verified_single_cpu=1\nP1: PDH response probe (idle, 2 s) ...\nP2: step-transition test ...\nB6 gap=0 cycle=0 median_us=131\nidle 30s ...\nB6 gap=1 cycle=1 median_us=131\nidle 30s ...\nB6 gap=1 cycle=2 median_us=142\nidle 30s ...\nB6 gap=1 cycle=3 median_us=130\nB6 gap=0 cycle=1 median_us=130.5\nB6 gap=0 cycle=2 median_us=130\nidle 30s ...\nB9 gap=1 median_us=130\nB9 gap=0 median_us=130\nidle 30s ...\nB7 gap=1 median_us=2053.5\nB7 gap=0 median_us=2104.5\nexecs=10 wrote reports/g7-campaign-affinityfix/highres_frequency_v3.json\n"
+  },
+  "restore": {
+    "status": 0,
+    "timestamp": "2026-10-06T15:24:38.580Z",
+    "scheme_after": "DFE97760-471C-4D01-BD06-B8B04C50ECD8",
+    "matches_original": true
+  },
+  "result": "OK"
+}

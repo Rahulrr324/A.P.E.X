@@ -1,0 +1,76 @@
+STABILITY-GATE PREDECLARATION (fixed BEFORE running the controlled diagnostic)
+Written: 2026-10-06, before any power-scheme change was applied.
+
+PURPOSE
+  Validate the session-scoped High-performance power-scheme control proposed in
+  CPU_FREQUENCY_CAUSE_INVESTIGATION.md section 9. This is a conditioning /
+  stability validation ONLY. No G7 campaign is run in this task.
+
+CONTROL UNDER TEST
+  Apply documented Windows "High performance" scheme
+      8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+  via PowerSetActiveScheme(NULL, &guid) for the duration of one diagnostic
+  session, then restore exactly the scheme that was active beforehand
+  (queried from the OS, expected DFE97760-471C-4D01-BD06-B8B04C50ECD8 but NOT
+  assumed). Documented API only: no registry edits, no MSR, no BIOS, no
+  clock forcing, no thermal-protection changes, no permanent policy change.
+
+DIAGNOSTIC (unchanged methodology)
+  The UNMODIFIED binary build-v24-release/diag_frequency_evidence.exe, run as:
+      diag_frequency_evidence.exe --out <new file> --idle 30
+  Same structure as the previous investigation: 10 production execs
+  (B6 x6 = 1 warm + 3 post-30s-gap + 2 back-to-back; B9 x2 gap/warm;
+  B7 x2 gap/warm), warmup=10, samples=50, thread=1, batch=1, seq=0, FP32,
+  verified CPU-0 affinity, 100 ms background sampler.
+  Nothing in the benchmark, timing, sample count, warmup count, affinity,
+  G7 formula, or G7 tolerance is changed.
+
+METRIC
+  Exec-window observed performance = execs[].pdh_after.observed_pct_perf_cpu0
+  (PDH "\Processor Information(0,0)\% Processor Performance"), i.e. the
+  snapshot interval [collect_before -> collect_after] which brackets the exec
+  itself. Identical field and definition as the baseline run
+  frequency_evidence.json.
+
+STABILITY GATE (fixed now; will NOT be adjusted after seeing results)
+  Gate statistic (primary):
+      spread_pct = (max - min) / max * 100
+  over ALL exec-window observed_pct_perf_cpu0 values of the controlled run.
+  This is exactly the frozen G7 pairwise formula
+  abs(x-y)/max(abs(x),abs(y))*100 evaluated on the extreme pair (min, max).
+  Gate: spread_pct <= 5.0  =>  PASS.
+
+  Also reported (secondary, non-gating, reported for transparency):
+      spread_over_mean_pct = (max - min) / mean * 100
+      spread_over_min_pct  = (max - min) / min * 100
+      CV = sample_stdev / mean * 100   (n-1 denominator)
+      min, max, mean, median
+
+IN-EXECUTION RAMP (fixed now)
+  An exec shows a MATERIAL in-execution frequency/timing ramp if EITHER:
+    (a) |last10_median_us - first10_median_us| / first10_median_us * 100 > 5.0
+        (within-window timing drift over the 50 measured samples), OR
+    (b) |observed_pct_perf_after - observed_pct_perf_before|
+        / observed_pct_perf_before * 100 > 5.0
+        (bracketing PDH %perf change across the exec).
+  Timeline samples (100 ms) that fall inside an exec window are reported as
+  additional evidence where coverage exists.
+
+POST-GAP VS WARM (reported, not gating by itself)
+  Mean exec-window %perf for after_idle_gap=true vs after_idle_gap=false.
+
+DECISION RULES (fixed now)
+  C - CONTROL FAILED : apply failed, or restore failed / original scheme not
+                       proven restored after the session.
+  B - CONTROL INSUFFICIENT : apply+restore succeeded but spread_pct > 5.0
+                       or a material in-execution ramp was observed.
+  A - CONTROL VALIDATED : apply+restore succeeded AND spread_pct <= 5.0 AND
+                       no material in-execution ramp.
+
+AUTHORIZATION
+  A new G7 campaign is authorized ONLY on classification A.
+
+INTEGRITY CONSTRAINTS
+  - No new G7 records; frozen 30 and campaign 30 byte-identical afterwards.
+  - Baseline frequency_evidence.json from the previous investigation is NOT
+    overwritten; the controlled run writes frequency_evidence_hp.json.

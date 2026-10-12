@@ -1,0 +1,11 @@
+# ninja log v7
+85	1086	8134352213179485	CMakeFiles/bm_b7_diagnostic.dir/src/phase1/bench/TinyDenseModel.cpp.obj	aa84e2fbcb9849d0
+100	2172	8134352213321902	CMakeFiles/bm_b7_diagnostic.dir/src/phase1/bench/ParameterAccounting.cpp.obj	eeba2d33222476ff
+115	8279	8134352213480289	CMakeFiles/bm_b7_diagnostic.dir/src/phase1/common/ExperimentRecord.cpp.obj	24fabc4e295ec55c
+16	2777	8134356468562441	CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj	98ee4f9291597bda
+2778	3233	8134356496237445	bm_b7_diagnostic.exe	987b9f1252d0b7a1
+59	3364	8134360031198642	CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj	98ee4f9291597bda
+3366	3839	8134360064238794	bm_b7_diagnostic.exe	987b9f1252d0b7a1
+12	5622	8135041400563192	CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj	98ee4f9291597bda
+47	4839	8135042327639755	CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj	98ee4f9291597bda
+4840	5444	8135042375577123	bm_b7_diagnostic.exe	987b9f1252d0b7a1

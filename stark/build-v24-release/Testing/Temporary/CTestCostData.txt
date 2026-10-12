@@ -1,0 +1,8 @@
+test_phase1_profiler 4 0.176471
+test_phase1_accounting 4 0.193633
+test_phase1_budget 4 0.210061
+test_phase1_records 6 0.410656
+test_phase1_reproducibility 4 0.20528
+test_phase1_gates 6 0.0756962
+test_phase1_affinity 3 0.0922399
+---

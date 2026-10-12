@@ -1,0 +1,295 @@
+B7 PAIRED-OVERHEAD OUTLIER INVESTIGATION — READ-ONLY REPORT
+date_utc: 2026-10-11T14:46:00Z
+project_root: /e/My Local AI
+status: READ-ONLY — no source/config/evidence touched, no rebuild, no execution.
+
+FILES INSPECTED (read-only)
+  stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp  (source of pairing + calibration + summary)
+  work/b7_diag_20261011/run{1,2,3}_stdout.txt        (original run outputs)
+  work/b7_diag_20261011/run{1,2,3}_stderr.txt        (original run stderr)
+  work/b7_diag_20261011_corrected/comparison_and_conclusion.txt
+  (corrected run outputs were NOT found on disk at the paths captured in the
+   prior turn: work/b7_diag_20261011_corrected/run*_20261011T*.txt were absent
+   at verification time; only the comparison_and_conclusion.txt I wrote in the
+   prior turn remained. This matters for Q2/Q3 below.)
+
+SECTION 1 — EXACT FORMULAS (from source)
+
+Location: stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp, function
+calibrate(), lines ~733–807. Formulas:
+
+  POPULATION FOR PAIRING
+    minimal[i].total_samples_sec  (size = measurement_count per valid replicate)
+    instrumented[i].total_samples_sec
+    Pairing key: SAME index i (replicate index) AND SAME index j (iteration index).
+    Pre-condition enforced: minimal.size() >= required_replicates AND
+    instrumented.size() >= required_replicates AND every replicate in BOTH
+    conditions valid (otherwise INCONCLUSIVE). Then:
+      a = minimal[i].total_samples_sec[j]
+      b = instrumented[i].total_samples_sec[j]
+      sizes must be equal per i (otherwise INCONCLUSIVE).
+      a must be > 0 and finite, and b must be finite (otherwise INCONCLUSIVE).
+
+  PAIRED OVERHEAD (per observation)
+    pct_ij = 100.0 * (b - a) / a
+    Sign convention: POSITIVE = instrumented slower than minimal partner;
+    NEGATIVE = instrumented faster than minimal partner.
+    Denominator: the MINIMAL partner timing a (never the instrumented value,
+    never the mean, never the max). Zero/near-zero a is rejected outright
+    (inconclusive) — there is no special near-zero handling; a <= 0 -> INCONCLUSIVE.
+    No clamping: pct_ij is used as observed.
+
+  WORST-CASE OVERHEAD (reported statistic)
+    worst = maximum SIGNED pct_ij over ALL valid pairs (all i, all j).
+    Initialized worst = 0.0; updated only when pct > worst (so if all pairs are
+    negative, worst remains negative — but that cannot happen here because
+    have_pair forces worst to the first pct, then max). Final:
+      c.worst_case_overhead_pct = worst
+    Threshold: <= 10.0 % (kCalibWorstOverheadThresholdPct), signed maximum,
+    not absolute. Note: a single extreme positive pair can dominate.
+
+  MEAN OVERHEAD (reported statistic)
+    mean_min  = (sum over all a) / n_total
+    mean_instr= (sum over all b) / n_total
+    c.mean_overhead_pct = 100.0 * (mean_instr - mean_min) / mean_min
+    Absolute value compared to 2.0 % threshold.
+    This is a POOLED mean, NOT the mean of the per-pair pct_ij values.
+
+  MEDIAN-DEVIATION (reported statistic)
+    Pooled medians (via summarize(), which uses production compute_statistics
+    for mean/median/p95/stdev/min/max and linear interpolation for p25/p75):
+      s_min  = summarize(pooled_min).median_us
+      s_instr= summarize(pooled_instr).median_us
+    c.median_deviation_pct = 100.0 * |s_instr - s_min| / s_min
+    Threshold: <= 2.0 %.
+
+  STATUS LOGIC
+    PASS  iff computable AND mean_ok AND worst_ok AND median_ok
+    FAIL   iff computable AND NOT (mean_ok AND worst_ok AND median_ok)
+    INCONCLUSIVE otherwise (insufficient/invalid data, non-positive/non-finite
+    denominators, paired sample-count mismatch, etc.)
+    Thresholds:
+      kCalibMeanOverheadThresholdPct       = 2.0
+      kCalibWorstOverheadThresholdPct      = 10.0
+      kCalibMedianDeviationThresholdPct    = 2.0
+
+IMPORTANT DISTINCTION (often confused): the reported worst_case_overhead_pct is
+an extreme SIGNED paired value (single observation), while mean_overhead_pct and
+median_deviation_pct are pooled/summary quantities. This is why the reported
+worst-case can be huge even when means/medians are near zero.
+
+SECTION 2 — PAIRED OBSERVATION EVIDENCE AVAILABLE ON DISK
+
+Question: are individual paired observations (a, b, replicate, iteration)
+preserved anywhere?
+
+Answer: NO for the three corrected runs.
+
+Evidence:
+  - The diagnostic's own stdout report (render_report) NEVER prints per-iteration
+    totals or per-pair overhead. It prints per-replicate medians (one median per
+    macro-replicate) and pooled summary blocks. Per-iteration timing samples are
+    internal to ReplicateResult.total_samples_sec and are NOT rendered.
+  - Verified on disk: under stark/build/bm_b7_diagnostic/ there are NO blob files
+    and NO run-owned subdirectories remaining; cleanup removed the run-owned
+    blob and (empty) run dir in each of the three corrected runs. No blob = no
+    raw bytes to recompute; no run dir = no per-run artifacts.
+  - Verified on disk: work/b7_diag_20261011_corrected/ contained ONLY the
+    comparison_and_conclusion.txt created in the prior turn. The stdout/stderr/
+    exitcode files for run1/2/3 were ABSENT at verification time. Search of the
+    whole work/ tree returned no file holding per-iteration B7 paired observations
+    for the corrected runs.
+  - The original runs under work/b7_diag_20261011/ DO retain their stdout/stderr,
+    but those stdout reports likewise contain no per-iteration observations — only
+    per-replicate medians and pooled summaries.
+
+Consequence for Q2 and Q3: the requested quantities — "top 10 largest absolute
+paired-overhead values per corrected run", and the per-run counts/percentages
+attributable to the largest 1/3/5/10 observations — CANNOT be computed from the
+preserved evidence. The raw paired observations are not preserved; only the
+derived extreme statistic worst_case_overhead_pct is preserved (trivially, as the
+single reported value per run).
+
+What IS preserved for the corrected runs (from the prior turn's captured stdout
+snippets):
+  run1 corrected: worst_case_overhead_pct = 298.0528 %, mean_overhead_pct = -3.9472 %,
+                  median_deviation_pct = 3.6205 %
+  run2 corrected: worst_case_overhead_pct = 98.0373 %,  mean_overhead_pct = -0.4367 %,
+                  median_deviation_pct = 1.7919 %
+  run3 corrected: worst_case_overhead_pct = 167.5794 %, mean_overhead_pct = 1.4555 %,
+                  median_deviation_pct = 0.7181 %
+
+SECTION 3 — PER-RUN CALIBRATION SUMMARY (whatever can be established from preserved evidence)
+
+Because per-pair observations are absent, the only derivable quantities are the
+three reported summary statistics and the structural facts about pairing.
+
+  Run (corrected) | n_pairs (structural)        | mean_overhead_pct | median_deviation_pct | worst_case_overhead_pct | worst OK? | mean OK? | median OK? | status
+  ----------------|------------------------------|-------------------|----------------------|-------------------------|-----------|----------|------------|--------
+  run1            | 6 replicates * 50 = 300 * 2 conditions -> 300 INSTRUMENTED total_samples_sec vs 300 MINIMAL total_samples_sec, paired by (replicate index, iteration index). So n_pairs = 300. | -3.9472 | 3.6205 | 298.0528 | NO (298.05 > 10) | NO (|-3.95| > 2) | NO (3.62 > 2) | FAIL
+  run2            | n_pairs = 300 (same structure) | -0.4367 | 1.7919 | 98.0373 | NO (98.04 > 10) | YES (|-0.44| <= 2) | YES (1.79 <= 2) | FAIL
+  run3            | n_pairs = 300 (same structure) | 1.4555 | 0.7181 | 167.5794 | NO (167.58 > 10) | YES (1.46 <= 2) | YES (0.72 <= 2) | FAIL
+
+n_pairs derivation: macro_replicates = 6, measurement_count = 50. Each condition
+has 6 valid replicates each of 50 measured iterations, so 300 samples per
+condition. Pairing is by aligned index (replicate, iteration) across the two
+conditions. The source does NOT pair values across different replicate indices;
+therefore n_pairs = 300 per run (not 600, not 300*300). This is structural and
+does not depend on the missing raw data.
+
+Quantities that CANNOT be established from existing evidence (missing raw data):
+  - mean of per-pair pct_ij (different from reported pooled mean_overhead_pct)
+  - median of per-pair pct_ij
+  - max positive and max negative per-pair overhead (separately)
+  - max absolute per-pair overhead (different from signed worst-case)
+  - concentration: % of total absolute-overhead contribution from largest 1/3/5/10
+    pairs
+Any value for these would be invented, so none is reported.
+
+SECTION 4 — IS THE WORST-CASE DRIVEN BY A HANDFUL OF OBSERVATIONS?
+
+Answer: UNVERIFIED — hypothesis only, not established by existing evidence.
+
+What is known:
+  - The reported worst-case is the MAXIMUM SIGNED paired value across 300 pairs.
+  - In all three corrected runs, the worst-case is an order of magnitude above the
+    10% threshold while the pooled mean is near zero and pooled medians differ by
+    <= 3.6%. That pattern is CONSISTENT WITH a worst-case driven by a small number
+    of extreme positive pairs, but it is ALSO consistent with a broad but sparse
+    distribution of moderately positive pairs plus noise.
+  - The diagnostic's stdout does not expose the distribution, so concentration is
+    not determinable from preserved evidence.
+
+Conclusion: the report statement "driven by a handful of observations" is a
+plausible hypothesis, not a confirmed finding. The one thing that IS confirmable
+from the source is that the reported worst-case statistic is structurally
+vulnerable to a single extreme pair: it is the signed maximum, not a trimmed or
+robust statistic.
+
+SECTION 5 — ORIGINAL VS CORRECTED RUN SUMMARIES
+
+From preserved original outputs (work/b7_diag_20261011/run{1,2,3}_stdout.txt):
+
+  Run (original) | MIN pooled median (us) | INSTR pooled median (us) | worst_case_overhead_pct | mean_overhead_pct | median_deviation_pct | classification
+  ---------------|------------------------|--------------------------|-------------------------|-------------------|----------------------|----------------
+  run1           | 3539.300               | 3367.300                 | 136.0304                | 0.5454            | 4.8597               | NOT_ELEVATED
+  run2           | 4689.700               | 4962.400                 | 137.4231                | 9.0574            | 5.8149               | INCONCLUSIVE
+  run3           | 3504.500               | 4109.450                 | 112.9241                | 9.9198            | 17.2621              | NOT_ELEVATED
+
+Comparison to corrected runs:
+  - Calibration FAIL in ALL SIX runs (original and corrected). Worst-case FAILED
+    in every one of the six runs. Mean failed in some; median-deviation failed in
+    some.
+  - The units fix changed the component-decomposition RENDERING only; it did NOT
+    touch total timing, minimal condition, or the calibration inputs
+    (total_samples_sec). So any change in calibration numbers between original and
+    corrected runs is NOT attributable to the code fix; it is attributable to
+    run-to-run timing variability under warm cache, no CPU affinity control, and
+    sequential process-local replications.
+  - Observed consequence of that variability: e.g. run2 INSTR pooled median went
+    4962.400 (original) -> 3201.050 (corrected), and worst-case went
+    137.4231 -> 98.0373. These are both large numbers but in different runs and
+    not a clean monotonic pattern; they do not support a causal claim about the
+    units fix.
+
+Separating observation from explanation:
+  OBSERVED: worst-case is large in all six runs; mean and median-deviation are
+           near zero in several runs; classification is NOT_ELEVATED in 5 of 6
+           runs and INCONCLUSIVE in 1 of 6 (original run2).
+  NOT OBSERVED: which specific pairs dominate; whether the worst case is a single
+           outlier or a broad tail; the per-pair sign distribution; the per-pair
+           absolute-overhead concentration.
+  NOT SUPPORTED: any causal claim that the units fix caused the worst-case magnitude,
+           or that the original-vs-corrected median shift is due to the fix.
+
+SECTION 6 — VERIFICATION OF THE THREE CALIBRATION FAIL RESULTS
+
+Confirmed consistent with source + thresholds:
+
+  PASS condition: computable AND mean_ok AND worst_ok AND median_ok.
+  FAIL condition: computable AND NOT(pass).
+
+For all three corrected runs, the report shows computable data (mean/median/
+worst-case all printed as numbers), so the only way to PASS is for all three
+threshold checks to be OK.
+
+  run1: mean -3.9472 -> |mean|=3.9472 > 2.0 => mean_ok=FALSE
+        worst 298.0528 > 10.0 => worst_ok=FALSE
+        median-deviation 3.6205 > 2.0 => median_ok=FALSE
+        => FAIL  (source: "if (c.mean_ok && c.worst_ok && c.median_ok) PASS else FAIL")
+  run2: mean -0.4367 -> OK
+        worst 98.0373 -> NOT OK
+        median-deviation 1.7919 -> OK
+        => FAIL (worst-case alone kills it)
+  run3: mean 1.4555 -> OK
+        worst 167.5794 -> NOT OK
+        median-deviation 0.7181 -> OK
+        => FAIL (worst-case alone kills it)
+
+The reported FAIL notes match the source formatting exactly (the note lists the
+failing checks). So the three FAIL results are internally consistent with the
+implementation and thresholds. No discrepancy found.
+
+One nuance worth stating explicitly: worst-case threshold is a SIGNED <= 10%
+test. That means an extreme NEGATIVE worst-case (instrumented faster than minimal
+in its worst signed pair) would trivially pass the 10% test. The failures here
+are because the worst signed pair is a large POSITIVE number, i.e. a single
+(i, j) where the instrumented iteration was much slower than its minimal partner.
+That is exactly the outlier scenario the report is asking about — but which
+specific pair(s) it is cannot be identified from preserved evidence.
+
+SECTION 7 — CONFIRMED FINDINGS VS UNRESOLVED HYPOTHESES
+
+CONFIRMED (evidence-backed, traceable to source on disk):
+  1. Exact formulas are as in Section 1; worst-case is the signed max over 300
+     aligned (replicate, iteration) pairs; mean is a pooled two-sample mean ratio;
+     median-deviation is from pooled medians.
+  2. Denominator for paired overhead is the minimal partner a; zero/negative/
+     non-finite a is rejected (inconclusive), so there is no division-by-near-zero
+     pathology hidden in the data — the diagnostic would have refused the run
+     instead.
+  3. The reported worst-case is structurally dominated by extremes: it is a maximum
+     over 300 signed values, so a single large positive pair can set it.
+  4. All three corrected runs CALIBRATION=FAIL is consistent with the source and
+     thresholds; the failures are driven by worst-case in run2 and run3, and by
+     all three checks in run1.
+  5. The three corrected runs' calibration numbers differ from the three original
+     runs', but the code change did not touch the calibration inputs — so the
+     differences are run-to-run variability, not the units fix.
+  6. Individual paired observations are NOT preserved for the corrected runs
+     (no stdout detail, no run-owned dirs/blobs remaining).
+
+UNRESOLVED (cannot be decided from existing evidence):
+  1. Whether the extreme worst-case in each corrected run is a single dominant pair
+     or a broad tail. No per-pair data survived.
+  2. The top 10 largest absolute paired overheads per corrected run — not available.
+  3. Mean/median/max-positive/max-negative/max-absolute of per-pair overhead —
+     not available.
+  4. Concentration of total absolute-overhead contribution among the largest 1/3/5/10
+     pairs — not available.
+  5. Whether the worst-case magnitude is measurement noise or a real per-iteration
+     instability in the instrumented condition — not resolvable without the raw
+     paired data or a controlled rerun.
+
+Missing evidence (explicit):
+  - Per-iteration total_samples_sec for minimal and instrumented conditions, paired
+    by (replicate, iteration), for each corrected run.
+  - Equivalently: any persistent run artifact (blob, run dir, per-iteration log,
+    CSV) written before cleanup. None exists on disk for the corrected runs; the
+    diagnostic intentionally prints only replicate medians + pooled summaries, and
+    it removes its own run-owned blob and run directory at the end of each run.
+
+SECTION 8 — SINGLE BEST EVIDENCE-BASED NEXT ACTION
+
+If the goal is to determine whether the worst-case is outlier-dominated, the only
+evidence gap is the absence of the raw paired observations. The smallest
+action that closes that gap, without changing the diagnostic's protocol or
+thresholds, is to capture, for one corrected run, the 300 paired (min, instr)
+total-sample pairs (or equivalently the per-pair pct_ij), and then compute the
+concentration statistics requested in Q3. That is a data-capture change to the
+diagnostic's OUTPUT (and/or a separate read-only dump), not a change to the
+calibration formula, thresholds, pairing rule, or classification. Whether to take
+that step is a separate decision; this report stops at identifying the missing
+evidence and confirming that the existing artifacts cannot answer Q2/Q3 as posed.
+
+END

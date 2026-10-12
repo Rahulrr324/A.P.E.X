@@ -1,0 +1,159 @@
+struct PairedArtifact {
+    bool attempted = false;
+    bool written = false;
+    std::string path;        // empty until successfully opened for exclusive write
+    std::string note;        // empty when written
+
+    // Persistent, host-visible paired-sample capture path (Phase: paired-capture
+    // persistence fix). Written to the work area so it survives the diagnostic's
+    // run-owned cleanup. Exclusive no-overwrite creation is preserved.
+    //
+    // Destination is configured by the caller via set_host_path(); if it has not been
+    // set, the artifact is not attempted (backward-compatible with builds that do not
+    // configure a host path).
+    void write(const std::vector<ReplicateResult>& minimal,
+               const std::vector<ReplicateResult>& instrumented) {
+        if (attempted) return;
+        attempted = true;
+
+        if (host_path.empty()) {
+            note = "paired artifact not written: no host path configured";
+            return;
+        }
+
+        // Build the final exclusive-creation path under the configured host directory.
+        std::string path;
+        if (!host_path.empty() && host_path.back() == '/')
+            path = host_path + "paired_samples.csv";
+        else
+            path = host_path + "/" + "paired_samples.csv";
+
+        // Mirror calibrate()'s validity pre-condition: write only when every
+        // replicate in BOTH conditions is valid.
+        if (minimal.size() != instrumented.size()) {
+            note = "refused to write paired artifact: condition replicate counts differ " +
+                   std::to_string(minimal.size()) + " vs " + std::to_string(instrumented.size());
+            return;
+        }
+        for (const auto& r : minimal)
+            if (!r.valid) {
+                note = "refused to write paired artifact: a MINIMAL replicate is invalid";
+                return;
+            }
+        for (const auto& r : instrumented)
+            if (!r.valid) {
+                note = "refused to write paired artifact: an INSTRUMENTED replicate is invalid";
+                return;
+            }
+
+        // Validate the exact candidate path BEFORE any filesystem call.
+        const std::string perr = validate_host_capture_path(path);
+        if (!perr.empty()) {
+            note = "refused to write paired artifact: host-capture path validation failed: " + perr;
+            return;
+        }
+
+        const int fd = exclusive_create_file(path);
+        if (fd < 0) {
+            note = "cannot create paired artifact (exists or exclusive creation unsupported); nothing overwritten: " +
+                   path;
+            return;
+        }
+
+        // Write through a buffered stdio stream; ownership of fd is transferred to a small
+        // RAII closer so the file is closed on every exit path.
+        FILE* f = nullptr;
+#ifdef _WIN32
+        f = _fdopen(fd, "wb");
+#else
+        f = fdopen(fd, "wb");
+#endif
+        if (!f) {
+            this->path = path;
+            this->note = "paired artifact fdopen failed; nothing overwritten: " + path;
+            return;
+        }
+        auto close_f = [&]() {
+            if (f) {
+#ifdef _WIN32
+                _close(_fileno(f));
+#else
+                fclose(f);
+#endif
+                f = nullptr;
+            }
+        };
+        fprintf(f, "replicate,iteration,minimal_sec,instrumented_sec,signed_overhead_pct\n");
+        for (size_t i = 0; i < minimal.size(); ++i) {
+            const auto& a = minimal[i].total_samples_sec;
+            const auto& b = instrumented[i].total_samples_sec;
+            for (size_t j = 0; j < a.size(); ++j) {
+                const double pct = 100.0 * (b[j] - a[j]) / a[j];
+                fprintf(f, "%u,%zu,%#.9g,%#.9g,%#.9g\n",
+                        minimal[i].index, j, a[j], b[j], pct);
+            }
+        }
+        if (fflush(f) != 0) {
+            close_f();
+            this->path = path;
+            this->note = "paired artifact fflush failed; nothing overwritten: " + path;
+            return;
+        }
+#ifdef _WIN32
+        int err = _commit(fd);
+#else
+        int err = fsync(fd);
+#endif
+        close_f();
+        if (err == 0) {
+            this->path = path;
+            this->written = true;
+            this->note.clear();
+            return;
+        }
+        this->path = path;
+        this->note = "paired artifact created but not confirmed durable on disk (flush/sync failed)";
+    }
+
+    /// Configure the host-visible capture directory. Relative, non-traversal, non-absolute.
+    /// The final CSV path is host_path/paired_samples.csv, created with exclusive no-overwrite.
+    void set_host_path(const std::string& p) { host_path = p; }
+
+private:
+    std::string host_path;  // empty => artifact not attempted (backward compatible)
+};
+
+// ---------------------------------------------------------------------------
+// Host-capture path validation (dedicated; does NOT enforce the diagnostic dir prefix,
+// because the host work area is outside build/bm_b7_diagnostic/ by design).
+// ---------------------------------------------------------------------------
+std::string validate_host_capture_path(const std::string& raw) {
+    if (raw.empty()) return "path empty";
+    if (raw.find(':') != std::string::npos)
+        return "absolute paths are not allowed (drive letters / schemes)";
+    if (!raw.empty() && (raw[0] == '/' || raw[0] == '\'))
+        return "absolute paths are not allowed";
+    if (raw.find("..") != std::string::npos)
+        return "'..' path traversal is not allowed";
+    // Defense in depth: never write into campaign/historical/production artifact areas.
+    static const char* kForbidden[] = {
+        "g7-campaign", "g7cam", "reports", "records", ".jsonl",
+        "evidence_manifest", "gate_results", "tiny_dense_2l_weights.bin",
+    };
+    const std::string low = to_lower(raw);
+    for (const char* f : kForbidden) {
+        if (low.find(to_lower(f)) != std::string::npos)
+            return std::string("path contains forbidden marker '") + f +
+                   "' (historical/production data must never be touched)";
+    }
+    return "";
+}
+
+// ---------------------------------------------------------------------------
+// Paired-sample capture wiring (output-only). Thin wrapper around PairedArtifact::write().
+// ---------------------------------------------------------------------------
+void write_paired_artifact_if_valid(PairedArtifact& art,
+                                    const std::vector<ReplicateResult>& minimal,
+                                    const std::vector<ReplicateResult>& instrumented) {
+    art.write(minimal, instrumented);
+}

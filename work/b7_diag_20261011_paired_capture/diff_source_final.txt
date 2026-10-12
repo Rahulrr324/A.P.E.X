@@ -1,0 +1,196 @@
+--- work/b7_diag_20261011_paired_capture/snapshot/bm_b7_diagnostic.cpp.before	2026-10-11 20:28:43.939936400 +0530
++++ stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp	2026-10-11 21:02:42.902648500 +0530
+@@ -1089,6 +1089,143 @@
+ }
+ 
+ // ---------------------------------------------------------------------------
++// Paired-sample capture (output-only; added for one authorized evidence run).
++// Captures the SAME (replicate, iteration) pairs used by calibrate(), using the
++// EXACT same paired-overhead formula, and persists them BEFORE the run-owned
++// blob/run dir are cleaned up and BEFORE any stdout report is rendered.
++//
++// Fields are stored RAW (seconds + signed pct), matching the calibration source
++// of truth. No rounding is applied before writing; the file is a CSV with a
++// header line. This source does NOT change which pairs are formed, the
++// protocol, calibration, classification, thresholds, or exit codes.
++//
++// WRITE DISCIPLINE:
++//   - Written to a unique, no-overwrite path under the SAME validated diagnostic
++//     directory (build/bm_b7_diagnostic/), so it cannot collide with production
++//     or historical evidence and cannot overwrite an existing file.
++//   - Written ONLY when every replicate in BOTH conditions is valid (the same
++//     pre-condition calibrate() requires for the worst-case statistic), so the
++//     file is not produced for a partial/invalid run.
++//   - Written BEFORE cleanup (so the blob/run dir still exist) and BEFORE main()
++//     renders the stdout report.
++//   - Failure to write is recorded in the report and printed on stderr; it does
++//     NOT truncate/retry-overwrite anything and does NOT change exit codes.
++// ---------------------------------------------------------------------------
++
++struct PairedSample {
++    uint32_t replicate = 0;
++    uint32_t iteration = 0;
++    double minimal_sec = 0.0;     // a in calibrate()
++    double instrumented_sec = 0.0; // b in calibrate()
++    double signed_overhead_pct = 0.0; // 100*(b-a)/a, exact formula from calibrate()
++};
++
++std::string make_paired_artifact_path(const std::string& run_dir) {
++    // Unique, no-overwrite CSV under the validated diagnostic dir.
++    if (!run_dir.empty() && run_dir.back() == '/') return run_dir + "paired_samples.csv";
++    return run_dir + "/" + "paired_samples.csv";
++}
++
++// Returns OK / not-tried / failed-with-note. Never throws; never overwrites.
++struct PairedArtifact {
++    bool attempted = false;
++    bool written = false;
++    std::string path;        // empty until successfully opened for exclusive write
++    std::string note;        // empty when written
++    void write(const std::string& run_dir,
++               const std::vector<ReplicateResult>& minimal,
++               const std::vector<ReplicateResult>& instrumented) {
++        if (attempted) return;
++        attempted = true;
++        if (minimal.size() != instrumented.size()) {
++            note = "refused to write paired artifact: condition replicate counts differ " +
++                   std::to_string(minimal.size()) + " vs " + std::to_string(instrumented.size());
++            return;
++        }
++        // Mirror calibrate()'s validity pre-condition: write only when every
++        // replicate in BOTH conditions is valid.
++        for (const auto& r : minimal)
++            if (!r.valid) {
++                note = "refused to write paired artifact: a MINIMAL replicate is invalid";
++                return;
++            }
++        for (const auto& r : instrumented)
++            if (!r.valid) {
++                note = "refused to write paired artifact: an INSTRUMENTED replicate is invalid";
++                return;
++            }
++        const std::string path = make_paired_artifact_path(run_dir);
++        const std::string perr = validate_diagnostic_path(path);
++        if (!perr.empty()) {
++            note = "refused to write paired artifact: isolation validation failed: " + perr;
++            return;
++        }
++        const int fd = exclusive_create_file(path);
++        if (fd < 0) {
++            note = "cannot create paired artifact (exists or exclusive creation unsupported); nothing overwritten: " +
++                   path;
++            return;
++        }
++        // Write to the fd through a std::ostream for formatting; ownership of fd
++        // is transferred to a small RAII closer so the file is closed on every
++        // exit path. The closer uses a lambda deleter so the platform-specific
++        // close call is selected with an ordinary runtime if/else (no #ifdef
++        // inside a function body).
++        FILE* f = nullptr;
++#ifdef _WIN32
++        f = _fdopen(fd, "wb");
++#else
++        f = fdopen(fd, "wb");
++#endif
++        if (!f) {
++            this->path = path;
++            this->note = "paired artifact fdopen failed; nothing overwritten: " + path;
++            return;
++        }
++        auto close_f = [&]() {
++            if (f) {
++#ifdef _WIN32
++                _close(_fileno(f));
++#else
++                fclose(f);
++#endif
++                f = nullptr;
++            }
++        };
++        fprintf(f, "replicate,iteration,minimal_sec,instrumented_sec,signed_overhead_pct\n");
++        for (size_t i = 0; i < minimal.size(); ++i) {
++            const auto& a = minimal[i].total_samples_sec;
++            const auto& b = instrumented[i].total_samples_sec;
++            for (size_t j = 0; j < a.size(); ++j) {
++                const double pct = 100.0 * (b[j] - a[j]) / a[j];
++                fprintf(f, "%u,%zu,%#.9g,%#.9g,%#.9g\n",
++                        minimal[i].index, j, a[j], b[j], pct);
++            }
++        }
++        if (fflush(f) != 0) {
++            close_f();
++            this->path = path;
++            this->note = "paired artifact fflush failed; nothing overwritten: " + path;
++            return;
++        }
++#ifdef _WIN32
++        int err = _commit(fd);
++#else
++        int err = fsync(fd);
++#endif
++        close_f();
++        if (err == 0) {
++            this->path = path;
++            this->written = true;
++            this->note.clear();
++            return;
++        }
++        this->path = path;
++        this->note = "paired artifact created but not confirmed durable on disk (flush/sync failed)";
++    }
++};
++
++// ---------------------------------------------------------------------------
+ // Orchestration
+ // ---------------------------------------------------------------------------
+ void abort_report(DiagnosticReport& rep, const std::string& why) {
+@@ -1097,6 +1234,18 @@
+     rep.classification = Classification::INSUFFICIENT_REPLICATION;
+ }
+ 
++// ---------------------------------------------------------------------------
++// Paired-sample capture wiring (output-only; added for one authorized evidence
++// run). Thin wrapper around PairedArtifact::write(); kept separate so the
++// capture point in run_bm_b7_diagnostic stays readable.
++// ---------------------------------------------------------------------------
++void write_paired_artifact_if_valid(PairedArtifact& art,
++                                    const std::string& run_dir,
++                                    const std::vector<ReplicateResult>& minimal,
++                                    const std::vector<ReplicateResult>& instrumented) {
++    art.write(run_dir, minimal, instrumented);
++}
++
+ DiagnosticReport run_bm_b7_diagnostic(const Protocol& proto,
+                                       const DiagnosticPaths& paths) {
+     DiagnosticReport rep;
+@@ -1117,6 +1266,7 @@
+     }
+ 
+     BlobCleanup cleanup;
++    PairedArtifact paired;
+ 
+     try {
+         const RunOwnedBlob blob = create_run_owned_blob(paths);
+@@ -1153,6 +1303,12 @@
+                 }
+             }
+ 
++            // Paired-sample capture: write AFTER all pairing data exists and
++            // BEFORE cleanup + stdout rendering. Uses the same (replicate,
++            // iteration) pairs and the same formula as calibrate().
++            write_paired_artifact_if_valid(paired, blob.run_dir, rep.minimal,
++                                            rep.instrumented);
++
+             rep.calibration = calibrate(rep.minimal, rep.instrumented,
+                                         proto.macro_replicates);
+             rep.classification = classify(rep.calibration, rep.minimal,
+@@ -1207,6 +1363,9 @@
+     const DiagnosticReport rep = run_bm_b7_diagnostic(Protocol{}, paths);
+     std::cout << render_report(rep);
+ 
++    // The paired-sample artifact (if produced) is the authoritative persistent
++    // record; its presence/absence is confirmed by the filesystem under the
++    // validated diagnostic directory. This does not change exit-code semantics.
+     if (!rep.completed) return 2;
+     if (rep.classification == Classification::INSUFFICIENT_REPLICATION) return 3;
+     return 0;

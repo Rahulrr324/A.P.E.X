@@ -1,0 +1,26 @@
+STARK Phase 0 — archive and toolchain discovery (M0 independent review)
+
+# Repository layout
+Repo: /e/My Local AI/stark (NO .git directory)
+- src/phase1/*.cpp            Phase-1 measurement infra
+- tests/test_phase1_*.cpp     Phase-1 regression tests (debug & release)
+- aggregate.cpp               results aggregator (G1-G8)
+- BenchmarkHarness.*          PeakMemorySample + peak_memory_json
+- HardwareProfiler.*          schema: peak_memory {ram_peak_bytes, vram_peak_bytes, ram_measured, vram_measured}
+- CMakeLists.txt              project STARK-006; foreach(profiler accounting budget records reproducibility); enable_testing + 5 add_test
+- Design/HardwareProfiler.h   V009 spec cross-reference
+
+# Compiler configurations found in archive
+- stark/build/CMakeCache.txt: GCC 16.1.0 (WinLibs in user LocalAppData/WinGet)
+- stark/build-release/CMakeCache.txt: GCC 6.3.0 (/c/MinGW/bin/c++.exe)
+
+# Verification outcome
+GCC 16.1.0 present AND verified with headers + Ninja 1.13.2. Builds clean.
+Execution BLOCKED under GCC 16.1.0 (CRT duplication on load).
+GC 6.3.0 (MinGW) also present but not re-verified for execution.
+No git repository -> no Git revision available.
+
+# Historical records
+build/results/ contained 24 JSON + tiny_dense_2l_weights.bin (1,051,664 bytes).
+build/results/ was removed during this session. Not recoverable.
+Regenerated baselines exist in fresh dirs only; originals never modified.

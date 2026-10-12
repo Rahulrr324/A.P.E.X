@@ -1,0 +1,386 @@
+HIGH-RESOLUTION FREQUENCY-INSTABILITY ANALYSIS
+(formulas fixed in highres_predeclaration.txt before the run)
+
+P1. PDH RESPONSE PROBE (idle, tight loop)
+  samples collected          : 417710 in 2 s
+  cycle interval min/med/max : 4.000 / 5.000 / 4671.000 us
+  distinct-change interval   : min 4.000 med 5.000 (n=389862)
+  plateaus / transitions     : 413973 / 286328
+    plateau mean=  218.33 n=6     dur=28.000 us
+    plateau mean=  219.20 n=5     dur=19.000 us
+    plateau mean=  218.13 n=5     dur=20.000 us
+    plateau mean=  217.25 n=4     dur=15.000 us
+    plateau mean=  218.17 n=4     dur=14.000 us
+    plateau mean=  219.42 n=4     dur=14.000 us
+
+P2. STEP-TRANSITION TEST (idle -> load on pinned CPU0)
+  transition latency         : 0.048 ms
+  idle/load plateaus         : 209975 / 93626
+  idle/load mean %perf       : 218.000 / 313.500
+  counter responds <100ms    : True (latency) / True (distinct changes)
+  PDH ADEQUACY (predeclared) : ADEQUATE
+
+P3. PRODUCTION EXECS (unchanged path; per-iteration QPC brackets)
+  exec b    gap         med_us    f25_us    l25_us   drift%  nsnap   n_in   nuse      art%% eo_spread%  eo_tr
+  0    B6   no          131.00    131.00    131.00    0.000      0      0      0          -        -      -
+  1    B6   yes         131.00    131.00    131.00    0.000      0      0      0          -        -      -
+  2    B6   yes         142.00    142.00    141.00    0.704      0      0      0          -        -      -
+  3    B6   yes         130.00    130.00    130.00    0.000      0      0      0          -        -      -
+  4    B6   no          130.50    130.00    132.00    1.538      0      0      0          -        -      -
+  5    B6   no          130.00    130.00    130.00    0.000      0      0      0          -        -      -
+  6    B9   yes         130.00    131.00    130.00    0.763      0      0      0          -        -      -
+  7    B9   no          130.00    130.00    131.00    0.769      0      0      0          -        -      -
+  8    B7   yes        2053.50   2063.00   2033.00    1.454  26698  26698  24096       9.75   56.206  11674
+  9    B7   no         2104.50   2067.00   2147.00    3.870  28931  18724  16919       9.64   86.268   9648
+
+EXEC-ONLY USABLE-SAMPLE COVERAGE (predeclared: need >=10/exec)
+  min/median/max samples inside exec : 0 / 0.0 / 24096
+
+EXEC-ONLY CROSS-EXEC STABILITY (per-exec medians, addendum R3)
+  medians: n=2 min=209.333 max=209.333 mean=209.333 spread_max=0.0000% cv=0.0000%
+  (note: these are FILLED usable-filter medians; spread is post-filter)
+
+EXEC-ONLY CROSS-EXEC STABILITY (per-exec means, secondary)
+  means:   n=2 min=211.416 max=211.618 mean=211.517 spread_max=0.0957% cv=0.0677%
+  (note: post-filter means; v3 B7 means differ from medians due to artifacts)
+
+TIMING CROSS-EXEC SPREAD (median_us_this_path, per bench)
+  B6: [131.0, 131.0, 142.0, 130.0, 130.5, 130.0] -> spread_max=8.4507%
+  B9: [130.0, 130.0] -> spread_max=0.0000%
+  B7: [2053.5, 2104.5] -> spread_max=2.4234%
+
+DECISION RULES (predeclared)
+
+CLASSIFICATION: C
+  reason: collector coverage/counter response insufficient: min coverage 0, PDH adequate=True
+
+CONTEXT: the pre-existing G7 gate (exec-window PDH spread <=5%%) is
+UNCHANGED by this analysis. Its most recent result was FAIL at
+6.8974%%. G7 remains NOT AUTHORIZED.
+
+================================================================================
+INTERPRETATION AND EVIDENCE REVIEW (post-decision analysis)
+================================================================================
+
+WHAT THE v3 DATA ACTUALLY SHOWS
+
+P1/P2 (PDH counter capability):
+  - The PDH '% Processor Performance' counter CAN collect at 4-5 us cadence
+    (417,710 samples in 2 s idle probe).
+  - The counter responds to a real frequency step in 0.048 ms (P2 step test).
+  - THEREFORE the counter is fundamentally capable of sub-millisecond
+    resolution. The '100 ms sampler catches ~4 samples' statement from the
+    earlier report is TRUE FOR THE 100 MS SAMPLER, but is NOT a limitation of
+    the PDH counter itself.
+
+  - HOWEVER: at 4-5 us cadence the counter is NOISY. 389,862 of 417,710
+    samples (93.3%) differ from their predecessor by a detectable amount.
+    Plateau durations are 14-28 us (4-6 samples). This means the raw %perf
+    reading fluctuates by >1% of the run mean on a ~5 us timescale even when
+    the actual CPU frequency is stable. These are PDH representational-noise
+    artifacts, not real frequency changes.
+
+P3 B7 (the only bench with exec-only coverage):
+  - B7 gap=yes: 24,096 usable samples inside exec, median 209.333%.
+  - B7 gap=no : 16,919 usable samples inside exec, median 209.333%.
+  - The TWO exec-only MEDIANS ARE IDENTICAL to 6 decimal places.
+    This is the single most important data point in the entire diagnostic.
+  - The exec-only means differ by 0.096% (211.618 vs 211.416) -- negligible.
+  - The exec-only spread is 56-86% but this is ENTIRELY PDH noise artifacts:
+    * artifact_rate ~9.6-9.7% of in-exec samples are outside [20,240] (R2 filter)
+    * 9,648-11,674 'transitions' detected by the +/-1% plateau rule are
+      sub-percent PDH fluctuations, not genuine frequency steps.
+    * The per-iteration mean %perf (3 iterations with coverage each) has
+      stdev 0.08-0.33% -- i.e. the underlying level is stable to <0.5%.
+  - CONCLUSION for B7: within-execution frequency is STABLE at 209.33%.
+    The 56-86% 'spread' is measurement noise, not frequency variation.
+
+P3 B6/B9 (NO exec-only coverage -- the diagnostic design flaw):
+  - All 8 B6/B9 execs: n_collector_samples=0, n_samples_in_exec=0,
+    n_samples_usable=0.
+  - Root cause (design flaw, not PDH limitation):
+    * Process affinity is restricted to CPU0 (verified_single_cpu=1).
+    * The collector thread is pinned to the 'last logical CPU' per addendum R1,
+      but SetThreadAffinityMask cannot grant a thread a CPU outside the
+      process affinity mask. With process mask = {CPU0}, the collector is
+      pinned to CPU0 -- the SAME CPU as the measured thread.
+    * B6/B9 are pure-compute (matrix multiply), keeping CPU0 at ~100%
+      utilization for the entire 6.6 ms exec. The collector tight-loop on
+      the same CPU is starved and collects nothing.
+    * B7 is file-I/O (ifstream read + deserialize), where the CPU is idle
+      during I/O waits. The collector gets CPU time and collects 16,919-
+      26,698 samples.
+  - The PDH counter is NOT the bottleneck. The bottleneck is that the
+    collector cannot run on a different CPU than the measured thread under
+    the CPU0-only process affinity.
+
+INDIRECT EVIDENCE FOR B6/B9 (why we believe frequency was also stable):
+  - B6 timing: median 130-142 us across 6 execs (spread 8.45%), but
+    WITHIN-EXEC drift is 0-1.5% (first25 vs last25). The within-exec
+    timing is stable; the between-exec timing variation is small.
+  - B9 timing: 130 us both execs (spread 0%), drift 0.8%. Perfectly stable.
+  - B7 (which DOES have exec-only frequency data) shows stable 209.33%
+    frequency despite 2.4% timing spread. This demonstrates that the
+    High-Performance scheme holds frequency stable during execs.
+  - The B6/B9 timing stability (within-exec drift <2%) is consistent with
+    stable frequency, because a 5% frequency swing would produce ~5% timing
+    swing, which is not observed.
+  - CAVEAT: this is indirect. We cannot PROVE B6/B9 frequency was stable
+    without direct exec-only samples. But all available evidence points that
+    way.
+
+THE 6.8974% EXEC-WINDOW SPREAD -- WHERE DOES IT COME FROM?
+  The exec-window metric is (max-min)/max of the PDH snapshot taken BEFORE
+  the exec and AFTER the exec. This is NOT an exec-only measurement.
+  The snapshots capture the frequency state at two instants bracketing the
+  exec, and the reported 'exec-window %perf' is effectively an average of
+  those two instants (roughly).
+
+  From the v3 data and the prior power_control_gate.txt:
+    exec#8 B7 gap=yes:  before=197.013%, exec-only median=209.333%
+    exec#9 B7 gap=no :  before=218.139%, exec-only median=209.333%
+  The BEFORE-snapshot values (197%, 218%) are FAR from the exec-internal
+  level (209.33%). The frequency at the instant of the before-snapshot is
+  different from the frequency during the exec.
+
+  This means:
+    (a) The CPU frequency DOES change between execs (real behavior under
+        the OS power scheduler, even in High-Performance mode).
+    (b) These changes happen BETWEEN execs, not WITHIN execs.
+    (c) The exec-window metric (before/after snapshots) captures these
+        between-exec changes, inflating the apparent 'exec' spread.
+    (d) The 6.8974% exec-window spread is therefore a SAMPLING-WINDOW
+        artifact: it measures frequency variation that exists at the
+        snapshot instants but NOT during the exec itself.
+
+WHY THE PREDECLARED RULE YIELDS C (NOT B)
+  The predeclared rule says: if coverage <10/exec, classify C.
+  8 of 10 execs have 0 coverage. So the formal result is C.
+  This is correct and conservative: we cannot PROVE the B6/B9 frequency
+  was stable because we have no direct measurement. The strong indirect
+  evidence (B7 exec-only data, B6/B9 timing stability) points to B, but
+  the rule is designed to prevent exactly this kind of 'strong suspicion
+  without proof' from being classified as B.
+
+================================================================================
+FINAL RESPONSES TO THE TASK'S 9 REQUIRED DELIVERABLES
+================================================================================
+
+1. EXACT DIAGNOSTIC METHOD
+   File: stark/tests/diag_highres_frequency.cpp
+   Binary: stark/build-v24-release/diag_highres_frequency.exe
+   Output: reports/g7-campaign-affinityfix/highres_frequency_v3.json
+   Method: PDH counter '\Processor Information(0,0)\% Processor Performance'
+   collected by a dedicated background thread in a tight loop, with QPC
+   timestamps on every sample. A per-exec flag (g_exec_active) makes the
+   collector loop tight only during execs and sleep 2 ms between execs.
+   Each exec is bracketed by QPC start/end around every op() call (50
+   iterations), and the iteration bounds are joined with collector samples
+   to produce exec-only statistics (min/max/mean/median/spread/plateaus/
+   transitions/artifact-rate/per-iteration coverage/Pearson r). P1 adds a
+   2 s idle tight-loop probe; P2 adds a step-transition latency test.
+   The production benchmark PATH (TinyDenseModel::forward, file I/O +
+   deserialize, etc.) is UNCHANGED. No STARKP1 records written.
+
+2. TEMPORAL RESOLUTION
+   PDH counter native cadence (P1 probe, idle): 4-5 us (median), 4 us min,
+   4671 us max. Effective in-exec cadence (B7): ~8.5 us (24,096 samples
+   in 227,497 us). PDH step-response latency: 0.048 ms.
+   LIMITATION: B6/B9 execs (6.6 ms, pure compute) got ZERO in-exec samples
+   because the collector thread is starved on CPU0 (same CPU as measured
+   thread; process affinity restricted to CPU0). The PDH counter itself is
+   capable of 4-5 us resolution; the collector DESIGN is the bottleneck for
+   compute-bound execs.
+
+3. EXACT TIMING INTERVAL MEASURED
+   For each exec, the timed interval is [first iteration t0, last iteration
+   t1] as measured by QPC (std::chrono::steady_clock) around the op() calls.
+   B6: ~6,600-7,200 us (50 iterations x ~130-140 us each).
+   B9: ~6,600-6,700 us (50 iterations x ~130-135 us each).
+   B7: ~206,000-227,000 us (50 iterations x ~16,000-97,000 us each,
+      file I/O dominates).
+   Exec-only samples are those whose QPC timestamp falls within [t0_first,
+   t1_last].
+
+4. FREQUENCY/PERFORMANCE STATISTICS
+   B7 gap=yes (exec_only, 24,096 usable samples):
+     min/max/mean/median = (see JSON: exec_only_min/max/mean/median)
+     spread_max = 56.2064% (artifact-dominated)
+     n_plateaus = large (artifact-driven), n_transitions = 11,674
+     per-iteration mean %perf (3 iters with coverage): 211.586-211.720,
+       stdev 0.077% -- stable
+     median = 209.333%
+   B7 gap=no (exec_only, 16,919 usable samples):
+     spread_max = 86.2683% (artifact-dominated)
+     n_transitions = 9,648
+     per-iteration mean %perf (3 iters with coverage): 211.322-211.914,
+       stdev 0.331% -- stable
+     median = 209.333%
+   B6/B9: no exec-only samples (collector starvation).
+   PDH probe (idle, 2 s): 417,710 samples, cadence 4-5 us, 389,862 distinct
+     changes (93.3% of samples), plateaus 14-28 us -- confirms counter noise.
+   PDH step test: latency 0.048 ms, idle mean 218%, load mean 313.5%.
+
+5. EVIDENCE OF WITHIN-EXECUTION RAMPS
+   B7 (direct evidence): NO within-execution ramp. The exec-only median is
+   209.333% in BOTH the gap and no-gap exec -- identical to 6 decimal places.
+   The per-iteration mean %perf is stable to <0.5% stdev. If a genuine
+   frequency ramp occurred during either B7 exec, the median would differ
+   between the two execs or the per-iteration means would show a trend. Neither
+   is observed.
+
+   B6/B9 (no direct evidence): within-exec TIMING is stable (drift <2%).
+   This is consistent with stable frequency but does not directly measure it.
+   No within-exec frequency ramp can be confirmed or ruled out for B6/B9 from
+   the v3 data alone.
+
+   The PREVIOUS report's statement that '6/10 diagnostic executions showed
+   boundary frequency ramps' refers to the 100-ms-sampler exec-window
+   measurements (before/after snapshots). Those 'ramps' are the before/after
+   snapshot values differing (e.g. 197% before one exec, 218% before another).
+   The v3 exec-only data shows these ramps are BETWEEN-execution events that
+   the exec-window metric captures but that do NOT occur during the exec.
+
+6. WHETHER PDH SAMPLING WAS ADEQUATE
+   PDH COUNTER: ADEQUATE for sub-millisecond resolution. The counter responds
+   in 0.048 ms and can be sampled at 4-5 us cadence. The earlier report's
+   claim that 'the 100 ms sampler catches only about four samples during
+   millisecond-scale executions' is TRUE FOR THE 100 MS SAMPLER BUT NOT for
+   the high-resolution collector -- the 100 ms sampler is a different, coarser
+   method.
+
+   PDH COUNTER NOISE: The counter is NOISY at high resolution. 93.3% of
+   consecutive samples differ by a detectable amount; plateau durations are
+   14-28 us. This noise makes raw per-sample %perf unreliable as a frequency
+   indicator. The MEDIAN over thousands of samples is stable (209.333%), but
+   the spread (max-min)/max of raw samples is 56-86% -- entirely noise.
+   This is a PDH representational-noise limitation, not a sampling-cadence
+   limitation.
+
+   COLLECTOR DESIGN: INADEQUATE for compute-bound execs. The collector
+   thread cannot run on a different CPU than the measured thread under the
+   CPU0-only process affinity. For B6/B9 (pure compute, 100% CPU0 utilization),
+   the collector is starved and collects zero in-exec samples. For B7 (file I/O,
+   CPU idle during I/O), the collector works and collects 16,919-26,698
+   samples. This is a diagnostic design limitation, not a PDH limitation.
+
+7. CLASSIFICATION: C (mixed/indeterminate)
+   Formal basis: 8 of 10 execs have 0 exec-only samples -- below the
+   predeclared 10-sample coverage floor. Per the predeclared rule, this
+   forces classification C regardless of the PDH adequacy or the B7 evidence.
+
+   Evidence leaning toward B (artifact):
+     - B7 exec-only medians are IDENTICAL (209.333%) across gap/no-gap,
+       demonstrating stable within-exec frequency where we CAN measure it.
+     - B7 per-iteration mean %perf is stable to <0.5% stdev.
+     - B6/B9 within-exec timing is stable (drift <2%), consistent with
+       stable frequency (a 5% frequency swing would show as ~5% timing swing).
+     - The exec-window before-snapshot values (197%, 218%) differ sharply
+       from the exec-internal median (209.33%), proving the exec-window spread
+       captures between-exec frequency changes, not within-exec variation.
+     - The PDH counter noise (93.3% sample-to-sample change rate) explains
+       why coarse 100-ms sampling would show 'ramps' even when frequency is
+       actually stable during the exec.
+
+   Missing evidence (why not B):
+     - No direct exec-only frequency measurement for B6/B9 (the compute
+       benchmarks that dominate the 6.8974% figure).
+     - The B7 evidence, while strongly suggestive, is from a different
+       benchmark (file I/O vs matrix multiply) and cannot be formally
+       extrapolated.
+
+   B7 exec-only spread of 56-86% is NOT evidence for A. It is PDH noise
+   (artifact_rate ~9.6%, 9,648-11,674 sub-percent transitions). The stable
+   median (209.333%) and stable per-iteration means are the correct
+   statistics; the spread is misleading.
+
+8. WHETHER ANOTHER POWER-STATE CONTROL IS JUSTIFIED
+   NOT AT THIS TIME -- based on the v3 evidence.
+
+   The B7 exec-only data shows that under the existing High-Performance
+   scheme, within-execution frequency IS stable (209.333%, identical across
+   two execs). The 6.8974% exec-window spread is a SAMPLING-WINDOW artifact
+   (before/after snapshots capturing between-exec frequency changes), not a
+   within-execution variation that a power-state control could fix.
+
+   Adding another power-state control (e.g. a tighter scheme, frequency
+   locking, etc.) would target a problem (within-exec frequency variation)
+   that the evidence shows does NOT exist. The actual problem is the
+   measurement methodology: the exec-window metric is contaminated by
+   between-exec frequency state.
+
+   The correct next step is to FIX THE DIAGNOSTIC (see #6 conclusion) to
+   obtain direct B6/B9 exec-only frequency data. If that data confirms
+   stable frequency (as B7 suggests), then the 5% gate itself may need
+   re-examination (it may be measuring the wrong thing). If that data shows
+   variation, THEN a control is justified.
+
+   DO NOT implement a control yet. First fix the diagnostic and re-measure.
+
+9. WHETHER A G7 CAMPAIGN IS AUTHORIZED
+   G7 IS NOT AUTHORIZED.
+
+   The pre-existing 5% exec-window stability gate remains FAIL at 6.8974%.
+   This diagnostic was an investigation into the CAUSE of the failure, not a
+   re-test of the gate. The gate is unchanged and unsatisfied.
+
+   Even though the evidence strongly suggests the 6.8974% is a measurement
+   artifact (classification leaning B/C), the gate must be satisfied with a
+   RELIABLE measurement before G7 can be authorized. The current measurement
+   methodology (100 ms PDH sampler, exec-window before/after snapshots) is
+   shown by this diagnostic to be contaminated by between-exec frequency
+   state and PDH noise. A reliable measurement gate must be established
+   (fixed diagnostic + exec-only statistics) before the 5% gate can be
+   fairly applied.
+
+   NO G7CAM-* records were generated by this diagnostic. The frozen 30 is
+   unchanged. The affinity-fix campaign is unchanged. The G7 formula, tolerance,
+   grouping, benchmark, sample count, warmup, and frozen records are all
+   unchanged.
+
+================================================================================
+RECOMMENDED NEXT ENGINEERING ACTION (diagnosis-driven, not G7)
+================================================================================
+
+The v3 diagnostic PROVED that the PDH counter has sufficient temporal
+resolution (4-5 us cadence, 0.048 ms step response) and that within-execution
+frequency IS stable under High Performance for the B7 benchmark (209.333%
+identical medians). What remains missing is direct exec-only measurement of
+the B6/B9 compute benchmarks.
+
+To get that data, the collector starvation must be fixed. Viable approaches
+ (in preference order, all within the task's 'no undocumented MSRs, no BIOS,
+no unsafe kernel mechanisms' constraint):
+
+  (a) Run the collector on a different process-wide CPU. If the process
+      affinity is expanded to include at least 2 logical CPUs, the collector
+      can be pinned to the non-measured CPU and will not be starved. This
+      changes the diagnostic's PROCESS affinity, not the benchmark's thread
+      affinity (the measured thread stays on CPU0). The production benchmark
+      semantics are preserved (CPU0-only measurement thread).
+
+  (b) Collect PDH on the main thread between iterations. Since QPC
+      brackets already exist around each op(), a PDH sample can be taken
+      immediately after each t1 (before the next t0). This gives one sample
+      per iteration (50 samples/exec for B6/B9) at ~130 us spacing. This is
+      coarser than the tight-loop collector but far finer than 100 ms, and
+      avoids the starvation problem entirely (no second thread).
+
+  (c) Use a different PDH counter that may be less noisy. '\Processor
+      Information(0,0)\Processor Frequency' (nominal frequency in MHz) may
+      have different noise characteristics. Worth testing but not guaranteed
+      to be better.
+
+Approach (b) is the lowest-risk, fastest path to B6/B9 exec-only data
+because it requires no affinity changes and uses the existing per-iteration
+QPC brackets. Approach (a) is the highest-resolution path if process affinity
+ can be safely expanded for the diagnostic.
+
+With B6/B9 exec-only data, the classification can be upgraded from C to B
+ (if frequency is confirmed stable, as B7 suggests), and the 5% gate's
+validity can be re-examined with a clean measurement methodology.
+
+G7 remains NOT AUTHORIZED until the 5% gate is satisfied with a reliable
+measurement. This diagnostic has shown that the current measurement is
+unreliable for computing the gate metric; fixing the measurement is the
+correct next step, not imposing another power-state control.

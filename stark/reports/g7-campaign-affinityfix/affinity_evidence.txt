@@ -1,0 +1,35 @@
+records: 30
+file                                     exp  bench req setret  gle  pmask  smask    eff  qok  ver ok
+G7CAM-B6-E1-14955664.json                E1   B6      0      1    0      1   4095      0 True True OK
+G7CAM-B6-E1-20855871.json                E1   B6      0      1    0      1   4095      0 True True OK
+G7CAM-B6-E1-49559376.json                E1   B6      0      1    0      1   4095      0 True True OK
+G7CAM-B6-E1-61571712.json                E1   B6      0      1    0      1   4095      0 True True OK
+G7CAM-B6-E1-63692176.json                E1   B6      0      1    0      1   4095      0 True True OK
+G7CAM-B6-E5-14955664.json                E5   B6      0      1    0      1   4095      0 True True OK
+G7CAM-B6-E5-20855871.json                E5   B6      0      1    0      1   4095      0 True True OK
+G7CAM-B6-E5-49559376.json                E5   B6      0      1    0      1   4095      0 True True OK
+G7CAM-B6-E5-61571712.json                E5   B6      0      1    0      1   4095      0 True True OK
+G7CAM-B6-E5-63692176.json                E5   B6      0      1    0      1   4095      0 True True OK
+G7CAM-B7-E1-14955664.json                E1   B7      0      1    0      1   4095      0 True True OK
+G7CAM-B7-E1-20855871.json                E1   B7      0      1    0      1   4095      0 True True OK
+G7CAM-B7-E1-49559376.json                E1   B7      0      1    0      1   4095      0 True True OK
+G7CAM-B7-E1-61571712.json                E1   B7      0      1    0      1   4095      0 True True OK
+G7CAM-B7-E1-63692176.json                E1   B7      0      1    0      1   4095      0 True True OK
+G7CAM-B7-E5-14955664.json                E5   B7      0      1    0      1   4095      0 True True OK
+G7CAM-B7-E5-20855871.json                E5   B7      0      1    0      1   4095      0 True True OK
+G7CAM-B7-E5-49559376.json                E5   B7      0      1    0      1   4095      0 True True OK
+G7CAM-B7-E5-61571712.json                E5   B7      0      1    0      1   4095      0 True True OK
+G7CAM-B7-E5-63692176.json                E5   B7      0      1    0      1   4095      0 True True OK
+G7CAM-B9-E1-14955664.json                E1   B9      0      1    0      1   4095      0 True True OK
+G7CAM-B9-E1-20855871.json                E1   B9      0      1    0      1   4095      0 True True OK
+G7CAM-B9-E1-49559376.json                E1   B9      0      1    0      1   4095      0 True True OK
+G7CAM-B9-E1-61571712.json                E1   B9      0      1    0      1   4095      0 True True OK
+G7CAM-B9-E1-63692176.json                E1   B9      0      1    0      1   4095      0 True True OK
+G7CAM-B9-E5-14955664.json                E5   B9      0      1    0      1   4095      0 True True OK
+G7CAM-B9-E5-20855871.json                E5   B9      0      1    0      1   4095      0 True True OK
+G7CAM-B9-E5-49559376.json                E5   B9      0      1    0      1   4095      0 True True OK
+G7CAM-B9-E5-61571712.json                E5   B9      0      1    0      1   4095      0 True True OK
+G7CAM-B9-E5-63692176.json                E5   B9      0      1    0      1   4095      0 True True OK
+
+records with truthful single-CPU evidence: 30/30
+AFFINITY EVIDENCE CHECK: PASSED (all 30 runs)

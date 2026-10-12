@@ -1,0 +1,15 @@
+ninja: Entering directory `build-release-clean-3'
+[1/14] Linking CXX static library libstark_phase1.a
+[2/14] Linking CXX executable test_phase1_profiler.exe
+[3/14] Linking CXX executable test_phase1_budget.exe
+[4/14] Linking CXX executable aggregate.exe
+[5/14] Building CXX object CMakeFiles/test_phase1_accounting.dir/src/phase1/bench/TinyDenseModel.cpp.obj
+[6/14] Building CXX object CMakeFiles/test_phase1_reproducibility.dir/src/phase1/bench/TinyDenseModel.cpp.obj
+[7/14] Building CXX object CMakeFiles/run_baseline.dir/src/phase1/bench/TinyDenseModel.cpp.obj
+[8/14] Building CXX object CMakeFiles/profiler_cli.dir/src/phase1/bench/TinyDenseModel.cpp.obj
+[9/14] Building CXX object CMakeFiles/test_phase1_records.dir/src/phase1/bench/TinyDenseModel.cpp.obj
+[10/14] Linking CXX executable test_phase1_accounting.exe
+[11/14] Linking CXX executable test_phase1_reproducibility.exe
+[12/14] Linking CXX executable run_baseline.exe
+[13/14] Linking CXX executable profiler_cli.exe
+[14/14] Linking CXX executable test_phase1_records.exe

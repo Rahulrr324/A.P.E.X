@@ -1,0 +1,88 @@
+HIGH-RESOLUTION FREQUENCY DIAGNOSTIC v7 -- PREDECLARATION ADDENDUM
+Written BEFORE modifying the diagnostic, building, or running anything for v7.
+Date (local): 2026-10-07
+Status: supersedes ONLY (a) the collector inter-sample behavior and (b) the
+g_exec_active gating ORDER stated/implied by the v5 predeclaration and v6
+addendum. The schedule, thresholds, classification framework, coverage floor,
+artifact filter, and A/B rules remain IN FORCE exactly as predeclared
+(v5 predeclaration + v6 addendum). No G7 threshold, formula, benchmark
+timing semantic, record store, or production binary is touched.
+
+1. WHY A NEW RUN IS NEEDED (v6 outcome, evidence on disk)
+   v6 executed the v6 addendum faithfully (topology-verified collector on
+   CPU2 = different physical core; worker CPU0; both pins readback-verified;
+   observed CPUs [0] vs [2]; original scheme restored, wrapper exit 0) and
+   the topology rules all passed. BUT two residual defects remain:
+
+   (D1) COVERAGE RACE: 4 of 8 collector-active (B) compute execs recorded
+   0-1 samples in [t0,t1] (execs 1,5,7,15 of highres_frequency_v6.json)
+   even though the collector CPU was free. Root cause in code: the collector
+   loop reads g_exec_active BEFORE the main thread sets it (thread is
+   spawned, produces its first sample, main clears + sets active), takes the
+   2 ms inter-sample sleep on that stale read, and Windows' default 15.6 ms
+   timer granularity can let that sleep outlive an entire ~7 ms exec; the
+   subsequent join (g_stop) then exits the thread before it ever collects.
+
+   (D2) RATE PERTURBATION: execs where the collector DID sample ran slower
+   than their A partners even on the separate core (B6 130->221.5 us;
+   B7 2585/2501 -> 4563.5/3983 us, +57..63%). An external calibrated probe
+   (2026-10-07, /tmp/pdh_pace_probe.py, both threads pinned + readback-
+   verified, worker=CPU0, sampler=CPU2, 1.2 s trials, 2 trials each)
+   isolated the cause as PDH COLLECTION RATE, not CPU burn:
+       no sampler          : 14.36M / 13.20M loops   (base)
+       tight ~47-56 kHz    : 10.73M / 10.85M         (ratio 0.75/0.76)
+       paced 2 kHz (500 us): 14.64M / 14.74M         (ratio 1.02/1.03)
+       paced 500 Hz (2 ms) : 15.18M / 14.52M         (ratio 1.06/1.01)
+   => a ~50 kHz tight PDH loop costs the measured thread ~25%; <=2 kHz
+   pacing shows no measurable loss. The 500 us (2 kHz) pace point is chosen
+   because it is the LARGEST rate that still guarantees the >=10-sample
+   coverage floor for the shortest observed B exec (~6.8 ms -> >=13 samples,
+   30% margin) while being 25x below the perturbing tight-loop rate.
+
+2. v7 CHANGES (two, both measurement-mechanism only)
+   (F1) Gating order: g_exec_active is stored BEFORE the collector thread
+   is spawned; samples are cleared only AFTER the first sample arrives
+   (ready). The collector therefore reads tight=true on its first loop
+   iteration and cannot take the inter-sample sleep anywhere inside
+   [clear .. exec end]. Zero-coverage from the sleep/granularity race
+   becomes structurally impossible; any residual shortfall is now
+   observable (see F3) instead of silent.
+   (F2) Paced sampling during B execs: after each sample the collector
+   spins on QPC until t_in + 500 us (period anchored to the previous
+   sample's start; g_stop checked inside the spin). No sleep calls in the
+   sample path. Cadence target 500 us +/- QPC jitter. P1/P2 probes keep
+   their existing tight loops (unchanged PDH adequacy rules; probes run
+   with no benchmark in flight).
+   (F3) Observability (no semantic change): per-B-exec collector_diag
+   {ready_wait_ms, loops, pdh_ok, pdh_fail_collect, pdh_fail_format,
+   cstatus_neg, last_err, max_single_pdh_call_us, first_sample_delay_us,
+   max_sample_gap_us} plus static {pace_period_us=500, pace_mode}. These
+   make any residual coverage shortfall diagnosable, never silent.
+
+3. UNCHANGED (reaffirmed): 16-exec A/B-pair schedule with alternating order
+   and 30 s idles; warmup=10/measure=50; production benchmark semantics;
+   A/B materiality 2.0%; coverage floor >=10 usable samples per B exec
+   (zero coverage is NEVER stability evidence); R2 artifact filter
+   20-240%; in-exec ramp >1 transition OR spread >5.0%; PDH adequacy
+   P1 <100 ms AND P2 <100 ms; classification A/B/C exactly as in
+   highres_predeclaration.txt (no new classes, no relaxed thresholds);
+   session-scoped High Performance with post-session restore + GUID
+   verification; no G7 campaign; no frozen-record, manifest, threshold,
+   formula, historical, or G7CAM changes.
+
+4. PREDECLARED OUTPUT ARTIFACTS (v7)
+   - reports/g7-campaign-affinityfix/highres_frequency_v7.json
+   - reports/g7-campaign-affinityfix/power_scheme_session_highres_v7.json
+   - reports/g7-campaign-affinityfix/highres_v6_analysis.txt (v6 outcome)
+   - reports/g7-campaign-affinityfix/highres_v7_analysis.txt (final:
+     A/B/C/D determination for this step)
+   v5/v6 artifacts remain on disk unchanged as evidence.
+
+5. DECISION TO BE MADE FROM v7 (stated in advance)
+   Per bench: pooled A vs B execution-time comparison against 2.0%;
+   B-exec coverage against >=10; in-window frequency stats/transitions
+   against the A/B/C rules; P1/P2 against PDH adequacy. The step's goal is
+   answered YES only if ALL hold: every B exec >=10 usable in-window
+   samples, A-vs-B timing within 2.0% per bench, pins verified on both
+   threads, P1/P2 adequate. Otherwise the outcome is C (or D where truly
+   indeterminate) and the limitation is reported -- G7 remains untouched.

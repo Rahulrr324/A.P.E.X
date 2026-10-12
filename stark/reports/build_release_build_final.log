@@ -1,0 +1,62 @@
+ninja: Entering directory `build-release-clean-3'
+[1/2] Building CXX object CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj
+FAILED: [code=1] CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -I"E:/My Local AI/stark/src/phase1" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj -MF CMakeFiles\aggregate.dir\src\phase1\aggregate.cpp.obj.d -o CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj -c "E:/My Local AI/stark/src/phase1/aggregate.cpp"
+E:/My Local AI/stark/src/phase1/aggregate.cpp: In function 'int {anonymous}::run(int, char**)':
+E:/My Local AI/stark/src/phase1/aggregate.cpp:252:30: error: invalid operands of types 'const char*' and 'const char [53]' to binary 'operator+'
+  252 |                 ram_err = id + ": peak_memory missing ram_measured or ram_peak_bytes";
+      |                           ~~ ^ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                           |    |
+      |                           |    const char [53]
+      |                           const char*
+E:/My Local AI/stark/src/phase1/aggregate.cpp:256:28: error: 'const class stark_p1::JsonValue' has no member named 'isBool'; did you mean 'asBool'?
+  256 |                 if (!ram_m.isBool() || ram_m.asBool() != true) {
+      |                            ^~~~~~
+      |                            asBool
+E:/My Local AI/stark/src/phase1/aggregate.cpp:258:34: error: invalid operands of types 'const char*' and 'const char [37]' to binary 'operator+'
+  258 |                     ram_err = id + ": ram_measured is not a true boolean";
+      |                               ~~ ^ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                               |    |
+      |                               |    const char [37]
+      |                               const char*
+E:/My Local AI/stark/src/phase1/aggregate.cpp:261:34: error: invalid operands of types 'const char*' and 'const char [39]' to binary 'operator+'
+  261 |                     ram_err = id + ": ram_peak_bytes missing numeric value";
+      |                               ~~ ^ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                               |    |
+      |                               |    const char [39]
+      |                               const char*
+E:/My Local AI/stark/src/phase1/aggregate.cpp:266:38: error: invalid operands of types 'const char*' and 'const char [37]' to binary 'operator+'
+  266 |                         ram_err = id + ": ram_peak_bytes not positive/finite";
+      |                                   ~~ ^ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                   |    |
+      |                                   |    const char [37]
+      |                                   const char*
+E:/My Local AI/stark/src/phase1/aggregate.cpp:278:68: error: 'const class stark_p1::JsonValue' has no member named 'isBool'; did you mean 'asBool'?
+  278 |             if (pm.has("vram_measured") && pm.get("vram_measured").isBool()) {
+      |                                                                    ^~~~~~
+      |                                                                    asBool
+E:/My Local AI/stark/src/phase1/aggregate.cpp:285:37: error: invalid operands of types 'const char*' and 'const char [38]' to binary 'operator+'
+  285 |                         detail = id + ": GPU-enabled vram_peak_bytes missing";
+      |                                  ~~ ^ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                  |    |
+      |                                  |    const char [38]
+      |                                  const char*
+E:/My Local AI/stark/src/phase1/aggregate.cpp:290:41: error: invalid operands of types 'const char*' and 'const char [50]' to binary 'operator+'
+  290 |                             detail = id + ": GPU-enabled vram_peak_bytes not positive/finite";
+      |                                      ~~ ^ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                      |    |
+      |                                      |    const char [50]
+      |                                      const char*
+E:/My Local AI/stark/src/phase1/aggregate.cpp:299:37: error: invalid operands of types 'const char*' and 'const char [50]' to binary 'operator+'
+  299 |                         detail = id + ": CPU-only vram source not documented with reason";
+      |                                  ~~ ^ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                                  |    |
+      |                                  |    const char [50]
+      |                                  const char*
+E:/My Local AI/stark/src/phase1/aggregate.cpp:304:29: error: invalid operands of types 'const char*' and 'const char [35]' to binary 'operator+'
+  304 |                 detail = id + ": vram_peak_bytes is not an object";
+      |                          ~~ ^ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                          |    |
+      |                          |    const char [35]
+      |                          const char*
+ninja: build stopped: subcommand failed.

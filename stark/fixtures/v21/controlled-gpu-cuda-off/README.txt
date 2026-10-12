@@ -1,0 +1,1 @@
+CONTROLLED TEST INPUT (not a measurement). E1/E5 declare hardware.gpu_present=true (physical GPU) with cuda_available=false (this build has no CUDA). VRAM is unavailable. G4 is expected to FAIL: a GPU-capable host requires measured VRAM, and the CUDA-less build cannot measure it. cuda_available=false must NOT be read as CPU-only.

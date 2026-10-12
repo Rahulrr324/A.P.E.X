@@ -1,0 +1,3 @@
+444de6e08449140bd0c30458c6a0cfcb80f0dbf9631ebbe11d6781af5d05c646 *stark/build/aggregate.exe
+60b98291849235e6371191db24ecf9feb4efc7f011ba6702644acdc1f81d947b *stark/build/profiler_cli.exe
+57438627c8a29d6cb446d1bcf565a50641a01056a26a442bbe8317aef1325628 *stark/build/run_baseline.exe

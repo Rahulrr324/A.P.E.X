@@ -1,0 +1,21 @@
+record_id             bench build     n    median_us      mean_us     min_us     max_us     stdev     CV%    MAD_us  med==recomp
+P1-E1-B6-24899        B6    Debug    10     978.3000    1055.1500   931.4000  1394.1000  161.9940   15.35   42.2500           OK
+P1-E1-B6-57493        B6    Debug    10     999.5000    1074.4300   933.8000  1352.9000  152.9589   14.24   64.0000           OK
+P1-E1-B7-24899        B7    Debug    10   58168.2500   58495.7800 49122.5000 69968.5000 7072.6434   12.09 6983.0500           OK
+P1-E1-B7-57493        B7    Debug    10   60302.8500   62489.5100 47972.2000 79406.400010222.1364   16.36 6900.7500           OK
+P1-E1-B9-24899        B9    Debug    10    1449.6000    1467.0700   944.6000  2204.4000  397.7484   27.11  366.2000           OK
+P1-E1-B9-57493        B9    Debug    10    2003.6000    1947.4000  1697.0000  2013.0000  112.7845    5.79    8.1000           OK
+P1-E5-B6-90937        B6    Debug    10    1166.5000    1201.9400  1000.7000  1559.2000  168.1562   13.99   72.7000           OK
+P1-E5-B7-90937        B7    Debug    10   47479.7500   54477.5300 47068.8000 82587.000012516.4736   22.98  293.9000           OK
+P1-E5-B9-90937        B9    Debug    10    1041.1500    1093.2300   935.4000  1608.7000  193.1386   17.67   91.8000           OK
+
+== determinism / created_utc / thread ==
+P1-E1-B6-24899         created=2026-10-04T01:30:37.596Z threads=0 warmup=3 meas=10 det={'deterministic_mode_available': True, 'deterministic_mode_requested': True, 'outputs_bit_identical': True}
+P1-E1-B6-57493         created=2026-10-04T01:30:14.706Z threads=0 warmup=3 meas=10 det={'deterministic_mode_available': True, 'deterministic_mode_requested': True, 'outputs_bit_identical': True}
+P1-E1-B7-24899         created=2026-10-04T01:30:38.431Z threads=0 warmup=3 meas=10 det={'deterministic_mode_available': True, 'deterministic_mode_requested': True, 'outputs_bit_identical': None}
+P1-E1-B7-57493         created=2026-10-04T01:30:15.533Z threads=0 warmup=3 meas=10 det={'deterministic_mode_available': True, 'deterministic_mode_requested': True, 'outputs_bit_identical': None}
+P1-E1-B9-24899         created=2026-10-04T01:30:37.618Z threads=0 warmup=3 meas=10 det={'deterministic_mode_available': True, 'deterministic_mode_requested': True, 'outputs_bit_identical': True}
+P1-E1-B9-57493         created=2026-10-04T01:30:14.734Z threads=0 warmup=3 meas=10 det={'deterministic_mode_available': True, 'deterministic_mode_requested': True, 'outputs_bit_identical': True}
+P1-E5-B6-90937         created=2026-10-04T01:30:38.488Z threads=0 warmup=3 meas=10 det={'deterministic_mode_available': True, 'deterministic_mode_requested': True, 'outputs_bit_identical': True}
+P1-E5-B7-90937         created=2026-10-04T01:30:39.272Z threads=0 warmup=3 meas=10 det={'deterministic_mode_available': True, 'deterministic_mode_requested': True, 'outputs_bit_identical': None}
+P1-E5-B9-90937         created=2026-10-04T01:30:38.505Z threads=0 warmup=3 meas=10 det={'deterministic_mode_available': True, 'deterministic_mode_requested': True, 'outputs_bit_identical': True}

@@ -1,0 +1,112 @@
+benchmark records loaded: 30
+
+# stored vs recomputed median consistency (frozen 0.001% tolerance):
+   G7CAM-B6-E1-11933807         stored= 219.4500us recomputed= 219.4500us diff=0.000000% OK
+   G7CAM-B6-E1-39872860         stored= 219.8000us recomputed= 219.8000us diff=0.000000% OK
+   G7CAM-B6-E1-41851871         stored= 219.8000us recomputed= 219.8000us diff=0.000000% OK
+   G7CAM-B6-E1-76656589         stored= 178.7000us recomputed= 178.7000us diff=0.000000% OK
+   G7CAM-B6-E1-9007430          stored= 359.5000us recomputed= 359.5000us diff=0.000000% OK
+   G7CAM-B6-E5-11933807         stored= 221.3500us recomputed= 221.3500us diff=0.000000% OK
+   G7CAM-B6-E5-39872860         stored= 219.9500us recomputed= 219.9500us diff=0.000000% OK
+   G7CAM-B6-E5-41851871         stored= 220.0000us recomputed= 220.0000us diff=0.000000% OK
+   G7CAM-B6-E5-76656589         stored= 179.4500us recomputed= 179.4500us diff=0.000000% OK
+   G7CAM-B6-E5-9007430          stored= 181.5000us recomputed= 181.5000us diff=0.000000% OK
+
+=== B6 group — 10 records — tolerance 15.00% ===
+record_id                    exp  created_utc          median(us)
+G7CAM-B6-E1-11933807         E1   2026-10-08T15:15:59.411Z    219.45
+G7CAM-B6-E1-39872860         E1   2026-10-08T15:15:28.832Z    219.80
+G7CAM-B6-E1-41851871         E1   2026-10-08T15:17:00.763Z    219.80
+G7CAM-B6-E1-76656589         E1   2026-10-08T15:16:30.197Z    178.70
+G7CAM-B6-E1-9007430          E1   2026-10-08T15:14:58.398Z    359.50
+G7CAM-B6-E5-11933807         E5   2026-10-08T15:15:59.723Z    221.35
+G7CAM-B6-E5-39872860         E5   2026-10-08T15:15:29.094Z    219.95
+G7CAM-B6-E5-41851871         E5   2026-10-08T15:17:01.028Z    220.00
+G7CAM-B6-E5-76656589         E5   2026-10-08T15:16:30.458Z    179.45
+G7CAM-B6-E5-9007430          E5   2026-10-08T15:14:58.610Z    181.50
+
+n_pairs = 45
+max pairwise symmetric relative diff = 50.2921%
+  worst pair: runs 4 <-> 5  (records G7CAM-B6-E1-76656589 / G7CAM-B6-E1-9007430, medians 178.70us / 359.50us)
+min pairwise symmetric relative diff = 0.0000%
+CV = 22.19%
+failing pairs (>15.00%) = 27/45
+verdict = FAIL
+
+>>> B6 independent recompute verdict: FAIL (max 50.2921%, 27/45 failing)
+
+# stored vs recomputed median consistency (frozen 0.001% tolerance):
+   G7CAM-B7-E1-11933807         stored=3339.0500us recomputed=3339.0500us diff=0.000000% OK
+   G7CAM-B7-E1-39872860         stored=3300.8500us recomputed=3300.8500us diff=0.000000% OK
+   G7CAM-B7-E1-41851871         stored=3242.5500us recomputed=3242.5500us diff=0.000000% OK
+   G7CAM-B7-E1-76656589         stored=2814.6000us recomputed=2814.6000us diff=0.000000% OK
+   G7CAM-B7-E1-9007430          stored=2731.2000us recomputed=2731.2000us diff=0.000000% OK
+   G7CAM-B7-E5-11933807         stored=5721.9000us recomputed=5721.9000us diff=0.000000% OK
+   G7CAM-B7-E5-39872860         stored=4147.1500us recomputed=4147.1500us diff=0.000000% OK
+   G7CAM-B7-E5-41851871         stored=3075.5500us recomputed=3075.5500us diff=0.000000% OK
+   G7CAM-B7-E5-76656589         stored=3892.4500us recomputed=3892.4500us diff=0.000000% OK
+   G7CAM-B7-E5-9007430          stored=2863.3500us recomputed=2863.3500us diff=0.000000% OK
+
+=== B7 group — 10 records — tolerance 15.00% ===
+record_id                    exp  created_utc          median(us)
+G7CAM-B7-E1-11933807         E1   2026-10-08T15:15:59.674Z   3339.05
+G7CAM-B7-E1-39872860         E1   2026-10-08T15:15:29.062Z   3300.85
+G7CAM-B7-E1-41851871         E1   2026-10-08T15:17:00.997Z   3242.55
+G7CAM-B7-E1-76656589         E1   2026-10-08T15:16:30.408Z   2814.60
+G7CAM-B7-E1-9007430          E1   2026-10-08T15:14:58.582Z   2731.20
+G7CAM-B7-E5-11933807         E5   2026-10-08T15:16:00.149Z   5721.90
+G7CAM-B7-E5-39872860         E5   2026-10-08T15:15:29.356Z   4147.15
+G7CAM-B7-E5-41851871         E5   2026-10-08T15:17:01.237Z   3075.55
+G7CAM-B7-E5-76656589         E5   2026-10-08T15:16:30.716Z   3892.45
+G7CAM-B7-E5-9007430          E5   2026-10-08T15:14:58.799Z   2863.35
+
+n_pairs = 45
+max pairwise symmetric relative diff = 52.2676%
+  worst pair: runs 5 <-> 6  (records G7CAM-B7-E1-9007430 / G7CAM-B7-E5-11933807, medians 2731.20us / 5721.90us)
+min pairwise symmetric relative diff = 1.1440%
+CV = 24.30%
+failing pairs (>15.00%) = 26/45
+verdict = FAIL
+
+>>> B7 independent recompute verdict: FAIL (max 52.2676%, 26/45 failing)
+
+# stored vs recomputed median consistency (frozen 0.001% tolerance):
+   G7CAM-B9-E1-11933807         stored= 223.8000us recomputed= 223.8000us diff=0.000000% OK
+   G7CAM-B9-E1-39872860         stored= 187.5500us recomputed= 187.5500us diff=0.000000% OK
+   G7CAM-B9-E1-41851871         stored= 222.6500us recomputed= 222.6500us diff=0.000000% OK
+   G7CAM-B9-E1-76656589         stored= 180.6000us recomputed= 180.6000us diff=0.000000% OK
+   G7CAM-B9-E1-9007430          stored= 181.7500us recomputed= 181.7500us diff=0.000000% OK
+   G7CAM-B9-E5-11933807         stored= 260.5000us recomputed= 260.5000us diff=0.000000% OK
+   G7CAM-B9-E5-39872860         stored= 223.8000us recomputed= 223.8000us diff=0.000000% OK
+   G7CAM-B9-E5-41851871         stored= 223.1000us recomputed= 223.1000us diff=0.000000% OK
+   G7CAM-B9-E5-76656589         stored= 179.5000us recomputed= 179.5000us diff=0.000000% OK
+   G7CAM-B9-E5-9007430          stored= 182.1500us recomputed= 182.1500us diff=0.000000% OK
+
+=== B9 group — 10 records — tolerance 15.00% ===
+record_id                    exp  created_utc          median(us)
+G7CAM-B9-E1-11933807         E1   2026-10-08T15:15:59.698Z    223.80
+G7CAM-B9-E1-39872860         E1   2026-10-08T15:15:29.077Z    187.55
+G7CAM-B9-E1-41851871         E1   2026-10-08T15:17:01.012Z    222.65
+G7CAM-B9-E1-76656589         E1   2026-10-08T15:16:30.429Z    180.60
+G7CAM-B9-E1-9007430          E1   2026-10-08T15:14:58.596Z    181.75
+G7CAM-B9-E5-11933807         E5   2026-10-08T15:16:00.181Z    260.50
+G7CAM-B9-E5-39872860         E5   2026-10-08T15:15:29.371Z    223.80
+G7CAM-B9-E5-41851871         E5   2026-10-08T15:17:01.254Z    223.10
+G7CAM-B9-E5-76656589         E5   2026-10-08T15:16:30.736Z    179.50
+G7CAM-B9-E5-9007430          E5   2026-10-08T15:14:58.814Z    182.15
+
+n_pairs = 45
+max pairwise symmetric relative diff = 31.0940%
+  worst pair: runs 6 <-> 9  (records G7CAM-B9-E5-11933807 / G7CAM-B9-E5-76656589, medians 260.50us / 179.50us)
+min pairwise symmetric relative diff = 0.0000%
+CV = 12.82%
+failing pairs (>15.00%) = 25/45
+verdict = FAIL
+
+>>> B9 independent recompute verdict: FAIL (max 31.0940%, 25/45 failing)
+
+
+=== E1/E5 configuration-identity check (production grouping semantics) ===
+B6: E1 config == E5 config ? True  (E1 n=5, E5 n=5)
+B7: E1 config == E5 config ? True  (E1 n=5, E5 n=5)
+B9: E1 config == E5 config ? True  (E1 n=5, E5 n=5)

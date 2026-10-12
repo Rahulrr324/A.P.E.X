@@ -1,0 +1,104 @@
+Start testing: Oct 04 11:01 India Standard Time
+----------------------------------------------------------
+1/6 Testing: test_phase1_profiler
+1/6 Test: test_phase1_profiler
+Command: "E:/My Local AI/stark/build-v14-release/test_phase1_profiler.exe"
+Directory: E:/My Local AI/stark
+"test_phase1_profiler" start time: Oct 04 11:01 India Standard Time
+Output:
+----------------------------------------------------------
+test_phase1_profiler: 35 assertions, 0 failures
+PASS: test_phase1_profiler (35 assertions)
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"test_phase1_profiler" end time: Oct 04 11:01 India Standard Time
+"test_phase1_profiler" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/6 Testing: test_phase1_accounting
+2/6 Test: test_phase1_accounting
+Command: "E:/My Local AI/stark/build-v14-release/test_phase1_accounting.exe"
+Directory: E:/My Local AI/stark
+"test_phase1_accounting" start time: Oct 04 11:01 India Standard Time
+Output:
+----------------------------------------------------------
+test_phase1_accounting: 67 assertions, 0 failures
+PASS: test_phase1_accounting (67 assertions)
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"test_phase1_accounting" end time: Oct 04 11:01 India Standard Time
+"test_phase1_accounting" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/6 Testing: test_phase1_budget
+3/6 Test: test_phase1_budget
+Command: "E:/My Local AI/stark/build-v14-release/test_phase1_budget.exe"
+Directory: E:/My Local AI/stark
+"test_phase1_budget" start time: Oct 04 11:01 India Standard Time
+Output:
+----------------------------------------------------------
+test_phase1_budget: 55 assertions, 0 failures
+PASS: <unknown> (55 assertions)
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"test_phase1_budget" end time: Oct 04 11:01 India Standard Time
+"test_phase1_budget" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/6 Testing: test_phase1_records
+4/6 Test: test_phase1_records
+Command: "E:/My Local AI/stark/build-v14-release/test_phase1_records.exe"
+Directory: E:/My Local AI/stark
+"test_phase1_records" start time: Oct 04 11:01 India Standard Time
+Output:
+----------------------------------------------------------
+test_phase1_records: 54 assertions, 0 failures
+PASS: test_phase1_records (54 assertions)
+<end of output>
+Test time =   0.09 sec
+----------------------------------------------------------
+Test Passed.
+"test_phase1_records" end time: Oct 04 11:01 India Standard Time
+"test_phase1_records" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/6 Testing: test_phase1_reproducibility
+5/6 Test: test_phase1_reproducibility
+Command: "E:/My Local AI/stark/build-v14-release/test_phase1_reproducibility.exe"
+Directory: E:/My Local AI/stark
+"test_phase1_reproducibility" start time: Oct 04 11:01 India Standard Time
+Output:
+----------------------------------------------------------
+test_phase1_reproducibility: 37 assertions, 0 failures
+PASS: test_phase1_reproducibility (37 assertions)
+<end of output>
+Test time =   0.08 sec
+----------------------------------------------------------
+Test Passed.
+"test_phase1_reproducibility" end time: Oct 04 11:01 India Standard Time
+"test_phase1_reproducibility" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/6 Testing: test_phase1_gates
+6/6 Test: test_phase1_gates
+Command: "E:/My Local AI/stark/build-v14-release/test_phase1_gates.exe"
+Directory: E:/My Local AI/stark
+"test_phase1_gates" start time: Oct 04 11:01 India Standard Time
+Output:
+----------------------------------------------------------
+PASS: test_phase1_gates (96 assertions)
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"test_phase1_gates" end time: Oct 04 11:01 India Standard Time
+"test_phase1_gates" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 04 11:01 India Standard Time

@@ -1,0 +1,141 @@
+{
+  "accounting": null,
+  "budget": null,
+  "configuration": {
+    "batch_size": 1,
+    "benchmark_id": "B7",
+    "measurement_count": 10,
+    "sequence_length": 0,
+    "thread_count": 0,
+    "warmup_count": 3,
+    "workload_params": {
+      "blob_bytes": "1051664",
+      "mode": "warm_cache"
+    }
+  },
+  "created_utc": "2026-10-05T02:27:39.478Z",
+  "determinism": {
+    "deterministic_mode_available": true,
+    "deterministic_mode_requested": true,
+    "outputs_bit_identical": null
+  },
+  "experiment_id": "E5",
+  "failures": [],
+  "hardware": {
+    "build_type": "Release",
+    "collected_utc": "2026-10-05T02:27:39.345Z",
+    "cpu_instruction_set_notes": "SSE4.2, OSXSAVE, AVX, SSE, SSE2, AVX2",
+    "cpu_model": "12th Gen Intel(R) Core(TM) i5-12450H",
+    "cuda_available": false,
+    "cuda_version": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_compute_capability_major": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_compute_capability_minor": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_model": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_present": true,
+    "logical_cores": 12,
+    "os_name": "Windows",
+    "os_version": "10.0 (build 26300)",
+    "physical_cores": 8,
+    "provenance": {
+      "cpu_model": "source: cpuid brand string (leaves 0x80000002..4)",
+      "cuda_available": "unavailable: binary built without CUDA (STARK_ENABLE_CUDA=OFF / no toolkit)",
+      "cuda_version": "unavailable: binary built without CUDA",
+      "gpu_model": "unavailable: binary built without CUDA",
+      "gpu_present": "source: EnumDisplayDevices display-adapter enumeration | adapters: Intel(R) UHD Graphics | Intel(R) UHD Graphics | Intel(R) UHD Graphics | Intel(R) UHD Graphics | NVIDIA GeForce RTX 2050",
+      "logical_cores": "source: std::thread::hardware_concurrency()",
+      "os_version": "source: ntdll RtlGetVersion (unmanifested true version)",
+      "physical_cores": "source: GetLogicalProcessorInformation (RelationProcessorCore count)",
+      "pytorch_cuda_available_note": "unavailable: PyTorch runtime out of scope for C++ Phase 1 (spec §A / §L.7)",
+      "ram_total_bytes": "source: GlobalMemoryStatusEx ullTotalPhys (installed)",
+      "storage_volumes": "source: GetDiskFreeSpaceExA over fixed drives"
+    },
+    "pytorch_cuda_available": null,
+    "ram_total_bytes": 25392844800,
+    "storage_volumes": [
+      {
+        "free_bytes": 7052652544,
+        "path": "C:\\",
+        "total_bytes": 247782699008
+      },
+      {
+        "free_bytes": 153383378944,
+        "path": "E:\\",
+        "total_bytes": 262883241984
+      }
+    ],
+    "theoretical_memory_bandwidth_gbps": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "toolchain": "GCC 16.1.0",
+    "vram_total_bytes": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    }
+  },
+  "kind": "benchmark",
+  "measured_gflops": null,
+  "measured_memory_bandwidth_gbps": null,
+  "peak_memory": {
+    "ram_measured": true,
+    "ram_peak_bytes": 11550720,
+    "vram_measured": false,
+    "vram_peak_bytes": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    }
+  },
+  "precision": {
+    "compute_precision": "FP32",
+    "storage_format": "FP32"
+  },
+  "provenance": {
+    "cpu_model": "source: embedded hardware snapshot"
+  },
+  "record_id": "P1-E5-B7-47089",
+  "schema_version": "STARKP1 1",
+  "software": {
+    "benchmark_libs": "standard library only (no external deps)",
+    "build_type": "Release",
+    "compiler": "GCC 16.1.0",
+    "cuda_runtime": null,
+    "os": "Windows 10.0 (build 26300)"
+  },
+  "stark_phase": "P1",
+  "statistics": {
+    "computed": true,
+    "max": 0.0083826999999999999,
+    "mean": 0.0072737699999999988,
+    "median": 0.0077070000000000003,
+    "min": 0.0060200999999999996,
+    "p95": 0.0082264149999999991,
+    "p99": 0.0083514430000000001,
+    "samples": [
+      0.0064757,
+      0.0077273000000000003,
+      0.0083826999999999999,
+      0.0078936000000000006,
+      0.0080353999999999998,
+      0.0076867000000000003,
+      0.0077441999999999997,
+      0.0060200999999999996,
+      0.0063336,
+      0.0064384000000000004
+    ],
+    "stdev": 0.00085517166054541356
+  },
+  "status": "PASSED",
+  "status_reason": null
+}

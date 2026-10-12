@@ -1,0 +1,155 @@
+ninja: Entering directory `stark/build-b7diag-20261011'
+[1/2] C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\g++.exe  -I"E:/My Local AI/stark/src" -I"E:/My Local AI/stark/src/phase1" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj -MF CMakeFiles\bm_b7_diagnostic.dir\src\phase1\diagnostics\bm_b7_diagnostic.cpp.obj.d -o CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj -c "E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp"
+FAILED: [code=1] CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\g++.exe  -I"E:/My Local AI/stark/src" -I"E:/My Local AI/stark/src/phase1" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj -MF CMakeFiles\bm_b7_diagnostic.dir\src\phase1\diagnostics\bm_b7_diagnostic.cpp.obj.d -o CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj -c "E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp"
+E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp: In member function 'void stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)':
+E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1181:69: error: no matching function for call to 'std::unique_ptr<int, stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)> >::unique_ptr(const int&, stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>&)'
+ 1181 |         std::unique_ptr<int, decltype(closer)> guarded_fd(fd, closer);
+      |                                                                     ^
+  • there are 9 candidates
+In file included from C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/memory:80,
+                 from E:/My Local AI/stark/src/phase1/common/ExperimentRecord.h:21,
+                 from E:/My Local AI/stark/src/phase1/bench/ParameterAccounting.h:34,
+                 from E:/My Local AI/stark/src/phase1/bench/TinyDenseModel.h:22,
+                 from E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:142:
+    • candidate 1: 'template<class _Up, class> std::unique_ptr<_Tp, _Dp>::unique_ptr(std::auto_ptr<_Up>&&) [with <template-parameter-2-2> = _Up; _Tp = int; _Dp = stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>]'
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:394:9:
+        394 |         unique_ptr(auto_ptr<_Up>&& __u) noexcept;
+            |         ^~~~~~~~~~
+      • candidate expects 1 argument, 2 provided
+    • candidate 2: 'template<class _Up, class _Ep, class> std::unique_ptr<_Tp, _Dp>::unique_ptr(std::unique_ptr<_Up, _Ep>&&) [with _Ep = _Up; <template-parameter-2-3> = _Ep; _Tp = int; _Dp = stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>]'
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:383:9:
+        383 |         unique_ptr(unique_ptr<_Up, _Ep>&& __u) noexcept
+            |         ^~~~~~~~~~
+      • candidate expects 1 argument, 2 provided
+    • candidate 3: 'template<class _Del, class> constexpr std::unique_ptr<_Tp, _Dp>::unique_ptr(std::nullptr_t) [with <template-parameter-2-2> = _Del; _Tp = int; _Dp = stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>]'
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:362:19:
+        362 |         constexpr unique_ptr(nullptr_t) noexcept
+            |                   ^~~~~~~~~~
+      • candidate expects 1 argument, 2 provided
+    • candidate 4: 'template<class _Del, class _DelUnref> std::unique_ptr<_Tp, _Dp>::unique_ptr(pointer, std::__enable_if_t<((bool)std::is_lvalue_reference<_Del>::value), _DelUnref&&>) [with _DelUnref = _Del; _Tp = int; _Dp = stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>]' (deleted)
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:356:9:
+        356 |         unique_ptr(pointer,
+            |         ^~~~~~~~~~
+      • template argument deduction/substitution failed:
+        •   cannot convert 'fd' (type 'const int') to type 'std::unique_ptr<int, stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)> >::pointer' {aka 'int*'}
+          E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1181:59:
+           1181 |         std::unique_ptr<int, decltype(closer)> guarded_fd(fd, closer);
+                |                                                           ^~
+    • candidate 5: 'template<class _Del, class> std::unique_ptr<_Tp, _Dp>::unique_ptr(pointer, std::__enable_if_t<((bool)(! std::is_lvalue_reference<_Del>::value)), _Del&&>) [with <template-parameter-2-2> = _Del; _Tp = int; _Dp = stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>]'
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:347:9:
+        347 |         unique_ptr(pointer __p,
+            |         ^~~~~~~~~~
+      • template argument deduction/substitution failed:
+        •   cannot convert 'fd' (type 'const int') to type 'std::unique_ptr<int, stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)> >::pointer' {aka 'int*'}
+          E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1181:59:
+           1181 |         std::unique_ptr<int, decltype(closer)> guarded_fd(fd, closer);
+                |                                                           ^~
+    • candidate 6: 'template<class _Del, class> std::unique_ptr<_Tp, _Dp>::unique_ptr(pointer, const deleter_type&) [with <template-parameter-2-2> = _Del; _Tp = int; _Dp = stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>]'
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:334:9:
+        334 |         unique_ptr(pointer __p, const deleter_type& __d) noexcept
+            |         ^~~~~~~~~~
+      • template argument deduction/substitution failed:
+        •   cannot convert 'fd' (type 'const int') to type 'std::unique_ptr<int, stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)> >::pointer' {aka 'int*'}
+          E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1181:59:
+           1181 |         std::unique_ptr<int, decltype(closer)> guarded_fd(fd, closer);
+                |                                                           ^~
+    • candidate 7: 'template<class _Del, class> std::unique_ptr<_Tp, _Dp>::unique_ptr(pointer) [with <template-parameter-2-2> = _Del; _Tp = int; _Dp = stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>]'
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:320:9:
+        320 |         unique_ptr(pointer __p) noexcept
+            |         ^~~~~~~~~~
+      • candidate expects 1 argument, 2 provided
+    • candidate 8: 'template<class _Del, class> constexpr std::unique_ptr<_Tp, _Dp>::unique_ptr() [with <template-parameter-2-2> = _Del; _Tp = int; _Dp = stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>]'
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:307:19:
+        307 |         constexpr unique_ptr() noexcept
+            |                   ^~~~~~~~~~
+      • candidate expects 0 arguments, 2 provided
+    • candidate 9: 'std::unique_ptr<_Tp, _Dp>::unique_ptr(std::unique_ptr<_Tp, _Dp>&&) [with _Tp = int; _Dp = stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>]'
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:369:7:
+        369 |       unique_ptr(unique_ptr&&) = default;
+            |       ^~~~~~~~~~
+      • candidate expects 1 argument, 2 provided
+E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1183:20: error: no matching function for call to 'std::basic_filebuf<char>::open(const int&, std::_Ios_Openmode)'
+ 1183 |         if (fb.open(fd, std::ios::out | std::ios::binary)) {
+      |             ~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  • there are 4 candidates
+In file included from C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/fstream:1372,
+                 from E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:121:
+    • candidate 1: 'std::basic_filebuf<_CharT, _Traits>::__filebuf_type* std::basic_filebuf<_CharT, _Traits>::open(const char*, std::ios_base::openmode) [with _CharT = char; _Traits = std::char_traits<char>; __filebuf_type = std::basic_filebuf<char>; std::ios_base::openmode = std::ios_base::openmode]' (near match)
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/fstream.tcc:183:5:
+        183 |     basic_filebuf<_CharT, _Traits>::
+            |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      • conversion of argument 1 would be ill-formed:
+      • error: invalid conversion from 'int' to 'const char*' [-fpermissive]
+        E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1183:21:
+         1183 |         if (fb.open(fd, std::ios::out | std::ios::binary)) {
+              |                     ^~
+              |                     |
+              |                     int
+    • candidate 2: 'std::basic_filebuf<_CharT, _Traits>* std::basic_filebuf<_CharT, _Traits>::open(const wchar_t*, std::ios_base::openmode) [with _CharT = char; _Traits = std::char_traits<char>; std::ios_base::openmode = std::ios_base::openmode]' (near match)
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/fstream.tcc:218:5:
+        218 |     basic_filebuf<_CharT, _Traits>::
+            |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      • conversion of argument 1 would be ill-formed:
+      • error: invalid conversion from 'int' to 'const wchar_t*' [-fpermissive]
+        E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1183:21:
+         1183 |         if (fb.open(fd, std::ios::out | std::ios::binary)) {
+              |                     ^~
+              |                     |
+              |                     int
+    • candidate 3: 'template<class _Path> std::_If_fs_path<_Path, std::basic_filebuf<_CharT, _Traits>*> std::basic_filebuf<_CharT, _Traits>::open(const _Path&, std::ios_base::openmode) [with _CharT = char; _Traits = std::char_traits<char>]'
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/fstream:356:9:
+        356 |         open(const _Path& __s, ios_base::openmode __mode)
+            |         ^~~~
+      • template argument deduction/substitution failed:
+        • C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/fstream: In substitution of 'template<class _Path> std::_If_fs_path<_Path, std::basic_filebuf<char>*, decltype (declval<_Path&>().make_preferred().filename())> std::basic_filebuf<char>::open(const _Path&, std::ios_base::openmode) [with _Path = int]':
+        • required from here
+          E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1183:20:   
+           1183 |         if (fb.open(fd, std::ios::out | std::ios::binary)) {
+                |             ~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        • error: request for member 'make_preferred' in 'std::declval<int&>()', which is of non-class type 'int'
+          C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/fstream:66:60:
+             66 |            = decltype(std::declval<_Path&>().make_preferred().filename())>
+                |                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~
+    • candidate 4: 'std::basic_filebuf<_CharT, _Traits>::__filebuf_type* std::basic_filebuf<_CharT, _Traits>::open(const std::string&, std::ios_base::openmode) [with _CharT = char; _Traits = std::char_traits<char>; __filebuf_type = std::basic_filebuf<char>; std::string = std::__cxx11::basic_string<char>; std::ios_base::openmode = std::ios_base::openmode]'
+      C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/fstream:344:7:
+        344 |       open(const std::string& __s, ios_base::openmode __mode)
+            |       ^~~~
+      • no known conversion for argument 1 from 'const int' to 'const std::string&' {aka 'const std::__cxx11::basic_string<char>&'}
+        C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/fstream:344:31:
+          344 |       open(const std::string& __s, ios_base::openmode __mode)
+              |            ~~~~~~~~~~~~~~~~~~~^~~
+E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp: In function 'stark_p1::b7diag::DiagnosticReport stark_p1::b7diag::run_bm_b7_diagnostic(const Protocol&, const DiagnosticPaths&)':
+E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1287:13: error: 'write_paired_artifact_if_valid' was not declared in this scope
+ 1287 |             write_paired_artifact_if_valid(paired, blob.run_dir, rep.minimal,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h: In instantiation of 'std::unique_ptr<_Tp, _Dp>::~unique_ptr() [with _Tp = int; _Dp = stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>]':
+E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1181:69:   required from here
+ 1181 |         std::unique_ptr<int, decltype(closer)> guarded_fd(fd, closer);
+      |                                                                     ^
+C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:404:63: error: static assertion failed: unique_ptr's deleter must be invocable with a pointer
+  404 |         static_assert(__is_invocable<deleter_type&, pointer>::value,
+      |                                                               ^~~~~
+  • 'std::integral_constant<bool, false>::value' evaluates to false
+C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.2.0/bits/unique_ptr.h:408:24: error: no match for call to '(std::unique_ptr<int, stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)> >::deleter_type {aka stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>}) (std::remove_reference<int*&>::type)'
+  408 |           get_deleter()(std::move(__ptr));
+      |           ~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~
+  • there is 1 candidate
+    E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1174:25:
+     1174 |         auto closer = [&](int f) {
+          |                         ^
+    • candidate 1: 'stark_p1::b7diag::PairedArtifact::write(const std::string&, const std::vector<stark_p1::b7diag::ReplicateResult>&, const std::vector<stark_p1::b7diag::ReplicateResult>&)::<lambda(int)>' (near match)
+      E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1174:23:
+       1174 |         auto closer = [&](int f) {
+            |                       ^
+      • conversion of argument 1 would be ill-formed:
+      • error: invalid conversion from 'std::remove_reference<int*&>::type' {aka 'int*'} to 'int' [-fpermissive]
+         1174 |         auto closer = [&](int f) {
+              |                       ^
+              |                       |
+              |                       std::remove_reference<int*&>::type {aka int*}
+      • possible fix: dereference with '*'
+         1174 |         auto closer = [&](int f) {
+              |                       ^
+              |                       *
+ninja: build stopped: subcommand failed.

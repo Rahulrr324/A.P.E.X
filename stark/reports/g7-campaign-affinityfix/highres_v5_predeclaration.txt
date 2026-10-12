@@ -1,0 +1,113 @@
+HIGH-RESOLUTION FREQUENCY DIAGNOSTIC v5 — PRE-RUN PREDECLARATION
+Written: 2026-10-07, BEFORE the v5 diagnostic was built or run.
+(The G7 gate, its formula, tolerance, grouping, benchmark, sample count,
+warmup, and the frozen records are NOT changed by this diagnostic.)
+
+PURPOSE (this step)
+  Fix the MEASUREMENT ARCHITECTURE so the high-resolution frequency
+  collector does not compete with the benchmark thread, then establish
+  whether we now have a non-perturbing, adequately covered measurement of
+  frequency during the actual benchmark execution window.
+  This step does NOT make G7 pass and does NOT run G7.
+
+FROZEN EVIDENCE — PRESERVED BEFORE ANY CHANGE (verified 2026-10-07)
+  verify_frozen30.py exit 0; 30/30 SHA match; evidence_manifest.json
+  sha256 = 7a8dd9de17c4effdc9153ac4505a6f6f95ed662ef204cab52ad279c4bf01fc5a
+  records_sha256.txt sha256 = bf479cbcf08eef94bfd6481f16e6a881e0e15b52cbec05aaed0377afe2edc6ae
+  sha256sums_g7_campaign.txt sha256 = 4d0f54531d35195ef4262c71e15227476d67e2813979ae7f4bef74022d53150a
+  Production binaries hashed before the change (sha256):
+    g7_campaign.exe      2667719fc4b44a8c014b9adad5d2957ee4007f2521923f372b4322ff20812f01
+    aggregate.exe        2f4600a6d7830ef022462d29ad1d83966992640cd3c46ea2f739720b58a3e354
+    run_baseline.exe     61e2d123745056ddac6c2c98a7bf2e3743badbed6b5ec6f134a03dec66d8a40d
+    libstark_phase1.a    426a810202144bbbc342d73759026a68b817dd348ffdb12b67925a29751d8149
+    power_scheme_control.exe 01b60583b15c577a43be1281b9251bde616123e60543813a052e2ac547612675
+
+MACHINE MASK (verified before choosing CPU 1)
+  GetProcessAffinityMask: system mask = 0xFFF, logical CPUs [0..11].
+  CPU0 present = true, CPU1 present = true. CPU1 therefore exists in the
+  machine's real logical-CPU mask; it is not assumed.
+
+ARCHITECTURE (v5; measurement-only change in tests/diag_highres_frequency.cpp)
+  1. Query the machine/system logical-CPU mask FIRST. Require bits 0 and 1;
+     abort with an explicit message otherwise (documented limitation path).
+  2. Do NOT narrow the process affinity to a single CPU (that was the v3/v4
+     root cause: SetThreadAffinityMask cannot grant a CPU outside the
+     process mask, so the collector stayed on CPU0). The process mask is
+     widened to at least {CPU0, CPU1} ONLY so that per-thread pinning can
+     take effect; widening alone is explicitly NOT treated as separation.
+  3. Benchmark worker (main thread): SetThreadAffinityMask -> CPU0.
+  4. Collector thread: SetThreadAffinityMask -> CPU1 (the bit after CPU0
+     in the verified system mask; falls back only if CPU1 absent, which is
+     recorded as a limitation).
+  5. ACTUAL effective affinity of BOTH threads is verified AFTER setting:
+     - per-thread readback where the OS provides it, AND
+     - runtime evidence: every collector sample and every benchmark
+       iteration records GetCurrentProcessorNumber(); the observed CPU set
+       is written to the JSON per exec. The run is judged on observed
+       placement, not on the set call's return value alone.
+  6. Affinity evidence recorded per exec:
+     effective_worker_cpus[], effective_collector_cpus[] (observed),
+     worker_set_api_return/last_error, collector_set_api_return/last_error,
+     process_mask_raw, system_mask_raw.
+
+PERTURBATION CHECK (A/B), predeclared
+  A. Benchmark exec with NO collector active (collector thread stopped).
+  B. Identical benchmark exec with the collector active (tight loop on CPU1).
+  Same op, same warmup=10/measurement=50, same config, same power scheme.
+  Order alternates across pairs (A,B then B,A ...) to avoid order bias.
+  Material perturbation threshold (fixed before the run):
+     |median(B) - median(A)| / median(A) * 100 > 2.0%  => MATERIAL
+     <= 2.0% => not material (timing noise band).
+  Reported per bench (B6, B9, B7) and pooled.
+
+EXEC SET (fixed before the run)
+  B6: 3 pairs (A,B / B,A / A,B)  = 6 execs, back-to-back
+  idle 30 s
+  B9: 2 pairs (A,B / B,A)        = 4 execs, back-to-back
+  idle 30 s
+  B7: 2 pairs (A,B / B,A)        = 4 execs, back-to-back
+  idle 30 s
+  B6: 1 pair  (A,B)              = 2 execs after idle (gap condition)
+  Total = 16 execs (8 no-collector, 8 collector-active).
+  P1 (2 s idle probe) and P2 (step test) unchanged.
+
+PER-EXEC RECORD FOR COLLECTOR-ACTIVE (B) EXECS (fixed before the run)
+  exec_t0_us / exec_t1_us (QPC, bracket of all 50 measured iterations),
+  n_samples_in_window (PDH samples with t in [t0,t1]),
+  n_samples_usable (R2 filter 20<=pct<=240),
+  first_in_window_pct_perf, last_in_window_pct_perf,
+  min/max/mean/median of usable in-window samples,
+  n_plateaus / n_transitions (predeclared +/-1% plateau rule),
+  in_exec_ramp = (>1 transition) OR (spread_max > 5.0%)   [predeclared def]
+  exec_span_us, median_us_this_path, iteration_drift_pct,
+  effective_worker_cpus (observed), effective_collector_cpus (observed).
+  A (no-collector) execs record the same timing fields and are explicitly
+  marked collector_active=false; their sample counts are expected 0 and are
+  NOT counted as coverage failures (they are a different condition).
+
+COVERAGE RULE (unchanged floor, applied honestly)
+  Usable coverage floor: >=10 usable in-window samples per
+  COLLECTOR-ACTIVE exec. Executions below the floor are reported as
+  "not measurable" and are NEVER treated as evidence of stability.
+  Zero-coverage B execs are listed explicitly in the analysis.
+
+CLASSIFICATION FRAMEWORK (unchanged: highres_predeclaration.txt + R1-R4)
+  A = genuine within-execution frequency variation:
+      exec-only spread >5.0% OR >=2 in-exec transitions in compute benches
+      (B6/B9), corroborated by iteration timing drift >5.0%.
+  B = sampling/measurement artifact: exec-only spread <=2.0% AND <=1
+      transition while exec-window spread stays >5.0%.
+  C = mixed/indeterminate, or coverage <10 samples/exec, or PDH inadequate.
+  PDH adequacy: P1 distinct-change interval <100 ms AND P2 latency <100 ms.
+  (No new classification is invented; no threshold is relaxed.)
+
+FORBIDDEN (re-checked after the run)
+  No G7 campaign; no G7CAM-* records; frozen 30 and campaign 30
+  byte-identical (verify_frozen30.py exit 0; records_sha256.txt match);
+  production benchmark/G7 code untouched (binary hashes unchanged);
+  session wrapper restores the original power scheme and proves it.
+
+OUTPUT ARTIFACTS (this step)
+  reports/g7-campaign-affinityfix/highres_frequency_v5.json
+  reports/g7-campaign-affinityfix/power_scheme_session_highres_v5.json
+  reports/g7-campaign-affinityfix/highres_v5_analysis.txt

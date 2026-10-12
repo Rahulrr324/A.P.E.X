@@ -1,0 +1,302 @@
+==============================================================================
+HIGH-RESOLUTION FREQUENCY DIAGNOSTIC -- v8 ANALYSIS (FINAL FOR THIS STEP)
+Date: 2026-10-08. Investigation only: NO G7 campaign was run; G7
+thresholds/formulas, benchmark timing semantics, frozen 30 records,
+records_sha256.txt, evidence_manifest.json, production binaries, v7
+evidence, and historical records were NOT modified.
+Predeclaration: tests/diag_highres_frequency.cpp v8 header + control
+constants (DIAG_VERSION=v8, V8_B6_N_PAIRS=8, V8_B9_N_EXECS=8).
+Evidence: reports/g7-campaign-affinityfix/highres_frequency_v8.json
+Session: power_scheme_session_highres_v8.json
+==============================================================================
+
+0. RUN / INTEGRITY (exit codes; detail in work/scripts/v8_*integrity.json)
+   ninja build (diag_highres_frequency.exe only) = 0
+   harness smoke run (temp output, excluded from evidence) = 0
+   power_scheme_control run: wrapper=0, child_exit=0, restore_status=0,
+     scheme_after_apply=8C5E7FDA (High performance),
+     scheme_after_restore=DFE97760 (Performance Mode),
+     restore_matches_original=true
+   independent powercfg restore check (post-run) exit=0, guid match=true
+   pre-run integrity: verify_frozen30=0, records_sha256 -c=0,
+     manifest sha match, 5 production hashes captured, powercfg=0
+   post-run integrity: verify_frozen30=0, records_sha256 -c=0,
+     manifest sha match, 5 production binaries changed=[],
+     G7CAM created/modified=0
+
+1. STATIC / AFFINITY EVIDENCE
+   system_mask=0xfff process_mask_after=0x5
+   worker pin: set_api_return=1 readback=0x1 (expect 0x1)
+   collector target CPU=2 (expect 2); cpu1_shares_core_with_cpu0=True
+   pace_period_us=500 (expect 500)
+
+2. B6 POSITION-MATCHED A/B PAIRS (V8_B6_N_PAIRS=8, order alternated)
+   duration per exec = median_us_this_path (median of 50 iteration durs)
+   signed rel diff = (B - A) / A * 100;  positive = B (collector) slower
+
+   pair order      A_us    B_us   signed%  abs%  A_span  B_span  A_wcpu  B_wcpu B_ccpu B_pin B_pdhfail A_fr A_la A_mn A_mx A_med B_fr B_la B_mn B_mx B_med A_ramp B_ramp anom
+   0   A->B    141.0   149.0   +5.67   5.67    7344  13199  [0] [0] [2]  True     0
+        freq A: first=n/a last=n/a min=n/a max=n/a med=n/a spread=n/a% tr=None ramp=None
+        freq B: first=232.82 last=203.11 min=201.63 max=232.82 med=203.11 spread=13.40% tr=1 ramp=True; B_usable=23 in_win=23 raw=27 art=0
+        anomalies: ['spikes A=0 B=9']
+   1   B->A    141.0   144.0   +2.13   2.13    7295   9293  [0] [0] [2]  True     0
+        freq A: first=n/a last=n/a min=n/a max=n/a med=n/a spread=n/a% tr=None ramp=None
+        freq B: first=203.56 last=203.81 min=199.25 max=207.76 med=203.40 spread=4.09% tr=3 ramp=True; B_usable=18 in_win=18 raw=23 art=0
+        anomalies: ['spikes A=0 B=3']
+   2   A->B    143.0   133.0   -6.99   6.99    7198   6821  [0] [0] [2]  True     0
+        freq A: first=n/a last=n/a min=n/a max=n/a med=n/a spread=n/a% tr=None ramp=None
+        freq B: first=200.78 last=218.37 min=200.78 max=219.16 med=218.26 spread=8.39% tr=1 ramp=True; B_usable=14 in_win=14 raw=17 art=0
+        anomalies: none
+   3   B->A    132.0   132.5   +0.38   0.38    6904   6785  [0] [0] [2]  True     0
+        freq A: first=n/a last=n/a min=n/a max=n/a med=n/a spread=n/a% tr=None ramp=None
+        freq B: first=217.93 last=218.54 min=209.78 max=218.95 med=218.06 spread=4.19% tr=2 ramp=True; B_usable=13 in_win=13 raw=16 art=0
+        anomalies: ['spikes A=1 B=0']
+   4   A->B    133.5   141.0   +5.62   5.62    6750   7180  [0] [0] [2]  True     0
+        freq A: first=n/a last=n/a min=n/a max=n/a med=n/a spread=n/a% tr=None ramp=None
+        freq B: first=201.94 last=217.84 min=201.94 max=217.84 med=203.52 spread=7.30% tr=2 ramp=True; B_usable=14 in_win=14 raw=18 art=0
+        anomalies: none
+   5   B->A    133.0   133.0   +0.00   0.00    6843   6782  [0] [0] [2]  True     0
+        freq A: first=n/a last=n/a min=n/a max=n/a med=n/a spread=n/a% tr=None ramp=None
+        freq B: first=218.54 last=218.06 min=217.76 max=218.63 med=218.08 spread=0.40% tr=0 ramp=False; B_usable=14 in_win=14 raw=17 art=0
+        anomalies: none
+   6   A->B    133.0   133.0   +0.00   0.00    6786   6782  [0] [0] [2]  True     0
+        freq A: first=n/a last=n/a min=n/a max=n/a med=n/a spread=n/a% tr=None ramp=None
+        freq B: first=206.35 last=217.84 min=206.35 max=218.72 med=218.19 spread=5.65% tr=1 ramp=True; B_usable=14 in_win=14 raw=17 art=0
+        anomalies: none
+   7   B->A    143.0   142.5   -0.35   0.35    7270   7286  [0] [0] [2]  True     0
+        freq A: first=n/a last=n/a min=n/a max=n/a med=n/a spread=n/a% tr=None ramp=None
+        freq B: first=203.64 last=203.76 min=202.95 max=203.80 med=203.20 spread=0.42% tr=0 ramp=False; B_usable=15 in_win=15 raw=18 art=0
+        anomalies: none
+
+   AGGREGATE over the 8 paired signed relative differences (%):
+     values: +5.67, +2.13, -6.99, +0.38, +5.62, +0.00, +0.00, -0.35
+     paired median = +0.19%
+     paired mean   = +0.81%
+     min = -6.99%  max = +5.67%  spread(max-min) = 12.67 pp
+     abs rel diff: median = 1.25%  mean = 2.64%
+     pairs exceeding +/-2.0%: 4/8 = 50.0%
+     by order: A->B pairs mean = +1.07% (n=4), B->A pairs mean = +0.54% (n=4)
+   pooled iterations (v7 continuity): A median=140.0 us (n=400), B median=140.0 us (n=400), signed = +0.00%
+   v7 same metric for reference: A=140.0 B=132.0 signed = -5.71% (reported -5.71%)
+
+   PREDECLARED 2.0% MATERIALITY CRITERION (unchanged):
+     |paired median| 0.19% <= 2.0 -> True
+     |paired mean|   0.81% <= 2.0 -> True
+     |pooled signed| 0.00% <= 2.0 -> True
+     => B6 COLLECTOR-PERTURBATION CRITERION: PASS
+
+3. B9 REPEATED B-SIDE EXECUTIONS (V8_B9_N_EXECS=8, collector active, 500 us pace)
+   exec  QPC_t0   QPC_t1   span_us raw inwin usable rejected(why) pdhfail first last   min    max    med    tr ramp cadence wpin cpin wcpu ccpu cover
+   0  5733365692 5733372864    7172  17   14     14        0(R2 20..240 filter)       0 220.9 215.0 215.0 220.9 218.5  1 False 500us True  [0] [2] OK
+        mechanism: span/pace slots=15 raw=17 loops=17 first_sample_delay=209.0us max_gap=508us max_pdh_call=39us in_window=14 (loss outside window=3) artifacts=0 spread=2.67% drift=0.00% gap_after_idle=True
+   1  5733381856 5733388731    6875  17   14     14        0(R2 20..240 filter)       0 218.0 217.9 217.9 218.6 218.2  0 False 500us True  [0] [2] OK
+        mechanism: span/pace slots=14 raw=17 loops=17 first_sample_delay=188.0us max_gap=501us max_pdh_call=24us in_window=14 (loss outside window=3) artifacts=0 spread=0.34% drift=0.75% gap_after_idle=False
+   2  5733399479 5733406466    6987   8    7      7        0(R2 20..240 filter)       0 214.1 218.6 206.1 218.6 217.9  2 True  500us True  [0] [2] FAIL
+        mechanism: span/pace slots=14 raw=8 loops=8 first_sample_delay=280.0us max_gap=6247us max_pdh_call=49us in_window=7 (loss outside window=1) artifacts=0 spread=5.72% drift=2.27% gap_after_idle=False
+   3  5733413728 5733420912    7184  18   15     15        0(R2 20..240 filter)       0 192.6 218.2 192.6 232.4 217.6 11 True  500us True  [0] [2] OK
+        mechanism: span/pace slots=15 raw=18 loops=18 first_sample_delay=415.0us max_gap=543us max_pdh_call=61us in_window=15 (loss outside window=3) artifacts=0 spread=17.12% drift=1.48% gap_after_idle=False
+   4  5733437475 5733444330    6855  17   14     14        0(R2 20..240 filter)       0 218.8 212.2 212.2 219.3 218.2  1 False 500us True  [0] [2] OK
+        mechanism: span/pace slots=14 raw=17 loops=17 first_sample_delay=296.0us max_gap=505us max_pdh_call=175us in_window=14 (loss outside window=3) artifacts=0 spread=3.23% drift=0.00% gap_after_idle=False
+   5  5733469225 5733476135    6910  16   14     14        0(R2 20..240 filter)       0 217.8 217.2 212.4 218.6 217.9  0 False 500us True  [0] [2] OK
+        mechanism: span/pace slots=14 raw=16 loops=16 first_sample_delay=464.0us max_gap=526us max_pdh_call=633us in_window=14 (loss outside window=2) artifacts=0 spread=2.81% drift=0.75% gap_after_idle=False
+   6  5733501392 5733508305    6913  17   14     14        0(R2 20..240 filter)       0 218.6 213.8 210.2 218.7 218.3  3 True  500us True  [0] [2] OK
+        mechanism: span/pace slots=14 raw=17 loops=17 first_sample_delay=30.0us max_gap=501us max_pdh_call=49us in_window=14 (loss outside window=3) artifacts=0 spread=3.90% drift=0.75% gap_after_idle=False
+   7  5733532306 5733539318    7012  17   14     14        0(R2 20..240 filter)       0 216.1 218.6 203.7 219.3 218.0  3 True  500us True  [0] [2] OK
+        mechanism: span/pace slots=15 raw=17 loops=17 first_sample_delay=238.0us max_gap=504us max_pdh_call=85us in_window=14 (loss outside window=3) artifacts=0 spread=7.14% drift=3.62% gap_after_idle=False
+
+   usable samples per exec: [14, 14, 7, 15, 14, 14, 14, 14]
+   min=7 max=15 median=14.0 mean=13.2
+   execs >= 10-sample floor: 7/8
+   min margin above floor: -3 samples
+   spans (us): [7172, 6875, 6987, 7184, 6855, 6910, 6913, 7012]
+   span/500 theoretical max slots: [15, 14, 14, 15, 14, 14, 14, 15]
+   PDH failures total: 0
+   bit_identical: True
+   3b. B9 supplement: mean %perf, transitions, ramp (per exec)
+   exec   mean%perf  min    max    median  tr  ramp   drift  gt150  trace_n
+      0     218.23 214.98 220.88  218.46   1  False   0.00%     1  14
+      1     218.24 217.89 218.63  218.21   0  False   0.75%     0  14
+      2     215.92 206.12 218.63  217.93   2  True    2.27%     1  7
+      3     215.99 192.61 232.39  217.58  11  True    1.48%     1  15
+      4     217.84 212.25 219.33  218.19   1  False   0.00%     0  14
+      5     217.20 212.45 218.59  217.89   0  False   0.75%     0  14
+      6     217.02 210.15 218.67  218.26   3  True    0.75%     0  14
+      7     216.46 203.68 219.34  218.02   3  True    3.62%     0  14
+
+
+4. COUNTER ADEQUACY (unchanged rules)
+   P1 idle probe: n=418973 in 2s, cycle median=5.0us, distinct-change median=5.0us, n_transitions=322290
+   P2 step test: latency=0.026ms, idle_mean=209.0 -> load_mean=224.3
+
+5. V7 FREQUENCY FINDING SURVIVAL CHECK (B execs only, R2-filtered)
+   B execs with in_exec_ramp (tr>1 or spread>5%): 10/16
+   B execs with spread > 5.0%: 7/16
+   per exec:
+     0 B6 spread=13.40% tr=1 ramp=True usable=23 first=232.8 last=203.1
+     1 B6 spread=4.09% tr=3 ramp=True usable=18 first=203.6 last=203.8
+     2 B6 spread=8.39% tr=1 ramp=True usable=14 first=200.8 last=218.4
+     3 B6 spread=4.19% tr=2 ramp=True usable=13 first=217.9 last=218.5
+     4 B6 spread=7.30% tr=2 ramp=True usable=14 first=201.9 last=217.8
+     5 B6 spread=0.40% tr=0 ramp=False usable=14 first=218.5 last=218.1
+     6 B6 spread=5.65% tr=1 ramp=True usable=14 first=206.4 last=217.8
+     7 B6 spread=0.42% tr=0 ramp=False usable=15 first=203.6 last=203.8
+     8 B9 spread=2.67% tr=1 ramp=False usable=14 first=220.9 last=215.0
+     9 B9 spread=0.34% tr=0 ramp=False usable=14 first=218.0 last=217.9
+     10 B9 spread=5.72% tr=2 ramp=True usable=7 first=214.1 last=218.6
+     11 B9 spread=17.12% tr=11 ramp=True usable=15 first=192.6 last=218.2
+     12 B9 spread=3.23% tr=1 ramp=False usable=14 first=218.8 last=212.2
+     13 B9 spread=2.81% tr=0 ramp=False usable=14 first=217.8 last=217.2
+     14 B9 spread=3.90% tr=3 ramp=True usable=14 first=218.6 last=213.8
+     15 B9 spread=7.14% tr=3 ramp=True usable=14 first=216.1 last=218.6
+
+6. CLASSIFICATION (existing framework ONLY -- R4 rules verbatim)
+   B: spread <=2.0% AND <=1 transition;  A: spread >5.0% or
+   >=2 transitions corroborated by drift >5.0%;  C: otherwise or
+   coverage <10 filtered samples/exec.  No rule was changed.
+     exec bench  spread   tr  drift  usable  class
+        0   B6   13.40%   1   2.65%     23   A (spread>5.0)
+        1   B6    4.09%   3   1.39%     18   C (otherwise)
+        2   B6    8.39%   1   1.49%     14   A (spread>5.0)
+        3   B6    4.19%   2   0.75%     13   C (otherwise)
+        4   B6    7.30%   2   1.41%     14   A (spread>5.0)
+        5   B6    0.40%   0   0.75%     14   B
+        6   B6    5.65%   1   0.75%     14   A (spread>5.0)
+        7   B6    0.42%   0   0.70%     15   B
+        8   B9    2.67%   1   0.00%     14   C (otherwise)
+        9   B9    0.34%   0   0.75%     14   B
+       10   B9    5.72%   2   2.27%      7   C (coverage<10)
+       11   B9   17.12%  11   1.48%     15   A (spread>5.0)
+       12   B9    3.23%   1   0.00%     14   C (otherwise)
+       13   B9    2.81%   0   0.75%     14   C (otherwise)
+       14   B9    3.90%   3   0.75%     14   C (otherwise)
+       15   B9    7.14%   3   3.62%     14   A (spread>5.0)
+   Aggregate over the 16 covered B execs: 6 A-side, 3 B-side, 7 C-zone (1 C for coverage<10).
+   A-side spreads 5.65..17.12%; 5/16 execs exceed the
+   production 6.8974% gate value INSIDE a single ~7 ms exec.
+
+7. EXPLICIT ANSWERS (v8 step instructions, requirement 4)
+
+  (1) Does B6 now pass the predeclared 2.0% collector-perturbation
+      criterion?  **YES -- PASS.**
+      Paired median +0.19%, paired mean +0.81%, pooled-median comparison
+      +0.00% (A = 140.0 us, B = 140.0 us over 400+400 iterations) --
+      all three aggregates are within +/-2.0%.  The v7 pooled -5.71% is
+      NOT reproduced.  Honest qualification: 4/8 individual pairs exceed
+      +/-2% (50% of pairs), range -6.99%..+5.67%, spread 12.67 pp.
+
+  (2) If not, order/cold-start or genuine perturbation?  Not applicable
+      (criterion passes), but the residual per-pair scatter is answered:
+      it is NEITHER.  Signs are inconsistent across pairs (+5.67, +2.13,
+      -6.99, +0.38, +5.62, +0.00, +0.00, -0.35); order subgroups are
+      nearly identical (A->B mean +1.07%, B->A mean +0.54%) so no order
+      bias; pooled is exactly 0.00% so no systematic collector effect
+      (a real effect would be sign-stable with nonzero pooled).  The
+      scatter tracks exec-to-exec frequency-state flips (exec medians
+      cluster near ~133 vs ~143 us, +/-7.5%) -- i.e. the very variation
+      the investigation measures.  v7's -5.71% was driven by the
+      session's first-ever cold A exec (146 us) plus the post-idle A
+      exec (130 us), which this position-matched design removes.
+
+  (3) Does B9 now have comfortable coverage above the 10-sample floor?
+      TYPICALLY YES, NOT UNIFORMLY: 7/8 execs carry 14-15 usable
+      in-window samples (+4/+5 margin = 40-50% above the floor, at the
+      duration ceiling span/500 = 14-15 slots); 1/8 exec fell to 7
+      usable because of ONE 6.2 ms collector scheduling stall
+      (max_sample_gap 6247 us; all 14 slots were otherwise available).
+      Mechanism of v7's 10-13 result (now identified, all four
+      candidates tested): (a) execution duration -- dominant: the
+      ~6.9-7.2 ms window at 500 us admits at most 14-15 samples; (b)
+      sample filtering -- contributed in v7 (3 and 2 R2 rejections)
+      but ZERO rejections in v8; (c) out-of-window boundary loss 2-3
+      samples; (d) PDH latency/failures -- NOT a cause: 0 failures in
+      all 8 execs, max single PDH call 633 us; scheduling -- the cause
+      of the single 7-sample exec (one 6.2 ms stall).  B9 is NOT
+      intrinsically worse than B6: B6 spans are identical
+      (6.7-7.3 ms) and v8 B6 execs carry 13-23 samples at the same
+      ceiling.  The floor rule (>=10) was NOT lowered and cadence was
+      NOT increased.
+
+  (4) Does the v7 finding of genuine within-execution frequency
+      variation survive?  **YES.**  6/16 B execs show in-exec spreads
+      5.65-17.12%; 5/16 exceed the production 6.8974% gate value
+      INSIDE a single ~7 ms exec (impossible for a between-exec or
+      sampling artifact to mimic).  Between-exec medians are stable
+      (pooled A = B = 140.0 us exactly; B9 exec medians 133-135 us),
+      the counter is adequate (P1 distinct-change median 5.0 us;
+      P2 step latency 0.026 ms), pins verified on both threads,
+      0 PDH failures, 0 rejected samples.  Per-exec distribution
+      differs from v7 (6 A / 3 B / 7 C vs 6 A / 2 B / 0 C): the new
+      C-zone execs show MODERATE 2.67-4.19% in-exec variation that
+      meets neither threshold -- recorded honestly, not reclassified.
+
+  (5) Does any remaining uncertainty affect the validity of the
+      frequency measurement?  NO material effect.  Residuals and why
+      they do not invalidate: (a) 1/16 B exec below the coverage floor
+      (7 usable) -- classified C by rule and excluded from adequacy-
+      based claims; the other 15/16 carry 13-23 usable samples; (b) B6
+      per-pair timing scatter +/-7% sign-inconsistent -- affects only
+      the A/B timing comparison, which pools to exactly 0.00%; (c) A
+      execs have no frequency samples (structural: no collector exists
+      during A by design) -- frequency claims rest on B execs as
+      predeclared; (d) one first-B-exec transient (pair 0: span
+      13199 us, 9 slow iterations) -- inside the timed region, counted
+      in the aggregates, not excluded.  Counter adequacy, pin
+      verification, and 0 PDH failures are unchanged from v7.
+
+  (6) Which classification applies?  **A -- genuine within-execution
+      frequency variation** (same as v7), under the existing rules
+      unchanged.  B (measurement artifact) is not supported: only 3/16
+      execs hold <=2.0% in-exec spread, and those occur only in
+      already-at-frequency stretches, while 5/16 execs exceed 6.8974%
+      inside one exec.  The collector-perturbation explanation for the
+      timing spread fails its own 2.0% test (answer 1).  D is not
+      permitted here: coverage (15/16), PDH adequacy, and pins make the
+      data decidable.
+
+  (7) Is another diagnostic required?  **NO** for the two predeclared
+      v7 limitations: B6 materiality is resolved (PASS, pooled 0.00%,
+      order-balanced) and B9's low-coverage mechanism is identified
+      (duration ceiling + boundary loss + R2 rejections in v7; zero
+      filtering loss and 14-15 typical in v8; one scheduler stall
+      explains the single sub-floor exec).  Documented residual
+      limitation: at the frozen benchmark timing (~7 ms exec windows)
+      and the fixed, predeclared 500 us cadence, per-exec coverage is
+      structurally capped at 14-15 samples, and a rare scheduler stall
+      can drop a single exec below 10.  Raising that cap would require
+      changing the cadence or the benchmark -- both explicitly out of
+      scope.  This residual does not bear on the frequency finding.
+
+  (8) Is G7 authorized?  **NO.**  This step ran no G7 campaign.  The
+      5% G7 gate, thresholds, formulas, benchmark timing semantics,
+      frozen 30 records, records_sha256.txt, evidence_manifest.json,
+      production binaries, v7 evidence, and historical records are
+      unchanged (all re-verified, section 0).  No G7CAM record was
+      created or modified.
+
+8. WHAT THIS EVIDENCE MEANS FOR G7 (interpretation only -- no gate change)
+   - The diagnostic instrumentation used to question the frequency
+     finding is now clean on both documented v7 limitations: the
+     collector does not materially perturb execution (B6 pooled
+     0.00% vs 2.0% allowed), and B9 coverage is at its duration
+     ceiling with the shortfall mechanism fully attributed.
+   - Therefore the v7 conclusion -- genuine within-execution CPU
+     frequency variation, often exceeding the 5% exec-window spread
+     gate inside a single exec -- stands on unconfounded evidence.
+   - What that means FOR the G7 gate itself is a separate decision,
+     explicitly deferred: nothing here modifies the 5% gate, and no
+     G7 rerun is authorized by this step.
+
+9. CHANGED FILES (this step)
+   Source: tests/diag_highres_frequency.cpp (v8 P3 schedule only:
+     8 alternating B6 pairs + 8 B9 B-side execs; B7 dropped from the
+     schedule; control constants DIAG_VERSION/V8_B6_N_PAIRS/
+     V8_B9_N_EXECS).  Build: only diag_highres_frequency.exe relinked
+     (ninja exit 0); the 5 production binaries unchanged.
+   New evidence:
+     reports/g7-campaign-affinityfix/highres_frequency_v8.json
+     reports/g7-campaign-affinityfix/power_scheme_session_highres_v8.json
+     reports/g7-campaign-affinityfix/highres_v8_analysis.txt (this file)
+   Not touched: build/g7-campaign (frozen 30),
+     build/g7-campaign-affinityfix (30 G7CAM records), both manifests,
+     records_sha256.txt, all thresholds/specs, all v7 artifacts.
+

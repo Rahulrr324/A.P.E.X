@@ -1,0 +1,14 @@
+ninja: Entering directory `build-release-clean-3'
+[1/2] Building CXX object CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj
+FAILED: [code=1] CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -I"E:/My Local AI/stark/src/phase1" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj -MF CMakeFiles\aggregate.dir\src\phase1\aggregate.cpp.obj.d -o CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj -c "E:/My Local AI/stark/src/phase1/aggregate.cpp"
+E:/My Local AI/stark/src/phase1/aggregate.cpp: In function 'int {anonymous}::run(int, char**)':
+E:/My Local AI/stark/src/phase1/aggregate.cpp:256:28: error: 'const class stark_p1::JsonValue' has no member named 'isBool'; did you mean 'asBool'?
+  256 |                 if (!ram_m.isBool() || ram_m.asBool() != true) {
+      |                            ^~~~~~
+      |                            asBool
+E:/My Local AI/stark/src/phase1/aggregate.cpp:278:68: error: 'const class stark_p1::JsonValue' has no member named 'isBool'; did you mean 'asBool'?
+  278 |             if (pm.has("vram_measured") && pm.get("vram_measured").isBool()) {
+      |                                                                    ^~~~~~
+      |                                                                    asBool
+ninja: build stopped: subcommand failed.

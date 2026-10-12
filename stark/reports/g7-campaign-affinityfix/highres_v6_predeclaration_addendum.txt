@@ -1,0 +1,85 @@
+HIGH-RESOLUTION FREQUENCY DIAGNOSTIC v6 -- PREDECLARATION ADDENDUM
+Written BEFORE modifying the diagnostic, building, or running anything for v6.
+Date (local): 2026-10-07
+Status: this addendum SUPERSEDES only the collector-target-CPU choice stated in
+highres_v5_predeclaration.txt. Every other element of the v5 predeclaration
+(schedule, thresholds, classification rules, coverage floor, artifact filter)
+remains IN FORCE exactly as written there. Nothing here modifies G7 thresholds,
+G7 formulas, or the A/B/C classification framework.
+
+1. WHY A NEW RUN IS NEEDED (v5 outcome, evidence already on disk)
+   v5 verified API-level separation (worker readback=0x1, collector
+   readback=0x2, observed CPUs [0] vs [1]) yet still failed coverage:
+   5/8 collector-active (B) compute-bound execs recorded 0-1 samples in
+   [t0,t1], and the 3 B execs that did sample show ~1.9-2.2x iteration-time
+   inflation vs their A partners (e.g. B9 pair1: 26893 us span vs ~7500-8400 us
+   A; B7: median 4796/4810 us vs 2937/2408 us A).
+
+   ROOT CAUSE (verified 2026-10-07 via GetLogicalProcessorInformationEx,
+   RelationProcessorCore, before this addendum was written):
+     physical core 0 = logical processors {0,1}  (SMT pair)
+     physical core 1 = {2,3}   core 2 = {4,5}   core 3 = {6,7}
+     E-cores (no SMT): {8}, {9}, {10}, {11}
+     union of all LPs = 0xFFF = machine system mask (self-validating)
+     => CPU1 IS the SMT sibling of CPU0.
+   A worker that saturates P-core0 starves its sibling (explains 0 samples in
+   ~7 ms compute windows), and a collector that actually runs on CPU1 steals
+   execution resources from the worker (explains the ~2x slowdown). Measuring
+   on CPU1 therefore CANNOT satisfy the goal: "measurement must not compete
+   with the benchmark thread." The requirement to verify the machine's real
+   mask before choosing CPU1 is exactly what triggers this deviation.
+
+2. v6 CHANGE (single variable: collector target CPU selection rule)
+   Predeclared selection rule, computed in-process at startup from
+   GetLogicalProcessorInformationEx(RelationProcessorCore):
+     collector_cpu = the lowest-numbered logical CPU that
+       (a) is present in the system mask,
+       (b) is not CPU0 (the worker), and
+       (c) does NOT share a physical core with CPU0
+           (its core's LP set does not contain 0).
+   On this machine the rule evaluates to CPU2 (physical core 1).
+   If no such CPU exists, the diagnostic aborts with exit 3 (no run).
+   "preferably CPU 1" is intentionally NOT followed; CPU1 fails (c), and
+   section 1 documents why CPU1 cannot provide a non-perturbing measurement
+   on this hardware. This is a deviation from the preference, NOT from the
+   requirements: pinning must be to a different logical CPU, effective
+   affinity of BOTH threads must be verified, and separation must be proven
+   per-thread (never assumed from the process mask).
+
+   Process mask will be set to {CPU0, collector_cpu} (readback-verified) only
+   so both per-thread pins are realizable; separation is still proven by
+   per-thread SetThreadAffinityMask readback + per-sample observed CPU.
+
+3. UNCHANGED (reaffirmed; sourced from highres_v5_predeclaration.txt and
+   highres_predeclaration.txt)
+   - Schedule: 16 execs = B6 3 pairs + 1 final pair, B9 2 pairs, B7 2 pairs;
+     A/B order alternates; 30 s idles between groups; warmup=10, measure=50;
+     production benchmark semantics untouched.
+   - A/B materiality threshold for collector perturbation: 2.0%.
+   - Coverage floor: >=10 usable in-window samples per B exec; zero-coverage
+     is NEVER stability evidence ("not measurable").
+   - R2 artifact filter: usable iff 20.0 <= pct_perf <= 240.0.
+   - In-exec ramp: >1 transition OR spread >5.0%.
+   - PDH adequacy: P1 change interval <100 ms AND P2 latency <100 ms.
+   - Classification: A = genuine frequency variation (exec-only spread >5.0%
+     OR >=2 in-exec transitions in B6/B9 corroborated by iteration drift
+     >5.0%); B = exec-only spread <=2.0% AND <=1 transition while exec-window
+     spread >5.0%; C = otherwise or coverage <10 samples/exec. No new
+     classes, no relaxed thresholds.
+   - Session-scoped High Performance scheme; original scheme restored and
+     GUID-verified after the session (diagnostic aid only).
+   - No G7 campaign, no changes to frozen 30 records, records_sha256.txt,
+     evidence_manifest.json, production binaries, historical/G7CAM records.
+
+4. PREDECLARED OUTPUT ARTIFACTS (v6)
+   - reports/g7-campaign-affinityfix/highres_frequency_v6.json
+   - reports/g7-campaign-affinityfix/power_scheme_session_highres_v6.json
+   - reports/g7-campaign-affinityfix/highres_v6_analysis.txt (post-run)
+   v5 artifacts remain on disk, unchanged, as evidence of the v5 failure mode.
+
+5. DECISION TO BE MADE FROM v6 (stated in advance)
+   Compare A vs B timing per bench against the 2.0% threshold, B-exec coverage
+   against the >=10 floor, in-window frequency stats against the A/B/C rules,
+   and P1/P2 against PDH adequacy. Outcome determines whether we now have a
+   non-perturbing, adequately covered measurement of frequency during the
+   actual benchmark window (the goal of this step) -- NOT whether G7 passes.

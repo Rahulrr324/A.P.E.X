@@ -1,0 +1,29 @@
+=== STARK Phase 1 (M0) Aggregator ===
+records directory: build/historical-regen
+records found: 6
+
+STATUS SUMMARY:
+  E1: 3 record(s)
+  E5: 3 record(s)
+  PASSED=6 FAILED=0 SKIPPED=0 NOT_ATTEMPTED=0
+
+GATE RESULTS:
+  [FAIL] G1 hardware profile collected
+         no PROFILE record found (run profiler_cli)
+  [PASS] G2 CPU baselines present and complete
+         E1 and E5 present, distinct, each with >=10 samples
+  [FAIL] G3 GPU branch complete-or-skipped with reason
+         E2 record missing entirely (must record skipped status)
+  [FAIL] G4 peak memory measured
+         E5: hardware GPU capability unknown (no gpu_present device-inventory evidence and no authoritative GPU field); refusing to classify as CPU-only
+  [PASS] G5 parameter accounting consistent
+         all accounting records pass G5 checks
+  [PASS] G6 budget evaluator rejects over-budget demands
+         VRAM-only violation detected; compute fields informational
+  [FAIL] G7 same-config medians reproducible across repeats
+         B6 medians differ 16.13% (allowed 15.00%) between runs 1 and 2
+B7 medians differ 18.38% (allowed 15.00%) between runs 1 and 2
+B9 medians differ 28.18% (allowed 15.00%) between runs 1 and 2
+
+
+OVERALL: FAIL (4 gate(s) failed)

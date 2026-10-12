@@ -1,0 +1,189 @@
+Loaded 35 JSON records from build/g7-campaign-frozen-20261008
+
+=== Independent G7 verification ===
+
+FAIL B6: max pairwise diff 50.2921% > 15.0% (n=10, samples/group shown below)
+  benchmark=B6  config_key={"batch_size": 1, "benchmark_id": "B6", "measurement_count": 50, "sequence_length": 0, "th...
+  runs=10  tolerance=15.0%  max_diff=50.2921%  min_diff=0.0000%  cv=23.39%
+    G7CAM-B6-E1-11933807  exp=E1  n=50  median=219.4500us  stored=219.4500us
+    G7CAM-B6-E1-39872860  exp=E1  n=50  median=219.8000us  stored=219.8000us
+    G7CAM-B6-E1-41851871  exp=E1  n=50  median=219.8000us  stored=219.8000us
+    G7CAM-B6-E1-76656589  exp=E1  n=50  median=178.7000us  stored=178.7000us
+    G7CAM-B6-E1-9007430  exp=E1  n=50  median=359.5000us  stored=359.5000us
+    G7CAM-B6-E5-11933807  exp=E5  n=50  median=221.3500us  stored=221.3500us
+    G7CAM-B6-E5-39872860  exp=E5  n=50  median=219.9500us  stored=219.9500us
+    G7CAM-B6-E5-41851871  exp=E5  n=50  median=220.0000us  stored=220.0000us
+    G7CAM-B6-E5-76656589  exp=E5  n=50  median=179.4500us  stored=179.4500us
+    G7CAM-B6-E5-9007430  exp=E5  n=50  median=181.5000us  stored=181.5000us
+    pair (1,2): 0.1592%
+    pair (1,3): 0.1592%
+    pair (1,4): 18.5692%
+    pair (1,5): 38.9569%
+    pair (1,6): 0.8584%
+    pair (1,7): 0.2273%
+    pair (1,8): 0.2500%
+    pair (1,9): 18.2274%
+    pair (1,10): 17.2932%
+    pair (2,3): 0.0000%
+    pair (2,4): 18.6988%
+    pair (2,5): 38.8595%
+    pair (2,6): 0.7002%
+    pair (2,7): 0.0682%
+    pair (2,8): 0.0909%
+    pair (2,9): 18.3576%
+    pair (2,10): 17.4249%
+    pair (3,4): 18.6988%
+    pair (3,5): 38.8595%
+    pair (3,6): 0.7002%
+    pair (3,7): 0.0682%
+    pair (3,8): 0.0909%
+    pair (3,9): 18.3576%
+    pair (3,10): 17.4249%
+    pair (4,5): 50.2921%
+    pair (4,6): 19.2681%
+    pair (4,7): 18.7543%
+    pair (4,8): 18.7727%
+    pair (4,9): 0.4179%
+    pair (4,10): 1.5427%
+    pair (5,6): 38.4284%
+    pair (5,7): 38.8178%
+    pair (5,8): 38.8039%
+    pair (5,9): 50.0834%
+    pair (5,10): 49.5132%
+    pair (6,7): 0.6325%
+    pair (6,8): 0.6099%
+    pair (6,9): 18.9293%
+    pair (6,10): 18.0032%
+    pair (7,8): 0.0227%
+    pair (7,9): 18.4133%
+    pair (7,10): 17.4812%
+    pair (8,9): 18.4318%
+    pair (8,10): 17.5000%
+    pair (9,10): 1.1295%
+
+FAIL B7: max pairwise diff 52.2676% > 15.0% (n=10, samples/group shown below)
+  benchmark=B7  config_key={"batch_size": 1, "benchmark_id": "B7", "measurement_count": 50, "sequence_length": 0, "th...
+  runs=10  tolerance=15.0%  max_diff=52.2676%  min_diff=1.1440%  cv=25.61%
+    G7CAM-B7-E1-11933807  exp=E1  n=50  median=3339.0500us  stored=3339.0500us
+    G7CAM-B7-E1-39872860  exp=E1  n=50  median=3300.8500us  stored=3300.8500us
+    G7CAM-B7-E1-41851871  exp=E1  n=50  median=3242.5500us  stored=3242.5500us
+    G7CAM-B7-E1-76656589  exp=E1  n=50  median=2814.6000us  stored=2814.6000us
+    G7CAM-B7-E1-9007430  exp=E1  n=50  median=2731.2000us  stored=2731.2000us
+    G7CAM-B7-E5-11933807  exp=E5  n=50  median=5721.9000us  stored=5721.9000us
+    G7CAM-B7-E5-39872860  exp=E5  n=50  median=4147.1500us  stored=4147.1500us
+    G7CAM-B7-E5-41851871  exp=E5  n=50  median=3075.5500us  stored=3075.5500us
+    G7CAM-B7-E5-76656589  exp=E5  n=50  median=3892.4500us  stored=3892.4500us
+    G7CAM-B7-E5-9007430  exp=E5  n=50  median=2863.3500us  stored=2863.3500us
+    pair (1,2): 1.1440%
+    pair (1,3): 2.8900%
+    pair (1,4): 15.7066%
+    pair (1,5): 18.2043%
+    pair (1,6): 41.6444%
+    pair (1,7): 19.4857%
+    pair (1,8): 7.8915%
+    pair (1,9): 14.2173%
+    pair (1,10): 14.2466%
+    pair (2,3): 1.7662%
+    pair (2,4): 14.7311%
+    pair (2,5): 17.2577%
+    pair (2,6): 42.3120%
+    pair (2,7): 20.4068%
+    pair (2,8): 6.8255%
+    pair (2,9): 15.1987%
+    pair (2,10): 13.2542%
+    pair (3,4): 13.1979%
+    pair (3,5): 15.7700%
+    pair (3,6): 43.3309%
+    pair (3,7): 21.8126%
+    pair (3,8): 5.1503%
+    pair (3,9): 16.6964%
+    pair (3,10): 11.6945%
+    pair (4,5): 2.9631%
+    pair (4,6): 50.8100%
+    pair (4,7): 32.1317%
+    pair (4,8): 8.4847%
+    pair (4,9): 27.6908%
+    pair (4,10): 1.7026%
+    pair (5,6): 52.2676%
+    pair (5,7): 34.1427%
+    pair (5,8): 11.1964%
+    pair (5,9): 29.8334%
+    pair (5,10): 4.6152%
+    pair (6,7): 27.5215%
+    pair (6,8): 46.2495%
+    pair (6,9): 31.9728%
+    pair (6,10): 49.9581%
+    pair (7,8): 25.8394%
+    pair (7,9): 6.1416%
+    pair (7,10): 30.9562%
+    pair (8,9): 20.9868%
+    pair (8,10): 6.8996%
+    pair (9,10): 26.4384%
+
+FAIL B9: max pairwise diff 31.0940% > 15.0% (n=10, samples/group shown below)
+  benchmark=B9  config_key={"batch_size": 1, "benchmark_id": "B9", "measurement_count": 50, "sequence_length": 0, "th...
+  runs=10  tolerance=15.0%  max_diff=31.0940%  min_diff=0.0000%  cv=13.52%
+    G7CAM-B9-E1-11933807  exp=E1  n=50  median=223.8000us  stored=223.8000us
+    G7CAM-B9-E1-39872860  exp=E1  n=50  median=187.5500us  stored=187.5500us
+    G7CAM-B9-E1-41851871  exp=E1  n=50  median=222.6500us  stored=222.6500us
+    G7CAM-B9-E1-76656589  exp=E1  n=50  median=180.6000us  stored=180.6000us
+    G7CAM-B9-E1-9007430  exp=E1  n=50  median=181.7500us  stored=181.7500us
+    G7CAM-B9-E5-11933807  exp=E5  n=50  median=260.5000us  stored=260.5000us
+    G7CAM-B9-E5-39872860  exp=E5  n=50  median=223.8000us  stored=223.8000us
+    G7CAM-B9-E5-41851871  exp=E5  n=50  median=223.1000us  stored=223.1000us
+    G7CAM-B9-E5-76656589  exp=E5  n=50  median=179.5000us  stored=179.5000us
+    G7CAM-B9-E5-9007430  exp=E5  n=50  median=182.1500us  stored=182.1500us
+    pair (1,2): 16.1975%
+    pair (1,3): 0.5139%
+    pair (1,4): 19.3029%
+    pair (1,5): 18.7891%
+    pair (1,6): 14.0883%
+    pair (1,7): 0.0000%
+    pair (1,8): 0.3128%
+    pair (1,9): 19.7945%
+    pair (1,10): 18.6104%
+    pair (2,3): 15.7647%
+    pair (2,4): 3.7057%
+    pair (2,5): 3.0925%
+    pair (2,6): 28.0038%
+    pair (2,7): 16.1975%
+    pair (2,8): 15.9346%
+    pair (2,9): 4.2922%
+    pair (2,10): 2.8792%
+    pair (3,4): 18.8861%
+    pair (3,5): 18.3696%
+    pair (3,6): 14.5298%
+    pair (3,7): 0.5139%
+    pair (3,8): 0.2017%
+    pair (3,9): 19.3802%
+    pair (3,10): 18.1900%
+    pair (4,5): 0.6327%
+    pair (4,6): 30.6718%
+    pair (4,7): 19.3029%
+    pair (4,8): 19.0498%
+    pair (4,9): 0.6091%
+    pair (4,10): 0.8509%
+    pair (5,6): 30.2303%
+    pair (5,7): 18.7891%
+    pair (5,8): 18.5343%
+    pair (5,9): 1.2380%
+    pair (5,10): 0.2196%
+    pair (6,7): 14.0883%
+    pair (6,8): 14.3570%
+    pair (6,9): 31.0940%
+    pair (6,10): 30.0768%
+    pair (7,8): 0.3128%
+    pair (7,9): 19.7945%
+    pair (7,10): 18.6104%
+    pair (8,9): 19.5428%
+    pair (8,10): 18.3550%
+    pair (9,10): 1.4548%
+
+=== Independent G7 verdict: FAIL ===
+
+
+=== Group summary ===
+benchmark n_runs  tolerance  max_diff   min_diff   cv%       verdict
+B6       10      15.0       50.2921%   0.0000%    23.39     FAIL
+B7       10      15.0       52.2676%   1.1440%    25.61     FAIL
+B9       10      15.0       31.0940%   0.0000%    13.52     FAIL

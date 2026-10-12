@@ -1,0 +1,16 @@
+{
+  "harness_constants": {
+    "DIAG_VERSION": "v8",
+    "V8_B6_N_PAIRS": "8",
+    "V8_B9_N_EXECS": "8"
+  },
+  "harness_doc_contains_v8": true,
+  "harness_control_block_line_present": true,
+  "start_scheme_present": true,
+  "start_scheme_guid": "dfe97760-471c-4d01-bd06-b8b04c50ecd8",
+  "mtime_snapshot_present": true,
+  "mtime_snapshot_file_count": 63,
+  "verify_end_present": true,
+  "diag_highres_frequency_present": true,
+  "current_scheme_guid": "dfe97760-471c-4d01-bd06-b8b04c50ecd8"
+}

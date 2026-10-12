@@ -1,0 +1,1 @@
+CONTROLLED TEST INPUT (not a measurement). Real records with one disclosed edit: the E5-B6 statistics block was replaced with the E1-B6 statistics block so the two independent runs of the same configuration agree, allowing G7 to pass. All gates are expected to PASS.

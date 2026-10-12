@@ -1,0 +1,20 @@
+Fresh controlled repeats (release build, same machine, same config, 6x E1 + 6x E5)
+
+=== BB6 : 12 runs ===
+  medians (us): [207.2, 450.3, 306.55, 417.4, 410.6, 432.35, 432.75, 444.75, 420.9, 184.35, 186.9, 442.2]
+  median-of-medians=419.15us  min=184.35  max=450.30  spread=59.06%
+  intra-run CV%: [42.61, 11.88, 37.25, 3.14, 29.56, 14.72, 3.91, 14.53, 1.73, 47.15, 41.4, 7.04]
+  all-pairs: 66 comparisons, 35 exceed 15% -> G7 would FAIL
+
+=== BB7 : 12 runs ===
+  medians (us): [6735.75, 6790.65, 6546.65, 7099.5, 6712.5, 7308.55, 7449.55, 6902.15, 7707.0, 6983.35, 6410.0, 7916.05]
+  median-of-medians=6942.75us  min=6410.00  max=7916.05  spread=19.03%
+  intra-run CV%: [11.76, 13.94, 9.17, 10.0, 14.64, 10.17, 13.72, 9.19, 11.15, 11.3, 12.87, 13.2]
+  all-pairs: 66 comparisons, 5 exceed 15% -> G7 would FAIL
+
+=== BB9 : 12 runs ===
+  medians (us): [394.15, 419.25, 213.55, 443.2, 420.6, 479.75, 531.0, 411.75, 457.95, 410.55, 456.7, 442.9]
+  median-of-medians=431.75us  min=213.55  max=531.00  spread=59.78%
+  intra-run CV%: [5.17, 32.21, 22.82, 31.37, 3.67, 7.14, 19.92, 26.43, 34.79, 3.31, 5.16, 25.76]
+  all-pairs: 66 comparisons, 19 exceed 15% -> G7 would FAIL
+

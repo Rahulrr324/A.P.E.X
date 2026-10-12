@@ -1,0 +1,116 @@
+$ cmake -S . -B build-v15-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=<winlibs>/g++.exe
+-- The CXX compiler identification is GNU 16.1.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/g++.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (2.5s)
+-- Generating done (0.2s)
+-- Build files have been written to: E:/My Local AI/stark/build-v15-release
+
+$ cmake --build build-v15-release
+[1/103] Building CXX object CMakeFiles/stark_002.dir/src/neural/NeuralCell.cpp.obj
+[2/103] Building CXX object CMakeFiles/test_params.dir/src/test_params.cpp.obj
+[3/103] Building CXX object CMakeFiles/test_params.dir/src/neural/NeuralCell.cpp.obj
+[4/103] Building CXX object CMakeFiles/test_neuron.dir/src/neural/NeuralCell.cpp.obj
+[5/103] Building CXX object CMakeFiles/stark_002.dir/src/neural/Synapse.cpp.obj
+[6/103] Building CXX object CMakeFiles/stark_phase1.dir/src/phase1/bench/TinyDenseModel.cpp.obj
+[7/103] Building CXX object CMakeFiles/stark_002.dir/src/main.cpp.obj
+[8/103] Building CXX object CMakeFiles/test_neuron.dir/src/test_neuron.cpp.obj
+[9/103] Building CXX object CMakeFiles/test_integration.dir/src/neural/NeuralCell.cpp.obj
+[10/103] Building CXX object CMakeFiles/network_demo.dir/src/neural/NeuralCell.cpp.obj
+[11/103] Building CXX object CMakeFiles/test_integration.dir/src/test_integration.cpp.obj
+[12/103] Building CXX object CMakeFiles/test_synapse.dir/src/test_synapse.cpp.obj
+[13/103] Building CXX object CMakeFiles/test_integration.dir/src/neural/Synapse.cpp.obj
+[14/103] Building CXX object CMakeFiles/test_synapse.dir/src/neural/Synapse.cpp.obj
+[15/103] Building CXX object CMakeFiles/network_demo.dir/src/network_demo.cpp.obj
+[16/103] Building CXX object CMakeFiles/network_demo.dir/src/neural/Synapse.cpp.obj
+[17/103] Building CXX object CMakeFiles/stdp_demo.dir/src/neural/NeuralCell.cpp.obj
+[18/103] Building CXX object CMakeFiles/test_stdp.dir/src/neural/NeuralCell.cpp.obj
+[19/103] Building CXX object CMakeFiles/test_stdp.dir/src/neural/Synapse.cpp.obj
+[20/103] Building CXX object CMakeFiles/stdp_demo.dir/src/neural/Synapse.cpp.obj
+[21/103] Building CXX object CMakeFiles/stdp_demo.dir/tests/examples/stdp_demo.cpp.obj
+[22/103] Building CXX object CMakeFiles/test_stdp.dir/tests/test_stdp.cpp.obj
+[23/103] Building CXX object CMakeFiles/test_homeostasis.dir/src/neural/NeuralCell.cpp.obj
+[24/103] Building CXX object CMakeFiles/stark_phase1.dir/src/phase1/bench/BudgetLedger.cpp.obj
+[25/103] Building CXX object CMakeFiles/test_homeostasis.dir/src/neural/Synapse.cpp.obj
+[26/103] Building CXX object CMakeFiles/homeostasis_demo.dir/src/neural/NeuralCell.cpp.obj
+[27/103] Building CXX object CMakeFiles/homeostasis_demo.dir/tests/examples/homeostasis_demo.cpp.obj
+[28/103] Building CXX object CMakeFiles/homeostasis_demo.dir/src/neural/Synapse.cpp.obj
+[29/103] Building CXX object CMakeFiles/stark_phase1.dir/src/phase1/bench/ParameterAccounting.cpp.obj
+[30/103] Building CXX object CMakeFiles/test_network.dir/src/neural/NeuralCell.cpp.obj
+[31/103] Building CXX object CMakeFiles/test_network.dir/src/neural/Synapse.cpp.obj
+[32/103] Building CXX object CMakeFiles/test_network.dir/src/test_network.cpp.obj
+[33/103] Building CXX object CMakeFiles/test_three_factor.dir/src/neural/NeuralCell.cpp.obj
+[34/103] Building CXX object CMakeFiles/test_three_factor.dir/src/neural/Synapse.cpp.obj
+[35/103] Building CXX object CMakeFiles/test_three_factor.dir/tests/test_three_factor.cpp.obj
+[36/103] Building CXX object CMakeFiles/three_factor_demo.dir/tests/examples/three_factor_demo.cpp.obj
+[37/103] Building CXX object CMakeFiles/test_homeostasis.dir/tests/test_homeostasis.cpp.obj
+[38/103] Building CXX object CMakeFiles/three_factor_demo.dir/src/neural/NeuralCell.cpp.obj
+[39/103] Building CXX object CMakeFiles/test_network.dir/src/neural/Network.cpp.obj
+[40/103] Building CXX object CMakeFiles/three_factor_demo.dir/src/neural/Synapse.cpp.obj
+[41/103] Building CXX object CMakeFiles/test_serialization.dir/src/neural/NeuralCell.cpp.obj
+[42/103] Building CXX object CMakeFiles/test_serialization.dir/src/neural/Synapse.cpp.obj
+[43/103] Building CXX object CMakeFiles/test_three_factor.dir/src/neural/Network.cpp.obj
+[44/103] Building CXX object CMakeFiles/network_demo.dir/src/neural/Network.cpp.obj
+[45/103] Building CXX object CMakeFiles/test_stdp.dir/src/neural/Network.cpp.obj
+[46/103] Building CXX object CMakeFiles/test_serialization.dir/src/experiment/Experiment.cpp.obj
+[47/103] Building CXX object CMakeFiles/test_serialization.dir/src/experiment/Recorder.cpp.obj
+[48/103] Building CXX object CMakeFiles/homeostasis_demo.dir/src/neural/Network.cpp.obj
+[49/103] Building CXX object CMakeFiles/serialization_demo.dir/tests/examples/serialization_demo.cpp.obj
+[50/103] Building CXX object CMakeFiles/serialization_demo.dir/src/neural/NeuralCell.cpp.obj
+[51/103] Building CXX object CMakeFiles/stdp_demo.dir/src/neural/Network.cpp.obj
+[52/103] Building CXX object CMakeFiles/test_serialization.dir/tests/test_serialization.cpp.obj
+[53/103] Building CXX object CMakeFiles/serialization_demo.dir/src/neural/Synapse.cpp.obj
+[54/103] Building CXX object CMakeFiles/test_homeostasis.dir/src/neural/Network.cpp.obj
+[55/103] Building CXX object CMakeFiles/serialization_demo.dir/src/experiment/Experiment.cpp.obj
+[56/103] Building CXX object CMakeFiles/serialization_demo.dir/src/experiment/Recorder.cpp.obj
+[57/103] Building CXX object CMakeFiles/test_phase1_profiler.dir/tests/test_main.cpp.obj
+[58/103] Building CXX object CMakeFiles/stark_phase1.dir/src/phase1/gates.cpp.obj
+[59/103] Building CXX object CMakeFiles/test_phase1_accounting.dir/tests/test_main.cpp.obj
+[60/103] Building CXX object CMakeFiles/three_factor_demo.dir/src/neural/Network.cpp.obj
+[61/103] Building CXX object CMakeFiles/test_serialization.dir/src/neural/Network.cpp.obj
+[62/103] Building CXX object CMakeFiles/test_phase1_budget.dir/tests/test_main.cpp.obj
+[63/103] Building CXX object CMakeFiles/test_phase1_profiler.dir/tests/test_phase1_profiler.cpp.obj
+[64/103] Building CXX object CMakeFiles/test_phase1_records.dir/tests/test_main.cpp.obj
+[65/103] Building CXX object CMakeFiles/test_phase1_reproducibility.dir/tests/test_main.cpp.obj
+[66/103] Building CXX object CMakeFiles/test_phase1_gates.dir/tests/test_main.cpp.obj
+[67/103] Linking CXX executable stark_002.exe
+[68/103] Building CXX object CMakeFiles/test_phase1_budget.dir/tests/test_phase1_budget.cpp.obj
+[69/103] Linking CXX executable test_neuron.exe
+[70/103] Building CXX object CMakeFiles/profiler_cli.dir/src/phase1/profiler_cli.cpp.obj
+[71/103] Building CXX object CMakeFiles/test_phase1_accounting.dir/tests/test_phase1_accounting.cpp.obj
+[72/103] Linking CXX executable test_synapse.exe
+[73/103] Linking CXX executable test_params.exe
+[74/103] Linking CXX executable test_integration.exe
+[75/103] Linking CXX executable network_demo.exe
+[76/103] Linking CXX executable test_stdp.exe
+[77/103] Linking CXX executable stdp_demo.exe
+[78/103] Linking CXX executable test_homeostasis.exe
+[79/103] Linking CXX executable homeostasis_demo.exe
+[80/103] Linking CXX executable test_network.exe
+[81/103] Linking CXX executable test_three_factor.exe
+[82/103] Linking CXX executable three_factor_demo.exe
+[83/103] Building CXX object CMakeFiles/stark_phase1.dir/src/phase1/bench/BenchmarkHarness.cpp.obj
+[84/103] Linking CXX executable test_serialization.exe
+[85/103] Building CXX object CMakeFiles/stark_phase1.dir/src/phase1/common/HardwareProfiler.cpp.obj
+[86/103] Building CXX object CMakeFiles/test_phase1_reproducibility.dir/tests/test_phase1_reproducibility.cpp.obj
+[87/103] Building CXX object CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj
+[88/103] Building CXX object CMakeFiles/serialization_demo.dir/src/neural/Network.cpp.obj
+[89/103] Linking CXX executable serialization_demo.exe
+[90/103] Building CXX object CMakeFiles/test_phase1_records.dir/tests/test_phase1_records.cpp.obj
+[91/103] Building CXX object CMakeFiles/test_phase1_gates.dir/tests/test_phase1_gates.cpp.obj
+[92/103] Building CXX object CMakeFiles/stark_phase1.dir/src/phase1/common/ExperimentRecord.cpp.obj
+[93/103] Linking CXX static library libstark_phase1.a
+[94/103] Building CXX object CMakeFiles/run_baseline.dir/src/phase1/baselines/run_baseline.cpp.obj
+[95/103] Linking CXX executable profiler_cli.exe
+[96/103] Linking CXX executable aggregate.exe
+[97/103] Linking CXX executable test_phase1_profiler.exe
+[98/103] Linking CXX executable test_phase1_accounting.exe
+[99/103] Linking CXX executable test_phase1_budget.exe
+[100/103] Linking CXX executable test_phase1_reproducibility.exe
+[101/103] Linking CXX executable test_phase1_records.exe
+[102/103] Linking CXX executable test_phase1_gates.exe
+[103/103] Linking CXX executable run_baseline.exe
+BUILD_EXIT=0

@@ -1,0 +1,69 @@
+STABILITY-GATE RESULT (predeclared formulas; see gate_predeclaration.txt)
+
+CONTROL
+  original scheme      : DFE97760-471C-4D01-BD06-B8B04C50ECD8
+  requested            : 8C5E7FDA-E8BF-4A96-9A85-A6E23A8C635C
+  apply status         : 0 (ok=True)
+  scheme after apply   : 8C5E7FDA-E8BF-4A96-9A85-A6E23A8C635C
+  scheme seen by child : 8C5E7FDA-E8BF-4A96-9A85-A6E23A8C635C
+  restore status       : 0 (matches_original=True)
+  scheme after restore : DFE97760-471C-4D01-BD06-B8B04C50ECD8
+  child exit           : 0
+
+SAMPLES
+  exec-window samples  : 10 (n=10)
+  benches              : B6 x6, B9 x2, B7 x2
+  verified_single_cpu  : 10/10
+
+EXEC-WINDOW %% PROCESSOR PERFORMANCE (controlled run)
+  exec#0  B6  gap=no    perf= 203.256  before=202.855  median_us=139.60  first10=139.70 last10=139.50
+  exec#1  B6  gap=yes   perf= 217.863  before=194.192  median_us=129.90  first10=129.90 last10=129.95
+  exec#2  B6  gap=yes   perf= 216.030  before=193.671  median_us=129.95  first10=130.00 last10=130.10
+  exec#3  B6  gap=yes   perf= 218.314  before=187.035  median_us=129.90  first10=129.80 last10=129.85
+  exec#4  B6  gap=no    perf= 218.237  before=218.147  median_us=130.35  first10=131.50 last10=130.35
+  exec#5  B6  gap=no    perf= 218.235  before=218.269  median_us=129.90  first10=130.90 last10=130.05
+  exec#6  B9  gap=yes   perf= 218.026  before=192.687  median_us=130.30  first10=130.50 last10=130.30
+  exec#7  B9  gap=no    perf= 218.232  before=218.208  median_us=130.30  first10=130.20 last10=130.30
+  exec#8  B7  gap=yes   perf= 209.552  before=197.013  median_us=2105.70  first10=2140.55 last10=2030.85
+  exec#9  B7  gap=no    perf= 205.440  before=218.139  median_us=2128.95  first10=2130.75 last10=2066.75
+  min    = 203.256
+  max    = 218.314
+  mean   = 214.318
+  median = 217.944
+  stdev  = 5.917 (sample, n-1)
+  CV     = 2.761 %
+
+SPREAD
+  PRIMARY  (max-min)/max*100      = 6.8974 %   [GATE <= 5.0 %]
+  secondary (max-min)/mean*100    = 7.0260 % (non-gating)
+  secondary (max-min)/min*100     = 7.4084 % (non-gating)
+  GATE RESULT                     : FAIL
+
+POST-GAP VS WARM (exec-window %%perf)
+  post-gap n=5 mean=215.957 min=209.552 max=218.314
+  warm     n=5 mean=212.680 min=203.256 max=218.237
+  delta (warm - post-gap) = -3.277 pp
+  relative gap penalty     = 1.517 %
+  baseline (pre-control): post-gap mean vs warm mean from frequency_evidence.json = 113.2 vs 147.1
+
+IN-EXECUTION RAMP (threshold: 5.0 %)
+  max |last10-first10|/first10 = 5.125 %
+  max |perf_after-perf_before|/perf_before = 16.724 %
+  execs with MATERIAL ramp     : 6/10
+    exec#1 B6 drift=0.038 bracket=12.189
+    exec#2 B6 drift=0.077 bracket=11.545
+    exec#3 B6 drift=0.039 bracket=16.724
+    exec#6 B9 drift=0.153 bracket=13.150
+    exec#8 B7 drift=5.125 bracket=6.365
+    exec#9 B7 drift=3.004 bracket=5.822
+  timeline samples inside exec windows: 4 (sampler period 100 ms; execs are ~ms-scale)
+
+BASELINE (pre-control, read-only) FOR CONTEXT
+  baseline exec-window %perf: n=10 min=87.010 max=158.133 spread(G7 form)=44.9768 %
+  baseline B6/B9/B7 medians us: 179.4, 249.5, 322.3, 311.5, 212.3, 232.5, 211.8, 190.5, 3250.3, 3318.6
+  controlled medians us        : 139.6, 129.9, 129.9, 129.9, 130.3, 129.9, 130.3, 130.3, 2105.7, 2129.0
+
+CLASSIFICATION: B
+  A = apply+restore OK AND spread<=5.0%% AND no material in-exec ramp
+  B = apply+restore OK but gate failed
+  C = apply or restore failed

@@ -1,0 +1,120 @@
+struct PairedArtifact {
+    bool attempted = false;
+    bool written = false;
+    std::string path;        // empty until successfully opened for exclusive write
+    std::string note;        // empty when written
+    void write(const std::string& run_dir,
+               const std::vector<ReplicateResult>& minimal,
+               const std::vector<ReplicateResult>& instrumented) {
+        if (attempted) return;
+        attempted = true;
+        if (minimal.size() != instrumented.size()) {
+            note = "refused to write paired artifact: condition replicate counts differ " +
+                   std::to_string(minimal.size()) + " vs " + std::to_string(instrumented.size());
+            return;
+        }
+        // Mirror calibrate()'s validity pre-condition: write only when every
+        // replicate in BOTH conditions is valid.
+        for (const auto& r : minimal)
+            if (!r.valid) {
+                note = "refused to write paired artifact: a MINIMAL replicate is invalid";
+                return;
+            }
+        for (const auto& r : instrumented)
+            if (!r.valid) {
+                note = "refused to write paired artifact: an INSTRUMENTED replicate is invalid";
+                return;
+            }
+        const std::string path = make_paired_artifact_path(run_dir);
+        const std::string perr = validate_diagnostic_path(path);
+        if (!perr.empty()) {
+            note = "refused to write paired artifact: isolation validation failed: " + perr;
+            return;
+        }
+        const int fd = exclusive_create_file(path);
+        if (fd < 0) {
+            note = "cannot create paired artifact (exists or exclusive creation unsupported); nothing overwritten: " +
+                   path;
+            return;
+        }
+        // Write to the fd through a std::ostream for formatting; ownership of fd
+        // is transferred to a small RAII closer so the file is closed on every
+        // exit path. The closer uses a lambda deleter so the platform-specific
+        // close call is selected with an ordinary runtime if/else (no #ifdef
+        // inside a function body).
+        FILE* f = nullptr;
+#ifdef _WIN32
+        f = _fdopen(fd, "wb");
+#else
+        f = fdopen(fd, "wb");
+#endif
+        if (!f) {
+            this->path = path;
+            this->note = "paired artifact fdopen failed; nothing overwritten: " + path;
+            return;
+        }
+        auto close_f = [&]() {
+            if (f) {
+#ifdef _WIN32
+                _close(_fileno(f));
+#else
+                fclose(f);
+#endif
+                f = nullptr;
+            }
+        };
+        fprintf(f, "replicate,iteration,minimal_sec,instrumented_sec,signed_overhead_pct\n");
+        for (size_t i = 0; i < minimal.size(); ++i) {
+            const auto& a = minimal[i].total_samples_sec;
+            const auto& b = instrumented[i].total_samples_sec;
+            for (size_t j = 0; j < a.size(); ++j) {
+                const double pct = 100.0 * (b[j] - a[j]) / a[j];
+                fprintf(f, "%u,%zu,%#.9g,%#.9g,%#.9g\n",
+                        minimal[i].index, j, a[j], b[j], pct);
+            }
+        }
+        if (fflush(f) != 0) {
+            close_f();
+            this->path = path;
+            this->note = "paired artifact fflush failed; nothing overwritten: " + path;
+            return;
+        }
+#ifdef _WIN32
+        int err = _commit(fd);
+#else
+        int err = fsync(fd);
+#endif
+        close_f();
+        if (err == 0) {
+            this->path = path;
+            this->written = true;
+            this->note.clear();
+            return;
+        }
+        this->path = path;
+        this->note = "paired artifact created but not confirmed durable on disk (flush/sync failed)";
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Orchestration
+// ---------------------------------------------------------------------------
+void abort_report(DiagnosticReport& rep, const std::string& why) {
+    rep.completed = false;
+    rep.abort_reason = why;
+    rep.classification = Classification::INSUFFICIENT_REPLICATION;
+}
+
+// ---------------------------------------------------------------------------
+// Paired-sample capture wiring (output-only; added for one authorized evidence
+// run). Thin wrapper around PairedArtifact::write(); kept separate so the
+// capture point in run_bm_b7_diagnostic stays readable.
+// ---------------------------------------------------------------------------
+void write_paired_artifact_if_valid(PairedArtifact& art,
+                                    const std::string& run_dir,
+                                    const std::vector<ReplicateResult>& minimal,
+                                    const std::vector<ReplicateResult>& instrumented) {
+    art.write(run_dir, minimal, instrumented);
+}
+
+DiagnosticReport run_bm_b7_diagnostic(const Protocol& proto,

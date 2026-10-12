@@ -1,0 +1,260 @@
+HIGH-RESOLUTION FREQUENCY DIAGNOSTIC -- v7 ANALYSIS (FINAL FOR THIS STEP)
+Date: 2026-10-07. Investigation only: NO G7 campaign was run; G7
+thresholds and formulas, benchmark timing semantics, frozen 30 records,
+records_sha256.txt, evidence_manifest.json, production binaries,
+historical records, and existing G7CAM records were not modified.
+Predeclaration: highres_v7_predeclaration_addendum.txt (written before any
+v7 code change, build, or run). Schedule/thresholds/classification per
+highres_v5_predeclaration.txt + highres_predeclaration.txt, unchanged.
+
+STEP GOAL (restated): establish whether we now have a NON-PERTURBING,
+ADEQUATELY COVERED measurement of frequency during the actual benchmark
+execution window. Not: make G7 pass.
+
+--------------------------------------------------------------------------------
+1. MEASUREMENT ARCHITECTURE (final, v7)
+   Machine: i5-12450H, 12 logical CPUs, system mask 0xFFF (verified via
+   GetProcessAffinityMask before any choice).
+   Physical-core topology (verified 2 ways, recorded in JSON static block):
+     {LP0,1} {LP2,3} {LP4,5} {LP6,7} = SMT P-cores; {8}{9}{10}{11} = E-cores;
+     union of core LP sets = 0xFFF (self-validated in-process; the run
+     ABORTS rather than pinning if validation fails).
+     => CPU1 = SMT sibling of CPU0 (why v5 failed).
+   Independent contention probe (pins + readback verified): pair(0,1)
+   combined-throughput ratio 0.755 vs pair(0,2) 0.957 => CPU2 is a
+   DIFFERENT physical core.
+   Selection rule (predeclared): lowest LP in system mask not sharing a
+   physical core with CPU0 => collector = CPU2. Process mask {CPU0,CPU2}
+   (raw 0x5, readback-verified) exists ONLY to make both pins realizable;
+   separation is proven per-thread, never by the process mask.
+   Worker: SetThreadAffinityMask(CPU0), 2nd-call readback = 0x1, observed
+   CPU via GetCurrentProcessorNumber = [0] on ALL 16 execs.
+   Collector: readback = 0x2, observed CPUs from per-sample
+   GetCurrentProcessorNumber = [2] on all 8 B execs; collector_pin_verified
+   = true on all 8 (v7 requires readback match AND >=1 observed sample
+   inside the target mask -- zero-sample execs can no longer pass vacuously).
+   v7 mechanism fixes (both predeclared):
+     F1 gate-before-spawn: g_exec_active stored BEFORE the collector thread
+        starts; samples cleared after first sample. The collector can no
+        longer sleep on a stale pre-exec read (v6's zero-coverage race).
+     F2 paced sampling: 500 us cadence (QPC spin between samples) while an
+        exec is active. Chosen from the probe: tight ~50 kHz = 0.75 worker
+        ratio (material), 2 kHz = 1.02 (no loss). 500 us guarantees >=13
+        samples in the shortest observed ~6.8 ms B exec (floor 10, 30%
+        margin) at 25x below the perturbing rate.
+     F3 observability: per-B-exec collector_diag (loops, PDH ok/fail/error,
+        max single PDH call, first-sample delay, max sample gap).
+
+2. RUN INTEGRITY AND EXIT CODES
+   ninja (v6 build) = 0; ninja (v7 build) = 0.
+   v6 session: wrapper=0, child_exit=0, restore_status=0.
+   v7 session: wrapper=0, child_exit=0, restore_status=0,
+     scheme_after_apply=8C5E7FDA-E8BF-4A96-9A85-A6E23A8C635C (HP),
+     scheme_after_restore=DFE97760-471C-4D01-BD06-B8B04C50ECD8,
+     restore_matches_original=true.
+   power_scheme_control status (after all runs) = 0,
+     active_guid=DFE97760-471C-4D01-BD06-B8B04C50ECD8 == original GUID.
+   verify_frozen30.py = exit 0: 30/30 records, manifest count 30,
+     evidence_manifest.json sha matches frozen value.
+   Recorded SHA re-check (all EXACT):
+     records_sha256.txt           bf479cbcf08eef94...edc6ae (match, exact)
+     evidence_manifest.json       7a8dd9de17c4effd...01fc5a -> 7a8dd9... (match)
+     sha256sums_g7_campaign.txt   4d0f54531d35195e...53150a -> 4d0f54... (match)
+   Production binary hashes vs /tmp/prod_bin_hashes_before.txt from
+   build-v24-release: g7_campaign.exe OK, aggregate.exe OK,
+   run_baseline.exe OK, libstark_phase1.a OK, power_scheme_control.exe OK
+   (sha256sum -c exit 0). Only diag_highres_frequency.exe was re-linked.
+   G7CAM records: 60 pre-existing (30 frozen + 30 prior-session
+   g7-campaign-affinityfix); newest mtime 2026-10-06T12:20Z; ZERO files
+   created or modified today (mtime scan exit 0).
+   powercfg /getactivescheme was rejected by that build (exit 1, invalid
+   parameters); superseded by power_scheme_control status (exit 0).
+
+3. COVERAGE (requirement: floor >=10 usable in-window samples per B exec;
+   zero coverage is NEVER stability evidence)
+   v7 result: 8 of 8 B execs PASS the floor. No zero-coverage execs.
+     exec  bench  n_coll  n_in_window  n_usable  cov>=10  max_gap_us
+     1     B6     20      17           15        yes      2290
+     2     B6     18      13           13        yes      507
+     5     B6     17      14           14        yes      504
+     7     B9     16      13           10        yes      1025
+     8     B9     15      12           10        yes      1162
+     11    B7     370     326          326       yes      33163
+     12    B7     297     229          229       yes      1710
+     15    B6     18      15           15        yes      551
+   (v6 for comparison: 4/8 passed; v5: 3/8.)
+   collector_diag for all 8: pdh_fail_collect=0, pdh_fail_format=0,
+   cstatus_neg=0, last_err=0 (the counter never failed); first-sample
+   delay after clear = 83..1079 us; ready_wait 6..26 ms (1 ms poll);
+   max single PdhCollectQueryData call = 55..12972 us (one 13 ms call in
+   exec11 produced the 33 ms max gap -- still 326 usable samples).
+   Margins: the two B9 execs sit exactly at 10 usable each (floor met,
+   thin margin; recorded as a limitation); B6 execs carry 13-15.
+
+4. COLLECTOR-PERTURBATION CHECK A vs B (threshold 2.0%, pooled medians
+   per bench, per predeclaration; all measured iterations pooled)
+     bench   A pooled median   B pooled median   delta (B-A)     verdict
+     B6      140.0 us (n=200)  132.0 us (n=200)  -5.71%          MATERIAL
+     B9      140.0 us (n=100)  142.5 us (n=100)  +1.79%          within 2.0%
+     B7      2292.0 us (n=100) 2247.0 us (n=100) -1.96%          within 2.0%
+   Per-pair deltas (exec medians; order alternated A,B,B,A / B,A,A-B pairs):
+     B6: -9.25%, -6.43%, -6.07%, +3.85%   B9: +4.78%, +1.42%
+     B7: +3.21%, -9.11%                   (mean -2.20%, signs NOT stable)
+   Reading:
+   - B7 -- the bench that showed catastrophic inflation under v5/v6
+     (v6: A 2585/2501 vs B 4563.5/3983, +59..77% paired) -- is now within the
+     2.0% threshold (-1.96% pooled; no collector-induced slowdown).
+   - B9 within threshold (+1.79%).
+   - B6 pooled -5.71% FAILS the 2.0% threshold in the FASTER direction
+     (B quicker than A). Pair signs are inconsistent (last pair +3.85%);
+     the A group contains the session's first-ever exec (146 us, cold)
+     and the post-idle exec (130 us), and A-exec internal spread
+     (max-min)/max = 10.96% (130..146) vs B-exec 2.96% (131..135). No
+     position-matched control exists for the cold-start exec (it can only
+     be A by
+     schedule). The pattern is inconsistent with a systematic collector
+     effect (which would be sign-stable) but the predeclared 2.0% test
+     is failed for B6 as written -- recorded as a LIMITATION, not
+     reinterpreted away.
+   - R1 cross-check (B7 timing not void/inflated): v7 B7 exec medians
+     2139..2353.5 us vs R1 reference 2105..2129 us: the A (no-collector)
+     execs themselves reach +10.6% over the historical window, i.e. the
+     excursion exists WITHOUT the collector; paired pooled B-A = -1.96%.
+     The v1-type interference (57x) is absent. The literal ~5% historical
+     window is exceeded by day-to-day machine variance in BOTH conditions.
+   Historical perturbation chain for the same B7 bench:
+     v5: A 2407-2937 vs B 4796-4810 (+63..100% paired)  -> material C
+     v6: A 2501-2585 vs B 3983-4563 (+59..77% paired)   -> material C
+     v7: A 2228-2353.5 vs B 2139-2299.5 (pooled -1.96%) -> within 2.0%
+
+5. FREQUENCY STATISTICS (in-window, R2-filtered 20..240; QPC t0/t1,
+   first/last, min/max/mean/median, transitions, ramp all recorded per
+   exec in highres_frequency_v7.json)
+     exec bench first   last    min    max    med     spread  tr   ramp drift  nus
+     1    B6    214.7   217.2   60.6   219.2  217.41  72.33%  6    yes  5.0%   15
+     2    B6    218.5   219.3   217.2  219.3  218.48  0.98%   0    no   0.0%   13
+     5    B6    218.4   217.9   217.8  218.6  218.26  0.38%   0    no   0.8%   14
+     7    B9    123.6   205.4   123.6  213.8  206.16  42.19%  7    yes  2.1%   10
+     8    B9    202.7   213.2   135.3  217.0  207.32  37.64%  8    yes  3.4%   10
+     11   B7    203.4   207.7   165.8  235.3  204.05  29.55%  150  yes  7.8%   326
+     12   B7    208.3   218.2   189.7  231.6  203.56  18.12%  78   yes  14.5%  229
+     15   B6    216.9   219.9   201.3  221.4  212.53  9.08%   13   yes  3.8%   15
+   Artifact rates: 0% on 5 execs; 11.8/23.1/16.7% on execs 1/7/8 (excluded
+   by the predeclared R2 filter and counted).
+   PDH adequacy: P1 distinct-value change interval median 5.0 us (n=365416
+   samples/2 s) << 100 ms; P2 step transition latency 0.032 ms < 100 ms
+   (idle mean 209.0 -> loaded 41.9). => counter ADEQUATE by the unchanged
+   rules.
+
+6. CLASSIFICATION (existing framework ONLY -- no new classes, no relaxed
+   thresholds; R4 rules applied verbatim)
+   Per exec (exec-window spread for the B rule = the production
+   6.8974% > 5.0%, the known gate metric):
+     exec2: spread 0.98% <= 2.0 AND transitions 0 <= 1 -> B (artifact-side)
+     exec5: spread 0.38% <= 2.0 AND transitions 0 <= 1 -> B (artifact-side)
+     exec1,7,8,11,12,15: exec-only spread > 5.0%        -> A (spread route)
+     C triggers: NONE fired (no 2-5% execs; coverage >= 10 everywhere;
+     counter adequate; effects are NOT B7-only).
+   Transition-route corroboration (drift) is moot: A fires via the spread
+   route without it; where relevant, drift > 5.0% occurs in execs 11/12.
+   Aggregate over the 8 covered B execs: 6 A-side, 2 B-side, 0 C.
+
+7. STEP DETERMINATION (requirement 8: A / B / C / D)
+   A. Frequency GENUINELY VARIES during benchmark execution:
+      SUPPORTED and dominant. 6/8 covered B execs show within-exec
+      % Processor Performance spreads of 9.1..72.3% -- several EXCEED the
+      6.8974% gate value inside a single exec. Shapes: exec-start boost
+      ramps (exec7: 123.6 -> 205.4 within one ~7 ms exec), mid-exec dips
+      (exec1: min 60.6), sustained I/O-bursty modulation (exec11/12:
+      78..150 transitions over 116..235 ms).
+   B. The previous 6.8974% was primarily between-exec/sampling artifact:
+      NOT SUPPORTED as the primary explanation: variation lives INSIDE
+      execs and often exceeds 6.8974% there. The 2 B-side execs (<=1%
+      in-exec spread) show the counter also holds steady during
+      back-to-back execs already at operating frequency -- so variation
+      is state-dependent (idle transitions, exec starts, I/O burstiness),
+      not constant counter noise.
+   C. The collector itself perturbs execution:
+      TRUE for the v5/v6 architectures (B7 +59..100% paired; external probe:
+      tight-loop collection = -25% worker throughput) -- documented and
+      now FIXED. For the v7 mechanism: B7 and B9 are within the predeclared
+      2.0% (-1.96%, +1.79%), B6 pooled is material in the FASTER direction
+      (-5.71%) with inconsistent pair signs and cold-start/order
+      confounding -> NOT clean, see limitation L1.
+   D. Indeterminate: NOT applicable. Coverage 8/8, PDH adequate, pins
+      verified on both threads -- the data is decidable.
+   => OVERALL DETERMINATION FOR THIS STEP: **A -- genuine within-execution
+      frequency variation**, with the qualifications in L1 (B6 timing
+      materiality) and L2 (B9 margin at the floor).
+
+8. EXPLICIT FOUR-WAY COMPARISON (requirement 9)
+              no-collector (A)      collector-active (B)   frequency stats   coverage
+   B6         pooled 140.0 us       pooled 132.0 us        0.38-72.33%       4/4 >=10
+              exec medians 130-146  exec medians 131-135   2 stable, 2 ramp
+   B9         pooled 140.0 us       pooled 142.5 us        37.64-42.19%      2/2 >=10
+              exec medians 136-141  exec medians 142.5-143 both ramping
+   B7         pooled 2292.0 us      pooled 2247.0 us       18.12-29.55%      2/2 >=10
+              exec medians 2228-2353.5 exec medians 2139-2299.5 many transitions
+   Cross-exec spread of B-exec medians: B6 2.96%, B9 0.35%, B7 6.98%
+   (context: original production exec-window spread 6.8974%; v3 cross-exec
+   figure 6.9873%). Medians are stable BETWEEN execs while spreads/ramps
+   exist WITHIN execs -- exactly the structure the gate's (max-min)/max
+   metric is sensitive to.
+
+9. GOAL ASSESSMENT
+   ADEQUATELY COVERED: YES -- 8/8 B execs >= 10 usable in-window samples,
+   zero-coverage structurally eliminated (gate-before-spawn), all failure
+   modes observable in collector_diag.
+   NON-PERTURBING: PARTIALLY ESTABLISHED -- established for B7 and B9
+   (within 2.0%, and the historical +59..77% (v6) inflation is gone); NOT
+   cleanly established for B6 (pooled -5.71%, faster direction, order/
+   cold-start confounded, pair signs inconsistent).
+   Whether the 5% G7 stability metric measures the intended phenomenon is
+   a SEPARATE decision, to be taken only after this evidence is
+   independently reviewed (as stipulated in the step instructions).
+
+10. CHANGED FILES (this step)
+   Source: tests/diag_highres_frequency.cpp (v6 topology selection +
+     v7 gate-before-spawn, 500 us pacing, collector_diag; only this
+     diagnostic source changed; production path untouched).
+   New reports:
+     reports/g7-campaign-affinityfix/highres_v6_predeclaration_addendum.txt
+     reports/g7-campaign-affinityfix/highres_v7_predeclaration_addendum.txt
+     reports/g7-campaign-affinityfix/highres_frequency_v6.json
+     reports/g7-campaign-affinityfix/highres_frequency_v7.json
+     reports/g7-campaign-affinityfix/power_scheme_session_highres_v6.json
+     reports/g7-campaign-affinityfix/power_scheme_session_highres_v7.json
+     reports/g7-campaign-affinityfix/highres_v6_analysis.txt (this file's
+       companion) and highres_v7_analysis.txt (this file).
+   (v5 artifacts from earlier in this step: highres_v5_predeclaration.txt,
+     highres_frequency_v5.json, power_scheme_session_highres_v5.json.)
+   Build outputs: build-v24-release/diag_highres_frequency.exe (+.obj);
+     build/diag_highres_weights.bin (B7 scratch blob, regenerated by every
+     diagnostic run since v1). No production binary changed (hash-verified).
+
+11. LIMITATIONS
+   L1. B6 pooled A/B delta -5.71% exceeds the predeclared 2.0% materiality
+       in the faster direction with inconsistent pair signs; confounded by
+       the schedule-fixed cold-start exec (A-only position) and post-idle
+       positions. A position-matched rerun would be needed to separate
+       order drift from a real (beneficial) collector effect; the threshold
+       was NOT reinterpreted to pass.
+   L2. The two B9 execs sit exactly at 10 usable samples -- floor met
+       but with no margin to spare; a longer collector stall (e.g. a
+       >13 ms single PDH call as seen once in exec11) could push a
+       ~7 ms exec below the floor; such
+       an exec would be ruled "not measurable", never stable.
+   L3. P2 loaded-state %perf (41.9) differs from idle (209.0) in sign of
+       what "load" does to this counter's basis on this hybrid CPU; P1/P2
+       are used ONLY for response-time adequacy (both pass by orders of
+       magnitude), never as absolute frequency truth.
+   L4. Two historical runs (v5/v6) consumed session HP windows today; both
+       restored and GUID-verified. The machine is a shared laptop (Chrome/
+       OneDrive/Zed present); background load cannot be excluded as a
+       contributor to exec-level timing noise (~5% band observed within a
+       single condition).
+   L5. The topology API layout was cross-validated on this machine
+       (offsets confirmed by two independent Python parses + in-process
+       self-validation + observed-CPU evidence); if the runtime layout
+       ever differs, the in-process validation fails the run closed
+       (exit 3) rather than pinning from a bad map.

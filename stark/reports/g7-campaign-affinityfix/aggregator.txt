@@ -1,0 +1,71 @@
+=== STARK Phase 1 (M0) Aggregator ===
+records directory: build/g7-campaign-affinityfix
+records found: 30
+
+STATUS SUMMARY:
+  E1: 15 record(s)
+  E5: 15 record(s)
+  PASSED=30 FAILED=0 SKIPPED=0 NOT_ATTEMPTED=0
+
+GATE RESULTS:
+  [FAIL] G1 hardware profile collected
+         no PROFILE record found (run profiler_cli)
+  [PASS] G2 CPU baselines present and complete
+         E1 and E5 present, distinct, each with >=10 samples
+  [FAIL] G3 GPU branch complete-or-skipped with reason
+         E2 record missing entirely (must record skipped status)
+  [PASS] G4 peak memory measured
+         E1 and E5 present, PASSED; every PASSED baseline: RAM peak measured; VRAM measured or structured unavailability corroborated by embedded capability evidence (physical capability gpu/gpu — informational, not a G4 criterion)
+  [PASS] G5 parameter accounting consistent
+         all accounting records pass G5 checks
+  [PASS] G6 budget evaluator rejects over-budget demands
+         VRAM-only violation detected; compute fields informational
+  [FAIL] G7 same-config medians reproducible across repeats
+         B6 medians differ 17.51% (allowed 15.00%) between runs 1 and 2
+B6 medians differ 46.25% (allowed 15.00%) between runs 1 and 3
+B6 medians differ 18.20% (allowed 15.00%) between runs 1 and 4
+B6 medians differ 49.71% (allowed 15.00%) between runs 1 and 5
+B6 medians differ 17.62% (allowed 15.00%) between runs 1 and 7
+B6 medians differ 18.11% (allowed 15.00%) between runs 1 and 9
+B6 medians differ 17.60% (allowed 15.00%) between runs 1 and 10
+B6 medians differ 34.84% (allowed 15.00%) between runs 2 and 3
+B6 medians differ 39.03% (allowed 15.00%) between runs 2 and 5
+B6 medians differ 18.26% (allowed 15.00%) between runs 2 and 6
+B6 medians differ 15.41% (allowed 15.00%) between runs 2 and 8
+B6 medians differ 34.29% (allowed 15.00%) between runs 3 and 4
+B6 medians differ 46.74% (allowed 15.00%) between runs 3 and 6
+B6 medians differ 34.75% (allowed 15.00%) between runs 3 and 7
+B6 medians differ 44.88% (allowed 15.00%) between runs 3 and 8
+B6 medians differ 34.36% (allowed 15.00%) between runs 3 and 9
+B6 medians differ 34.76% (allowed 15.00%) between runs 3 and 10
+B6 medians differ 38.52% (allowed 15.00%) between runs 4 and 5
+B6 medians differ 18.94% (allowed 15.00%) between runs 4 and 6
+B6 medians differ 16.12% (allowed 15.00%) between runs 4 and 8
+B6 medians differ 50.17% (allowed 15.00%) between runs 5 and 6
+B6 medians differ 38.95% (allowed 15.00%) between runs 5 and 7
+B6 medians differ 48.43% (allowed 15.00%) between runs 5 and 8
+B6 medians differ 38.59% (allowed 15.00%) between runs 5 and 9
+B6 medians differ 38.96% (allowed 15.00%) between runs 5 and 10
+B6 medians differ 18.37% (allowed 15.00%) between runs 6 and 7
+B6 medians differ 18.85% (allowed 15.00%) between runs 6 and 9
+B6 medians differ 18.35% (allowed 15.00%) between runs 6 and 10
+B6 medians differ 15.53% (allowed 15.00%) between runs 7 and 8
+B6 medians differ 16.03% (allowed 15.00%) between runs 8 and 9
+B6 medians differ 15.51% (allowed 15.00%) between runs 8 and 10
+B9 medians differ 18.50% (allowed 15.00%) between runs 1 and 2
+B9 medians differ 17.85% (allowed 15.00%) between runs 1 and 3
+B9 medians differ 18.07% (allowed 15.00%) between runs 1 and 4
+B9 medians differ 18.32% (allowed 15.00%) between runs 1 and 5
+B9 medians differ 18.52% (allowed 15.00%) between runs 1 and 7
+B9 medians differ 18.30% (allowed 15.00%) between runs 1 and 8
+B9 medians differ 18.59% (allowed 15.00%) between runs 1 and 9
+B9 medians differ 18.57% (allowed 15.00%) between runs 2 and 6
+B9 medians differ 17.92% (allowed 15.00%) between runs 3 and 6
+B9 medians differ 18.14% (allowed 15.00%) between runs 4 and 6
+B9 medians differ 18.38% (allowed 15.00%) between runs 5 and 6
+B9 medians differ 18.59% (allowed 15.00%) between runs 6 and 7
+B9 medians differ 18.37% (allowed 15.00%) between runs 6 and 8
+B9 medians differ 18.66% (allowed 15.00%) between runs 6 and 9
+
+
+OVERALL: FAIL (3 gate(s) failed)

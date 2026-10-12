@@ -1,0 +1,31 @@
+=== STARK Phase 1 (M0) Aggregator ===
+records directory: fixtures/controlled-valid
+records found: 7
+
+STATUS SUMMARY:
+  B4: 1 record(s)
+  B5: 1 record(s)
+  E1: 1 record(s)
+  E2: 1 record(s)
+  E5: 1 record(s)
+  PROFILE: 1 record(s)
+  TELEMETRY: 1 record(s)
+  PASSED=4 FAILED=0 SKIPPED=3 NOT_ATTEMPTED=0
+
+GATE RESULTS:
+  [PASS] G1 hardware profile collected
+         cpu=12th Gen Intel(R) Core(TM) i5-12450H, ram_total=25392844800
+  [PASS] G2 CPU baselines present and complete
+         E1 and E5 present, distinct, each with >=10 samples
+  [PASS] G3 GPU branch complete-or-skipped with reason
+         B5: SKIPPED — skipped: no CUDA device / binary built without CUDA (spec G3 skipped-branch)
+  [PASS] G4 peak memory measured
+         E1 and E5 present, PASSED, RAM peak measured; VRAM source documented per schema
+  [PASS] G5 parameter accounting consistent
+         all accounting records pass G5 checks
+  [PASS] G6 budget evaluator rejects over-budget demands
+         VRAM-only violation detected; compute fields informational
+  [PASS] G7 same-config medians reproducible across repeats
+         all repeats within every same-configuration group agree pairwise within tolerance (timing 15% / bandwidth 20%)
+
+OVERALL: PASS (0 gate(s) failed)

@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"E:/My Local AI/stark/build-release-test-isolate/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

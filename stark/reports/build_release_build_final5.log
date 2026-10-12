@@ -1,0 +1,22 @@
+ninja: Entering directory `build-release-clean-3'
+[1/2] Building CXX object CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj
+FAILED: [code=1] CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -I"E:/My Local AI/stark/src/phase1" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj -MF CMakeFiles\aggregate.dir\src\phase1\aggregate.cpp.obj.d -o CMakeFiles/aggregate.dir/src/phase1/aggregate.cpp.obj -c "E:/My Local AI/stark/src/phase1/aggregate.cpp"
+E:/My Local AI/stark/src/phase1/aggregate.cpp: In function 'int {anonymous}::run(int, char**)':
+E:/My Local AI/stark/src/phase1/aggregate.cpp:257:28: error: 'const class stark_p1::JsonValue' has no member named 'isBool'; did you mean 'asBool'?
+  257 |                 if (!ram_m.isBool() || ram_m.asBool() != true) {
+      |                            ^~~~~~
+      |                            asBool
+E:/My Local AI/stark/src/phase1/aggregate.cpp:260:35: error: 'const class stark_p1::JsonValue' has no member named 'isNumber'; did you mean 'number'?
+  260 |                 } else if (!ram_p.isNumber() && !ram_p.isObject()) {
+      |                                   ^~~~~~~~
+      |                                   number
+E:/My Local AI/stark/src/phase1/aggregate.cpp:263:34: error: 'const class stark_p1::JsonValue' has no member named 'isNumber'; did you mean 'number'?
+  263 |                 } else if (ram_p.isNumber()) {
+      |                                  ^~~~~~~~
+      |                                  number
+E:/My Local AI/stark/src/phase1/aggregate.cpp:289:82: error: 'const class stark_p1::JsonValue' has no member named 'isNumber'; did you mean 'number'?
+  289 |                     if (!pm.has("vram_peak_bytes") || !pm.get("vram_peak_bytes").isNumber()) {
+      |                                                                                  ^~~~~~~~
+      |                                                                                  number
+ninja: build stopped: subcommand failed.

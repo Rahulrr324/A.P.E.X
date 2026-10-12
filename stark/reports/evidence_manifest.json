@@ -1,0 +1,193 @@
+{
+  "report": "APEX_M0_v2.0_Historical_Data_Reconciliation_Final_Verification",
+  "date": "2026-10-05",
+  "repository": "stark/ (STARK-006), preserved original source tree",
+  "supersedes": [
+    "reports/M0_FINAL_REPORT_v1.9.md",
+    "reports/historical/superseded/M0_FINAL_REPORT_v1.9.md",
+    "reports/historical/superseded/M0_FINAL_REPORT_v1.8.md",
+    "reports/historical/superseded/M0_FINAL_REPORT_v1.6.md",
+    "reports/historical/superseded/M0_FINAL_REPORT_v1.1.md"
+  ],
+  "git_revision": "UNAVAILABLE - repository contains no .git directory; source identity recorded via SHA-256 below",
+  "overall_decision": "FAIL",
+  "overall_reason": "Historical G7 fails on the recovered records (B6 16.13%; B7 18.38%/21.26%; B9 27.65%/28.18%/48.04% vs 15% allowed). G1 and G3 lack required records (no PROFILE, no E2/skip). Historical dataset completeness is not proven (9 records, not 24). No threshold was changed to manufacture a pass.",
+  "m1_status": "LOCKED - not started",
+
+  "v20_corrections": [
+    {
+      "id": "recovery-count",
+      "v1_9_error": "The report/wording around the recovery count was inconsistent; the recovery set is 9 records and is NOT proven to be a 24-record dataset.",
+      "v2_0_correction": "Inventory and report state exactly 9 records recovered; completeness of a 24-record historical dataset is explicitly NOT claimed."
+    },
+    {
+      "id": "aggregator-input-manifest",
+      "v1_9_error": "The aggregator was pointed at archive_recovery/original_historical_records/, so RECOVERY_MANIFEST.json entered RecordStore::loadAll() and was counted as 1 invalid record.",
+      "v2_0_correction": "A dedicated input dir archive_recovery/aggregator_input/ contains exactly the 9 experiment JSON records; manifest and weights live outside it. Aggregator now reports 9 records, 0 invalid. Production parser unchanged."
+    },
+    {
+      "id": "g7-grouping-explanation",
+      "v1_9_error": "The report explained G7 grouping as by experiment+benchmark and claimed the E5 groups had no repeats.",
+      "v2_0_correction": "Production groups by r.configuration.dump(). E1 and E5 records for the same benchmark share a serialized configuration, so each of B6/B7/B9 is a 3-run group (E1 x2 + E5 x1). Full pairwise table produced."
+    },
+    {
+      "id": "sha-count-disagreement",
+      "v1_9_error": "sha256sums_v18.txt held 32 entries while the evidence manifest and report said 30 verified.",
+      "v2_0_correction": "reports/sha256sums_v20.txt holds 46 entries, all verified; manifest and report both state 46."
+    },
+    {
+      "id": "filename-typo",
+      "v1_9_error": "The report table listed the E5/B7 filename as P1-E5-B7-909138.json.",
+      "v2_0_correction": "Actual file/record_id is P1-E5-B7-90937.json. All 9 filenames equal their embedded record_id; corrected as a report typo."
+    }
+  ],
+
+  "recovery_summary": {
+    "archive_supplied_via_package": true,
+    "archive_name": "My Local AI(20261003-134219).zip",
+    "archive_sha256_manifest_asserted": "cb5e85e8b446ef0a0c0acf64f4151142489a73c9a9cb0cb5c6f5d28e92fdc733",
+    "archive_sha256_independently_reverified": false,
+    "archive_sha256_note": "Original .zip not present in workspace; digest is manifest-asserted only.",
+    "manifest_sha256": "a4750291e58ea20e3cfab7f6c42a3b6a7f0461aa5519606a55eaa8d051c70168",
+    "records_recovered": 9,
+    "weights_binary_recovered": 1,
+    "manifest_files": 10,
+    "all_file_checksums_match_manifest": true,
+    "manifest_lists_24_records": false,
+    "manifest_lists_9_records": true,
+    "completeness_claimed": false,
+    "aggregator_input_directory": "archive_recovery/aggregator_input/ (9 records, no manifest)",
+    "originals_directory": "archive_recovery/original_historical_records/ (pristine)",
+    "note": "The recovery set contains exactly nine JSON experiment records plus one weights binary. It is NOT asserted to be a complete historical dataset; absent records were not fabricated."
+  },
+
+  "toolchain": {
+    "compiler": "g++.exe (MinGW-W64 x86_64-ucrt-posix-seh, built by Brecht Sanders, r4) 16.1.0",
+    "target": "x86_64-w64-mingw32",
+    "cmake": "4.4.1",
+    "ninja": "1.13.2.git.kitware.jobserver-pipe-1",
+    "cxx_standard": "17 (CMAKE_CXX_STANDARD_REQUIRED=ON, CMAKE_CXX_EXTENSIONS=OFF)"
+  },
+
+  "build_evidence": {
+    "build_dirs": ["stark/build-v18-debug", "stark/build-v18-release"],
+    "source_changed_in_v20": false,
+    "binaries_correspond_to_source": true,
+    "ctest_exit": {"debug": 0, "release": 0},
+    "ctest_passed": {"debug": "6/6", "release": "6/6"},
+    "tests_executed": [
+      "test_phase1_profiler", "test_phase1_accounting", "test_phase1_budget",
+      "test_phase1_records", "test_phase1_reproducibility", "test_phase1_gates"
+    ],
+    "gates_test_assertions": {"debug": 328, "release": 328, "failures": 0}
+  },
+
+  "aggregator_evidence": {
+    "runs": 52,
+    "inputs": 13,
+    "configs": ["debug", "release"],
+    "modes": ["normal", "--strict"],
+    "reconciled": "13 inputs x 2 configs x 2 modes = 52 executions",
+    "debug_release_agree": true,
+    "crashes": 0,
+    "matrix": "reports/v20-aggregator/matrix.txt",
+    "logs_dir": "reports/v20-aggregator/",
+    "recovered_input": {
+      "directory": "archive_recovery/aggregator_input/",
+      "records_found": 9,
+      "records_loaded": 9,
+      "invalid_records": 0,
+      "exit": {"normal": 1, "strict": 1},
+      "passed_gates": ["G2", "G4", "G5", "G6"],
+      "failed_gates": ["G1", "G3", "G7"]
+    },
+    "results": {
+      "build/historical-regen": {"normal": 1, "strict": 1, "passed": 4, "failed": 3, "records": 6, "invalid": 0},
+      "build/results": {"normal": 1, "strict": 1, "passed": 2, "failed": 5, "records": 3, "invalid": 0},
+      "fixtures/v14-valid": {"normal": 1, "strict": 1, "passed": 6, "failed": 1, "records": 11, "invalid": 0},
+      "fixtures/controlled-valid": {"normal": 0, "strict": 0, "passed": 7, "failed": 0, "records": 7, "invalid": 0},
+      "fixtures/controlled-invalid-g2": {"normal": 1, "strict": 1, "passed": 4, "failed": 3, "records": 6, "invalid": 0},
+      "fixtures/controlled-invalid-g4": {"normal": 1, "strict": 1, "passed": 6, "failed": 1, "records": 7, "invalid": 0},
+      "fixtures/controlled-invalid-g7": {"normal": 1, "strict": 1, "passed": 6, "failed": 1, "records": 7, "invalid": 0},
+      "fixtures/controlled-g7-endpoint-outlier": {"normal": 1, "strict": 1, "passed": 6, "failed": 1, "records": 10, "invalid": 0},
+      "fixtures/controlled-invalid-raw-sample": {"normal": 0, "strict": 1, "passed": 7, "failed": 0, "records": 8, "invalid": 1},
+      "fixtures/controlled-incorrect-stored-median": {"normal": 1, "strict": 1, "passed": 6, "failed": 1, "records": 8, "invalid": 0},
+      "fixtures/probe-malformed-profile": {"normal": 1, "strict": 1, "passed": 6, "failed": 1, "records": 7, "invalid": 0},
+      "fixtures/probe-malformed-accounting": {"normal": 1, "strict": 1, "passed": 6, "failed": 1, "records": 7, "invalid": 0}
+    }
+  },
+
+  "gate_results": {
+    "G1": "FAIL on recovered historical data (no PROFILE record)",
+    "G2": "PASS on recovered historical data (E1 and E5 both present, distinct, >=10 samples each)",
+    "G3": "FAIL on recovered historical data (no E2 record; skip receipts absent)",
+    "G4": "PASS on recovered historical data (RAM peak measured on latest E1/E5; VRAM documented as unavailable per CPU-only schema)",
+    "G5": "PASS on recovered historical data (all accounting records pass)",
+    "G6": "PASS on recovered historical data (VRAM-only violation detected, informational)",
+    "G7": "FAIL on recovered historical data (3 config groups B6/B7/B9, 3 runs each; six pairs exceed 15%)"
+  },
+
+  "g7_analysis": {
+    "grouping_key": "r.configuration.dump()",
+    "thresholds_unchanged": {"median_consistency_pct": 0.001, "timing_pct": 15.0, "bandwidth_B3_B5_pct": 20.0, "min_samples": 10},
+    "num_groups": 3,
+    "groups": {
+      "config:B6": {"runs": 3, "distinct_record_ids": ["P1-E1-B6-24899", "P1-E1-B6-57493", "P1-E5-B6-90937"], "pairwise_fail_pct": [16.13], "result": "FAIL"},
+      "config:B7": {"runs": 3, "distinct_record_ids": ["P1-E1-B7-24899", "P1-E1-B7-57493", "P1-E5-B7-90937"], "pairwise_fail_pct": [18.38, 21.26], "result": "FAIL"},
+      "config:B9": {"runs": 3, "distinct_record_ids": ["P1-E1-B9-24899", "P1-E1-B9-57493", "P1-E5-B9-90937"], "pairwise_fail_pct": [27.65, 28.18, 48.04], "result": "FAIL"}
+    },
+    "stored_vs_recomputed_median": "all 9/9 within 0.001%",
+    "detail_file": "reports/gate_results/G7.json"
+  },
+
+  "sha256_evidence_list": {
+    "file": "reports/sha256sums_v20.txt",
+    "entries_in_list": 46,
+    "entries_verified": 46,
+    "entries_failed": 0,
+    "v1_9_discrepancy_resolved": "v1.9 list had 32 entries while manifest/report said 30; v2.0 states 46 and the list holds 46, all verified",
+    "covers": "v2.0 report + preserved reports + inventory + this manifest + gate JSONs + source + extras + v20 aggregator logs/matrix + recovered-record copies + recovery manifest + recovered records"
+  },
+
+  "tested_source_sha256": {
+    "src/phase1/gates.cpp": "7fd240a8b486b9f85703fe6cf38966c4914794ccb0b4a829b455f03c43b070e2",
+    "src/phase1/gates.h": "e335ee9745c25074d2f0df01da0e6baab6f9b1f037b3e898d8525318d731753c",
+    "src/phase1/common/ExperimentRecord.cpp": "60476435e90f4dc56c48b321561f06fa086cfa7ea493dc23c5ce422ef7523952",
+    "src/phase1/common/ExperimentRecord.h": "2f75b9b4957f0c6f6ea9ef501689f2b26ee9719657758069ed1cd277fd4b90f9",
+    "src/phase1/aggregate.cpp": "6c372e70ecd0e9dcd6f651c3275b605f78160d357fc31644fa1d5a172afeaf9d",
+    "CMakeLists.txt": "cf8c7ad6c53c05b4e8180e063cdf9fa639f75fe8a752fa685883dc4f1d56e056",
+    "tests/test_phase1_gates.cpp": "15110df5f78d9131a2e626ae7b834b4ee6a80958da274160d3edc70b818d44b5"
+  },
+
+  "evidence_files": [
+    "M0_FINAL_REPORT_v2.0.md",
+    "M0_FINAL_REPORT_v1.9.md",
+    "historical/superseded/M0_FINAL_REPORT_v1.9.md",
+    "historical/superseded/M0_FINAL_REPORT_v1.8.md",
+    "historical/superseded/M0_FINAL_REPORT_v1.6.md",
+    "historical/superseded/M0_FINAL_REPORT_v1.1.md",
+    "evidence_manifest.json",
+    "historical_artifact_inventory.json",
+    "sha256sums_v20.txt",
+    "gate_results/G2.json",
+    "gate_results/G4.json",
+    "gate_results/G7.json",
+    "v20-aggregator/matrix.txt",
+    "v20-aggregator/historical.debug.normal.log",
+    "v20-aggregator/historical.debug.strict.log",
+    "v20-aggregator/historical.release.normal.log",
+    "v20-aggregator/historical.release.strict.log"
+  ],
+
+  "compliance": {
+    "m1_started": false,
+    "thresholds_modified": false,
+    "historical_measurements_modified": false,
+    "historical_records_modified": false,
+    "failing_tests_skipped": false,
+    "generated_build_files_hand_edited": false,
+    "json_schema_changed": false,
+    "production_parser_changed": false,
+    "v18_v19_baseline_preserved": true
+  }
+}

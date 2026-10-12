@@ -1,0 +1,118 @@
+=== chronological records ===
+ # created                    bench exp  gap?   dt_s   median    cv%    first     last   f10med   l10med spk    q_ns bands
+ 0 2026-10-06T12:18:02.699Z   B6   E1      ?   -1.0   181.15 120.18   187.90   187.00   186.65   179.95   3   100.0 200-250:3 <200:44 >250:3
+ 1 2026-10-06T12:18:02.904Z   B7   E1      .    0.2  2925.55  36.01  2945.30  2884.60  2817.05  2917.40   2   100.0 <3100:36 >=3100:14
+ 2 2026-10-06T12:18:02.919Z   B9   E1      .    0.0   180.40   3.12   183.40   201.70   183.30   181.45   0   100.0 200-250:2 <200:48
+ 3 2026-10-06T12:18:02.932Z   B6   E5      .    0.0   179.50   1.45   182.60   181.60   180.45   179.20   0   100.0 <200:50
+ 4 2026-10-06T12:18:03.197Z   B7   E5      .    0.3  2999.20  68.71  2790.20  2843.90  2803.80  2961.20  11   400.0 <3100:30 >=3100:20
+ 5 2026-10-06T12:18:03.210Z   B9   E5      .    0.0   180.25   8.67   185.30   182.10   185.60   179.45   1   100.0 200-250:2 <200:47 >250:1
+ 6 2026-10-06T12:18:33.244Z   B6   E1    GAP   30.0   360.20   6.30   369.60   357.90   392.90   360.80   0   100.0 >250:50
+ 7 2026-10-06T12:18:33.487Z   B7   E1      .    0.2  3341.65  18.93  3283.60  3417.10  3333.00  3347.05   2   100.0 <3100:3 >=3100:47
+ 8 2026-10-06T12:18:33.504Z   B9   E1      .    0.0   220.85  12.09   181.10   221.50   220.55   221.05   0   100.0 200-250:33 <200:15 >250:2
+ 9 2026-10-06T12:18:33.520Z   B6   E5      .    0.0   219.85  24.93   225.00   181.20   190.00   184.05   3   100.0 200-250:28 <200:19 >250:3
+10 2026-10-06T12:18:33.763Z   B7   E5      .    0.2  3326.35  38.22  3386.60  3334.10  3372.30  3296.85   4   100.0 <3100:5 >=3100:45
+11 2026-10-06T12:18:33.779Z   B9   E5      .    0.0   191.40  56.42   223.50   188.50   190.70   210.55   5   100.0 200-250:11 <200:30 >250:9
+12 2026-10-06T12:19:03.807Z   B6   E1    GAP   30.0   219.60  19.97   180.70   190.70   208.60   184.70   2   100.0 200-250:27 <200:20 >250:3
+13 2026-10-06T12:19:04.043Z   B7   E1      .    0.2  3249.00  13.97  4944.80  3116.30  3435.15  3196.85   2   100.0 <3100:12 >=3100:38
+14 2026-10-06T12:19:04.060Z   B9   E1      .    0.0   221.35  74.62   230.80   236.00   227.90   218.05   2   100.0 200-250:26 <200:17 >250:7
+15 2026-10-06T12:19:04.076Z   B6   E5      .    0.0   219.90  29.47   221.40   188.60   220.40   182.75   2   100.0 200-250:23 <200:19 >250:8
+16 2026-10-06T12:19:04.296Z   B7   E5      .    0.2  3230.90   8.02  3256.20  3299.60  3369.45  3230.90   0  1500.0 <3100:12 >=3100:38
+17 2026-10-06T12:19:04.312Z   B9   E5      .    0.0   221.40  55.47   210.90   221.80   221.60   221.35   3   100.0 200-250:31 <200:14 >250:5
+18 2026-10-06T12:19:34.336Z   B6   E1    GAP   30.0   221.45   3.20   264.60   221.20   223.00   220.15   0   100.0 200-250:49 >250:1
+19 2026-10-06T12:19:34.564Z   B7   E1      .    0.2  3207.25  14.86  2787.60  3326.70  3163.45  3221.40   2   300.0 <3100:17 >=3100:33
+20 2026-10-06T12:19:34.580Z   B9   E1      .    0.0   220.20  25.41   224.50   179.50   224.30   220.45   3   100.0 200-250:28 <200:15 >250:7
+21 2026-10-06T12:19:34.599Z   B6   E5      .    0.0   221.20  45.84   251.20   221.40   237.90   190.45   2   100.0 200-250:29 <200:11 >250:10
+22 2026-10-06T12:19:34.829Z   B7   E5      .    0.2  3337.20  11.21  3451.40  3286.10  3448.50  3298.80   1   500.0 <3100:5 >=3100:45
+23 2026-10-06T12:19:34.845Z   B9   E5      .    0.0   221.60  23.17   238.50   221.40   221.45   221.95   3   100.0 200-250:31 <200:13 >250:6
+24 2026-10-06T12:20:04.875Z   B6   E1    GAP   30.0   337.00 127.49   341.30   178.70   389.80   199.45   5   100.0 200-250:4 <200:5 >250:41
+25 2026-10-06T12:20:05.078Z   B7   E1      .    0.2  2902.80  15.94  3213.00  2903.70  2884.15  2902.80   3   100.0 <3100:39 >=3100:11
+26 2026-10-06T12:20:05.094Z   B9   E1      .    0.0   219.60  22.64   234.30   235.90   220.70   215.65   2   100.0 200-250:24 <200:20 >250:6
+27 2026-10-06T12:20:05.111Z   B6   E5      .    0.0   185.75  37.77   186.00   178.60   206.40   203.00   6   100.0 200-250:10 <200:32 >250:8
+28 2026-10-06T12:20:05.340Z   B7   E5      .    0.2  3339.65  18.77  3392.20  3403.90  3479.85  3350.90   4   600.0 <3100:4 >=3100:46
+29 2026-10-06T12:20:05.355Z   B9   E5      .    0.0   220.80  29.14   222.40   180.50   221.10   184.55   3   100.0 200-250:26 <200:19 >250:5
+
+=== cluster x idle-gap contingency ===
+B6 A_fast(~180us)   post-gap=0 within-run=2 process-start=1
+B6 B_mid(~221us)    post-gap=2 within-run=3 process-start=0
+B6 C_slow(>300us)   post-gap=2 within-run=0 process-start=0
+B7 H(~3200-3342)    post-gap=0 within-run=7 process-start=0
+B7 L(~2900-3000)    post-gap=0 within-run=3 process-start=0
+B9 A_fast(~180us)   post-gap=0 within-run=3 process-start=0
+B9 B_mid(~221us)    post-gap=0 within-run=7 process-start=0
+
+=== post-gap records (first exec after >=29s idle) ===
+  #6 B6 E1 median=360.20us cluster=C_slow(>300us)
+  #12 B6 E1 median=219.60us cluster=B_mid(~221us)
+  #18 B6 E1 median=221.45us cluster=B_mid(~221us)
+  #24 B6 E1 median=337.00us cluster=C_slow(>300us)
+
+=== within-run band occupancy (bimodal run => mid-run state transition) ===
+  MIXED B6 E1 G7CAM-B6-E1-14955664: {'<200': 44, '200-250': 3, '>250': 3}
+  MIXED B7 E1 G7CAM-B7-E1-14955664: {'<3100': 36, '>=3100': 14}
+  MIXED B9 E1 G7CAM-B9-E1-14955664: {'<200': 48, '200-250': 2}
+  MIXED B7 E5 G7CAM-B7-E5-14955664: {'<3100': 30, '>=3100': 20}
+  MIXED B9 E5 G7CAM-B9-E5-14955664: {'<200': 47, '200-250': 2, '>250': 1}
+  MIXED B7 E1 G7CAM-B7-E1-63692176: {'>=3100': 47, '<3100': 3}
+  MIXED B9 E1 G7CAM-B9-E1-63692176: {'<200': 15, '200-250': 33, '>250': 2}
+  MIXED B6 E5 G7CAM-B6-E5-63692176: {'200-250': 28, '>250': 3, '<200': 19}
+  MIXED B7 E5 G7CAM-B7-E5-63692176: {'>=3100': 45, '<3100': 5}
+  MIXED B9 E5 G7CAM-B9-E5-63692176: {'200-250': 11, '<200': 30, '>250': 9}
+  MIXED B6 E1 G7CAM-B6-E1-20855871: {'<200': 20, '200-250': 27, '>250': 3}
+  MIXED B7 E1 G7CAM-B7-E1-20855871: {'>=3100': 38, '<3100': 12}
+  MIXED B9 E1 G7CAM-B9-E1-20855871: {'200-250': 26, '>250': 7, '<200': 17}
+  MIXED B6 E5 G7CAM-B6-E5-20855871: {'200-250': 23, '>250': 8, '<200': 19}
+  MIXED B7 E5 G7CAM-B7-E5-20855871: {'>=3100': 38, '<3100': 12}
+  MIXED B9 E5 G7CAM-B9-E5-20855871: {'200-250': 31, '<200': 14, '>250': 5}
+  MIXED B6 E1 G7CAM-B6-E1-61571712: {'>250': 1, '200-250': 49}
+  MIXED B7 E1 G7CAM-B7-E1-61571712: {'<3100': 17, '>=3100': 33}
+  MIXED B9 E1 G7CAM-B9-E1-61571712: {'200-250': 28, '>250': 7, '<200': 15}
+  MIXED B6 E5 G7CAM-B6-E5-61571712: {'>250': 10, '200-250': 29, '<200': 11}
+  MIXED B7 E5 G7CAM-B7-E5-61571712: {'>=3100': 45, '<3100': 5}
+  MIXED B9 E5 G7CAM-B9-E5-61571712: {'200-250': 31, '>250': 6, '<200': 13}
+  MIXED B6 E1 G7CAM-B6-E1-49559376: {'>250': 41, '200-250': 4, '<200': 5}
+  MIXED B7 E1 G7CAM-B7-E1-49559376: {'>=3100': 11, '<3100': 39}
+  MIXED B9 E1 G7CAM-B9-E1-49559376: {'200-250': 24, '<200': 20, '>250': 6}
+  MIXED B6 E5 G7CAM-B6-E5-49559376: {'<200': 32, '200-250': 10, '>250': 8}
+  MIXED B7 E5 G7CAM-B7-E5-49559376: {'>=3100': 46, '<3100': 4}
+  MIXED B9 E5 G7CAM-B9-E5-49559376: {'200-250': 26, '>250': 5, '<200': 19}
+  (no MIXED lines above => every run occupied exactly one band for its whole window)
+
+=== inferred frequency ratios (INFERENCE from timing, constant-work assumption) ===
+  B6 A_fast(~180us)   geometric-mean-median=  182.11us  inferred_f_ratio_vs_fastest=0.986x
+  B6 B_mid(~221us)    geometric-mean-median=  220.40us  inferred_f_ratio_vs_fastest=0.814x
+  B6 C_slow(>300us)   geometric-mean-median=  348.41us  inferred_f_ratio_vs_fastest=0.515x
+  B9 A_fast(~180us)   geometric-mean-median=  183.94us  inferred_f_ratio_vs_fastest=0.980x
+  B9 B_mid(~221us)    geometric-mean-median=  220.83us  inferred_f_ratio_vs_fastest=0.816x
+  (ratios assume identical work per exec — INFERENCE, not telemetry)
+
+=== per-run independent-run summary (run_suffix groups) ===
+  run1 B6  E1  median=  181.15 cluster=A_fast(~180us) gap=None
+  run1 B7  E1  median= 2925.55 cluster=L(~2900-3000) gap=False
+  run1 B9  E1  median=  180.40 cluster=A_fast(~180us) gap=False
+  run1 B6  E5  median=  179.50 cluster=A_fast(~180us) gap=False
+  run1 B7  E5  median= 2999.20 cluster=L(~2900-3000) gap=False
+  run1 B9  E5  median=  180.25 cluster=A_fast(~180us) gap=False
+  run2 B6  E1  median=  360.20 cluster=C_slow(>300us) gap=True
+  run2 B7  E1  median= 3341.65 cluster=H(~3200-3342) gap=False
+  run2 B9  E1  median=  220.85 cluster=B_mid(~221us) gap=False
+  run2 B6  E5  median=  219.85 cluster=B_mid(~221us) gap=False
+  run2 B7  E5  median= 3326.35 cluster=H(~3200-3342) gap=False
+  run2 B9  E5  median=  191.40 cluster=A_fast(~180us) gap=False
+  run3 B6  E1  median=  219.60 cluster=B_mid(~221us) gap=True
+  run3 B7  E1  median= 3249.00 cluster=H(~3200-3342) gap=False
+  run3 B9  E1  median=  221.35 cluster=B_mid(~221us) gap=False
+  run3 B6  E5  median=  219.90 cluster=B_mid(~221us) gap=False
+  run3 B7  E5  median= 3230.90 cluster=H(~3200-3342) gap=False
+  run3 B9  E5  median=  221.40 cluster=B_mid(~221us) gap=False
+  run4 B6  E1  median=  221.45 cluster=B_mid(~221us) gap=True
+  run4 B7  E1  median= 3207.25 cluster=H(~3200-3342) gap=False
+  run4 B9  E1  median=  220.20 cluster=B_mid(~221us) gap=False
+  run4 B6  E5  median=  221.20 cluster=B_mid(~221us) gap=False
+  run4 B7  E5  median= 3337.20 cluster=H(~3200-3342) gap=False
+  run4 B9  E5  median=  221.60 cluster=B_mid(~221us) gap=False
+  run5 B6  E1  median=  337.00 cluster=C_slow(>300us) gap=True
+  run5 B7  E1  median= 2902.80 cluster=L(~2900-3000) gap=False
+  run5 B9  E1  median=  219.60 cluster=B_mid(~221us) gap=False
+  run5 B6  E5  median=  185.75 cluster=A_fast(~180us) gap=False
+  run5 B7  E5  median= 3339.65 cluster=H(~3200-3342) gap=False
+  run5 B9  E5  median=  220.80 cluster=B_mid(~221us) gap=False

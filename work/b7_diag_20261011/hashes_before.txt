@@ -1,0 +1,2 @@
+532bc249ba1e4ba0697c465f25baa2ed2d3d04cec7a806ada53bd9fcaa901d47 *stark/CMakeLists.txt
+cf3c1e54bc525bcac3c7ff1279e66e057f29058906a4d849565976b9648de5b0 *stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp

@@ -1,0 +1,1 @@
+CONTROLLED TEST INPUT (not a measurement). E1/E5 declare physical GPU presence (gpu_present=true) with CUDA enabled and a MEASURED VRAM peak (synthetic numeric value). All gates are expected to PASS, demonstrating the GPU workload path under the frozen G4 rule.

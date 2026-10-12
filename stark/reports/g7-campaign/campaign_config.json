@@ -1,0 +1,46 @@
+{
+  "campaign": "G7-resolution",
+  "frozen_spec": "design/V009_phase1_M0_specification.md",
+  "frozen_contract_summary": {
+    "benchmark_id": "B6/B7/B9 (TINY-DENSE-2L where applicable)",
+    "configuration_basis": "serialized BenchConfig block; E1 and E5 are independent repeats of the same logical CPU FP32 configuration",
+    "minimum_samples": 10,
+    "warmup_count": ">=3",
+    "thread_count": 1,
+    "batch_size": 1,
+    "sequence_length": 0,
+    "precision": "FP32",
+    "deterministic_mode_requested": "true for B6/B9 (spec E/F deterministic path)",
+    "median_definition": "linear interpolation on sorted samples at quantile 0.5 using index 0.5*(n-1)",
+    "symmetric_relative_difference_pct": "abs(x-y)/max(abs(x),abs(y))*100, with 0/0 -> 0 and one-zero -> 100",
+    "tolerance_timing_pct": 15.0,
+    "tolerance_bandwidth_pct": 20.0,
+    "g7_group_rule": "all-pairs: every independent repeat must agree with every other repeat",
+    "median_consistency_tolerance_pct": 0.001
+  },
+  "campaign_design_frozen_before_measurement": {
+    "n_per_run": 50,
+    "warmup_per_run": 10,
+    "independent_runs_per_experiment_id": 5,
+    "experiment_ids": ["E1", "E5"],
+    "benchmarks": ["B6", "B7", "B9"],
+    "reason": "n=50 >= 10 spec floor; warmup=10 >= 3 spec floor; 5 runs/experiment exceeds minimum; both E1 and E5 included to satisfy G2/G4 and provide independent repeats of the same configuration"
+  },
+  "controls_applied": {
+    "thread_count": 1,
+    "thread_affinity_recorded": "single-thread pinned (thread_count=1) — recorded as provenance, OS-level pinning not independently asserted",
+    "deterministic_mode_requested": true,
+    "batch_size": 1,
+    "sequence_length": 0,
+    "workload_fixed": true,
+    "inter_run_delay_seconds": 30,
+    "cpu_affinity_guaranteed_os_level": false,
+    "power_state_guaranteed": false,
+    "background_interference_guaranteed_eliminated": false
+  },
+  "controls_not_guaranteed": {
+    "cpu_affinity": "not asserted at OS level; only thread_count=1 is enforced by the runner",
+    "power_performance_state": "not locked; thermal/frequency scaling may still occur",
+    "background_processes": "not independently controlled beyond the runner's own process isolation"
+  }
+}

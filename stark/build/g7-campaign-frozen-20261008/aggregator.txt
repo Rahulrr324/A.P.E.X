@@ -1,0 +1,109 @@
+=== STARK Phase 1 (M0) Aggregator ===
+records directory: build/g7-campaign-frozen-20261008
+records found: 35
+
+STATUS SUMMARY:
+  B4: 1 record(s)
+  B5: 1 record(s)
+  E1: 15 record(s)
+  E2: 1 record(s)
+  E5: 15 record(s)
+  PROFILE: 1 record(s)
+  TELEMETRY: 1 record(s)
+  PASSED=32 FAILED=0 SKIPPED=3 NOT_ATTEMPTED=0
+
+GATE RESULTS:
+  [PASS] G1 hardware profile collected
+         cpu=12th Gen Intel(R) Core(TM) i5-12450H, ram_total=25392844800
+  [PASS] G2 CPU baselines present and complete
+         E1 and E5 present, distinct, each with >=10 samples
+  [PASS] G3 GPU branch complete-or-skipped with reason
+         B5: SKIPPED (cuda_unavailable) — skipped: CUDA unavailable in this build (STARK_ENABLE_CUDA=OFF / no CUDA toolkit); this does NOT imply the machine has no GPU -- physical GPU presence is recorded independently in hardware.gpu_present (spec G3 skipped-branch)
+  [PASS] G4 peak memory measured
+         E1 and E5 present, PASSED; every PASSED baseline: RAM peak measured; VRAM measured or structured unavailability corroborated by embedded capability evidence (physical capability gpu/gpu — informational, not a G4 criterion)
+  [PASS] G5 parameter accounting consistent
+         all accounting records pass G5 checks
+  [PASS] G6 budget evaluator rejects over-budget demands
+         VRAM-only violation detected; compute fields informational
+  [FAIL] G7 same-config medians reproducible across repeats
+         B6 medians differ 18.57% (allowed 15.00%) between runs 1 and 4
+B6 medians differ 38.96% (allowed 15.00%) between runs 1 and 5
+B6 medians differ 18.23% (allowed 15.00%) between runs 1 and 9
+B6 medians differ 17.29% (allowed 15.00%) between runs 1 and 10
+B6 medians differ 18.70% (allowed 15.00%) between runs 2 and 4
+B6 medians differ 38.86% (allowed 15.00%) between runs 2 and 5
+B6 medians differ 18.36% (allowed 15.00%) between runs 2 and 9
+B6 medians differ 17.42% (allowed 15.00%) between runs 2 and 10
+B6 medians differ 18.70% (allowed 15.00%) between runs 3 and 4
+B6 medians differ 38.86% (allowed 15.00%) between runs 3 and 5
+B6 medians differ 18.36% (allowed 15.00%) between runs 3 and 9
+B6 medians differ 17.42% (allowed 15.00%) between runs 3 and 10
+B6 medians differ 50.29% (allowed 15.00%) between runs 4 and 5
+B6 medians differ 19.27% (allowed 15.00%) between runs 4 and 6
+B6 medians differ 18.75% (allowed 15.00%) between runs 4 and 7
+B6 medians differ 18.77% (allowed 15.00%) between runs 4 and 8
+B6 medians differ 38.43% (allowed 15.00%) between runs 5 and 6
+B6 medians differ 38.82% (allowed 15.00%) between runs 5 and 7
+B6 medians differ 38.80% (allowed 15.00%) between runs 5 and 8
+B6 medians differ 50.08% (allowed 15.00%) between runs 5 and 9
+B6 medians differ 49.51% (allowed 15.00%) between runs 5 and 10
+B6 medians differ 18.93% (allowed 15.00%) between runs 6 and 9
+B6 medians differ 18.00% (allowed 15.00%) between runs 6 and 10
+B6 medians differ 18.41% (allowed 15.00%) between runs 7 and 9
+B6 medians differ 17.48% (allowed 15.00%) between runs 7 and 10
+B6 medians differ 18.43% (allowed 15.00%) between runs 8 and 9
+B6 medians differ 17.50% (allowed 15.00%) between runs 8 and 10
+B7 medians differ 15.71% (allowed 15.00%) between runs 1 and 4
+B7 medians differ 18.20% (allowed 15.00%) between runs 1 and 5
+B7 medians differ 41.64% (allowed 15.00%) between runs 1 and 6
+B7 medians differ 19.49% (allowed 15.00%) between runs 1 and 7
+B7 medians differ 17.26% (allowed 15.00%) between runs 2 and 5
+B7 medians differ 42.31% (allowed 15.00%) between runs 2 and 6
+B7 medians differ 20.41% (allowed 15.00%) between runs 2 and 7
+B7 medians differ 15.20% (allowed 15.00%) between runs 2 and 9
+B7 medians differ 15.77% (allowed 15.00%) between runs 3 and 5
+B7 medians differ 43.33% (allowed 15.00%) between runs 3 and 6
+B7 medians differ 21.81% (allowed 15.00%) between runs 3 and 7
+B7 medians differ 16.70% (allowed 15.00%) between runs 3 and 9
+B7 medians differ 50.81% (allowed 15.00%) between runs 4 and 6
+B7 medians differ 32.13% (allowed 15.00%) between runs 4 and 7
+B7 medians differ 27.69% (allowed 15.00%) between runs 4 and 9
+B7 medians differ 52.27% (allowed 15.00%) between runs 5 and 6
+B7 medians differ 34.14% (allowed 15.00%) between runs 5 and 7
+B7 medians differ 29.83% (allowed 15.00%) between runs 5 and 9
+B7 medians differ 27.52% (allowed 15.00%) between runs 6 and 7
+B7 medians differ 46.25% (allowed 15.00%) between runs 6 and 8
+B7 medians differ 31.97% (allowed 15.00%) between runs 6 and 9
+B7 medians differ 49.96% (allowed 15.00%) between runs 6 and 10
+B7 medians differ 25.84% (allowed 15.00%) between runs 7 and 8
+B7 medians differ 30.96% (allowed 15.00%) between runs 7 and 10
+B7 medians differ 20.99% (allowed 15.00%) between runs 8 and 9
+B7 medians differ 26.44% (allowed 15.00%) between runs 9 and 10
+B9 medians differ 16.20% (allowed 15.00%) between runs 1 and 2
+B9 medians differ 19.30% (allowed 15.00%) between runs 1 and 4
+B9 medians differ 18.79% (allowed 15.00%) between runs 1 and 5
+B9 medians differ 19.79% (allowed 15.00%) between runs 1 and 9
+B9 medians differ 18.61% (allowed 15.00%) between runs 1 and 10
+B9 medians differ 15.76% (allowed 15.00%) between runs 2 and 3
+B9 medians differ 28.00% (allowed 15.00%) between runs 2 and 6
+B9 medians differ 16.20% (allowed 15.00%) between runs 2 and 7
+B9 medians differ 15.93% (allowed 15.00%) between runs 2 and 8
+B9 medians differ 18.89% (allowed 15.00%) between runs 3 and 4
+B9 medians differ 18.37% (allowed 15.00%) between runs 3 and 5
+B9 medians differ 19.38% (allowed 15.00%) between runs 3 and 9
+B9 medians differ 18.19% (allowed 15.00%) between runs 3 and 10
+B9 medians differ 30.67% (allowed 15.00%) between runs 4 and 6
+B9 medians differ 19.30% (allowed 15.00%) between runs 4 and 7
+B9 medians differ 19.05% (allowed 15.00%) between runs 4 and 8
+B9 medians differ 30.23% (allowed 15.00%) between runs 5 and 6
+B9 medians differ 18.79% (allowed 15.00%) between runs 5 and 7
+B9 medians differ 18.53% (allowed 15.00%) between runs 5 and 8
+B9 medians differ 31.09% (allowed 15.00%) between runs 6 and 9
+B9 medians differ 30.08% (allowed 15.00%) between runs 6 and 10
+B9 medians differ 19.79% (allowed 15.00%) between runs 7 and 9
+B9 medians differ 18.61% (allowed 15.00%) between runs 7 and 10
+B9 medians differ 19.54% (allowed 15.00%) between runs 8 and 9
+B9 medians differ 18.35% (allowed 15.00%) between runs 8 and 10
+
+
+OVERALL: FAIL (1 gate(s) failed)

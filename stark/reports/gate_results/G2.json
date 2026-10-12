@@ -1,0 +1,54 @@
+{
+  "gate": "G2 CPU baselines present and complete",
+  "report_version": "v2.0",
+  "date": "2026-10-05",
+
+  "spec": "V009 - Both E1 and E5 baselines must exist, PASSED, and each carry >=10 samples (E5 is NOT optional). E1 and E5 must resolve to distinct record_ids (duplicate-only evidence fails).",
+
+  "verified_source": {
+    "file": "src/phase1/gates.cpp",
+    "sha256": "7fd240a8b486b9f85703fe6cf38966c4914794ccb0b4a829b455f03c43b070e2",
+    "inspection": "independent source read, not inherited from prior reports",
+    "logic": "E1 missing -> fail; E5 missing -> fail; E1 not PASSED -> fail; E5 not PASSED -> fail; same record_id (duplicate-only evidence) -> fail; n1<10 -> fail; n5<10 -> fail; otherwise pass",
+    "note": "G2 block unchanged from v1.8/v1.9. G2 uses latest_by_experiment(); E1 (6 recovered records) resolves to its newest record, E5 (3 recovered records) to its newest -- but G2 presence/distinctness/sample-count is evaluated over the latest of each, both of which carry 10 samples."
+  },
+
+  "regression_tests": {
+    "file": "tests/test_phase1_gates.cpp",
+    "total_assertions": 328,
+    "failures": 0,
+    "configs": ["Debug", "Release"],
+    "cases": [
+      "both baselines valid -> PASS",
+      "E1 missing -> FAIL",
+      "E5 missing -> FAIL",
+      "both missing -> FAIL",
+      "E1 not PASSED -> FAIL",
+      "E5 not PASSED -> FAIL",
+      "insufficient samples (9) -> FAIL",
+      "duplicate-only evidence (same record_id) -> FAIL"
+    ]
+  },
+
+  "aggregator_results": {
+    "input_directory": "archive_recovery/aggregator_input/ (exactly 9 experiment records; no manifest)",
+    "records_loaded": 9,
+    "invalid_records": 0,
+    "controlled_valid": "exit 0 - G2 PASS (E1 and E5 present, distinct, each >=10 samples)",
+    "controlled_invalid_g2": "exit 1 - G2 FAIL (E5 baseline omitted), alongside G4/G7",
+    "v14_valid": "G2 contributes to that combined result (G7 is the failing gate there)"
+  },
+
+  "real_historical_result": {
+    "over_recovered_records": "PASS - 9 records loaded from archive_recovery/aggregator_input/; E1 has 6 records (B6 x2, B7 x2, B9 x2), E5 has 3 records (B6 x1, B7 x1, B9 x1); all PASSED, all 10 samples; latest E1 record_id != latest E5 record_id; E1 AND E5 both present",
+    "e1_record_ids": ["P1-E1-B6-24899", "P1-E1-B6-57493", "P1-E1-B7-24899", "P1-E1-B7-57493", "P1-E1-B9-24899", "P1-E1-B9-57493"],
+    "e5_record_ids": ["P1-E5-B6-90937", "P1-E5-B7-90937", "P1-E5-B9-90937"],
+    "distinct": true,
+    "duplicates_counted_as_independent_coverage": false,
+    "over_surviving_originals_build_results": "FAIL - only 3 E1 records (B6/B7/B9), no E5 baseline present",
+    "over_regenerated_build_historical_regen": "PASS - E1 and E5 present, distinct, each 10 samples"
+  },
+
+  "decision": "PASS on implementation, tests, and recovered historical data (G2 PASS). E1 AND E5 both verified from actual recovered records - no shortcut, no duplicate substitution.",
+  "recommendation": "G2 satisfied over real recovered data; thresholds unchanged."
+}

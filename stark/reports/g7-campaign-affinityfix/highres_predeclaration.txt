@@ -1,0 +1,188 @@
+ADDENDUM 1 (written 2026-10-06, AFTER the first high-res run, BEFORE the
+re-run; the G7 gate and rules above are NOT changed)
+
+The first high-res run exposed three defects in the diagnostic harness
+itself (not in the production benchmark):
+  D1. The background collector thread inherited the process affinity mask
+      (CPU0) and ran a tight PDH loop there, starving the measured workload:
+      B7 medians inflated ~57x (2.1 ms -> 120 ms), B6 exec spans stretched
+      up to ~55x. The run therefore measured collector interference.
+  D2. At ~5 us collection cadence, PDH % Processor Performance returns
+      division artifacts: exec-only sample extremes of 1.1 % and 30,490 %
+      of nominal are physically impossible on this CPU (max turbo
+      4.4 GHz = ~220 % of the 2000 MHz nominal basis; idle states reach
+      ~23 %). The MEDIAN over exec-only samples stayed 209.3-211.7 % in
+      every exec despite the artifacts.
+  D3. Two code defects: the execs array was not written to the JSON, and
+      the second B9 exec was never appended (9 of 10 execs recorded).
+
+ADDENDUM RULES for the re-run (fixed now, before it):
+  R1. The collector thread is pinned to the LAST logical CPU of the system
+      mask (SetThreadAffinityMask), NOT CPU0, so it cannot steal time from
+      the pinned measured thread. Interference check: the B7 medians of the
+      re-run must be within ~5 % of the previous 10-exec High-Performance
+      run (2105-2129 us); if they are inflated again, the re-run is void
+      for timing purposes and only its PDH telemetry is used.
+  R2. Valid-sample filter (predeclared): a PDH sample is USABLE iff
+      20.0 <= pct_perf <= 240.0 (% of nominal). Outside = artifact
+      (idle-state or division artifact), excluded from exec-only stats but
+      COUNTED and reported (artifact rate). Raw samples are also kept
+      unfiltered in the JSON.
+  R3. The exec-only statistics reported by the decision rules are computed
+      on the filtered set; the exec-only MEDIAN per exec is reported
+      alongside mean; cross-exec stability uses per-exec medians.
+  R4. The decision rules of the main predeclaration are otherwise applied
+      unchanged (B: exec-only spread <=2.0 % and <=1 transition;
+      A: spread >5.0 % or >=2 transitions corroborated by iteration drift
+      >5.0 %; C otherwise or if coverage <10 filtered samples/exec).
+
+ADDENDUM 2 (written 2026-10-06, AFTER the v2 high-res run, BEFORE the
+v3 re-run; the G7 gate and decision rules are NOT changed)
+
+The v2 run fixed the interference (collector pinned off-CPU0: B7 medians back
+to 2233/2264 us, B6 130-136 us) but introduced a coverage failure: the 1 ms
+collector sleep yields only 0-1 samples per ~7 ms exec (predeclared
+decision floor is >=10 usable samples/exec), so no A/B/C decision is
+possible from v2. V2 remains valid evidence for: PDH adequacy (P1 change
+interval ~5 us; P2 step latency 0.026 ms), artifact rate ~0 at 1 ms cadence,
+and cross-exec per-exec-median stability 6.9873 % (n=8).
+
+V3 HARNESS CHANGE (measurement capability only; production path unchanged):
+  C1. The collector loops TIGHT (no sleep) only while an atomic
+      exec-in-progress flag is set, and sleeps ~2 ms between execs. The
+      collector stays pinned to the last logical CPU (addendum R1), so the
+      tight loop cannot steal time from the CPU0-pinned measured thread;
+      it is also active only ~10 ms total per exec instead of saturating a
+      core for the whole session.
+  C2. Exec-only statistics (usable filter R2, min/max/mean/median/spread/
+      plateaus/transitions/artifact-rate) are computed IN-PROCESS inside
+      the exec snapshot, eliminating the v1 defect of joining stale or
+      missing sample sets afterwards.
+  C3. Per-iteration join: with ~5 us cadence each ~130 us iteration
+      contains ~20+ usable samples; the per-iteration mean usable %perf is
+      computed for every iteration, and per-exec Pearson r(dur_us, mean
+      %perf) is reported (expect strong negative correlation if timing is
+      frequency-driven).
+  C4. The JSON keeps, per exec, the computed stats plus a downsampled
+      trace (at most 400 samples) as evidence; full raw sample vectors are
+      not serialized.
+
+The main-predeclaration decision rules and the R2/R3/R4 addendum rules are
+applied to the v3 data UNCHANGED. A v3 run whose B7 medians inflate again
+beyond ~5 % of 2105-2129 us is void for timing conclusions (R1 check).
+
+--- ORIGINAL PREDECLARATION FOLLOWS ---
+
+HIGH-RESOLUTION FREQUENCY-INSTABILITY ANALYSIS — PREDECLARATION
+Written: 2026-10-06, BEFORE any diagnostic of this task was run.
+(Carried forward from gate_predeclaration.txt: the G7 stability gate is and
+remains exec-window PDH % Processor Performance spread
+= (max-min)/max*100 <= 5.0%, fixed before the 2026-10-06 controlled run.
+That gate is NOT changed. This predeclaration governs only the diagnosis of
+WHY the gate failed.)
+
+PURPOSE
+  Determine whether the residual 6.8974% exec-window spread of the
+  High-Performance validation run is
+    A. genuine within-execution frequency variation, or
+    B. a sampling-window / PDH resolution artifact, or
+    C. mixed/indeterminate.
+  This is a measurement-resolution investigation. No control is implemented,
+  no G7 campaign is run, no production benchmark/G7 code is modified.
+
+DIAGNOSTIC METHOD (new, additive; production path untouched)
+  New target diag_highres_frequency (tests/diag_highres_frequency.cpp):
+    P1. PDH RESPONSE PROBE (resolution characterization):
+        Same counter path "\Processor Information(0,0)\% Processor
+        Performance" as the existing diagnostic, collected in a tight loop.
+        For a ~2.0 s window, timestamps and values of every successful
+        PdhCollectQueryData+PdhGetFormattedCounterValue cycle are recorded;
+        the distribution of (a) the raw cycle wall-time and (b) the
+        interval between distinct value CHANGES (stable-interval
+        distribution) is computed. Distinct stable plateaus with their
+        start/end timestamps, durations, and means are listed. This
+        measures, at sub-100ms granularity, how often the underlying
+        performance statistic actually changes and how quickly the counter
+        responds to a known load step (transition detection).
+    P2. STEP-TRANSITION TEST (temporal-response characterization):
+        Background load thread (spinning on the pinned CPU) toggles
+        OFF->ON->OFF with the collector running; the probe records the
+        timestamp when the reported %perf level first moves (latency) and
+        how many distinct plateaus separate idle from loaded state. This
+        bounds the counter's response time to a genuine instantaneous
+        frequency change on the pinned CPU.
+    P3. PRODUCTION EXECS WITH PER-ITERATION SAMPLING (the core evidence):
+        The SAME unmodified production benchmark path as before
+        (stark_p1::run_benchmark, warmup=10, samples=50, thread=1, batch=1,
+        seq=0, FP32, verified CPU-0 affinity via
+        HardwareAffinity::requestAndVerifyFirstCpu) is invoked. For each
+        exec, the background collector thread samples the PDH counter in a
+        tight loop for the whole exec; each successful sample is recorded
+        with its QPC timestamp, and every one of the 50 measured iterations
+        is bracketed with QPC start/end stamps taken by THIS PROCESS around
+        its own op() calls (the same op code the campaign uses, timed
+        identically; the production harness median for the same exec is
+        also reported for parity). Joining per-iteration brackets with
+        collector samples yields, per exec:
+          n_samples_in_exec, first/last/mid sample times,
+          min/max/mean/median of %perf over samples that fall INSIDE the
+          50-iteration span, the stable-plateau decomposition inside the
+          exec, and the bracket-level %perf values immediately before and
+          after the iteration span.
+        Exec set: B6 x6 (1 warm + 3 post-30s-gap + 2 back-to-back),
+        B9 x2 (gap/warm), B7 x2 (gap/warm) -- identical structure to both
+        prior investigations, same 30 s gaps, via the SAME guarded
+        power_scheme_control.exe wrapper (apply HP -> run -> restore ->
+        prove restore).
+
+KEY PREDECLARED DEFINITIONS
+  For exec-window comparisons the metric stays
+    execs[].pdh_after.observed_pct_perf_cpu0  (snapshot-interval average,
+    brackets collect_before -> collect_after ~ the whole exec).
+  For exec-ONLY resolution the metric is
+    pdh samples whose QPC timestamp lies within
+    [first-iteration start, last-iteration end]  ("exec-only set").
+  Per-iteration frequency value: the mean of exec-only samples whose
+  timestamps fall inside that iteration's bracket; iterations with no
+  covering sample are excluded and counted (coverage reported).
+
+ANALYSIS FORMULAS (fixed before the run)
+  spread_max(v)   = (max-min)/max*100          (G7 pairwise form, primary)
+  spread_mean(v)  = (max-min)/mean*100         (secondary)
+  cv(v)           = stdev(v, n-1)/mean*100     (secondary)
+  plateau         = maximal run of consecutive collector samples whose
+                    values stay within +/-1.0% of the run's mean
+  transition      = a change between plateaus whose means differ by >1.0%
+  in-exec ramp    = >1 transition inside the exec-only set, OR
+                    (max-min)/max of exec-only samples >5.0%
+  iteration drift = |median(last 25 iteration-level values)
+                     - median(first 25 iteration-level values)|
+                     / median(first 25) * 100
+
+DECISION RULES (fixed before the run)
+  B (artifact)  : exec-only %perf spread <=2.0% AND <=1 transition inside
+                  execs, while exec-window spread stays >5.0%; i.e. the
+                  variation lives in the sampling window, not the exec.
+  A (real)      : exec-only %perf spread >5.0% OR >=2 in-exec transitions
+                  in the compute benches (B6/B9), corroborated by
+                  iteration-level timing drift >5.0% in the same direction.
+  C (mixed)     : neither rule fires cleanly (e.g. exec-only spread 2-5%,
+                  or B7-only effects, or collector coverage too low to
+                  decide: if exec-only sample coverage < 10 samples/exec or
+                  the probe shows the counter itself is unresponsive at
+                  sub-100ms scale, the result is C by definition).
+  PDH adequacy  : adequate if the P1/P2 probes show distinct-value change
+                  intervals materially shorter than 100 ms AND the P2
+                  transition latency is < 100 ms; otherwise the counter is
+                  declared unable to resolve sub-100ms frequency changes and
+                  any 'no ramp found' conclusion is labeled inconclusive.
+
+INTEGRITY CONSTRAINTS (unchanged)
+  - No G7 campaign; no new G7CAM-* records; frozen 30 and campaign 30
+    byte-identical afterwards (verify_frozen30.py exit 0; SHA match against
+    records_sha256.txt).
+  - Production benchmark/timing/G7 code untouched; only additive diagnostic
+    files + one additive CMake target.
+  - The session wrapper must restore the original scheme and prove it.
+  - The G7 authorization gate itself remains the pre-existing <=5.0%
+    exec-window rule; this task does not re-run or alter it.

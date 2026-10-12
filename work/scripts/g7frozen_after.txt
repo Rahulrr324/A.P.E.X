@@ -1,0 +1,45 @@
+=== AFTER STATE 2026-10-08T15:17:43Z ===
+--- frozen 30 verify ---
+manifest record_count = 30
+manifest records list length = 30
+records on disk = 30
+SHA matches: 30/30
+evidence_manifest.json sha actual   = 7a8dd9de17c4effdc9153ac4505a6f6f95ed662ef204cab52ad279c4bf01fc5a
+evidence_manifest.json sha (frozen) = 7a8dd9de17c4effdc9153ac4505a6f6f95ed662ef204cab52ad279c4bf01fc5a
+
+FROZEN RECORD VERIFICATION: PASSED
+  - 30 records present
+  - manifest count = 30
+  - every SHA matches (30/30)
+  - no missing records
+  - no unexpected replacements
+  - evidence_manifest.json unchanged
+verify_frozen30_exit=0
+--- evidence_manifest.json sha ---
+14975fa285362d4bb6f92f08840841de6edfad88b29dfd101107075731d473d3 *reports/evidence_manifest.json
+--- protected source hashes ---
+2c8c730ce590000afc8c9ed22929c2538bf8b38b20cbce245f6d34fc2ef3d55b *design/V009_phase1_M0_specification.md
+c4ff3a91d51090427a5ed1bbbefe40796c88f57adc7714e4eb7fc67b21a0ef4b *src/phase1/gates.cpp
+6c372e70ecd0e9dcd6f651c3275b605f78160d357fc31644fa1d5a172afeaf9d *src/phase1/aggregate.cpp
+1de216cbcc2cadf379120c87edded8547658277216111c7481392b7e942c2eaa *src/phase1/campaign/G7Campaign.cpp
+1b37e95f0cc47568839727bc0ef8836397f705255b47fe85ebe4b988867b4414 *src/phase1/bench/BenchmarkHarness.cpp
+33a38fdbcf4497654f92b9f789813318a5d2c36b8396ce43067d91f15f685bf6 *src/phase1/common/ExperimentRecord.cpp
+--- production binaries (build-v24-release) ---
+2667719fc4b44a8c014b9adad5d2957ee4007f2521923f372b4322ff20812f01 *build-v24-release/g7_campaign.exe
+2f4600a6d7830ef022462d29ad1d83966992640cd3c46ea2f739720b58a3e354 *build-v24-release/aggregate.exe
+61e2d123745056ddac6c2c98a7bf2e3743badbed6b5ec6f134a03dec66d8a40d *build-v24-release/run_baseline.exe
+b3539413fb86b30f8c44f6901bdd1c6d51572307aff5271ebe08a934423bb6df *build-v24-release/profiler_cli.exe
+426a810202144bbbc342d73759026a68b817dd348ffdb12b67925a29751d8149 *build-v24-release/libstark_phase1.a
+--- power scheme ---
+Power Scheme GUID: dfe97760-471c-4d01-bd06-b8b04c50ecd8  (Performance Mode)--- frozen 30 dir state ---
+30
+2026-10-05T19:58
+2026-10-05T19:59
+2026-10-05T20:00
+--- affinityfix campaign dir state ---
+30
+2026-10-06T17:48
+2026-10-06T17:49
+2026-10-06T17:50
+--- existing record-id inventory (hash of sorted ids) ---
+10373526f103fd08de8300aa5f99a574fcefc26004b436d745a0bffbf039549b *-

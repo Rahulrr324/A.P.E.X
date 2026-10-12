@@ -1,0 +1,29 @@
+STARK M0 CTest Release execution log
+=====================================
+Command: ctest --test-dir build-release-clean-3 --output-on-failure
+Compiler: GCC 16.1.0 (Release)
+Result: 80% tests passed, 1 tests failed (SEGFAULT on test_phase1_records)
+
+Test project E:/My Local AI/stark/build-release-clean-3
+    Start 1: test_phase1_profiler
+1/5 Test #1: test_phase1_profiler .............   Passed    0.92 sec
+    Start 2: test_phase1_accounting
+2/5 Test #2: test_phase1_accounting ...........   Passed    0.47 sec
+    Start 3: test_phase1_budget
+3/5 Test #3: test_phase1_budget ...............   Passed    0.51 sec
+    Start 4: test_phase1_records
+4/5 Test #4: test_phase1_records ..............***Exception: SegFault  0.52 sec
+    Start 5: test_phase1_reproducibility
+5/5 Test #5: test_phase1_reproducibility ......   Passed    0.55 sec
+
+80% tests passed, 1 tests failed out of 5
+
+The following tests FAILED:
+    4 - test_phase1_records (SEGFAULT)
+Errors while running CTest (rc=8)
+
+Notes:
+- test_phase1_records SEGFAULTs under Release (-O3) because it fails to load:
+  "multiple definition of WinMainCRTStartup" / ".refptr.__xc_z" (CRT dup).
+- Debug (-O0) run of the same test PASSES (ctest_debug.log: 5/5).
+- test_phase1_profiler/accounting/budget/reproducibility all pass in Release.

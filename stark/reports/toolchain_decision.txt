@@ -1,0 +1,42 @@
+GCC 16.1.0 (WinLibs) — toolchain verification for STARK M0
+
+# Compiler path
+compiler_path=/c/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/c++.exe
+
+# Executable presence
+$ compiler_path --version
+c++.exe (MinGW-W64 x86_64-ucrt-posix-seh, built by Brecht Sanders, r4) 16.1.0
+
+# Headers
+header_dir=/c/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/include/c++/16.1.0/
+-> contains bits/, memory, string, vector, algorithm, atomic, ... (C++17 standard library)
+
+# Build tools
+cmake=/c/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/cmake
+cmake --version -> cmake version 4.4.1
+ninja=/c/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/ninja.exe
+ninja --version -> 1.13.2
+
+# Clean configure/release
+cmake -S . -B build-release-clean-3 -G Ninja -DCMAKE_CXX_COMPILER=<compiler_path> -DCMAKE_BUILD_TYPE=Release
+Result: configure rc=0 (CXX compiler identification: GNU 16.1.0)
+Build: ninja -C build-release-clean-3
+Result: build rc=0, all 94 targets produced
+
+# Clean configure/debug
+cmake -S . -B build-debug-clean-2 -G Ninja -DCMAKE_CXX_COMPILER=<compiler_path> -DCMAKE_BUILD_TYPE=Debug
+Result: configure rc=0, build rc=0
+
+# Execution status
+ALL compiled Phase-1 / test executables FAIL TO LOAD under GCC 16.1.0:
+  "multiple definition of WinMainCRTStartup"
+  "multiple definition of mainCRTStartup"
+  "multiple definition of atexit"
+  "multiple definition of __gcc_register_frame"
+  "multiple definition of __gcc_deregister_frame"
+  "multiple definition of .refptr.__xc_z", ".refptr.__mingw_initltsdrot_force",
+  ".refptr.__native_startup_state", ...
+Cause: MinGW exception-runtime objects define identical CRT data symbols twice
+under GCC 16.1.0. Debug (-O0) builds execute; Release (-O3) builds load-fail.
+Conclusion: GCC 16.1.0 is AVAILABLE and builds, but cannot EXECUTE the
+compiled artifacts -> execution BLOCKED.

@@ -1,0 +1,10 @@
+ninja: Entering directory `stark/build-b7diag-20261011'
+[1/2] C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\g++.exe  -I"E:/My Local AI/stark/src" -I"E:/My Local AI/stark/src/phase1" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj -MF CMakeFiles\bm_b7_diagnostic.dir\src\phase1\diagnostics\bm_b7_diagnostic.cpp.obj.d -o CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj -c "E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp"
+FAILED: [code=1] CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\g++.exe  -I"E:/My Local AI/stark/src" -I"E:/My Local AI/stark/src/phase1" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj -MF CMakeFiles\bm_b7_diagnostic.dir\src\phase1\diagnostics\bm_b7_diagnostic.cpp.obj.d -o CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj -c "E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp"
+E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp: In lambda function:
+E:/My Local AI/stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp:1193:17: error: '_fclose' was not declared in this scope; did you mean 'fclose'?
+ 1193 |                 _fclose(f);
+      |                 ^~~~~~~
+      |                 fclose
+ninja: build stopped: subcommand failed.

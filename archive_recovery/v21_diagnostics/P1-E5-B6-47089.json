@@ -1,0 +1,164 @@
+{
+  "accounting": {
+    "activation_bytes": 4096,
+    "active_parameters": 262912,
+    "inconsistent": false,
+    "kv_or_state_bytes": 0,
+    "logical_parameters": 262912,
+    "nominal_parameter_payload_bytes": 1051648,
+    "optimizer_bytes": 0,
+    "optimizer_configuration": null,
+    "optimizer_type": "none",
+    "packing_overhead_bytes": 16,
+    "peak_memory_estimated": false,
+    "provenance": {},
+    "runtime_parameter_bytes": 1051648,
+    "storage_format": "FP32",
+    "stored_parameter_bytes": 1051664,
+    "temporary_workspace_bytes": 2048,
+    "total_peak_memory": 1057792,
+    "total_peak_memory_measured": {
+      "reason": "unavailable: no reason recorded",
+      "value": null
+    },
+    "training_or_inference": "INFERENCE"
+  },
+  "budget": null,
+  "configuration": {
+    "batch_size": 1,
+    "benchmark_id": "B6",
+    "measurement_count": 10,
+    "sequence_length": 0,
+    "thread_count": 0,
+    "warmup_count": 3,
+    "workload_params": {
+      "logical_params": "262912",
+      "model": "TINY-DENSE-2L"
+    }
+  },
+  "created_utc": "2026-10-05T02:27:39.352Z",
+  "determinism": {
+    "deterministic_mode_available": true,
+    "deterministic_mode_requested": true,
+    "outputs_bit_identical": true
+  },
+  "experiment_id": "E5",
+  "failures": [],
+  "hardware": {
+    "build_type": "Release",
+    "collected_utc": "2026-10-05T02:27:39.345Z",
+    "cpu_instruction_set_notes": "SSE4.2, OSXSAVE, AVX, SSE, SSE2, AVX2",
+    "cpu_model": "12th Gen Intel(R) Core(TM) i5-12450H",
+    "cuda_available": false,
+    "cuda_version": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_compute_capability_major": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_compute_capability_minor": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_model": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_present": true,
+    "logical_cores": 12,
+    "os_name": "Windows",
+    "os_version": "10.0 (build 26300)",
+    "physical_cores": 8,
+    "provenance": {
+      "cpu_model": "source: cpuid brand string (leaves 0x80000002..4)",
+      "cuda_available": "unavailable: binary built without CUDA (STARK_ENABLE_CUDA=OFF / no toolkit)",
+      "cuda_version": "unavailable: binary built without CUDA",
+      "gpu_model": "unavailable: binary built without CUDA",
+      "gpu_present": "source: EnumDisplayDevices display-adapter enumeration | adapters: Intel(R) UHD Graphics | Intel(R) UHD Graphics | Intel(R) UHD Graphics | Intel(R) UHD Graphics | NVIDIA GeForce RTX 2050",
+      "logical_cores": "source: std::thread::hardware_concurrency()",
+      "os_version": "source: ntdll RtlGetVersion (unmanifested true version)",
+      "physical_cores": "source: GetLogicalProcessorInformation (RelationProcessorCore count)",
+      "pytorch_cuda_available_note": "unavailable: PyTorch runtime out of scope for C++ Phase 1 (spec §A / §L.7)",
+      "ram_total_bytes": "source: GlobalMemoryStatusEx ullTotalPhys (installed)",
+      "storage_volumes": "source: GetDiskFreeSpaceExA over fixed drives"
+    },
+    "pytorch_cuda_available": null,
+    "ram_total_bytes": 25392844800,
+    "storage_volumes": [
+      {
+        "free_bytes": 7052652544,
+        "path": "C:\\",
+        "total_bytes": 247782699008
+      },
+      {
+        "free_bytes": 153383378944,
+        "path": "E:\\",
+        "total_bytes": 262883241984
+      }
+    ],
+    "theoretical_memory_bandwidth_gbps": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "toolchain": "GCC 16.1.0",
+    "vram_total_bytes": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    }
+  },
+  "kind": "baseline",
+  "measured_gflops": null,
+  "measured_memory_bandwidth_gbps": null,
+  "peak_memory": {
+    "ram_measured": true,
+    "ram_peak_bytes": 7032832,
+    "vram_measured": false,
+    "vram_peak_bytes": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    }
+  },
+  "precision": {
+    "compute_precision": "FP32",
+    "storage_format": "FP32"
+  },
+  "provenance": {
+    "cpu_model": "source: embedded hardware snapshot"
+  },
+  "record_id": "P1-E5-B6-47089",
+  "schema_version": "STARKP1 1",
+  "software": {
+    "benchmark_libs": "standard library only (no external deps)",
+    "build_type": "Release",
+    "compiler": "GCC 16.1.0",
+    "cuda_runtime": null,
+    "os": "Windows 10.0 (build 26300)"
+  },
+  "stark_phase": "P1",
+  "statistics": {
+    "computed": true,
+    "max": 0.00043399999999999998,
+    "mean": 0.00042140999999999999,
+    "median": 0.00042089999999999999,
+    "min": 0.0004105,
+    "p95": 0.00043327999999999997,
+    "p99": 0.00043385599999999999,
+    "samples": [
+      0.00042440000000000002,
+      0.00041429999999999999,
+      0.0004105,
+      0.00042470000000000002,
+      0.00043239999999999999,
+      0.00042129999999999999,
+      0.00042049999999999998,
+      0.00041659999999999999,
+      0.00043399999999999998,
+      0.00041540000000000001
+    ],
+    "stdev": 7.6647026469828963e-06
+  },
+  "status": "PASSED",
+  "status_reason": null
+}

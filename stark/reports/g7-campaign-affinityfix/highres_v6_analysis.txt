@@ -1,0 +1,85 @@
+HIGH-RESOLUTION FREQUENCY DIAGNOSTIC -- v6 ANALYSIS
+Date: 2026-10-07. Investigation only. No G7 campaign was run; G7
+thresholds/formulas, frozen 30 records, record stores, production binaries,
+and timing semantics were untouched.
+Predeclaration: highres_v6_predeclaration_addendum.txt (written before any
+code change, build, or run of v6).
+
+1. WHAT v6 CHANGED (single variable vs v5)
+   v5 pinned the collector to CPU1 and achieved API-level separation, yet
+   5/8 collector-active (B) compute execs still got 0-1 in-window samples
+   and the sampling execs showed ~2x iteration inflation. This run first
+   measured the machine's REAL physical-core topology:
+     - GetLogicalProcessorInformationEx(RelationProcessorCore) via Python
+       ctypes AND an independent pinned-burner contention probe:
+         physical core: {0,1} {2,3} {4,5} {6,7}   (SMT pairs, P-cores)
+                        {8} {9} {10} {11}          (E-cores, no SMT)
+         union = 0xFFF = system mask (self-validating)
+         => CPU1 IS the SMT sibling of CPU0.
+       independent probe: pair(0,1) combined throughput ratio 0.755
+       (sibling) vs pair(0,2) 0.957 (separate cores).
+   v6 rule (predeclared): collector CPU = lowest LP in the system mask that
+   does NOT share a physical core with CPU0 => CPU2. Worker stays on CPU0.
+   Both per-thread pins verified by readback; observed CPUs recorded per
+   sample; process mask {CPU0,CPU2} readback-verified (raw 0x5).
+
+2. RUN INTEGRITY (v6)
+   wrapper_exit=0; child_exit=0; apply 8C5E7FDA...(HP) status=0;
+   restore_status=0; scheme_after_restore=DFE97760-471C-4D01-BD06-
+   B8B04C50ECD8; restore_matches_original=true.
+   Output: highres_frequency_v6.json (16 execs), session log
+   power_scheme_session_highres_v6.json.
+   Architecture evidence in JSON: collector_target_cpu=2,
+   cpu1_shares_core_with_cpu0=true, core_topology table,
+   worker observed [0], collector observed [2] on all sampling execs,
+   collector_pin_verified=true on execs with samples.
+
+3. RESULT: ARCHITECTURE PASSES, MEASUREMENT STILL FAILS -- TWO DEFECTS
+   (D1) COVERAGE RACE (predeclared floor >=10 usable samples/B exec):
+        B execs 1,5,7,15 = 0,1,0,1 collector samples; only 4/8 B execs
+        reached the floor (execs 2,8,11,12). The collector CPU was free
+        and pinned correctly, so separation was NOT the cause. Code
+        analysis: the collector reads g_exec_active BEFORE main sets it,
+        takes the 2 ms inter-sample sleep on that stale read, and Windows'
+        default 15.6 ms timer granularity lets that sleep outlive an
+        entire ~7 ms exec; the join (g_stop) then exits the thread with
+        zero samples. Sampling therefore only "caught" execs whose
+        sleep happened to expire inside the window.
+   (D2) RATE PERTURBATION: execs that DID sample ran slower even from the
+        separate physical core:
+          B6 pair1 A=130 us vs B=221.5 us  (+70%)
+          B7 A (no collector) 2585/2501 us vs B 4563.5/3983 us
+            paired deltas +76.5% and +59.3% (+59..77%)
+        External calibrated probe (both threads pinned + readback-verified,
+        worker CPU0, sampler CPU2, 1.2 s x 2 trials):
+          no sampler           : base = 1.00
+          tight ~47-56 kHz     : 0.75 / 0.76   (MATERIAL)
+          paced 2 kHz (500 us) : 1.02 / 1.03   (no measurable loss)
+          paced 500 Hz (2 ms)  : 1.06 / 1.01   (no measurable loss)
+        => the ~50 kHz tight PDH loop costs the measured thread ~25%;
+        collection RATE, not CPU burn, is the perturbation mechanism.
+   PDH counter itself remained healthy in v6: P1 median cycle 5.0 us,
+   P2 step latency 0.031 ms (both far inside the <100 ms adequacy rules).
+
+4. DETERMINATION FOR v6
+   v6 does NOT meet the step's goal: coverage floor fails on 4/8 B execs
+   (never stability evidence -- "not measurable" per the floor rule), and
+   the tight-loop collector materially perturbs (>>2.0%) when it samples.
+   v6 succeeds only as diagnosis: it isolates the two remaining root causes
+   (sleep/granularity race; collection rate), both of which are fixed in v7
+   under a separately predeclared addendum (highres_v7_predeclaration_
+   addendum.txt), with the pace point chosen from the probe numbers above.
+   Classification of the original 6.8974% question: NOT determinable from
+   v6 (coverage floor). No thresholds or rules were changed to accommodate
+   this; v7 re-runs the identical schedule and rules.
+
+5. LIMITATIONS OF v6
+   - v6's own diagnostics (collector_diag) do not exist; the race is
+     established from sample counts + code analysis, and confirmed by the
+     v7 fix eliminating zero coverage.
+   - The external probe measures a Python-level sampler; absolute rates
+     differ from C++, but the rate-dependence conclusion is directional
+     and was re-confirmed by the v7 run itself.
+   - Only B7/B9-with-samples and B6-pair1 carry timing under active
+     sampling in v6; those numbers are void for timing conclusions by the
+     predeclared 2.0% rule.

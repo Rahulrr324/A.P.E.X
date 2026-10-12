@@ -1,0 +1,52 @@
+{
+  "campaign": "G7-resolution-affinityfix",
+  "campaign_id": "G7CAM-AF2-20261006",
+  "purpose": "Single controlled G7 rerun under the corrected production affinity instrumentation (DWORD_PTR(1) << i enumeration fix).",
+  "frozen_spec": "design/V009_phase1_M0_specification.md",
+  "frozen_contract_summary": {
+    "benchmark_id": "B6/B7/B9 (TINY-DENSE-2L where applicable)",
+    "configuration_basis": "serialized BenchConfig block; E1 and E5 are independent repeats of the same logical CPU FP32 configuration",
+    "minimum_samples": 10,
+    "warmup_count": ">=3",
+    "thread_count": 1,
+    "batch_size": 1,
+    "sequence_length": 0,
+    "precision": "FP32",
+    "deterministic_mode_requested": "true for B6/B9 (spec E/F deterministic path)",
+    "median_definition": "linear interpolation on sorted samples at quantile 0.5 using index 0.5*(n-1)",
+    "symmetric_relative_difference_pct": "abs(x-y)/max(abs(x),abs(y))*100, with 0/0 -> 0 and one-zero -> 100",
+    "tolerance_timing_pct": 15.0,
+    "tolerance_bandwidth_pct": 20.0,
+    "g7_group_rule": "all-pairs: every independent repeat must agree with every other repeat",
+    "g7_grouping_key": "r.configuration.dump()",
+    "median_consistency_tolerance_pct": 0.001
+  },
+  "campaign_design_frozen_before_measurement": {
+    "n_per_run": 50,
+    "warmup_per_run": 10,
+    "independent_runs_per_experiment_id": 5,
+    "experiment_ids": ["E1", "E5"],
+    "benchmarks": ["B6", "B7", "B9"],
+    "inter_run_delay_seconds": 30,
+    "command": "g7_campaign.exe --out build/g7-campaign-affinityfix --samples 50 --warmup 10 --runs 5 --threads 1"
+  },
+  "affinity_requirement": {
+    "policy": "Every run must demonstrate truthful single-CPU affinity through the production path or the campaign stops.",
+    "captured_per_run": [
+      "requested_cpu",
+      "set_api_return (raw SetProcessAffinityMask return)",
+      "set_api_last_error (GetLastError after set)",
+      "raw_process_mask (post-set)",
+      "raw_system_mask",
+      "effective_logical_cpus (production query)",
+      "query_ok",
+      "verified_single_cpu (production verification result)"
+    ],
+    "record_location": "provenance.affinity in each STARKP1 record; also printed as affinity_evidence lines in the campaign log"
+  },
+  "relationship_to_frozen_evidence": {
+    "frozen_30_records": "build/g7-campaign — NOT regenerated, NOT modified, verified 30/30 SHA before this campaign",
+    "frozen_manifest": "reports/g7-campaign/evidence_manifest.json — unchanged",
+    "storage": "this campaign is stored separately under build/g7-campaign-affinityfix"
+  }
+}

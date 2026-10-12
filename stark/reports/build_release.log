@@ -1,0 +1,23 @@
+STARK M0 Release build log (GCC 16.1.0, WinLibs)
+=================================================
+Commands:
+  $CMAKE=/c/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/cmake.exe
+  $CXX=/c/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/c++.exe
+  $NINJA=/c/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/ninja.exe
+  $CMAKE -S . -B build-release-clean-3 -G Ninja -DCMAKE_CXX_COMPILER=$CXX -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17
+  $NINJA -C build-release-clean-3
+
+Output (configure+build combined rc=0):
+-- The CXX compiler identification is GNU 16.1.0
+-- Detecting CXX compiler ABI info ... done
+-- Check for working CXX compiler: <compiler_path> - skipped
+-- Configuring done (0.2s)
+-- Generating done (0.2s)
+-- Build files written to: E:/My Local AI/stark/build-release-clean-3
+[1/1] Linking CXX executable profiler_cli.exe
+ninja: no work to do.
+
+Compiler: c++.exe (MinGW-W64 x86_64-ucrt-posix-seh) 16.1.0 (Brecht Sanders, r4)
+CMake: 4.4.1
+Ninja: 1.13.2
+Clean Release configure+build: OK (rc=0)

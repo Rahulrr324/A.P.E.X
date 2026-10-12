@@ -1,0 +1,9 @@
+-- Configuring done (0.3s)
+-- Generating done (0.1s)
+CMake Warning (unused-cli):
+  Manually-specified variables were not used by the project:
+
+    CMAKE_C_COMPILER
+
+
+-- Build files have been written to: E:/My Local AI/stark

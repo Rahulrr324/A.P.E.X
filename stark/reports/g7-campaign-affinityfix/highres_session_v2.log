@@ -1,0 +1,33 @@
+original_guid=DFE97760-471C-4D01-BD06-B8B04C50ECD8
+original_name=(none)
+original_timestamp=2026-10-06T14:59:48.061Z
+requested_guid=8C5E7FDA-E8BF-4A96-9A85-A6E23A8C635C
+apply_status=0
+scheme_after_apply=8C5E7FDA-E8BF-4A96-9A85-A6E23A8C635C
+running: "E:/My Local AI/stark/build-v24-release/diag_highres_frequency.exe" --out reports/g7-campaign-affinityfix/highres_frequency_v2.json --idle 30
+=== High-resolution frequency diagnostic ===
+affinity verified_single_cpu=1
+P1: PDH response probe (idle, 2 s) ...
+P2: step-transition test ...
+B6 gap=0 cycle=0 median_us=131
+idle 30s ...
+B6 gap=1 cycle=1 median_us=136.5
+idle 30s ...
+B6 gap=1 cycle=2 median_us=131
+idle 30s ...
+B6 gap=1 cycle=3 median_us=133.5
+B6 gap=0 cycle=1 median_us=130
+B6 gap=0 cycle=2 median_us=130
+idle 30s ...
+B9 gap=1 median_us=133
+B9 gap=0 median_us=132
+idle 30s ...
+B7 gap=1 median_us=2233.5
+B7 gap=0 median_us=2264.5
+execs=10 wrote reports/g7-campaign-affinityfix/highres_frequency_v2.json
+child_exit=0
+restore_status=0
+scheme_after_restore=DFE97760-471C-4D01-BD06-B8B04C50ECD8
+restore_matches_original=true
+json_written=reports/g7-campaign-affinityfix/power_scheme_session_highres_v2.json
+SESSION_EXIT=0

@@ -1,0 +1,20 @@
+Test project E:/My Local AI/stark/build-release-clean-3
+    Start 1: test_phase1_profiler
+1/5 Test #1: test_phase1_profiler .............   Passed    0.05 sec
+    Start 2: test_phase1_accounting
+2/5 Test #2: test_phase1_accounting ...........   Passed    0.05 sec
+    Start 3: test_phase1_budget
+3/5 Test #3: test_phase1_budget ...............   Passed    0.04 sec
+    Start 4: test_phase1_records
+4/5 Test #4: test_phase1_records ..............***Exception: SegFault  0.04 sec
+
+    Start 5: test_phase1_reproducibility
+5/5 Test #5: test_phase1_reproducibility ......   Passed    0.06 sec
+
+80% tests passed, 1 tests failed out of 5
+
+Total Test time (real) =   0.25 sec
+
+The following tests FAILED:
+	  4 - test_phase1_records (SEGFAULT)
+Errors while running CTest

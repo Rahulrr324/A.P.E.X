@@ -1,0 +1,74 @@
+{
+  "gate": "G4 peak memory measured",
+  "report_version": "v2.0",
+  "date": "2026-10-05",
+
+  "spec": "Both E1 and E5 present and PASSED, with a strictly validated measured peak-memory block: ram_measured must be true with a positive finite numeric ram_peak_bytes; GPU-capable hardware must carry a measured numeric vram_peak_bytes; CPU-only hardware must document VRAM unavailability with a non-empty reason and a null value. Unknown capability fails closed.",
+
+  "verified_source": {
+    "file": "src/phase1/gates.cpp",
+    "sha256": "7fd240a8b486b9f85703fe6cf38966c4914794ccb0b4a829b455f03c43b070e2",
+    "inspection": "independent source read of check_peak_memory() and device_capability(), not inherited from prior reports",
+    "logic": "both E1 and E5 required (missing -> fail, never skipped); status must be PASSED; peak_memory must be an object; ram_measured/ram_peak_bytes required and type-checked; ram_peak_bytes must be numeric, finite, >0; vram_measured required bool; capability from cuda_available / gpu_model / cuda_version / vram_total_bytes; Unknown -> fail closed ('refusing to classify as CPU-only')",
+    "thresholds_changed": false,
+    "evidence_distinction": {
+      "allocated_bytes": "accounting.nominal_parameter_payload_bytes / accounting.stored_parameter_bytes -- parameter footprint, NOT the G4 peak",
+      "reserved_bytes": "accounting.runtime_parameter_bytes / accounting.total_peak_memory -- model-side estimate (peak_memory_estimated=false), informational",
+      "peak_bytes": "peak_memory.ram_peak_bytes -- the process-global peak actually sampled by the harness; THIS is the value G4 validates",
+      "device_reported_bytes": "peak_memory.vram_peak_bytes -- VRAM; documented as unavailable on this CPU-only host with a non-empty reason and null value"
+    }
+  },
+
+  "regression_tests": {
+    "file": "tests/test_phase1_gates.cpp",
+    "total_assertions": 328,
+    "failures": 0,
+    "configs": ["Debug", "Release"],
+    "cases": [
+      "both valid -> PASS",
+      "E1 missing -> FAIL",
+      "E5 missing -> FAIL",
+      "E1 not PASSED -> FAIL",
+      "E5 not PASSED -> FAIL",
+      "missing ram_peak_bytes key -> FAIL",
+      "ram_measured=false -> FAIL",
+      "ram_peak_bytes invalid types and non-positive/non-finite values -> FAIL",
+      "valid GPU VRAM -> PASS",
+      "malformed GPU VRAM -> FAIL",
+      "valid CPU-only VRAM unavailability reason -> PASS",
+      "malformed CPU-only VRAM reason -> FAIL",
+      "G1 fail-closed: malformed PROFILE hardware does not crash, sets G1 FAIL"
+    ]
+  },
+
+  "aggregator_results": {
+    "input_directory": "archive_recovery/aggregator_input/ (exactly 9 experiment records; no manifest)",
+    "records_loaded": 9,
+    "invalid_records": 0,
+    "controlled_valid": "exit 0 - G4 PASS ('E1 and E5 present, PASSED, RAM peak measured; VRAM source documented per schema')",
+    "controlled_invalid_g4": "exit 1 - G4 FAIL (E1 peak_memory.ram_measured set to false)",
+    "controlled_invalid_g2": "exit 1 - G4 FAIL (E5 record absent; G4 never skips a baseline)"
+  },
+
+  "real_historical_result": {
+    "over_recovered_records": "PASS - E1 (6 records) + E5 (3 records) all PASSED; all 9 records carry ram_measured=true with a positive finite ram_peak_bytes; hardware cuda_available=false with a documented VRAM-unavailable object (reason + null value); provenance present",
+    "per_record_memory_evidence": [
+      {"record_id": "P1-E1-B6-24899", "ram_measured": true, "ram_peak_bytes": 6262784, "vram_measured": false, "vram_reason": "unavailable: binary built without CUDA", "cuda_available": false},
+      {"record_id": "P1-E1-B6-57493", "ram_measured": true, "ram_peak_bytes": 6262784, "vram_measured": false, "vram_reason": "unavailable: binary built without CUDA", "cuda_available": false},
+      {"record_id": "P1-E1-B7-24899", "ram_measured": true, "ram_peak_bytes": 10825728, "vram_measured": false, "vram_reason": "unavailable: binary built without CUDA", "cuda_available": false},
+      {"record_id": "P1-E1-B7-57493", "ram_measured": true, "ram_peak_bytes": 10973184, "vram_measured": false, "vram_reason": "unavailable: binary built without CUDA", "cuda_available": false},
+      {"record_id": "P1-E1-B9-24899", "ram_measured": true, "ram_peak_bytes": 6578176, "vram_measured": false, "vram_reason": "unavailable: binary built without CUDA", "cuda_available": false},
+      {"record_id": "P1-E1-B9-57493", "ram_measured": true, "ram_peak_bytes": 6582272, "vram_measured": false, "vram_reason": "unavailable: binary built without CUDA", "cuda_available": false},
+      {"record_id": "P1-E5-B6-90937", "ram_measured": true, "ram_peak_bytes": 6262784, "vram_measured": false, "vram_reason": "unavailable: binary built without CUDA", "cuda_available": false},
+      {"record_id": "P1-E5-B7-90937", "ram_measured": true, "ram_peak_bytes": 10829824, "vram_measured": false, "vram_reason": "unavailable: binary built without CUDA", "cuda_available": false},
+      {"record_id": "P1-E5-B9-90937", "ram_measured": true, "ram_peak_bytes": 6578176, "vram_measured": false, "vram_reason": "unavailable: binary built without CUDA", "cuda_available": false}
+    ],
+    "provenance_check": "all 9 records embed hardware provenance (cpu_model source) and the CPU-only VRAM unavailability reason; device_capability() classifies them CPU (explicit cuda_available=false)",
+    "missing_required_evidence_fails": true,
+    "over_surviving_originals_build_results": "FAIL - E5 baseline record absent, so G4 cannot be satisfied",
+    "over_regenerated_build_historical_regen": "PASS - E1 and E5 present, PASSED, RAM peak measured; VRAM source documented"
+  },
+
+  "decision": "PASS on implementation, tests, and recovered historical data (G4 PASS). Fail-closed behaviour for undecodable hardware evidence strengthened by the v1.8 G1 fix.",
+  "recommendation": "G4 satisfied over real recovered data; thresholds unchanged."
+}

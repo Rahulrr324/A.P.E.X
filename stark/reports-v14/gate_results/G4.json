@@ -1,0 +1,44 @@
+{
+  "gate": "G4 peak memory measured",
+  "implementation": "src/phase1/gates.cpp (evaluate_gates / check_peak_memory / device_capability)",
+  "status": "PASS",
+  "requirement": "BOTH E1 and E5 present and PASSED; ram_measured boolean true; ram_peak_bytes positive finite numeric (Int/UInt/Double); unavailable RAM object never counts; GPU-capable requires measured numeric VRAM; CPU-only requires a non-empty VRAM unavailability reason and null value; unknown hardware capability FAILS (fail closed); malformed types rejected safely",
+  "capability_classification": {
+    "GPU": "explicit cuda_available=true OR authoritative GPU field (non-empty gpu_model / cuda_version, or positive vram_total_bytes)",
+    "CPU": "explicit cuda_available=false",
+    "Unknown": "cuda_available missing/malformed and no authoritative GPU field -> FAILS; absence of evidence is not evidence of CPU-only"
+  },
+  "regression_test": "tests/test_phase1_gates.cpp",
+  "regression_assertions": 148,
+  "debug_result": "PASS (exit 0)",
+  "release_result": "PASS (exit 0)",
+  "cases_covered": [
+    "both baselines valid -> pass",
+    "E1 missing -> fail (never skipped)",
+    "E5 missing -> fail",
+    "E1 not PASSED -> fail",
+    "E5 not PASSED -> fail",
+    "missing RAM measurement -> fail",
+    "ram_measured=true with unavailable RAM object -> fail",
+    "invalid RAM types (string/array/zero/negative) -> fail",
+    "ram_measured non-boolean -> fail",
+    "valid GPU VRAM (numeric) -> pass",
+    "invalid GPU VRAM (missing/object/zero) -> fail",
+    "explicit cuda_available=true with vram_measured=false -> fail",
+    "cuda_available missing (empty hardware) on E1 -> fail",
+    "cuda_available missing (empty hardware) on E5 -> fail",
+    "cuda_available null -> fail (E1 and E5)",
+    "cuda_available string -> fail (E1 and E5)",
+    "cuda_available integer -> fail (E1 and E5)",
+    "unknown cuda_available but authoritative gpu_model + measured VRAM -> pass",
+    "unknown cuda_available but authoritative gpu_model and vram_measured=false -> fail",
+    "explicit cuda_available=false with valid unavailable-VRAM reason -> pass",
+    "empty / non-string / missing / non-null CPU-only VRAM reason -> fail"
+  ],
+  "real_data": {
+    "build/results": "FAIL (E5 missing)",
+    "build/historical-regen": "PASS (CPU-only, cuda_available=false with documented reason)",
+    "fixtures/v14-valid": "PASS"
+  },
+  "aggregator_exit_on_fail": 1
+}

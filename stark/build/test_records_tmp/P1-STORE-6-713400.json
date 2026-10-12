@@ -1,0 +1,112 @@
+{
+  "accounting": null,
+  "budget": null,
+  "configuration": null,
+  "created_utc": "2026-10-06T02:07:42.690Z",
+  "determinism": {
+    "deterministic_mode_available": false,
+    "deterministic_mode_requested": false,
+    "outputs_bit_identical": null
+  },
+  "experiment_id": "B2",
+  "failures": [],
+  "hardware": {
+    "build_type": "Release",
+    "collected_utc": "2026-10-06T02:07:42.685Z",
+    "cpu_instruction_set_notes": "SSE4.2, OSXSAVE, AVX, SSE, SSE2, AVX2",
+    "cpu_model": "12th Gen Intel(R) Core(TM) i5-12450H",
+    "cuda_available": false,
+    "cuda_version": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_compute_capability_major": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_compute_capability_minor": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_model": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_present": true,
+    "logical_cores": 12,
+    "os_name": "Windows",
+    "os_version": "10.0 (build 26300)",
+    "physical_cores": 8,
+    "provenance": {
+      "cpu_model": "source: cpuid brand string (leaves 0x80000002..4)",
+      "cuda_available": "unavailable: binary built without CUDA (STARK_ENABLE_CUDA=OFF / no toolkit)",
+      "cuda_version": "unavailable: binary built without CUDA",
+      "gpu_model": "unavailable: binary built without CUDA",
+      "gpu_present": "source: OS display-adapter inventory (EnumDisplayDevices), deduped by PNP device id | physical: Intel(R) UHD Graphics | NVIDIA GeForce RTX 2050 | raw_entries: 5 | unique_adapters: 2",
+      "logical_cores": "source: std::thread::hardware_concurrency()",
+      "os_version": "source: ntdll RtlGetVersion (unmanifested true version)",
+      "physical_cores": "source: GetLogicalProcessorInformation (RelationProcessorCore count)",
+      "pytorch_cuda_available_note": "unavailable: PyTorch runtime out of scope for C++ Phase 1 (spec §A / §L.7)",
+      "ram_total_bytes": "source: GlobalMemoryStatusEx ullTotalPhys (installed)",
+      "storage_volumes": "source: GetDiskFreeSpaceExA over fixed drives"
+    },
+    "pytorch_cuda_available": null,
+    "ram_total_bytes": 25392844800,
+    "storage_volumes": [
+      {
+        "free_bytes": 3932626944,
+        "path": "C:\\",
+        "total_bytes": 247782699008
+      },
+      {
+        "free_bytes": 153687326720,
+        "path": "E:\\",
+        "total_bytes": 262883241984
+      }
+    ],
+    "theoretical_memory_bandwidth_gbps": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "toolchain": "GCC 16.1.0",
+    "vram_total_bytes": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    }
+  },
+  "kind": "benchmark",
+  "measured_gflops": null,
+  "measured_memory_bandwidth_gbps": null,
+  "peak_memory": null,
+  "precision": null,
+  "provenance": {},
+  "record_id": "P1-STORE-6-713400",
+  "schema_version": "STARKP1 1",
+  "skip_attestation": null,
+  "software": {},
+  "stark_phase": "P1",
+  "statistics": {
+    "computed": true,
+    "max": 10.0,
+    "mean": 5.5,
+    "median": 5.5,
+    "min": 1.0,
+    "p95": 9.5499999999999989,
+    "p99": 9.9100000000000001,
+    "samples": [
+      1.0,
+      2.0,
+      3.0,
+      4.0,
+      5.0,
+      6.0,
+      7.0,
+      8.0,
+      9.0,
+      10.0
+    ],
+    "stdev": 3.0276503540974917
+  },
+  "status": "PASSED",
+  "status_reason": null
+}

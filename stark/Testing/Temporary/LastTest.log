@@ -1,0 +1,19 @@
+Start testing: Oct 05 20:05 India Standard Time
+----------------------------------------------------------
+Unable to find executable: E:/My Local AI/stark/test_phase1_records.exe
+4/6 Testing: test_phase1_records
+4/6 Test: test_phase1_records
+Command: ""
+Directory: E:/My Local AI/stark
+"test_phase1_records" start time: 
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"test_phase1_records" end time: Oct 05 20:05 India Standard Time
+"test_phase1_records" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 05 20:05 India Standard Time

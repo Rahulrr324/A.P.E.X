@@ -1,0 +1,145 @@
+B7 DIAGNOSTIC — UNIT FIX & RERUN: COMPARISON OF 6 RUNS
+date_utc: 2026-10-11T14:44:00Z
+project_root: /e/My Local AI
+correction: bm_b7_diagnostic.cpp component-vector insertions changed from
+  sec_to_us(c.open_sec) / sec_to_us(c.read_sec) / sec_to_us(c.deser_sec) / sec_to_us(c.residual_sec)
+to
+  c.open_sec / c.read_sec / c.deser_sec / c.residual_sec
+  at lines ~1023-1026. summarize() unchanged (accepts seconds, reports µs).
+
+FILES
+  original outputs : work/b7_diag_20261011/run{1,2,3}_stdout.txt
+    (preserved; not overwritten)
+  corrected outputs: work/b7_diag_20261011_corrected/run*_20261011T*.txt
+  artifact hash (corrected binary):
+    06dfbfa34f7e8a8da09ee57fa2ac5bf09aa7d92665a4f45a812f0c813851eb2d *stark/build-b7diag-20261011/bm_b7_diagnostic.exe
+  changed-source sha256:
+    BEFORE: cf3c1e54bc525bcac3c7ff1279e66e057f29058906a4d849565976b9648de5b0 *stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp
+    AFTER : a00d0475c47ee8655100348d629894df16965d1b58a34af0ab1dcc0acd891863 *stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp
+  CMakeLists.txt sha256 (unchanged): 575fe264921512f41d30267c1c659e3662bbcfd92e71623720f9d047b7dddcc8
+  protected-evidence sha256: ALL MATCH before/after records in
+    work/b7_diag_20261011/hashes_evidence_before.txt == hashes_evidence_after.txt
+    (evidence_manifest.json, g7-campaign/evidence_manifest.json,
+     g7-campaign-affinityfix/records_sha256.txt, v2.1..v2.4 evidence_manifest.json)
+
+TOOLCHAIN
+  g++  : MinGW-W64 x86_64-ucrt-posix-seh, built by Brecht Sanders, r1, 16.2.0
+  cmake: 4.4.2 (WinLibs bundle)
+  ninja: 1.13.2.git.kitware.jobserver-pipe-1
+  build: isolated dir stark/build-b7diag-20261011, Release, Ninja target bm_b7_diagnostic
+  configure exit=0; build exit=0; rebuild warnings=0
+
+RUN EXIT CODES
+  run1 (original)       : 0
+  run2 (original)       : 0
+  run3 (original)       : 0
+  run1 (corrected)      : 0
+  run2 (corrected)      : 0
+  run3 (corrected)      : 0
+  All stderr files empty (0 bytes) in all six runs.
+
+COMPONENT-MEDIAN COMPARISON TABLE (pooled across valid replicates, INSTRUMENTED condition)
+-units: µs (after correction). Before-correction values were inflated ~1e6 because
+ components were stored as µs but summarize() treated them as seconds and multiplied
+ by 1e6 again. After correction, components are stored as seconds and summarize()
+ applies the single sec_to_us() at report time.
+
+Run            | Condition pooled median (µs) | open median (µs) | read median (µs) | deserialize median (µs) | residual median (µs) | calibration status | classification
+---------------|------------------------------|------------------|------------------|-------------------------|----------------------|--------------------|----------------
+run1 (orig)    | MIN 3539.300 / INSTR 3367.300 | 152000000.000   | 3002600000.000  | 96500000.000           | 113000000.000        | FAIL               | NOT_ELEVATED
+run2 (orig)    | MIN 4689.700 / INSTR 4962.400 | 215450000.000   | 4456600000.000  | 129250000.000          | 152150000.000        | FAIL               | INCONCLUSIVE
+run3 (orig)    | MIN 3504.500 / INSTR 4109.450 | 175700000.000   | 3638350000.000  | 98400000.000           | 124650000.000        | FAIL               | NOT_ELEVATED
+run1 (corrected)| MIN 3081.050 / INSTR 2969.500 | 110.950         | 2688.000        | 70.900                 | 83.350               | FAIL               | NOT_ELEVATED
+run2 (corrected)| MIN 3144.700 / INSTR 3201.050 | 134.150         | 2854.750        | 79.050                 | 94.750               | FAIL               | NOT_ELEVATED
+run3 (corrected)| MIN 3049.550 / INSTR 3071.450 | 122.800         | 2738.200        | 76.950                 | 89.050               | FAIL               | NOT_ELEVATED
+
+INTERNAL CONSISTENCY (corrected runs)
+  INSTRUMENTED pooled median is consistent with component medians + residual in each run:
+    run1: 2969.500 ≈ 110.950 + 2688.000 + 70.900 + 83.350 = 2953.200 (components are
+          per-iteration medians, not a reconstructed total; small difference is expected)
+    run2: 3201.050 ≈ 134.150 + 2854.750 + 79.050 + 94.750 = 3162.700
+    run3: 3071.450 ≈ 122.800 + 2738.200 + 76.950 + 89.050 = 3027.000
+  These are not required to add up exactly (median-of-sums != sum-of-medians), and the
+  residual column is defined as total_per_iteration − (open+read+deserialize)_per_iteration,
+  summarized independently. Consistency is plausible; no contradiction.
+
+CALIBRATION (unchanged logic; raw timing data unchanged)
+  calibration uses the SAME raw total_samples_sec vectors in both conditions, paired by
+  (replicate index, iteration). The unit fix only changed the RENDERING of components, not
+  the calibration data or the classify() inputs. Therefore calibration numbers and
+  classification logic are technically unaffected by the fix, but they DID change across
+  runs because runs are independent (warm-cache, no affinity control, sequential
+  process-local replications).
+
+  Corrected runs calibration:
+    run1: mean_overhead_pct=-3.9472%, worst_case_overhead_pct=298.0528%, median_deviation_pct=3.6205%
+          -> FAIL (mean, worst-case, median-deviation all exceed)
+    run2: mean_overhead_pct=-0.4367%, worst_case_overhead_pct=98.0373%, median_deviation_pct=1.7919%
+          -> FAIL (worst-case only)
+    run3: mean_overhead_pct=1.4555%, worst_case_overhead_pct=167.5794%, median_deviation_pct=0.7181%
+          -> FAIL (worst-case only)
+
+CLASSIFICATION (unchanged decision rules)
+  All three corrected runs classify NOT_ELEVATED.
+  - Zero replicates elevated in any corrected run (all replicate medians < 5721.90 µs).
+  - Rule 4 applies: none_elevated => NOT_ELEVATED, regardless of calibration.
+  - NO run is reported as REPRODUCIBLE_ELEVATION.
+  - The diagnostic exit code never encodes a pass/fail verdict against 5721.90 µs; all
+    completed runs exited 0 (per the documented protocol: 0 == completed with sufficient
+    replication, classification reported in output).
+
+HISTORICAL COMPARISON REFERENCE (comparison datum only)
+  5721.90 µs — frozen record G7CAM-B7-E5-11933807.
+  Used only as a comparison datum for the elevation classification; NOT a pass/fail
+  threshold for this diagnostic's own data, and NOT encoded in the process exit code.
+
+PROTECTED-FILE INTEGRITY
+  The following remained byte-identical to the pre-change records recorded before this
+  correction:
+    stark/reports/evidence_manifest.json
+    stark/reports/g7-campaign/evidence_manifest.json
+    stark/reports/g7-campaign-affinityfix/records_sha256.txt
+    stark/reports/v2.1/evidence_manifest.json
+    stark/reports/v2.2/evidence_manifest.json
+    stark/reports/v2.3/evidence_manifest.json
+    stark/reports/v2.4/evidence_manifest.json
+  Since evidence_before.txt == evidence_after.txt (all seven hashes equal), and the
+  current on-disk sha256 for each file equals that record, no protected evidence was
+  created, deleted, truncated, or modified.
+
+CONCLUSION
+Confirmed facts (evidence-backed, traceable to the files above):
+  1. The unit defect was real and localized: component vectors were stored as µs via
+     sec_to_us() at insertion, then summarize() treated them as seconds and multiplied by
+     1e6 again, producing component medians inflated by ~1e6 (e.g., read median 3,002,600,000
+     µs before vs 2,688.000 µs after in run1).
+  2. The correction was exactly the four insertions specified (c.open_sec / c.read_sec /
+     c.deser_sec / c.residual_sec), leaving summarize() and every other block unchanged.
+  3. The corrected binary was rebuilt with the documented WinLibs 16.2.0 toolchain, exited
+     0 for configure + build, and produced three clean (stderr empty, exit 0) runs.
+  4. After correction, component medians are reported in plausible microsecond units
+     (read ~2.7-2.9 ms, open ~110-134 µs, deserialize ~70-79 µs, residual ~83-95 µs),
+     and the INSTRUMENTED pooled median (~2.97-3.20 ms) is internally consistent with those
+     components plus residual.
+  5. Calibration and classification logic were NOT changed by the fix (same raw data, same
+     functions). All three corrected runs: calibration FAIL (worst-case overhead exceeds the
+     10% threshold in every run; mean and/or median-deviation also exceed in some runs), and
+     classification NOT_ELEVATED in all three (no replicate median exceeded 5721.90 µs).
+  6. No run is reported as REPRODUCIBLE_ELEVATION and no run is a G7 PASS.
+  7. All protected evidence and production artifacts remained byte-identical to their
+     pre-change records.
+
+Hypotheses and limitations (not presented as established):
+  - The pre-vs-post median shift in the MINIMAL and INSTRUMENTED pooled medians across runs
+    (e.g., run2 MIN 4689.700 -> 3144.700) is due to run-to-run timing variability under warm
+    cache and no CPU-affinity control, NOT a consequence of the unit fix. The unit fix did
+    not touch total timing or the minimal condition at all. The shift is a real observed
+    variability, but its cause is environmental, not the code change.
+  - The calibration worst-case overhead remaining large (98%-298%) in the corrected runs
+    despite the mean being near zero (or negative) is an observed property of the paired
+    per-iteration data, not a bug in the fix; it reflects genuine per-iteration variability
+    under the documented sequential process-local protocol. Whether that variability is
+    measurement noise vs. a real per-iteration instability is not resolved by this diagnostic.
+  - This diagnostic is NOT a G7 campaign and does NOT reproduce the historical campaign's
+    affinity/record conditions; it only reproduces the B7 operation structure. A comparison
+    to the frozen 5721.90 µs datum is classification context only.

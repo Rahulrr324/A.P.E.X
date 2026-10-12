@@ -1,0 +1,28 @@
+=== STARK Phase 1 (M0) Aggregator ===
+records directory: build/results
+records found: 3
+
+STATUS SUMMARY:
+  E1: 3 record(s)
+  PASSED=3 FAILED=0 SKIPPED=0 NOT_ATTEMPTED=0
+
+GATE RESULTS:
+  [FAIL] G1 hardware profile collected
+         no PROFILE record found (run profiler_cli)
+  [FAIL] G2 CPU baselines present and complete
+         E5 baseline record missing (required independent repeat)
+  [FAIL] G3 GPU branch complete-or-skipped with reason
+         E2 record missing entirely (must record skipped status)
+  [FAIL] G4 peak memory measured
+         E5: baseline record missing (G4 requires both E1 and E5)
+  [PASS] G5 parameter accounting consistent
+         all accounting records pass G5 checks
+  [PASS] G6 budget evaluator rejects over-budget demands
+         VRAM-only violation detected; compute fields informational
+  [FAIL] G7 same-config medians reproducible across repeats
+         missing independent repeat for B6 (only 1 valid median execution(s)); insufficient evidence
+missing independent repeat for B7 (only 1 valid median execution(s)); insufficient evidence
+missing independent repeat for B9 (only 1 valid median execution(s)); insufficient evidence
+
+
+OVERALL: FAIL (5 gate(s) failed)

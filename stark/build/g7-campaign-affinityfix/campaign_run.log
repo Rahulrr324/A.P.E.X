@@ -1,0 +1,89 @@
+=== G7 Resolution Campaign ===
+measurement_count: 50
+warmup_count: 10
+thread_count: 1
+independent_runs: 5
+out_dir: build/g7-campaign-affinityfix
+
+
+=== Independent run 1/5 ===
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B6 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B7 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B9 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B6 (E5) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B7 (E5) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B9 (E5) complete
+
+=== Independent run 2/5 ===
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B6 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B7 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B9 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B6 (E5) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B7 (E5) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B9 (E5) complete
+
+=== Independent run 3/5 ===
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B6 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B7 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B9 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B6 (E5) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B7 (E5) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B9 (E5) complete
+
+=== Independent run 4/5 ===
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B6 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B7 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B9 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B6 (E5) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B7 (E5) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B9 (E5) complete
+
+=== Independent run 5/5 ===
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B6 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B7 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B9 (E1) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B6 (E5) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B7 (E5) complete
+affinity_evidence: {"effective_logical_cpus":[0],"query_ok":true,"raw_process_mask":1,"raw_system_mask":4095,"reason":null,"requested_cpu":0,"set_api_last_error":0,"set_api_return":1,"set_ok":true,"supported":true,"verified_single_cpu":true}
+B9 (E5) complete
+
+=== Affinity control summary ===
+affinity_supported=1
+affinity_query_ok=1
+affinity_effective_count=1
+  effective_logical_cpu=0
+affinity_reason=(none)
+
+
+=== Campaign complete ===
+Records written to: build/g7-campaign-affinityfix
+CAMPAIGN_EXIT=0

@@ -1,0 +1,127 @@
+{
+  "gate": "G7 same-config medians reproducible across repeats",
+  "report_version": "v2.0",
+  "date": "2026-10-05",
+
+  "spec": "Every same-configuration benchmark group's medians must agree: timing <=15% symmetric relative difference; memory bandwidth (B3/B5) <=20%; stored median must equal the independently recomputed median within 0.001%; >=10 finite raw samples; >=2 distinct record IDs per group; every pair compared (all-pairs); a single run never passes.",
+  "spec_formula": "abs(x1 - x2) / max(abs(x1), abs(x2)) * 100",
+
+  "verified_source": {
+    "file": "src/phase1/gates.cpp",
+    "sha256": "7fd240a8b486b9f85703fe6cf38966c4914794ccb0b4a829b455f03c43b070e2",
+    "grouping_key": "r.configuration.dump()",
+    "grouping_note": "G7 groups records by the SERIALIZED CONFIGURATION (r.configuration.dump()), NOT by experiment_id and NOT by (experiment_id, benchmark_id). Two records whose serialized configuration blocks are identical fall into the same group even when their experiment_id differs; two records that share an experiment_id but differ in configuration do NOT form one group. Independence inside a group is established by DISTINCT record_id.",
+    "constants_unchanged": {
+      "G7_MEDIAN_TOLERANCE_PCT": 0.001,
+      "timing_tolerance_pct": 15.0,
+      "bandwidth_B3_B5_tolerance_pct": 20.0,
+      "min_finite_samples": 10
+    },
+    "v1.9_delta": "No source change. v1.9's REPORT explanation of grouping was incorrect (it described grouping by experiment+benchmark); the production implementation has always grouped by configuration.dump(). v2.0 corrects the explanation to match the code."
+  },
+
+  "verified_behavior": [
+    "telemetry/profiler excluded: kind != benchmark && kind != baseline -> continue; empty benchmark_id -> continue",
+    "only benchmark and baseline records qualify for groups",
+    "at least 10 finite raw samples required (validate_samples: size<10 fail, !isfinite fail)",
+    "stored median independently recomputed by recompute_median() and checked at 0.001% relative",
+    "at least 2 distinct record IDs per configuration group (set-based dedupe, then size<2 -> fail)",
+    "every pair compared (nested i<j all-pairs loop, no early exit after first passing pair)",
+    "timing 15%, B3/B5 bandwidth 20%",
+    "overall_pass starts true and is only ever assigned false - a later passing group cannot overwrite an earlier failure; diagnostics accumulate",
+    "missing or invalid evidence fails closed: no statistics / not computed / <10 samples / bad median each set overall_pass=false"
+  ],
+
+  "regression_tests": {
+    "file": "tests/test_phase1_gates.cpp",
+    "sha256": "15110df5f78d9131a2e626ae7b834b4ee6a80958da274160d3edc70b818d44b5",
+    "total_assertions": 328,
+    "failures": 0,
+    "configs": ["Debug", "Release"]
+  },
+
+  "aggregator_results": {
+    "driver": "reports/v20-aggregator/matrix.txt (13 inputs x Debug/Release x normal/strict = 52 runs)",
+    "runs": 52,
+    "configs_agree": true,
+    "controlled_valid": "exit 0 - G7 PASS (all 7 gates pass)",
+    "controlled_invalid_g7": "exit 1 - stored=0.000567 recomputed=0.000284 diff=50.000000% allowed=0.001000% -> record rejected",
+    "controlled_g7_endpoint_outlier": "exit 1 - three repeats 100/90/80: adjacent 10% and 11.11% within 15% but endpoints 20% -> all-pairs FAIL",
+    "controlled_incorrect_stored_median": "exit 1 - stored=0.000851 recomputed=0.000284 diff=66.666667% allowed=0.001000%",
+    "controlled_invalid_raw_sample": "exit 0 non-strict / exit 1 strict - malformed record reported as INVALID RECORDS (1), never enters a group",
+    "v14_valid": "exit 1 - B6 medians differ 28.84% (allowed 15.00%)"
+  },
+
+  "real_historical_result": {
+    "input_directory": "archive_recovery/aggregator_input/ (exactly the 9 recovered experiment JSON records; RECOVERY_MANIFEST.json and the weights binary are OUTSIDE this directory)",
+    "records_loaded": 9,
+    "invalid_records": 0,
+    "result": "FAIL",
+    "groups": [
+      {
+        "group_id": "config:B6",
+        "grouping_key": "r.configuration.dump() of {batch_size:1, benchmark_id:B6, measurement_count:10, sequence_length:0, thread_count:0, warmup_count:3, workload_params:{logical_params:'262912', model:'TINY-DENSE-2L'}}",
+        "benchmark_id": "B6",
+        "tolerance_pct": 15.0,
+        "distinct_record_ids": 3,
+        "runs": [
+          {"run": 1, "record_id": "P1-E1-B6-24899", "experiment_id": "E1", "raw_samples": 10, "stored_median": 0.0009782999999999999, "recomputed_median": 0.0009782999999999999, "median_valid": true},
+          {"run": 2, "record_id": "P1-E1-B6-57493", "experiment_id": "E1", "raw_samples": 10, "stored_median": 0.0009995, "recomputed_median": 0.0009995, "median_valid": true},
+          {"run": 3, "record_id": "P1-E5-B6-90937", "experiment_id": "E5", "raw_samples": 10, "stored_median": 0.0011665, "recomputed_median": 0.0011665, "median_valid": true}
+        ],
+        "pairwise": [
+          {"pair": "1&2", "a": "P1-E1-B6-24899", "b": "P1-E1-B6-57493", "diff_pct": 2.12, "verdict": "within"},
+          {"pair": "1&3", "a": "P1-E1-B6-24899", "b": "P1-E5-B6-90937", "diff_pct": 16.13, "verdict": "FAIL"},
+          {"pair": "2&3", "a": "P1-E1-B6-57493", "b": "P1-E5-B6-90937", "diff_pct": 14.32, "verdict": "within"}
+        ],
+        "group_result": "FAIL",
+        "failure_reason": "B6 medians differ 16.13% (allowed 15.00%) between runs 1 and 3"
+      },
+      {
+        "group_id": "config:B7",
+        "grouping_key": "r.configuration.dump() of {batch_size:1, benchmark_id:B7, measurement_count:10, sequence_length:0, thread_count:0, warmup_count:3, workload_params:{blob_bytes:'1051664', mode:'warm_cache'}}",
+        "benchmark_id": "B7",
+        "tolerance_pct": 15.0,
+        "distinct_record_ids": 3,
+        "runs": [
+          {"run": 1, "record_id": "P1-E1-B7-24899", "experiment_id": "E1", "raw_samples": 10, "stored_median": 0.058168250000000005, "recomputed_median": 0.058168250000000005, "median_valid": true},
+          {"run": 2, "record_id": "P1-E1-B7-57493", "experiment_id": "E1", "raw_samples": 10, "stored_median": 0.06030285, "recomputed_median": 0.06030285, "median_valid": true},
+          {"run": 3, "record_id": "P1-E5-B7-90937", "experiment_id": "E5", "raw_samples": 10, "stored_median": 0.04747975, "recomputed_median": 0.04747975, "median_valid": true}
+        ],
+        "pairwise": [
+          {"pair": "1&2", "a": "P1-E1-B7-24899", "b": "P1-E1-B7-57493", "diff_pct": 3.54, "verdict": "within"},
+          {"pair": "1&3", "a": "P1-E1-B7-24899", "b": "P1-E5-B7-90937", "diff_pct": 18.38, "verdict": "FAIL"},
+          {"pair": "2&3", "a": "P1-E1-B7-57493", "b": "P1-E5-B7-90937", "diff_pct": 21.26, "verdict": "FAIL"}
+        ],
+        "group_result": "FAIL",
+        "failure_reason": "B7 medians differ 18.38% (runs 1&3) and 21.26% (runs 2&3), allowed 15.00%"
+      },
+      {
+        "group_id": "config:B9",
+        "grouping_key": "r.configuration.dump() of {batch_size:1, benchmark_id:B9, measurement_count:10, sequence_length:0, thread_count:0, warmup_count:3, workload_params:{model:'TINY-DENSE-2L', repeats:'200'}}",
+        "benchmark_id": "B9",
+        "tolerance_pct": 15.0,
+        "distinct_record_ids": 3,
+        "runs": [
+          {"run": 1, "record_id": "P1-E1-B9-24899", "experiment_id": "E1", "raw_samples": 10, "stored_median": 0.0014496, "recomputed_median": 0.0014496, "median_valid": true},
+          {"run": 2, "record_id": "P1-E1-B9-57493", "experiment_id": "E1", "raw_samples": 10, "stored_median": 0.0020036, "recomputed_median": 0.0020036, "median_valid": true},
+          {"run": 3, "record_id": "P1-E5-B9-90937", "experiment_id": "E5", "raw_samples": 10, "stored_median": 0.00104115, "recomputed_median": 0.00104115, "median_valid": true}
+        ],
+        "pairwise": [
+          {"pair": "1&2", "a": "P1-E1-B9-24899", "b": "P1-E1-B9-57493", "diff_pct": 27.65, "verdict": "FAIL"},
+          {"pair": "1&3", "a": "P1-E1-B9-24899", "b": "P1-E5-B9-90937", "diff_pct": 28.18, "verdict": "FAIL"},
+          {"pair": "2&3", "a": "P1-E1-B9-57493", "b": "P1-E5-B9-90937", "diff_pct": 48.04, "verdict": "FAIL"}
+        ],
+        "group_result": "FAIL",
+        "failure_reason": "B9 medians differ 27.65% (runs 1&2), 28.18% (runs 1&3) and 48.04% (runs 2&3), allowed 15.00%"
+      }
+    ],
+    "summary": "3 configuration groups (B6, B7, B9), each with 3 distinct-record-id runs (E1 x2 + E5 x1). Every stored median matches its independently recomputed median within 0.001%. The B6 group's 1&3 pair, both B7 cross-experiment pairs, and all three B9 pairs exceed the 15% timing tolerance. G7 FAILS closed."
+  },
+
+  "over_surviving_originals_build_results": "FAIL - 3 E1-only records: each configuration group has only 1 valid median execution; 'missing independent repeat' -> fail closed",
+  "over_regenerated_build_historical_regen": "FAIL - B6 16.13%, B7 18.38%, B9 28.18% vs 15% allowed; also G1/G3 fail (no PROFILE/E2 record in that directory)",
+
+  "decision": "PASS on implementation and controlled fixtures; FAIL on every real record set that exists (recovered, surviving, regenerated).",
+  "recommendation": "G7 genuinely fails on recovered historical data; thresholds must not be altered to convert the real-data FAIL into a pass."
+}

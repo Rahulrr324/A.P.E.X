@@ -1,0 +1,223 @@
+{
+  "accounting": {
+    "activation_bytes": 4096,
+    "active_parameters": 262912,
+    "inconsistent": false,
+    "kv_or_state_bytes": 0,
+    "logical_parameters": 262912,
+    "nominal_parameter_payload_bytes": 1051648,
+    "optimizer_bytes": 0,
+    "optimizer_configuration": null,
+    "optimizer_type": "none",
+    "packing_overhead_bytes": 16,
+    "peak_memory_estimated": false,
+    "provenance": {},
+    "runtime_parameter_bytes": 1051648,
+    "storage_format": "FP32",
+    "stored_parameter_bytes": 1051664,
+    "temporary_workspace_bytes": 2048,
+    "total_peak_memory": 1057792,
+    "total_peak_memory_measured": {
+      "reason": "unavailable: no reason recorded",
+      "value": null
+    },
+    "training_or_inference": "INFERENCE"
+  },
+  "budget": null,
+  "configuration": {
+    "batch_size": 1,
+    "benchmark_id": "B6",
+    "measurement_count": 50,
+    "sequence_length": 0,
+    "thread_count": 1,
+    "warmup_count": 10,
+    "workload_params": {
+      "logical_params": "262912",
+      "model": "TINY-DENSE-2L"
+    }
+  },
+  "created_utc": "2026-10-08T15:15:29.094Z",
+  "determinism": {
+    "deterministic_mode_available": true,
+    "deterministic_mode_requested": true,
+    "outputs_bit_identical": true
+  },
+  "experiment_id": "E5",
+  "failures": [],
+  "hardware": {
+    "build_type": "Release",
+    "collected_utc": "2026-10-08T15:14:58.375Z",
+    "cpu_instruction_set_notes": "SSE4.2, OSXSAVE, AVX, SSE, SSE2, AVX2",
+    "cpu_model": "12th Gen Intel(R) Core(TM) i5-12450H",
+    "cuda_available": false,
+    "cuda_version": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_compute_capability_major": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_compute_capability_minor": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_model": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_present": true,
+    "logical_cores": 12,
+    "os_name": "Windows",
+    "os_version": "10.0 (build 26300)",
+    "physical_cores": 8,
+    "provenance": {
+      "cpu_model": "source: cpuid brand string (leaves 0x80000002..4)",
+      "cuda_available": "unavailable: binary built without CUDA (STARK_ENABLE_CUDA=OFF / no toolkit)",
+      "cuda_version": "unavailable: binary built without CUDA",
+      "gpu_model": "unavailable: binary built without CUDA",
+      "gpu_present": "source: OS display-adapter inventory (EnumDisplayDevices), deduped by PNP device id | physical: Intel(R) UHD Graphics | NVIDIA GeForce RTX 2050 | raw_entries: 5 | unique_adapters: 2",
+      "logical_cores": "source: std::thread::hardware_concurrency()",
+      "os_version": "source: ntdll RtlGetVersion (unmanifested true version)",
+      "physical_cores": "source: GetLogicalProcessorInformation (RelationProcessorCore count)",
+      "pytorch_cuda_available_note": "unavailable: PyTorch runtime out of scope for C++ Phase 1 (spec §A / §L.7)",
+      "ram_total_bytes": "source: GlobalMemoryStatusEx ullTotalPhys (installed)",
+      "storage_volumes": "source: GetDiskFreeSpaceExA over fixed drives"
+    },
+    "pytorch_cuda_available": null,
+    "ram_total_bytes": 25392844800,
+    "storage_volumes": [
+      {
+        "free_bytes": 10325528576,
+        "path": "C:\\",
+        "total_bytes": 247782699008
+      },
+      {
+        "free_bytes": 153756389376,
+        "path": "E:\\",
+        "total_bytes": 262883241984
+      }
+    ],
+    "theoretical_memory_bandwidth_gbps": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "toolchain": "GCC 16.1.0",
+    "vram_total_bytes": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    }
+  },
+  "kind": "baseline",
+  "measured_gflops": null,
+  "measured_memory_bandwidth_gbps": null,
+  "peak_memory": {
+    "ram_measured": true,
+    "ram_peak_bytes": 12611584,
+    "vram_measured": false,
+    "vram_peak_bytes": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    }
+  },
+  "precision": {
+    "compute_precision": "FP32",
+    "storage_format": "FP32"
+  },
+  "provenance": {
+    "affinity": {
+      "effective_logical_cpus": [
+        0
+      ],
+      "query_ok": true,
+      "raw_process_mask": 1,
+      "raw_system_mask": 4095,
+      "reason": null,
+      "requested_cpu": 0,
+      "set_api_last_error": 0,
+      "set_api_return": 1,
+      "set_ok": true,
+      "supported": true,
+      "verified_single_cpu": true
+    },
+    "campaign": "G7-resolution",
+    "cpu_model": "source: embedded hardware snapshot",
+    "run_group": "B6",
+    "run_suffix": "2026-10-08T15:14:58.376Z-run2"
+  },
+  "record_id": "G7CAM-B6-E5-39872860",
+  "schema_version": "STARKP1 1",
+  "skip_attestation": null,
+  "software": {
+    "benchmark_libs": "standard library only (no external deps)",
+    "build_type": "Release",
+    "compiler": "GCC 16.1.0",
+    "cuda_runtime": null,
+    "os": "Windows 10.0 (build 26300)"
+  },
+  "stark_phase": "P1",
+  "statistics": {
+    "computed": true,
+    "max": 0.00084230000000000004,
+    "mean": 0.00023289800000000002,
+    "median": 0.00021995000000000001,
+    "min": 0.0001786,
+    "p95": 0.00033794999999999978,
+    "p99": 0.00062718999999999915,
+    "samples": [
+      0.000222,
+      0.00022159999999999999,
+      0.00022110000000000001,
+      0.0001884,
+      0.00018000000000000001,
+      0.0001986,
+      0.0002308,
+      0.00022149999999999999,
+      0.00022039999999999999,
+      0.00022039999999999999,
+      0.00021990000000000001,
+      0.0001942,
+      0.0001861,
+      0.00022049999999999999,
+      0.00022020000000000001,
+      0.0002276,
+      0.0002218,
+      0.00018359999999999999,
+      0.0001786,
+      0.00019689999999999999,
+      0.0002197,
+      0.00022000000000000001,
+      0.00022000000000000001,
+      0.00022000000000000001,
+      0.0002197,
+      0.00022829999999999999,
+      0.00019369999999999999,
+      0.00017890000000000001,
+      0.00017890000000000001,
+      0.00020790000000000001,
+      0.00022039999999999999,
+      0.0002198,
+      0.0002197,
+      0.0002196,
+      0.0002274,
+      0.00022240000000000001,
+      0.0002197,
+      0.00021990000000000001,
+      0.0002967,
+      0.00020540000000000001,
+      0.00028269999999999999,
+      0.00037169999999999998,
+      0.0001807,
+      0.0001786,
+      0.00084230000000000004,
+      0.00022249999999999999,
+      0.00040329999999999999,
+      0.00026669999999999998,
+      0.0001794,
+      0.00018469999999999999
+    ],
+    "stdev": 9.761412680048113e-05
+  },
+  "status": "PASSED",
+  "status_reason": null
+}

@@ -1,0 +1,59 @@
+=== B7 isolated diagnostic report ===
+units: raw samples stored as seconds; displayed in us (us = s * 1e6, applied after computation, no pre-classification rounding)
+protocol: warmup=10 (untimed), measured=50, macro_replicates_per_condition=6 (min 6; SEQUENTIAL, PROCESS-LOCAL replications within one run — not independent machine/session replications)
+diagnostic blob: path=build/bm_b7_diagnostic/run_1791729701893833000_0/bm_b7_diagnostic_weights.bin  bytes=1051664  (run-owned, exclusively created — pre-existing files never overwritten; real byte count; NO hash/provenance digest is computed by this source)
+executed condition order (recorded):
+  replicate 0: MINIMAL then INSTRUMENTED
+  replicate 1: INSTRUMENTED then MINIMAL
+  replicate 2: MINIMAL then INSTRUMENTED
+  replicate 3: INSTRUMENTED then MINIMAL
+  replicate 4: MINIMAL then INSTRUMENTED
+  replicate 5: INSTRUMENTED then MINIMAL
+conditions run SEQUENTIALLY and process-locally (not independent machine/session replications); cache state is not controlled (warm-cache) and no cache-state or CPU-affinity equivalence with the historical campaign is claimed.
+MINIMAL condition (production op, single outer timer) (6 macro-replicates):
+  replicate 0: VALID  median_us=3635.700
+  replicate 1: VALID  median_us=3100.600
+  replicate 2: VALID  median_us=3170.600
+  replicate 3: VALID  median_us=3515.350
+  replicate 4: VALID  median_us=3131.700
+  replicate 5: VALID  median_us=2859.500
+  pooled (valid replicates only):
+    n=300  median=3144.700 us  mean=3386.668 us  stdev=986.919 us  cv=29.14 %
+    min=2385.600 us  p95=5158.750 us  max=13993.800 us  iqr=626.175 us
+INSTRUMENTED condition (op + component timers) (6 macro-replicates):
+  replicate 0: VALID  median_us=3624.700
+  replicate 1: VALID  median_us=3158.300
+  replicate 2: VALID  median_us=2984.050
+  replicate 3: VALID  median_us=3594.350
+  replicate 4: VALID  median_us=3136.650
+  replicate 5: VALID  median_us=2894.250
+  pooled (valid replicates only):
+    n=300  median=3201.050 us  mean=3371.878 us  stdev=709.181 us  cv=21.03 %
+    min=2361.000 us  p95=4639.480 us  max=6743.200 us  iqr=765.075 us
+component decomposition (INSTRUMENTED, pooled across valid replicates):
+  open:
+    n=300  median=134.150 us  mean=145.033 us  stdev=68.131 us  cv=46.98 %
+    min=60.100 us  p95=256.380 us  max=576.300 us  iqr=84.225 us
+  read:
+    n=300  median=2854.750 us  mean=3033.979 us  stdev=638.307 us  cv=21.04 %
+    min=2164.000 us  p95=4226.530 us  max=6154.500 us  iqr=674.175 us
+  deserialize:
+    n=300  median=79.050 us  mean=90.809 us  stdev=41.818 us  cv=46.05 %
+    min=54.700 us  p95=153.290 us  max=531.000 us  iqr=41.800 us
+  residual = total - (open+read+deserialize):
+    n=300  median=94.750 us  mean=102.058 us  stdev=32.527 us  cv=31.87 %
+    min=64.500 us  p95=173.540 us  max=280.400 us  iqr=38.875 us
+  residual is expected >= 0 (call/return + stream destruction + clock-read overhead); it is reported, never hidden.
+calibration (instrumentation overhead, measured not assumed):
+  mean_overhead_pct       = -0.4367 %   (threshold <= 2.0000 %)
+  worst_case_overhead_pct = 98.0373 %   (max SIGNED paired overhead; threshold <= 10.0000 %)
+  median_deviation_pct    = 1.7919 %   (threshold <= 2.0000 %)
+  threshold checks: mean OK, worst-case NOT OK, median-deviation OK
+  worst-case is the maximum SIGNED paired overhead; negative values (instrumented faster) are reported as observed, never clamped to zero.
+  status: FAIL — instrumentation overhead exceeds threshold(s): worst-case 
+historical comparison reference: 5721.90 us (frozen record G7CAM-B7-E5-11933807)
+  NOTE: comparison datum only — NOT a pass/fail claim about this diagnostic's data, and not encoded in the process exit code.
+classification: NOT_ELEVATED
+  rules: elevation is judged ONLY on replicate medians across ALL valid macro-replicates (one slow iteration never establishes reproducibility); INSUFFICIENT_REPLICATION when either condition has < 6 valid replicates; REPRODUCIBLE_ELEVATION requires calibration PASS + every replicate elevated in BOTH conditions + pooled medians elevated; NOT_ELEVATED when zero replicates are elevated; otherwise INCONCLUSIVE.
+cleanup: run-owned blob removed (created by this invocation); run dir removed (empty; a non-empty dir is always kept)
+limitations: sequential process-local macro-replicates (not independent machine/session replications); warm-cache, no cache control; no CPU affinity control and NO cache-state or CPU-affinity equivalence with the historical campaign is claimed; steady_clock (production clock).

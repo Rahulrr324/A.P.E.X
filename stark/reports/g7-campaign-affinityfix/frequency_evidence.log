@@ -1,0 +1,20 @@
+=== Frequency/power-state evidence diagnostic ===
+affinity verified_single_cpu=1
+B6 gap=0 cycle=0 median_us=179.45
+idle 30s ...
+B6 gap=1 cycle=1 median_us=249.5
+idle 30s ...
+B6 gap=1 cycle=2 median_us=322.3
+idle 30s ...
+B6 gap=1 cycle=3 median_us=311.5
+B6 gap=0 cycle=1 median_us=212.35
+B6 gap=0 cycle=2 median_us=232.5
+idle 30s ...
+B9 gap=1 cycle=1 median_us=211.75
+B9 gap=0 cycle=1 median_us=190.55
+idle 30s ...
+B7 gap=1 cycle=1 median_us=3250.3
+B7 gap=0 cycle=1 median_us=3318.55
+execs=10 timeline_samples=1364
+wrote reports/g7-campaign-affinityfix/frequency_evidence.json
+DIAG_EXIT=0

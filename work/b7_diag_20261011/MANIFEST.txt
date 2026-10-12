@@ -1,0 +1,46 @@
+B7 DIAGNOSTIC INVESTIGATION — EVIDENCE MANIFEST
+date_utc: 2026-10-11T14:28:12Z
+project_root: /e/My Local AI
+git: NOT A GIT REPOSITORY (no .git)
+
+TOOLCHAIN (restored; documented WinLibs path was missing at task start)
+  g++   : g++.exe (MinGW-W64 x86_64-ucrt-posix-seh, built by Brecht Sanders, r1) 16.2.0
+  target: x86_64-w64-mingw32
+  cmake : cmake version 4.4.2  (bundled in the WinLibs package)
+  ninja : /c/Users/rahul/AppData/Roaming/Python/Python314/Scripts/ninja.exe 1.13.2
+  winlibs prefix: /c/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64
+
+BUILD (isolated dir stark/build-b7diag-20261011, Release, Ninja, target bm_b7_diagnostic)
+  configure_exit: 0   build_exit: 0   warnings: 0
+  artifact: stark/build-b7diag-20261011/bm_b7_diagnostic.exe
+
+RUNS (CWD=stark/, documented relative path build/bm_b7_diagnostic)
+  run1 exit=0  run2 exit=0  run3 exit=0
+
+FILES
+  total 93
+  drwxr-xr-x 1 rahul 197609    0 Oct 11 19:58 .
+  drwxr-xr-x 1 rahul 197609    0 Oct 11 19:28 ..
+  -rw-r--r-- 1 rahul 197609  952 Oct 11 19:58 MANIFEST.txt
+  drwxr-xr-x 1 rahul 197609    0 Oct 11 19:55 build
+  -rw-r--r-- 1 rahul 197609 5120 Oct 11 19:28 g7cam_list_before.txt
+  -rw-r--r-- 1 rahul 197609  203 Oct 11 19:57 hashes_after.txt
+  -rw-r--r-- 1 rahul 197609  115 Oct 11 19:58 hashes_artifact.txt
+  -rw-r--r-- 1 rahul 197609  203 Oct 11 19:28 hashes_before.txt
+  -rw-r--r-- 1 rahul 197609  773 Oct 11 19:57 hashes_evidence_after.txt
+  -rw-r--r-- 1 rahul 197609  773 Oct 11 19:28 hashes_evidence_before.txt
+  -rw-r--r-- 1 rahul 197609 1040 Oct 11 19:57 hashes_frozen_after.txt
+  -rw-r--r-- 1 rahul 197609 1040 Oct 11 19:28 hashes_frozen_before.txt
+  -rw-r--r-- 1 rahul 197609 7320 Oct 11 19:57 hashes_g7cam_after.txt
+  -rw-r--r-- 1 rahul 197609 7320 Oct 11 19:28 hashes_g7cam_before.txt
+  -rw-r--r-- 1 rahul 197609 4576 Oct 11 19:57 hashes_g7cam_frozen20261008_after.txt
+  -rw-r--r-- 1 rahul 197609 4576 Oct 11 19:28 hashes_g7cam_frozen20261008_before.txt
+  -rw-r--r-- 1 rahul 197609  282 Oct 11 19:57 hashes_prodbin_after.txt
+  -rw-r--r-- 1 rahul 197609  282 Oct 11 19:28 hashes_prodbin_before.txt
+  -rw-r--r-- 1 rahul 197609    0 Oct 11 19:56 run1_stderr.txt
+  -rw-r--r-- 1 rahul 197609 4824 Oct 11 19:56 run1_stdout.txt
+  -rw-r--r-- 1 rahul 197609    0 Oct 11 19:56 run2_stderr.txt
+  -rw-r--r-- 1 rahul 197609 4837 Oct 11 19:56 run2_stdout.txt
+  -rw-r--r-- 1 rahul 197609    0 Oct 11 19:56 run3_stderr.txt
+  -rw-r--r-- 1 rahul 197609 4833 Oct 11 19:56 run3_stdout.txt
+  drwxr-xr-x 1 rahul 197609    0 Oct 11 19:28 snapshot

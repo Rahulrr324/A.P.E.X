@@ -1,0 +1,5 @@
+[1/5] Building CXX object CMakeFiles/bm_b7_diagnostic.dir/src/phase1/bench/TinyDenseModel.cpp.obj
+[2/5] Building CXX object CMakeFiles/bm_b7_diagnostic.dir/src/phase1/bench/ParameterAccounting.cpp.obj
+[3/5] Building CXX object CMakeFiles/bm_b7_diagnostic.dir/src/phase1/diagnostics/bm_b7_diagnostic.cpp.obj
+[4/5] Building CXX object CMakeFiles/bm_b7_diagnostic.dir/src/phase1/common/ExperimentRecord.cpp.obj
+[5/5] Linking CXX executable bm_b7_diagnostic.exe

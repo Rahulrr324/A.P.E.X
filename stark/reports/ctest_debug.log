@@ -1,0 +1,22 @@
+STARK M0 CTest Debug execution log
+=====================================
+Command: ctest --test-dir build-debug-clean-2 --output-on-failure
+Compiler: GCC 16.1.0 (Debug / -O0)
+Result: 100% tests passed (5/5)
+
+Test project E:/My Local AI/stark/build-debug-clean-2
+    Start 1: test_phase1_profiler
+1/5 Test #1: test_phase1_profiler .............   Passed    0.67 sec
+    Start 2: test_phase1_accounting
+2/5 Test #2: test_phase1_accounting ...........   Passed    0.70 sec
+    Start 3: test_phase1_budget
+3/5 Test #3: test_phase1_budget ...............   Passed    0.67 sec
+    Start 4: test_phase1_records
+4/5 Test #4: test_phase1_records ..............   Passed    0.71 sec
+    Start 5: test_phase1_reproducibility
+5/5 Test #5: test_phase1_reproducibility ......   Passed    0.88 sec
+
+100% tests passed out of 5
+
+Total Test time (real) = 3.65 sec
+Compiler: c++.exe (MinGW-W64 x86_64-ucrt-posix-seh) 16.1.0 (Debug)

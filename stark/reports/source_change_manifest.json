@@ -1,0 +1,85 @@
+{
+  "report": "APEX_M0_v1.8_source_change_manifest",
+  "date": "2026-10-04",
+  "scope": "M0 corrective remediation only. No M1 work, no APEX features, no threshold/acceptance-gate changes.",
+
+  "changes": [
+    {
+      "file": "src/phase1/gates.cpp",
+      "sha256_before": "0cbb31dcaa9d7bd498d940bae2400b1469ff04953f877542e282c8d907dd71bf",
+      "sha256_after": "7fd240a8b486b9f85703fe6cf38966c4914794ccb0b4a829b455f03c43b070e2",
+      "nature": "fail-closed defect fix (2 sites)",
+      "detail": "Wrapped two previously unguarded decoders inside evaluate_gates() in try/catch: (1) G1 StaticHardwareProfile::from_json(hw_rec.hardware); (2) G5 ParameterAccounting::from_json(r.accounting). On std::exception the gate is set to FAIL with a 'malformed ...' detail string.",
+      "why": "Both paths threw std::runtime_error out of evaluate_gates, aborting the aggregator with exit 127 on evidence that ExperimentRecord::validate() accepted. This violated M0 section 2 ('malformed input must be rejected cleanly - no crash') and section 3 ('missing or invalid evidence fails closed').",
+      "thresholds_changed": false,
+      "evidence": [
+        "fixtures/probe-malformed-profile: before exit=127 what(): json: missing key 'cpu_model' -> after exit=1 [FAIL] G1",
+        "fixtures/probe-malformed-accounting: before exit=127 what(): json: expected uint -> after exit=1 [FAIL] G5"
+      ],
+      "unchanged_constants": {
+        "G7_MEDIAN_TOLERANCE_PCT": 0.001,
+        "timing_tolerance_pct": 15.0,
+        "bandwidth_B3_B5_tolerance_pct": 20.0,
+        "min_samples": 10,
+        "distinct_record_ids_required": 2
+      }
+    },
+    {
+      "file": "tests/test_phase1_gates.cpp",
+      "sha256_before": "c67ba3c7c07a17553255f30e2fab30e0669d1c93a6ab378bef4015f39d46f79a",
+      "sha256_after": "15110df5f78d9131a2e626ae7b834b4ee6a80958da274160d3edc70b818d44b5",
+      "nature": "corrected v1.7 syntax + added v1.8 regression tests",
+      "detail": [
+        "Section 1: restored the samplesB declaration in the v1.7 different-distributions block from a // comment to live code; test data unchanged; added explicit medianA == 1.0 / medianB == 1.0 assertions.",
+        "Section 2: added deserialization-boundary tests through Statistics::from_json, ExperimentRecord::parse, RecordStore::loadAll and the aggregator record-loading/strict-mode contract (coverage matrix in report section 2).",
+        "Section 3: added profiler-kind exclusion tests and the exact 0.001% median-tolerance boundary (just inside PASS / just outside FAIL).",
+        "Section 3.1: added regression tests asserting no throw escapes evaluate_gates and that G1/G5 fail closed with a reason.",
+        "Replaced two tautological assertions found in self-review (CHECK(!x || true), CHECK(true) in a catch) with real either-or invariants."
+      ],
+      "assertions_before": 189,
+      "assertions_after": 328,
+      "failures": 0,
+      "tests_not_weakened": true
+    },
+    {
+      "file": "fixtures/make_boundary_fixtures.py",
+      "nature": "new file",
+      "detail": "Generates two disclosed controlled fixtures required by section 6: controlled-invalid-raw-sample (samples[3] is a string) and controlled-incorrect-stored-median (stored median 3x its own recomputed median). Derived from the real controlled-valid records with one disclosed edit each; every directory carries a README.txt."
+    },
+    {
+      "file": "fixtures/make_malformed_profile_probe.py",
+      "nature": "new file",
+      "detail": "Generates the probe fixture that reproduces the G1 fail-open crash: PROFILE record whose hardware block is non-null but missing cpu_model."
+    },
+    {
+      "file": "scripts/run_aggregator_matrix_v18.sh",
+      "nature": "new file",
+      "detail": "Reproducible driver running the real aggregate.exe over all 12 inputs x 2 configs x 2 modes (48 runs), recording exact exit codes, pass/fail counts, record counts and invalid-record counts into reports/v18-aggregator/."
+    }
+  ],
+
+  "fixtures_generated": [
+    {"dir": "fixtures/controlled-invalid-raw-sample", "records": 8, "defect": "P1-B2-badraw.json statistics.samples[3] = 'not-a-number'", "expected": "non-strict 0 / strict 1, 1 invalid reported"},
+    {"dir": "fixtures/controlled-incorrect-stored-median", "records": 8, "defect": "P1-E1-B6-copy.json stored median = 3x recomputed", "expected": "exit 1, G7 median mismatch"},
+    {"dir": "fixtures/probe-malformed-profile", "records": 7, "defect": "PROFILE hardware = {cuda_available:false} (missing cpu_model)", "expected": "exit 1, G1 fail-closed"},
+    {"dir": "fixtures/probe-malformed-accounting", "records": 7, "defect": "accounting = {logical_parameters:'not-a-number'}", "expected": "exit 1, G5 fail-closed"}
+  ],
+
+  "files_intentionally_not_modified": [
+    "src/phase1/common/ExperimentRecord.cpp (JSON schema, parse, validate, to_json unchanged; sha256 60476435...)",
+    "src/phase1/common/ExperimentRecord.h (STARKP1 1 schema unchanged; sha256 2f75b9b4...)",
+    "src/phase1/aggregate.cpp (CLI exit-code semantics unchanged; sha256 6c372e70...)",
+    "CMakeLists.txt (target/test registration unchanged; sha256 cf8c7ad6...)",
+    "all G1-G6 thresholds and tolerances",
+    "all historical measurement records (build/results, build/historical-regen, fixtures/v14-valid)"
+  ],
+
+  "validation": {
+    "debug_build": "103/103 exit 0",
+    "release_build": "103/103 exit 0",
+    "debug_ctest": "6/6 exit 0",
+    "release_ctest": "6/6 exit 0",
+    "gates_test": "328 assertions, 0 failures, both configs",
+    "aggregator_matrix": "48 runs, 0 crashes, debug == release"
+  }
+}

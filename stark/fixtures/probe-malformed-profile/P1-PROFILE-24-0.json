@@ -1,0 +1,44 @@
+{
+  "accounting": null,
+  "budget": null,
+  "configuration": null,
+  "created_utc": "2026-10-04T05:26:53.213Z",
+  "determinism": {
+    "deterministic_mode_available": false,
+    "deterministic_mode_requested": false,
+    "outputs_bit_identical": null
+  },
+  "experiment_id": "PROFILE",
+  "failures": [],
+  "hardware": {
+    "cuda_available": false
+  },
+  "kind": "profiler",
+  "measured_gflops": null,
+  "measured_memory_bandwidth_gbps": null,
+  "peak_memory": null,
+  "precision": null,
+  "provenance": {
+    "cpu_model": "source: cpuid brand string (leaves 0x80000002..4)",
+    "cuda_available": "unavailable: binary built without CUDA (STARK_ENABLE_CUDA=OFF / no toolkit)",
+    "cuda_version": "unavailable: binary built without CUDA",
+    "gpu_model": "unavailable: binary built without CUDA",
+    "logical_cores": "source: std::thread::hardware_concurrency()",
+    "os_version": "source: ntdll RtlGetVersion (unmanifested true version)",
+    "physical_cores": "source: GetLogicalProcessorInformation (RelationProcessorCore count)",
+    "pytorch_cuda_available_note": "unavailable: PyTorch runtime out of scope for C++ Phase 1 (spec \u00a7A / \u00a7L.7)",
+    "ram_total_bytes": "source: GlobalMemoryStatusEx ullTotalPhys (installed)",
+    "storage_volumes": "source: GetDiskFreeSpaceExA over fixed drives"
+  },
+  "record_id": "P1-PROFILE-24-0",
+  "schema_version": "STARKP1 1",
+  "software": {
+    "build_type": "Release",
+    "compiler": "GCC 16.1.0",
+    "os": "Windows 10.0 (build 26300)"
+  },
+  "stark_phase": "P1",
+  "statistics": null,
+  "status": "PASSED",
+  "status_reason": null
+}

@@ -1,0 +1,33 @@
+{
+  "checks": {
+    "verify_frozen30": {
+      "exit": 0,
+      "stdout_tail": "anifest.json sha actual   = 7a8dd9de17c4effdc9153ac4505a6f6f95ed662ef204cab52ad279c4bf01fc5a\nevidence_manifest.json sha (frozen) = 7a8dd9de17c4effdc9153ac4505a6f6f95ed662ef204cab52ad279c4bf01fc5a\n\nFROZEN RECORD VERIFICATION: PASSED\n  - 30 records present\n  - manifest count = 30\n  - every SHA matches (30/30)\n  - no missing records\n  - no unexpected replacements\n  - evidence_manifest.json unchanged\n"
+    },
+    "records_sha256_c": {
+      "exit": 0,
+      "stdout_tail": "finityfix/G7CAM-B9-E1-61571712.json: OK\nbuild/g7-campaign-affinityfix/G7CAM-B9-E1-63692176.json: OK\nbuild/g7-campaign-affinityfix/G7CAM-B9-E5-14955664.json: OK\nbuild/g7-campaign-affinityfix/G7CAM-B9-E5-20855871.json: OK\nbuild/g7-campaign-affinityfix/G7CAM-B9-E5-49559376.json: OK\nbuild/g7-campaign-affinityfix/G7CAM-B9-E5-61571712.json: OK\nbuild/g7-campaign-affinityfix/G7CAM-B9-E5-63692176.json: OK\n",
+      "stderr": ""
+    },
+    "records_sha256_own_sha": {
+      "expected": "bf479cbcf08eef94bfd6481f16e6a881e0e15b52cbec05aaed0377afe2edc6ae",
+      "actual": "bf479cbcf08eef94bfd6481f16e6a881e0e15b52cbec05aaed0377afe2edc6ae",
+      "match": true
+    },
+    "evidence_manifest_sha": {
+      "expected": "7a8dd9de17c4effdc9153ac4505a6f6f95ed662ef204cab52ad279c4bf01fc5a",
+      "actual": "7a8dd9de17c4effdc9153ac4505a6f6f95ed662ef204cab52ad279c4bf01fc5a",
+      "match": true
+    },
+    "prod_bins_before": {
+      "exit": 0,
+      "file": "work\\scripts\\prod_bin_hashes_before.txt"
+    },
+    "power_scheme_before": {
+      "exit": 0,
+      "guid": "dfe97760-471c-4d01-bd06-b8b04c50ecd8",
+      "raw": "Power Scheme GUID: dfe97760-471c-4d01-bd06-b8b04c50ecd8  (Performance Mode)"
+    }
+  },
+  "all_ok": true
+}

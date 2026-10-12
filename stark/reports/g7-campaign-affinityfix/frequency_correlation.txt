@@ -1,0 +1,93 @@
+=== static / provenance-labeled environment ===
+  nominal registry ~MHz          = 2496
+  nominal CPUID brand            = 12th Gen Intel(R) Core(TM) i5-12450H
+  OS power scheme                =  (DFE97760-471C-4D01-BD06-B8B04C50ECD8)
+  counters available             = {"counter_p0_freq_mhz": true, "counter_p0_pct_perf": true, "counter_p0_pct_util": true, "counter_thermal": false, "counter_total_pct_perf": true, "pdh_query_open": true}
+  NT @start cpu0: max=2000MHz current=2000MHz limit=2000MHz
+  affinity: verified=True effective=[0] raw_mask=1
+  distinct observed %perf(cpu0) levels in timeline (rounded 0.1): [39.8, 40.2, 40.5, 41.6, 41.7, 42.1, 43.7, 43.8, 44.1, 44.6, 45.0, 45.3, 45.9, 46.0, 46.5, 47.0, 47.3, 47.4, 47.5, 48.0, 48.6, 48.8, 49.2, 49.5, 49.6, 49.8, 49.9, 50.0, 50.1, 50.4, 50.5, 51.0, 51.1, 51.5, 51.6, 51.7, 51.8, 51.9, 52.0, 52.2, 52.3, 52.5, 52.7, 52.8, 52.9, 53.0, 53.1, 53.2, 53.3, 53.4, 53.6, 53.7, 54.0, 54.3, 54.4, 54.5, 54.8, 54.9, 55.0, 55.1, 55.3, 55.5, 55.7, 55.8, 56.0, 56.1, 56.2, 56.3, 56.4, 56.5, 56.6, 56.7, 56.8, 56.9, 57.0, 57.1, 57.2, 57.4, 57.5, 57.6, 57.7, 57.8, 57.9, 58.0, 58.1, 58.2, 58.3, 58.4, 58.5, 58.6, 58.7, 58.8, 58.9, 59.0, 59.1, 59.2, 59.3, 59.4, 59.5, 59.6, 59.7, 59.8, 59.9, 60.0, 60.1, 60.2, 60.3, 60.4, 60.5, 60.6, 60.7, 60.8, 60.9, 61.0, 61.1, 61.2, 61.3, 61.4, 61.5, 61.6, 61.7, 61.8, 61.9, 62.0, 62.1, 62.2, 62.3, 62.4, 62.5, 62.6, 62.7, 62.8, 62.9, 63.0, 63.1, 63.2, 63.3, 63.4, 63.5, 63.6, 63.7, 63.8, 63.9, 64.0, 64.1, 64.2, 64.3, 64.4, 64.5, 64.6, 64.7, 64.8, 64.9, 65.0, 65.1, 65.2, 65.3, 65.4, 65.5, 65.6, 65.7, 65.8, 65.9, 66.0, 66.1, 66.2, 66.3, 66.4, 66.5, 66.6, 66.7, 66.8, 66.9, 67.0, 67.1, 67.2, 67.3, 67.4, 67.5, 67.6, 67.7, 67.8, 67.9, 68.0, 68.1, 68.2, 68.3, 68.4, 68.5, 68.6, 68.7, 68.8, 68.9, 69.0, 69.1, 69.2, 69.3, 69.4, 69.5, 69.6, 69.7, 69.8, 69.9, 70.0, 70.1, 70.2, 70.3, 70.4, 70.5, 70.6, 70.7, 70.8, 70.9, 71.0, 71.1, 71.2, 71.3, 71.4, 71.5, 71.6, 71.7, 71.8, 71.9, 72.0, 72.1, 72.2, 72.3, 72.4, 72.5, 72.6, 72.7, 72.8, 72.9, 73.0, 73.1, 73.2, 73.3, 73.4, 73.5, 73.6, 73.7, 73.8, 73.9, 74.0, 74.1, 74.2, 74.3, 74.4, 74.6, 74.7, 74.8, 74.9, 75.0, 75.1, 75.3, 75.4, 75.5, 75.6, 75.7, 75.8, 75.9, 76.0, 76.1, 76.2, 76.3, 76.4, 76.5, 76.6, 76.7, 76.8, 77.0, 77.1, 77.2, 77.3, 77.4, 77.5, 77.6, 77.7, 77.8, 77.9, 78.0, 78.1, 78.2, 78.4, 78.5, 78.6, 78.7, 78.8, 78.9, 79.0, 79.1, 79.2, 79.3, 79.4, 79.5, 79.6, 79.7, 79.8, 79.9, 80.1, 80.4, 80.6, 80.7, 80.8, 80.9, 81.1, 81.2, 81.4, 81.5, 81.7, 81.9, 82.0, 82.1, 82.2, 82.3, 82.4, 82.5, 82.6, 82.8, 83.2, 83.3, 83.5, 83.6, 83.8, 83.9, 84.0, 84.1, 84.2, 84.3, 84.6, 84.7, 84.8, 84.9, 85.1, 85.2, 85.3, 85.4, 85.5, 85.6, 85.8, 86.1, 86.4, 86.6, 86.8, 87.4, 87.7, 87.9, 88.1, 88.3, 88.4, 88.8, 89.0, 89.1, 89.6, 89.7, 89.9, 90.0, 90.1, 90.2, 90.8, 90.9, 91.0, 91.1, 91.2, 91.5, 91.6, 91.8, 91.9, 92.3, 92.7, 93.0, 93.1, 93.2, 93.3, 93.4, 93.6, 94.3, 94.4, 94.5, 94.7, 94.8, 95.0, 95.4, 95.5, 95.6, 96.0, 96.3, 96.6, 96.7, 96.9, 97.0, 97.1, 97.4, 97.6, 97.7, 97.9, 98.0, 98.1, 98.6, 98.8, 99.1, 99.4, 99.9, 100.4, 100.5, 100.7, 100.8, 101.5, 102.0, 102.6, 102.7, 102.8, 102.9, 103.2, 103.4, 103.5, 104.1, 104.2, 104.9, 105.0, 105.1, 105.3, 105.4, 105.5, 105.6, 105.7, 105.9, 106.0, 106.9, 107.1, 107.4, 108.4, 108.6, 108.7, 109.0, 109.6, 109.7, 110.4, 110.5, 110.6, 110.7, 111.0, 111.1, 111.2, 111.6, 111.7, 111.9, 112.5, 112.7, 112.8, 112.9, 113.1, 113.3, 113.7, 113.9, 114.0, 114.5, 115.9, 116.3, 116.6, 116.9, 117.3, 117.4, 117.5, 117.7, 118.1, 118.3, 118.7, 118.8, 119.4, 119.8, 119.9, 120.0, 120.6, 120.8, 121.2, 121.4, 121.5, 121.9, 122.1, 122.9, 123.2, 123.3, 123.6, 123.8, 124.4, 124.7, 125.0, 125.2, 125.7, 125.9, 126.0, 126.7, 127.0, 127.5, 127.6, 127.7, 127.8, 128.3, 128.5, 128.6, 128.8, 128.9, 129.2, 129.9, 130.2, 130.4, 130.8, 131.6, 132.5, 132.7, 133.1, 133.4, 133.6, 134.0, 134.3, 134.6, 135.1, 136.2, 136.4, 136.8, 136.9, 137.9, 138.9, 139.5, 139.6, 140.1, 140.4, 141.5, 141.7, 141.9, 142.9, 143.6, 143.7, 143.8, 143.9, 145.7, 145.8, 145.9, 147.3, 147.5, 148.1, 148.2, 149.2, 150.7, 151.2, 151.3, 151.5, 153.4, 153.5, 153.9, 155.0, 156.7, 157.4, 158.2, 159.9, 165.0, 167.6, 168.5, 174.6, 183.0, 183.2, 186.8, 197.9, 198.7, 205.2]
+
+=== per-exec telemetry correlation (frequencies labeled by provenance) ===
+ # bench  gap median_us | obs%%perf before   after win_n | obsMHz before  after |  osCurMHz b/a osLimit | util% a  tempC
+ 0 B6      .    179.45 | 158.46153846153845 158.1334250343879     1 |       2000.0 2000.0 | 2000/  2000    2000 | 158.15256762952774   None
+    covering-sample observed %%perf (100ms interval containing ENTIRE exec): 158.2  <-- exec-load observed frequency
+ 1 B6    GAP    249.50 | 101.40396550181468 102.17666842521763     1 |       2000.0 2000.0 | 2000/  2000    2000 | 102.04412830138972   None
+    covering-sample observed %%perf (100ms interval containing ENTIRE exec): -
+ 2 B6    GAP    322.30 | 85.76074042270122 110.86830220239754     0 |       2000.0 2000.0 | 2000/  2000    2000 | 110.89164621904975   None
+    covering-sample observed %%perf (100ms interval containing ENTIRE exec): 98.6  <-- exec-load observed frequency
+ 3 B6    GAP    311.50 | 80.764863315073 87.0101338326816     0 |       2000.0 2000.0 | 2000/  2000    2000 | 86.89986252405829   None
+    covering-sample observed %%perf (100ms interval containing ENTIRE exec): 99.9  <-- exec-load observed frequency
+ 4 B6      .    212.35 | 158.08380520951303 138.22557924003706     0 |       2000.0 2000.0 | 2000/  2000    2000 | 136.56692913385828   None
+    covering-sample observed %%perf (100ms interval containing ENTIRE exec): 99.9  <-- exec-load observed frequency
+ 5 B6      .    232.50 | 129.2823086574655 141.7316032098344     1 |       2000.0 2000.0 | 2000/  2000    2000 | 141.50779851700332   None
+    covering-sample observed %%perf (100ms interval containing ENTIRE exec): -
+ 6 B9    GAP    211.75 | 76.10878273214718 126.26080813789206     0 |       2000.0 2000.0 | 2000/  2000    2000 | 126.30975035327367   None
+    covering-sample observed %%perf (100ms interval containing ENTIRE exec): -
+ 7 B9      .    190.55 | 158.88522954091817 154.73418892357498     0 |       2000.0 2000.0 | 2000/  2000    2000 | 154.7622571692877   None
+    covering-sample observed %%perf (100ms interval containing ENTIRE exec): 115.9  <-- exec-load observed frequency
+ 8 B7    GAP   3250.30 | 75.12318966538932 139.5702670665638     2 |       2000.0 2000.0 | 2000/  2000    2000 | 130.20627439920437   None
+    covering-sample observed %%perf (100ms interval containing ENTIRE exec): -
+ 9 B7      .   3318.55 | 138.76696725201708 142.6947623302874     2 |       2000.0 2000.0 | 2000/  2000    2000 | 137.49836120215542   None
+    covering-sample observed %%perf (100ms interval containing ENTIRE exec): -
+
+=== idle-state telemetry (timeline in last 5s before each GAP exec) ===
+  exec#1 B6: idle_tail_obs_pct_perf = 77.93870796955356
+  exec#2 B6: idle_tail_obs_pct_perf = 91.10670891215399
+  exec#3 B6: idle_tail_obs_pct_perf = 78.72198284286728
+  exec#6 B9: idle_tail_obs_pct_perf = 66.45187884169151
+  exec#8 B7: idle_tail_obs_pct_perf = 66.52900046134067
+
+=== B6 detail (fast vs slow median vs observed state) ===
+  exec#0 gap=False median=179.45us obs%perf(before->158.46153846153845, after->158.1334250343879) obsMHz(before->2000.0, after->2000.0) osMHz(before->2000, after->2000) limit=2000 first10=180.7 last10=179.2 cpu_util=0.0%
+  exec#1 gap=True median=249.50us obs%perf(before->101.40396550181468, after->102.17666842521763) obsMHz(before->2000.0, after->2000.0) osMHz(before->2000, after->2000) limit=2000 first10=406.9 last10=227.3 cpu_util=130.1%
+  exec#2 gap=True median=322.30us obs%perf(before->85.76074042270122, after->110.86830220239754) obsMHz(before->2000.0, after->2000.0) osMHz(before->2000, after->2000) limit=2000 first10=361.5 last10=178.9 cpu_util=109.4%
+  exec#3 gap=True median=311.50us obs%perf(before->80.764863315073, after->87.0101338326816) obsMHz(before->2000.0, after->2000.0) osMHz(before->2000, after->2000) limit=2000 first10=402.2 last10=442.6 cpu_util=108.5%
+  exec#4 gap=False median=212.35us obs%perf(before->158.08380520951303, after->138.22557924003706) obsMHz(before->2000.0, after->2000.0) osMHz(before->2000, after->2000) limit=2000 first10=179.2 last10=207.5 cpu_util=91.5%
+  exec#5 gap=False median=232.50us obs%perf(before->129.2823086574655, after->141.7316032098344) obsMHz(before->2000.0, after->2000.0) osMHz(before->2000, after->2000) limit=2000 first10=348.1 last10=238.1 cpu_util=84.0%
+
+=== association: median vs EXEC-WINDOW observed %perf ===
+  (snapshot-query interval [collect_before, collect_after] ~ the exec itself;
+   PDH % Processor Performance = hardware-derived effective-clock ratio vs nominal)
+  B6 (n=6): pearson r(median, exec-window %perf) = -0.848
+  B6 t*x%perf products (constant iff exact t ~ 1/f): #0:28.4k, #1:25.5k, #2:35.7k, #3:27.1k, #4:29.4k, #5:33.0k
+  product mean=29.8k  cv=11.7%  (raw median spread across same execs = 1.80x)
+  per-exec mapping:
+    exec#0 gap=False median= 179.45us  exec-window obs%perf= 158.1  ~3163MHz (of nominal 2000MHz)
+    exec#1 gap=True  median= 249.50us  exec-window obs%perf= 102.2  ~2044MHz (of nominal 2000MHz)
+    exec#2 gap=True  median= 322.30us  exec-window obs%perf= 110.9  ~2217MHz (of nominal 2000MHz)
+    exec#3 gap=True  median= 311.50us  exec-window obs%perf=  87.0  ~1740MHz (of nominal 2000MHz)
+    exec#4 gap=False median= 212.35us  exec-window obs%perf= 138.2  ~2765MHz (of nominal 2000MHz)
+    exec#5 gap=False median= 232.50us  exec-window obs%perf= 141.7  ~2835MHz (of nominal 2000MHz)
+  gap vs no-gap exec-window observed %perf:
+    post-gap           n=5 mean=113.2%  range=[87.0, 139.6]  ~2264MHz
+    warm/back-to-back  n=5 mean=147.1%  range=[138.2, 158.1]  ~2942MHz
+
+=== within-exec sample-window telemetry (timeline samples inside exec window) ===
+  exec#0 B6: in-window=[158.2] covering=[158.2]
+  exec#1 B6: in-window=[70.2] covering=[]
+  exec#2 B6: in-window=[] covering=[98.6]
+  exec#3 B6: in-window=[] covering=[99.9]
+  exec#4 B6: in-window=[] covering=[99.9]
+  exec#5 B6: in-window=[99.9] covering=[]
+  exec#7 B9: in-window=[] covering=[115.9]
+  exec#8 B7: in-window=[101.5, 139.6] covering=[]
+  exec#9 B7: in-window=[140.1, 143.8] covering=[]
+
+=== B6/B9: exec median vs covering observed %perf (direct association) ===
+  exec#0 B6 gap=False median=179.45us covering_obs%perf=158.2  (nominal 2000MHz => ~3164MHz observed)
+  exec#2 B6 gap=True median=322.30us covering_obs%perf=98.6  (nominal 2000MHz => ~1971MHz observed)
+  exec#3 B6 gap=True median=311.50us covering_obs%perf=99.9  (nominal 2000MHz => ~1997MHz observed)
+  exec#4 B6 gap=False median=212.35us covering_obs%perf=99.9  (nominal 2000MHz => ~1997MHz observed)
+  exec#7 B9 gap=False median=190.55us covering_obs%perf=115.9  (nominal 2000MHz => ~2318MHz observed)
+
+=== thread CPU utilization during exec (scheduling alternative-cause probe) ===
+  exec#0 B6 gap=False: wall=0.0139s thread_cpu_util=0.0%  spikes>1.5xmedian=1
+  exec#1 B6 gap=True: wall=0.0240s thread_cpu_util=130.1%  spikes>1.5xmedian=18
+  exec#2 B6 gap=True: wall=0.0286s thread_cpu_util=109.4%  spikes>1.5xmedian=13
+  exec#3 B6 gap=True: wall=0.0288s thread_cpu_util=108.5%  spikes>1.5xmedian=12
+  exec#4 B6 gap=False: wall=0.0171s thread_cpu_util=91.5%  spikes>1.5xmedian=9
+  exec#5 B6 gap=False: wall=0.0186s thread_cpu_util=84.0%  spikes>1.5xmedian=9
+  exec#6 B9 gap=True: wall=0.0165s thread_cpu_util=0.0%  spikes>1.5xmedian=8
+  exec#7 B9 gap=False: wall=0.0138s thread_cpu_util=113.5%  spikes>1.5xmedian=8
+  exec#8 B7 gap=True: wall=0.2153s thread_cpu_util=87.1%  spikes>1.5xmedian=1
+  exec#9 B7 gap=False: wall=0.2302s thread_cpu_util=81.4%  spikes>1.5xmedian=4

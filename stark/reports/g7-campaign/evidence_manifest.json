@@ -1,0 +1,317 @@
+{
+  "campaign": "G7-resolution",
+  "record_dir": "build/g7-campaign",
+  "generated_utc": "2026-10-05T14:31:53.658Z",
+  "record_count": 30,
+  "records": [
+    {
+      "file": "G7CAM-B6-E1-30822082.json",
+      "record_id": "G7CAM-B6-E1-30822082",
+      "experiment_id": "E1",
+      "benchmark_id": "B6",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 446.0,
+      "sha256": "5e02c20db188304cb13aa365b1d1323b6b0ef1eb4c022f224bd2a918f7a2887e"
+    },
+    {
+      "file": "G7CAM-B6-E1-34325368.json",
+      "record_id": "G7CAM-B6-E1-34325368",
+      "experiment_id": "E1",
+      "benchmark_id": "B6",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 383.8,
+      "sha256": "38f59bd246e90e102529ea507e392f0966a5546e1a0881605e9a6028ca9c7706"
+    },
+    {
+      "file": "G7CAM-B6-E1-63991758.json",
+      "record_id": "G7CAM-B6-E1-63991758",
+      "experiment_id": "E1",
+      "benchmark_id": "B6",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 369.05,
+      "sha256": "2b0466ed5d72560f1d1fcdba24e142a1a7baa417c97136106477e6607d31caad"
+    },
+    {
+      "file": "G7CAM-B6-E1-66912564.json",
+      "record_id": "G7CAM-B6-E1-66912564",
+      "experiment_id": "E1",
+      "benchmark_id": "B6",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 230.4,
+      "sha256": "d0256aae5dfcc225e4f9fb2dcba24f68fffc16697c599c68be247ac9861d1860"
+    },
+    {
+      "file": "G7CAM-B6-E1-90989457.json",
+      "record_id": "G7CAM-B6-E1-90989457",
+      "experiment_id": "E1",
+      "benchmark_id": "B6",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 460.05000000000007,
+      "sha256": "f6efaa4f576ca39c374b27e4858b15acaf16c29dc49f5bb34a4f300bdca18d86"
+    },
+    {
+      "file": "G7CAM-B6-E5-30822082.json",
+      "record_id": "G7CAM-B6-E5-30822082",
+      "experiment_id": "E5",
+      "benchmark_id": "B6",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 539.05,
+      "sha256": "da7f685a162524a3eea943fcdc85df4f842f1c453e2bc123b5f9ec8430687caf"
+    },
+    {
+      "file": "G7CAM-B6-E5-34325368.json",
+      "record_id": "G7CAM-B6-E5-34325368",
+      "experiment_id": "E5",
+      "benchmark_id": "B6",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 410.8,
+      "sha256": "6dce74431ca29b7e093e8577b726952466d40b75992799df114bdf851c63ec1d"
+    },
+    {
+      "file": "G7CAM-B6-E5-63991758.json",
+      "record_id": "G7CAM-B6-E5-63991758",
+      "experiment_id": "E5",
+      "benchmark_id": "B6",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 526.6500000000001,
+      "sha256": "821592ea31685b989614502574f19220e8cacd859b2eeaf8aee1aa164a071d09"
+    },
+    {
+      "file": "G7CAM-B6-E5-66912564.json",
+      "record_id": "G7CAM-B6-E5-66912564",
+      "experiment_id": "E5",
+      "benchmark_id": "B6",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 189.55,
+      "sha256": "10a7c8adde1fef5960d1e6d3c7136e0d408cf6c0734acf05507d12a49ed0d9e0"
+    },
+    {
+      "file": "G7CAM-B6-E5-90989457.json",
+      "record_id": "G7CAM-B6-E5-90989457",
+      "experiment_id": "E5",
+      "benchmark_id": "B6",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 392.54999999999995,
+      "sha256": "a0000e6e11c98a5805374d38188de379128245c149b1a14bbe6aa383c4f7ff84"
+    },
+    {
+      "file": "G7CAM-B7-E1-30822082.json",
+      "record_id": "G7CAM-B7-E1-30822082",
+      "experiment_id": "E1",
+      "benchmark_id": "B7",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 6808.599999999999,
+      "sha256": "83cf618b6dcd6dcb20b219e9fc556e76303e70f6bc67cf3e5da95c526afe986c"
+    },
+    {
+      "file": "G7CAM-B7-E1-34325368.json",
+      "record_id": "G7CAM-B7-E1-34325368",
+      "experiment_id": "E1",
+      "benchmark_id": "B7",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 6426.9,
+      "sha256": "92517e00fe03d45ffea3a09885d4174e3a4f291a71d0d3565bddbfbb3f173299"
+    },
+    {
+      "file": "G7CAM-B7-E1-63991758.json",
+      "record_id": "G7CAM-B7-E1-63991758",
+      "experiment_id": "E1",
+      "benchmark_id": "B7",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 6652.55,
+      "sha256": "c08269316e0473fc8da2f3f889c49217bea5b8532d70ce6f78cd4d3db0c01516"
+    },
+    {
+      "file": "G7CAM-B7-E1-66912564.json",
+      "record_id": "G7CAM-B7-E1-66912564",
+      "experiment_id": "E1",
+      "benchmark_id": "B7",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 3026.6,
+      "sha256": "5486bb0bbb6f7dace2933ca60b5a9b2e367b10a6c7489ecfe724b94970489ce4"
+    },
+    {
+      "file": "G7CAM-B7-E1-90989457.json",
+      "record_id": "G7CAM-B7-E1-90989457",
+      "experiment_id": "E1",
+      "benchmark_id": "B7",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 5224.25,
+      "sha256": "44a3f0ef48349c94efbd3955b78e10cac5c475ec25babf245053854842dc0c78"
+    },
+    {
+      "file": "G7CAM-B7-E5-30822082.json",
+      "record_id": "G7CAM-B7-E5-30822082",
+      "experiment_id": "E5",
+      "benchmark_id": "B7",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 6615.700000000001,
+      "sha256": "dd3f19d187941f572763fef2b07d519d0460d8204183cc9d7d6543dd30fc98cc"
+    },
+    {
+      "file": "G7CAM-B7-E5-34325368.json",
+      "record_id": "G7CAM-B7-E5-34325368",
+      "experiment_id": "E5",
+      "benchmark_id": "B7",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 6513.4,
+      "sha256": "e36f5a5111d3e4ae75d2fb1f7839bd3a0896232c1231770b7df3a972cdab2f99"
+    },
+    {
+      "file": "G7CAM-B7-E5-63991758.json",
+      "record_id": "G7CAM-B7-E5-63991758",
+      "experiment_id": "E5",
+      "benchmark_id": "B7",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 6551.599999999999,
+      "sha256": "ade52de0f5685033a92bfd4e46486531d0449c996424060b3174cad9045027be"
+    },
+    {
+      "file": "G7CAM-B7-E5-66912564.json",
+      "record_id": "G7CAM-B7-E5-66912564",
+      "experiment_id": "E5",
+      "benchmark_id": "B7",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 2983.0000000000005,
+      "sha256": "3eea2a38aa606bc4c8a2606c76298b69eb5dae4bb591fb6640a6485708225b4d"
+    },
+    {
+      "file": "G7CAM-B7-E5-90989457.json",
+      "record_id": "G7CAM-B7-E5-90989457",
+      "experiment_id": "E5",
+      "benchmark_id": "B7",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 6334.349999999999,
+      "sha256": "4200c1f6612600b24f907f9547b6455907762ab6f60d4e6cde2209b88f51bd8d"
+    },
+    {
+      "file": "G7CAM-B9-E1-30822082.json",
+      "record_id": "G7CAM-B9-E1-30822082",
+      "experiment_id": "E1",
+      "benchmark_id": "B9",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 554.05,
+      "sha256": "d7218b5fd3dc805248aab425971c5187a6e7a5f71f621aee56bd2aac24703ddc"
+    },
+    {
+      "file": "G7CAM-B9-E1-34325368.json",
+      "record_id": "G7CAM-B9-E1-34325368",
+      "experiment_id": "E1",
+      "benchmark_id": "B9",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 391.90000000000003,
+      "sha256": "000bef5553a61286108f2c0ab3a5ca50ed40b64dffcb09c26b9951139ca3079b"
+    },
+    {
+      "file": "G7CAM-B9-E1-63991758.json",
+      "record_id": "G7CAM-B9-E1-63991758",
+      "experiment_id": "E1",
+      "benchmark_id": "B9",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 495.29999999999995,
+      "sha256": "88fcc4b64cef34f63cd96f76feacfc0074474ed8bb4f237e102884a1a4061de1"
+    },
+    {
+      "file": "G7CAM-B9-E1-66912564.json",
+      "record_id": "G7CAM-B9-E1-66912564",
+      "experiment_id": "E1",
+      "benchmark_id": "B9",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 187.6,
+      "sha256": "2c48956b990c4a4c9dd424abcb1be00328b89233aa3e7952401a11ca49c951b7"
+    },
+    {
+      "file": "G7CAM-B9-E1-90989457.json",
+      "record_id": "G7CAM-B9-E1-90989457",
+      "experiment_id": "E1",
+      "benchmark_id": "B9",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 386.95,
+      "sha256": "6ed213bfd4c57c8cd000fe91cdd5f43bf37e02eb077689c11461ecbd8166ca95"
+    },
+    {
+      "file": "G7CAM-B9-E5-30822082.json",
+      "record_id": "G7CAM-B9-E5-30822082",
+      "experiment_id": "E5",
+      "benchmark_id": "B9",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 497.3499999999999,
+      "sha256": "7319c2df6281f54119f99188d778a088b6aa29ce7bbc69971ac5d3581f799d69"
+    },
+    {
+      "file": "G7CAM-B9-E5-34325368.json",
+      "record_id": "G7CAM-B9-E5-34325368",
+      "experiment_id": "E5",
+      "benchmark_id": "B9",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 397.34999999999997,
+      "sha256": "2d8eaa2ad9fbcac9d683f1f34beb663d81d2920a17402d19f3b70d845b448b26"
+    },
+    {
+      "file": "G7CAM-B9-E5-63991758.json",
+      "record_id": "G7CAM-B9-E5-63991758",
+      "experiment_id": "E5",
+      "benchmark_id": "B9",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 470.24999999999994,
+      "sha256": "209fd94a408bf70b4f15677ce4127a39cdf07b13e78ef3579c007736cacc7584"
+    },
+    {
+      "file": "G7CAM-B9-E5-66912564.json",
+      "record_id": "G7CAM-B9-E5-66912564",
+      "experiment_id": "E5",
+      "benchmark_id": "B9",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 191.54999999999998,
+      "sha256": "46693aff8f5b7aa93168278fd1fa979ef3d69debeb90f5d64a5614bfffde4436"
+    },
+    {
+      "file": "G7CAM-B9-E5-90989457.json",
+      "record_id": "G7CAM-B9-E5-90989457",
+      "experiment_id": "E5",
+      "benchmark_id": "B9",
+      "status": "PASSED",
+      "n_samples": 50,
+      "median_us": 569.1999999999999,
+      "sha256": "28e2e502768620a42ec7b5c0693a28a7fd0f45cfb2ba9a0a808655347b2e5176"
+    }
+  ],
+  "sha256_sha256": "53bc0eea6553da7254a2abad8a9e1438223497f96a24574449477ba78358b6af",
+  "new_file_hashes": {
+    "outlier_analysis.json": "26faa41b6a0ba2698d7da3aa75268e75ddf3a411552ed161097a320bca29a991",
+    "execution_path_audit.md": "27e3217de3d61707410c848fc5320dbeb02cda7c20bfd41a948c992051a3722f",
+    "timing_affinity_audit.md": "6c36fbe5083706081b45cbf1214a7209ea54a941fb3720436075f81b79ecbd40",
+    "root_cause_analysis.md": "7d75e54a396606a38fbcffa97155e9846c5e6a94f1df5f9c0d77b2656a406271",
+    "final_g7_determination.md": "cd67f6ba34ae00ea6f5213050a39a0977fe56eef7af8eaa21c114794767b2e7f"
+  },
+  "new_files_combined_sha256": "ba6006143a2817008944c6e436f05bcaad9b28d1609359df701ef04b4fcfd083"
+}

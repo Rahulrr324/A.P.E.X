@@ -1,0 +1,1 @@
+978d040027f49625c4d1f0cd0c59cb7078c00a576966ac0aa12084cad3cd8780 *stark/build-b7diag-20261011/bm_b7_diagnostic.exe

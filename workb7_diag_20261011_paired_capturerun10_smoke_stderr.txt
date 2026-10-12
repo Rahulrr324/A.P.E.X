@@ -1,0 +1,18 @@
+matches expected: True
+cmd: ['E:\\My Local AI\\stark\\build-b7diag-20261011\\bm_b7_diagnostic.exe']
+cwd: E:\My Local AI\stark\build-b7diag-20261011
+rc: 2
+wrote work\b7_diag_20261011_paired_capture\run10_probe_stdout.txt work\b7_diag_20261011_paired_capture\run10_probe_stderr.txt
+--- stdout (first 3000 chars) ---
+=== B7 isolated diagnostic report ===
+units: raw samples stored as seconds; displayed in us (us = s * 1e6, applied after computation, no pre-classification rounding)
+protocol: warmup=10 (untimed), measured=50, macro_replicates_per_condition=6 (min 6; SEQUENTIAL, PROCESS-LOCAL replications within one run — not independent machine/session replications)
+diagnostic blob: (no run-owned blob was created)
+executed condition order (recorded):
+conditions run SEQUENTIALLY and process-locally (not independent machine/session replications); cache state is not controlled (warm-cache) and no cache-state or CPU-affinity equivalence with the historical campaign is claimed.
+status: ABORTED — run-owned storage could not be created (nothing overwritten): cannot create diagnostic base directory: build/bm_b7_diagnostic
+classification: INSUFFICIENT_REPLICATION (incomplete run is NOT reported as success)
+cleanup: no run-owned storage was created; nothing removed
+
+--- stderr (first 500 chars) ---
+

@@ -1,0 +1,50 @@
+STARK M0 v1.5 — G7 REPRODUCIBILITY SAMPLES (real, unedited)
+generated 2026-10-04T05:55:26Z
+
+[measurement policy: warmup_count=3, measurement_count=10, thread_count=0 (unpinned), deterministic_mode=true, batch=1, FP32]
+[E1 and E5 configuration blocks byte-identical on B6/B7/B9: verified]
+
+fixtures/repro-study/e1-1\P1-E1-B6-36792.json
+  raw samples (us): [343.9, 345.5, 371.8, 584.9, 480.0, 512.4, 425.5, 427.4, 363.9, 368.6]
+  median=398.650 us  mean=422.390 us  stdev=80.837 us
+
+fixtures/repro-study/e1-1\P1-E1-B9-36792.json
+  raw samples (us): [257.0, 269.9, 537.6, 449.8, 417.6, 443.5, 418.5, 421.6, 422.3, 437.7]
+  median=421.950 us  mean=407.550 us  stdev=83.764 us
+
+fixtures/repro-study/e5-1\P1-E5-B6-37093.json
+  raw samples (us): [236.9, 246.5, 249.5, 245.3, 239.0, 252.7, 225.1, 221.2, 228.3, 235.9]
+  median=237.950 us  mean=238.040 us  stdev=10.663 us
+
+fixtures/repro-study/e5-1\P1-E5-B9-37093.json
+  raw samples (us): [273.0, 260.7, 248.4, 238.8, 236.7, 236.2, 229.2, 227.4, 221.2, 229.2]
+  median=236.450 us  mean=240.080 us  stdev=16.194 us
+
+medians across 5xE1 + 5xE5 fresh runs:
+  B6: min=179.200 us max=398.650 us spread=55.05%
+  B7: min=2929.950 us max=5712.500 us spread=48.71%
+  B9: min=185.050 us max=428.000 us spread=56.76%
+
+[host CPU]
+
+
+Name                      : 12th Gen Intel(R) Core(TM) i5-12450H
+NumberOfCores             : 8
+NumberOfLogicalProcessors : 12
+MaxClockSpeed             : 2000
+LoadPercentage            : 31
+
+
+
+[top processes by cumulative CPU]
+
+ProcessName        CPU
+-----------        ---
+find            6636.5
+chrome        2327.125
+chrome         849.375
+chrome      817.015625
+chrome       281.15625
+audiodg      238.28125
+
+

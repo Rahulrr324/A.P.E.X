@@ -1,0 +1,151 @@
+{
+  "report": "STARK Phase 1 (M0) final acceptance matrix",
+  "date": "2026-10-05",
+  "authority": "design/V009_phase1_M0_specification.md (rev 1.1) — the frozen M0 specification",
+  "decision": "M0 = FAIL (NOT ACCEPTED); M1 = LOCKED",
+  "decision_rule": "FAIL whenever at least one mandatory frozen requirement is definitively unsatisfied. G7 is definitively unsatisfied by every evidence set available in the project.",
+  "rows": [
+    {
+      "requirement": "Repository preservation",
+      "frozen_reference": "Ground rules; §L.1-1.4; project evidence",
+      "exact_clause": "Prior deliverables must remain intact; identity by SHA-256 (no .git in this checkout).",
+      "evidence": "sha256sums_v{20,21,22,23,24}.txt; historical inventory; nine recovered records",
+      "satisfied": true,
+      "blocking_clause": null
+    },
+    {
+      "requirement": "Source integrity",
+      "frozen_reference": "Change-control principle, prior stage reports",
+      "exact_clause": "Only documented, intentional source edits; CMakeLists.txt and historical sources unchanged unless documented.",
+      "evidence": "CMakeLists.txt hash cf8c7ad6... unchanged since v2.0; HardwareProfiler/ExperimentRecord/run_baseline hashes unchanged since v2.3; intentional edits limited to gates.cpp/gates.h/test_phase1_gates.cpp",
+      "satisfied": true,
+      "blocking_clause": null
+    },
+    {
+      "requirement": "Build",
+      "frozen_reference": "§L.8 exit criteria (implicit); prior stage convention",
+      "exact_clause": "Fresh Debug and Release builds succeed with zero warnings.",
+      "evidence": "build-v24-debug/build-v24-release: configure+build exit 0, 0 warnings, 0 errors, 103/103 steps (re-verified, ninja: no work needed)",
+      "satisfied": true,
+      "blocking_clause": null
+    },
+    {
+      "requirement": "Tests",
+      "frozen_reference": "§K; §L.8 'all Phase-1 tests pass'",
+      "exact_clause": "All six registered Phase-1 test suites pass in Debug and Release with identical behavior.",
+      "evidence": "CTest 6/6 passed exit 0 in both configs (pipefail-verified); assertions profiler 35 / accounting 67 / budget 55 / records 54 / reproducibility 37 / gates 437, Debug == Release",
+      "satisfied": true,
+      "blocking_clause": null
+    },
+    {
+      "requirement": "G1 — complete hardware profile",
+      "frozen_reference": "§G G1",
+      "exact_clause": "'HardwareProfiler::collectStatic() returns a complete profile; cpu_model, OS, RAM total, storage are non-null; every null field carries a provenance reason.'",
+      "evidence": "PASS over current-machine candidate sets (v21_evidence, v23-valid): genuine PROFILE record. FAIL over the historical nine alone (no PROFILE record).",
+      "satisfied": true,
+      "blocking_clause": null,
+      "notes": "Acceptance scope is the current-machine verification run (see G1/G3 scope determination); the historical set's missing PROFILE is a preservation gap, not a frozen acceptance requirement."
+    },
+    {
+      "requirement": "G2 — CPU baselines present and reproducible",
+      "frozen_reference": "§G G2",
+      "exact_clause": "'CPU baselines (E1, E5) produce records with >=10 samples each; median latency within +-15% of the median of a second independent run.'",
+      "evidence": "PASS on every evidence set (nine, v21-candidate, v23-valid, fixtures, v21-diagnostics): E1/E5 present, distinct, >=10 samples.",
+      "satisfied": true,
+      "blocking_clause": null
+    },
+    {
+      "requirement": "G3 — CUDA branch or attested no-CUDA skip",
+      "frozen_reference": "§G G3",
+      "exact_clause": "'If CUDA exists: GPU baselines (E2 + B4/B5) produce complete records; if no CUDA: records exist with status: skipped + reason. Either branch passes.'",
+      "evidence": "PASS over v23-valid and v23-attested candidate sets (structured skip attestation, v2.3 standard) with cuda_available=false on this machine. FAIL over v23-fabricated/contradictory/missing-e2/malformed and over the historical nine (which never contained E2/B4/B5).",
+      "satisfied": true,
+      "blocking_clause": null,
+      "notes": "No-CUDA branch chosen by the current machine's probe; legitimate attested candidate records satisfy G3. Historical absence of E2/B4/B5 is a preservation gap, not an acceptance blocker."
+    },
+    {
+      "requirement": "G4 — measured peak memory, no estimated peak",
+      "frozen_reference": "§G G4",
+      "exact_clause": "'Every baseline record's peak RAM/VRAM comes from process/device queries (B8), with measured: true; any estimated field is flagged and gate G4 fails if a peak memory field is estimated.'",
+      "evidence": "PASS on the nine recovered records, v21-candidate, v23-valid, and all honest fixtures (v2.4 Case B determination). FAIL only on the intentional negative control fixture/controlled-invalid-g4 (its E1 has ram_measured=false — the frozen fail condition).",
+      "satisfied": true,
+      "blocking_clause": null
+    },
+    {
+      "requirement": "G5 — parameter accounting consistency",
+      "frozen_reference": "§G G5",
+      "exact_clause": "logical >= active; component sum splits; stored = nominal payload + packing overhead; optimizer zero-state rules.",
+      "evidence": "PASS on all evidence sets; accounting suite 67 assertions.",
+      "satisfied": true,
+      "blocking_clause": null
+    },
+    {
+      "requirement": "G6 — budget evaluator rejects over-budget",
+      "frozen_reference": "§G G6",
+      "exact_clause": "Synthetic over-budget demand returns within_budget=false with the correct per-resource violation; informational compute fields never flip it; deterministic.",
+      "evidence": "PASS on all evidence sets; budget suite 55 assertions.",
+      "satisfied": true,
+      "blocking_clause": null
+    },
+    {
+      "requirement": "G7 — same-config median reproducibility",
+      "frozen_reference": "§G G7",
+      "exact_clause": "'Full re-run of the same suite with same config: every benchmark median within +-15% of the recorded median (memory bandwidth +-20%). ... Tolerance is defined here once — later phases may not loosen it silently.'",
+      "evidence": "FAIL on the nine recovered records (B6 16.13%; B7 18.38%/21.26%; B9 27.65%/28.18%/48.04% vs 15%), reproduced identically by independent recomputation (v2.2) and by the v2.4 binaries. FAIL on every fresh set: v23-valid B6 47.55%; v21-diagnostics B6 53.99%, spreads 19-60%. No evidence set in the project passes G7.",
+      "satisfied": false,
+      "blocking_clause": "V009 §G G7 (tolerance defined here once; same-config re-run must be within +-15%/20%)",
+      "notes": "Permanent over the immutable historical nine (G7-C). A future same-config campaign is permitted by §B mechanics (n>=10 configurable, warmup>=3, recorded affinity) but is NEW evidence — none exists in the project, and it cannot retroactively pass the historical nine (records are append-only, §F)."
+    },
+    {
+      "requirement": "G8 — current-run records complete and parseable",
+      "frozen_reference": "§G G8 (line 329)",
+      "exact_clause": "'build/results/ contains a machine-readable record (JSON, STARKP1 1) for every executed benchmark/baseline and every profiler capture, parseable by the same reader used in tests.'",
+      "evidence": "Every record present in the evaluation stores parses and validates (loadAll parse_ok + validate); controlled-valid store exits 0 with all 7 gates PASS and zero invalid records; strict mode reports invalid records as exit 1; records suite (54) covers round-trip/append-only/parseability. sha256sums_v24.txt 95/95 OK.",
+      "satisfied": true,
+      "blocking_clause": null,
+      "notes": "G8 is a current verification-run completeness/parseability gate over the store the reader can enumerate; the implementation cannot detect and the frozen text does not require records that do not exist in the store. The 15 historically absent records are a preservation limitation, not a G8 violation (see G8 audit, questions 1/4/6/9)."
+    },
+    {
+      "requirement": "Historical artifact preservation",
+      "frozen_reference": "Prior stage reports; acceptance audit scope",
+      "exact_clause": "The nine recovered records and historical raw samples must remain byte-identical.",
+      "evidence": "9/9 byte-identical to the v2.0 inventory in archive_recovery/aggregator_input/ and 9/9 in original_historical_records/ (re-verified); prior sha lists OK apart from documented intentional source edits.",
+      "satisfied": true,
+      "blocking_clause": null
+    },
+    {
+      "requirement": "Reproducibility requirements",
+      "frozen_reference": "§K test_phase1_reproducibility; §G G7",
+      "exact_clause": "Statistics computed identically from stored samples; seeds recorded; determinism triple serialized; same-config medians reproducible.",
+      "evidence": "Reproducibility suite 37 assertions PASS; median consistency verified for all nine records; but G7 same-config median reproducibility FAILS (see G7 row).",
+      "satisfied": false,
+      "blocking_clause": "V009 §G G7",
+      "notes": "Mechanics (statistics, seed recording, determinism) pass; the acceptance-critical reproducibility gate G7 fails."
+    },
+    {
+      "requirement": "Architecture restrictions",
+      "frozen_reference": "Ground rules 2-3; Non-goals; §L.1; §I 'no router, no adapters, no cloud'",
+      "exact_clause": "CPU-first, offline, no network, no M1/APEX work, no architecture selection in M0.",
+      "evidence": "No M1 or APEX implementation was started in any stage; codebase unchanged in scope; no network code.",
+      "satisfied": true,
+      "blocking_clause": null
+    },
+    {
+      "requirement": "Change control",
+      "frozen_reference": "Prior stage reports; task constraints",
+      "exact_clause": "No threshold, record, sample, G7 grouping, G3/G4 semantics or historical evidence may be altered to manufacture a pass.",
+      "evidence": "G7 thresholds/grouping/samples untouched (G7 detail numbers identical across v2.2/v2.3/v2.4); nine records byte-identical; only documented interpretation corrections (G3 attestation, GPU dedupe, G4 Case B) applied with matching tests.",
+      "satisfied": true,
+      "blocking_clause": null
+    }
+  ],
+  "mandatory_requirement_summary": {
+    "satisfied_count": 14,
+    "unsatisfied_count": 2,
+    "unsatisfied": [
+      "G7 — same-config median reproducibility (historical nine permanent FAIL; every fresh set FAIL)",
+      "Reproducibility requirements at the gate level (composition of the G7 failure)"
+    ],
+    "conclusion": "At least one mandatory frozen requirement (G7) is definitively unsatisfied by every evidence set available in the project. M0 = FAIL; M1 = LOCKED."
+  }
+}

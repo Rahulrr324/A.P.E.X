@@ -1,0 +1,7 @@
+$ ./build-v15-debug/test_phase1_gates.exe
+PASS: test_phase1_gates (148 assertions)
+DEBUG_EXIT=0
+
+$ ./build-v15-release/test_phase1_gates.exe
+PASS: test_phase1_gates (148 assertions)
+RELEASE_EXIT=0

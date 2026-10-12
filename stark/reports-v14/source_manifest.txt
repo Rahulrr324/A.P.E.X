@@ -1,0 +1,23 @@
+STARK M0 v1.5 SOURCE MANIFEST (sha256)
+generated: 2026-10-04T06:02:47Z
+
+CMakeLists.txt                                          cf8c7ad6c53c05b4e8180e063cdf9fa639f75fe8a752fa685883dc4f1d56e056
+src/phase1/aggregate.cpp                                6c372e70ecd0e9dcd6f651c3275b605f78160d357fc31644fa1d5a172afeaf9d
+src/phase1/gates.h                                      e335ee9745c25074d2f0df01da0e6baab6f9b1f037b3e898d8525318d731753c
+src/phase1/gates.cpp                                    658e606f79feba00f1e61d00ba0ffcbc0dfa957f506c8a12b20efcdf75a7cc29
+src/phase1/common/ExperimentRecord.cpp                  60476435e90f4dc56c48b321561f06fa086cfa7ea493dc23c5ce422ef7523952
+src/phase1/common/ExperimentRecord.h                    2f75b9b4957f0c6f6ea9ef501689f2b26ee9719657758069ed1cd277fd4b90f9
+src/phase1/common/HardwareProfiler.cpp                  d063033d6bcc0e95363a741d488759465277f6b26eeb6a5f11a9164a869fd830
+src/phase1/bench/BenchmarkHarness.cpp                   45ccdcbf1b766c1fc3990844064dfbbe00d6124a8d2178a108f494e97d1b8feb
+src/phase1/bench/BudgetLedger.cpp                       a8dafcbcac68e81725106731b0bdb81365b15fedf6fcd0d867e1fceabde69794
+src/phase1/bench/ParameterAccounting.cpp                8760cf69c853229c8dcc1cf0f94e4fca3158a78f8f04d5d537276df4377685d6
+src/phase1/bench/TinyDenseModel.cpp                     d458e4c9cd8c14bdf340452aa46200c4c0e357989e7cdb536b6bee77eb99f099
+tests/test_harness.h                                    75e04e40ee2f567ae3def9d83def90f0bfeb164b9fcde0a0a27fd80c9af4c41f
+tests/test_main.cpp                                     d63fb9848a079ca421b8f6e4254aa554330a24c61098be4d98c725427ea5f10e
+tests/test_phase1_gates.cpp                             2d89ed662a4aae2d24be30a97ecc21b8ef81786e5e469eacbc6e2e9efa0e6111
+tests/test_phase1_profiler.cpp                          b914f766af3be0b15a492fd7297bffabaa7f36e295d4a1eb91aac7d8e73a2d46
+tests/test_phase1_accounting.cpp                        b38e609c84049356305ecc1166e3311fb0eba42f3a787ad701ae3b3f79ced366
+tests/test_phase1_budget.cpp                            cfe6cc24a4661aed0993c9dc74d8fb409be27c4e090f2b6b2425c7ba8d3a4ee4
+tests/test_phase1_records.cpp                           9fc635ad9afc5451e87394378ca99416a634c342ff83bb25ad1fdcc7d1b2b63c
+tests/test_phase1_reproducibility.cpp                   3b7017edb25bf19a7de5a740fdea72487fef49d3ab79affe33ae3afc58f18ca3
+fixtures/make_controlled_fixtures.py                    2c3ab96e63853b68261b8e5d733ff36b903a37846b9b41a3aff5ba4183a2893b

@@ -1,0 +1,9 @@
+STARK M0 v1.4 TOOLCHAIN MANIFEST
+
+CXX: g++.exe (MinGW-W64 x86_64-ucrt-posix-seh, built by Brecht Sanders, r4) 16.1.0
+path: C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/g++.exe
+target: x86_64-w64-mingw32
+cmake: cmake version 4.4.1
+ninja: 1.13.2.git.kitware.jobserver-pipe-1
+default PATH c++: c++.exe (MinGW.org GCC-6.3.0-1) 6.3.0  [UNUSED - lacks <optional>]
+runtime fix: -static-libgcc -static-libstdc++ on Phase-1 targets (see report)

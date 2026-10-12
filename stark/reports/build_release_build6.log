@@ -1,0 +1,100 @@
+ninja: Entering directory `build-release-clean-3'
+[1/34] Building CXX object CMakeFiles/test_phase1_profiler.dir/src/phase1/common/ExperimentRecord.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_profiler.dir/src/phase1/common/ExperimentRecord.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_profiler.dir/src/phase1/common/ExperimentRecord.cpp.obj -MF CMakeFiles\test_phase1_profiler.dir\src\phase1\common\ExperimentRecord.cpp.obj.d -o CMakeFiles/test_phase1_profiler.dir/src/phase1/common/ExperimentRecord.cpp.obj -c "E:/My Local AI/stark/src/phase1/common/ExperimentRecord.cpp"
+E:/My Local AI/stark/src/phase1/common/ExperimentRecord.cpp:1:10: fatal error: common/ExperimentRecord.h: No such file or directory
+    1 | #include "common/ExperimentRecord.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[2/34] Building CXX object CMakeFiles/test_phase1_profiler.dir/src/phase1/bench/BudgetLedger.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_profiler.dir/src/phase1/bench/BudgetLedger.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_profiler.dir/src/phase1/bench/BudgetLedger.cpp.obj -MF CMakeFiles\test_phase1_profiler.dir\src\phase1\bench\BudgetLedger.cpp.obj.d -o CMakeFiles/test_phase1_profiler.dir/src/phase1/bench/BudgetLedger.cpp.obj -c "E:/My Local AI/stark/src/phase1/bench/BudgetLedger.cpp"
+E:/My Local AI/stark/src/phase1/bench/BudgetLedger.cpp:1:10: fatal error: bench/BudgetLedger.h: No such file or directory
+    1 | #include "bench/BudgetLedger.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[3/34] Building CXX object CMakeFiles/test_phase1_accounting.dir/src/phase1/common/ExperimentRecord.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_accounting.dir/src/phase1/common/ExperimentRecord.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_accounting.dir/src/phase1/common/ExperimentRecord.cpp.obj -MF CMakeFiles\test_phase1_accounting.dir\src\phase1\common\ExperimentRecord.cpp.obj.d -o CMakeFiles/test_phase1_accounting.dir/src/phase1/common/ExperimentRecord.cpp.obj -c "E:/My Local AI/stark/src/phase1/common/ExperimentRecord.cpp"
+E:/My Local AI/stark/src/phase1/common/ExperimentRecord.cpp:1:10: fatal error: common/ExperimentRecord.h: No such file or directory
+    1 | #include "common/ExperimentRecord.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[4/34] Building CXX object CMakeFiles/test_phase1_profiler.dir/tests/test_phase1_profiler.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_profiler.dir/tests/test_phase1_profiler.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_profiler.dir/tests/test_phase1_profiler.cpp.obj -MF CMakeFiles\test_phase1_profiler.dir\tests\test_phase1_profiler.cpp.obj.d -o CMakeFiles/test_phase1_profiler.dir/tests/test_phase1_profiler.cpp.obj -c "E:/My Local AI/stark/tests/test_phase1_profiler.cpp"
+E:/My Local AI/stark/tests/test_phase1_profiler.cpp:11:10: fatal error: common/HardwareProfiler.h: No such file or directory
+   11 | #include "common/HardwareProfiler.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[5/34] Building CXX object CMakeFiles/test_phase1_budget.dir/src/phase1/bench/BudgetLedger.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_budget.dir/src/phase1/bench/BudgetLedger.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_budget.dir/src/phase1/bench/BudgetLedger.cpp.obj -MF CMakeFiles\test_phase1_budget.dir\src\phase1\bench\BudgetLedger.cpp.obj.d -o CMakeFiles/test_phase1_budget.dir/src/phase1/bench/BudgetLedger.cpp.obj -c "E:/My Local AI/stark/src/phase1/bench/BudgetLedger.cpp"
+E:/My Local AI/stark/src/phase1/bench/BudgetLedger.cpp:1:10: fatal error: bench/BudgetLedger.h: No such file or directory
+    1 | #include "bench/BudgetLedger.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[6/34] Building CXX object CMakeFiles/test_phase1_profiler.dir/src/phase1/common/HardwareProfiler.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_profiler.dir/src/phase1/common/HardwareProfiler.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_profiler.dir/src/phase1/common/HardwareProfiler.cpp.obj -MF CMakeFiles\test_phase1_profiler.dir\src\phase1\common\HardwareProfiler.cpp.obj.d -o CMakeFiles/test_phase1_profiler.dir/src/phase1/common/HardwareProfiler.cpp.obj -c "E:/My Local AI/stark/src/phase1/common/HardwareProfiler.cpp"
+E:/My Local AI/stark/src/phase1/common/HardwareProfiler.cpp:1:10: fatal error: common/HardwareProfiler.h: No such file or directory
+    1 | #include "common/HardwareProfiler.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[7/34] Building CXX object CMakeFiles/test_phase1_accounting.dir/src/phase1/bench/ParameterAccounting.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_accounting.dir/src/phase1/bench/ParameterAccounting.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_accounting.dir/src/phase1/bench/ParameterAccounting.cpp.obj -MF CMakeFiles\test_phase1_accounting.dir\src\phase1\bench\ParameterAccounting.cpp.obj.d -o CMakeFiles/test_phase1_accounting.dir/src/phase1/bench/ParameterAccounting.cpp.obj -c "E:/My Local AI/stark/src/phase1/bench/ParameterAccounting.cpp"
+E:/My Local AI/stark/src/phase1/bench/ParameterAccounting.cpp:1:10: fatal error: bench/ParameterAccounting.h: No such file or directory
+    1 | #include "bench/ParameterAccounting.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[8/34] Building CXX object CMakeFiles/test_phase1_budget.dir/src/phase1/common/HardwareProfiler.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_budget.dir/src/phase1/common/HardwareProfiler.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_budget.dir/src/phase1/common/HardwareProfiler.cpp.obj -MF CMakeFiles\test_phase1_budget.dir\src\phase1\common\HardwareProfiler.cpp.obj.d -o CMakeFiles/test_phase1_budget.dir/src/phase1/common/HardwareProfiler.cpp.obj -c "E:/My Local AI/stark/src/phase1/common/HardwareProfiler.cpp"
+E:/My Local AI/stark/src/phase1/common/HardwareProfiler.cpp:1:10: fatal error: common/HardwareProfiler.h: No such file or directory
+    1 | #include "common/HardwareProfiler.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[9/34] Building CXX object CMakeFiles/test_phase1_profiler.dir/src/phase1/bench/ParameterAccounting.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_profiler.dir/src/phase1/bench/ParameterAccounting.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_profiler.dir/src/phase1/bench/ParameterAccounting.cpp.obj -MF CMakeFiles\test_phase1_profiler.dir\src\phase1\bench\ParameterAccounting.cpp.obj.d -o CMakeFiles/test_phase1_profiler.dir/src/phase1/bench/ParameterAccounting.cpp.obj -c "E:/My Local AI/stark/src/phase1/bench/ParameterAccounting.cpp"
+E:/My Local AI/stark/src/phase1/bench/ParameterAccounting.cpp:1:10: fatal error: bench/ParameterAccounting.h: No such file or directory
+    1 | #include "bench/ParameterAccounting.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[10/34] Building CXX object CMakeFiles/test_phase1_accounting.dir/src/phase1/common/HardwareProfiler.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_accounting.dir/src/phase1/common/HardwareProfiler.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_accounting.dir/src/phase1/common/HardwareProfiler.cpp.obj -MF CMakeFiles\test_phase1_accounting.dir\src\phase1\common\HardwareProfiler.cpp.obj.d -o CMakeFiles/test_phase1_accounting.dir/src/phase1/common/HardwareProfiler.cpp.obj -c "E:/My Local AI/stark/src/phase1/common/HardwareProfiler.cpp"
+E:/My Local AI/stark/src/phase1/common/HardwareProfiler.cpp:1:10: fatal error: common/HardwareProfiler.h: No such file or directory
+    1 | #include "common/HardwareProfiler.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[11/34] Building CXX object CMakeFiles/test_phase1_accounting.dir/src/phase1/bench/BudgetLedger.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_accounting.dir/src/phase1/bench/BudgetLedger.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_accounting.dir/src/phase1/bench/BudgetLedger.cpp.obj -MF CMakeFiles\test_phase1_accounting.dir\src\phase1\bench\BudgetLedger.cpp.obj.d -o CMakeFiles/test_phase1_accounting.dir/src/phase1/bench/BudgetLedger.cpp.obj -c "E:/My Local AI/stark/src/phase1/bench/BudgetLedger.cpp"
+E:/My Local AI/stark/src/phase1/bench/BudgetLedger.cpp:1:10: fatal error: bench/BudgetLedger.h: No such file or directory
+    1 | #include "bench/BudgetLedger.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[12/34] Building CXX object CMakeFiles/test_phase1_budget.dir/src/phase1/common/ExperimentRecord.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_budget.dir/src/phase1/common/ExperimentRecord.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_budget.dir/src/phase1/common/ExperimentRecord.cpp.obj -MF CMakeFiles\test_phase1_budget.dir\src\phase1\common\ExperimentRecord.cpp.obj.d -o CMakeFiles/test_phase1_budget.dir/src/phase1/common/ExperimentRecord.cpp.obj -c "E:/My Local AI/stark/src/phase1/common/ExperimentRecord.cpp"
+E:/My Local AI/stark/src/phase1/common/ExperimentRecord.cpp:1:10: fatal error: common/ExperimentRecord.h: No such file or directory
+    1 | #include "common/ExperimentRecord.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[13/34] Building CXX object CMakeFiles/test_phase1_budget.dir/tests/test_phase1_budget.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_budget.dir/tests/test_phase1_budget.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_budget.dir/tests/test_phase1_budget.cpp.obj -MF CMakeFiles\test_phase1_budget.dir\tests\test_phase1_budget.cpp.obj.d -o CMakeFiles/test_phase1_budget.dir/tests/test_phase1_budget.cpp.obj -c "E:/My Local AI/stark/tests/test_phase1_budget.cpp"
+E:/My Local AI/stark/tests/test_phase1_budget.cpp:12:10: fatal error: bench/BudgetLedger.h: No such file or directory
+   12 | #include "bench/BudgetLedger.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+[14/34] Building CXX object CMakeFiles/test_phase1_accounting.dir/tests/test_phase1_accounting.cpp.obj
+FAILED: [code=1] CMakeFiles/test_phase1_accounting.dir/tests/test_phase1_accounting.cpp.obj 
+C:\Users\rahul\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin\c++.exe  -I"E:/My Local AI/stark/src" -O3 -DNDEBUG -std=gnu++17 -MD -MT CMakeFiles/test_phase1_accounting.dir/tests/test_phase1_accounting.cpp.obj -MF CMakeFiles\test_phase1_accounting.dir\tests\test_phase1_accounting.cpp.obj.d -o CMakeFiles/test_phase1_accounting.dir/tests/test_phase1_accounting.cpp.obj -c "E:/My Local AI/stark/tests/test_phase1_accounting.cpp"
+E:/My Local AI/stark/tests/test_phase1_accounting.cpp:11:10: fatal error: bench/ParameterAccounting.h: No such file or directory
+   11 | #include "bench/ParameterAccounting.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+ninja: build stopped: subcommand failed.

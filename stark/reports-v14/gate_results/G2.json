@@ -1,0 +1,25 @@
+{
+  "gate": "G2 CPU baselines present and complete",
+  "implementation": "src/phase1/gates.cpp (evaluate_gates)",
+  "status": "PASS",
+  "requirement": "E1 and E5 both present, both PASSED, each with >=10 samples, distinct records",
+  "regression_test": "tests/test_phase1_gates.cpp",
+  "regression_assertions": 148,
+  "debug_result": "PASS (exit 0)",
+  "release_result": "PASS (exit 0)",
+  "cases_covered": [
+    "both valid -> pass",
+    "E1 missing -> fail",
+    "E5 missing -> fail",
+    "both missing -> fail",
+    "E1 not PASSED -> fail",
+    "E5 not PASSED -> fail",
+    "insufficient samples -> fail",
+    "duplicate-only evidence (shared record_id) -> fail"
+  ],
+  "real_data": {
+    "build/results": "FAIL (E5 missing)",
+    "build/historical-regen": "PASS (E1 and E5 present, distinct, >=10 samples each)"
+  },
+  "aggregator_exit_on_fail": 1
+}

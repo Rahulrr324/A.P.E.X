@@ -1,0 +1,14 @@
+{
+  "run": "run2",
+  "exe_path": "stark/build-b7diag-20261011/bm_b7_diagnostic.exe",
+  "exe_sha256": "a2e9e0ada6df0f10a91681e96349349166a081dcca0570312c6d175ad0691bd6",
+  "src_sha256": "5ff3a4e4fa952aa0761734e4b4e34bfbbe4810fbb1f89b73d85e5426a4e38ac9",
+  "cmake_sha256": "575fe264921512f41d30267c1c659e3662bbcfd92e71623720f9d047b7dddcc8",
+  "host_csv": "work/b7_diag_20261011_paired_capture/run2/paired_samples.csv",
+  "start_utc": "2026-10-12T11:15:45Z",
+  "status": "running",
+  "exe_exists": true,
+  "exe_lexists": true,
+  "exe_bytes": 3168146,
+  "parent_exists": true
+}

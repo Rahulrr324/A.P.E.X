@@ -1,0 +1,18 @@
+resolved: E:\My Local AI\stark\build-b7diag-20261011\bm_b7_diagnostic.exe
+sha256: a2e9e0ada6df0f10a91681e96349349166a081dcca0570312c6d175ad0691bd6
+matches expected: True
+CreatePipe stdout ok=1 last_error=0
+CreatePipe stderr ok=1 last_error=0
+--- cwd=None, app=exe, cmdline=exe ---
+CreateProcessW ok=1 last_error=0
+process id=23712
+usage: E:\My [diagnostic-directory]
+  default directory: build/bm_b7_diagnostic/ (diagnostic-owned; isolation is validated at run time)
+WaitForSingleObject=0
+GetExitCodeProcess ok=1 exit_code=2
+--- stdout (len 0) ---
+
+--- stderr (len 0) ---
+
+wrote stdout -> work/b7_diag_20261011_paired_capture/run10_stdout.bin bytes=0 sha=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+wrote stderr -> work/b7_diag_20261011_paired_capture/run10_stderr.bin bytes=0 sha=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

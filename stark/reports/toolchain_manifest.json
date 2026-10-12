@@ -1,0 +1,97 @@
+{
+  "report": "APEX_M0_v1.8_toolchain_manifest",
+  "date": "2026-10-04",
+
+  "rejected_toolchain": {
+    "path": "C:/MinGW/bin/g++.exe (also /c/MinGW/bin/g++)",
+    "version": "g++.exe (MinGW.org GCC-6.3.0-1) 6.3.0",
+    "target": "mingw32",
+    "reason": "libstdc++ ships NO <optional>. Only <experimental/optional> exists, and experimental/type_traits lacks the std::is_void_v / is_integral_v / is_null_pointer_v variable templates the tree requires.",
+    "include_search_cxx": [
+      "c:/mingw/bin/../lib/gcc/mingw32/6.3.0/include/c++",
+      "c:/mingw/bin/../lib/gcc/mingw32/6.3.0/include/c++/mingw32"
+    ],
+    "probe_result": "fatal error: optional: No such file or directory",
+    "experimental_path_probe": "-isystem c++/experimental -> error: 'is_void' was not declared in this scope (experimental/type_traits uses std namespace but the aliases are absent)",
+    "observed_build_failure": "build-v17-* and first build-v18-* attempts: fatal error: optional: No such file or directory in src/phase1/bench/{BudgetLedger,ParameterAccounting}.h, BenchmarkHarness.h, src/phase1/common/{HardwareProfiler,ExperimentRecord}.h"
+  },
+
+  "adopted_toolchain": {
+    "gxx_path": "C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/g++.exe",
+    "gcc_path": "C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/gcc.exe",
+    "version_output": "g++.exe (MinGW-W64 x86_64-ucrt-posix-seh, built by Brecht Sanders, r4) 16.1.0",
+    "dumpmachine": "x86_64-w64-mingw32",
+    "std_optional_header": "mingw64/include/c++/16.1.0/optional (present)",
+    "why_selected": "Already installed on this host and used by CMake 4.4.1 itself; provides a complete C++17 libstdc++ with <optional> and the std::*_v variable templates. Documented toolchain substitution, not a patch to generated build files.",
+
+    "standalone_optional_probe": {
+      "source": "#include <optional>\n#include <type_traits>\nstatic_assert(std::is_void_v<void>); static_assert(std::is_integral_v<int>);\nstd::optional<int> o; std::optional<std::string> s = std::nullopt; return 0;",
+      "command": "g++.exe -std=c++17 -Wall -o optional_probe.exe optional_probe.cpp",
+      "compile_exit_code": 0,
+      "run_exit_code": 0,
+      "warnings": 0
+    },
+
+    "include_search_paths": [
+      ".../mingw64/bin/../lib/gcc/x86_64-w64-mingw32/16.1.0/../../../../include/c++/16.1.0",
+      ".../mingw64/bin/../lib/gcc/x86_64-w64-mingw32/16.1.0/../../../../include/c++/16.1.0/x86_64-w64-mingw32",
+      ".../mingw64/bin/../lib/gcc/x86_64-w64-mingw32/16.1.0/../../../../include/c++/16.1.0/backward",
+      ".../mingw64/bin/../lib/gcc/x86_64-w64-mingw32/16.1.0/include",
+      ".../mingw64/bin/../lib/gcc/x86_64-w64-mingw32/16.1.0/../../../../include",
+      ".../mingw64/bin/../lib/gcc/x86_64-w64-mingw32/16.1.0/include-fixed",
+      ".../mingw64/bin/../lib/gcc/x86_64-w64-mingw32/16.1.0/../../../../x86_64-w64-mingw32/include"
+    ],
+    "include_search_full_prefix": "C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64"
+  },
+
+  "cmake": {
+    "version": "cmake version 4.4.1",
+    "path": "/c/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/cmake",
+    "generator": "Ninja",
+    "compiler_identification_line": "-- The CXX compiler identification is GNU 16.1.0",
+    "cache_entries": {
+      "CMAKE_CXX_COMPILER": "C:/Users/rahul/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/g++.exe",
+      "CMAKE_C_COMPILER": "<same prefix>/mingw64/bin/gcc.exe",
+      "CMAKE_GENERATOR": "Ninja",
+      "CMAKE_BUILD_TYPE": "Debug (build-v18-debug) / Release (build-v18-release)",
+      "CMAKE_CXX_STANDARD": "17",
+      "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+      "CMAKE_CXX_EXTENSIONS": "OFF"
+    }
+  },
+
+  "ninja": {
+    "version": "1.13.2.git.kitware.jobserver-pipe-1",
+    "path": "/c/Users/rahul/AppData/Roaming/Python/Python314/Scripts/ninja"
+  },
+
+  "configure_commands": {
+    "debug": "cmake -S . -B build-v18-debug -G Ninja -DCMAKE_CXX_COMPILER=$WINLIBS/bin/g++.exe -DCMAKE_C_COMPILER=$WINLIBS/bin/gcc.exe -DCMAKE_MAKE_PROGRAM=$(which ninja) -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_STANDARD=17 -DCMAKE_CXX_STANDARD_REQUIRED=ON -DCMAKE_CXX_EXTENSIONS=OFF",
+    "release": "cmake -S . -B build-v18-release -G Ninja -DCMAKE_CXX_COMPILER=$WINLIBS/bin/g++.exe -DCMAKE_C_COMPILER=$WINLIBS/bin/gcc.exe -DCMAKE_MAKE_PROGRAM=$(which ninja) -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17 -DCMAKE_CXX_STANDARD_REQUIRED=ON -DCMAKE_CXX_EXTENSIONS=OFF"
+  },
+
+  "results": {
+    "configure_exit": {"debug": 0, "release": 0},
+    "build_exit": {"debug": 0, "release": 0},
+    "targets": {"debug": "103/103", "release": "103/103"},
+    "ctest_exit": {"debug": 0, "release": 0},
+    "ctest_passed": {"debug": "6/6", "release": "6/6"},
+    "gates_test": {"debug": "PASS: test_phase1_gates (328 assertions)", "release": "PASS: test_phase1_gates (328 assertions)"},
+    "executables_built": {"debug": 24, "release": 24}
+  },
+
+  "logs": [
+    "build-v18-debug/configure.log",
+    "build-v18-debug/build.log",
+    "build-v18-debug/ctest.log",
+    "build-v18-release/configure.log",
+    "build-v18-release/build.log",
+    "build-v18-release/ctest.log"
+  ],
+
+  "invalid_shortcuts_avoided": [
+    "No generated build.ninja or CMake cache file was hand-edited.",
+    "Configure-only directories were not counted as builds.",
+    "Registered test names were not counted as executions; all 6 tests ran to completion in both configs with exit 0."
+  ]
+}

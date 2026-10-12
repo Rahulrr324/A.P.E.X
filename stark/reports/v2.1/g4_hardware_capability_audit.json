@@ -1,0 +1,135 @@
+{
+  "report": "APEX_M0_v2.1_G4_hardware_capability_audit",
+  "date": "2026-10-05",
+  "scope": "Re-examination of the v2.0 G4 PASS. No historical record was modified; no threshold changed.",
+
+  "summary": {
+    "v2_0_verdict": "G4 PASS (E1/E5 treated as CPU-only)",
+    "v2_1_verdict": "G4 FAIL (corrected)",
+    "why": "device_capability() treated cuda_available=false as proof of CPU-only hardware. On this host cuda_available=false only because the binary was built without CUDA; the machine physically has an NVIDIA GeForce RTX 2050. CUDA build/runtime availability is not physical GPU absence."
+  },
+
+  "physical_hardware_evidence": {
+    "host_observed": true,
+    "method_1_os_device_inventory": {
+      "tool": "powershell Get-CimInstance Win32_VideoController",
+      "adapters": [
+        {"name": "Intel(R) UHD Graphics", "adapter_ram_bytes": 2147479552, "driver_version": "32.0.101.5542", "status": "OK"},
+        {"name": "NVIDIA GeForce RTX 2050", "adapter_ram_bytes": 4293918720, "driver_version": "32.0.16.1714", "status": "OK"}
+      ],
+      "conclusion": "A discrete NVIDIA GeForce RTX 2050 (~4.0 GiB) is physically present, in addition to integrated Intel UHD graphics."
+    },
+    "method_2_production_profiler": {
+      "record": "archive_recovery/v21_evidence/P1-PROFILE-24-0.json",
+      "field": "hardware.gpu_present = true",
+      "provenance": "source: EnumDisplayDevices display-adapter enumeration | adapters: Intel(R) UHD Graphics | Intel(R) UHD Graphics | Intel(R) UHD Graphics | Intel(R) UHD Graphics | NVIDIA GeForce RTX 2050",
+      "conclusion": "The production profiler independently reports physical GPU presence, matching the OS device inventory. The two sources agree."
+    },
+    "spec_confirmation": "design/V009_phase1_M0_specification.md names the target hardware as 'HP Victus: i5-12450H, RTX 2050 4 GB VRAM, 24 GB RAM'. The recovered records' CPU (i5-12450H) matches this target."
+  },
+
+  "code_trace": {
+    "how_the_fields_are_populated_today": {
+      "file": "src/phase1/common/HardwareProfiler.cpp",
+      "collectGpu()": "When compiled without CUDA (STARK_P1_CUDA_COMPILED undefined): cuda_available=false; provenance['cuda_available']='unavailable: binary built without CUDA (STARK_ENABLE_CUDA=OFF / no toolkit)'; gpu_model='unavailable: binary built without CUDA'; cuda_version likewise. vram_total_bytes is left unset.",
+      "meaning": "These are BUILD facts, not hardware facts. They cannot distinguish 'no GPU' from 'no CUDA in this build'."
+    },
+    "the_defect": {
+      "file": "src/phase1/gates.cpp",
+      "function": "device_capability()",
+      "old_logic": "if cuda_available is a bool: return true? GPU : CPU  -- i.e. cuda_available=false => CPU-only",
+      "consequence": "A CUDA-disabled build on a GPU host was classified CPU-only, which let the recovered records bypass the measured-VRAM requirement and produced the v2.0 G4 PASS."
+    },
+    "frozen_spec_context": {
+      "G4_definition": "Every baseline record's peak RAM/VRAM comes from process/device queries (B8), with measured: true; any estimated field is flagged and gate G4 fails if a peak memory field is estimated.",
+      "G3_definition": "If CUDA exists: GPU baselines produce complete records; if no CUDA: records exist with status: skipped + reason. Either branch passes.",
+      "note": "G3 keys on CUDA availability (a build fact) and legitimately permits skip records. G4 keys on measured peak RAM/VRAM. The physical-capability question is separate from both."
+    }
+  },
+
+  "source_change": {
+    "minimal": true,
+    "files": [
+      {
+        "file": "src/phase1/common/HardwareProfiler.h",
+        "sha256_before_v2_1": "not previously recorded",
+        "sha256_after_v2_1": "44242286cf8c803c23c8f7184c1858984def2a840af44e1925407aadaeb3d358",
+        "change": "Added std::optional<bool> gpu_present to StaticHardwareProfile (tri-state physical presence: true / false / nullopt=unknown), documented as independent of cuda_available."
+      },
+      {
+        "file": "src/phase1/common/HardwareProfiler.cpp",
+        "sha256_before_v2_1": "not previously recorded",
+        "sha256_after_v2_1": "43a795ed265ef5050dd53b9731ebd81976fade373db7c6ac47ce8ca3dfc98274",
+        "change": "Added collectPhysicalGpuPresence(): on Windows, EnumDisplayDevices enumeration of display adapters (real vs basic/remote); sets gpu_present and provenance. Serialize/parse gpu_present (bare bool when known, {value:null,reason} when unknown). Non-Windows => nullopt + reason."
+      },
+      {
+        "file": "src/phase1/gates.cpp",
+        "sha256_before_v2_1": "7fd240a8b486b9f85703fe6cf38966c4914794ccb0b4a829b455f03c43b070e2",
+        "sha256_after_v2_1": "32d89a4fd02ddb302ab1747bcd8f5544284ca02994398ce8bed7c8f913e51849",
+        "change": "Rewrote device_capability(): GPU if gpu_present==true / cuda_available==true / authoritative GPU field; CPU ONLY if gpu_present==false; else Unknown. cuda_available==false is no longer CPU-only evidence. Updated the fail-closed detail string."
+      },
+      {
+        "file": "src/phase1/baselines/run_baseline.cpp",
+        "sha256_before_v2_1": "not previously recorded",
+        "sha256_after_v2_1": "0c06b778d496dd6663183893014e4b3299e2bc88863f2620227feb94dd93c226",
+        "change": "E2/B4/B5 SKIPPED reason made build-scoped and precise: states CUDA is unavailable in THIS build without asserting the machine lacks a GPU, and points to hardware.gpu_present."
+      },
+      {
+        "file": "tests/test_phase1_gates.cpp",
+        "sha256_before_v2_1": "15110df5f78d9131a2e626ae7b834b4ee6a80958da274160d3edc70b818d44b5",
+        "sha256_after_v2_1": "8c584a03136fb36fc4583d7ed1536b0752155ef7cf930ce1381d3b44768ecdb8",
+        "change": "mk() helper now declares confirmed CPU-only via gpu_present=false; added 6 v2.1 capability regression blocks (12 new checks). 328 -> 340 assertions."
+      },
+      {
+        "file": "fixtures/make_controlled_fixtures.py",
+        "sha256_before_v2_1": "f713ae7205ac804a00a97db16f9c9bcf64806f06496f1684fcfe7c26966ce579",
+        "sha256_after_v2_1": "29d571661a033e4f1eeb243308bce67c28d7f8b37f3b035fcaecdb979fcd9bc5",
+        "change": "Controlled CPU-workload fixtures now set hardware.gpu_present=false explicitly (no longer relying on a CUDA-less build flag)."
+      },
+      {
+        "file": "fixtures/make_v21_capability_fixtures.py",
+        "sha256_before_v2_1": "new file",
+        "sha256_after_v2_1": "ba455f39b9ab7a6b45e2b42a7ec34317603752dd614b223b9614eeedb44c7e2c",
+        "change": "New generator for the three v2.1 capability fixtures."
+      }
+    ],
+    "CMakeLists_txt": {"sha256": "cf8c7ad6c53c05b4e8180e063cdf9fa639f75fe8a752fa685883dc4f1d56e056", "changed": false},
+    "no_threshold_or_schema_break": "No frozen threshold, grouping key, or historical record changed. The added hardware field is additive."
+  },
+
+  "corrected_result": {
+    "nine_recovered_records": {
+      "input": "archive_recovery/aggregator_input/ (9 records, unchanged)",
+      "g4": "FAIL",
+      "reason": "records carry cuda_available=false and no gpu_present evidence; physical capability is Unknown -> fail closed ('refusing to classify as CPU-only')"
+    },
+    "v2_1_candidate_evidence": {
+      "input": "archive_recovery/v21_evidence/ (9 recovered + genuine PROFILE/TELEMETRY + genuine E2/B4/B5 skip = 14 records)",
+      "g4": "FAIL",
+      "reason": "E5 (and E1) still lack gpu_present evidence -> Unknown -> fail closed. Even had they carried gpu_present=true, the CUDA-less build cannot measure VRAM, so the measured-VRAM requirement would still fail."
+    },
+    "physical_host_is_gpu_capable": true,
+    "g4_requires_measured_vram_for_this_host": true,
+    "verdict": "G4 is FAIL. The v2.0 G4 PASS is withdrawn."
+  },
+
+  "regression_tests_added": [
+    "Physical GPU present, CUDA build disabled (gpu_present=true, cuda_available=false), VRAM unavailable -> G4 FAIL",
+    "Physical GPU present, CUDA enabled (gpu_present=true, cuda_available=true, gpu_model), VRAM measured -> G4 PASS",
+    "Confirmed CPU-only (gpu_present=false, cuda_available=false), documented VRAM unavailability -> G4 PASS (CPU workload, frozen rule)",
+    "Unknown capability: cuda_available=false alone (no gpu_present) -> G4 FAIL (must not be read as CPU-only)",
+    "Unknown capability: gpu_present present but malformed/null-valued -> G4 FAIL",
+    "GPU workload requiring VRAM: gpu_present=true, vram_measured=true but VRAM value unavailable -> G4 FAIL"
+  ],
+  "end_to_end_fixtures": {
+    "fixtures/v21/controlled-gpu-cuda-off": "recorded 7; G4 FAIL; exit 1",
+    "fixtures/v21/controlled-gpu-vram-measured": "recorded 7; all gates PASS; exit 0",
+    "fixtures/v21/controlled-unknown-capability": "recorded 7; G4 FAIL; exit 1"
+  },
+
+  "backward_compatibility": {
+    "existing_records": "Preserved unchanged. Records predating the gpu_present field have no physical-capability evidence; they are now classified Unknown and fail G4 closed.",
+    "migration_limitation": "There is no way to retroactively derive physical GPU presence for a historical record that did not capture it. Such records cannot regain a CPU-only classification and cannot satisfy the measured-VRAM requirement either; they remain G4-FAIL by construction. This is intentional (fail closed) and is the honest handling of the frozen rule.",
+    "schema": "Additive only. Older readers ignore gpu_present; older records parse with gpu_present absent (Unknown)."
+  }
+}
