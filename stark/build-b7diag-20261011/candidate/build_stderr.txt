@@ -1,0 +1,22 @@
+In file included from src/phase1/bench/TinyDenseModel.h:22:0,
+                 from src/phase1/diagnostics/bm_b7_diagnostic.cpp:142:
+src/phase1/bench/ParameterAccounting.h:30:20: fatal error: optional: No such file or directory
+ #include <optional>
+                    ^
+compilation terminated.
+In file included from src/phase1/bench/TinyDenseModel.h:22:0,
+                 from src/phase1/bench/TinyDenseModel.cpp:1:
+src/phase1/bench/ParameterAccounting.h:30:20: fatal error: optional: No such file or directory
+ #include <optional>
+                    ^
+compilation terminated.
+In file included from src/phase1/bench/ParameterAccounting.cpp:1:0:
+src/phase1/bench/ParameterAccounting.h:30:20: fatal error: optional: No such file or directory
+ #include <optional>
+                    ^
+compilation terminated.
+In file included from src/phase1/common/ExperimentRecord.cpp:1:0:
+src/phase1/common/ExperimentRecord.h:22:20: fatal error: optional: No such file or directory
+ #include <optional>
+                    ^
+compilation terminated.
