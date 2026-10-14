@@ -1,0 +1,138 @@
+############ FROZEN G7/M0/M1 SOURCE HASHES (baseline Oct-11) ############
+--- hashes_frozen_before.txt ---
+stark/src/phase1/gates.cpp: OK
+stark/src/phase1/gates.h: OK
+stark/src/phase1/bench/BenchmarkHarness.cpp: OK
+stark/src/phase1/bench/TinyDenseModel.cpp: OK
+stark/src/phase1/bench/TinyDenseModel.h: OK
+stark/src/phase1/common/ExperimentRecord.cpp: OK
+stark/src/phase1/common/ExperimentRecord.h: OK
+stark/src/phase1/campaign/G7Campaign.cpp: OK
+stark/src/phase1/aggregate.cpp: OK
+stark/reports/source_change_manifest.json: OK
+   (exit=0)
+--- hashes_evidence_before.txt ---
+stark/reports/evidence_manifest.json: OK
+stark/reports/g7-campaign/evidence_manifest.json: OK
+stark/reports/g7-campaign-affinityfix/records_sha256.txt: OK
+stark/reports/v2.1/evidence_manifest.json: OK
+stark/reports/v2.2/evidence_manifest.json: OK
+stark/reports/v2.3/evidence_manifest.json: OK
+stark/reports/v2.4/evidence_manifest.json: OK
+   (exit=0)
+--- hashes_g7cam_before.txt ---
+stark/build/g7-campaign/G7CAM-B6-E1-30822082.json: OK
+stark/build/g7-campaign/G7CAM-B6-E1-34325368.json: OK
+stark/build/g7-campaign/G7CAM-B6-E1-63991758.json: OK
+stark/build/g7-campaign/G7CAM-B6-E1-66912564.json: OK
+stark/build/g7-campaign/G7CAM-B6-E1-90989457.json: OK
+stark/build/g7-campaign/G7CAM-B6-E5-30822082.json: OK
+stark/build/g7-campaign/G7CAM-B6-E5-34325368.json: OK
+stark/build/g7-campaign/G7CAM-B6-E5-63991758.json: OK
+stark/build/g7-campaign/G7CAM-B6-E5-66912564.json: OK
+stark/build/g7-campaign/G7CAM-B6-E5-90989457.json: OK
+stark/build/g7-campaign/G7CAM-B7-E1-30822082.json: OK
+stark/build/g7-campaign/G7CAM-B7-E1-34325368.json: OK
+stark/build/g7-campaign/G7CAM-B7-E1-63991758.json: OK
+stark/build/g7-campaign/G7CAM-B7-E1-66912564.json: OK
+stark/build/g7-campaign/G7CAM-B7-E1-90989457.json: OK
+stark/build/g7-campaign/G7CAM-B7-E5-30822082.json: OK
+stark/build/g7-campaign/G7CAM-B7-E5-34325368.json: OK
+stark/build/g7-campaign/G7CAM-B7-E5-63991758.json: OK
+stark/build/g7-campaign/G7CAM-B7-E5-66912564.json: OK
+stark/build/g7-campaign/G7CAM-B7-E5-90989457.json: OK
+stark/build/g7-campaign/G7CAM-B9-E1-30822082.json: OK
+stark/build/g7-campaign/G7CAM-B9-E1-34325368.json: OK
+stark/build/g7-campaign/G7CAM-B9-E1-63991758.json: OK
+stark/build/g7-campaign/G7CAM-B9-E1-66912564.json: OK
+stark/build/g7-campaign/G7CAM-B9-E1-90989457.json: OK
+stark/build/g7-campaign/G7CAM-B9-E5-30822082.json: OK
+stark/build/g7-campaign/G7CAM-B9-E5-34325368.json: OK
+stark/build/g7-campaign/G7CAM-B9-E5-63991758.json: OK
+stark/build/g7-campaign/G7CAM-B9-E5-66912564.json: OK
+stark/build/g7-campaign/G7CAM-B9-E5-90989457.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B6-E1-14955664.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B6-E1-20855871.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B6-E1-49559376.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B6-E1-61571712.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B6-E1-63692176.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B6-E5-14955664.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B6-E5-20855871.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B6-E5-49559376.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B6-E5-61571712.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B6-E5-63692176.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B7-E1-14955664.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B7-E1-20855871.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B7-E1-49559376.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B7-E1-61571712.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B7-E1-63692176.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B7-E5-14955664.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B7-E5-20855871.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B7-E5-49559376.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B7-E5-61571712.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B7-E5-63692176.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B9-E1-14955664.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B9-E1-20855871.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B9-E1-49559376.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B9-E1-61571712.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B9-E1-63692176.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B9-E5-14955664.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B9-E5-20855871.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B9-E5-49559376.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B9-E5-61571712.json: OK
+stark/build/g7-campaign-affinityfix/G7CAM-B9-E5-63692176.json: OK
+   (exit=0)
+--- hashes_g7cam_frozen20261008_before.txt ---
+stark/build/g7-campaign-frozen-20261008/G7CAM-B6-E1-11933807.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B6-E1-39872860.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B6-E1-41851871.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B6-E1-76656589.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B6-E1-9007430.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B6-E5-11933807.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B6-E5-39872860.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B6-E5-41851871.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B6-E5-76656589.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B6-E5-9007430.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B7-E1-11933807.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B7-E1-39872860.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B7-E1-41851871.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B7-E1-76656589.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B7-E1-9007430.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B7-E5-11933807.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B7-E5-39872860.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B7-E5-41851871.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B7-E5-76656589.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B7-E5-9007430.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B9-E1-11933807.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B9-E1-39872860.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B9-E1-41851871.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B9-E1-76656589.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B9-E1-9007430.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B9-E5-11933807.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B9-E5-39872860.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B9-E5-41851871.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B9-E5-76656589.json: OK
+stark/build/g7-campaign-frozen-20261008/G7CAM-B9-E5-9007430.json: OK
+stark/build/g7-campaign-frozen-20261008/P1-B4-skip.json: OK
+stark/build/g7-campaign-frozen-20261008/P1-B5-skip.json: OK
+stark/build/g7-campaign-frozen-20261008/P1-E2-skip.json: OK
+stark/build/g7-campaign-frozen-20261008/P1-PROFILE-24-0.json: OK
+stark/build/g7-campaign-frozen-20261008/P1-TELEMETRY-24-1.json: OK
+   (exit=0)
+--- hashes_prodbin_before.txt ---
+stark/build/aggregate.exe: OK
+stark/build/profiler_cli.exe: OK
+stark/build/run_baseline.exe: OK
+   (exit=0)
+
+############ PRE-FIX BASELINE (expected to differ: source + CMakeLists legitimately changed) ############
+stark/CMakeLists.txt: FAILED
+stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp: FAILED
+sha256sum: WARNING: 2 computed checksums did NOT match
+
+############ ARTIFACT BASELINE ############
+stark/build-b7diag-20261011/bm_b7_diagnostic.exe: FAILED
+sha256sum: WARNING: 1 computed checksum did NOT match
+
+############ CSV FILES IN TREE ############
+./build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv

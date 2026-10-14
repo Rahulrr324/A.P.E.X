@@ -1,0 +1,17 @@
+############ PROOF: new parser string is compiled into the NEW exe only ############
+new exe contains '--host-capture-dir' : 7
+old exe contains '--host-capture-dir' : 0
+0
+
+############ OLD BINARY vs --host-capture-dir (differentiator) ############
+old exe exit = 2
+old exe stdout(first line) = 
+old exe stderr(first line) = usage: E:\My Local AI\stark\build-b7diag-20261011\bm_b7_diagnostic.exe [diagnostic-directory]
+
+############ NEW BINARY same argv (already tested as C2) ############
+new exe exit = 2  (accepts flag; aborts only on the invalid dir)
+
+############ artifact snapshot unchanged by the old-binary invocation? ############
+Files work/b7_diag_20261011_paired_capture/phase16_vs2019/cli/snapshot_after.txt and work/b7_diag_20261011_paired_capture/phase16_vs2019/cli/snapshot_after_old.txt differ
+CHANGED
+d0fca204c9443ef2

@@ -1,0 +1,158 @@
+{
+  "csv": "E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\run2\\paired_samples.csv",
+  "checks": {
+    "csv_non_empty": {
+      "ok": true,
+      "detail": "12766 bytes"
+    },
+    "header_exact": {
+      "ok": true,
+      "detail": "header=['replicate', 'iteration', 'minimal_sec', 'instrumented_sec', 'signed_overhead_pct']"
+    },
+    "exactly_300_data_rows": {
+      "ok": true,
+      "detail": "data rows=300"
+    },
+    "total_lines_301_incl_header": {
+      "ok": true,
+      "detail": "lines=301"
+    },
+    "pair_keys_unique": {
+      "ok": true,
+      "detail": "unique=300"
+    },
+    "pair_keys_exact_set": {
+      "ok": true,
+      "detail": "missing=0 extra=0"
+    },
+    "per_replicate_counts_50": {
+      "ok": true,
+      "detail": "counts={0: 50, 1: 50, 2: 50, 3: 50, 4: 50, 5: 50}"
+    },
+    "all_values_finite": {
+      "ok": true,
+      "detail": ""
+    },
+    "minimal_sec_positive": {
+      "ok": true,
+      "detail": ""
+    },
+    "instrumented_sec_positive": {
+      "ok": true,
+      "detail": ""
+    },
+    "row_formula_pct_matches": {
+      "ok": true,
+      "detail": "violations=0"
+    },
+    "recomputed_matches_reported_mean_overhead_pct": {
+      "ok": true,
+      "detail": "recomputed=8.550597 reported=8.5506"
+    },
+    "recomputed_matches_reported_worst_case_overhead_pct": {
+      "ok": true,
+      "detail": "recomputed=109.088219 reported=109.0882"
+    },
+    "recomputed_matches_reported_median_deviation_pct": {
+      "ok": true,
+      "detail": "recomputed=2.116052 reported=2.1161"
+    },
+    "recomputed_matches_reported_median_minimal_us": {
+      "ok": true,
+      "detail": "recomputed=15469.85 reported=15469.85"
+    },
+    "recomputed_matches_reported_median_instrumented_us": {
+      "ok": true,
+      "detail": "recomputed=15797.2 reported=15797.2"
+    },
+    "recomputed_matches_reported_mean_minimal_us": {
+      "ok": true,
+      "detail": "recomputed=14761.781 reported=14761.781"
+    },
+    "recomputed_matches_reported_mean_instrumented_us": {
+      "ok": true,
+      "detail": "recomputed=16024.001333 reported=16024.001"
+    },
+    "per_replicate_medians_minimal": {
+      "ok": true,
+      "detail": "recomputed=[11559.3, 13001.7, 15523.5, 15788.1, 15968.85, 15490.1] reported=[11559.3, 13001.7, 15523.5, 15788.1, 15968.85, 15490.1]"
+    },
+    "per_replicate_medians_instrumented": {
+      "ok": true,
+      "detail": "recomputed=[15559.35, 14225.5, 17633.65, 15940.95, 15994.9, 15655.4] reported=[15559.35, 14225.5, 17633.65, 15940.95, 15994.9, 15655.4]"
+    },
+    "report_contains[mean_overhead_pct       = 8.5506 %]": {
+      "ok": true,
+      "detail": ""
+    },
+    "report_contains[worst_case_overhead_pct = 109.0882 %]": {
+      "ok": true,
+      "detail": ""
+    },
+    "report_contains[median_deviation_pct    = 2.1161 %]": {
+      "ok": true,
+      "detail": ""
+    },
+    "report_contains[classification: INCONCLUSIVE]": {
+      "ok": true,
+      "detail": ""
+    },
+    "report_contains[historical comparison reference: 5721.90]": {
+      "ok": true,
+      "detail": ""
+    },
+    "no_forbidden_marker_in_path": {
+      "ok": true,
+      "detail": ""
+    },
+    "no_forbidden_marker_in_contents": {
+      "ok": true,
+      "detail": ""
+    },
+    "threshold_mean_le_2pct": {
+      "ok": false,
+      "detail": "8.5506 %"
+    },
+    "threshold_worst_le_10pct": {
+      "ok": false,
+      "detail": "109.0882 %"
+    },
+    "threshold_median_dev_le_2pct": {
+      "ok": false,
+      "detail": "2.1161 %"
+    }
+  },
+  "metrics": {
+    "n_samples_per_condition": 300,
+    "mean_minimal_us": 14761.781,
+    "mean_instrumented_us": 16024.001333,
+    "median_minimal_us": 15469.85,
+    "median_instrumented_us": 15797.2,
+    "mean_overhead_pct": 8.550597,
+    "worst_case_overhead_pct": 109.088219,
+    "median_deviation_pct": 2.116052
+  },
+  "verdict": {
+    "threshold_mean_le_2pct": {
+      "value": 8.5506,
+      "ok": false
+    },
+    "threshold_worst_le_10pct": {
+      "value": 109.0882,
+      "ok": false
+    },
+    "threshold_median_dev_le_2pct": {
+      "value": 2.1161,
+      "ok": false
+    },
+    "calibration_status": "FAIL"
+  },
+  "csv_bytes": 12766,
+  "csv_sha256": "818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f",
+  "all_checks_passed": false,
+  "failed_checks": [
+    "threshold_mean_le_2pct",
+    "threshold_worst_le_10pct",
+    "threshold_median_dev_le_2pct"
+  ]
+}

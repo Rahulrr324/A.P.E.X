@@ -1,0 +1,39 @@
+==============================================================================
+INDEPENDENT CSV VALIDATION
+==============================================================================
+[PASS] csv_non_empty  -- 12766 bytes
+[PASS] header_exact  -- header=['replicate', 'iteration', 'minimal_sec', 'instrumented_sec', 'signed_overhead_pct']
+[PASS] exactly_300_data_rows  -- data rows=300
+[PASS] total_lines_301_incl_header  -- lines=301
+[PASS] pair_keys_unique  -- unique=300
+[PASS] pair_keys_exact_set  -- missing=0 extra=0
+[PASS] per_replicate_counts_50  -- counts={0: 50, 1: 50, 2: 50, 3: 50, 4: 50, 5: 50}
+[PASS] all_values_finite
+[PASS] minimal_sec_positive
+[PASS] instrumented_sec_positive
+[PASS] row_formula_pct_matches  -- violations=0
+[PASS] recomputed_matches_reported_mean_overhead_pct  -- recomputed=8.550597 reported=8.5506
+[PASS] recomputed_matches_reported_worst_case_overhead_pct  -- recomputed=109.088219 reported=109.0882
+[PASS] recomputed_matches_reported_median_deviation_pct  -- recomputed=2.116052 reported=2.1161
+[PASS] recomputed_matches_reported_median_minimal_us  -- recomputed=15469.85 reported=15469.85
+[PASS] recomputed_matches_reported_median_instrumented_us  -- recomputed=15797.2 reported=15797.2
+[PASS] recomputed_matches_reported_mean_minimal_us  -- recomputed=14761.781 reported=14761.781
+[PASS] recomputed_matches_reported_mean_instrumented_us  -- recomputed=16024.001333 reported=16024.001
+[PASS] per_replicate_medians_minimal  -- recomputed=[11559.3, 13001.7, 15523.5, 15788.1, 15968.85, 15490.1] reported=[11559.3, 13001.7, 15523.5, 15788.1, 15968.85, 15490.1]
+[PASS] per_replicate_medians_instrumented  -- recomputed=[15559.35, 14225.5, 17633.65, 15940.95, 15994.9, 15655.4] reported=[15559.35, 14225.5, 17633.65, 15940.95, 15994.9, 15655.4]
+[PASS] report_contains[mean_overhead_pct       = 8.5506 %]
+[PASS] report_contains[worst_case_overhead_pct = 109.0882 %]
+[PASS] report_contains[median_deviation_pct    = 2.1161 %]
+[PASS] report_contains[classification: INCONCLUSIVE]
+[PASS] report_contains[historical comparison reference: 5721.90]
+[PASS] no_forbidden_marker_in_path
+[PASS] no_forbidden_marker_in_contents
+[FAIL] threshold_mean_le_2pct  -- 8.5506 %
+[FAIL] threshold_worst_le_10pct  -- 109.0882 %
+[FAIL] threshold_median_dev_le_2pct  -- 2.1161 %
+==============================================================================
+STRUCTURAL VALIDITY : FAIL  (30 checks, 3 failed)
+CALIBRATION VERDICT : FAIL
+mean=8.5506%  worst=109.0882%  median_dev=2.1161%
+wrote E:\My Local AI\work\b7_diag_20261011_paired_capture\phase16_vs2019\csv_validation.json
+==============================================================================

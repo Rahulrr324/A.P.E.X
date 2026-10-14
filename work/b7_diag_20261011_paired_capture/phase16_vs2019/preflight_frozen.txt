@@ -1,0 +1,26 @@
+############ M0/M1 FROZEN EVIDENCE (expected hashes from work/_task_b7_phase1_report.md) ############
+MISMATCH stark/reports/evidence_manifest.json
+         expected 7a8dd9de17c4effdc9153ac4505a6f6f95ed662ef204cab52ad279c4bf01fc5a
+         actual   14975fa285362d4bb6f92f08840841de6edfad88b29dfd101107075731d473d3
+MATCH    stark/reports/source_change_manifest.json
+MATCH    stark/reports/historical_artifact_inventory.json
+MATCH    stark/reports/m0_acceptance_matrix.json
+MATCH    stark/reports/M0_FINAL_REPORT_v2.3.md
+MATCH    stark/reports/g7-campaign-affinityfix/G7_FROZEN_CAMPAIGN_RESULT.md
+MATCH    stark/reports/g7-campaign-affinityfix/records_sha256.txt
+MATCH    stark/reports/gate_results/G7.json
+MATCH    stark/reports/gate_results/G4.json
+
+############ HISTORICAL / OLD CSV (must be preserved, not overwritten) ############
+MATCH    build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv
+
+############ BUILD BASIS (current, post-fix) ############
+MATCH    stark/CMakeLists.txt
+MATCH    stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp
+
+############ DESTINATION + DIRECTORY PRECONDITIONS ############
+OK       host dir exists: work/b7_diag_20261011_paired_capture/run2
+OK       destination absent: work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+OK       diagnostic dir exists: build/bm_b7_diagnostic
+         run dirs present: 1
+run_1791799501127597800_0

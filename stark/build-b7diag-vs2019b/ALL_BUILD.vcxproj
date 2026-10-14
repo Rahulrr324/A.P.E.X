@@ -1,0 +1,210 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{43B9E4DC-1700-33BD-B3DF-9905B5AB119A}</ProjectGuid>
+    <WindowsTargetPlatformVersion>10.0.19041.0</WindowsTargetPlatformVersion>
+    <Keyword>Win32Proj</Keyword>
+    <Platform>x64</Platform>
+    <ProjectName>ALL_BUILD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v142</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>E:\My Local AI\stark\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="E:\My Local AI\stark\CMakeLists.txt">
+      <StdOutEncoding>UTF-8</StdOutEncoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule E:/My Local AI/stark/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+"C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" "-SE:/My Local AI/stark" "-BE:/My Local AI/stark/build-b7diag-vs2019b" --check-stamp-file "E:/My Local AI/stark/build-b7diag-vs2019b/CMakeFiles/generate.stamp"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeCXXInformation.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeGenericSystem.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeInitializeConfigs.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeLanguageInformation.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeRCInformation.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Platform\Windows-MSVC.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Platform\Windows.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Platform\WindowsPaths.cmake;E:\My Local AI\stark\build-b7diag-vs2019b\CMakeFiles\3.20.21032501-MSVC_2\CMakeCXXCompiler.cmake;E:\My Local AI\stark\build-b7diag-vs2019b\CMakeFiles\3.20.21032501-MSVC_2\CMakeRCCompiler.cmake;E:\My Local AI\stark\build-b7diag-vs2019b\CMakeFiles\3.20.21032501-MSVC_2\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">E:\My Local AI\stark\build-b7diag-vs2019b\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\ZERO_CHECK.vcxproj">
+      <Project>{52E82B4D-2D2D-3E23-80F8-5DA68CD4E17E}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\aggregate.vcxproj">
+      <Project>{FF1671CA-A2E2-3B88-8EF6-1D28E11A1470}</Project>
+      <Name>aggregate</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj">
+      <Project>{CBC3F8B4-60D8-3462-9C8C-B9327FBDE4E0}</Project>
+      <Name>bm_b7_diagnostic</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\diag_frequency_evidence.vcxproj">
+      <Project>{77578F1B-EB02-3D76-A3A0-718F0787DBB5}</Project>
+      <Name>diag_frequency_evidence</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\diag_highres_frequency.vcxproj">
+      <Project>{39491D88-5E5E-3AB7-856F-40CA1ECDFA44}</Project>
+      <Name>diag_highres_frequency</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\g7_campaign.vcxproj">
+      <Project>{73FE0AB9-C516-3B22-8544-B2D040643485}</Project>
+      <Name>g7_campaign</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\homeostasis_demo.vcxproj">
+      <Project>{4FE3E939-2CE3-3FD1-B0D1-02333847FD12}</Project>
+      <Name>homeostasis_demo</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\network_demo.vcxproj">
+      <Project>{C499229D-E82F-36E2-B94A-70B7D12E69BF}</Project>
+      <Name>network_demo</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\power_scheme_control.vcxproj">
+      <Project>{FD0D9900-1124-309E-9768-9A28D31901B1}</Project>
+      <Name>power_scheme_control</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\profiler_cli.vcxproj">
+      <Project>{B09A4FAB-8FFF-39EF-83F6-4693493918E6}</Project>
+      <Name>profiler_cli</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\run_baseline.vcxproj">
+      <Project>{6B76B23A-0418-3F3E-807E-172524E864B1}</Project>
+      <Name>run_baseline</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\serialization_demo.vcxproj">
+      <Project>{0EBE1ACE-38F7-3094-93D7-25EC8EAAD77F}</Project>
+      <Name>serialization_demo</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\stark_002.vcxproj">
+      <Project>{B4D64271-064F-3CCA-9415-B102697B3E86}</Project>
+      <Name>stark_002</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\stark_phase1.vcxproj">
+      <Project>{D13E4890-0A2B-36E8-ABA8-B7FE44E7D182}</Project>
+      <Name>stark_phase1</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\stdp_demo.vcxproj">
+      <Project>{43C44933-7708-3AD1-8C0C-ECBDE521BB93}</Project>
+      <Name>stdp_demo</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_homeostasis.vcxproj">
+      <Project>{9D26A248-76F4-3649-A35A-A69346618DDE}</Project>
+      <Name>test_homeostasis</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_integration.vcxproj">
+      <Project>{2400B3C1-984C-319B-B0F1-E15AE055C0FC}</Project>
+      <Name>test_integration</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_network.vcxproj">
+      <Project>{393AD8A0-5392-36F3-BD55-6C20072BE85B}</Project>
+      <Name>test_network</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_neuron.vcxproj">
+      <Project>{1BF8AADA-E58F-3628-BD16-1C93FE21E6D2}</Project>
+      <Name>test_neuron</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_params.vcxproj">
+      <Project>{F90357FB-0695-39E5-8DCB-A26D2AD5C639}</Project>
+      <Name>test_params</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_phase1_accounting.vcxproj">
+      <Project>{D8A153F0-B711-3FB9-ADE2-CC7F4C7CCE2E}</Project>
+      <Name>test_phase1_accounting</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_phase1_affinity.vcxproj">
+      <Project>{4D70938A-9622-3161-81F1-E3F1B077F13F}</Project>
+      <Name>test_phase1_affinity</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_phase1_budget.vcxproj">
+      <Project>{DECC8AAA-27E6-3680-8B04-89C9B5CB98CE}</Project>
+      <Name>test_phase1_budget</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_phase1_gates.vcxproj">
+      <Project>{8DCDC756-D30C-3C1A-9A96-AEACAADF0FE1}</Project>
+      <Name>test_phase1_gates</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_phase1_profiler.vcxproj">
+      <Project>{0F4CF62F-7A80-3694-942E-B3CC9C0227B2}</Project>
+      <Name>test_phase1_profiler</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_phase1_records.vcxproj">
+      <Project>{F447E330-B15D-3CFA-9089-28E77D4E6ADF}</Project>
+      <Name>test_phase1_records</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_phase1_reproducibility.vcxproj">
+      <Project>{983F3810-46FC-3ED5-A6C6-028245BCBEBE}</Project>
+      <Name>test_phase1_reproducibility</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_production_affinity_evidence.vcxproj">
+      <Project>{3F5B3D81-1FA5-3E08-B406-BEE687CCAEE5}</Project>
+      <Name>test_production_affinity_evidence</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_serialization.vcxproj">
+      <Project>{02AD74A1-4759-321F-8163-2CC02E4ABA87}</Project>
+      <Name>test_serialization</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_stdp.vcxproj">
+      <Project>{C867DB05-1C89-34F3-972E-217EFE9E0458}</Project>
+      <Name>test_stdp</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_synapse.vcxproj">
+      <Project>{0A5445C4-6C48-3C16-926B-42A2385E93BF}</Project>
+      <Name>test_synapse</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_three_factor.vcxproj">
+      <Project>{E579CE48-6B58-3010-96B5-C512D76209D4}</Project>
+      <Name>test_three_factor</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\test_windows_affinity_diag.vcxproj">
+      <Project>{60909E33-4B25-358B-B260-C1EB7F14D732}</Project>
+      <Name>test_windows_affinity_diag</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-vs2019b\three_factor_demo.vcxproj">
+      <Project>{03DFA5D8-A2C8-3EBE-AEFC-994EEB82255F}</Project>
+      <Name>three_factor_demo</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

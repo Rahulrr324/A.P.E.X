@@ -1,0 +1,4 @@
+-- Selecting Windows SDK version 10.0.19041.0 to target Windows 10.0.26300.
+-- Configuring done
+-- Generating done
+-- Build files have been written to: E:/My Local AI/stark/build-b7diag-vs2019b

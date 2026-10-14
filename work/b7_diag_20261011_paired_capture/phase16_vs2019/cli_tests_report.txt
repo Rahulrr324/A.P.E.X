@@ -1,0 +1,151 @@
+########## A. --host-capture-dir contract ##########
+=== CASE A1 ===
+desc    : --host-capture-dir with no value
+argv    : --host-capture-dir
+exit    : 2
+stderr  : error: --host-capture-dir requires a value
+stdout-1: 
+
+=== CASE A2 ===
+desc    : --host-capture-dir followed by another option
+argv    : --host-capture-dir --other
+exit    : 2
+stderr  : error: --host-capture-dir requires a non-option value
+stdout-1: 
+
+=== CASE A3 ===
+desc    : --host-capture-dir empty value
+argv    : --host-capture-dir 
+exit    : 2
+stderr  : error: --host-capture-dir requires a non-option value
+stdout-1: 
+
+=== CASE A4 ===
+desc    : duplicate --host-capture-dir
+argv    : --host-capture-dir ok1 --host-capture-dir ok2
+exit    : 2
+stderr  : error: duplicate --host-capture-dir
+stdout-1: 
+
+=== CASE A5 ===
+desc    : absolute (drive letter)
+argv    : --host-capture-dir C:hostcaps
+exit    : 2
+stderr  : error: invalid --host-capture-dir: absolute paths are not allowed (drive letters / schemes)
+stdout-1: 
+
+=== CASE A6 ===
+desc    : absolute (leading slash)
+argv    : --host-capture-dir /hostcaps
+exit    : 2
+stderr  : error: invalid --host-capture-dir: absolute paths are not allowed
+stdout-1: 
+
+=== CASE A7 ===
+desc    : parent traversal
+argv    : --host-capture-dir ../hostcaps
+exit    : 2
+stderr  : error: invalid --host-capture-dir: '..' path traversal is not allowed
+stdout-1: 
+
+=== CASE A8 ===
+desc    : embedded traversal
+argv    : --host-capture-dir a/../b
+exit    : 2
+stderr  : error: invalid --host-capture-dir: '..' path traversal is not allowed
+stdout-1: 
+
+=== CASE A9 ===
+desc    : forbidden marker: reports
+argv    : --host-capture-dir reports/x
+exit    : 2
+stderr  : error: invalid --host-capture-dir: path contains forbidden marker 'reports' (historical/production data must never be touched)
+stdout-1: 
+
+=== CASE A10 ===
+desc    : forbidden marker: records
+argv    : --host-capture-dir records/x
+exit    : 2
+stderr  : error: invalid --host-capture-dir: path contains forbidden marker 'records' (historical/production data must never be touched)
+stdout-1: 
+
+=== CASE A11 ===
+desc    : forbidden marker: g7-campaign
+argv    : --host-capture-dir g7-campaign/x
+exit    : 2
+stderr  : error: invalid --host-capture-dir: path contains forbidden marker 'g7-campaign' (historical/production data must never be touched)
+stdout-1: 
+
+=== CASE A12 ===
+desc    : forbidden marker: .jsonl
+argv    : --host-capture-dir x.jsonl
+exit    : 2
+stderr  : error: invalid --host-capture-dir: path contains forbidden marker '.jsonl' (historical/production data must never be touched)
+stdout-1: 
+
+=== CASE A13 ===
+desc    : forbidden marker: evidence_manifest
+argv    : --host-capture-dir evidence_manifest
+exit    : 2
+stderr  : error: invalid --host-capture-dir: path contains forbidden marker 'evidence_manifest' (historical/production data must never be touched)
+stdout-1: 
+
+########## B. other parser contract ##########
+=== CASE B1 ===
+desc    : unknown long option
+argv    : --bogus
+exit    : 2
+stderr  : error: unknown option: --bogus
+stdout-1: 
+
+=== CASE B2 ===
+desc    : two positional directory arguments
+argv    : dir_one dir_two
+exit    : 2
+stderr  : error: more than one diagnostic-directory argument
+stdout-1: 
+
+=== CASE B3 ===
+desc    : option value that looks like an option
+argv    : --host-capture-dir --host-capture-dir
+exit    : 2
+stderr  : error: --host-capture-dir requires a non-option value
+stdout-1: 
+
+########## C. backward-compatible forms (must PARSE, abort at isolation check) ##########
+=== CASE C1 ===
+desc    : single positional (invalid dir => isolation abort)
+argv    : not_the_diagnostic_dir
+exit    : 2
+stderr  : 
+stdout-1: === B7 isolated diagnostic report ===
+
+=== CASE C2 ===
+desc    : single positional + valid host dir (isolation abort)
+argv    : not_the_diagnostic_dir --host-capture-dir work/b7_diag_20261011_paired_capture/run2
+exit    : 2
+stderr  : 
+stdout-1: === B7 isolated diagnostic report ===
+
+########## D. artifact snapshot diff (before vs after invalid-arg tests) ##########
+IDENTICAL: no artifact was created or modified by any invalid-argument invocation.
+
+########## E. exit-code summary ##########
+A1     2
+A10    2
+A11    2
+A12    2
+A13    2
+A2     2
+A3     2
+A4     2
+A5     2
+A6     2
+A7     2
+A8     2
+A9     2
+B1     2
+B2     2
+B3     2
+C1     2
+C2     2

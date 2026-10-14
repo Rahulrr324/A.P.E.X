@@ -1,0 +1,13 @@
+Microsoft (R) Build Engine version 16.11.6+a918ceb31 for .NET Framework
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+  Checking Build System
+  Building Custom Rule E:/My Local AI/stark/CMakeLists.txt
+  bm_b7_diagnostic.cpp
+  TinyDenseModel.cpp
+  ParameterAccounting.cpp
+  ExperimentRecord.cpp
+  Generating Code...
+LINK : warning LNK4044: unrecognized option '/static-libgcc'; ignored [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+LINK : warning LNK4044: unrecognized option '/static-libstdc++'; ignored [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+  bm_b7_diagnostic.vcxproj -> E:\My Local AI\stark\build-b7diag-vs2019b\Release\bm_b7_diagnostic.exe

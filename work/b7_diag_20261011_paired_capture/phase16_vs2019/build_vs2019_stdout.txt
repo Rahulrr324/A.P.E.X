@@ -1,0 +1,66 @@
+Microsoft (R) Build Engine version 16.11.6+a918ceb31 for .NET Framework
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+  Checking Build System
+  Building Custom Rule E:/My Local AI/stark/CMakeLists.txt
+  bm_b7_diagnostic.cpp
+E:\My Local AI\stark\src\phase1\diagnostics\bm_b7_diagnostic.cpp(607,9): warning C4530: C++ exception handler used, but unwind semantics are not enabled. Specify /EHsc [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+  TinyDenseModel.cpp
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(1232,1): warning C4530: C++ exception handler used, but unwind semantics are not enabled. Specify /EHsc [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(1262): message : see reference to function template instantiation 'void std::vector<float,std::allocator<float>>::_Resize_reallocate<_Ty2>(const unsigned __int64,const _Ty2 &)' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+          with
+          [
+              _Ty2=std::_Value_init_tag
+          ]
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(1262): message : see reference to function template instantiation 'void std::vector<float,std::allocator<float>>::_Resize_reallocate<_Ty2>(const unsigned __int64,const _Ty2 &)' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+          with
+          [
+              _Ty2=std::_Value_init_tag
+          ]
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(1277): message : see reference to function template instantiation 'void std::vector<float,std::allocator<float>>::_Resize<std::_Value_init_tag>(const unsigned __int64,const _Ty2 &)' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+          with
+          [
+              _Ty2=std::_Value_init_tag
+          ]
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(1277): message : see reference to function template instantiation 'void std::vector<float,std::allocator<float>>::_Resize<std::_Value_init_tag>(const unsigned __int64,const _Ty2 &)' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+          with
+          [
+              _Ty2=std::_Value_init_tag
+          ]
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(1275): message : while compiling class template member function 'void std::vector<float,std::allocator<float>>::resize(const unsigned __int64)' [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+E:\My Local AI\stark\src\phase1\bench\TinyDenseModel.cpp(33): message : see reference to function template instantiation 'void std::vector<float,std::allocator<float>>::resize(const unsigned __int64)' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+E:\My Local AI\stark\src\phase1\bench/TinyDenseModel.h(72): message : see reference to class template instantiation 'std::vector<float,std::allocator<float>>' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+  ParameterAccounting.cpp
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(752,1): warning C4530: C++ exception handler used, but unwind semantics are not enabled. Specify /EHsc [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(726): message : see reference to function template instantiation 'std::basic_string<char,std::char_traits<char>,std::allocator<char>> *std::vector<std::string,std::allocator<std::string>>::_Emplace_reallocate<_Ty>(std::basic_string<char,std::char_traits<char>,std::allocator<char>> *const ,_Ty &&)' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+          with
+          [
+              _Ty=std::basic_string<char,std::char_traits<char>,std::allocator<char>>
+          ]
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(734): message : see reference to function template instantiation 'std::basic_string<char,std::char_traits<char>,std::allocator<char>> *std::vector<std::string,std::allocator<std::string>>::_Emplace_reallocate<_Ty>(std::basic_string<char,std::char_traits<char>,std::allocator<char>> *const ,_Ty &&)' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+          with
+          [
+              _Ty=std::basic_string<char,std::char_traits<char>,std::allocator<char>>
+          ]
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(748): message : see reference to function template instantiation '_Ty &std::vector<_Ty,std::allocator<_Ty>>::emplace_back<std::basic_string<char,std::char_traits<char>,std::allocator<char>>>(std::basic_string<char,std::char_traits<char>,std::allocator<char>> &&)' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+          with
+          [
+              _Ty=std::string
+          ]
+C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\include\vector(746): message : while compiling class template member function 'void std::vector<std::string,std::allocator<std::string>>::push_back(_Ty &&)' [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+          with
+          [
+              _Ty=std::string
+          ]
+E:\My Local AI\stark\src\phase1\bench\ParameterAccounting.cpp(246): message : see reference to function template instantiation 'void std::vector<std::string,std::allocator<std::string>>::push_back(_Ty &&)' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+          with
+          [
+              _Ty=std::string
+          ]
+E:\My Local AI\stark\src\phase1\bench\ParameterAccounting.cpp(240): message : see reference to class template instantiation 'std::vector<std::string,std::allocator<std::string>>' being compiled [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+  ExperimentRecord.cpp
+E:\My Local AI\stark\src\phase1\common\ExperimentRecord.cpp(335,1): warning C4530: C++ exception handler used, but unwind semantics are not enabled. Specify /EHsc [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+  Generating Code...
+LINK : warning LNK4044: unrecognized option '/static-libgcc'; ignored [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+LINK : warning LNK4044: unrecognized option '/static-libstdc++'; ignored [E:\My Local AI\stark\build-b7diag-vs2019b\bm_b7_diagnostic.vcxproj]
+  bm_b7_diagnostic.vcxproj -> E:\My Local AI\stark\build-b7diag-vs2019b\Release\bm_b7_diagnostic.exe

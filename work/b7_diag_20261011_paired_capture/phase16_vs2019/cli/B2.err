@@ -1,0 +1,4 @@
+error: more than one diagnostic-directory argument
+usage: E:\My Local AI\stark\build-b7diag-vs2019b\Release\bm_b7_diagnostic.exe [diagnostic-directory] [--host-capture-dir <relative-dir>]
+  default directory: build/bm_b7_diagnostic/ (diagnostic-owned; isolation is validated at run time)
+  --host-capture-dir: relative, non-traversal directory that receives paired_samples.csv (exclusive, no overwrite). Omit to skip host persistence.

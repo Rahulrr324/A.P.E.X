@@ -1,0 +1,62 @@
+############ POST-RUN FROZEN EVIDENCE RECHECK ############
+MATCH    stark/reports/source_change_manifest.json
+MATCH    stark/reports/historical_artifact_inventory.json
+MATCH    stark/reports/m0_acceptance_matrix.json
+MATCH    stark/reports/M0_FINAL_REPORT_v2.3.md
+MATCH    stark/reports/g7-campaign-affinityfix/G7_FROZEN_CAMPAIGN_RESULT.md
+MATCH    stark/reports/gate_results/G7.json
+MATCH    stark/reports/gate_results/G4.json
+MATCH    stark/reports/evidence_manifest.json
+--- full frozen baseline sets ---
+ALL OK   hashes_frozen_before.txt
+ALL OK   hashes_evidence_before.txt
+ALL OK   hashes_g7cam_before.txt
+ALL OK   hashes_g7cam_frozen20261008_before.txt
+ALL OK   hashes_prodbin_before.txt
+
+############ HISTORICAL (OLD) CSV PRESERVED ############
+MATCH    build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv
+
+############ NEW ARTIFACT ############
+total 26
+drwxr-xr-x 1 rahul 197609     0 Oct 14 20:10 .
+drwxr-xr-x 1 rahul 197609     0 Oct 14 20:06 ..
+-rw-r--r-- 1 rahul 197609   586 Oct 12 16:45 exec_meta.json
+-rw-r--r-- 1 rahul 197609     4 Oct 12 16:28 exitcode.txt
+-rw-r--r-- 1 rahul 197609 12766 Oct 14 20:10 paired_samples.csv
+-rw-r--r-- 1 rahul 197609     0 Oct 12 16:45 stderr.txt
+-rw-r--r-- 1 rahul 197609     0 Oct 12 16:45 stdout.txt
+818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f *work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+
+############ DIAGNOSTIC DIR LEFT CLEAN (run-owned blob/run dir removed) ############
+build/bm_b7_diagnostic:
+total 0
+drwxr-xr-x 1 rahul 197609 0 Oct 14 20:10 .
+drwxr-xr-x 1 rahul 197609 0 Oct 12 15:35 ..
+drwxr-xr-x 1 rahul 197609 0 Oct 12 15:35 run_1791799501127597800_0
+
+build/bm_b7_diagnostic/run_1791799501127597800_0:
+total 16
+drwxr-xr-x 1 rahul 197609     0 Oct 12 15:35 .
+drwxr-xr-x 1 rahul 197609     0 Oct 14 20:10 ..
+-rw-r--r-- 1 rahul 197609 13358 Oct 12 15:35 paired_samples.csv
+
+############ GIT STATUS ############
+ M stark/build-b7diag-20261011/CMakeCache.txt
+?? stark/build-b7diag-msvc-vs2019/
+?? stark/build-b7diag-nomax/
+?? stark/build-b7diag-vs2019b/
+?? stark/nul
+?? stark/work/_b7_cmake_configure.bat
+?? stark/work/_b7_cmake_nomax.bat
+?? stark/work/_b7_cmake_vs2019.bat
+?? stark/work/_b7_cmake_vs2019_log.txt
+?? stark/work_b7_cmake_vs2019.bat
+?? stark/work_b7_cmake_vs2019_log.txt
+?? work/b7_diag_20261011_paired_capture/phase15_msvc/toolchain_msvc_nomax.cmake
+?? work/b7_diag_20261011_paired_capture/phase16_vs2019/
+?? work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+--- branch/HEAD ---
+main
+1b7616f failed
+a53fd83 The B7 diagnostic did not run. The build is blocked, so the task is incomplete.

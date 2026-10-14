@@ -1,0 +1,6 @@
+env: MSYS2_ARG_CONV_EXCL='*'
+-G "Visual Studio 16 2019" -A x64
+-DCMAKE_CONFIGURATION_TYPES=Release
+-DCMAKE_CXX_FLAGS=-DNOMINMAX
+-S "E:/My Local AI/stark"
+-B "E:/My Local AI/stark/build-b7diag-vs2019b"
