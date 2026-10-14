@@ -1,0 +1,166 @@
+{
+  "at_utc": "2026-10-14T15:18:09+00:00",
+  "runs": [
+    {
+      "run": "SELFTEST_a",
+      "order": 1,
+      "condition": "unpinned",
+      "mask_intended": null,
+      "mask_cpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "affinity_verified_before_resume": true,
+      "exit_code": 0,
+      "csv_sha256": "818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f",
+      "mean_overhead_pct": 8.550597,
+      "worst_case_overhead_pct": 109.088219,
+      "median_deviation_pct": 2.116052,
+      "pairs_over_10pct": 96,
+      "pooled_std_minimal_us": 2228.857,
+      "calibration_status": "FAIL"
+    },
+    {
+      "run": "SELFTEST_b",
+      "order": 2,
+      "condition": "pinned",
+      "mask_intended": 1,
+      "mask_cpus": [
+        0
+      ],
+      "affinity_verified_before_resume": true,
+      "exit_code": 0,
+      "csv_sha256": "818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f",
+      "mean_overhead_pct": 8.550597,
+      "worst_case_overhead_pct": 109.088219,
+      "median_deviation_pct": 2.116052,
+      "pairs_over_10pct": 96,
+      "pooled_std_minimal_us": 2228.857,
+      "calibration_status": "FAIL"
+    }
+  ],
+  "per_condition_spread": {
+    "unpinned": {
+      "mean_overhead_pct": {
+        "n": 1,
+        "values": [
+          8.550597
+        ],
+        "min": 8.550597,
+        "max": 8.550597,
+        "range": 0.0,
+        "median": 8.550597
+      },
+      "worst_case_overhead_pct": {
+        "n": 1,
+        "values": [
+          109.088219
+        ],
+        "min": 109.088219,
+        "max": 109.088219,
+        "range": 0.0,
+        "median": 109.088219
+      },
+      "median_deviation_pct": {
+        "n": 1,
+        "values": [
+          2.116052
+        ],
+        "min": 2.116052,
+        "max": 2.116052,
+        "range": 0.0,
+        "median": 2.116052
+      },
+      "pairs_over_10pct": {
+        "n": 1,
+        "values": [
+          96
+        ],
+        "min": 96,
+        "max": 96,
+        "range": 0,
+        "median": 96
+      },
+      "pooled_std_minimal_us": {
+        "n": 1,
+        "values": [
+          2228.857
+        ],
+        "min": 2228.857,
+        "max": 2228.857,
+        "range": 0.0,
+        "median": 2228.857
+      }
+    },
+    "pinned": {
+      "mean_overhead_pct": {
+        "n": 1,
+        "values": [
+          8.550597
+        ],
+        "min": 8.550597,
+        "max": 8.550597,
+        "range": 0.0,
+        "median": 8.550597
+      },
+      "worst_case_overhead_pct": {
+        "n": 1,
+        "values": [
+          109.088219
+        ],
+        "min": 109.088219,
+        "max": 109.088219,
+        "range": 0.0,
+        "median": 109.088219
+      },
+      "median_deviation_pct": {
+        "n": 1,
+        "values": [
+          2.116052
+        ],
+        "min": 2.116052,
+        "max": 2.116052,
+        "range": 0.0,
+        "median": 2.116052
+      },
+      "pairs_over_10pct": {
+        "n": 1,
+        "values": [
+          96
+        ],
+        "min": 96,
+        "max": 96,
+        "range": 0,
+        "median": 96
+      },
+      "pooled_std_minimal_us": {
+        "n": 1,
+        "values": [
+          2228.857
+        ],
+        "min": 2228.857,
+        "max": 2228.857,
+        "range": 0.0,
+        "median": 2228.857
+      }
+    }
+  },
+  "IMPORTANT": [
+    "This is a DESCRIPTIVE comparison of six independent runs. It is NOT a",
+    "pooled calibration result and must not be presented as one.",
+    "n=3 per condition gives very limited statistical power: with 3 values a",
+    "range is a weak dispersion estimate and no significance claim is made.",
+    "The frozen thresholds are applied PER RUN, unchanged, in each run's own",
+    "validation.json. No outlier is removed from any run."
+  ]
+}

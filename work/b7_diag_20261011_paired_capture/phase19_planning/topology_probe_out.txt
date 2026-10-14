@@ -1,0 +1,56 @@
+=== process / system affinity mask ===
+Cannot convert the "4095" value of type "System.UIntPtr" to type "System.Int64".
+At E:\My Local AI\work\b7_diag_20261011_paired_capture\phase19_planning\topology_probe.ps1:78 char:1
++ Write-Output ("  current process mask = 0x{0:X}  ({1})" -f [int64]$pm ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : ConvertToFinalInvalidCastException
+ 
+Cannot convert the "4095" value of type "System.UIntPtr" to type "System.Int64".
+At E:\My Local AI\work\b7_diag_20261011_paired_capture\phase19_planning\topology_probe.ps1:79 char:1
++ Write-Output ("  system mask          = 0x{0:X}  ({1})" -f [int64]$sm ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : ConvertToFinalInvalidCastException
+ 
+Cannot convert the "4095" value of type "System.UIntPtr" to type "System.Int64".
+At E:\My Local AI\work\b7_diag_20261011_paired_capture\phase19_planning\topology_probe.ps1:80 char:1
++ Write-Output ("  logical CPU count    = {0}" -f ([Convert]::ToString( ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : ConvertToFinalInvalidCastException
+ 
+
+=== per-physical-core records (RelationProcessorCore) ===
+  core[0] mask=0x3 logicalCPUs=(0,1) group=0 efficiencyClass=1  -> P-core (higher perf)
+  core[1] mask=0xC logicalCPUs=(2,3) group=0 efficiencyClass=1  -> P-core (higher perf)
+  core[2] mask=0x30 logicalCPUs=(4,5) group=0 efficiencyClass=1  -> P-core (higher perf)
+  core[3] mask=0xC0 logicalCPUs=(6,7) group=0 efficiencyClass=1  -> P-core (higher perf)
+  core[4] mask=0x100 logicalCPUs=(8) group=0 efficiencyClass=0  -> E-core (lower perf)
+  core[5] mask=0x200 logicalCPUs=(9) group=0 efficiencyClass=0  -> E-core (lower perf)
+  core[6] mask=0x400 logicalCPUs=(10) group=0 efficiencyClass=0  -> E-core (lower perf)
+  core[7] mask=0x800 logicalCPUs=(11) group=0 efficiencyClass=0  -> E-core (lower perf)
+
+=== cache relationships (L1/L2/L3 sharing) ===
+  L1 Data size=49152 bytes  shared by logicalCPU=(0,1)
+  L1 Instruction size=32768 bytes  shared by logicalCPU=(0,1)
+  L2 Unified size=1310720 bytes  shared by logicalCPU=(0,1)
+  L3 Unified size=12582912 bytes  shared by logicalCPU=(0,1,2,3,4,5,6,7,8,9,10,11)
+  L1 Data size=49152 bytes  shared by logicalCPU=(2,3)
+  L1 Instruction size=32768 bytes  shared by logicalCPU=(2,3)
+  L2 Unified size=1310720 bytes  shared by logicalCPU=(2,3)
+  L1 Data size=49152 bytes  shared by logicalCPU=(4,5)
+  L1 Instruction size=32768 bytes  shared by logicalCPU=(4,5)
+  L2 Unified size=1310720 bytes  shared by logicalCPU=(4,5)
+  L1 Data size=49152 bytes  shared by logicalCPU=(6,7)
+  L1 Instruction size=32768 bytes  shared by logicalCPU=(6,7)
+  L2 Unified size=1310720 bytes  shared by logicalCPU=(6,7)
+  L1 Data size=32768 bytes  shared by logicalCPU=(8)
+  L1 Instruction size=65536 bytes  shared by logicalCPU=(8)
+  L2 Unified size=2097152 bytes  shared by logicalCPU=(8,9,10,11)
+  L1 Data size=32768 bytes  shared by logicalCPU=(9)
+  L1 Instruction size=65536 bytes  shared by logicalCPU=(9)
+  L1 Data size=32768 bytes  shared by logicalCPU=(10)
+  L1 Instruction size=65536 bytes  shared by logicalCPU=(10)
+  L1 Data size=32768 bytes  shared by logicalCPU=(11)
+  L1 Instruction size=65536 bytes  shared by logicalCPU=(11)

@@ -1,0 +1,13 @@
+{
+  "run": "SELFTEST_b",
+  "order": 2,
+  "condition": "pinned",
+  "launch": {
+    "mask_intended": 1,
+    "mask_cpus": [
+      0
+    ],
+    "affinity_verified_before_resume": true,
+    "exit_code": 0
+  }
+}

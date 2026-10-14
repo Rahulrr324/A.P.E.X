@@ -1,0 +1,1 @@
+{"probe": "child", "pid": 8716, "process_mask": 256, "system_mask": 4095, "cpus": [8]}

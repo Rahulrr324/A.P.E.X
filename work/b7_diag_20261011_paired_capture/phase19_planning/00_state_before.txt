@@ -1,0 +1,58 @@
+PHASE 19 STARTING STATE
+recorded_local: 2026-10-14T20:48:57+05:30
+
+=== GIT ===
+branch: main
+HEAD  : 30742b15ce7f32e27f0b121a513b2cc6a187c160  (2)
+recent commits:
+  30742b1 2
+  f8b1d13 1
+  f2f910e some chnages
+  1b7616f failed
+  a53fd83 The B7 diagnostic did not run. The build is blocked, so the task is incomplete.
+  66d8c1c push 3
+
+git status --porcelain (whole repo):
+  ?? stark/nul
+  ?? work/b7_diag_20261011_paired_capture/phase19_planning/
+
+=== PRESERVED EVIDENCE: sha256 (actual) vs expected ===
+-- B7 paired-sample deliverable (must never change)
+  818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f  MATCH     work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+
+-- historical frozen campaign CSV
+  csv files under stark/: <none>
+
+-- executable that produced the deliverable (version-locked for Phase 19)
+  86ee9f3ee2c1daac8f2815be4516e2ea03fd19273166978cbf09e6d69ca09d88  MATCH     stark/build-b7diag-vs2019b/Release/bm_b7_diagnostic.exe
+-- older WinLibs/MinGW diagnostic build (NOT used in Phase 19)
+  a2e9e0ada6df0f10a91681e96349349166a081dcca0570312c6d175ad0691bd6  MATCH     stark/build-b7diag-20261011/bm_b7_diagnostic.exe
+
+-- diagnostic source and build basis
+  aeb31eb2250d05e66a805597624db62f7d66090c7e9b5140b38f9c6f5955ca2b  MATCH     stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp
+  1b37e95f0cc47568839727bc0ef8836397f705255b47fe85ebe4b988867b4414  MATCH     stark/src/phase1/bench/BenchmarkHarness.cpp
+  d458e4c9cd8c14bdf340452aa46200c4c0e357989e7cdb536b6bee77eb99f099  MATCH     stark/src/phase1/bench/TinyDenseModel.cpp
+  05f83b7d0d40dff9ef72bb9407c3c51222193d888a8ff85cb57e71f7acd9479c  MATCH     stark/src/phase1/bench/TinyDenseModel.h
+  575fe264921512f41d30267c1c659e3662bbcfd92e71623720f9d047b7dddcc8  MATCH     stark/CMakeLists.txt
+
+-- predecessor report
+  37a074c4df15be29f9f2de6b11c60ed63cce118a435d481d8a8f9df2cf03a845  work/b7_diag_20261011_paired_capture/phase18_report_timing_order_and_tail.md  (no expectation recorded)
+
+=== RUN COUNTS ===
+  files matching */paired_samples.csv (whole repo):
+    ./build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv
+    ./work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+  phase19_runs present? NO
+
+=== ADDENDUM: historical frozen CSV (correct path; my first scan searched only stark/) ===
+  d0fca204c9443ef2d0113c12884dfc0fbfc1d64f08c3903f89c98c0c4bf5163a  MATCH     build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv
+
+=== ADDENDUM: preserved historical run dir (must survive all six runs) ===
+  total 0
+  drwxr-xr-x 1 rahul 197609 0 Oct 14 20:10 .
+  drwxr-xr-x 1 rahul 197609 0 Oct 12 15:35 ..
+  drwxr-xr-x 1 rahul 197609 0 Oct 12 15:35 run_1791799501127597800_0
+
+=== ADDENDUM: surrounding data dirs, for the record ===
+  project-root build/bm_b7_diagnostic/  <- kDiagnosticDir resolves here (cwd = project root)
+    build/bm_b7_diagnostic/run_1791799501127597800_0/

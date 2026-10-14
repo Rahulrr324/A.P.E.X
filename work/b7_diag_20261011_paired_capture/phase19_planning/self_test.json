@@ -1,0 +1,136 @@
+{
+  "all_cases_passed": true,
+  "results": [
+    {
+      "case": "unpinned",
+      "mask_intended": null,
+      "exe": "C:\\Python314\\python.exe",
+      "argv": [
+        "E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase19_planning\\phase19_runner.py",
+        "--probe-child"
+      ],
+      "self_process_mask": 4095,
+      "system_mask": 4095,
+      "system_cpu_count": 12,
+      "command_line": "C:\\Python314\\python.exe \"E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase19_planning\\phase19_runner.py\" --probe-child",
+      "create_ok": true,
+      "child_pid": 25528,
+      "child_tid": 23696,
+      "image_path": "C:\\Python314\\python.exe",
+      "image_matches_exe": true,
+      "mask_observed_suspended": 4095,
+      "system_mask_observed": 4095,
+      "affinity_verified_before_resume": true,
+      "mask_cpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "resume_thread_rc": 1,
+      "resume_ok": true,
+      "mask_observed_after_resume": 4095,
+      "affinity_drifted": false,
+      "exit_code": 0,
+      "mask_observed_at_exit": 4095,
+      "child_reported_mask": 4095,
+      "child_reported_cpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "expected": 4095,
+      "CHILD_MASK_MATCHES_EXPECTED": true
+    },
+    {
+      "case": "pinned_cpu0",
+      "mask_intended": 1,
+      "exe": "C:\\Python314\\python.exe",
+      "argv": [
+        "E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase19_planning\\phase19_runner.py",
+        "--probe-child"
+      ],
+      "self_process_mask": 4095,
+      "system_mask": 4095,
+      "system_cpu_count": 12,
+      "command_line": "C:\\Python314\\python.exe \"E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase19_planning\\phase19_runner.py\" --probe-child",
+      "create_ok": true,
+      "child_pid": 25508,
+      "child_tid": 19016,
+      "image_path": "C:\\Python314\\python.exe",
+      "image_matches_exe": true,
+      "mask_observed_suspended": 1,
+      "system_mask_observed": 4095,
+      "affinity_verified_before_resume": true,
+      "mask_cpus": [
+        0
+      ],
+      "resume_thread_rc": 1,
+      "resume_ok": true,
+      "mask_observed_after_resume": 1,
+      "affinity_drifted": false,
+      "exit_code": 0,
+      "mask_observed_at_exit": 1,
+      "child_reported_mask": 1,
+      "child_reported_cpus": [
+        0
+      ],
+      "expected": 1,
+      "CHILD_MASK_MATCHES_EXPECTED": true
+    },
+    {
+      "case": "pinned_cpu8",
+      "mask_intended": 256,
+      "exe": "C:\\Python314\\python.exe",
+      "argv": [
+        "E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase19_planning\\phase19_runner.py",
+        "--probe-child"
+      ],
+      "self_process_mask": 4095,
+      "system_mask": 4095,
+      "system_cpu_count": 12,
+      "command_line": "C:\\Python314\\python.exe \"E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase19_planning\\phase19_runner.py\" --probe-child",
+      "create_ok": true,
+      "child_pid": 8716,
+      "child_tid": 18520,
+      "image_path": "C:\\Python314\\python.exe",
+      "image_matches_exe": true,
+      "mask_observed_suspended": 256,
+      "system_mask_observed": 4095,
+      "affinity_verified_before_resume": true,
+      "mask_cpus": [
+        8
+      ],
+      "resume_thread_rc": 1,
+      "resume_ok": true,
+      "mask_observed_after_resume": 256,
+      "affinity_drifted": false,
+      "exit_code": 0,
+      "mask_observed_at_exit": 256,
+      "child_reported_mask": 256,
+      "child_reported_cpus": [
+        8
+      ],
+      "expected": 256,
+      "CHILD_MASK_MATCHES_EXPECTED": true
+    }
+  ],
+  "note": "harmless child = this script in --probe-child mode; no diagnostic was launched and no CSV was created"
+}
