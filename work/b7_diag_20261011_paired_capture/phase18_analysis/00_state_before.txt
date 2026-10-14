@@ -1,0 +1,39 @@
+PHASE 18 - STATE RECORDED BEFORE INVESTIGATION
+date_utc: 2026-10-14T14:57:38Z
+repo: E:\My Local AI
+branch: main
+HEAD: f8b1d135b9043930a61ed1493b87fbf95115b70d
+HEAD subject: 1
+
+=== GIT STATUS (porcelain) ===
+?? stark/nul
+?? work/b7_diag_20261011_paired_capture/phase18_analysis/
+
+=== HASHES OF B7 ARTIFACTS UNDER INVESTIGATION ===
+818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f *work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+d0fca204c9443ef2d0113c12884dfc0fbfc1d64f08c3903f89c98c0c4bf5163a *build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv
+aeb31eb2250d05e66a805597624db62f7d66090c7e9b5140b38f9c6f5955ca2b *stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp
+1b37e95f0cc47568839727bc0ef8836397f705255b47fe85ebe4b988867b4414 *stark/src/phase1/bench/BenchmarkHarness.cpp
+d458e4c9cd8c14bdf340452aa46200c4c0e357989e7cdb536b6bee77eb99f099 *stark/src/phase1/bench/TinyDenseModel.cpp
+575fe264921512f41d30267c1c659e3662bbcfd92e71623720f9d047b7dddcc8 *stark/CMakeLists.txt
+86ee9f3ee2c1daac8f2815be4516e2ea03fd19273166978cbf09e6d69ca09d88 *stark/build-b7diag-vs2019b/Release/bm_b7_diagnostic.exe
+a2e9e0ada6df0f10a91681e96349349166a081dcca0570312c6d175ad0691bd6 *stark/build-b7diag-20261011/bm_b7_diagnostic.exe
+e7f42b36b5e8220a120fbbc98ba2b5b911bd658b501c1e4ab42dd648900b3789 *work/b7_diag_20261011_paired_capture/phase17_report_calibration_failure_analysis.md
+e4bda22f0870124f6d182e678603fd30feaf1653c6eb95aa440ef68e8aa85c35 *work/b7_diag_20261011_paired_capture/phase16_report_vs2019_resolved.md
+
+=== RUN EVIDENCE ===
+33f7b52f74b948d8a9e54794b3419b9d11ecb6bac66d85eeb1b18c6186d419d6 *work/b7_diag_20261011_paired_capture/phase16_vs2019/run_expected/stdout.txt
+77e2d496c4300c4d573356072b8ede7fd23c621d037c5ae045e911bc1841001e *work/b7_diag_20261011_paired_capture/phase16_vs2019/run_expected/exec_meta.json
+
+=== FROZEN EVIDENCE SPOT-CHECK ===
+9e090fda4e42ad342a11606060a602d1f4d9211539b3cd1e0e2898a192c77c50 *stark/reports/gate_results/G7.json
+869ea3fc620567bdb6a2a04deb0359d6e427c55d66f3bbb80aaae6a5504bc795 *stark/reports/m0_acceptance_matrix.json
+533f01ebbea8bc32c69007a22fe945dff3cb52e9cd5440011121f010240c8aa2 *stark/reports/source_change_manifest.json
+
+=== APPROVED THRESHOLDS / FORMULAS AS ENCODED IN SOURCE (read-only) ===
+157:constexpr double kCalibMeanOverheadThresholdPct = 2.0;    // mean overhead <= 2%
+158:constexpr double kCalibWorstOverheadThresholdPct = 10.0;  // worst-case overhead <= 10%
+159:constexpr double kCalibMedianDeviationThresholdPct = 2.0; // median deviation <= 2%
+816:    c.mean_ok = std::fabs(c.mean_overhead_pct) <= kCalibMeanOverheadThresholdPct;
+817:    c.worst_ok = c.worst_case_overhead_pct <= kCalibWorstOverheadThresholdPct;
+818:    c.median_ok = c.median_deviation_pct <= kCalibMedianDeviationThresholdPct;

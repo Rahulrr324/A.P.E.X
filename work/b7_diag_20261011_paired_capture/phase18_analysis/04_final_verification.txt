@@ -1,0 +1,75 @@
+############ PHASE 18 FINAL VERIFICATION ############
+date_utc: 2026-10-14T15:03:00Z
+
+=== 1. EVIDENCE UNCHANGED (all spot-checked against recorded hashes) ===
+MATCH    work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+MATCH    build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv
+MATCH    stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp
+MATCH    stark/src/phase1/bench/BenchmarkHarness.cpp
+MATCH    stark/CMakeLists.txt
+MATCH    stark/build-b7diag-vs2019b/Release/bm_b7_diagnostic.exe
+MATCH    stark/build-b7diag-20261011/bm_b7_diagnostic.exe
+MATCH    work/b7_diag_20261011_paired_capture/phase17_report_calibration_failure_analysis.md
+MATCH    stark/reports/gate_results/G7.json
+MATCH    stark/reports/m0_acceptance_matrix.json
+MATCH    stark/reports/source_change_manifest.json
+MATCH    stark/reports/evidence_manifest.json
+
+=== 2. AUTHORITATIVE frozen baseline sets ===
+ALL OK   hashes_frozen_before.txt
+ALL OK   hashes_frozen_after.txt
+ALL OK   hashes_evidence_before.txt
+ALL OK   hashes_evidence_after.txt
+ALL OK   hashes_g7cam_before.txt
+ALL OK   hashes_g7cam_after.txt
+ALL OK   hashes_g7cam_frozen20261008_before.txt
+ALL OK   hashes_g7cam_frozen20261008_after.txt
+ALL OK   hashes_prodbin_before.txt
+ALL OK   hashes_prodbin_after.txt
+
+=== 3. NO SECOND CSV WAS CREATED (investigation only) ===
+./build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv
+./work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+
+=== 4. REPORT STRUCTURE ===
+11:## 0. Headline — Phase 17's reading is partly revised
+34:## 1. Recorded state (step 1)
+61:## 2. Timing implementation and execution order (step 2)
+166:## 3. Recomputed results (step 3)
+274:## 4. Plausible explanations, with explicit confidence (step 4)
+338:## 5. Is the proposed discarded warm-up replicate sufficient? (step 5)
+368:## 6. Recommended next experiment (step 6) — **NOT EXECUTED**
+431:## 7. Limitations
+453:## 8. Status
+--- typo check ---
+  occurrences of typo: 0
+--- size ---
+  464 31376 work/b7_diag_20261011_paired_capture/phase18_report_timing_order_and_tail.md
+
+=== 5. THRESHOLDS/FORMULAS IN SOURCE UNCHANGED ===
+157:constexpr double kCalibMeanOverheadThresholdPct = 2.0;    // mean overhead <= 2%
+158:constexpr double kCalibWorstOverheadThresholdPct = 10.0;  // worst-case overhead <= 10%
+159:constexpr double kCalibMedianDeviationThresholdPct = 2.0; // median deviation <= 2%
+
+=== 6. GIT ===
+?? stark/nul
+?? work/b7_diag_20261011_paired_capture/phase18_analysis/
+?? work/b7_diag_20261011_paired_capture/phase18_report_timing_order_and_tail.md
+--- staged (must be empty) ---
+(empty = nothing staged)
+f8b1d13 1
+
+=== 7. PHASE 18 OUTPUTS ===
+total 96
+drwxr-xr-x 1 rahul 197609     0 Oct 14 20:33 .
+drwxr-xr-x 1 rahul 197609     0 Oct 14 20:32 ..
+-rw-r--r-- 1 rahul 197609  2787 Oct 14 20:27 00_state_before.txt
+-rw-r--r-- 1 rahul 197609 25123 Oct 14 20:29 01_trajectory_tail.json
+-rw-r--r-- 1 rahul 197609  5565 Oct 14 20:29 01_trajectory_tail_report.txt
+-rw-r--r-- 1 rahul 197609  5015 Oct 14 20:30 02_regime_and_start_effects.json
+-rw-r--r-- 1 rahul 197609  4664 Oct 14 20:30 02_regime_and_start_effects_report.txt
+-rw-r--r-- 1 rahul 197609   826 Oct 14 20:31 03_environment_probe.txt
+-rw-r--r-- 1 rahul 197609  2654 Oct 14 20:33 04_final_verification.txt
+-rwxr-xr-x 1 rahul 197609  6408 Oct 14 20:30 regime_and_start_effects.py
+-rwxr-xr-x 1 rahul 197609 10583 Oct 14 20:29 trajectory_tail.py
+-rw-r--r-- 1 rahul 197609 31376 Oct 14 20:32 work/b7_diag_20261011_paired_capture/phase18_report_timing_order_and_tail.md

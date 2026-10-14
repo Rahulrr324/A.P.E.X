@@ -1,0 +1,70 @@
+====================================================================================================
+Q1. SHAPE OF THE EARLY-BLOCK DEVIATIONS (per-iteration, us)
+====================================================================================================
+
+  rep0_MINIMAL:  min=9312  max=18986  median=11559  max/min=2.04x
+    iter  0- 9:    9312    9553   10698   12160   10014   10576   10029   12301   13485   14101
+    iter 10-19:   13910   11014   12187   11542   10057    9957    9971    9639   10747   13589
+    iter 20-29:   11216   13640   15720   16603   12446   12324   10414   10199    9802   13719
+    iter 30-39:   10839   10046   11255   13999   10573    9753   11576   10116   10269   11578
+    iter 40-49:   13924   12747   17028   16449   18021   18986   10898   14937   17397   15752
+
+  rep1_MINIMAL:  min=9391  max=20550  median=13002  max/min=2.19x
+    iter  0- 9:   17087   15174   16072   10939    9986   10072   10142    9634   10005   11938
+    iter 10-19:    9572   10181   10228    9644   10007    9558   11674   13426   12948   10872
+    iter 20-29:    9862   15280   13976    9598   10729   12562   11116   10265    9450    9772
+    iter 30-39:    9391   13056   15466   15924   16383   15062   16080   15142   16535   20550
+    iter 40-49:   16763   19050   16553   16077   15053   15501   15075   16195   16360   15811
+
+  rep1_INSTRUMENTED:  min=9502  max=19980  median=14226  max/min=2.10x
+    iter  0- 9:   14697   11377   15261   17165   13546   15960   14628   15057   16554   17214
+    iter 10-19:   14543   14407   11406   15459   10495   12919   11537   15416    9718   10472
+    iter 20-29:   10072    9773   10382    9502    9881   11514   11785   11455   11204   14937
+    iter 30-39:   13822   12341   16348   17247   17294   16066   13418   14044   16840   17103
+    iter 40-49:   15123    9678   11500   13016   14450   19885   19980   19129   12935   15072
+
+  rep2_INSTRUMENTED:  min=14832  max=31876  median=17634  max/min=2.15x
+    iter  0- 9:   15537   16001   15938   15507   15219   16613   15116   15206   16064   15463
+    iter 10-19:   15470   15275   15086   15200   14848   14832   15165   15264   19755   16420
+    iter 20-29:   21367   22021   22518   21896   22656   21704   21622   19886   20268   20288
+    iter 30-39:   20931   20882   22479   21300   20436   20877   24248   31876   17222   16265
+    iter 40-49:   15632   17800   15715   19522   17467   15232   19626   21818   21699   19465
+
+  Largest single-iteration jumps within these blocks:
+    rep0_MINIMAL        largest step  -8087.2 us at iteration 46
+    rep1_MINIMAL        largest step  +5418.3 us at iteration 21
+    rep1_INSTRUMENTED   largest step  -6194.3 us at iteration 48
+    rep2_INSTRUMENTED   largest step -14653.8 us at iteration 38
+
+  Compare: single largest step vs whole-block ramp (first10 vs last10):
+    rep0_MINIMAL        first10-vs-last10 =  +4391.3 us ; largest single step =  -8087.2 us ; ratio=1.84
+    rep1_MINIMAL        first10-vs-last10 =  +4138.9 us ; largest single step =  +5418.3 us ; ratio=1.31
+    rep1_INSTRUMENTED   first10-vs-last10 =    -69.1 us ; largest single step =  -6194.3 us ; ratio=89.60
+    rep2_INSTRUMENTED   first10-vs-last10 =  +2731.2 us ; largest single step = -14653.8 us ; ratio=5.37
+
+====================================================================================================
+Q2. IS THE >10% TAIL ENRICHED AT THE START OF A MEASURED BLOCK?
+====================================================================================================
+
+  ALL replicates (12 blocks)
+    pairs total=300  pairs >10%=96  base rate=32.00%
+    iterations 0-1 : 24 iteration-slots, 5 exceed 10% -> rate 20.83%
+    iterations 0-4 : 60 iteration-slots, 9 exceed 10% -> rate 15.00%
+
+  replicates 3-5 only (6 blocks)
+    pairs total=150  pairs >10%=14  base rate=9.33%
+    iterations 0-1 : 12 iteration-slots, 3 exceed 10% -> rate 25.00%
+    iterations 0-4 : 30 iteration-slots, 3 exceed 10% -> rate 10.00%
+
+  replicates 0-2 only (6 blocks)
+    pairs total=150  pairs >10%=82  base rate=54.67%
+    iterations 0-1 : 12 iteration-slots, 2 exceed 10% -> rate 16.67%
+    iterations 0-4 : 30 iteration-slots, 6 exceed 10% -> rate 20.00%
+
+  Interpretation: a per-block warm-up deficit would show first2/first5 enrichment
+  well above 1.0x. A stationary heavy tail shows ~1.0x.
+
+  iteration indices of all 96 >10% pairs: median=24.5  mean=23.4  (uniform on 0..49 would give median 24.5, mean 24.5)
+  quartiles: Q1=12, Q3=34
+
+====================================================================================================

@@ -1,0 +1,33 @@
+=== CPU topology ===
+
+
+Name                      : 12th Gen Intel(R) Core(TM) i5-12450H
+NumberOfCores             : 8
+NumberOfLogicalProcessors : 12
+MaxClockSpeed             : 2000
+CurrentClockSpeed         : 2000
+Manufacturer              : GenuineIntel
+
+
+
+=== core types (hybrid detection) ===
+cpu: 12th Gen Intel(R) Core(TM) i5-12450H
+
+
+Model               : Victus by HP Gaming Laptop 15-fa1xxx
+TotalPhysicalMemory : 25392844800
+SystemType          : x64-based PC
+
+
+
+=== active power scheme ===
+Power Scheme GUID: dfe97760-471c-4d01-bd06-b8b04c50ecd8  (Performance Mode)=== battery / AC ===
+
+
+BatteryStatus            : 2
+EstimatedChargeRemaining : 100
+
+
+
+=== processor performance info (P/E core counts via registry hint) ===
+Name=12th Gen Intel(R) Core(TM) i5-12450H Cores=8 Logical=12

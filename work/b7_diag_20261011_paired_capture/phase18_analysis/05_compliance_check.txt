@@ -1,0 +1,59 @@
+############ PHASE 18 FINAL COMPLIANCE CHECK ############
+date_utc: 2026-10-14T15:04:57Z
+
+=== A. §4 covers every candidate mechanism the request names ===
+  fixed order      occurrences=0
+  counterbalanced  occurrences=5
+  warm-up          occurrences=19
+  cache            occurrences=13
+  scheduling       occurrences=4
+  migration        occurrences=12
+  regime           occurrences=19
+  --- hypothesis blocks in §4.2 ---
+    3:**H-migration (leading): heterogeneous-core scheduling / power-state changes.**
+    13:**H-regime (supporting): the first ~2–3 replicates ran in a different machine regime.**
+    20:**H-cache (candidate, and partly contradicted by the data).**
+    34:**H-writeback (minor, plausible): the un-synced ≈1 MB blob write.**
+    39:**H-per-block warm-up (revised to: not supported for the tail).**
+
+=== B. §6 specifies every required element ===
+  6.1 Hypothesis                         1
+  6.2 Controlled variables               1
+  6.3 The single variable changed        1
+  6.4 Number of runs                     1
+  6.5 Observations that would confirm    1
+
+=== C. step-4 three-way confidence distinction present ===
+  3:### 4.1 Directly established by code or data
+  21:### 4.2 Supported but not proven
+  65:### 4.3 Unknown because the CSV lacks the necessary observations
+
+=== D. report location + unique phase18_report_* name ===
+phase18_analysis
+phase18_report_timing_order_and_tail.md
+
+=== E. evidence still unchanged after the report edits ===
+MATCH    work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+MATCH    build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv
+MATCH    stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp
+MATCH    stark/build-b7diag-vs2019b/Release/bm_b7_diagnostic.exe
+MATCH    work/b7_diag_20261011_paired_capture/phase17_report_calibration_failure_analysis.md
+
+=== F. CSVs present (must be exactly the historical + the phase16 deliverable) ===
+./build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv
+./work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+
+=== G. thresholds unchanged in source ===
+157:constexpr double kCalibMeanOverheadThresholdPct = 2.0;    // mean overhead <= 2%
+158:constexpr double kCalibWorstOverheadThresholdPct = 10.0;  // worst-case overhead <= 10%
+159:constexpr double kCalibMedianDeviationThresholdPct = 2.0; // median deviation <= 2%
+
+=== H. git: nothing staged/committed by this phase ===
+?? stark/nul
+?? work/b7_diag_20261011_paired_capture/phase18_analysis/
+?? work/b7_diag_20261011_paired_capture/phase18_report_timing_order_and_tail.md
+(empty staged)
+f8b1d13 1
+
+=== I. report size ===
+  478 32709 work/b7_diag_20261011_paired_capture/phase18_report_timing_order_and_tail.md
