@@ -1,0 +1,15 @@
+The system cannot find the path specified.
+CMake Error at build-b7diag-msvc-20261014/CMakeFiles/3.20.21032501-MSVC_2/CMakeCXXCompiler.cmake:1 (set):
+  Syntax error in cmake code at
+
+    E:/My Local AI/stark/build-b7diag-msvc-20261014/CMakeFiles/3.20.21032501-MSVC_2/CMakeCXXCompiler.cmake:1
+
+  when parsing string
+
+    C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\bin\Hostx64\x64\cl.exe
+
+  Invalid character escape '\P'.
+Call Stack (most recent call first):
+  CMakeLists.txt:2 (project)
+
+

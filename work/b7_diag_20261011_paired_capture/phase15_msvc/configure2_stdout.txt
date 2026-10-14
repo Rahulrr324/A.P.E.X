@@ -1,0 +1,5 @@
+-- The CXX compiler identification is MSVC 19.29.30159.0
+-- Configuring incomplete, errors occurred!
+See also "E:/My Local AI/stark/build-b7diag-msvc-20261014/CMakeFiles/CMakeOutput.log".
+See also "E:/My Local AI/stark/build-b7diag-msvc-20261014/CMakeFiles/CMakeError.log".
+CONFIGURE_RC=1
