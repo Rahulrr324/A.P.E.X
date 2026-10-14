@@ -1,0 +1,407 @@
+{
+  "note": "All subset figures are EXPLANATORY ONLY; frozen metrics unchanged.",
+  "block_series_in_execution_order": [
+    {
+      "block": "rep0_MINIMAL",
+      "replicate": 0,
+      "condition": "MINIMAL",
+      "position_in_replicate": 1,
+      "median_us": 11559.3,
+      "mean_us": 12341.316,
+      "first10_mean_us": 11222.71,
+      "last10_mean_us": 15613.98
+    },
+    {
+      "block": "rep0_INSTRUMENTED",
+      "replicate": 0,
+      "condition": "INSTRUMENTED",
+      "position_in_replicate": 2,
+      "median_us": 15559.35,
+      "mean_us": 15694.588,
+      "first10_mean_us": 14843.99,
+      "last10_mean_us": 14213.13
+    },
+    {
+      "block": "rep1_INSTRUMENTED",
+      "replicate": 1,
+      "condition": "INSTRUMENTED",
+      "position_in_replicate": 1,
+      "median_us": 14225.5,
+      "mean_us": 13872.556,
+      "first10_mean_us": 15145.89,
+      "last10_mean_us": 15076.76
+    },
+    {
+      "block": "rep1_MINIMAL",
+      "replicate": 1,
+      "condition": "MINIMAL",
+      "position_in_replicate": 2,
+      "median_us": 13001.7,
+      "mean_us": 13155.962,
+      "first10_mean_us": 12105.01,
+      "last10_mean_us": 16243.95
+    },
+    {
+      "block": "rep2_MINIMAL",
+      "replicate": 2,
+      "condition": "MINIMAL",
+      "position_in_replicate": 1,
+      "median_us": 15523.5,
+      "mean_us": 15677.786,
+      "first10_mean_us": 16056.89,
+      "last10_mean_us": 15159.87
+    },
+    {
+      "block": "rep2_INSTRUMENTED",
+      "replicate": 2,
+      "condition": "INSTRUMENTED",
+      "position_in_replicate": 2,
+      "median_us": 17633.65,
+      "mean_us": 18573.918,
+      "first10_mean_us": 15666.33,
+      "last10_mean_us": 18397.53
+    },
+    {
+      "block": "rep3_INSTRUMENTED",
+      "replicate": 3,
+      "condition": "INSTRUMENTED",
+      "position_in_replicate": 1,
+      "median_us": 15940.95,
+      "mean_us": 16218.05,
+      "first10_mean_us": 17099.61,
+      "last10_mean_us": 16156.17
+    },
+    {
+      "block": "rep3_MINIMAL",
+      "replicate": 3,
+      "condition": "MINIMAL",
+      "position_in_replicate": 2,
+      "median_us": 15788.1,
+      "mean_us": 15857.614,
+      "first10_mean_us": 16141.16,
+      "last10_mean_us": 15668.28
+    },
+    {
+      "block": "rep4_MINIMAL",
+      "replicate": 4,
+      "condition": "MINIMAL",
+      "position_in_replicate": 1,
+      "median_us": 15968.85,
+      "mean_us": 15972.786,
+      "first10_mean_us": 15958.43,
+      "last10_mean_us": 15618.17
+    },
+    {
+      "block": "rep4_INSTRUMENTED",
+      "replicate": 4,
+      "condition": "INSTRUMENTED",
+      "position_in_replicate": 2,
+      "median_us": 15994.9,
+      "mean_us": 16011.588,
+      "first10_mean_us": 16146.49,
+      "last10_mean_us": 15714.4
+    },
+    {
+      "block": "rep5_INSTRUMENTED",
+      "replicate": 5,
+      "condition": "INSTRUMENTED",
+      "position_in_replicate": 1,
+      "median_us": 15655.4,
+      "mean_us": 15773.308,
+      "first10_mean_us": 16541.45,
+      "last10_mean_us": 15330.84
+    },
+    {
+      "block": "rep5_MINIMAL",
+      "replicate": 5,
+      "condition": "MINIMAL",
+      "position_in_replicate": 2,
+      "median_us": 15490.1,
+      "mean_us": 15565.222,
+      "first10_mean_us": 15565.73,
+      "last10_mean_us": 15501.64
+    }
+  ],
+  "position_effect_second_vs_first": [
+    {
+      "replicate": 0,
+      "first_condition": "MINIMAL",
+      "second_condition": "INSTRUMENTED",
+      "first_median_us": 11559.3,
+      "second_median_us": 15559.35,
+      "second_vs_first_pct": 34.605
+    },
+    {
+      "replicate": 1,
+      "first_condition": "INSTRUMENTED",
+      "second_condition": "MINIMAL",
+      "first_median_us": 14225.5,
+      "second_median_us": 13001.7,
+      "second_vs_first_pct": -8.603
+    },
+    {
+      "replicate": 2,
+      "first_condition": "MINIMAL",
+      "second_condition": "INSTRUMENTED",
+      "first_median_us": 15523.5,
+      "second_median_us": 17633.65,
+      "second_vs_first_pct": 13.593
+    },
+    {
+      "replicate": 3,
+      "first_condition": "INSTRUMENTED",
+      "second_condition": "MINIMAL",
+      "first_median_us": 15940.95,
+      "second_median_us": 15788.1,
+      "second_vs_first_pct": -0.959
+    },
+    {
+      "replicate": 4,
+      "first_condition": "MINIMAL",
+      "second_condition": "INSTRUMENTED",
+      "first_median_us": 15968.85,
+      "second_median_us": 15994.9,
+      "second_vs_first_pct": 0.163
+    },
+    {
+      "replicate": 5,
+      "first_condition": "INSTRUMENTED",
+      "second_condition": "MINIMAL",
+      "first_median_us": 15655.4,
+      "second_median_us": 15490.1,
+      "second_vs_first_pct": -1.056
+    }
+  ],
+  "position_summary": {
+    "minimal_runs_first_replicates": [
+      0,
+      2,
+      4
+    ],
+    "instrumented_runs_first_replicates": [
+      1,
+      3,
+      5
+    ],
+    "mean_overhead_pct_when_MINIMAL_first": 16.1203,
+    "mean_overhead_pct_when_INSTRUMENTED_first": 3.816
+  },
+  "condition_x_position": {
+    "MINIMAL": {
+      "median_us_when_run_first": 14350.55,
+      "median_us_when_run_second": 14759.97,
+      "second_minus_first_us": 409.42,
+      "second_vs_first_pct": 2.853
+    },
+    "INSTRUMENTED": {
+      "median_us_when_run_first": 15273.95,
+      "median_us_when_run_second": 16395.97,
+      "second_minus_first_us": 1122.02,
+      "second_vs_first_pct": 7.346
+    }
+  },
+  "within_block_drift": [
+    {
+      "replicate": 0,
+      "condition": "MINIMAL",
+      "first10_mean_us": 11222.71,
+      "last10_mean_us": 15613.98,
+      "last10_minus_first10_us": 4391.27,
+      "slope_us_per_iteration": 82.67,
+      "direction": "rising"
+    },
+    {
+      "replicate": 0,
+      "condition": "INSTRUMENTED",
+      "first10_mean_us": 14843.99,
+      "last10_mean_us": 14213.13,
+      "last10_minus_first10_us": -630.86,
+      "slope_us_per_iteration": -34.58,
+      "direction": "falling"
+    },
+    {
+      "replicate": 1,
+      "condition": "MINIMAL",
+      "first10_mean_us": 12105.01,
+      "last10_mean_us": 16243.95,
+      "last10_minus_first10_us": 4138.94,
+      "slope_us_per_iteration": 121.85,
+      "direction": "rising"
+    },
+    {
+      "replicate": 1,
+      "condition": "INSTRUMENTED",
+      "first10_mean_us": 15145.89,
+      "last10_mean_us": 15076.76,
+      "last10_minus_first10_us": -69.13,
+      "slope_us_per_iteration": 34.6,
+      "direction": "rising"
+    },
+    {
+      "replicate": 2,
+      "condition": "MINIMAL",
+      "first10_mean_us": 16056.89,
+      "last10_mean_us": 15159.87,
+      "last10_minus_first10_us": -897.02,
+      "slope_us_per_iteration": -21.45,
+      "direction": "falling"
+    },
+    {
+      "replicate": 2,
+      "condition": "INSTRUMENTED",
+      "first10_mean_us": 15666.33,
+      "last10_mean_us": 18397.53,
+      "last10_minus_first10_us": 2731.2,
+      "slope_us_per_iteration": 113.12,
+      "direction": "rising"
+    },
+    {
+      "replicate": 3,
+      "condition": "MINIMAL",
+      "first10_mean_us": 16141.16,
+      "last10_mean_us": 15668.28,
+      "last10_minus_first10_us": -472.88,
+      "slope_us_per_iteration": -6.07,
+      "direction": "falling"
+    },
+    {
+      "replicate": 3,
+      "condition": "INSTRUMENTED",
+      "first10_mean_us": 17099.61,
+      "last10_mean_us": 16156.17,
+      "last10_minus_first10_us": -943.44,
+      "slope_us_per_iteration": -23.66,
+      "direction": "falling"
+    },
+    {
+      "replicate": 4,
+      "condition": "MINIMAL",
+      "first10_mean_us": 15958.43,
+      "last10_mean_us": 15618.17,
+      "last10_minus_first10_us": -340.26,
+      "slope_us_per_iteration": -6.71,
+      "direction": "falling"
+    },
+    {
+      "replicate": 4,
+      "condition": "INSTRUMENTED",
+      "first10_mean_us": 16146.49,
+      "last10_mean_us": 15714.4,
+      "last10_minus_first10_us": -432.09,
+      "slope_us_per_iteration": -8.24,
+      "direction": "falling"
+    },
+    {
+      "replicate": 5,
+      "condition": "MINIMAL",
+      "first10_mean_us": 15565.73,
+      "last10_mean_us": 15501.64,
+      "last10_minus_first10_us": -64.09,
+      "slope_us_per_iteration": -1.66,
+      "direction": "falling"
+    },
+    {
+      "replicate": 5,
+      "condition": "INSTRUMENTED",
+      "first10_mean_us": 16541.45,
+      "last10_mean_us": 15330.84,
+      "last10_minus_first10_us": -1210.61,
+      "slope_us_per_iteration": -27.79,
+      "direction": "falling"
+    }
+  ],
+  "blocks_rising": 4,
+  "blocks_falling": 8,
+  "subset_metrics_explanatory_only": [
+    {
+      "label": "ALL 6 replicates (the frozen metric basis)",
+      "replicates": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "mean_overhead_pct": 8.5506,
+      "worst_case_overhead_pct": 109.0882,
+      "median_deviation_pct": 2.1161
+    },
+    {
+      "label": "replicates 0-2 only (early run)",
+      "replicates": [
+        0,
+        1,
+        2
+      ],
+      "mean_overhead_pct": 16.918,
+      "worst_case_overhead_pct": 109.0882,
+      "median_deviation_pct": 4.243
+    },
+    {
+      "label": "replicates 3-5 only (later run)",
+      "replicates": [
+        3,
+        4,
+        5
+      ],
+      "mean_overhead_pct": 1.2814,
+      "worst_case_overhead_pct": 25.5727,
+      "median_deviation_pct": 0.8927
+    },
+    {
+      "label": "replicate 0 excluded",
+      "replicates": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "mean_overhead_pct": 5.536,
+      "worst_case_overhead_pct": 105.9879,
+      "median_deviation_pct": 1.6084
+    },
+    {
+      "label": "replicates 0 and 2 excluded",
+      "replicates": [
+        1,
+        3,
+        4,
+        5
+      ],
+      "mean_overhead_pct": 2.1864,
+      "worst_case_overhead_pct": 65.4523,
+      "median_deviation_pct": 0.6802
+    },
+    {
+      "label": "same-position pairs only: even reps (min first)",
+      "replicates": [
+        0,
+        2,
+        4
+      ],
+      "mean_overhead_pct": 14.294,
+      "worst_case_overhead_pct": 109.0882,
+      "median_deviation_pct": 3.9186
+    },
+    {
+      "label": "same-position pairs only: odd reps (ins first)",
+      "replicates": [
+        1,
+        3,
+        5
+      ],
+      "mean_overhead_pct": 2.8828,
+      "worst_case_overhead_pct": 65.4523,
+      "median_deviation_pct": 0.5241
+    }
+  ],
+  "order_hypothesis_test": {
+    "prediction": "if the SECOND condition in a replicate is penalised, MINIMAL-first reps should show inflated apparent overhead and INSTRUMENTED-first reps should show understated apparent overhead",
+    "observed_minimal_first_mean_overhead_pct": 16.1203,
+    "observed_instrumented_first_mean_overhead_pct": 3.816,
+    "consistent_with_prediction": true,
+    "note": "association only - the design cannot separate position from elapsed time"
+  }
+}

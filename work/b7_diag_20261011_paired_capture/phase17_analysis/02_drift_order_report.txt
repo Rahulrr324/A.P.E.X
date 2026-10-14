@@ -1,0 +1,65 @@
+====================================================================================================
+PHASE 17 - POSITION / WARM-UP / DRIFT ANALYSIS
+====================================================================================================
+
+--- 12 blocks in reconstructed execution order ---
+  block                    median_us     mean_us  first10_us   last10_us
+  rep0_MINIMAL              11559.30    12341.32    11222.71    15613.98
+  rep0_INSTRUMENTED         15559.35    15694.59    14843.99    14213.13
+  rep1_INSTRUMENTED         14225.50    13872.56    15145.89    15076.76
+  rep1_MINIMAL              13001.70    13155.96    12105.01    16243.95
+  rep2_MINIMAL              15523.50    15677.79    16056.89    15159.87
+  rep2_INSTRUMENTED         17633.65    18573.92    15666.33    18397.53
+  rep3_INSTRUMENTED         15940.95    16218.05    17099.61    16156.17
+  rep3_MINIMAL              15788.10    15857.61    16141.16    15668.28
+  rep4_MINIMAL              15968.85    15972.79    15958.43    15618.17
+  rep4_INSTRUMENTED         15994.90    16011.59    16146.49    15714.40
+  rep5_INSTRUMENTED         15655.40    15773.31    16541.45    15330.84
+  rep5_MINIMAL              15490.10    15565.22    15565.73    15501.64
+
+--- position effect within each replicate (2nd median vs 1st median) ---
+  rep 1st cond      2nd cond          1st_us    2nd_us  2nd vs 1st %
+    0 MINIMAL       INSTRUMENTED    11559.30  15559.35        34.605
+    1 INSTRUMENTED  MINIMAL         14225.50  13001.70        -8.603
+    2 MINIMAL       INSTRUMENTED    15523.50  17633.65        13.593
+    3 INSTRUMENTED  MINIMAL         15940.95  15788.10        -0.959
+    4 MINIMAL       INSTRUMENTED    15968.85  15994.90         0.163
+    5 INSTRUMENTED  MINIMAL         15655.40  15490.10        -1.056
+
+--- condition x position (median us) ---
+  MINIMAL        first=  14350.55  second=  14759.97  delta=  +409.42 us (+2.853 %)
+  INSTRUMENTED   first=  15273.95  second=  16395.97  delta= +1122.02 us (+7.346 %)
+
+--- order-hypothesis test ---
+  prediction: if the SECOND condition in a replicate is penalised, MINIMAL-first reps should show inflated apparent overhead and INSTRUMENTED-first reps should show understated apparent overhead
+  observed_minimal_first_mean_overhead_pct: 16.1203
+  observed_instrumented_first_mean_overhead_pct: 3.816
+  consistent_with_prediction: True
+  note: association only - the design cannot separate position from elapsed time
+
+--- within-block drift (is time rising or falling across the 50-iteration loop?) ---
+  rep cond            first10_us   last10_us  last-first   slope us/it  dir
+    0 MINIMAL           11222.71    15613.98    +4391.27         82.67  rising
+    0 INSTRUMENTED      14843.99    14213.13     -630.86        -34.58  falling
+    1 MINIMAL           12105.01    16243.95    +4138.94        121.85  rising
+    1 INSTRUMENTED      15145.89    15076.76      -69.13         34.60  rising
+    2 MINIMAL           16056.89    15159.87     -897.02        -21.45  falling
+    2 INSTRUMENTED      15666.33    18397.53    +2731.20        113.12  rising
+    3 MINIMAL           16141.16    15668.28     -472.88         -6.07  falling
+    3 INSTRUMENTED      17099.61    16156.17     -943.44        -23.66  falling
+    4 MINIMAL           15958.43    15618.17     -340.26         -6.71  falling
+    4 INSTRUMENTED      16146.49    15714.40     -432.09         -8.24  falling
+    5 MINIMAL           15565.73    15501.64      -64.09         -1.66  falling
+    5 INSTRUMENTED      16541.45    15330.84    -1210.61        -27.79  falling
+  rising blocks: 4   falling blocks: 8
+
+--- SUBSET METRICS (EXPLANATORY ONLY - frozen metric NOT replaced) ---
+  subset                                                   mean%     worst%   meddev%    all<=thr?
+  ALL 6 replicates (the frozen metric basis)              8.5506   109.0882    2.1161           no
+  replicates 0-2 only (early run)                        16.9180   109.0882    4.2430           no
+  replicates 3-5 only (later run)                         1.2814    25.5727    0.8927           no
+  replicate 0 excluded                                    5.5360   105.9879    1.6084           no
+  replicates 0 and 2 excluded                             2.1864    65.4523    0.6802           no
+  same-position pairs only: even reps (min first)        14.2940   109.0882    3.9186           no
+  same-position pairs only: odd reps (ins first)          2.8828    65.4523    0.5241           no
+====================================================================================================

@@ -1,0 +1,94 @@
+========================================================================================
+PHASE 17 - INDEPENDENT RECOMPUTATION FROM CSV
+========================================================================================
+csv sha256 818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f  bytes=12766  lines=301  CRLF=False
+parsed rows=300  unique keys=300  anomalies=89
+
+--- FROZEN GLOBAL METRICS (recomputed, independent of stdout) ---
+  mean_overhead_pct       =     8.5506   (limit <= 2.0)   NOT OK
+  worst_case_overhead_pct =   109.0882   (limit <= 10.0)  NOT OK
+  median_deviation_pct    =     2.1161   (limit <= 2.0)   NOT OK
+  worst pair = replicate 0 iteration 28  (9801.70 -> 20494.20 us)
+  vs diagnostic stdout: mean 8.5506 / worst 109.0882 / meddev 2.1161
+
+--- FORMULA CONTRAST (ratio-of-means/medians vs mean/median-of-ratios) ---
+  mean_of_pair_ratios_pct                                 10.9510
+  median_of_pair_ratios_pct                                2.9823
+  ratio_of_means_pct (== FROZEN mean_overhead)             8.5506
+  ratio_of_medians_pct (== FROZEN median_deviation)        2.1161
+  trimmed_mean_pair_ratios_pct (drop top1+bottom1)        10.8235
+
+--- PER-REPLICATE ---
+  rep  mean_ovh%  median_dev%  worst_signed%  med_pair_ratio%   neg   >10%
+    0     27.171       34.605        109.088           30.423    10     35
+    1      5.447        9.413         65.452            5.217    22     20
+    2     18.473       13.593        105.988           16.305    12     27
+    3      2.273        0.968         25.573            1.221    19      6
+    4      0.243        0.163         10.283            0.646    21      1
+    5      1.337        1.067         16.631            1.996    22      7
+
+--- TOP 10 SIGNED PAIR OVERHEADS ---
+  rep0 iter28    9801.700 ->  20494.200 us       109.0882 %
+  rep2 iter37   15474.500 ->  31875.600 us       105.9879 %
+  rep0 iter15    9956.700 ->  19671.900 us        97.5745 %
+  rep0 iter16    9971.200 ->  19636.000 us        96.9272 %
+  rep0 iter14   10056.600 ->  18829.200 us        87.2323 %
+  rep0 iter 0    9311.600 ->  17329.600 us        86.1077 %
+  rep0 iter31   10046.300 ->  18567.500 us        84.8193 %
+  rep0 iter 6   10028.600 ->  17895.800 us        78.4476 %
+  rep0 iter17    9638.800 ->  16972.200 us        76.0821 %
+  rep0 iter26   10413.700 ->  17666.000 us        69.6419 %
+--- BOTTOM 10 SIGNED PAIR OVERHEADS ---
+  rep1 iter41   19050.400 ->   9677.800 us       -49.1990 %
+  rep1 iter21   15280.100 ->   9773.400 us       -36.0384 %
+  rep0 iter45   18985.700 ->  12572.600 us       -33.7786 %
+  rep1 iter42   16552.800 ->  11499.900 us       -30.5260 %
+  rep1 iter22   13975.900 ->  10382.200 us       -25.7135 %
+  rep1 iter 1   15174.100 ->  11377.400 us       -25.0209 %
+  rep1 iter18   12947.900 ->   9717.800 us       -24.9469 %
+  rep0 iter43   16449.300 ->  12730.600 us       -22.6070 %
+  rep0 iter47   14937.400 ->  11574.700 us       -22.5119 %
+  rep1 iter48   16360.000 ->  12934.600 us       -20.9377 %
+
+--- DISTRIBUTION OF PER-PAIR SIGNED OVERHEAD (%) ---
+  min        -49.199
+  p1         -30.5585
+  p5         -14.1166
+  p10        -7.5381
+  q1         -2.7798
+  median     2.9823
+  p75_q3     17.6703
+  p90        45.1514
+  p95        60.2469
+  p99        96.9336
+  max        109.0882
+  mean       10.951
+  stdev      24.1613
+  iqr        20.4501
+  n_negative 106
+  n_zero     0
+  n_positive 194
+  n_gt_2pct  164
+  n_gt_10pct 96
+  n_gt_50pct 25
+
+--- CLUSTERING ---
+  top10 replicates [0, 0, 0, 0, 0, 0, 0, 0, 0, 2]  iterations [0, 6, 14, 15, 16, 17, 26, 28, 31, 37]
+  bottom10 replicates [0, 0, 0, 1, 1, 1, 1, 1, 1, 1]  iterations [1, 18, 21, 22, 41, 42, 43, 45, 47, 48]
+  negatives per replicate [10, 22, 12, 19, 21, 22]
+  pairs >10% per replicate [35, 20, 27, 6, 1, 7]
+  rep median minimal us [11559.3, 13001.7, 15523.5, 15788.1, 15968.85, 15490.1]
+  rep median instrumented us [15559.35, 14225.5, 17633.65, 15940.95, 15994.9, 15655.4]
+  first-half mean 12.262 %   second-half mean 9.64 %
+
+--- SENSITIVITY (EXPLANATORY ONLY; frozen metric NOT replaced) ---
+  frozen_worst_case_pct                        109.0882
+  2nd_largest_pair_pct                         105.9879
+  3rd_largest_pair_pct                         97.5745
+  worst_case_without_the_single_max_pct        105.9879
+  n_pairs_above_10pct                          96
+  pct_of_pairs_driving_the_worst_case          0.3333
+  note                                         Reported for explanation only. The frozen metric is the single maximum and is NOT replaced anywhere.
+
+FROZEN CALIBRATION VERDICT: FAIL
+========================================================================================

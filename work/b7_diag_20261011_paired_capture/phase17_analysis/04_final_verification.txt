@@ -1,0 +1,50 @@
+############ PHASE 17 FINAL VERIFICATION (corrected) ############
+date_utc: 2026-10-14T14:53:45Z
+note: an earlier copy of this record had a hand-typed expected hash for
+      BenchmarkHarness.cpp that was actually gates.h's hash. Corrected here;
+      the authoritative baseline-file verification is shown below and passes.
+
+=== 1. EVIDENCE UNCHANGED ===
+MATCH    work/b7_diag_20261011_paired_capture/run2/paired_samples.csv
+MATCH    build/bm_b7_diagnostic/run_1791799501127597800_0/paired_samples.csv
+MATCH    stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp
+MATCH    stark/src/phase1/bench/BenchmarkHarness.cpp
+MATCH    stark/CMakeLists.txt
+MATCH    stark/build-b7diag-vs2019b/Release/bm_b7_diagnostic.exe
+MATCH    stark/build-b7diag-20261011/bm_b7_diagnostic.exe
+MATCH    stark/reports/gate_results/G7.json
+MATCH    stark/reports/gate_results/G4.json
+MATCH    stark/reports/m0_acceptance_matrix.json
+MATCH    stark/reports/source_change_manifest.json
+MATCH    stark/reports/evidence_manifest.json
+MATCH    work/b7_diag_20261011_paired_capture/phase16_report_vs2019_resolved.md
+
+=== 1b. AUTHORITATIVE baseline-file verification (frozen G7/M0/M1 sets) ===
+ALL OK   hashes_frozen_before.txt
+ALL OK   hashes_frozen_after.txt
+ALL OK   hashes_evidence_before.txt
+ALL OK   hashes_evidence_after.txt
+ALL OK   hashes_g7cam_before.txt
+ALL OK   hashes_g7cam_after.txt
+ALL OK   hashes_g7cam_frozen20261008_before.txt
+ALL OK   hashes_g7cam_frozen20261008_after.txt
+ALL OK   hashes_prodbin_before.txt
+ALL OK   hashes_prodbin_after.txt
+
+=== 2. REPORT STRUCTURE ===
+12:## 0. Headline
+28:## 1. Evidence preservation
+55:## 2. Independently recomputed metrics (from the CSV alone)
+256:## 3. Measurement implementation — code-level findings
+356:## 4. The toolchain caveat, stated precisely
+419:## 5. Recommended next experiment — DO NOT EXECUTE
+497:## 6. Limitations
+535:## 7. Final status distinctions
+
+=== 3. GIT ===
+?? stark/nul
+?? work/b7_diag_20261011_paired_capture/phase17_analysis/
+?? work/b7_diag_20261011_paired_capture/phase17_report_calibration_failure_analysis.md
+--- staged (must be empty) ---
+(empty = nothing staged)
+f2f910e some chnages
