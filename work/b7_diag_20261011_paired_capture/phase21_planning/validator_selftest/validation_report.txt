@@ -1,0 +1,22 @@
+==============================================================================
+PHASE 19 PER-RUN VALIDATION  run2
+==============================================================================
+csv                 : E:\My Local AI\work\b7_diag_20261011_paired_capture\run2\paired_samples.csv
+csv sha256          : 818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f
+structural checks   : FAIL (14 checks, 1 failed)
+failed checks       : ['stdout_available']
+  (calibration thresholds are reported below and are NOT structural checks)
+
+FROZEN METRICS (recomputed from CSV bytes)   [threshold]
+  mean_overhead_pct       = 8.550597   [<= 2.0]
+  worst_case_overhead_pct = 109.088219   [<= 10.0]
+  median_deviation_pct    = 2.116052   [<= 2.0]
+
+DESCRIPTIVE (not calibration metrics)
+  pooled median minimal/instrumented us : 15469.85 / 15797.2
+  pooled stdev minimal/instrumented us  : 2228.857 / 2530.213
+  min pair overhead %                   : -49.198967
+  pairs over 10%                        : 96 / 300
+
+CALIBRATION VERDICT : FAIL
+==============================================================================

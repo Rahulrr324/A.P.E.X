@@ -1,0 +1,5 @@
+usage: phase19_runner.py [-h] [--probe-child] [--self-test] [--topology]
+                         [--dry-run] [--run-id RUN_ID]
+                         [--condition {pinned,unpinned}] [--mask MASK]
+                         [--order ORDER]
+phase19_runner.py: error: argument --mask: expected one argument

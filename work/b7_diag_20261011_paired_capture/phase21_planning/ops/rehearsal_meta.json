@@ -1,0 +1,26 @@
+{
+  "invocation": [
+    "C:\\Python314\\python.exe",
+    "E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase19_planning\\phase19_runner.py",
+    "--run-id",
+    "p21r1",
+    "--condition",
+    "pinned",
+    "--mask",
+    "--order",
+    "1"
+  ],
+  "cwd": "E:\\My Local AI",
+  "runner_rc": 2,
+  "runner_stdout_bytes": 0,
+  "runner_stderr_bytes": 305,
+  "runner_stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "runner_stderr_sha256": "cd44f9c17a11d2dfc9fb4131fcb89d4c6e1a77661175495b7a33d0f307f81a77",
+  "capture": {
+    "stdout_file": "E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase21_planning\\ops\\runner_stdout.txt",
+    "stderr_file": "E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase21_planning\\ops\\runner_stderr.txt",
+    "exitcode_file": "E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase21_planning\\ops\\runner_exitcode.txt"
+  },
+  "intended_exit": 2,
+  "interpretation": "argparse rejects bare --mask with exit 2 before any measurement path is entered; this is established by source inspection and prior CLI tests, not invented here"
+}
