@@ -1,0 +1,157 @@
+{
+  "label": "post_run",
+  "at_local": "2026-10-15T18:43:29.216",
+  "system_cpu_busy_fraction": 0.1173,
+  "self_process_mask": 4095,
+  "system_mask": 4095,
+  "ac": {
+    "ACLineStatus": 1,
+    "BatteryLifePercent": 100,
+    "note": "ACLineStatus: 1=AC, 0=battery, 255=unknown"
+  },
+  "power_scheme": {
+    "cmd": "powercfg /getactivescheme",
+    "rc": 0,
+    "stdout": "Power Scheme GUID: dfe97760-471c-4d01-bd06-b8b04c50ecd8  (Performance Mode)",
+    "stderr": ""
+  },
+  "thermal": {
+    "rc": 1,
+    "stdout": "",
+    "stderr": "Get-CimInstance : Access denied \nAt line:1 char:2\n+ (Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTem ...\n+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : PermissionDenied: (root/wmi:MSAcpi_ThermalZoneTemperature:String) [Get-CimInstance], Cim \n   Exception\n    + FullyQualifiedErrorId : HRESULT 0x80041003,Microsoft.Management",
+    "note": "tenths of Kelvin if present"
+  },
+  "topology": {
+    "cores": [
+      {
+        "mask": 3,
+        "cpus": [
+          0,
+          1
+        ],
+        "efficiency_class": 1,
+        "class": "P-core",
+        "smt_threads": 2
+      },
+      {
+        "mask": 12,
+        "cpus": [
+          2,
+          3
+        ],
+        "efficiency_class": 1,
+        "class": "P-core",
+        "smt_threads": 2
+      },
+      {
+        "mask": 48,
+        "cpus": [
+          4,
+          5
+        ],
+        "efficiency_class": 1,
+        "class": "P-core",
+        "smt_threads": 2
+      },
+      {
+        "mask": 192,
+        "cpus": [
+          6,
+          7
+        ],
+        "efficiency_class": 1,
+        "class": "P-core",
+        "smt_threads": 2
+      },
+      {
+        "mask": 256,
+        "cpus": [
+          8
+        ],
+        "efficiency_class": 0,
+        "class": "E-core",
+        "smt_threads": 1
+      },
+      {
+        "mask": 512,
+        "cpus": [
+          9
+        ],
+        "efficiency_class": 0,
+        "class": "E-core",
+        "smt_threads": 1
+      },
+      {
+        "mask": 1024,
+        "cpus": [
+          10
+        ],
+        "efficiency_class": 0,
+        "class": "E-core",
+        "smt_threads": 1
+      },
+      {
+        "mask": 2048,
+        "cpus": [
+          11
+        ],
+        "efficiency_class": 0,
+        "class": "E-core",
+        "smt_threads": 1
+      }
+    ],
+    "p_core_logical_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "e_core_logical_cpus": [
+      8,
+      9,
+      10,
+      11
+    ],
+    "l3_caches": [
+      {
+        "level": 3,
+        "size_bytes": 12582912,
+        "type": 0,
+        "shared_cpus": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ]
+      }
+    ],
+    "l3_shared_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "cache_record_count": 22,
+    "note": "EfficiencyClass is reported by the OS; P/E is not assumed"
+  }
+}

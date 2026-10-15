@@ -1,0 +1,115 @@
+{
+  "run_dir": "E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase19_runs\\p19r6",
+  "csv": "E:\\My Local AI\\work\\b7_diag_20261011_paired_capture\\phase19_runs\\p19r6\\paired_samples.csv",
+  "checks": {
+    "csv_non_empty": {
+      "ok": true,
+      "detail": "12837 bytes"
+    },
+    "header_exact": {
+      "ok": true,
+      "detail": "header=['replicate', 'iteration', 'minimal_sec', 'instrumented_sec', 'signed_overhead_pct']"
+    },
+    "exactly_300_data_rows": {
+      "ok": true,
+      "detail": "data rows=300"
+    },
+    "total_lines_301_incl_header": {
+      "ok": true,
+      "detail": "lines=301"
+    },
+    "pair_keys_unique": {
+      "ok": true,
+      "detail": "unique=300"
+    },
+    "pair_keys_exact_set": {
+      "ok": true,
+      "detail": "missing=0 extra=0"
+    },
+    "per_replicate_counts_50": {
+      "ok": true,
+      "detail": "counts={0: 50, 1: 50, 2: 50, 3: 50, 4: 50, 5: 50}"
+    },
+    "all_values_finite": {
+      "ok": true,
+      "detail": ""
+    },
+    "minimal_sec_positive": {
+      "ok": true,
+      "detail": ""
+    },
+    "instrumented_sec_positive": {
+      "ok": true,
+      "detail": ""
+    },
+    "row_formula_pct_matches": {
+      "ok": true,
+      "detail": "violations=0"
+    },
+    "recomputed_matches_reported_mean_overhead_pct": {
+      "ok": true,
+      "detail": "recomputed=5.410102 reported=5.4101"
+    },
+    "recomputed_matches_reported_worst_case_overhead_pct": {
+      "ok": true,
+      "detail": "recomputed=308.730248 reported=308.7302"
+    },
+    "recomputed_matches_reported_median_deviation_pct": {
+      "ok": true,
+      "detail": "recomputed=0.929618 reported=0.9296"
+    },
+    "no_forbidden_marker_in_path": {
+      "ok": true,
+      "detail": ""
+    },
+    "no_forbidden_marker_in_contents": {
+      "ok": true,
+      "detail": ""
+    }
+  },
+  "metrics": {
+    "n_samples_per_condition": 300,
+    "mean_minimal_us": 13059.131,
+    "mean_instrumented_us": 13765.643333,
+    "median_minimal_us": 11736.0,
+    "median_instrumented_us": 11845.1,
+    "mean_overhead_pct": 5.410102,
+    "worst_case_overhead_pct": 308.730248,
+    "median_deviation_pct": 0.929618,
+    "pooled_std_minimal_us": 4315.345,
+    "pooled_std_instrumented_us": 5035.065,
+    "min_pair_overhead_pct": -71.553256,
+    "count_pairs_over_10pct": 112
+  },
+  "verdict": {
+    "threshold_mean_le_2pct": {
+      "value": 5.4101,
+      "ok": false
+    },
+    "threshold_worst_le_10pct": {
+      "value": 308.7302,
+      "ok": false
+    },
+    "threshold_median_dev_le_2pct": {
+      "value": 0.9296,
+      "ok": true
+    },
+    "calibration_status": "FAIL",
+    "thresholds_used": {
+      "mean_overhead_pct": 2.0,
+      "worst_case_overhead_pct": 10.0,
+      "median_deviation_pct": 2.0
+    },
+    "note": "reported per run; the diagnostic's own verdict is not altered"
+  },
+  "at_utc": "2026-10-15T13:22:52+00:00",
+  "csv_bytes": 12837,
+  "csv_sha256": "9f9c95640b763384ffa5123807ec50f7961c7320de1e507cd28cdcbef9e2710b",
+  "reported": {
+    "mean_overhead_pct": 5.4101,
+    "worst_case_overhead_pct": 308.7302,
+    "median_deviation_pct": 0.9296
+  },
+  "failed_checks": [],
+  "structural_pass": true
+}

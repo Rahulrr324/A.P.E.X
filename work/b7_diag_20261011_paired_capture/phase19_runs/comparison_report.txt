@@ -1,0 +1,30 @@
+================================================================================================
+PHASE 19 - SIX INDEPENDENT RUNS (descriptive; NOT pooled)
+================================================================================================
+run     ord  condition  mask   cpu            mean%     worst%    meddev%   >10%  verdict
+p19r1   1    unpinned   none   all(12)     1.705128 110.007077   2.836746     90     FAIL
+p19r2   2    pinned     0x1    0           0.619725 223.987819    0.53909     74     FAIL
+p19r3   3    unpinned   none   all(12)     2.606424  108.94421   4.905067    105     FAIL
+p19r4   4    pinned     0x1    0         -12.214239 189.082194   7.470189     57     FAIL
+p19r5   5    unpinned   none   all(12)     1.030841 140.528287   3.616135     84     FAIL
+p19r6   6    pinned     0x1    0           5.410102 308.730248   0.929618    112     FAIL
+
+per-condition spread (n=3 each; weak dispersion estimate)
+  unpinned  mean_overhead_pct          min=1.030841     max=2.606424     range=1.575583
+  unpinned  worst_case_overhead_pct    min=108.94421    max=140.528287   range=31.584077
+  unpinned  median_deviation_pct       min=2.836746     max=4.905067     range=2.068321
+  unpinned  pairs_over_10pct           min=84           max=105          range=21
+  unpinned  pooled_std_minimal_us      min=3794.107     max=4179.273     range=385.166
+  pinned    mean_overhead_pct          min=-12.214239   max=5.410102     range=17.624341
+  pinned    worst_case_overhead_pct    min=189.082194   max=308.730248   range=119.648054
+  pinned    median_deviation_pct       min=0.53909      max=7.470189     range=6.931099
+  pinned    pairs_over_10pct           min=57           max=112          range=55
+  pinned    pooled_std_minimal_us      min=2800.094     max=6197.173     range=3397.079
+
+This is a DESCRIPTIVE comparison of six independent runs. It is NOT a
+pooled calibration result and must not be presented as one.
+n=3 per condition gives very limited statistical power: with 3 values a
+range is a weak dispersion estimate and no significance claim is made.
+The frozen thresholds are applied PER RUN, unchanged, in each run's own
+validation.json. No outlier is removed from any run.
+================================================================================================

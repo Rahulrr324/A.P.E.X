@@ -1,0 +1,395 @@
+{
+  "run": "p19r1",
+  "order": 1,
+  "condition": "unpinned",
+  "plan": {
+    "run_id": "p19r1",
+    "order": 1,
+    "condition": "unpinned",
+    "cwd": "E:\\My Local AI",
+    "exe_rel": "stark/build-b7diag-vs2019b/Release/bm_b7_diagnostic.exe",
+    "diag_dir_rel": "build/bm_b7_diagnostic/p19r1",
+    "host_dir_rel": "work/b7_diag_20261011_paired_capture/phase19_runs/p19r1",
+    "host_csv_rel": "work/b7_diag_20261011_paired_capture/phase19_runs/p19r1/paired_samples.csv",
+    "argv": [
+      "build/bm_b7_diagnostic/p19r1",
+      "--host-capture-dir",
+      "work/b7_diag_20261011_paired_capture/phase19_runs/p19r1"
+    ],
+    "mask": null,
+    "expected_mask": "system mask (all logical CPUs)"
+  },
+  "exe_sha256": "86ee9f3ee2c1daac8f2815be4516e2ea03fd19273166978cbf09e6d69ca09d88",
+  "pre_run_snapshot": {
+    "label": "pre_run",
+    "at_local": "2026-10-15T18:42:19.149",
+    "system_cpu_busy_fraction": 0.0464,
+    "self_process_mask": 4095,
+    "system_mask": 4095,
+    "ac": {
+      "ACLineStatus": 1,
+      "BatteryLifePercent": 100,
+      "note": "ACLineStatus: 1=AC, 0=battery, 255=unknown"
+    },
+    "power_scheme": {
+      "cmd": "powercfg /getactivescheme",
+      "rc": 0,
+      "stdout": "Power Scheme GUID: dfe97760-471c-4d01-bd06-b8b04c50ecd8  (Performance Mode)",
+      "stderr": ""
+    },
+    "thermal": {
+      "rc": 1,
+      "stdout": "",
+      "stderr": "Get-CimInstance : Access denied \nAt line:1 char:2\n+ (Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTem ...\n+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : PermissionDenied: (root/wmi:MSAcpi_ThermalZoneTemperature:String) [Get-CimInstance], Cim \n   Exception\n    + FullyQualifiedErrorId : HRESULT 0x80041003,Microsoft.Management",
+      "note": "tenths of Kelvin if present"
+    },
+    "topology": {
+      "cores": [
+        {
+          "mask": 3,
+          "cpus": [
+            0,
+            1
+          ],
+          "efficiency_class": 1,
+          "class": "P-core",
+          "smt_threads": 2
+        },
+        {
+          "mask": 12,
+          "cpus": [
+            2,
+            3
+          ],
+          "efficiency_class": 1,
+          "class": "P-core",
+          "smt_threads": 2
+        },
+        {
+          "mask": 48,
+          "cpus": [
+            4,
+            5
+          ],
+          "efficiency_class": 1,
+          "class": "P-core",
+          "smt_threads": 2
+        },
+        {
+          "mask": 192,
+          "cpus": [
+            6,
+            7
+          ],
+          "efficiency_class": 1,
+          "class": "P-core",
+          "smt_threads": 2
+        },
+        {
+          "mask": 256,
+          "cpus": [
+            8
+          ],
+          "efficiency_class": 0,
+          "class": "E-core",
+          "smt_threads": 1
+        },
+        {
+          "mask": 512,
+          "cpus": [
+            9
+          ],
+          "efficiency_class": 0,
+          "class": "E-core",
+          "smt_threads": 1
+        },
+        {
+          "mask": 1024,
+          "cpus": [
+            10
+          ],
+          "efficiency_class": 0,
+          "class": "E-core",
+          "smt_threads": 1
+        },
+        {
+          "mask": 2048,
+          "cpus": [
+            11
+          ],
+          "efficiency_class": 0,
+          "class": "E-core",
+          "smt_threads": 1
+        }
+      ],
+      "p_core_logical_cpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "e_core_logical_cpus": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "l3_caches": [
+        {
+          "level": 3,
+          "size_bytes": 12582912,
+          "type": 0,
+          "shared_cpus": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ]
+        }
+      ],
+      "l3_shared_cpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "cache_record_count": 22,
+      "note": "EfficiencyClass is reported by the OS; P/E is not assumed"
+    }
+  },
+  "start_local": "2026-10-15T18:42:20.404",
+  "end_local": "2026-10-15T18:42:31.319",
+  "elapsed_sec": 10.915,
+  "launch": {
+    "exe": "E:\\My Local AI\\stark\\build-b7diag-vs2019b\\Release\\bm_b7_diagnostic.exe",
+    "argv": [
+      "build/bm_b7_diagnostic/p19r1",
+      "--host-capture-dir",
+      "work/b7_diag_20261011_paired_capture/phase19_runs/p19r1"
+    ],
+    "mask_intended": null,
+    "self_process_mask": 4095,
+    "system_mask": 4095,
+    "system_cpu_count": 12,
+    "command_line": "\"E:\\My Local AI\\stark\\build-b7diag-vs2019b\\Release\\bm_b7_diagnostic.exe\" build/bm_b7_diagnostic/p19r1 --host-capture-dir work/b7_diag_20261011_paired_capture/phase19_runs/p19r1",
+    "create_ok": true,
+    "child_pid": 15308,
+    "child_tid": 15812,
+    "image_path": "E:\\My Local AI\\stark\\build-b7diag-vs2019b\\Release\\bm_b7_diagnostic.exe",
+    "image_matches_exe": true,
+    "mask_observed_suspended": 4095,
+    "system_mask_observed": 4095,
+    "affinity_verified_before_resume": true,
+    "mask_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "resume_thread_rc": 1,
+    "resume_ok": true,
+    "mask_observed_after_resume": 4095,
+    "affinity_drifted": false,
+    "exit_code": 0,
+    "mask_observed_at_exit": 4095
+  },
+  "post_run_snapshot": {
+    "label": "post_run",
+    "at_local": "2026-10-15T18:42:31.319",
+    "system_cpu_busy_fraction": 0.0831,
+    "self_process_mask": 4095,
+    "system_mask": 4095,
+    "ac": {
+      "ACLineStatus": 1,
+      "BatteryLifePercent": 100,
+      "note": "ACLineStatus: 1=AC, 0=battery, 255=unknown"
+    },
+    "power_scheme": {
+      "cmd": "powercfg /getactivescheme",
+      "rc": 0,
+      "stdout": "Power Scheme GUID: dfe97760-471c-4d01-bd06-b8b04c50ecd8  (Performance Mode)",
+      "stderr": ""
+    },
+    "thermal": {
+      "rc": 1,
+      "stdout": "",
+      "stderr": "Get-CimInstance : Access denied \nAt line:1 char:2\n+ (Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTem ...\n+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : PermissionDenied: (root/wmi:MSAcpi_ThermalZoneTemperature:String) [Get-CimInstance], Cim \n   Exception\n    + FullyQualifiedErrorId : HRESULT 0x80041003,Microsoft.Management",
+      "note": "tenths of Kelvin if present"
+    },
+    "topology": {
+      "cores": [
+        {
+          "mask": 3,
+          "cpus": [
+            0,
+            1
+          ],
+          "efficiency_class": 1,
+          "class": "P-core",
+          "smt_threads": 2
+        },
+        {
+          "mask": 12,
+          "cpus": [
+            2,
+            3
+          ],
+          "efficiency_class": 1,
+          "class": "P-core",
+          "smt_threads": 2
+        },
+        {
+          "mask": 48,
+          "cpus": [
+            4,
+            5
+          ],
+          "efficiency_class": 1,
+          "class": "P-core",
+          "smt_threads": 2
+        },
+        {
+          "mask": 192,
+          "cpus": [
+            6,
+            7
+          ],
+          "efficiency_class": 1,
+          "class": "P-core",
+          "smt_threads": 2
+        },
+        {
+          "mask": 256,
+          "cpus": [
+            8
+          ],
+          "efficiency_class": 0,
+          "class": "E-core",
+          "smt_threads": 1
+        },
+        {
+          "mask": 512,
+          "cpus": [
+            9
+          ],
+          "efficiency_class": 0,
+          "class": "E-core",
+          "smt_threads": 1
+        },
+        {
+          "mask": 1024,
+          "cpus": [
+            10
+          ],
+          "efficiency_class": 0,
+          "class": "E-core",
+          "smt_threads": 1
+        },
+        {
+          "mask": 2048,
+          "cpus": [
+            11
+          ],
+          "efficiency_class": 0,
+          "class": "E-core",
+          "smt_threads": 1
+        }
+      ],
+      "p_core_logical_cpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "e_core_logical_cpus": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "l3_caches": [
+        {
+          "level": 3,
+          "size_bytes": 12582912,
+          "type": 0,
+          "shared_cpus": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ]
+        }
+      ],
+      "l3_shared_cpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "cache_record_count": 22,
+      "note": "EfficiencyClass is reported by the OS; P/E is not assumed"
+    }
+  },
+  "stdout.txt_bytes": 4690,
+  "stdout.txt_sha256": "2cc1d814c18acc107f1f8c81b0651e503673a640a2bc3e715fd77fca14da4006",
+  "stderr.txt_bytes": 0,
+  "stderr.txt_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "host_csv_exists": true,
+  "host_csv_bytes": 12863,
+  "host_csv_sha256": "10c6273ff063afeb77098067998fba2a4863a144a0765c5e3e2a735bcb2d94b2",
+  "historical_csv_sha256_now": "818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f",
+  "historical_csv_unchanged": true,
+  "frozen_thresholds": {
+    "mean_overhead_pct": 2.0,
+    "worst_overhead_pct": 10.0,
+    "median_deviation_pct": 2.0
+  }
+}

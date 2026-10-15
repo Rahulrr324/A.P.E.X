@@ -1,0 +1,280 @@
+{
+  "at_utc": "2026-10-15T13:17:24+00:00",
+  "runs": [
+    {
+      "run": "p19r1",
+      "order": 1,
+      "condition": "unpinned",
+      "mask_intended": null,
+      "mask_cpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "affinity_verified_before_resume": true,
+      "exit_code": 0,
+      "csv_sha256": "10c6273ff063afeb77098067998fba2a4863a144a0765c5e3e2a735bcb2d94b2",
+      "mean_overhead_pct": 1.705128,
+      "worst_case_overhead_pct": 110.007077,
+      "median_deviation_pct": 2.836746,
+      "pairs_over_10pct": 90,
+      "pooled_std_minimal_us": 4019.147,
+      "calibration_status": "FAIL"
+    },
+    {
+      "run": "p19r2",
+      "order": 2,
+      "condition": "pinned",
+      "mask_intended": 1,
+      "mask_cpus": [
+        0
+      ],
+      "affinity_verified_before_resume": true,
+      "exit_code": 0,
+      "csv_sha256": "d7eb3ac85f51ccca292e9f5f5c4003c973a1713c61b1459139c1224f7e49f5ae",
+      "mean_overhead_pct": 0.619725,
+      "worst_case_overhead_pct": 223.987819,
+      "median_deviation_pct": 0.53909,
+      "pairs_over_10pct": 74,
+      "pooled_std_minimal_us": 2800.094,
+      "calibration_status": "FAIL"
+    },
+    {
+      "run": "p19r3",
+      "order": 3,
+      "condition": "unpinned",
+      "mask_intended": null,
+      "mask_cpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "affinity_verified_before_resume": true,
+      "exit_code": 0,
+      "csv_sha256": "21d005c71c141aeb62bcfd077fdbf5b16bff028a8fb350e69e15119e3b28f55c",
+      "mean_overhead_pct": 2.606424,
+      "worst_case_overhead_pct": 108.94421,
+      "median_deviation_pct": 4.905067,
+      "pairs_over_10pct": 105,
+      "pooled_std_minimal_us": 3794.107,
+      "calibration_status": "FAIL"
+    },
+    {
+      "run": "p19r4",
+      "order": 4,
+      "condition": "pinned",
+      "mask_intended": 1,
+      "mask_cpus": [
+        0
+      ],
+      "affinity_verified_before_resume": true,
+      "exit_code": 0,
+      "csv_sha256": "9057c467c921f21f6dfd21f4e7298b09e564b61901700a5959783b8388393901",
+      "mean_overhead_pct": -12.214239,
+      "worst_case_overhead_pct": 189.082194,
+      "median_deviation_pct": 7.470189,
+      "pairs_over_10pct": 57,
+      "pooled_std_minimal_us": 6197.173,
+      "calibration_status": "FAIL"
+    },
+    {
+      "run": "p19r5",
+      "order": 5,
+      "condition": "unpinned",
+      "mask_intended": null,
+      "mask_cpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "affinity_verified_before_resume": true,
+      "exit_code": 0,
+      "csv_sha256": "c66e9d85f9b20fa4c1f6ad1e651f540614522f9ad3cfb857fbc380c01d6ddaf0",
+      "mean_overhead_pct": 1.030841,
+      "worst_case_overhead_pct": 140.528287,
+      "median_deviation_pct": 3.616135,
+      "pairs_over_10pct": 84,
+      "pooled_std_minimal_us": 4179.273,
+      "calibration_status": "FAIL"
+    },
+    {
+      "run": "p19r6",
+      "order": 6,
+      "condition": "pinned",
+      "mask_intended": 1,
+      "mask_cpus": [
+        0
+      ],
+      "affinity_verified_before_resume": true,
+      "exit_code": 0,
+      "csv_sha256": "9f9c95640b763384ffa5123807ec50f7961c7320de1e507cd28cdcbef9e2710b",
+      "mean_overhead_pct": 5.410102,
+      "worst_case_overhead_pct": 308.730248,
+      "median_deviation_pct": 0.929618,
+      "pairs_over_10pct": 112,
+      "pooled_std_minimal_us": 4315.345,
+      "calibration_status": "FAIL"
+    }
+  ],
+  "per_condition_spread": {
+    "unpinned": {
+      "mean_overhead_pct": {
+        "n": 3,
+        "values": [
+          1.030841,
+          1.705128,
+          2.606424
+        ],
+        "min": 1.030841,
+        "max": 2.606424,
+        "range": 1.575583,
+        "median": 1.705128
+      },
+      "worst_case_overhead_pct": {
+        "n": 3,
+        "values": [
+          108.94421,
+          110.007077,
+          140.528287
+        ],
+        "min": 108.94421,
+        "max": 140.528287,
+        "range": 31.584077,
+        "median": 110.007077
+      },
+      "median_deviation_pct": {
+        "n": 3,
+        "values": [
+          2.836746,
+          3.616135,
+          4.905067
+        ],
+        "min": 2.836746,
+        "max": 4.905067,
+        "range": 2.068321,
+        "median": 3.616135
+      },
+      "pairs_over_10pct": {
+        "n": 3,
+        "values": [
+          84,
+          90,
+          105
+        ],
+        "min": 84,
+        "max": 105,
+        "range": 21,
+        "median": 90
+      },
+      "pooled_std_minimal_us": {
+        "n": 3,
+        "values": [
+          3794.107,
+          4019.147,
+          4179.273
+        ],
+        "min": 3794.107,
+        "max": 4179.273,
+        "range": 385.166,
+        "median": 4019.147
+      }
+    },
+    "pinned": {
+      "mean_overhead_pct": {
+        "n": 3,
+        "values": [
+          -12.214239,
+          0.619725,
+          5.410102
+        ],
+        "min": -12.214239,
+        "max": 5.410102,
+        "range": 17.624341,
+        "median": 0.619725
+      },
+      "worst_case_overhead_pct": {
+        "n": 3,
+        "values": [
+          189.082194,
+          223.987819,
+          308.730248
+        ],
+        "min": 189.082194,
+        "max": 308.730248,
+        "range": 119.648054,
+        "median": 223.987819
+      },
+      "median_deviation_pct": {
+        "n": 3,
+        "values": [
+          0.53909,
+          0.929618,
+          7.470189
+        ],
+        "min": 0.53909,
+        "max": 7.470189,
+        "range": 6.931099,
+        "median": 0.929618
+      },
+      "pairs_over_10pct": {
+        "n": 3,
+        "values": [
+          57,
+          74,
+          112
+        ],
+        "min": 57,
+        "max": 112,
+        "range": 55,
+        "median": 74
+      },
+      "pooled_std_minimal_us": {
+        "n": 3,
+        "values": [
+          2800.094,
+          4315.345,
+          6197.173
+        ],
+        "min": 2800.094,
+        "max": 6197.173,
+        "range": 3397.079,
+        "median": 4315.345
+      }
+    }
+  },
+  "IMPORTANT": [
+    "This is a DESCRIPTIVE comparison of six independent runs. It is NOT a",
+    "pooled calibration result and must not be presented as one.",
+    "n=3 per condition gives very limited statistical power: with 3 values a",
+    "range is a weak dispersion estimate and no significance claim is made.",
+    "The frozen thresholds are applied PER RUN, unchanged, in each run's own",
+    "validation.json. No outlier is removed from any run."
+  ]
+}
