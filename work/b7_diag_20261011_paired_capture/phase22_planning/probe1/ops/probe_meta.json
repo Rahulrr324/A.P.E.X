@@ -1,0 +1,60 @@
+{
+  "probe": "phase22_launch_probe",
+  "at_utc": "2026-10-15T13:03:56+00:00",
+  "exe": "E:\\My Local AI\\stark\\build-b7diag-vs2019b\\Release\\bm_b7_diagnostic.exe",
+  "exe_sha256_before": "86ee9f3ee2c1daac8f2815be4516e2ea03fd19273166978cbf09e6d69ca09d88",
+  "argv": [
+    "E:\\My Local AI\\stark\\build-b7diag-vs2019b\\Release\\bm_b7_diagnostic.exe",
+    "build/bm_b7_diagnostic",
+    "--host-capture-dir"
+  ],
+  "pin_mask": 1,
+  "launch": {
+    "create_ok": true,
+    "child_pid": 3556,
+    "child_tid": 13732,
+    "pin_mask": 1,
+    "argv": [
+      "E:\\My Local AI\\stark\\build-b7diag-vs2019b\\Release\\bm_b7_diagnostic.exe",
+      "build/bm_b7_diagnostic",
+      "--host-capture-dir"
+    ],
+    "image_path": "E:\\My Local AI\\stark\\build-b7diag-vs2019b\\Release\\bm_b7_diagnostic.exe",
+    "image_matches_exe": true,
+    "mask_observed_suspended": 1,
+    "system_mask_observed": 4095,
+    "affinity_verified": true,
+    "mask_cpus": [
+      0
+    ],
+    "resume_rc": 1,
+    "exit_code": 2,
+    "mask_at_exit": 1,
+    "affinity_drifted": false,
+    "exe_stdout.txt_bytes": 0,
+    "exe_stdout.txt_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "exe_stderr.txt_bytes": 431,
+    "exe_stderr.txt_sha256": "1e2d075090114da1d47bac2a56c2df859d2b86aa749855092e0d348725c57bf2",
+    "b7_csv_sha256_now": "818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f",
+    "b7_csv_unchanged": true,
+    "b7_csv_exists": true,
+    "historical_csv_sha256_now": "d0fca204c9443ef2d0113c12884dfc0fbfc1d64f08c3903f89c98c0c4bf5163a",
+    "historical_csv_unchanged": true,
+    "probe_csv_created": false
+  },
+  "b7_csv": {
+    "expected": "818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f",
+    "now": "818bf1a541b8115f2393a3da2b912eb3757b7f187199d5e9b60beca4e167998f",
+    "unchanged": true,
+    "exists": true
+  },
+  "historical_csv": {
+    "expected": "d0fca204c9443ef2d0113c12884dfc0fbfc1d64f08c3903f89c98c0c4bf5163a",
+    "now": "d0fca204c9443ef2d0113c12884dfc0fbfc1d64f08c3903f89c98c0c4bf5163a",
+    "unchanged": true
+  },
+  "probe_csv_created": false,
+  "exit_code": 2,
+  "exit_expected": 2,
+  "exit_matches_expected": true
+}
