@@ -1,0 +1,13 @@
+{
+  "run": "p19r3",
+  "order": 3,
+  "condition": "unpinned",
+  "launch": {
+    "mask_intended": null,
+    "mask_cpus": [
+      0
+    ],
+    "affinity_verified_before_resume": true,
+    "exit_code": 0
+  }
+}

@@ -1,0 +1,27 @@
+================================================================================================
+PHASE 19 - SIX INDEPENDENT RUNS (descriptive; NOT pooled)
+================================================================================================
+run     ord  condition  mask   cpu            mean%     worst%    meddev%   >10%  verdict
+p19r1   1    unpinned   none   0           8.820438   109.0882   8.550597      1     FAIL
+p19r2   2    pinned     0x1    0           8.820438   109.0882   8.550597      1     FAIL
+p19r3   3    unpinned   none   0           8.820438   109.0882   8.550597      1     FAIL
+
+per-condition spread (n=3 each; weak dispersion estimate)
+  unpinned  mean_overhead_pct          min=8.820438     max=8.820438     range=0.0
+  unpinned  worst_case_overhead_pct    min=109.0882     max=109.0882     range=0.0
+  unpinned  median_deviation_pct       min=8.550597     max=8.550597     range=0.0
+  unpinned  pairs_over_10pct           min=1            max=1            range=0
+  unpinned  pooled_std_minimal_us      min=363.96       max=363.96       range=0.0
+  pinned    mean_overhead_pct          min=8.820438     max=8.820438     range=0.0
+  pinned    worst_case_overhead_pct    min=109.0882     max=109.0882     range=0.0
+  pinned    median_deviation_pct       min=8.550597     max=8.550597     range=0.0
+  pinned    pairs_over_10pct           min=1            max=1            range=0
+  pinned    pooled_std_minimal_us      min=363.96       max=363.96       range=0.0
+
+This is a DESCRIPTIVE comparison of six independent runs. It is NOT a
+pooled calibration result and must not be presented as one.
+n=3 per condition gives very limited statistical power: with 3 values a
+range is a weak dispersion estimate and no significance claim is made.
+The frozen thresholds are applied PER RUN, unchanged, in each run's own
+validation.json. No outlier is removed from any run.
+================================================================================================
