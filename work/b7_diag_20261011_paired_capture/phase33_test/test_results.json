@@ -1,0 +1,445 @@
+[
+  {
+    "fixture": "valid_six.csv",
+    "profile": "six",
+    "note": "valid six-replicate",
+    "expected_exit": 0,
+    "actual_exit": 0,
+    "expected_structural_pass": true,
+    "actual_structural_pass": true,
+    "expected_calibration": "PASS",
+    "actual_calibration": "PASS",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [],
+    "pass": true
+  },
+  {
+    "fixture": "valid_eight.csv",
+    "profile": "eight",
+    "note": "valid eight-replicate",
+    "expected_exit": 0,
+    "actual_exit": 0,
+    "expected_structural_pass": true,
+    "actual_structural_pass": true,
+    "expected_calibration": "PASS",
+    "actual_calibration": "PASS",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [],
+    "pass": true
+  },
+  {
+    "fixture": "dup_key.csv",
+    "profile": "six",
+    "note": "duplicate pair key",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "pair_keys_unique",
+      "pair_keys_exact_set"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "missing_key.csv",
+    "profile": "six",
+    "note": "missing pair key",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "total_line_count",
+      "data_row_count",
+      "pair_keys_exact_set",
+      "per_replicate_counts"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "unexpected_key.csv",
+    "profile": "six",
+    "note": "unexpected replicate",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "pair_keys_exact_set",
+      "keys_in_expected_range",
+      "per_replicate_counts"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "wrong_row_count.csv",
+    "profile": "six",
+    "note": "301 rows",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "total_line_count",
+      "data_row_count",
+      "pair_keys_exact_set",
+      "keys_in_expected_range",
+      "per_replicate_counts"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "wrong_header.csv",
+    "profile": "six",
+    "note": "wrong header names",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "header_exact"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "missing_column.csv",
+    "profile": "six",
+    "note": "4-field row",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "all_rows_have_exact_field_count",
+      "pair_keys_exact_set",
+      "per_replicate_counts"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "malformed_row.csv",
+    "profile": "six",
+    "note": "6-field row",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "all_rows_have_exact_field_count",
+      "pair_keys_exact_set",
+      "per_replicate_counts"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "non_integer_key.csv",
+    "profile": "six",
+    "note": "non-integer keys",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "replicate_iteration_canonical_integers",
+      "pair_keys_exact_set",
+      "per_replicate_counts"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "non_numeric_timing.csv",
+    "profile": "six",
+    "note": "non-numeric timing",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "numeric_fields_parse",
+      "all_values_finite"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "bad_minimal_sec_nan.csv",
+    "profile": "six",
+    "note": "NaN minimal",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "numeric_fields_parse",
+      "all_values_finite"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "bad_minimal_sec_inf.csv",
+    "profile": "six",
+    "note": "inf minimal",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "numeric_fields_parse",
+      "all_values_finite"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "bad_instrumented_sec_nan.csv",
+    "profile": "six",
+    "note": "NaN instrumented",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "numeric_fields_parse",
+      "all_values_finite"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "bad_instrumented_sec_inf.csv",
+    "profile": "six",
+    "note": "inf instrumented",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "numeric_fields_parse",
+      "all_values_finite"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "bad_instrumented_sec_neginf.csv",
+    "profile": "six",
+    "note": "-inf instrumented",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "numeric_fields_parse",
+      "all_values_finite"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "bad_signed_overhead_pct_nan.csv",
+    "profile": "six",
+    "note": "NaN pct",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "numeric_fields_parse",
+      "all_values_finite"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "bad_signed_overhead_pct_inf.csv",
+    "profile": "six",
+    "note": "inf pct",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "numeric_fields_parse",
+      "all_values_finite"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "zero_minimal.csv",
+    "profile": "six",
+    "note": "zero minimal",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "minimal_sec_positive"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "negative_minimal.csv",
+    "profile": "six",
+    "note": "negative minimal",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "minimal_sec_positive"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "zero_instrumented.csv",
+    "profile": "six",
+    "note": "zero instrumented",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "instrumented_sec_positive",
+      "row_formula_pct_matches"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "negative_instrumented.csv",
+    "profile": "six",
+    "note": "negative instrumented",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "instrumented_sec_positive",
+      "row_formula_pct_matches"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "bad_overhead_pct.csv",
+    "profile": "six",
+    "note": "wrong recorded pct",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "expected_structural_pass": false,
+    "actual_structural_pass": false,
+    "expected_calibration": "NOT_EVALUATED",
+    "actual_calibration": "NOT_EVALUATED",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [
+      "row_formula_pct_matches"
+    ],
+    "pass": true
+  },
+  {
+    "fixture": "reordered_six.csv",
+    "profile": "six",
+    "note": "reordered rows, key-aligned",
+    "expected_exit": 0,
+    "actual_exit": 0,
+    "expected_structural_pass": true,
+    "actual_structural_pass": true,
+    "expected_calibration": "PASS",
+    "actual_calibration": "PASS",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [],
+    "pass": true
+  },
+  {
+    "fixture": "fail_calibration.csv",
+    "profile": "six",
+    "note": "structurally valid, fails thresholds",
+    "expected_exit": 2,
+    "actual_exit": 2,
+    "expected_structural_pass": true,
+    "actual_structural_pass": true,
+    "expected_calibration": "FAIL",
+    "actual_calibration": "FAIL",
+    "traceback_in_stderr": false,
+    "parse_error": null,
+    "failed_checks": [],
+    "pass": true
+  }
+]
