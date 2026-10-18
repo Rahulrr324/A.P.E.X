@@ -1,0 +1,210 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{FEDEBD32-1096-3EAF-956E-5640BB10D385}</ProjectGuid>
+    <WindowsTargetPlatformVersion>10.0.19041.0</WindowsTargetPlatformVersion>
+    <Keyword>Win32Proj</Keyword>
+    <Platform>x64</Platform>
+    <ProjectName>ALL_BUILD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v142</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>E:\My Local AI\stark\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="E:\My Local AI\stark\CMakeLists.txt">
+      <StdOutEncoding>UTF-8</StdOutEncoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule E:/My Local AI/stark/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+"C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" "-SE:/My Local AI/stark" "-BE:/My Local AI/stark/build-b7diag-fresh-p39b" --check-stamp-file "E:/My Local AI/stark/build-b7diag-fresh-p39b/CMakeFiles/generate.stamp"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeCXXCompiler.cmake.in;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeCXXCompilerABI.cpp;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeCXXInformation.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeCompilerIdDetection.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeDetermineCXXCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeDetermineCompileFeatures.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeDetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeDetermineCompilerABI.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeDetermineCompilerId.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeDetermineRCCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeDetermineSystem.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeFindBinUtils.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeGenericSystem.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeInitializeConfigs.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeLanguageInformation.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeParseImplicitLinkInfo.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeParseLibraryArchitecture.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeRCCompiler.cmake.in;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeRCInformation.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeSystem.cmake.in;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeTestCXXCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeTestCompilerCommon.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeTestRCCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\Comeau-CXX-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\TI-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CompilerId\VS-10.vcxproj.in;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Internal\FeatureTesting.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Platform\Windows-Determine-CXX.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Platform\Windows-MSVC.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Platform\Windows.cmake;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\Platform\WindowsPaths.cmake;E:\My Local AI\stark\build-b7diag-fresh-p39b\CMakeFiles\3.20.21032501-MSVC_2\CMakeCXXCompiler.cmake;E:\My Local AI\stark\build-b7diag-fresh-p39b\CMakeFiles\3.20.21032501-MSVC_2\CMakeRCCompiler.cmake;E:\My Local AI\stark\build-b7diag-fresh-p39b\CMakeFiles\3.20.21032501-MSVC_2\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">E:\My Local AI\stark\build-b7diag-fresh-p39b\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\ZERO_CHECK.vcxproj">
+      <Project>{058DBAAD-14CE-3A5E-85A2-A6DDB02CFAED}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\aggregate.vcxproj">
+      <Project>{C4344F21-C186-34AB-8021-F0BF91DE8DB4}</Project>
+      <Name>aggregate</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\bm_b7_diagnostic.vcxproj">
+      <Project>{462B107C-10C7-3FB9-B400-9EB57F457900}</Project>
+      <Name>bm_b7_diagnostic</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\diag_frequency_evidence.vcxproj">
+      <Project>{E15BED63-E091-32DA-BF5A-51E2ED479ABA}</Project>
+      <Name>diag_frequency_evidence</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\diag_highres_frequency.vcxproj">
+      <Project>{24A7E026-1FD0-38E0-B66A-3BAF38053C14}</Project>
+      <Name>diag_highres_frequency</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\g7_campaign.vcxproj">
+      <Project>{F2993C89-0F3C-35E2-B5CD-CFB78A032815}</Project>
+      <Name>g7_campaign</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\homeostasis_demo.vcxproj">
+      <Project>{90A93A98-503C-3C65-B28A-5F5A5544EFA2}</Project>
+      <Name>homeostasis_demo</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\network_demo.vcxproj">
+      <Project>{CD9A3C2E-AC1B-30A0-9819-54A91C8D92F5}</Project>
+      <Name>network_demo</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\power_scheme_control.vcxproj">
+      <Project>{3739F8D5-9CB8-37B5-B098-8E7F9390805B}</Project>
+      <Name>power_scheme_control</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\profiler_cli.vcxproj">
+      <Project>{5E334647-DFF8-36DE-BF5F-FD4B8A5255F4}</Project>
+      <Name>profiler_cli</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\run_baseline.vcxproj">
+      <Project>{8724E14D-A3BC-389A-8C78-EEDD1209F65F}</Project>
+      <Name>run_baseline</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\serialization_demo.vcxproj">
+      <Project>{A2F26A1A-DAC4-30C8-9D36-5D91F790A702}</Project>
+      <Name>serialization_demo</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\stark_002.vcxproj">
+      <Project>{0F601157-B936-39CB-A34A-03D33098790F}</Project>
+      <Name>stark_002</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\stark_phase1.vcxproj">
+      <Project>{94C187EE-69D3-3FB1-923A-D534ACA1CC41}</Project>
+      <Name>stark_phase1</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\stdp_demo.vcxproj">
+      <Project>{92122155-B20C-3039-AEEC-8808E5A94531}</Project>
+      <Name>stdp_demo</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_homeostasis.vcxproj">
+      <Project>{5E54ACE1-6AB7-3694-B831-C161E72E4C83}</Project>
+      <Name>test_homeostasis</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_integration.vcxproj">
+      <Project>{FFC981BA-0796-3D1E-802A-F9F73B65E12B}</Project>
+      <Name>test_integration</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_network.vcxproj">
+      <Project>{9CF6E184-FB46-3612-BB78-6FF3BE7BAD84}</Project>
+      <Name>test_network</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_neuron.vcxproj">
+      <Project>{E85D7227-3CAC-3068-80D7-AC1DD6D4DF98}</Project>
+      <Name>test_neuron</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_params.vcxproj">
+      <Project>{9E7FCAF5-7BDF-36A4-9AAF-CE297E7801AA}</Project>
+      <Name>test_params</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_phase1_accounting.vcxproj">
+      <Project>{2171B3F0-F236-3816-B096-B182A7AD1F13}</Project>
+      <Name>test_phase1_accounting</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_phase1_affinity.vcxproj">
+      <Project>{34519E48-D814-3FE1-A536-58F26ECE6204}</Project>
+      <Name>test_phase1_affinity</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_phase1_budget.vcxproj">
+      <Project>{215AC075-81E6-3672-BA86-0C1147878EA3}</Project>
+      <Name>test_phase1_budget</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_phase1_gates.vcxproj">
+      <Project>{6E6E96A8-259C-3656-9F97-6E0EDDC23624}</Project>
+      <Name>test_phase1_gates</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_phase1_profiler.vcxproj">
+      <Project>{5254FF1C-FC27-39DC-A292-F7E6C2AFC5F0}</Project>
+      <Name>test_phase1_profiler</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_phase1_records.vcxproj">
+      <Project>{2F451907-F393-3FCC-A07C-A9415AA78998}</Project>
+      <Name>test_phase1_records</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_phase1_reproducibility.vcxproj">
+      <Project>{680588B7-B9DB-3C0B-B559-B83BFE89E01A}</Project>
+      <Name>test_phase1_reproducibility</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_production_affinity_evidence.vcxproj">
+      <Project>{1D55D2CD-7FD1-34DE-A6FF-53708714AF62}</Project>
+      <Name>test_production_affinity_evidence</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_serialization.vcxproj">
+      <Project>{74ECE893-810D-3774-96D6-05073CE35FF4}</Project>
+      <Name>test_serialization</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_stdp.vcxproj">
+      <Project>{14A4AD0A-48C7-31D1-B6D7-1C8F6EB9FBDF}</Project>
+      <Name>test_stdp</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_synapse.vcxproj">
+      <Project>{06160BAD-A7B2-3CFB-9AA5-688A0E07B47F}</Project>
+      <Name>test_synapse</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_three_factor.vcxproj">
+      <Project>{96110847-6F61-3591-B5E8-246E9A6FFC19}</Project>
+      <Name>test_three_factor</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\test_windows_affinity_diag.vcxproj">
+      <Project>{25A08C8D-6601-32E0-8340-0790283AD377}</Project>
+      <Name>test_windows_affinity_diag</Name>
+    </ProjectReference>
+    <ProjectReference Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\three_factor_demo.vcxproj">
+      <Project>{E67B25E4-8372-3717-9287-5D556B27EAD6}</Project>
+      <Name>three_factor_demo</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

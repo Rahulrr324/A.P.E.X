@@ -1,0 +1,10 @@
+^E:\MY LOCAL AI\STARK\BUILD-B7DIAG-FRESH-P39B\CMAKEFILES\E58E098658E34606836C91CFDE4E1A9C\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" "-SE:/My Local AI/stark" "-BE:/My Local AI/stark/build-b7diag-fresh-p39b" --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file "E:/My Local AI/stark/build-b7diag-fresh-p39b/STARK-006.sln"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

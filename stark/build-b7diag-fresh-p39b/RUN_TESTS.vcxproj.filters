@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="E:\My Local AI\stark\build-b7diag-fresh-p39b\CMakeFiles\e58e098658e34606836c91cfde4e1a9c\RUN_TESTS_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{76291C1D-67E4-366B-B3FB-F2436513E301}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
