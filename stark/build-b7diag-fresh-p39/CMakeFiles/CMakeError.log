@@ -1,0 +1,74 @@
+Detecting CXX compiler ABI info failed to compile with the following output:
+Change Dir: E:/My Local AI/stark/build-b7diag-fresh-p39/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/MSBuild/Current/Bin/MSBuild.exe cmTC_e7c2f.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=16.0 /v:m && Microsoft (R) Build Engine version 16.11.6+a918ceb31 for .NET Framework
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+  Microsoft (R) C/C++ Optimizing Compiler Version 19.29.30159 for x64
+  Program
+  Copyright (C) Microsoft Corporation.  All rights reserved.
+  cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D "CMAKE_INTDIR=\"Debug\"" /D _MBCS /Gm- /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /Fo"cmTC_e7c2f.dir\Debug\\" /Fd"cmTC_e7c2f.dir\Debug\vc142.pdb" /external:W1 /Gd /TP /errorReport:queue  C:/Program Files/Git/DNOMINMAX "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeCXXCompilerABI.cpp"
+c1xx : fatal error C1083: Cannot open source file: 'C:/Program': No such file or directory [E:\My Local AI\stark\build-b7diag-fresh-p39\CMakeFiles\CMakeTmp\cmTC_e7c2f.vcxproj]
+  DNOMINMAX
+c1xx : fatal error C1083: Cannot open source file: 'Files/Git/DNOMINMAX': No such file or directory [E:\My Local AI\stark\build-b7diag-fresh-p39\CMakeFiles\CMakeTmp\cmTC_e7c2f.vcxproj]
+  CMakeCXXCompilerABI.cpp
+  Generating Code...
+
+
+
+
+Determining if the CXX compiler works failed with the following output:
+Change Dir: E:/My Local AI/stark/build-b7diag-fresh-p39/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/MSBuild/Current/Bin/MSBuild.exe cmTC_9e8b5.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=16.0 /v:m && Microsoft (R) Build Engine version 16.11.6+a918ceb31 for .NET Framework
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+  Microsoft (R) C/C++ Optimizing Compiler Version 19.29.30159 for x64
+  Program
+  Copyright (C) Microsoft Corporation.  All rights reserved.
+  cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D "CMAKE_INTDIR=\"Debug\"" /D _MBCS /Gm- /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /Fo"cmTC_9e8b5.dir\Debug\\" /Fd"cmTC_9e8b5.dir\Debug\vc142.pdb" /external:W1 /Gd /TP /errorReport:queue  C:/Program Files/Git/DNOMINMAX "E:\My Local AI\stark\build-b7diag-fresh-p39\CMakeFiles\CMakeTmp\testCXXCompiler.cxx"
+c1xx : fatal error C1083: Cannot open source file: 'C:/Program': No such file or directory [E:\My Local AI\stark\build-b7diag-fresh-p39\CMakeFiles\CMakeTmp\cmTC_9e8b5.vcxproj]
+  DNOMINMAX
+c1xx : fatal error C1083: Cannot open source file: 'Files/Git/DNOMINMAX': No such file or directory [E:\My Local AI\stark\build-b7diag-fresh-p39\CMakeFiles\CMakeTmp\cmTC_9e8b5.vcxproj]
+  testCXXCompiler.cxx
+  Generating Code...
+
+
+
+Detecting CXX compiler ABI info failed to compile with the following output:
+Change Dir: E:/My Local AI/stark/build-b7diag-fresh-p39/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/MSBuild/Current/Bin/MSBuild.exe cmTC_7787f.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=16.0 /v:m && Microsoft (R) Build Engine version 16.11.6+a918ceb31 for .NET Framework
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+  Microsoft (R) C/C++ Optimizing Compiler Version 19.29.30159 for x64
+  Program
+  Copyright (C) Microsoft Corporation.  All rights reserved.
+  cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D "CMAKE_INTDIR=\"Debug\"" /D _MBCS /Gm- /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /Fo"cmTC_7787f.dir\Debug\\" /Fd"cmTC_7787f.dir\Debug\vc142.pdb" /external:W1 /Gd /TP /errorReport:queue  C:/Program Files/Git/DNOMINMAX "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.20\Modules\CMakeCXXCompilerABI.cpp"
+c1xx : fatal error C1083: Cannot open source file: 'C:/Program': No such file or directory [E:\My Local AI\stark\build-b7diag-fresh-p39\CMakeFiles\CMakeTmp\cmTC_7787f.vcxproj]
+  DNOMINMAX
+c1xx : fatal error C1083: Cannot open source file: 'Files/Git/DNOMINMAX': No such file or directory [E:\My Local AI\stark\build-b7diag-fresh-p39\CMakeFiles\CMakeTmp\cmTC_7787f.vcxproj]
+  CMakeCXXCompilerABI.cpp
+  Generating Code...
+
+
+
+
+Determining if the CXX compiler works failed with the following output:
+Change Dir: E:/My Local AI/stark/build-b7diag-fresh-p39/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/MSBuild/Current/Bin/MSBuild.exe cmTC_442b5.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=16.0 /v:m && Microsoft (R) Build Engine version 16.11.6+a918ceb31 for .NET Framework
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+  Microsoft (R) C/C++ Optimizing Compiler Version 19.29.30159 for x64
+  Copyright (C) Microsoft Corporation.  All rights reserved.
+  Program
+c1xx : fatal error C1083: Cannot open source file: 'C:/Program': No such file or directory [E:\My Local AI\stark\build-b7diag-fresh-p39\CMakeFiles\CMakeTmp\cmTC_442b5.vcxproj]
+  cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D "CMAKE_INTDIR=\"Debug\"" /D _MBCS /Gm- /RTC1 /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /Fo"cmTC_442b5.dir\Debug\\" /Fd"cmTC_442b5.dir\Debug\vc142.pdb" /external:W1 /Gd /TP /errorReport:queue  C:/Program Files/Git/DNOMINMAX "E:\My Local AI\stark\build-b7diag-fresh-p39\CMakeFiles\CMakeTmp\testCXXCompiler.cxx"
+  DNOMINMAX
+c1xx : fatal error C1083: Cannot open source file: 'Files/Git/DNOMINMAX': No such file or directory [E:\My Local AI\stark\build-b7diag-fresh-p39\CMakeFiles\CMakeTmp\cmTC_442b5.vcxproj]
+  testCXXCompiler.cxx
+  Generating Code...
+
+
+
