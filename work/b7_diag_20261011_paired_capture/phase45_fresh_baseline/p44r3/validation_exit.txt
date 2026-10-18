@@ -1,0 +1,7 @@
+p44r3_exit=0
+start_ms=1792336143034
+end_ms=1792336153710
+exe_sha256=f50fda5a3486fa7d3225869d978a841c2d1fa10f92413530b1cda067b1000147
+command=stark/build-b7diag-fresh-p39b/Release/bm_b7_diagnostic.exe build/bm_b7_diagnostic --host-capture-dir work/b7_diag_20261011_paired_capture/phase45_fresh_baseline/p44r3
+cwd=E:/My Local AI
+validator_exit=0
