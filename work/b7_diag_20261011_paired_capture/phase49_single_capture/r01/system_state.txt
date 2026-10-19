@@ -1,0 +1,8 @@
+=== system_state.txt - Phase 49 r01 (observed at launch, best effort) ===
+platform: Windows-11-10.0.26300-SP0
+machine: AMD64
+processor (platform.platform): Intel64 Family 6 Model 154 Stepping 3, GenuineIntel
+os.cpu_count(): 12 logical processors
+powercfg /getactivescheme: Power Scheme GUID dfe97760-471c-4d01-bd06-b8b04c50ecd8 (Performance Mode)
+wmic cpu: unavailable (wm via WinError 2 - command not present in this environment)
+LIMITATIONS: CPU affinity of the launched process is NOT controlled; cache state is warm-cache (not controlled); these are documented differences from the historical campaign and remain uncontrolled factors, recorded only as observed, not claimed as controlled.

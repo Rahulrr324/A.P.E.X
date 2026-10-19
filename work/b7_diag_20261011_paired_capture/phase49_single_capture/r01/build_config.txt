@@ -1,0 +1,8 @@
+=== build_config.txt - Phase 49 r01 ===
+executable (relative to repo root): stark/build-b7diag-fresh-p39b/Release/bm_b7_diagnostic.exe
+resolved: E:\My Local AI\stark\build-b7diag-fresh-p39b\Release\bm_b7_diagnostic.exe
+build directory: stark/build-b7diag-fresh-p39b/
+CMake generator (from CMakeCache.txt): Visual Studio 16 2019
+CMAKE_CONFIGURATION_TYPES: Release
+generator-derived: MSVC toolset (VS 2019). Compiler version NOT re-derived without a rebuild; the frozen executable is used as-is. No rebuild performed.
+build artifacts date: executable mtime 2026-10-18 19:24 local

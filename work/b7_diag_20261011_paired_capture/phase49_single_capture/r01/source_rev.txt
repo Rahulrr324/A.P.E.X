@@ -1,0 +1,5 @@
+git HEAD: 36e8c954eed850471b530c90062d6ff883386308
+note: 'committed vs uncommitted' reflects the working tree at launch.
+--- git status --porcelain ---
+?? stark/nul
+?? work/b7_diag_20261011_paired_capture/phase49_single_capture/

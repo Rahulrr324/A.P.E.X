@@ -1,0 +1,1 @@
+cwd_at_launch=E:\My Local AI

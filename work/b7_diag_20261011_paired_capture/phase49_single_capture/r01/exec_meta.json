@@ -1,0 +1,57 @@
+{
+  "run_id": "phase49_single_capture/r01",
+  "launch_local": "2026-10-19T08:01:22+0530",
+  "launch_utc": "2026-10-19T02:31:22.862380+00:00",
+  "executable": "E:\\My Local AI\\stark\\build-b7diag-fresh-p39b\\Release\\bm_b7_diagnostic.exe",
+  "executable_exists": true,
+  "executable_bytes": 108544,
+  "exec_sha256_before": "f50fda5a3486fa7d3225869d978a841c2d1fa10f92413530b1cda067b1000147",
+  "cwd": "E:\\My Local AI",
+  "diagnostic_dir": "build/bm_b7_diagnostic",
+  "host_capture_dir": "work/b7_diag_20261011_paired_capture/phase49_single_capture/r01",
+  "argv": [
+    "build/bm_b7_diagnostic",
+    "--host-capture-dir",
+    "work/b7_diag_20261011_paired_capture/phase49_single_capture/r01"
+  ],
+  "command_line": [
+    "E:\\My Local AI\\stark\\build-b7diag-fresh-p39b\\Release\\bm_b7_diagnostic.exe",
+    "build/bm_b7_diagnostic",
+    "--host-capture-dir",
+    "work/b7_diag_20261011_paired_capture/phase49_single_capture/r01"
+  ],
+  "child_pid": 4112,
+  "create_ok": true,
+  "exit_code": 0,
+  "elapsed_sec": 7.051,
+  "end_local": "2026-10-19T08:01:30+0530",
+  "host_csv_exists": true,
+  "host_csv_bytes": 13255,
+  "host_csv_sha256": "5dc78fc5b1b82fdd7c5a52eb21d90572f89acb3c345ce37bfe50537dd208618b",
+  "exec_sha256_after": "f50fda5a3486fa7d3225869d978a841c2d1fa10f92413530b1cda067b1000147",
+  "csv_sha256": "5dc78fc5b1b82fdd7c5a52eb21d90572f89acb3c345ce37bfe50537dd208618b",
+  "protocol": {
+    "warmup_untimed": 10,
+    "measured_iterations": 50,
+    "macro_replicates_per_condition": 6,
+    "pairing": "by replicate index",
+    "schedule": "counterbalanced: even=MINIMAL-first, odd=INSTRUMENTED-first"
+  },
+  "process_exit_code": 0,
+  "csv_exists": true,
+  "csv_bytes": 13255,
+  "validator": {
+    "name": "phase33_paired_csv_validator",
+    "profile": "six",
+    "structural_pass": true,
+    "calibration_status": "FAIL",
+    "mean_overhead_pct": -0.154504,
+    "worst_case_overhead_pct": 88.582956,
+    "median_deviation_pct": 0.869475,
+    "exit_code": 2
+  },
+  "verdict": {
+    "frozen": "structural PASS; calibration FAIL (worst-case overhead exceeds 10%)",
+    "note": "FAIL applies when metrics computable and any frozen threshold fails; no rerun."
+  }
+}

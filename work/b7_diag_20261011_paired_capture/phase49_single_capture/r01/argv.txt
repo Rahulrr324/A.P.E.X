@@ -1,0 +1,5 @@
+command_line (argv vector, one per line):
+E:\My Local AI\stark\build-b7diag-fresh-p39b\Release\bm_b7_diagnostic.exe
+build/bm_b7_diagnostic
+--host-capture-dir
+work/b7_diag_20261011_paired_capture/phase49_single_capture/r01

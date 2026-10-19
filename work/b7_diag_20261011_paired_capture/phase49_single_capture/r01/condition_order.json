@@ -1,0 +1,42 @@
+{
+  "populated_after_run": true,
+  "source": "parsed from r01/stdout.txt executed condition order block",
+  "executed_order": [
+    {
+      "replicate": 0,
+      "condition_first": "MINIMAL",
+      "condition_second": "INSTRUMENTED",
+      "minimal_first": true
+    },
+    {
+      "replicate": 1,
+      "condition_first": "INSTRUMENTED",
+      "condition_second": "MINIMAL",
+      "minimal_first": false
+    },
+    {
+      "replicate": 2,
+      "condition_first": "MINIMAL",
+      "condition_second": "INSTRUMENTED",
+      "minimal_first": true
+    },
+    {
+      "replicate": 3,
+      "condition_first": "INSTRUMENTED",
+      "condition_second": "MINIMAL",
+      "minimal_first": false
+    },
+    {
+      "replicate": 4,
+      "condition_first": "MINIMAL",
+      "condition_second": "INSTRUMENTED",
+      "minimal_first": true
+    },
+    {
+      "replicate": 5,
+      "condition_first": "INSTRUMENTED",
+      "condition_second": "MINIMAL",
+      "minimal_first": false
+    }
+  ]
+}
