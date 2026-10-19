@@ -220,6 +220,26 @@ def model_C_zero_mean_noise(minmat, instrmat, rng, n_sims):
     return {"s_diff_observed": s, "maxima": maxima}
 
 
+def seed_sensitivity(minmat, instrmat, run_idx, obs_worst, n_a, n_b, seeds):
+    """Re-run Models A and B(L=5) with several independent seeds at reduced n to
+    show how sensitive the Monte Carlo p-value is to the random seed. Pairing /
+    randomization semantics are identical to the main models."""
+    out = {"n_a": n_a, "n_b": n_b, "seeds": list(seeds),
+           "within_rep_perm_p": [], "block_bootstrap_L5_p": []}
+    for s in seeds:
+        rA = np.random.default_rng(SEED_BASE + run_idx * 100000 + 7000 + s)
+        sA = model_A_within_replicate_perm(minmat, instrmat, rA, n_a)
+        out["within_rep_perm_p"].append(pval_bound(obs_worst, sA)["p_value"])
+        rB = np.random.default_rng(SEED_BASE + run_idx * 100000 + 8000 + s)
+        sB = model_B_block_bootstrap(minmat, instrmat, rB, n_b, 5)
+        out["block_bootstrap_L5_p"].append(pval_bound(obs_worst, sB)["p_value"])
+    out["within_rep_perm_p_min"] = min(out["within_rep_perm_p"])
+    out["within_rep_perm_p_max"] = max(out["within_rep_perm_p"])
+    out["block_bootstrap_L5_p_min"] = min(out["block_bootstrap_L5_p"])
+    out["block_bootstrap_L5_p_max"] = max(out["block_bootstrap_L5_p"])
+    return out
+
+
 def main():
     results = {"script": "phase52_analysis.py", "seed_base": SEED_BASE,
                "n_sims": {"within_rep_perm": SAMPLES_A, "block_l5": SAMPLES_B,
@@ -275,6 +295,11 @@ def main():
             "null": "no systematic shift; ratios are amplifier of observed-magnitude independent zero-mean additive noise",
             "s_diff_observed": simC["s_diff_observed"],
             "sim": summary_percentiles(simC["maxima"]), "obs_vs_null": pval_bound(obs_worst, simC["maxima"])}
+
+        # ---- seed sensitivity (Models A and B only, reduced n) ----
+        rec["seed_sensitivity"] = seed_sensitivity(
+            minmat, instrmat, run_idx, obs_worst,
+            n_a=20000, n_b=10000, seeds=(0, 7, 13, 29, 101))
 
         results["runs"].append(rec)
         print(f"[done] {name}  frozen worst={obs_worst}")
