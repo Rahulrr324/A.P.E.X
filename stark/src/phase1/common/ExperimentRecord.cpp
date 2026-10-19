@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 #ifdef _WIN32
+#define NOMINMAX
 #include <direct.h>
 #include <sys/stat.h>
 #include <windows.h>

@@ -129,6 +129,7 @@
 #include <vector>
 
 #ifdef _WIN32
+#define NOMINMAX
 #include <direct.h>
 #include <fcntl.h>
 #include <io.h>
@@ -150,9 +151,9 @@ using Clock = std::chrono::steady_clock;
 // ---------------------------------------------------------------------------
 // Predeclared protocol defaults (approved diagnostic plan)
 // ---------------------------------------------------------------------------
-constexpr uint32_t kWarmupIterations = 10;      // untimed warmups per replicate
-constexpr uint32_t kMeasuredIterations = 50;    // measured iterations per replicate
-constexpr uint32_t kMinMacroReplicates = 6;     // sequential, process-local macro-replicates PER CONDITION
+constexpr uint32_t kWarmupIterations = 50;      // untimed warmups per replicate
+constexpr uint32_t kMeasuredIterations = 100;   // measured iterations per replicate
+constexpr uint32_t kMinMacroReplicates = 8;     // sequential, process-local macro-replicates PER CONDITION
 constexpr double kHistoricalReferenceMedianUs = 5721.90;  // comparison datum ONLY
 constexpr double kCalibMeanOverheadThresholdPct = 2.0;    // mean overhead <= 2%
 constexpr double kCalibWorstOverheadThresholdPct = 10.0;  // worst-case overhead <= 10%
@@ -170,10 +171,13 @@ inline double sec_to_us(double sec) { return sec * 1000000.0; }  // 1 s = 1e6 µ
 // ---------------------------------------------------------------------------
 // Protocol
 // ---------------------------------------------------------------------------
+enum class MeasurementMode { BLOCK, INTERLEAVED };
+
 struct Protocol {
     uint32_t warmup_count = kWarmupIterations;       // untimed
     uint32_t measurement_count = kMeasuredIterations;
     uint32_t macro_replicates = kMinMacroReplicates; // per condition
+    MeasurementMode mode = MeasurementMode::INTERLEAVED; // corrected protocol to reduce drift
     std::vector<std::string> validate() const {
         std::vector<std::string> errs;
         if (warmup_count < 3)
@@ -578,16 +582,149 @@ const char* mode_name(Mode m) {
     return m == Mode::MINIMAL ? "MINIMAL" : "INSTRUMENTED";
 }
 
+struct InterleavedPair {
+    double min_sec = 0.0;
+    double inst_sec = 0.0;
+    ComponentTimings inst_components;
+};
+
 struct ReplicateResult {
-    Mode mode = Mode::MINIMAL;
+    Mode mode = Mode::MINIMAL;  // retained for compatibility in report text
     uint32_t index = 0;
     bool valid = false;                  // warmup + ALL measured iterations ok
     std::string failure_reason;          // empty iff valid
     uint32_t failed_iterations = 0;
-    std::vector<double> total_samples_sec;   // exactly measurement_count iff valid
-    std::vector<ComponentTimings> components;  // INSTRUMENTED only
+    std::vector<double> total_samples_sec;   // minimal samples
+    std::vector<double> inst_samples_sec;    // instrumented samples
+    std::vector<ComponentTimings> components;  // instrumented components
+    std::vector<InterleavedPair> paired_samples; // interleaved pairs when using new protocol
     Summary summary;                     // valid only when replicate valid
+    Summary inst_summary;                // instrumented summary
 };
+
+/// Run replicate with interleaved pairs: alternate minimal and instrumented
+/// measurements in tight succession to minimize temporal separation between pairs.
+/// This reduces drift contamination in paired comparisons.
+ReplicateResult run_replicate_interleaved(bool minimal_first, uint32_t index,
+                                         const std::string& blob_path,
+                                         const Protocol& proto) {
+    ReplicateResult r;
+    r.index = index;
+
+    TinyDenseModel loader(1);  // constructed outside all timed regions
+
+    try {
+        // Interleaved warmup
+        for (uint32_t i = 0; i < proto.warmup_count; ++i) {
+            if (minimal_first) {
+                minimal_op(blob_path, loader);
+                ComponentTimings discard;
+                instrumented_op(blob_path, loader, discard);
+            } else {
+                ComponentTimings discard;
+                instrumented_op(blob_path, loader, discard);
+                minimal_op(blob_path, loader);
+            }
+        }
+    } catch (const std::exception& ex) {
+        r.valid = false;
+        r.failure_reason = std::string("warmup failed: ") + ex.what();
+        return r;
+    }
+
+    r.total_samples_sec.clear();
+    r.inst_samples_sec.clear();
+    r.components.clear();
+    r.paired_samples.clear();
+    r.total_samples_sec.reserve(proto.measurement_count);
+    r.inst_samples_sec.reserve(proto.measurement_count);
+    r.components.reserve(proto.measurement_count);
+
+    for (uint32_t i = 0; i < proto.measurement_count; ++i) {
+        try {
+            if (minimal_first) {
+                // Measure minimal, then instrumented (adjacent)
+                double min_t = 0.0;
+                {
+                    const auto tA = Clock::now();
+                    minimal_op(blob_path, loader);
+                    const auto tB = Clock::now();
+                    min_t = std::chrono::duration<double>(tB - tA).count();
+                }
+                double inst_t = 0.0;
+                ComponentTimings comp;
+                {
+                    const auto tA = Clock::now();
+                    instrumented_op(blob_path, loader, comp);
+                    const auto tB = Clock::now();
+                    inst_t = std::chrono::duration<double>(tB - tA).count();
+                }
+                comp.residual_sec = inst_t - (comp.open_sec + comp.read_sec + comp.deser_sec);
+                if (!(min_t >= 0.0) || !(inst_t >= 0.0)) {
+                    r.failed_iterations += 1;
+                    r.valid = false;
+                    r.failure_reason = "iteration " + std::to_string(i) + " produced invalid timer sample";
+                    return r;
+                }
+                r.total_samples_sec.push_back(min_t);
+                r.inst_samples_sec.push_back(inst_t);
+                r.components.push_back(comp);
+                InterleavedPair ps; ps.min_sec = min_t; ps.inst_sec = inst_t; ps.inst_components = comp;
+                r.paired_samples.push_back(ps);
+            } else {
+                // instrumented first, then minimal (adjacent)
+                double inst_t = 0.0;
+                ComponentTimings comp;
+                {
+                    const auto tA = Clock::now();
+                    instrumented_op(blob_path, loader, comp);
+                    const auto tB = Clock::now();
+                    inst_t = std::chrono::duration<double>(tB - tA).count();
+                }
+                double min_t = 0.0;
+                {
+                    const auto tA = Clock::now();
+                    minimal_op(blob_path, loader);
+                    const auto tB = Clock::now();
+                    min_t = std::chrono::duration<double>(tB - tA).count();
+                }
+                comp.residual_sec = inst_t - (comp.open_sec + comp.read_sec + comp.deser_sec);
+                if (!(min_t >= 0.0) || !(inst_t >= 0.0)) {
+                    r.failed_iterations += 1;
+                    r.valid = false;
+                    r.failure_reason = "iteration " + std::to_string(i) + " produced invalid timer sample";
+                    return r;
+                }
+                r.total_samples_sec.push_back(min_t);
+                r.inst_samples_sec.push_back(inst_t);
+                r.components.push_back(comp);
+                InterleavedPair ps; ps.min_sec = min_t; ps.inst_sec = inst_t; ps.inst_components = comp;
+                r.paired_samples.push_back(ps);
+            }
+        } catch (const std::exception& ex) {
+            r.failed_iterations += 1;
+            r.valid = false;
+            r.failure_reason = "iteration " + std::to_string(i) + " failed: " + ex.what();
+            return r;
+        }
+    }
+
+    if (r.total_samples_sec.size() != static_cast<size_t>(proto.measurement_count) ||
+        r.inst_samples_sec.size() != static_cast<size_t>(proto.measurement_count)) {
+        r.valid = false;
+        r.failure_reason = "sample count mismatch after measured loop";
+        return r;
+    }
+    r.summary = summarize(r.total_samples_sec);
+    r.inst_summary = summarize(r.inst_samples_sec);
+    if (!r.summary.valid || !r.inst_summary.valid) {
+        r.valid = false;
+        r.failure_reason = "empty or unsummarizable sample set";
+        return r;
+    }
+    r.valid = true;
+    return r;
+}
 
 /// One sequential, process-local macro-replicate: fresh loader, fresh
 /// untimed warmups, fresh measured loop, executed in-process after the
@@ -662,6 +799,10 @@ ReplicateResult run_replicate(Mode mode, uint32_t index,
         return r;
     }
     r.summary = summarize(r.total_samples_sec);
+    if (mode == Mode::INSTRUMENTED) {
+        r.inst_samples_sec = r.total_samples_sec;
+        r.inst_summary = r.summary;
+    }
     if (!r.summary.valid) {
         r.valid = false;
         r.failure_reason = "empty or unsummarizable sample set";
@@ -965,7 +1106,8 @@ std::string render_report(const DiagnosticReport& rep) {
        << ", macro_replicates_per_condition=" << rep.protocol.macro_replicates
        << " (min " << kMinMacroReplicates
        << "; SEQUENTIAL, PROCESS-LOCAL replications within one run — not "
-          "independent machine/session replications)\n";
+          "independent machine/session replications)\n"
+       << "measurement_mode=" << (rep.protocol.mode == MeasurementMode::INTERLEAVED ? "INTERLEAVED" : "BLOCK") << "\n";
     if (rep.blob_bytes > 0) {
         os << "diagnostic blob: path=" << rep.blob_path
            << "  bytes=" << rep.blob_bytes
@@ -1350,18 +1492,46 @@ DiagnosticReport run_bm_b7_diagnostic(const Protocol& proto,
                     entry.minimal_first ? Mode::INSTRUMENTED : Mode::MINIMAL;
                 rep.executed_order.push_back(
                     "replicate " + std::to_string(entry.replicate) + ": " +
-                    mode_name(first) + " then " + mode_name(second));
+                    mode_name(first) + " then " + mode_name(second) +
+                    (proto.mode == MeasurementMode::INTERLEAVED ? " (interleaved pairs)" : ""));
 
-                ReplicateResult a =
-                    run_replicate(first, entry.replicate, blob.blob_path, proto);
-                ReplicateResult b =
-                    run_replicate(second, entry.replicate, blob.blob_path, proto);
-                if (first == Mode::MINIMAL) {
-                    rep.minimal.push_back(std::move(a));
-                    rep.instrumented.push_back(std::move(b));
+                if (proto.mode == MeasurementMode::INTERLEAVED) {
+                    ReplicateResult rres = run_replicate_interleaved(entry.minimal_first,
+                                                                     entry.replicate,
+                                                                     blob.blob_path,
+                                                                     proto);
+                    if (rres.valid) {
+                        // Build minimal/instrumented vectors from paired data
+                        ReplicateResult rmin = rres;
+                        rmin.mode = Mode::MINIMAL;
+                        rmin.total_samples_sec = rres.total_samples_sec;
+                        rmin.summary = rres.summary;
+                        rmin.inst_samples_sec.clear();
+                        rmin.components.clear();
+                        rmin.inst_summary = Summary{};
+                        ReplicateResult rins = rres;
+                        rins.mode = Mode::INSTRUMENTED;
+                        rins.total_samples_sec = rres.inst_samples_sec;
+                        rins.summary = rres.inst_summary;
+                        rins.components = rres.components;
+                        rep.minimal.push_back(std::move(rmin));
+                        rep.instrumented.push_back(std::move(rins));
+                    } else {
+                        rep.minimal.push_back(rres);
+                        rep.instrumented.push_back(rres);
+                    }
                 } else {
-                    rep.instrumented.push_back(std::move(a));
-                    rep.minimal.push_back(std::move(b));
+                    ReplicateResult a =
+                        run_replicate(first, entry.replicate, blob.blob_path, proto);
+                    ReplicateResult b =
+                        run_replicate(second, entry.replicate, blob.blob_path, proto);
+                    if (first == Mode::MINIMAL) {
+                        rep.minimal.push_back(std::move(a));
+                        rep.instrumented.push_back(std::move(b));
+                    } else {
+                        rep.instrumented.push_back(std::move(a));
+                        rep.minimal.push_back(std::move(b));
+                    }
                 }
             }
 

@@ -1,0 +1,10 @@
+^E:\MY LOCAL AI\STARK\BUILD-PHASE55-VS\CMAKEFILES\FDA5FE5D8F2BD8FEEDECF77BC5C124EB\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" "-SE:/My Local AI/stark" "-BE:/My Local AI/stark/build-phase55-vs" --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file "E:/My Local AI/stark/build-phase55-vs/STARK-006.sln"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
