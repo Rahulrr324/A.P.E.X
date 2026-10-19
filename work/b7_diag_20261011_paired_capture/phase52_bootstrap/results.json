@@ -1,0 +1,683 @@
+{
+  "script": "phase52_analysis.py",
+  "seed_base": 20261019,
+  "n_sims": {
+    "within_rep_perm": 100000,
+    "block_l5": 20000,
+    "block_l10": 20000,
+    "noise": 50000
+  },
+  "thresholds": {
+    "mean": 2.0,
+    "worst": 10.0,
+    "meddev": 2.0
+  },
+  "runs": [
+    {
+      "run": "p44r1",
+      "csv_sha256_ok": true,
+      "frozen": {
+        "mean_overhead_pct": -1.778611,
+        "mean_ok": true,
+        "worst_pct": 94.165583,
+        "worst_ok": false,
+        "worst_key": {
+          "replicate": 2,
+          "iteration": 9,
+          "minimal_sec": 0.0101484,
+          "instrumented_sec": 0.0197047
+        },
+        "worst_neg_pct": -44.100161,
+        "worst_neg_key": {
+          "replicate": 1,
+          "iteration": 22,
+          "minimal_sec": 0.0166013,
+          "instrumented_sec": 0.0092801
+        },
+        "median_deviation_pct": 3.031568,
+        "median_ok": false,
+        "count_above_10": 73,
+        "count_below_neg10": 86,
+        "count_outside_10": 159,
+        "grid_verdict": "FAIL"
+      },
+      "models": {
+        "within_rep_perm": {
+          "what_is_randomized": "instrumented iterations permuted within each replicate; minimal held fixed",
+          "null": "exchangeable within-replicate pairing; no systematic per-iteration instrumented-vs-minimal coupling",
+          "sim": {
+            "median": 112.24414610625318,
+            "p90": 124.37084954116608,
+            "p95": 126.6835700896098,
+            "p99": 129.69909740055695,
+            "max": 129.69909740055695
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 96468,
+            "n_sims": 100000,
+            "p_value": 0.964680353196468,
+            "floor_if_k_eq_1": 9.99990000099999e-06
+          }
+        },
+        "block_bootstrap_L5": {
+          "what_is_randomized": "each condition series block-resampled (circular length-5 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 109.22103392603671,
+            "p90": 124.8006705207281,
+            "p95": 126.6835700896098,
+            "p99": 129.69909740055695,
+            "max": 129.69909740055695
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 15814,
+            "n_sims": 20000,
+            "p_value": 0.7907104644767762,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "block_bootstrap_L10": {
+          "what_is_randomized": "each condition series block-resampled (circular length-10 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 109.22103392603671,
+            "p90": 124.37084954116608,
+            "p95": 126.6835700896098,
+            "p99": 129.69909740055695,
+            "max": 129.69909740055695
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 15344,
+            "n_sims": 20000,
+            "p_value": 0.7672116394180291,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "zero_mean_noise": {
+          "what_is_randomized": "instrumented = observed minimal + N(0, s^2) additive noise, s = observed pooled diff SD, zero mean, independent across pairs",
+          "null": "no systematic shift; ratios are amplifier of observed-magnitude independent zero-mean additive noise",
+          "s_diff_observed": 0.0029217564999716216,
+          "sim": {
+            "median": 69.66457772104872,
+            "p90": 88.54760133683166,
+            "p95": 94.98598874359003,
+            "p99": 108.9947573999522,
+            "max": 161.5836935455526
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 2766,
+            "n_sims": 50000,
+            "p_value": 0.05533889322213556,
+            "floor_if_k_eq_1": 1.999960000799984e-05
+          }
+        }
+      },
+      "paired_diffs": {
+        "mean_abs_diff": 0.002214462,
+        "sd_diff": 0.0029217564999716216,
+        "abs_diff_p50": 0.0016889999999999995,
+        "abs_diff_p90": 0.004907600000000001,
+        "abs_diff_p95": 0.006075660000000001,
+        "abs_diff_p99": 0.007712105,
+        "abs_diff_max": 0.009556299999999998,
+        "mean_signed_pct": 0.49632105898939216,
+        "sd_signed_pct": 21.051279730974294
+      }
+    },
+    {
+      "run": "p44r2",
+      "csv_sha256_ok": true,
+      "frozen": {
+        "mean_overhead_pct": 2.999179,
+        "mean_ok": false,
+        "worst_pct": 111.69296,
+        "worst_ok": false,
+        "worst_key": {
+          "replicate": 2,
+          "iteration": 11,
+          "minimal_sec": 0.0091089,
+          "instrumented_sec": 0.0192829
+        },
+        "worst_neg_pct": -51.653786,
+        "worst_neg_key": {
+          "replicate": 5,
+          "iteration": 39,
+          "minimal_sec": 0.0312616,
+          "instrumented_sec": 0.0151138
+        },
+        "median_deviation_pct": 5.014463,
+        "median_ok": false,
+        "count_above_10": 85,
+        "count_below_neg10": 67,
+        "count_outside_10": 152,
+        "grid_verdict": "FAIL"
+      },
+      "models": {
+        "within_rep_perm": {
+          "what_is_randomized": "instrumented iterations permuted within each replicate; minimal held fixed",
+          "null": "exchangeable within-replicate pairing; no systematic per-iteration instrumented-vs-minimal coupling",
+          "sim": {
+            "median": 154.0946808242326,
+            "p90": 184.87193843383946,
+            "p95": 189.36695772058823,
+            "p99": 195.58150451824903,
+            "max": 195.58150451824903
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 97993,
+            "n_sims": 100000,
+            "p_value": 0.979930200697993,
+            "floor_if_k_eq_1": 9.99990000099999e-06
+          }
+        },
+        "block_bootstrap_L5": {
+          "what_is_randomized": "each condition series block-resampled (circular length-5 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 146.99911738746692,
+            "p90": 184.87193843383946,
+            "p95": 189.36695772058823,
+            "p99": 195.58150451824903,
+            "max": 195.58150451824903
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 16770,
+            "n_sims": 20000,
+            "p_value": 0.8385080745962702,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "block_bootstrap_L10": {
+          "what_is_randomized": "each condition series block-resampled (circular length-10 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 146.99911738746692,
+            "p90": 184.87193843383946,
+            "p95": 189.36695772058823,
+            "p99": 195.58150451824903,
+            "max": 195.58150451824903
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 16722,
+            "n_sims": 20000,
+            "p_value": 0.8361081945902705,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "zero_mean_noise": {
+          "what_is_randomized": "instrumented = observed minimal + N(0, s^2) additive noise, s = observed pooled diff SD, zero mean, independent across pairs",
+          "null": "no systematic shift; ratios are amplifier of observed-magnitude independent zero-mean additive noise",
+          "s_diff_observed": 0.0032578806660868913,
+          "sim": {
+            "median": 79.56844830641205,
+            "p90": 100.28841857472072,
+            "p95": 107.43995531148612,
+            "p99": 122.73769141206566,
+            "max": 167.79034051851005
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 1647,
+            "n_sims": 50000,
+            "p_value": 0.03295934081318374,
+            "floor_if_k_eq_1": 1.999960000799984e-05
+          }
+        }
+      },
+      "paired_diffs": {
+        "mean_abs_diff": 0.002254427,
+        "sd_diff": 0.0032578806660868913,
+        "abs_diff_p50": 0.0015061499999999995,
+        "abs_diff_p90": 0.004945539999999999,
+        "abs_diff_p95": 0.006116050000000001,
+        "abs_diff_p99": 0.011511315999999999,
+        "abs_diff_max": 0.020703199999999998,
+        "mean_signed_pct": 5.268795958051513,
+        "sd_signed_pct": 24.220908365781263
+      }
+    },
+    {
+      "run": "p44r3",
+      "csv_sha256_ok": true,
+      "frozen": {
+        "mean_overhead_pct": 2.361009,
+        "mean_ok": false,
+        "worst_pct": 116.175456,
+        "worst_ok": false,
+        "worst_key": {
+          "replicate": 2,
+          "iteration": 11,
+          "minimal_sec": 0.0099991,
+          "instrumented_sec": 0.0216156
+        },
+        "worst_neg_pct": -52.052288,
+        "worst_neg_key": {
+          "replicate": 0,
+          "iteration": 23,
+          "minimal_sec": 0.0209303,
+          "instrumented_sec": 0.0100356
+        },
+        "median_deviation_pct": 1.742295,
+        "median_ok": true,
+        "count_above_10": 77,
+        "count_below_neg10": 70,
+        "count_outside_10": 147,
+        "grid_verdict": "FAIL"
+      },
+      "models": {
+        "within_rep_perm": {
+          "what_is_randomized": "instrumented iterations permuted within each replicate; minimal held fixed",
+          "null": "exchangeable within-replicate pairing; no systematic per-iteration instrumented-vs-minimal coupling",
+          "sim": {
+            "median": 110.37113668692615,
+            "p90": 124.66636178439279,
+            "p95": 133.13523949221823,
+            "p99": 133.8515465255915,
+            "max": 133.8515465255915
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 28022,
+            "n_sims": 100000,
+            "p_value": 0.28022719772802274,
+            "floor_if_k_eq_1": 9.99990000099999e-06
+          }
+        },
+        "block_bootstrap_L5": {
+          "what_is_randomized": "each condition series block-resampled (circular length-5 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 109.19893980548498,
+            "p90": 123.82653536702801,
+            "p95": 133.13523949221823,
+            "p99": 133.8515465255915,
+            "max": 133.8515465255915
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 5003,
+            "n_sims": 20000,
+            "p_value": 0.25018749062546874,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "block_bootstrap_L10": {
+          "what_is_randomized": "each condition series block-resampled (circular length-10 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 109.19893980548498,
+            "p90": 123.82653536702801,
+            "p95": 133.13523949221823,
+            "p99": 133.8515465255915,
+            "max": 133.8515465255915
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 5063,
+            "n_sims": 20000,
+            "p_value": 0.2531873406329683,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "zero_mean_noise": {
+          "what_is_randomized": "instrumented = observed minimal + N(0, s^2) additive noise, s = observed pooled diff SD, zero mean, independent across pairs",
+          "null": "no systematic shift; ratios are amplifier of observed-magnitude independent zero-mean additive noise",
+          "s_diff_observed": 0.0030412112431886765,
+          "sim": {
+            "median": 75.58911523519339,
+            "p90": 94.67618713240606,
+            "p95": 101.5989840147669,
+            "p99": 115.79677010719722,
+            "max": 163.04028928304655
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 473,
+            "n_sims": 50000,
+            "p_value": 0.009479810403791923,
+            "floor_if_k_eq_1": 1.999960000799984e-05
+          }
+        }
+      },
+      "paired_diffs": {
+        "mean_abs_diff": 0.0021731753333333334,
+        "sd_diff": 0.0030412112431886765,
+        "abs_diff_p50": 0.0013985500000000001,
+        "abs_diff_p90": 0.0050159800000000015,
+        "abs_diff_p95": 0.006686730000000001,
+        "abs_diff_p99": 0.010128425,
+        "abs_diff_max": 0.011616499999999998,
+        "mean_signed_pct": 5.458785059594033,
+        "sd_signed_pct": 25.677860490787864
+      }
+    },
+    {
+      "run": "p44r4",
+      "csv_sha256_ok": true,
+      "frozen": {
+        "mean_overhead_pct": 6.673764,
+        "mean_ok": false,
+        "worst_pct": 207.32758,
+        "worst_ok": false,
+        "worst_key": {
+          "replicate": 3,
+          "iteration": 37,
+          "minimal_sec": 0.014253,
+          "instrumented_sec": 0.0438034
+        },
+        "worst_neg_pct": -40.527978,
+        "worst_neg_key": {
+          "replicate": 3,
+          "iteration": 1,
+          "minimal_sec": 0.0238154,
+          "instrumented_sec": 0.0141635
+        },
+        "median_deviation_pct": 7.697923,
+        "median_ok": false,
+        "count_above_10": 106,
+        "count_below_neg10": 77,
+        "count_outside_10": 183,
+        "grid_verdict": "FAIL"
+      },
+      "models": {
+        "within_rep_perm": {
+          "what_is_randomized": "instrumented iterations permuted within each replicate; minimal held fixed",
+          "null": "exchangeable within-replicate pairing; no systematic per-iteration instrumented-vs-minimal coupling",
+          "sim": {
+            "median": 163.19887998942477,
+            "p90": 207.3275801585631,
+            "p95": 209.71350189490354,
+            "p99": 217.3699463845819,
+            "max": 217.3699463845819
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 10193,
+            "n_sims": 100000,
+            "p_value": 0.1019389806101939,
+            "floor_if_k_eq_1": 9.99990000099999e-06
+          }
+        },
+        "block_bootstrap_L5": {
+          "what_is_randomized": "each condition series block-resampled (circular length-5 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 159.41736303174955,
+            "p90": 207.1745639932399,
+            "p95": 209.71350189490354,
+            "p99": 217.3699463845819,
+            "max": 217.3699463845819
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 1905,
+            "n_sims": 20000,
+            "p_value": 0.09529523523823809,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "block_bootstrap_L10": {
+          "what_is_randomized": "each condition series block-resampled (circular length-10 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 159.5418671343588,
+            "p90": 207.1745639932399,
+            "p95": 209.71350189490354,
+            "p99": 217.3699463845819,
+            "max": 217.3699463845819
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 1891,
+            "n_sims": 20000,
+            "p_value": 0.09459527023648817,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "zero_mean_noise": {
+          "what_is_randomized": "instrumented = observed minimal + N(0, s^2) additive noise, s = observed pooled diff SD, zero mean, independent across pairs",
+          "null": "no systematic shift; ratios are amplifier of observed-magnitude independent zero-mean additive noise",
+          "s_diff_observed": 0.004338034054035167,
+          "sim": {
+            "median": 109.92461106745775,
+            "p90": 137.50050120626403,
+            "p95": 147.06201840349948,
+            "p99": 165.7587453848842,
+            "max": 242.465882025736
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 5,
+            "n_sims": 50000,
+            "p_value": 0.00011999760004799904,
+            "floor_if_k_eq_1": 1.999960000799984e-05
+          }
+        }
+      },
+      "paired_diffs": {
+        "mean_abs_diff": 0.0029888086666666667,
+        "sd_diff": 0.004338034054035167,
+        "abs_diff_p50": 0.0018942000000000004,
+        "abs_diff_p90": 0.007312790000000002,
+        "abs_diff_p95": 0.00883049,
+        "abs_diff_p99": 0.013143713999999997,
+        "abs_diff_max": 0.029550399999999998,
+        "mean_signed_pct": 11.05305108038867,
+        "sd_signed_pct": 34.90647504457153
+      }
+    },
+    {
+      "run": "p44r5",
+      "csv_sha256_ok": true,
+      "frozen": {
+        "mean_overhead_pct": 7.537539,
+        "mean_ok": false,
+        "worst_pct": 221.943024,
+        "worst_ok": false,
+        "worst_key": {
+          "replicate": 2,
+          "iteration": 15,
+          "minimal_sec": 0.0095233,
+          "instrumented_sec": 0.0306596
+        },
+        "worst_neg_pct": -65.937733,
+        "worst_neg_key": {
+          "replicate": 4,
+          "iteration": 38,
+          "minimal_sec": 0.0531644,
+          "instrumented_sec": 0.018109
+        },
+        "median_deviation_pct": 6.032071,
+        "median_ok": false,
+        "count_above_10": 133,
+        "count_below_neg10": 71,
+        "count_outside_10": 204,
+        "grid_verdict": "FAIL"
+      },
+      "models": {
+        "within_rep_perm": {
+          "what_is_randomized": "instrumented iterations permuted within each replicate; minimal held fixed",
+          "null": "exchangeable within-replicate pairing; no systematic per-iteration instrumented-vs-minimal coupling",
+          "sim": {
+            "median": 191.72946639263154,
+            "p90": 224.07327153381883,
+            "p95": 224.18292360560397,
+            "p99": 235.93303165437675,
+            "max": 235.93303165437675
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 10083,
+            "n_sims": 100000,
+            "p_value": 0.1008389916100839,
+            "floor_if_k_eq_1": 9.99990000099999e-06
+          }
+        },
+        "block_bootstrap_L5": {
+          "what_is_randomized": "each condition series block-resampled (circular length-5 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 146.90439376369022,
+            "p90": 221.94302395178138,
+            "p95": 224.18292360560397,
+            "p99": 235.93303165437675,
+            "max": 235.93303165437675
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 1869,
+            "n_sims": 20000,
+            "p_value": 0.09349532523373831,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "block_bootstrap_L10": {
+          "what_is_randomized": "each condition series block-resampled (circular length-10 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 146.90439376369022,
+            "p90": 221.94302395178138,
+            "p95": 224.18292360560397,
+            "p99": 235.93303165437675,
+            "max": 235.93303165437675
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 1895,
+            "n_sims": 20000,
+            "p_value": 0.09479526023698816,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "zero_mean_noise": {
+          "what_is_randomized": "instrumented = observed minimal + N(0, s^2) additive noise, s = observed pooled diff SD, zero mean, independent across pairs",
+          "null": "no systematic shift; ratios are amplifier of observed-magnitude independent zero-mean additive noise",
+          "s_diff_observed": 0.00462164429499463,
+          "sim": {
+            "median": 121.35687373494216,
+            "p90": 150.63669613653258,
+            "p95": 160.62127893446242,
+            "p99": 181.62497472608862,
+            "max": 247.12289971379548
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 11,
+            "n_sims": 50000,
+            "p_value": 0.00023999520009599807,
+            "floor_if_k_eq_1": 1.999960000799984e-05
+          }
+        }
+      },
+      "paired_diffs": {
+        "mean_abs_diff": 0.0033277246666666665,
+        "sd_diff": 0.00462164429499463,
+        "abs_diff_p50": 0.0025884499999999982,
+        "abs_diff_p90": 0.00654129,
+        "abs_diff_p95": 0.008900785000000001,
+        "abs_diff_p99": 0.013401908999999997,
+        "abs_diff_max": 0.0350554,
+        "mean_signed_pct": 12.961792340846076,
+        "sd_signed_pct": 34.147555203699575
+      }
+    },
+    {
+      "run": "p49r01",
+      "csv_sha256_ok": true,
+      "frozen": {
+        "mean_overhead_pct": -0.154504,
+        "mean_ok": true,
+        "worst_pct": 88.582956,
+        "worst_ok": false,
+        "worst_key": {
+          "replicate": 2,
+          "iteration": 36,
+          "minimal_sec": 0.0090216,
+          "instrumented_sec": 0.0170132
+        },
+        "worst_neg_pct": -40.801918,
+        "worst_neg_key": {
+          "replicate": 0,
+          "iteration": 31,
+          "minimal_sec": 0.0158919,
+          "instrumented_sec": 0.0094077
+        },
+        "median_deviation_pct": 0.869475,
+        "median_ok": true,
+        "count_above_10": 46,
+        "count_below_neg10": 55,
+        "count_outside_10": 101,
+        "grid_verdict": "FAIL"
+      },
+      "models": {
+        "within_rep_perm": {
+          "what_is_randomized": "instrumented iterations permuted within each replicate; minimal held fixed",
+          "null": "exchangeable within-replicate pairing; no systematic per-iteration instrumented-vs-minimal coupling",
+          "sim": {
+            "median": 86.19504667680826,
+            "p90": 89.56634131122698,
+            "p95": 90.20425503370711,
+            "p99": 92.07460260115604,
+            "max": 92.07460260115604
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 15923,
+            "n_sims": 100000,
+            "p_value": 0.15923840761592384,
+            "floor_if_k_eq_1": 9.99990000099999e-06
+          }
+        },
+        "block_bootstrap_L5": {
+          "what_is_randomized": "each condition series block-resampled (circular length-5 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 83.377345678347,
+            "p90": 89.27530427430301,
+            "p95": 90.20425503370711,
+            "p99": 92.07460260115604,
+            "max": 92.07460260115604
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 2993,
+            "n_sims": 20000,
+            "p_value": 0.14969251537423128,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "block_bootstrap_L10": {
+          "what_is_randomized": "each condition series block-resampled (circular length-10 blocks) separately per replicate; then paired by position",
+          "null": "autocorrelation within a condition preserved; pairing between conditions erased; no systematic difference",
+          "sim": {
+            "median": 83.73183006112441,
+            "p90": 89.27530427430301,
+            "p95": 90.20425503370711,
+            "p99": 92.07460260115604,
+            "max": 92.07460260115604
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 2972,
+            "n_sims": 20000,
+            "p_value": 0.14864256787160643,
+            "floor_if_k_eq_1": 4.999750012499375e-05
+          }
+        },
+        "zero_mean_noise": {
+          "what_is_randomized": "instrumented = observed minimal + N(0, s^2) additive noise, s = observed pooled diff SD, zero mean, independent across pairs",
+          "null": "no systematic shift; ratios are amplifier of observed-magnitude independent zero-mean additive noise",
+          "s_diff_observed": 0.0016328155416893125,
+          "sim": {
+            "median": 49.71826349348436,
+            "p90": 59.9612750334762,
+            "p95": 63.60185062022746,
+            "p99": 71.27425862235377,
+            "max": 89.78702427046655
+          },
+          "obs_vs_null": {
+            "k_ge_obs": 2,
+            "n_sims": 50000,
+            "p_value": 5.999880002399952e-05,
+            "floor_if_k_eq_1": 1.999960000799984e-05
+          }
+        }
+      },
+      "paired_diffs": {
+        "mean_abs_diff": 0.0010039726666666666,
+        "sd_diff": 0.0016328155416893125,
+        "abs_diff_p50": 0.0004762500000000001,
+        "abs_diff_p90": 0.0027716900000000007,
+        "abs_diff_p95": 0.0037512600000000032,
+        "abs_diff_p99": 0.005241892999999995,
+        "abs_diff_max": 0.0079916,
+        "mean_signed_pct": 1.0241694562375119,
+        "sd_signed_pct": 15.6528707338385
+      }
+    }
+  ]
+}
