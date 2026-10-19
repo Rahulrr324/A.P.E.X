@@ -1647,18 +1647,16 @@ int main(int argc, char** argv) {
     using stark_p1::b7diag::render_report;
     using stark_p1::b7diag::run_bm_b7_diagnostic;
 
-    DiagnosticPaths paths;
-    const std::string usage =
+    DiagnosticPaths paths;    const std::string usage =
         std::string("usage: ") + argv[0] +
-        " [diagnostic-directory] [--host-capture-dir <relative-dir>]
-        " [--batch-size <n>] [--measured-iterations <n>]\n"
+        " [diagnostic-directory] [--host-capture-dir <relative-dir>] [--batch-size <n>] [--measured-iterations <n>]\n"
         "  default directory: build/bm_b7_diagnostic/ "
         "(diagnostic-owned; isolation is validated at run time)\n"
         "  --host-capture-dir: relative, non-traversal directory that receives "
         "paired_samples.csv (exclusive, no overwrite). Omit to skip host persistence.\n"
         "  --batch-size: number of operations per timed sample (default 20, >=1).\n"
-        "  --measured-iterations: measured iterations per replicate (default 50,
-        " must match the Phase 33 validator profile: six=50, eight=50).
+        "  --measured-iterations: measured iterations per replicate (default 50,"
+        " must match the Phase 33 validator profile: six=50, eight=50)."
         " Range: >=10 and <=1000.\n";
 
     bool have_positional = false;

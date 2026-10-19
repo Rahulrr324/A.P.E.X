@@ -11,7 +11,7 @@ This phase implemented two minimal source fixes in `stark/src/phase1/diagnostics
 ## 1. Evidence Paths and Source Hashes
 
 ### Diagnostic Source
-- `stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp` (1766 lines after edits)
+- `stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp`
 - Pre-edit backup: `stark/src/phase1/diagnostics/bm_b7_diagnostic.cpp.pre_edit` (1372 lines)
 - Current git HEAD: `abc0fc35844cb0729cb1caf137ec17292f97d142` (Phase 59 commit)
 - Phase 49 executable hash: `f50fda5a3486fa7d3225869d978a841c2d1fa10f92413530b1cda067b1000147`
