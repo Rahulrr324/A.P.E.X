@@ -152,7 +152,7 @@ using Clock = std::chrono::steady_clock;
 // Predeclared protocol defaults (approved diagnostic plan)
 // ---------------------------------------------------------------------------
 constexpr uint32_t kWarmupIterations = 30;      // untimed warmups per replicate
-constexpr uint32_t kMeasuredIterations = 60;    // measured iterations per replicate
+constexpr uint32_t kMeasuredIterations = 50;    // measured iterations per replicate (matches Phase 33 validator six/eight profile: 50)
 constexpr uint32_t kMinMacroReplicates = 6;     // sequential, process-local macro-replicates PER CONDITION
 constexpr double kHistoricalReferenceMedianUs = 5721.90;  // comparison datum ONLY
 constexpr double kCalibMeanOverheadThresholdPct = 2.0;    // mean overhead <= 2%
@@ -710,7 +710,14 @@ ReplicateResult run_replicate_interleaved(bool minimal_first, uint32_t index,
                     const auto tB = Clock::now();
                     inst_t = std::chrono::duration<double>(tB - tA).count();
                 }
-                comp.residual_sec = inst_t - (comp.open_sec + comp.read_sec + comp.deser_sec);
+                // Dimensional fix: inst_t is TOTAL batch time [seconds/batch],
+                // while comp.* are PER-OPERATION [seconds/op]. To compute a
+                // per-operation residual, normalize inst_t to per-operation first:
+                //   residual_per_op = (inst_t / batch_size) - (open + read + deser)
+                // This matches instrumented_op_batch's internal residual:
+                //   (batch_total - (open_sum + read_sum + deser_sum)) / batch_size
+                comp.residual_sec = inst_t / static_cast<double>(proto.batch_size)
+                                   - (comp.open_sec + comp.read_sec + comp.deser_sec);
                 if (!(min_t >= 0.0) || !(inst_t >= 0.0)) {
                     r.failed_iterations += 1;
                     r.valid = false;
@@ -739,7 +746,11 @@ ReplicateResult run_replicate_interleaved(bool minimal_first, uint32_t index,
                     const auto tB = Clock::now();
                     min_t = std::chrono::duration<double>(tB - tA).count();
                 }
-                comp.residual_sec = inst_t - (comp.open_sec + comp.read_sec + comp.deser_sec);
+                // Dimensional fix: inst_t is TOTAL batch time [seconds/batch],
+                // while comp.* are PER-OPERATION [seconds/op]. Normalize inst_t
+                // to per-operation first: residual_per_op = inst_t/batch_size - (open + read + deser)
+                comp.residual_sec = inst_t / static_cast<double>(proto.batch_size)
+                                   - (comp.open_sec + comp.read_sec + comp.deser_sec);
                 if (!(min_t >= 0.0) || !(inst_t >= 0.0)) {
                     r.failed_iterations += 1;
                     r.valid = false;
@@ -839,7 +850,8 @@ ReplicateResult run_replicate(Mode mode, uint32_t index,
         r.total_samples_sec.push_back(total_sec);
         if (mode == Mode::INSTRUMENTED) {
             comp.residual_sec =
-                total_sec - (comp.open_sec + comp.read_sec + comp.deser_sec);
+                total_sec / static_cast<double>(proto.batch_size)
+                - (comp.open_sec + comp.read_sec + comp.deser_sec);
             r.components.push_back(comp);
         }
     }
@@ -1638,16 +1650,21 @@ int main(int argc, char** argv) {
     DiagnosticPaths paths;
     const std::string usage =
         std::string("usage: ") + argv[0] +
-        " [diagnostic-directory] [--host-capture-dir <relative-dir>] [--batch-size <n>]\n"
+        " [diagnostic-directory] [--host-capture-dir <relative-dir>]
+        " [--batch-size <n>] [--measured-iterations <n>]\n"
         "  default directory: build/bm_b7_diagnostic/ "
         "(diagnostic-owned; isolation is validated at run time)\n"
         "  --host-capture-dir: relative, non-traversal directory that receives "
         "paired_samples.csv (exclusive, no overwrite). Omit to skip host persistence.\n"
-        "  --batch-size: number of operations per timed sample (default 20, >=1).\n";
+        "  --batch-size: number of operations per timed sample (default 20, >=1).\n"
+        "  --measured-iterations: measured iterations per replicate (default 50,
+        " must match the Phase 33 validator profile: six=50, eight=50).
+        " Range: >=10 and <=1000.\n";
 
     bool have_positional = false;
     bool have_host = false;
     bool have_batch = false;
+    bool have_measured = false;
     Protocol proto;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -1696,6 +1713,32 @@ int main(int argc, char** argv) {
                 have_batch = true;
             } catch (...) {
                 std::cerr << "error: invalid batch-size\n" << usage;
+                return 2;
+            }
+        } else if (a == "--measured-iterations") {
+            if (have_measured) {
+                std::cerr << "error: duplicate --measured-iterations\n" << usage;
+                return 2;
+            }
+            if (i + 1 >= argc) {
+                std::cerr << "error: --measured-iterations requires a value\n" << usage;
+                return 2;
+            }
+            const std::string value = argv[++i];
+            if (value.empty() || value.rfind("--", 0) == 0) {
+                std::cerr << "error: --measured-iterations requires a non-option value\n" << usage;
+                return 2;
+            }
+            try {
+                unsigned long v = std::stoul(value);
+                if (v < 10 || v > 1000) {
+                    std::cerr << "error: --measured-iterations out of range (10..1000)\n" << usage;
+                    return 2;
+                }
+                proto.measurement_count = static_cast<uint32_t>(v);
+                have_measured = true;
+            } catch (...) {
+                std::cerr << "error: invalid --measured-iterations value\n" << usage;
                 return 2;
             }
         } else if (a.rfind("--", 0) == 0) {
