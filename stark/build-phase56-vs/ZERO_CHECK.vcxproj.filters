@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="E:\My Local AI\stark\build-phase56-vs\CMakeFiles\40154281c8ea81c8410566e7c2d8e6ba\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{B905258C-6BAD-34F5-AFE9-66823063F772}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

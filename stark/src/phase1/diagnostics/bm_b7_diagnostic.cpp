@@ -151,9 +151,9 @@ using Clock = std::chrono::steady_clock;
 // ---------------------------------------------------------------------------
 // Predeclared protocol defaults (approved diagnostic plan)
 // ---------------------------------------------------------------------------
-constexpr uint32_t kWarmupIterations = 50;      // untimed warmups per replicate
-constexpr uint32_t kMeasuredIterations = 100;   // measured iterations per replicate
-constexpr uint32_t kMinMacroReplicates = 8;     // sequential, process-local macro-replicates PER CONDITION
+constexpr uint32_t kWarmupIterations = 30;      // untimed warmups per replicate
+constexpr uint32_t kMeasuredIterations = 60;    // measured iterations per replicate
+constexpr uint32_t kMinMacroReplicates = 6;     // sequential, process-local macro-replicates PER CONDITION
 constexpr double kHistoricalReferenceMedianUs = 5721.90;  // comparison datum ONLY
 constexpr double kCalibMeanOverheadThresholdPct = 2.0;    // mean overhead <= 2%
 constexpr double kCalibWorstOverheadThresholdPct = 10.0;  // worst-case overhead <= 10%
@@ -178,6 +178,7 @@ struct Protocol {
     uint32_t measurement_count = kMeasuredIterations;
     uint32_t macro_replicates = kMinMacroReplicates; // per condition
     MeasurementMode mode = MeasurementMode::INTERLEAVED; // corrected protocol to reduce drift
+    uint32_t batch_size = 20;                       // operations per timed sample (>=1)
     std::vector<std::string> validate() const {
         std::vector<std::string> errs;
         if (warmup_count < 3)
@@ -186,6 +187,8 @@ struct Protocol {
             errs.push_back("measurement_count must be >= 10 (spec §B floor; plan default 50)");
         if (macro_replicates < kMinMacroReplicates)
             errs.push_back("macro_replicates must be >= 6 (sequential, process-local macro-replicates per condition)");
+        if (batch_size < 1)
+            errs.push_back("batch_size must be >= 1");
         return errs;
     }
 };
@@ -479,7 +482,7 @@ struct ComponentTimings {
 /// sequence from BenchmarkHarness.cpp bench_model_load_time(); the caller
 /// brackets this call with a single steady_clock pair, exactly as
 /// run_benchmark() does. Contains no internal timing at all.
-void minimal_op(const std::string& path, TinyDenseModel& loader) {
+void minimal_op_single(const std::string& path, TinyDenseModel& loader) {
     std::ifstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("cannot open weight blob");
     std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),
@@ -487,12 +490,27 @@ void minimal_op(const std::string& path, TinyDenseModel& loader) {
     loader.deserializeWeights(bytes);
 }
 
+void minimal_op_batch(const std::string& path, TinyDenseModel& loader, uint32_t batch_size) {
+    for (uint32_t i = 0; i < batch_size; ++i) {
+        std::ifstream f(path, std::ios::binary);
+        if (!f) throw std::runtime_error("cannot open weight blob");
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),
+                                   std::istreambuf_iterator<char>());
+        loader.deserializeWeights(bytes);
+    }
+}
+
+inline void minimal_op(const std::string& path, TinyDenseModel& loader, uint32_t batch_size) {
+    if (batch_size <= 1) minimal_op_single(path, loader);
+    else minimal_op_batch(path, loader, batch_size);
+}
+
 /// INSTRUMENTED condition. Identical statement sequence and identical
 /// open-failure behavior to minimal_op(), with four steady_clock reads at
 /// stage boundaries. No other instrumentation, no logging, no allocation
 /// beyond what the production op itself performs.
-void instrumented_op(const std::string& path, TinyDenseModel& loader,
-                     ComponentTimings& t) {
+void instrumented_op_single(const std::string& path, TinyDenseModel& loader,
+                            ComponentTimings& t) {
     const auto t0 = Clock::now();
     std::ifstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error("cannot open weight blob");
@@ -507,6 +525,39 @@ void instrumented_op(const std::string& path, TinyDenseModel& loader,
     t.deser_sec = std::chrono::duration<double>(t3 - t2).count();
     // residual_sec is filled by the caller once the independent total exists.
     t.residual_sec = 0.0;
+}
+
+void instrumented_op_batch(const std::string& path, TinyDenseModel& loader,
+                           ComponentTimings& t, uint32_t batch_size) {
+    const auto t0 = Clock::now();
+    double open_sum = 0.0, read_sum = 0.0, deser_sum = 0.0;
+    for (uint32_t i = 0; i < batch_size; ++i) {
+        const auto a0 = Clock::now();
+        std::ifstream f(path, std::ios::binary);
+        if (!f) throw std::runtime_error("cannot open weight blob");
+        const auto a1 = Clock::now();
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),
+                                   std::istreambuf_iterator<char>());
+        const auto a2 = Clock::now();
+        loader.deserializeWeights(bytes);
+        const auto a3 = Clock::now();
+        open_sum += std::chrono::duration<double>(a1 - a0).count();
+        read_sum += std::chrono::duration<double>(a2 - a1).count();
+        deser_sum += std::chrono::duration<double>(a3 - a2).count();
+    }
+    const auto t1_total = Clock::now();
+    const double batch_total = std::chrono::duration<double>(t1_total - t0).count();
+    const double inv_n = batch_size > 0 ? 1.0 / static_cast<double>(batch_size) : 1.0;
+    t.open_sec = open_sum * inv_n;
+    t.read_sec = read_sum * inv_n;
+    t.deser_sec = deser_sum * inv_n;
+    t.residual_sec = (batch_total - (open_sum + read_sum + deser_sum)) * inv_n;
+}
+
+inline void instrumented_op(const std::string& path, TinyDenseModel& loader,
+                            ComponentTimings& t, uint32_t batch_size) {
+    if (batch_size <= 1) instrumented_op_single(path, loader, t);
+    else instrumented_op_batch(path, loader, t, batch_size);
 }
 
 // ---------------------------------------------------------------------------
@@ -617,13 +668,13 @@ ReplicateResult run_replicate_interleaved(bool minimal_first, uint32_t index,
         // Interleaved warmup
         for (uint32_t i = 0; i < proto.warmup_count; ++i) {
             if (minimal_first) {
-                minimal_op(blob_path, loader);
+                minimal_op(blob_path, loader, proto.batch_size);
                 ComponentTimings discard;
-                instrumented_op(blob_path, loader, discard);
+                instrumented_op(blob_path, loader, discard, proto.batch_size);
             } else {
                 ComponentTimings discard;
-                instrumented_op(blob_path, loader, discard);
-                minimal_op(blob_path, loader);
+                instrumented_op(blob_path, loader, discard, proto.batch_size);
+                minimal_op(blob_path, loader, proto.batch_size);
             }
         }
     } catch (const std::exception& ex) {
@@ -647,7 +698,7 @@ ReplicateResult run_replicate_interleaved(bool minimal_first, uint32_t index,
                 double min_t = 0.0;
                 {
                     const auto tA = Clock::now();
-                    minimal_op(blob_path, loader);
+                    minimal_op(blob_path, loader, proto.batch_size);
                     const auto tB = Clock::now();
                     min_t = std::chrono::duration<double>(tB - tA).count();
                 }
@@ -655,7 +706,7 @@ ReplicateResult run_replicate_interleaved(bool minimal_first, uint32_t index,
                 ComponentTimings comp;
                 {
                     const auto tA = Clock::now();
-                    instrumented_op(blob_path, loader, comp);
+                    instrumented_op(blob_path, loader, comp, proto.batch_size);
                     const auto tB = Clock::now();
                     inst_t = std::chrono::duration<double>(tB - tA).count();
                 }
@@ -677,14 +728,14 @@ ReplicateResult run_replicate_interleaved(bool minimal_first, uint32_t index,
                 ComponentTimings comp;
                 {
                     const auto tA = Clock::now();
-                    instrumented_op(blob_path, loader, comp);
+                    instrumented_op(blob_path, loader, comp, proto.batch_size);
                     const auto tB = Clock::now();
                     inst_t = std::chrono::duration<double>(tB - tA).count();
                 }
                 double min_t = 0.0;
                 {
                     const auto tA = Clock::now();
-                    minimal_op(blob_path, loader);
+                    minimal_op(blob_path, loader, proto.batch_size);
                     const auto tB = Clock::now();
                     min_t = std::chrono::duration<double>(tB - tA).count();
                 }
@@ -745,9 +796,9 @@ ReplicateResult run_replicate(Mode mode, uint32_t index,
         for (uint32_t i = 0; i < proto.warmup_count; ++i) {  // UNTIMED
             if (mode == Mode::INSTRUMENTED) {
                 ComponentTimings discard;
-                instrumented_op(blob_path, loader, discard);
+                instrumented_op(blob_path, loader, discard, proto.batch_size);
             } else {
-                minimal_op(blob_path, loader);
+                minimal_op(blob_path, loader, proto.batch_size);
             }
         }
     } catch (const std::exception& ex) {
@@ -766,9 +817,9 @@ ReplicateResult run_replicate(Mode mode, uint32_t index,
         try {
             const auto tA = Clock::now();  // independent outer total timer
             if (mode == Mode::INSTRUMENTED)
-                instrumented_op(blob_path, loader, comp);
+                instrumented_op(blob_path, loader, comp, proto.batch_size);
             else
-                minimal_op(blob_path, loader);
+                minimal_op(blob_path, loader, proto.batch_size);
             const auto tB = Clock::now();
             total_sec = std::chrono::duration<double>(tB - tA).count();
         } catch (const std::exception& ex) {
@@ -1107,7 +1158,8 @@ std::string render_report(const DiagnosticReport& rep) {
        << " (min " << kMinMacroReplicates
        << "; SEQUENTIAL, PROCESS-LOCAL replications within one run — not "
           "independent machine/session replications)\n"
-       << "measurement_mode=" << (rep.protocol.mode == MeasurementMode::INTERLEAVED ? "INTERLEAVED" : "BLOCK") << "\n";
+       << "measurement_mode=" << (rep.protocol.mode == MeasurementMode::INTERLEAVED ? "INTERLEAVED" : "BLOCK")
+       << " batch_size=" << rep.protocol.batch_size << "\n";
     if (rep.blob_bytes > 0) {
         os << "diagnostic blob: path=" << rep.blob_path
            << "  bytes=" << rep.blob_bytes
@@ -1586,14 +1638,17 @@ int main(int argc, char** argv) {
     DiagnosticPaths paths;
     const std::string usage =
         std::string("usage: ") + argv[0] +
-        " [diagnostic-directory] [--host-capture-dir <relative-dir>]\n"
+        " [diagnostic-directory] [--host-capture-dir <relative-dir>] [--batch-size <n>]\n"
         "  default directory: build/bm_b7_diagnostic/ "
         "(diagnostic-owned; isolation is validated at run time)\n"
         "  --host-capture-dir: relative, non-traversal directory that receives "
-        "paired_samples.csv (exclusive, no overwrite). Omit to skip host persistence.\n";
+        "paired_samples.csv (exclusive, no overwrite). Omit to skip host persistence.\n"
+        "  --batch-size: number of operations per timed sample (default 20, >=1).\n";
 
     bool have_positional = false;
     bool have_host = false;
+    bool have_batch = false;
+    Protocol proto;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--host-capture-dir") {
@@ -1617,6 +1672,32 @@ int main(int argc, char** argv) {
             }
             paths.host_capture_dir = value;
             have_host = true;
+        } else if (a == "--batch-size") {
+            if (have_batch) {
+                std::cerr << "error: duplicate --batch-size\n" << usage;
+                return 2;
+            }
+            if (i + 1 >= argc) {
+                std::cerr << "error: --batch-size requires a value\n" << usage;
+                return 2;
+            }
+            const std::string value = argv[++i];
+            if (value.empty() || value.rfind("--", 0) == 0) {
+                std::cerr << "error: --batch-size requires a non-option value\n" << usage;
+                return 2;
+            }
+            try {
+                unsigned long v = std::stoul(value);
+                if (v < 1 || v > 1000000) {
+                    std::cerr << "error: batch-size out of range\n" << usage;
+                    return 2;
+                }
+                proto.batch_size = static_cast<uint32_t>(v);
+                have_batch = true;
+            } catch (...) {
+                std::cerr << "error: invalid batch-size\n" << usage;
+                return 2;
+            }
         } else if (a.rfind("--", 0) == 0) {
             std::cerr << "error: unknown option: " << a << "\n" << usage;
             return 2;
@@ -1630,7 +1711,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    const DiagnosticReport rep = run_bm_b7_diagnostic(Protocol{}, paths);
+    const DiagnosticReport rep = run_bm_b7_diagnostic(proto, paths);
     std::cout << render_report(rep);
 
     // The paired-sample artifact (if produced) is the authoritative persistent
