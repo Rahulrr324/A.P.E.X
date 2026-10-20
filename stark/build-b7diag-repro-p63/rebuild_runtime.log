@@ -1,0 +1,120 @@
+﻿
+
+
+=== cmake reconfigure ===
+-- Selecting Windows SDK version 10.0.19041.0 to target Windows 10.0.26300.
+-- The CXX compiler identification is MSVC 19.29.30159.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/VC/Tools/MSVC/14.29.30133/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done
+-- Generating done
+cmake.exe : CMake Warning:
+At C:\Users\rahul\AppData\Local\Temp\p63_rebuild10.ps1:20 char:16
++ $CmakeResult = & $Cmake $CmakeArgs 2>&1
++                ~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (CMake Warning::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  Manually-specified variables were not used by the project:
+
+    CMAKE_BUILD_TYPE
+
+
+-- Build files have been written to: E:/My Local AI/stark/build-b7diag-repro-p63
+
+CMAKE_EXIT=0
+
+CMAKE_OK
+
+
+=== build bm_b7_diagnostic target only (Release, x64) ===
+Microsoft (R) Build Engine version 16.11.6+a918ceb31 for .NET Framework
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+Build started 20-10-2026 12:24:49 PM.
+     1>Project "E:\My Local AI\stark\build-b7diag-repro-p63\STARK-006.sln" on node 1 (bm_b7_diagnostic target(s)).
+     1>ValidateSolutionConfiguration:
+         Building solution configuration "Release|x64".
+       ValidateProjects:
+         The project "ALL_BUILD" is not selected for building in solution configuration "Release|x64".
+         The project "RUN_TESTS" is not selected for building in solution configuration "Release|x64".
+     1>Project "E:\My Local AI\stark\build-b7diag-repro-p63\STARK-006.sln" (1) is building "E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj.metaproj" (2) on node 1 (default targets).
+     2>Project "E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj.metaproj" (2) is building "E:\My Local AI\stark\build-b7diag-repro-p63\ZERO_CHECK.vcxproj" (3) on node 1 (default targets).
+     3>PrepareForBuild:
+         Creating directory "x64\Release\ZERO_CHECK\".
+         Creating directory "x64\Release\ZERO_CHECK\ZERO_CHECK.tlog\".
+       InitializeBuildStatus:
+         Creating "x64\Release\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild" because "AlwaysCreate" was specified.
+       CustomBuild:
+         Checking Build System
+       FinalizeBuildStatus:
+         Deleting file "x64\Release\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild".
+         Touching "x64\Release\ZERO_CHECK\ZERO_CHECK.tlog\ZERO_CHECK.lastbuildstate".
+     3>Done Building Project "E:\My Local AI\stark\build-b7diag-repro-p63\ZERO_CHECK.vcxproj" (default targets).
+     2>Project "E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj.metaproj" (2) is building "E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj" (4) on node 1 (default targets).
+     4>PrepareForBuild:
+         Creating directory "bm_b7_diagnostic.dir\Release\".
+         Creating directory "E:\My Local AI\stark\build-b7diag-repro-p63\Release\".
+         Creating directory "bm_b7_diagnostic.dir\Release\bm_b7_diagnostic.tlog\".
+       InitializeBuildStatus:
+         Creating "bm_b7_diagnostic.dir\Release\bm_b7_diagnostic.tlog\unsuccessfulbuild" because "AlwaysCreate" was specified.
+       CustomBuild:
+         Building Custom Rule E:/My Local AI/stark/CMakeLists.txt
+       ClCompile:
+         C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\bin\HostX64\x64\CL.exe /c /I"E:\My Local AI\stark\src" /I"E:\My Local AI\stark\src\phase1" /nologo /W1 /WX- /diagnostics:column /O2 /Ob2 /D WIN32 /D _WINDOWS /D NDEBUG /D "CMAKE_INTDIR=\"Release\"" /D _MBCS /Gm- /EHsc /MD /GS /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /GR /std:c++17 /Fo"bm_b7_diagnostic.dir\Release\\" /Fd"bm_b7_diagnostic.dir\Release\vc142.pdb" /external:W1 /Gd /TP /errorReport:queue "E:\My Local AI\stark\src\phase1\diagnostics\bm_b7_diagnostic.cpp" "E:\My Local AI\stark\src\phase1\bench\TinyDenseModel.cpp" "E:\My Local AI\stark\src\phase1\bench\ParameterAccounting.cpp" "E:\My Local AI\stark\src\phase1\common\ExperimentRecord.cpp"
+         bm_b7_diagnostic.cpp
+         TinyDenseModel.cpp
+         ParameterAccounting.cpp
+         ExperimentRecord.cpp
+         Generating Code...
+       Link:
+         C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\bin\HostX64\x64\link.exe /ERRORREPORT:QUEUE /OUT:"E:\My Local AI\stark\build-b7diag-repro-p63\Release\bm_b7_diagnostic.exe" /INCREMENTAL:NO /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /PDB:"E:/My Local AI/stark/build-b7diag-repro-p63/Release/bm_b7_diagnostic.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"E:/My Local AI/stark/build-b7diag-repro-p63/Release/bm_b7_diagnostic.lib" /MACHINE:X64  /machine:x64 -static-libgcc -static-libstdc++ bm_b7_diagnostic.dir\Release\bm_b7_diagnostic.obj
+         bm_b7_diagnostic.dir\Release\TinyDenseModel.obj
+         bm_b7_diagnostic.dir\Release\ParameterAccounting.obj
+         bm_b7_diagnostic.dir\Release\ExperimentRecord.obj
+     4>LINK : warning LNK4044: unrecognized option '/static-libgcc'; ignored [E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj]
+     4>LINK : warning LNK4044: unrecognized option '/static-libstdc++'; ignored [E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj]
+         bm_b7_diagnostic.vcxproj -> E:\My Local AI\stark\build-b7diag-repro-p63\Release\bm_b7_diagnostic.exe
+       FinalizeBuildStatus:
+         Deleting file "bm_b7_diagnostic.dir\Release\bm_b7_diagnostic.tlog\unsuccessfulbuild".
+         Touching "bm_b7_diagnostic.dir\Release\bm_b7_diagnostic.tlog\bm_b7_diagnostic.lastbuildstate".
+     4>Done Building Project "E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj" (default targets).
+     2>Done Building Project "E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj.metaproj" (default targets).
+     1>Done Building Project "E:\My Local AI\stark\build-b7diag-repro-p63\STARK-006.sln" (bm_b7_diagnostic target(s)).
+
+Build succeeded.
+
+       "E:\My Local AI\stark\build-b7diag-repro-p63\STARK-006.sln" (bm_b7_diagnostic target) (1) ->
+       "E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj.metaproj" (default target) (2) ->
+       "E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj" (default target) (4) ->
+       (Link target) -> 
+         LINK : warning LNK4044: unrecognized option '/static-libgcc'; ignored [E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj]
+         LINK : warning LNK4044: unrecognized option '/static-libstdc++'; ignored [E:\My Local AI\stark\build-b7diag-repro-p63\bm_b7_diagnostic.vcxproj]
+
+    2 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:06.00
+
+MSBUILD_EXIT=0
+
+BUILD_OK
+
+
+=== exe on disk after build ===
+
+
+    Directory: E:\My Local AI\stark\build-b7diag-repro-p63\Release
+
+
+Mode                 LastWriteTime         Length Name                                                                 
+----                 -------------         ------ ----                                                                 
+-a----        20-10-2026  12:24 PM         138752 bm_b7_diagnostic.exe                                                 
+
+
+SHA256=57DE42C2F878DD1E48D8A7FCBD0397FC5339ADCC14A7B474A8056CB6F68F7030
+
+=== REBUILD-FROM-SOURCE finished at 2026-10-20T12:24:55.3497365+05:30 ===

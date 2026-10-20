@@ -1,0 +1,114 @@
+{
+  "validator": "phase33_paired_csv_validator",
+  "csv_path": "work\\b7_diag_20261011_paired_capture\\phase63_coarse_50\\paired_samples.csv",
+  "profile": "six",
+  "replicates": 6,
+  "iterations_per_replicate": 50,
+  "expected_data_rows": 300,
+  "ordering_contract": "row order is NOT required; pairs are aligned by (replicate, iteration) key before any paired metric is computed (never by file position)",
+  "pair_alignment": "(replicate, iteration)",
+  "overhead_formula_tolerance": "|recorded - 100*(instr-min)/min| <= 1e-06 * max(1.0, |recorded|)",
+  "structural_pass": true,
+  "checks": {
+    "file_readable": {
+      "ok": true,
+      "detail": "12304 bytes"
+    },
+    "file_non_empty": {
+      "ok": true,
+      "detail": "12304 bytes"
+    },
+    "utf8_decodable": {
+      "ok": true,
+      "detail": ""
+    },
+    "no_utf8_bom": {
+      "ok": true,
+      "detail": ""
+    },
+    "total_line_count": {
+      "ok": true,
+      "detail": "expected 301 lines (header + 300 rows), got 301"
+    },
+    "csv_parse_strict": {
+      "ok": true,
+      "detail": ""
+    },
+    "header_exact": {
+      "ok": true,
+      "detail": "expected ['replicate', 'iteration', 'minimal_sec', 'instrumented_sec', 'signed_overhead_pct'], got ['replicate', 'iteration', 'minimal_sec', 'instrumented_sec', 'signed_overhead_pct']"
+    },
+    "data_row_count": {
+      "ok": true,
+      "detail": "expected 300 data rows, got 300"
+    },
+    "all_rows_have_exact_field_count": {
+      "ok": true,
+      "detail": "0 rows with != 5 fields (first few: [])"
+    },
+    "replicate_iteration_canonical_integers": {
+      "ok": true,
+      "detail": "0 malformed keys (first few: [])"
+    },
+    "pair_keys_unique": {
+      "ok": true,
+      "detail": "0 duplicate keys"
+    },
+    "pair_keys_exact_set": {
+      "ok": true,
+      "detail": "missing=0 extra=0 (missing sample: [], extra sample: [])"
+    },
+    "keys_in_expected_range": {
+      "ok": true,
+      "detail": "0 keys outside replicate[0..5] x iteration[0..49] (sample: [])"
+    },
+    "per_replicate_counts": {
+      "ok": true,
+      "detail": "replicates with wrong row count: {}"
+    },
+    "numeric_fields_parse": {
+      "ok": true,
+      "detail": "0 rows with unparsable/non-finite numerics (first few: [])"
+    },
+    "all_values_finite": {
+      "ok": true,
+      "detail": ""
+    },
+    "minimal_sec_positive": {
+      "ok": true,
+      "detail": "0 rows with minimal_sec <= 0 (sample: [])"
+    },
+    "instrumented_sec_positive": {
+      "ok": true,
+      "detail": "0 rows with instrumented_sec <= 0 (sample: [])"
+    },
+    "row_formula_pct_matches": {
+      "ok": true,
+      "detail": "0 rows where recorded signed_overhead_pct != 100*(instr-min)/min within tolerance (sample: [])"
+    }
+  },
+  "failed_checks": [],
+  "calibration": {
+    "status": "FAIL",
+    "mean_overhead_pct": -6.384453,
+    "worst_case_overhead_pct": 13.462879,
+    "median_deviation_pct": 6.491725,
+    "thresholds": {
+      "mean_overhead_pct": 2.0,
+      "worst_case_overhead_pct": 10.0,
+      "median_deviation_pct": 2.0
+    },
+    "mean_ok": false,
+    "worst_ok": false,
+    "median_ok": false
+  },
+  "metrics": {
+    "n_pairs": 300,
+    "mean_minimal_sec": 0.501471397,
+    "mean_instrumented_sec": 0.469455189333,
+    "median_minimal_sec": 0.49752335,
+    "median_instrumented_sec": 0.4652255,
+    "min_pair_overhead_pct": -24.657842,
+    "count_pairs_over_10pct": 1
+  }
+}

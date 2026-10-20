@@ -1,0 +1,1 @@
+stark/build-b7diag-fresh-p39b/Release/bm_b7_diagnostic.exe --measured-iterations 50 --batch-size 50 --component-timing coarse --host-capture-dir work/b7_diag_20261011_paired_capture/phase63_coarse_50

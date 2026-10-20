@@ -122,6 +122,7 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -173,12 +174,26 @@ inline double sec_to_us(double sec) { return sec * 1000000.0; }  // 1 s = 1e6 µ
 // ---------------------------------------------------------------------------
 enum class MeasurementMode { BLOCK, INTERLEAVED };
 
+/// Component-timing granularity for the INSTRUMENTED condition (Phase 63
+/// controlled timing comparison).
+///   FINE   = per-operation stage clock reads at open/read/deserialize
+///            boundaries inside every operation of the measured batch
+///            (original behavior; decomposition measured per operation).
+///   COARSE = NO stage clock reads inside the measured batch. The
+///            instrumented operation executes the exact production statement
+///            sequence, bracketed only by the caller's independent outer
+///            batch timer (unchanged). open/read/deserialize/residual are
+///            NOT measured in COARSE mode and are never estimated,
+///            scaled, or fabricated from FINE-mode values.
+enum class ComponentTiming { FINE, COARSE };
+
 struct Protocol {
     uint32_t warmup_count = kWarmupIterations;       // untimed
     uint32_t measurement_count = kMeasuredIterations;
     uint32_t macro_replicates = kMinMacroReplicates; // per condition
     MeasurementMode mode = MeasurementMode::INTERLEAVED; // corrected protocol to reduce drift
     uint32_t batch_size = 20;                       // operations per timed sample (>=1)
+    ComponentTiming component_timing = ComponentTiming::FINE;  // INSTRUMENTED stage-clock granularity
     std::vector<std::string> validate() const {
         std::vector<std::string> errs;
         if (warmup_count < 3)
@@ -528,7 +543,31 @@ void instrumented_op_single(const std::string& path, TinyDenseModel& loader,
 }
 
 void instrumented_op_batch(const std::string& path, TinyDenseModel& loader,
-                           ComponentTimings& t, uint32_t batch_size) {
+                           ComponentTimings& t, uint32_t batch_size,
+                           ComponentTiming timing = ComponentTiming::FINE) {
+    if (timing == ComponentTiming::COARSE) {
+        // COARSE mode: same production statement sequence per iteration, NO
+        // stage clock reads inside the batch. The caller's independent outer
+        // timer brackets this whole call and remains the sole measured total
+        // (identical to the fine-grained mode), so batch timing stays
+        // independent and unchanged. Component decomposition is unavailable
+        // here by construction — it is reported as not-measured downstream,
+        // never estimated. residual_sec is set to NaN as an explicit
+        // "not measured" marker (never summarized: see render guard).
+        for (uint32_t i = 0; i < batch_size; ++i) {
+            std::ifstream f(path, std::ios::binary);
+            if (!f) throw std::runtime_error("cannot open weight blob");
+            std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),
+                                       std::istreambuf_iterator<char>());
+            loader.deserializeWeights(bytes);
+        }
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        t.open_sec = nan;
+        t.read_sec = nan;
+        t.deser_sec = nan;
+        t.residual_sec = nan;
+        return;
+    }
     const auto t0 = Clock::now();
     double open_sum = 0.0, read_sum = 0.0, deser_sum = 0.0;
     for (uint32_t i = 0; i < batch_size; ++i) {
@@ -555,9 +594,16 @@ void instrumented_op_batch(const std::string& path, TinyDenseModel& loader,
 }
 
 inline void instrumented_op(const std::string& path, TinyDenseModel& loader,
-                            ComponentTimings& t, uint32_t batch_size) {
+                            ComponentTimings& t, uint32_t batch_size,
+                            ComponentTiming timing = ComponentTiming::FINE) {
+    if (timing == ComponentTiming::COARSE) {
+        // COARSE: no stage clocks regardless of batch granularity; the batch
+        // path with timing==COARSE executes the plain statement sequence.
+        instrumented_op_batch(path, loader, t, batch_size, timing);
+        return;
+    }
     if (batch_size <= 1) instrumented_op_single(path, loader, t);
-    else instrumented_op_batch(path, loader, t, batch_size);
+    else instrumented_op_batch(path, loader, t, batch_size, timing);
 }
 
 // ---------------------------------------------------------------------------
@@ -670,10 +716,10 @@ ReplicateResult run_replicate_interleaved(bool minimal_first, uint32_t index,
             if (minimal_first) {
                 minimal_op(blob_path, loader, proto.batch_size);
                 ComponentTimings discard;
-                instrumented_op(blob_path, loader, discard, proto.batch_size);
+                instrumented_op(blob_path, loader, discard, proto.batch_size, proto.component_timing);
             } else {
                 ComponentTimings discard;
-                instrumented_op(blob_path, loader, discard, proto.batch_size);
+                instrumented_op(blob_path, loader, discard, proto.batch_size, proto.component_timing);
                 minimal_op(blob_path, loader, proto.batch_size);
             }
         }
@@ -706,7 +752,7 @@ ReplicateResult run_replicate_interleaved(bool minimal_first, uint32_t index,
                 ComponentTimings comp;
                 {
                     const auto tA = Clock::now();
-                    instrumented_op(blob_path, loader, comp, proto.batch_size);
+                    instrumented_op(blob_path, loader, comp, proto.batch_size, proto.component_timing);
                     const auto tB = Clock::now();
                     inst_t = std::chrono::duration<double>(tB - tA).count();
                 }
@@ -735,7 +781,7 @@ ReplicateResult run_replicate_interleaved(bool minimal_first, uint32_t index,
                 ComponentTimings comp;
                 {
                     const auto tA = Clock::now();
-                    instrumented_op(blob_path, loader, comp, proto.batch_size);
+                    instrumented_op(blob_path, loader, comp, proto.batch_size, proto.component_timing);
                     const auto tB = Clock::now();
                     inst_t = std::chrono::duration<double>(tB - tA).count();
                 }
@@ -807,7 +853,7 @@ ReplicateResult run_replicate(Mode mode, uint32_t index,
         for (uint32_t i = 0; i < proto.warmup_count; ++i) {  // UNTIMED
             if (mode == Mode::INSTRUMENTED) {
                 ComponentTimings discard;
-                instrumented_op(blob_path, loader, discard, proto.batch_size);
+                instrumented_op(blob_path, loader, discard, proto.batch_size, proto.component_timing);
             } else {
                 minimal_op(blob_path, loader, proto.batch_size);
             }
@@ -828,7 +874,7 @@ ReplicateResult run_replicate(Mode mode, uint32_t index,
         try {
             const auto tA = Clock::now();  // independent outer total timer
             if (mode == Mode::INSTRUMENTED)
-                instrumented_op(blob_path, loader, comp, proto.batch_size);
+                instrumented_op(blob_path, loader, comp, proto.batch_size, proto.component_timing);
             else
                 minimal_op(blob_path, loader, proto.batch_size);
             const auto tB = Clock::now();
@@ -1171,7 +1217,9 @@ std::string render_report(const DiagnosticReport& rep) {
        << "; SEQUENTIAL, PROCESS-LOCAL replications within one run — not "
           "independent machine/session replications)\n"
        << "measurement_mode=" << (rep.protocol.mode == MeasurementMode::INTERLEAVED ? "INTERLEAVED" : "BLOCK")
-       << " batch_size=" << rep.protocol.batch_size << "\n";
+       << " batch_size=" << rep.protocol.batch_size
+       << " component_timing=" << (rep.protocol.component_timing == ComponentTiming::COARSE ? "COARSE (no per-operation stage clock reads during the measured batch; component decomposition not measured)" : "FINE (4 stage clock reads per operation; component decomposition measured)")
+       << "\n";
     if (rep.blob_bytes > 0) {
         os << "diagnostic blob: path=" << rep.blob_path
            << "  bytes=" << rep.blob_bytes
@@ -1223,7 +1271,14 @@ std::string render_report(const DiagnosticReport& rep) {
     dump_condition("INSTRUMENTED condition (op + component timers)", rep.instrumented);
 
     // Component decomposition (INSTRUMENTED only).
-    {
+    if (rep.protocol.component_timing == ComponentTiming::COARSE) {
+        os << "component decomposition (INSTRUMENTED): NOT MEASURED — "
+              "component_timing=COARSE performs no stage clock reads during "
+              "the measured batch; open/read/deserialize/residual are "
+              "unavailable in this mode and are never estimated from "
+              "another mode. The independent outer batch timer (total) is "
+              "unaffected.\n";
+    } else {
         os << "component decomposition (INSTRUMENTED, pooled across valid replicates):\n";
         // UNIT FIX: store raw seconds (not us). The vectors are later passed to
         // summarize(), which accepts seconds and applies sec_to_us() to its
@@ -1644,6 +1699,7 @@ int main(int argc, char** argv) {
     using stark_p1::b7diag::DiagnosticReport;
     using stark_p1::b7diag::Protocol;
     using stark_p1::b7diag::Classification;
+    using stark_p1::b7diag::ComponentTiming;
     using stark_p1::b7diag::render_report;
     using stark_p1::b7diag::run_bm_b7_diagnostic;
 
@@ -1657,12 +1713,18 @@ int main(int argc, char** argv) {
         "  --batch-size: number of operations per timed sample (default 20, >=1).\n"
         "  --measured-iterations: measured iterations per replicate (default 50,"
         " must match the Phase 33 validator profile: six=50, eight=50)."
-        " Range: >=10 and <=1000.\n";
+        " Range: >=10 and <=1000.\n"
+        "  --component-timing: INSTRUMENTED stage-clock granularity "
+        "(default fine). fine = 4 clock reads per operation (decomposition "
+        "measured); coarse = no stage clock reads during the measured batch "
+        "(decomposition not measured, never estimated). Total batch timing "
+        "is independently bracketed in both modes.\n";
 
     bool have_positional = false;
     bool have_host = false;
     bool have_batch = false;
     bool have_measured = false;
+    bool have_component_timing = false;
     Protocol proto;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -1739,6 +1801,29 @@ int main(int argc, char** argv) {
                 std::cerr << "error: invalid --measured-iterations value\n" << usage;
                 return 2;
             }
+        } else if (a == "--component-timing") {
+            if (have_component_timing) {
+                std::cerr << "error: duplicate --component-timing\n" << usage;
+                return 2;
+            }
+            if (i + 1 >= argc) {
+                std::cerr << "error: --component-timing requires a value\n" << usage;
+                return 2;
+            }
+            const std::string value = argv[++i];
+            if (value.empty() || value.rfind("--", 0) == 0) {
+                std::cerr << "error: --component-timing requires a non-option value\n" << usage;
+                return 2;
+            }
+            if (value == "fine") {
+                proto.component_timing = ComponentTiming::FINE;
+            } else if (value == "coarse") {
+                proto.component_timing = ComponentTiming::COARSE;
+            } else {
+                std::cerr << "error: invalid --component-timing value (expected fine or coarse)\n" << usage;
+                return 2;
+            }
+            have_component_timing = true;
         } else if (a.rfind("--", 0) == 0) {
             std::cerr << "error: unknown option: " << a << "\n" << usage;
             return 2;
