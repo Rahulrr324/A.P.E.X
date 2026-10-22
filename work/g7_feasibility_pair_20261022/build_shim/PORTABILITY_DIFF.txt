@@ -1,0 +1,28 @@
+119c119
+< BenchResult bench_tiny_inference(const BenchConfig& base, TinyDenseModel& model) {
+---
+> BenchResult rb_bench_tiny_inference(const BenchConfig& base, TinyDenseModel& model) {
+131c131
+< StabilityOutcome bench_inference_stability(TinyDenseModel& model, const BenchConfig& base) {
+---
+> StabilityOutcome rb_bench_inference_stability(TinyDenseModel& model, const BenchConfig& base) {
+156c156
+< BenchResult bench_model_load_time(TinyDenseModel& model, const std::string& out_dir, const BenchConfig& base) {
+---
+> BenchResult rb_bench_model_load_time(TinyDenseModel& model, const std::string& out_dir, const BenchConfig& base) {
+267c267
+<         BenchResult b6 = bench_tiny_inference(cfg, model);
+---
+>         BenchResult b6 = rb_bench_tiny_inference(cfg, model);
+278c278
+<         StabilityOutcome st = bench_inference_stability(model, cfg);
+---
+>         StabilityOutcome st = rb_bench_inference_stability(model, cfg);
+289c289
+<         BenchResult b7 = bench_model_load_time(model, ctx.out_dir, cfg);
+---
+>         BenchResult b7 = rb_bench_model_load_time(model, ctx.out_dir, cfg);
+418c418
+<         BenchResult b6 = bench_tiny_inference(cfg, qmodel);
+---
+>         BenchResult b6 = rb_bench_tiny_inference(cfg, qmodel);

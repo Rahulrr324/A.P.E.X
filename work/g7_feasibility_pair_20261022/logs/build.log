@@ -1,0 +1,89 @@
+=== BUILD profiler_cli ===
+stark/src/phase1/common/HardwareProfiler.cpp: In static member function 'static void stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)':
+stark/src/phase1/common/HardwareProfiler.cpp:289:20: error: variable 'stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)::statvfs vfs' has initializer but incomplete type
+  289 |     struct statvfs vfs{};
+      |                    ^~~
+stark/src/phase1/common/HardwareProfiler.cpp:290:26: error: invalid use of incomplete type 'struct stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)::statvfs'
+  290 |     if (statvfs("/", &vfs) == 0) {
+      |                          ^
+stark/src/phase1/common/HardwareProfiler.cpp:289:12: note: forward declaration of 'struct stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)::statvfs'
+  289 |     struct statvfs vfs{};
+      |            ^~~~~~~
+stark/src/phase1/common/HardwareAffinity.cpp: In function 'std::string stark_p1::affinity_reason_from_errno(int)':
+stark/src/phase1/common/HardwareAffinity.cpp:25:11: error: 'strerror' was not declared in this scope; did you mean 'stderr'?
+   25 |     msg = strerror(err);
+      |           ^~~~~~~~
+      |           stderr
+BUILD_profiler_cli_EXIT=1
+=== BUILD run_baseline ===
+stark/src/phase1/common/HardwareProfiler.cpp: In static member function 'static void stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)':
+stark/src/phase1/common/HardwareProfiler.cpp:289:20: error: variable 'stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)::statvfs vfs' has initializer but incomplete type
+  289 |     struct statvfs vfs{};
+      |                    ^~~
+stark/src/phase1/common/HardwareProfiler.cpp:290:26: error: invalid use of incomplete type 'struct stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)::statvfs'
+  290 |     if (statvfs("/", &vfs) == 0) {
+      |                          ^
+stark/src/phase1/common/HardwareProfiler.cpp:289:12: note: forward declaration of 'struct stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)::statvfs'
+  289 |     struct statvfs vfs{};
+      |            ^~~~~~~
+stark/src/phase1/common/HardwareAffinity.cpp: In function 'std::string stark_p1::affinity_reason_from_errno(int)':
+stark/src/phase1/common/HardwareAffinity.cpp:25:11: error: 'strerror' was not declared in this scope; did you mean 'stderr'?
+   25 |     msg = strerror(err);
+      |           ^~~~~~~~
+      |           stderr
+stark/src/phase1/baselines/run_baseline.cpp: In function 'int {anonymous}::run_experiment(const Args&)':
+stark/src/phase1/baselines/run_baseline.cpp:267:46: error: call of overloaded 'bench_tiny_inference(stark_p1::BenchConfig&, stark_p1::TinyDenseModel&)' is ambiguous
+  267 |         BenchResult b6 = bench_tiny_inference(cfg, model);
+      |                          ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
+stark/src/phase1/baselines/run_baseline.cpp:119:13: note: candidate: 'stark_p1::BenchResult {anonymous}::bench_tiny_inference(const stark_p1::BenchConfig&, stark_p1::TinyDenseModel&)'
+  119 | BenchResult bench_tiny_inference(const BenchConfig& base, TinyDenseModel& model) {
+      |             ^~~~~~~~~~~~~~~~~~~~
+In file included from stark/src/phase1/baselines/run_baseline.cpp:27:
+stark/src/phase1/bench/BenchmarkHarness.h:129:13: note: candidate: 'stark_p1::BenchResult stark_p1::bench_tiny_inference(const BenchConfig&, TinyDenseModel&)'
+  129 | BenchResult bench_tiny_inference(const BenchConfig& base, TinyDenseModel& model);
+      |             ^~~~~~~~~~~~~~~~~~~~
+stark/src/phase1/baselines/run_baseline.cpp:278:56: error: call of overloaded 'bench_inference_stability(stark_p1::TinyDenseModel&, stark_p1::BenchConfig&)' is ambiguous
+  278 |         StabilityOutcome st = bench_inference_stability(model, cfg);
+      |                               ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~
+stark/src/phase1/baselines/run_baseline.cpp:131:18: note: candidate: '{anonymous}::StabilityOutcome {anonymous}::bench_inference_stability(stark_p1::TinyDenseModel&, const stark_p1::BenchConfig&)'
+  131 | StabilityOutcome bench_inference_stability(TinyDenseModel& model, const BenchConfig& base) {
+      |                  ^~~~~~~~~~~~~~~~~~~~~~~~~
+stark/src/phase1/bench/BenchmarkHarness.h:139:18: note: candidate: 'stark_p1::StabilityOutcome stark_p1::bench_inference_stability(TinyDenseModel&, const BenchConfig&)'
+  139 | StabilityOutcome bench_inference_stability(TinyDenseModel& model, const BenchConfig& base);
+      |                  ^~~~~~~~~~~~~~~~~~~~~~~~~
+stark/src/phase1/baselines/run_baseline.cpp:289:47: error: call of overloaded 'bench_model_load_time(stark_p1::TinyDenseModel&, std::string&, stark_p1::BenchConfig&)' is ambiguous
+  289 |         BenchResult b7 = bench_model_load_time(model, ctx.out_dir, cfg);
+      |                          ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~
+stark/src/phase1/baselines/run_baseline.cpp:156:13: note: candidate: 'stark_p1::BenchResult {anonymous}::bench_model_load_time(stark_p1::TinyDenseModel&, const std::string&, const stark_p1::BenchConfig&)'
+  156 | BenchResult bench_model_load_time(TinyDenseModel& model, const std::string& out_dir, const BenchConfig& base) {
+      |             ^~~~~~~~~~~~~~~~~~~~~
+stark/src/phase1/bench/BenchmarkHarness.h:132:13: note: candidate: 'stark_p1::BenchResult stark_p1::bench_model_load_time(TinyDenseModel&, const std::string&, const BenchConfig&)'
+  132 | BenchResult bench_model_load_time(TinyDenseModel& model, const std::string& out_dir, const BenchConfig& base);
+      |             ^~~~~~~~~~~~~~~~~~~~~
+stark/src/phase1/baselines/run_baseline.cpp:418:46: error: call of overloaded 'bench_tiny_inference(stark_p1::BenchConfig&, stark_p1::TinyDenseModel&)' is ambiguous
+  418 |         BenchResult b6 = bench_tiny_inference(cfg, qmodel);
+      |                          ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~
+stark/src/phase1/baselines/run_baseline.cpp:119:13: note: candidate: 'stark_p1::BenchResult {anonymous}::bench_tiny_inference(const stark_p1::BenchConfig&, stark_p1::TinyDenseModel&)'
+  119 | BenchResult bench_tiny_inference(const BenchConfig& base, TinyDenseModel& model) {
+      |             ^~~~~~~~~~~~~~~~~~~~
+stark/src/phase1/bench/BenchmarkHarness.h:129:13: note: candidate: 'stark_p1::BenchResult stark_p1::bench_tiny_inference(const BenchConfig&, TinyDenseModel&)'
+  129 | BenchResult bench_tiny_inference(const BenchConfig& base, TinyDenseModel& model);
+      |             ^~~~~~~~~~~~~~~~~~~~
+BUILD_run_baseline_EXIT=1
+=== BUILD aggregate ===
+stark/src/phase1/common/HardwareProfiler.cpp: In static member function 'static void stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)':
+stark/src/phase1/common/HardwareProfiler.cpp:289:20: error: variable 'stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)::statvfs vfs' has initializer but incomplete type
+  289 |     struct statvfs vfs{};
+      |                    ^~~
+stark/src/phase1/common/HardwareProfiler.cpp:290:26: error: invalid use of incomplete type 'struct stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)::statvfs'
+  290 |     if (statvfs("/", &vfs) == 0) {
+      |                          ^
+stark/src/phase1/common/HardwareProfiler.cpp:289:12: note: forward declaration of 'struct stark_p1::HardwareProfiler::collectStorage(stark_p1::StaticHardwareProfile&)::statvfs'
+  289 |     struct statvfs vfs{};
+      |            ^~~~~~~
+stark/src/phase1/common/HardwareAffinity.cpp: In function 'std::string stark_p1::affinity_reason_from_errno(int)':
+stark/src/phase1/common/HardwareAffinity.cpp:25:11: error: 'strerror' was not declared in this scope; did you mean 'stderr'?
+   25 |     msg = strerror(err);
+      |           ^~~~~~~~
+      |           stderr
+BUILD_aggregate_EXIT=1

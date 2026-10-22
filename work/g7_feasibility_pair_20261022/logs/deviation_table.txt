@@ -1,0 +1,90 @@
+### RAW-SAMPLE INTEGRITY (stored vs recomputed median, tol 0.001%; n samples)
+  P1-B1-21897          n=30  stored=3.261463973  recomputed=3.261463973  rel_diff=0.00e+00%  OK
+  P1-B1-69431          n=30  stored=3.495575251  recomputed=3.495575251  rel_diff=0.00e+00%  OK
+  P1-B2-30145          n=30  stored=0.065256346  recomputed=0.065256346  rel_diff=0.00e+00%  OK
+  P1-B2-48103          n=30  stored=0.064936487  recomputed=0.064936487  rel_diff=0.00e+00%  OK
+  P1-B3-80755          n=30  stored=0.095067031  recomputed=0.095067031  rel_diff=0.00e+00%  OK
+  P1-B3-84117          n=30  stored=0.096709908  recomputed=0.096709908  rel_diff=0.00e+00%  OK
+  P1-E1-B6-43345       n=10  stored=0.000308612  recomputed=0.000308612  rel_diff=0.00e+00%  OK
+  P1-E1-B6-69154       n=10  stored=0.000279418  recomputed=0.000279418  rel_diff=0.00e+00%  OK
+  P1-E1-B7-43345       n=10  stored=0.003162351  recomputed=0.003162351  rel_diff=0.00e+00%  OK
+  P1-E1-B7-69154       n=10  stored=0.003093610  recomputed=0.003093610  rel_diff=0.00e+00%  OK
+  P1-E1-B9-43345       n=10  stored=0.000293580  recomputed=0.000293580  rel_diff=0.00e+00%  OK
+  P1-E1-B9-69154       n=10  stored=0.000264992  recomputed=0.000264992  rel_diff=0.00e+00%  OK
+  P1-E5-B6-40708       n=10  stored=0.000299986  recomputed=0.000299986  rel_diff=0.00e+00%  OK
+  P1-E5-B6-45900       n=10  stored=0.000296044  recomputed=0.000296044  rel_diff=0.00e+00%  OK
+  P1-E5-B7-40708       n=10  stored=0.003087439  recomputed=0.003087439  rel_diff=0.00e+00%  OK
+  P1-E5-B7-45900       n=10  stored=0.003211904  recomputed=0.003211904  rel_diff=0.00e+00%  OK
+  P1-E5-B9-40708       n=10  stored=0.000299843  recomputed=0.000299843  rel_diff=0.00e+00%  OK
+  P1-E5-B9-45900       n=10  stored=0.000297896  recomputed=0.000297896  rel_diff=0.00e+00%  OK
+
+### G7 GROUPS: per-benchmark medians and deviations
+
+-- B1  (tol 15.0% on medians; group n=2) --
+   P1-B1-21897          exp=B1  median=3.261463973s  n=30
+   P1-B1-69431          exp=B1  median=3.495575251s  n=30
+   pair P1-B1-21897 vs P1-B1-69431: symmetric diff = 6.6974%  PASS
+   worst pair in group: 6.6974% -> PASS
+
+-- B2  (tol 15.0% on medians; group n=2) --
+   P1-B2-30145          exp=B2  median=0.065256346s  n=30
+   P1-B2-48103          exp=B2  median=0.064936487s  n=30
+   pair P1-B2-30145 vs P1-B2-48103: symmetric diff = 0.4902%  PASS
+   worst pair in group: 0.4902% -> PASS
+
+-- B3  (tol 20.0% on medians; group n=2) --
+   P1-B3-80755          exp=B3  median=0.095067031s  n=30
+   P1-B3-84117          exp=B3  median=0.096709908s  n=30
+   pair P1-B3-80755 vs P1-B3-84117: symmetric diff = 1.6988%  PASS
+   worst pair in group: 1.6988% -> PASS
+
+-- B6  (tol 15.0% on medians; group n=4) --
+   P1-E1-B6-43345       exp=E1  median=0.000308612s  n=10
+   P1-E1-B6-69154       exp=E1  median=0.000279418s  n=10
+   P1-E5-B6-40708       exp=E5  median=0.000299986s  n=10
+   P1-E5-B6-45900       exp=E5  median=0.000296044s  n=10
+   pair P1-E1-B6-43345 vs P1-E1-B6-69154: symmetric diff = 9.4595%  PASS
+   pair P1-E1-B6-43345 vs P1-E5-B6-40708: symmetric diff = 2.7948%  PASS
+   pair P1-E1-B6-43345 vs P1-E5-B6-45900: symmetric diff = 4.0723%  PASS
+   pair P1-E1-B6-69154 vs P1-E5-B6-40708: symmetric diff = 6.8563%  PASS
+   pair P1-E1-B6-69154 vs P1-E5-B6-45900: symmetric diff = 5.6159%  PASS
+   pair P1-E5-B6-40708 vs P1-E5-B6-45900: symmetric diff = 1.3142%  PASS
+   worst pair in group: 9.4595% -> PASS
+   reference-only vs historical nine (NON-GATE, different machine/epoch):
+     P1-E1-B6-24899: median=0.000978300s
+     P1-E1-B6-57493: median=0.000999500s
+     P1-E5-B6-90937: median=0.001166500s
+
+-- B7  (tol 15.0% on medians; group n=4) --
+   P1-E1-B7-43345       exp=E1  median=0.003162351s  n=10
+   P1-E1-B7-69154       exp=E1  median=0.003093610s  n=10
+   P1-E5-B7-40708       exp=E5  median=0.003087439s  n=10
+   P1-E5-B7-45900       exp=E5  median=0.003211904s  n=10
+   pair P1-E1-B7-43345 vs P1-E1-B7-69154: symmetric diff = 2.1737%  PASS
+   pair P1-E1-B7-43345 vs P1-E5-B7-40708: symmetric diff = 2.3689%  PASS
+   pair P1-E1-B7-43345 vs P1-E5-B7-45900: symmetric diff = 1.5428%  PASS
+   pair P1-E1-B7-69154 vs P1-E5-B7-40708: symmetric diff = 0.1995%  PASS
+   pair P1-E1-B7-69154 vs P1-E5-B7-45900: symmetric diff = 3.6830%  PASS
+   pair P1-E5-B7-40708 vs P1-E5-B7-45900: symmetric diff = 3.8751%  PASS
+   worst pair in group: 3.8751% -> PASS
+   reference-only vs historical nine (NON-GATE, different machine/epoch):
+     P1-E1-B7-24899: median=0.058168250s
+     P1-E1-B7-57493: median=0.060302850s
+     P1-E5-B7-90937: median=0.047479750s
+
+-- B9  (tol 15.0% on medians; group n=4) --
+   P1-E1-B9-43345       exp=E1  median=0.000293580s  n=10
+   P1-E1-B9-69154       exp=E1  median=0.000264992s  n=10
+   P1-E5-B9-40708       exp=E5  median=0.000299843s  n=10
+   P1-E5-B9-45900       exp=E5  median=0.000297896s  n=10
+   pair P1-E1-B9-43345 vs P1-E1-B9-69154: symmetric diff = 9.7377%  PASS
+   pair P1-E1-B9-43345 vs P1-E5-B9-40708: symmetric diff = 2.0888%  PASS
+   pair P1-E1-B9-43345 vs P1-E5-B9-45900: symmetric diff = 1.4487%  PASS
+   pair P1-E1-B9-69154 vs P1-E5-B9-40708: symmetric diff = 11.6231%  PASS
+   pair P1-E1-B9-69154 vs P1-E5-B9-45900: symmetric diff = 11.0453%  PASS
+   pair P1-E5-B9-40708 vs P1-E5-B9-45900: symmetric diff = 0.6495%  PASS
+   worst pair in group: 11.6231% -> PASS
+   reference-only vs historical nine (NON-GATE, different machine/epoch):
+     P1-E1-B9-24899: median=0.001449600s
+     P1-E1-B9-57493: median=0.002003600s
+     P1-E5-B9-90937: median=0.001041150s
