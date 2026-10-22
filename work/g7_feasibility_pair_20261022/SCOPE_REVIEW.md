@@ -15,9 +15,11 @@ source changes, no frozen-logic changes, no M0/M1 status change)
 - Pre-handoff commit (evidence payload, incl. store/records/logs/REPORT):
   `6d98b2e` ("G7 reproducibility feasibility pair: pre-registered two-pass
   campaign, G1-G7 PASS").
-- **Evidence-package commit SHA:** PENDING-ADDENDUM (the addendum commit that
-  finalizes this file records the introducing commit's SHA here; PR #1 carries
-  both SHAs).
+- **Evidence-package commit SHA:** `e41247e9370fc8330ffc9d16f18b949241f40c73`
+  ("Evidence package: manifest, reproducibility instructions, read-only
+  acceptance-scope audit") — the commit that introduces this file on
+  `arena/ae9d3c5a-a-p-e-x`. The follow-up SHA-recording commit (this edit) is
+  reported in PR #1 and the handoff message.
 - Package contents + hashes: `MANIFEST.md`, `MANIFEST.sha256`.
   Reproduction: `REPRODUCE.md`. Feasibility result: `REPORT.md`.
   Pre-registration: `PREREGISTRATION.md` (written before any build/run).

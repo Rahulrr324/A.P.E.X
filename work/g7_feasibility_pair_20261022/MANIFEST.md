@@ -1,7 +1,8 @@
 # Evidence Manifest — G7 Feasibility Pair (2026-10-22)
 
 Package root: repository root; all paths below are relative to it.
-Full per-file SHA-256: `work/g7_feasibility_pair_20261022/MANIFEST.sha256` (44 lines).
+Full per-file SHA-256: `work/g7_feasibility_pair_20261022/MANIFEST.sha256`
+(payload + handoff-docs sections).
 Verification command: `sha256sum -c work/g7_feasibility_pair_20261022/MANIFEST.sha256`
 (run from the repository root; the `bin/` section must be checked against the
 hashes recorded below / in `logs/bin_hashes.txt`).
