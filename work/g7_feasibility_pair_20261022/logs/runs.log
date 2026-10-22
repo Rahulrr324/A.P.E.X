@@ -1,0 +1,123 @@
+### ENV SET 2026-10-22T12:48:41Z
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/profiler_cli --out build/results-g7pair-20261022
+profile record: P1-PROFILE-24-0 status=PASSED
+telemetry record: P1-TELEMETRY-24-1
+EXIT=0
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline E2 --out build/results-g7pair-20261022
+E2 skipped: skipped: CUDA unavailable in this build (STARK_ENABLE_CUDA=OFF / no CUDA toolkit); this does NOT imply the machine has no GPU -- physical GPU presence is recorded independently in hardware.gpu_present (spec G3 skipped-branch)
+B4 skipped: skipped: CUDA unavailable in this build (STARK_ENABLE_CUDA=OFF / no CUDA toolkit); this does NOT imply the machine has no GPU -- physical GPU presence is recorded independently in hardware.gpu_present (spec G3 skipped-branch)
+B5 skipped: skipped: CUDA unavailable in this build (STARK_ENABLE_CUDA=OFF / no CUDA toolkit); this does NOT imply the machine has no GPU -- physical GPU presence is recorded independently in hardware.gpu_present (spec G3 skipped-branch)
+EXIT=0
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline E4 --out build/results-g7pair-20261022
+E4 not attempted: not_attempted: 4-bit weight-only path not trivially available without custom kernels/mechanisms beyond Phase-1 scope (spec E4, gate C8)
+EXIT=0
+### PASS 1 2026-10-22T12:48:52Z
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline E1 --out build/results-g7pair-20261022 --threads 1
+E1 complete: B6 median 308.612 us, bit_identical=true
+EXIT=0
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline E5 --out build/results-g7pair-20261022 --threads 1
+E5 complete: B6 median 296.044 us, bit_identical=true
+EXIT=0
+### PASS 1 CPU benches 2026-10-22T12:49:05Z
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline B1 --out build/results-g7pair-20261022 --threads 1
+B1 complete
+EXIT=0
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline B2 --out build/results-g7pair-20261022 --threads 1
+B2 complete
+EXIT=0
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline B3 --out build/results-g7pair-20261022 --threads 1
+B3 complete
+EXIT=0
+PASS1_DONE 2026-10-22T12:51:32Z
+### PASS 2 2026-10-22T12:51:44Z
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline E1 --out build/results-g7pair-20261022 --threads 1
+E1 complete: B6 median 279.418 us, bit_identical=true
+EXIT=0
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline E5 --out build/results-g7pair-20261022 --threads 1
+E5 complete: B6 median 299.986 us, bit_identical=true
+EXIT=0
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline B1 --out build/results-g7pair-20261022 --threads 1
+B1 complete
+EXIT=0
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline B2 --out build/results-g7pair-20261022 --threads 1
+B2 complete
+EXIT=0
+$ taskset -c 0 work/g7_feasibility_pair_20261022/bin/run_baseline --baseline B3 --out build/results-g7pair-20261022 --threads 1
+B3 complete
+EXIT=0
+PASS2_DONE 2026-10-22T12:54:20Z
+### AGGREGATE 2026-10-22T12:54:32Z
+$ work/g7_feasibility_pair_20261022/bin/aggregate --out build/results-g7pair-20261022
+=== STARK Phase 1 (M0) Aggregator ===
+records directory: build/results-g7pair-20261022
+records found: 24
+
+STATUS SUMMARY:
+  B1: 2 record(s)
+  B2: 2 record(s)
+  B3: 2 record(s)
+  B4: 1 record(s)
+  B5: 1 record(s)
+  E1: 6 record(s)
+  E2: 1 record(s)
+  E4: 1 record(s)
+  E5: 6 record(s)
+  PROFILE: 1 record(s)
+  TELEMETRY: 1 record(s)
+  PASSED=20 FAILED=0 SKIPPED=3 NOT_ATTEMPTED=1
+
+GATE RESULTS:
+  [PASS] G1 hardware profile collected
+         cpu=Intel(R) Xeon(R) Processor @ 2.60GHz, ram_total=4131278848
+  [PASS] G2 CPU baselines present and complete
+         E1 and E5 present, distinct, each with >=10 samples
+  [PASS] G3 GPU branch complete-or-skipped with reason
+         B5: SKIPPED (cuda_unavailable) — skipped: CUDA unavailable in this build (STARK_ENABLE_CUDA=OFF / no CUDA toolkit); this does NOT imply the machine has no GPU -- physical GPU presence is recorded independently in hardware.gpu_present (spec G3 skipped-branch)
+  [PASS] G4 peak memory measured
+         E1 and E5 present, PASSED; every PASSED baseline: RAM peak measured; VRAM measured or structured unavailability corroborated by embedded capability evidence (physical capability unknown/unknown — informational, not a G4 criterion)
+  [PASS] G5 parameter accounting consistent
+         all accounting records pass G5 checks
+  [PASS] G6 budget evaluator rejects over-budget demands
+         VRAM-only violation detected; compute fields informational
+  [PASS] G7 same-config medians reproducible across repeats
+         all repeats within every same-configuration group agree pairwise within tolerance (timing 15% / bandwidth 20%)
+
+OVERALL: PASS (0 gate(s) failed)
+EXIT=0
+$ work/g7_feasibility_pair_20261022/bin/aggregate --out build/results-g7pair-20261022 --strict
+=== STARK Phase 1 (M0) Aggregator ===
+records directory: build/results-g7pair-20261022
+records found: 24
+
+STATUS SUMMARY:
+  B1: 2 record(s)
+  B2: 2 record(s)
+  B3: 2 record(s)
+  B4: 1 record(s)
+  B5: 1 record(s)
+  E1: 6 record(s)
+  E2: 1 record(s)
+  E4: 1 record(s)
+  E5: 6 record(s)
+  PROFILE: 1 record(s)
+  TELEMETRY: 1 record(s)
+  PASSED=20 FAILED=0 SKIPPED=3 NOT_ATTEMPTED=1
+
+GATE RESULTS:
+  [PASS] G1 hardware profile collected
+         cpu=Intel(R) Xeon(R) Processor @ 2.60GHz, ram_total=4131278848
+  [PASS] G2 CPU baselines present and complete
+         E1 and E5 present, distinct, each with >=10 samples
+  [PASS] G3 GPU branch complete-or-skipped with reason
+         B5: SKIPPED (cuda_unavailable) — skipped: CUDA unavailable in this build (STARK_ENABLE_CUDA=OFF / no CUDA toolkit); this does NOT imply the machine has no GPU -- physical GPU presence is recorded independently in hardware.gpu_present (spec G3 skipped-branch)
+  [PASS] G4 peak memory measured
+         E1 and E5 present, PASSED; every PASSED baseline: RAM peak measured; VRAM measured or structured unavailability corroborated by embedded capability evidence (physical capability unknown/unknown — informational, not a G4 criterion)
+  [PASS] G5 parameter accounting consistent
+         all accounting records pass G5 checks
+  [PASS] G6 budget evaluator rejects over-budget demands
+         VRAM-only violation detected; compute fields informational
+  [PASS] G7 same-config medians reproducible across repeats
+         all repeats within every same-configuration group agree pairwise within tolerance (timing 15% / bandwidth 20%)
+
+OVERALL: PASS (0 gate(s) failed)
+EXIT=0
