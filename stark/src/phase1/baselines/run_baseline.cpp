@@ -38,6 +38,10 @@ struct Args {
     std::string baseline;
     std::string out = "build/results";
     uint32_t threads = 0;
+    // E3 disposition-only record (approved E3 ruling 2026-10-22): write a
+    // schema-valid not_attempted record WITHOUT executing E3. Opt-in only;
+    // --baseline E3 without --disposition keeps its original behavior.
+    bool disposition = false;
 };
 
 Args parse_args(int argc, char** argv) {
@@ -51,6 +55,7 @@ Args parse_args(int argc, char** argv) {
         if (s == "--baseline") a.baseline = next();
         else if (s == "--out") a.out = next();
         else if (s == "--threads") a.threads = static_cast<uint32_t>(std::stoul(next()));
+        else if (s == "--disposition") a.disposition = true;
         else throw std::runtime_error("unknown argument: " + s);
     }
     if (a.baseline.empty()) throw std::runtime_error("--baseline is required");
@@ -384,6 +389,26 @@ int run_experiment(const Args& args) {
             store.append(gpu);
             std::cout << id << " skipped: " << gpu.status_reason << "\n";
         }
+        return 0;
+    }
+
+    // E3 disposition-only record (approved E3 ruling 2026-10-22, §E L284 vs
+    // §8 L479-480 contradiction resolved as: do not execute E3; always record a
+    // disposition). Mirrors the E4 not_attempted pattern. The branch below
+    // returns before any benchmark code runs: no samples, no statistics, no
+    // measurements are produced or claimed.
+    if (args.baseline == "E3" && args.disposition) {
+        ExperimentRecord rec = base_record(ctx, "P1-E3-notattempted", "E3", "baseline");
+        rec.schema_version = "STARKP1 1";
+        rec.stark_phase = "P1";
+        rec.status = RunStatus::NOT_ATTEMPTED;
+        rec.status_reason = "not_attempted: E3 CPU INT8 path intentionally not executed per the "
+                            "approved E3 ruling (2026-10-22): disposition record only "
+                            "(spec §E L284 vs §8 L479-480 contradiction; no measurements produced)";
+        rec.software = software_json();
+        rec.determinism = DeterminismInfo{false, false, std::nullopt};
+        store.append(rec);
+        std::cout << "E3 not attempted (disposition): " << rec.status_reason << "\n";
         return 0;
     }
 

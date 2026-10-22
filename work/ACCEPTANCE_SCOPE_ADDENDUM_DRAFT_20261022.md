@@ -1,10 +1,12 @@
 # A.P.E.X — Acceptance-Scope Addendum (DRAFT for approval)
 
-**Document status: DRAFT — NOT APPROVED, NOT BINDING.**
-This document converts ten identified acceptance-scope questions into
-decision-ready form. Nothing here is an authorized ruling until the named
-approver completes the decision table in §5. A recommendation is not an
-approved decision.
+**Document status: RECORD OF DECISIONS — DOCUMENT UNSIGNED.**
+Decisions for U1–U10 and E3 were provided by the project owner through the
+authorized Q&A channel on **2026-10-22** and are recorded in §5. The rulings
+originate from that channel, not from this document. **This document itself is
+NOT a signed artifact** — the approval record in §5 is intentionally left
+unsigned; signing it on PR #2 formalizes this record. Prior recommended
+defaults in §4 are retained below as the proposals that were ruled on.
 
 | | |
 |---|---|
@@ -351,25 +353,36 @@ unresolved; per §4, unresolved rows block a defensible M0 flip where noted.
 
 | ID | Question (short) | Authorized ruling (Accept / Reject / Modify) | Approver | Date | Rationale |
 |---|---|---|---|---|---|
-| U1 | Acceptance machine = one pre-declared machine | | | | |
-| U2 | Both thread variants required; valid-run definition | | | | |
-| U3 | Affinity: conditional (in-record OR accepted external+log) | | | | |
-| U4 | Store = declared machine's verification store; nine preserved, not co-evaluated (or alternative) | | | | |
-| U5 | G8 evidence = reader-validity + test_phase1_records + inventory; manual checklist now | | | | |
-| U6 | Independence = distinct invocations (sessions preferred) | | | | |
-| U7 | Operative arithmetic = production evaluator; annotate divergences | | | | |
-| U8 | Acceptance store at designated `build/results/`; archive package stands | | | | |
-| U9 | M0 flip criteria + M1 auto-unlock definition | | | | |
-| U10 | M1 deliverable scope statement | | | | |
+| U1 | Acceptance machine = one pre-declared machine | **Accept** — declare the Linux Xeon container (current sandbox host; PROFILE `P1-PROFILE-24-0`) as the single acceptance machine | Project owner (authorized Q&A channel) | 2026-10-22 | One declared machine closes the scope; the feasibility evidence produced there is reusable |
+| U2 | Both thread variants required; valid-run definition | **Accept** — both variants required (single-thread AND all-core) | Project owner (authorized Q&A channel) | 2026-10-22 | Matches V009 L111 "single-thread AND all-core variants"; valid run per §B/§F mechanics |
+| U3 | Affinity: conditional (in-record OR accepted external+log) | **Accept option (b)** — external CPU pinning + run-log attestation counts as "recorded" | Project owner (authorized Q&A channel) | 2026-10-22 | No gate enforces the schema field; avoids an unauthorized production change and pair re-run; gap documented |
+| U4 | Store = declared machine's verification store; nine preserved, not co-evaluated (or alternative) | **Accept** — current-machine acceptance store only; historical nine preserved append-only, evaluated separately as G7-C FAIL; never co-evaluated, never silently excluded | Project owner (authorized Q&A channel) | 2026-10-22 | Co-evaluation fails G7 permanently (ACC §3 L128–131); explicit composition decision; preservation obligation intact |
+| U5 | G8 evidence = reader-validity + test_phase1_records + inventory; manual checklist now | **Accept** — manual G8 checklist + `test_phase1_records` this round; production G8 reporting deferred to future authorized work | Project owner (authorized Q&A channel) | 2026-10-22 | Certifiable without a code change now; §8 L483–484 aggregate G1–G8 clause noted as a known gap |
+| U6 | Independence = distinct invocations (sessions preferred) | **Accept** — distinct process invocations constitute independent runs; sessions preferred, not required | Project owner (authorized Q&A channel) | 2026-10-22 | Matches the mechanical definition (gates.cpp L831–839); the completed pair qualifies |
+| U7 | Operative arithmetic = production evaluator; annotate divergences | **Accept** — frozen production-evaluator arithmetic operative; annotate the three divergences; report secondary recorded-referenced column | Project owner (authorized Q&A channel) | 2026-10-22 | Tolerance frozen (V009 L328); annotation resolves the mismatch without change |
+| U8 | Acceptance store at designated `build/results/`; archive package stands | **Accept** — designated clean `build/results/` is the final acceptance store; committed package remains archived evidence | Project owner (authorized Q&A channel) | 2026-10-22 | Literal G8 (L329) / §8 (L477) text |
+| U9 | M0 flip criteria + M1 auto-unlock definition | **Accept** — M0 FAIL→PASS iff all rulings recorded + aggregator G1–G8 PASS over the designated store + §K/§M pass + one signed acceptance record; M1 unlocks at M0 ACCEPTED | Project owner (authorized Q&A channel) | 2026-10-22 | Writes the finish line down; aligns with ACC §7 |
+| U10 | M1 deliverable scope statement | **Accept** — M1 = Phase-2 architecture-selection boundary work (consumers of `ArchitectureCandidateEvaluation`, V009 §H); no architecture choice inside M1 | Project owner (authorized Q&A channel) | 2026-10-22 | Gives M1 defined content at unlock |
+| E3 (H2) | E3 contradiction: execute vs disposition | **Accept disposition-only** — do NOT execute E3; produce a `not_attempted` disposition record (§8 L479–480) | Project owner (authorized Q&A channel) | 2026-10-22 | Resolves the §E L284 / §8 L479 contradiction conservatively; no new G7-group member; matches "record them as skipped/not_attempted otherwise" |
 
-**Approval record:**
-- This addendum is approved as a whole: ☐ yes / ☐ no / ☐ with modifications (attach).
+**Record of decision source (added 2026-10-22):** the rulings in the table
+above were provided by the project owner through the authorized Q&A channel on
+2026-10-22 (ten scope decisions U1–U10 plus the E3 disposition ruling). This
+document is prepared as the written record of those rulings. The decisions do
+**not** originate from this document, and filling this document does not
+constitute a signature.
+
+**Approval record (formalization of THIS document — intentionally unsigned):**
+- This addendum record is accepted as the written form of the rulings above:
+  ☐ yes / ☐ no / ☐ with modifications (attach).
 - Approver (project owner / specification authority): ______________________
 - Date: ______________
 - Signature / reference to written approval (issue, doc id): __________________
 
-Until this record is completed and signed, **all rulings above are proposals
-only**. Nothing in this document is binding, and no gate status, M0 status, or
+**Formal signature status: NOT SIGNED.** The lines above are intentionally
+blank. Until the project owner signs (or an equivalent written approval is
+attached to PR #2), cite the authorized Q&A record of 2026-10-22 as the ruling
+source and this document as its prepared record. No gate status, M0 status, or
 M1 status changes by virtue of this document existing.
 
 ## 6. Minimum execution plan (conditional on approved decisions)
@@ -422,6 +435,7 @@ part of this plan.
 
 ---
 
-*End of DRAFT. Prepared read-only: no code, specification, threshold,
+*End of record. Prepared read-only: no code, specification, threshold,
 validator, historical record, gate status, or M0/M1 status was changed in
-producing this document. Not approved. Not binding.*
+producing this document. Decisions recorded 2026-10-22 (authorized Q&A
+channel, project owner). Document NOT signed — see §5.*
