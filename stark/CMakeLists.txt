@@ -191,6 +191,27 @@ add_executable(test_sequential_context
 )
 target_compile_features(test_sequential_context PUBLIC cxx_std_17)
 
+# STARK-L4 multi-item associative memory (learned cue->response bindings,
+# interference, save/reload). Frozen protocol:
+# design/associative_memory_milestone.md
+add_executable(associative_memory_loop
+    src/learning/associative_memory_loop.cpp
+    src/learning/AssociativeMemoryTask.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(associative_memory_loop PUBLIC cxx_std_17)
+
+add_executable(test_associative_memory
+    tests/test_associative_memory.cpp
+    src/learning/AssociativeMemoryTask.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_associative_memory PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.
