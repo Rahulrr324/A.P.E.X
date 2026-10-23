@@ -253,6 +253,26 @@ add_executable(test_learned_relevance
 )
 target_compile_features(test_learned_relevance PUBLIC cxx_std_17)
 
+# STARK-L7 N-way learned relevance (no hand-designed slot prior; scales to
+# N=2,4,8 channels/contexts). Frozen protocol: design/n_way_learned_relevance_milestone.md
+add_executable(n_way_learned_relevance_loop
+    src/learning/n_way_learned_relevance_loop.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(n_way_learned_relevance_loop PUBLIC cxx_std_17)
+
+add_executable(test_n_way_learned_relevance
+    tests/test_n_way_learned_relevance.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_n_way_learned_relevance PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.

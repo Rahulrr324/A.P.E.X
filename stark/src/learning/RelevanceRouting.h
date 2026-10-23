@@ -1,26 +1,31 @@
 #pragma once
 
 /**
- * STARK-L6: context-selected two-sample associative memory with a
- * LEARNED relevance-routing mechanism (see
- * stark/design/learned_relevance_milestone.md, frozen protocol v1.0).
+ * STARK-L6/L7: context-selected associative memory with a LEARNED
+ * relevance-routing mechanism (see stark/design/learned_relevance_milestone.md
+ * v1.0/v1.1 and n_way_learned_relevance_milestone.md v1.0).
  *
- * Task: two sample identities are presented on tagged slots; a context
- * input indicates which slot is queried (mapping phi is seeded, unknown to
+ * Task: candidates are presented on tagged channels; a context input
+ * indicates which channel is queried (mapping phi is seeded, unknown to
  * the mechanism); distractor identities co-activate during an interference
- * window; reward follows the decision. Correct = pi(identity on slot
+ * window; reward follows the decision. Correct = pi(identity on channel
  * phi(ctx)).
  *
- * Mechanism (arms LEARNED/SHAM/NEGATIVE): routing state v[ctx][slot]
- * stored in 4 ordinary synapses C->L; per-trial selection s* ~ softmax(v);
- * actuators = attentional input gain (unselected sample suppressed) + the
- * STARK-L5 eligibility gate (only the selected identity row accumulates
+ * Mechanism (arms LEARNED/SHAM/NEGATIVE): routing state v[ctx][channel]
+ * stored in ordinary synapses C->L; per-trial selection s* ~ softmax(v);
+ * actuators = attentional input gain (unselected candidates suppressed) +
+ * the STARK-L5 eligibility gate (only the selected identity row accumulates
  * eligibility). v is updated by REINFORCE from (choice consistency,
  * reward) only — phi is never observable to the mechanism.
  *
+ * STARK-L7 generalization: n_chan candidate channels and n_ctx contexts
+ * (defaults 2/2 reproduce STARK-L6 v1.1 byte-identically). No hand-designed
+ * slot prior: the channels are ordinary stimulus representation; which
+ * channel each context selects is learned.
+ *
  * Arms: UNGATED (no selection), ORACLE (driver selects via phi — reference
  * upper bound), LEARNED, SHAM (reward-independent v updates), ABLATION
- * (no selection, both samples eligible), NEGATIVE (selection inverted).
+ * (no selection, all candidates eligible), NEGATIVE (selection inverted).
  */
 
 #include "neural/Network.h"
@@ -42,6 +47,8 @@ enum LRArm {
 struct LRConfig {
     // Protocol
     int n_ids = 6;            // identities and responses
+    int n_chan = 2;           // STARK-L7: candidate channels (N-way; 2 = L6)
+    int n_ctx = 2;            // STARK-L7: contexts (N-way; 2 = L6)
     int ctx_steps = 2;
     int sample_steps = 3;
     int interf_steps = 8;
@@ -90,20 +97,21 @@ struct LRConfig {
 };
 
 /// Controlled assignment: pi (identity->response bijection) and phi
-/// (ctx->slot, identity or swap) — both seeded; phi is never given to the
+/// (ctx->channel bijection) — both seeded; phi is never given to the
 /// mechanism.
 struct LRMapping {
     std::vector<int> perm;    // perm[identity] = response
-    int phi[2];               // phi[ctx] = queried slot
+    std::vector<int> phi;     // phi[ctx] = queried channel (size n_ctx)
 };
 
-LRMapping makeLRMapping(unsigned seed, int n_ids);
+LRMapping makeLRMapping(unsigned seed, int n_ids, int n_ctx = 2);
 
 /// One trial's precomputed schedule.
 struct LRTrialSchedule {
-    int ctx = 0;                     // 0 or 1 (context input driven)
-    int id0 = 0, id1 = -1;           // identity on slot 0 / slot 1 (-1: none)
-    bool single = false;             // single-sample mapping-credit trial
+    int ctx = 0;                     // context input driven (0..n_ctx-1)
+    std::vector<int> presented;     // identity on channel s (-1: none)
+    int id0 = 0, id1 = -1;           // derived: presented[0], presented[1]
+    bool single = false;             // single-candidate mapping-credit trial
     std::vector<int> distractors;    // interf_steps: -1 silent, else identity
     std::vector<double> noise;       // n_ids_resp * (sample+interf+decision) steps, unit-major
     double tie_u = 0.5;
@@ -112,27 +120,28 @@ struct LRTrialSchedule {
 };
 
 /**
- * Mixed schedules (v1.1): `single_per_item` single-sample trials per
- * identity (one candidate + distractors; mapping credit) and
- * `pair_per_item` two-sample trials per queried identity (selection
- * credit), interleaved deterministically. Queried identity placed on slot
- * phi(ctx) (task construction); distractors exclude the samples; all draws
- * seeded. Evaluation/generalization use (0, per_item): pure two-sample.
+ * Mixed schedules (v1.1): `single_per_item` single-candidate trials per
+ * identity (mapping credit) and `pair_per_item` multi-candidate trials per
+ * queried identity (selection credit), interleaved deterministically.
+ * Queried identity placed on channel phi(ctx) (task construction); other
+ * candidates on the remaining channels; distractors exclude the presented
+ * identities; all draws seeded. Evaluation/generalization use (0, per_item):
+ * pure multi-candidate.
  */
 std::vector<LRTrialSchedule> makeLRTrials(const LRConfig& cfg,
                                           const LRMapping& map,
                                           int single_per_item, int pair_per_item,
                                           unsigned seed);
 
-/// Agent: identities S, responses A, slot markers L, context neurons C.
+/// Agent: identities S, responses A, channel markers L, context neurons C.
 /// Synapses: plastic[s][r] S->A (delay rung floor(r/2)); WTA + self on A;
-/// route[c][slot] C->L weights hold the routing state v.
+/// route[ctx][channel] C->L weights hold the routing state v.
 struct LRAgent {
     Network net;
     std::vector<size_t> s, a, l, c;
     std::vector<std::vector<size_t>> syn;
     std::vector<size_t> wta, self;
-    size_t route[2][2];
+    std::vector<std::vector<size_t>> route;  // route[ctx][channel]
 };
 
 LRAgent makeLRAgent(const LRConfig& cfg, bool plastic);
@@ -143,16 +152,17 @@ struct LRTrialResult {
     double reward = 0;
     double modulator = 0;
     int sel_slot = -1;       // mechanism selection (-1 = none/ablation/ungated)
-    double a0 = 0.0, a1 = 0.0; // attention shares (mechanism)
+    std::vector<double> shares; // STARK-L7: attention shares over channels
+    double a0 = 0.0, a1 = 0.0; // derived: shares[0], shares[1] (L6 compat)
     int s_sel = -1;          // diagnostic choice-consistency slot (-1 = none)
-    bool fp_gate = false;    // attention/perception on the non-queried sample
+    bool fp_gate = false;    // attention/perception on a non-queried candidate
     bool miss_gate = false;  // attention/perception off for the queried sample
 };
 
 /**
  * Execute one trial. The mechanism sees only observable inputs (context
- * and identity/slot co-activation) and, at the reward step, the reward and
- * the chosen response. phi is consulted ONLY to score the response and
+ * and identity/channel co-activation) and, at the reward step, the reward
+ * and the chosen response. phi is consulted ONLY to score the response and
  * (in the ORACLE arm) to actuate the reference selection.
  */
 LRTrialResult runLRTrial(LRAgent& agent, const LRConfig& cfg,
@@ -162,7 +172,10 @@ LRTrialResult runLRTrial(LRAgent& agent, const LRConfig& cfg,
 /// Current S->A weights as [identity][response].
 std::vector<std::vector<double>> lrWeights(const LRAgent& agent);
 
-/// Current routing state v[ctx][slot].
-double lrRouteState(const LRAgent& agent, int ctx, int slot);
+/// Current routing state v[ctx][channel].
+double lrRouteState(const LRAgent& agent, int ctx, int channel);
+
+/// STARK-L7: full routing state as [ctx][channel].
+std::vector<std::vector<double>> lrRouteStateAll(const LRAgent& agent);
 
 } // namespace learning

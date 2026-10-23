@@ -1,27 +1,38 @@
-#include "RelevanceRouting.h"
-#include <random>
+// STARK-L6/L7: learned relevance routing (see design docs).
+// STARK-L7: N-way generalization (n_chan/n_ctx); defaults 2/2 reproduce
+// STARK-L6 v1.1 byte-identically.
+
+#include "learning/RelevanceRouting.h"
+
 #include <algorithm>
 #include <cmath>
+#include <random>
 #include <stdexcept>
 
 namespace learning {
 
-namespace {
 int lrSampleSteps(const LRConfig& cfg) {
     return cfg.sample_steps + cfg.interf_steps + cfg.decision_steps;
 }
-} // namespace
 
-LRMapping makeLRMapping(unsigned seed, int n_ids) {
-    if (n_ids != 6) throw std::invalid_argument("makeLRMapping: n_ids must be 6");
+LRMapping makeLRMapping(unsigned seed, int n_ids, int n_ctx) {
     LRMapping m;
     m.perm.resize(static_cast<size_t>(n_ids));
     for (int i = 0; i < n_ids; ++i) m.perm[static_cast<size_t>(i)] = i;
+    // STARK-L6 v1.1 byte-identity: perm shuffled with a xor-seeded RNG.
     std::mt19937 rng_pi(seed ^ 0x9E3779B9u);
     std::shuffle(m.perm.begin(), m.perm.end(), rng_pi);
+    m.phi.resize(static_cast<size_t>(n_ctx));
+    for (int i = 0; i < n_ctx; ++i) m.phi[static_cast<size_t>(i)] = i;
     std::mt19937 rng_phi(seed);
-    m.phi[0] = static_cast<int>(rng_phi() & 1u);
-    m.phi[1] = 1 - m.phi[0];
+    if (n_ctx == 2) {
+        // STARK-L6 v1.1 byte-identity: phi from the low bit of the first
+        // output of a separate phi RNG.
+        m.phi[0] = static_cast<int>(rng_phi() & 1u);
+        m.phi[1] = 1 - m.phi[0];
+    } else {
+        std::shuffle(m.phi.begin(), m.phi.end(), rng_phi);
+    }
     return m;
 }
 
@@ -34,6 +45,8 @@ std::vector<LRTrialSchedule> makeLRTrials(const LRConfig& cfg,
         throw std::invalid_argument("makeLRTrials: bad per-item counts");
     if (static_cast<int>(map.perm.size()) != cfg.n_ids)
         throw std::invalid_argument("makeLRTrials: mapping size mismatch");
+    if (static_cast<int>(map.phi.size()) != cfg.n_ctx)
+        throw std::invalid_argument("makeLRTrials: phi size mismatch");
 
     std::mt19937 rng(seed);
     std::uniform_real_distribution<double> unif(0.0, 1.0);
@@ -71,21 +84,33 @@ std::vector<LRTrialSchedule> makeLRTrials(const LRConfig& cfg,
         const int queried = single ? order[t] : (order[t] - 1000);
         s.single = single;
 
-        s.ctx = (unif(rng) < 0.5) ? 0 : 1;
+        s.ctx = static_cast<int>(unif(rng) * cfg.n_ctx);
         const int qslot = map.phi[s.ctx];
+        s.presented.assign(static_cast<size_t>(cfg.n_chan), -1);
         if (single) {
-            // Sole candidate on a uniformly drawn slot (observable); the
-            // queried item is that candidate (no selection decision).
-            s.id0 = queried;
-            s.id1 = -1;
+            // Sole candidate on channel 0 (observable); the queried item is
+            // that candidate (no selection decision).
+            s.presented[0] = queried;
         } else {
-            int partner = static_cast<int>(unif(rng) * (cfg.n_ids - 1));
-            if (partner >= queried) ++partner;
-            if (qslot == 0) { s.id0 = queried; s.id1 = partner; }
-            else            { s.id0 = partner; s.id1 = queried; }
+            // Queried candidate on channel phi(ctx); the remaining
+            // candidates on the other channels (task construction).
+            s.presented[static_cast<size_t>(qslot)] = queried;
+            std::vector<bool> taken(static_cast<size_t>(cfg.n_ids), false);
+            taken[static_cast<size_t>(queried)] = true;
+            for (int c = 0; c < cfg.n_chan; ++c) {
+                if (c == qslot) continue;
+                int j = static_cast<int>(unif(rng) * (cfg.n_ids - 1));
+                if (j >= queried) ++j;
+                while (taken[static_cast<size_t>(j)])
+                    j = (j + 1) % cfg.n_ids;
+                taken[static_cast<size_t>(j)] = true;
+                s.presented[static_cast<size_t>(c)] = j;
+            }
         }
+        s.id0 = s.presented.size() > 0 ? s.presented[0] : -1;
+        s.id1 = s.presented.size() > 1 ? s.presented[1] : -1;
 
-        // Distractors: identities other than the presented samples.
+        // Distractors: identities other than the presented candidates.
         s.distractors.resize(static_cast<size_t>(cfg.interf_steps));
         for (int k = 0; k < cfg.interf_steps; ++k) {
             double u = unif(rng);
@@ -96,7 +121,8 @@ std::vector<LRTrialSchedule> makeLRTrials(const LRConfig& cfg,
                 do {
                     j = static_cast<int>(unif(rng) * cfg.n_ids);
                     if (j >= cfg.n_ids) j = cfg.n_ids - 1;
-                } while (j == s.id0 || j == s.id1);
+                } while (std::find(s.presented.begin(), s.presented.end(), j) !=
+                         s.presented.end());
                 s.distractors[static_cast<size_t>(k)] = j;
             }
         }
@@ -125,12 +151,12 @@ LRAgent makeLRAgent(const LRConfig& cfg, bool plastic) {
     NeuralCell acell(cfg.tau_m, cfg.theta_action, cfg.tau_a, cfg.adapt_b, cfg.v_reset);
     a.s.resize(static_cast<size_t>(cfg.n_ids));
     a.a.resize(static_cast<size_t>(cfg.n_ids));
-    a.l.resize(2);
-    a.c.resize(2);
+    a.l.resize(static_cast<size_t>(cfg.n_chan));
+    a.c.resize(static_cast<size_t>(cfg.n_ctx));
     for (int i = 0; i < cfg.n_ids; ++i) a.s[static_cast<size_t>(i)] = a.net.addNeuron(scell);
     for (int r = 0; r < cfg.n_ids; ++r) a.a[static_cast<size_t>(r)] = a.net.addNeuron(acell);
-    for (int k = 0; k < 2; ++k) a.l[static_cast<size_t>(k)] = a.net.addNeuron(scell);
-    for (int k = 0; k < 2; ++k) a.c[static_cast<size_t>(k)] = a.net.addNeuron(scell);
+    for (int k = 0; k < cfg.n_chan; ++k) a.l[static_cast<size_t>(k)] = a.net.addNeuron(scell);
+    for (int k = 0; k < cfg.n_ctx; ++k) a.c[static_cast<size_t>(k)] = a.net.addNeuron(scell);
 
     // Plastic S->A matrix; delivery delay floor(r/2) = exploration rung.
     a.syn.resize(static_cast<size_t>(cfg.n_ids));
@@ -168,13 +194,16 @@ LRAgent makeLRAgent(const LRConfig& cfg, bool plastic) {
                                           cfg.w_self, cfg.tau_s, /*delay=*/0));
     }
 
-    // Routing state v[ctx][slot] stored as ordinary C->L synapse weights
+    // Routing state v[ctx][channel] stored as ordinary C->L synapse weights
     // (persistence free via STARK-007 serialization).
-    for (int k = 0; k < 2; ++k) {
-        for (int s = 0; s < 2; ++s) {
-            a.route[k][s] = a.net.addSynapse(a.c[static_cast<size_t>(k)],
-                                             a.l[static_cast<size_t>(s)],
-                                             0.0, cfg.tau_s, /*delay=*/0);
+    a.route.assign(static_cast<size_t>(cfg.n_ctx),
+                   std::vector<size_t>(static_cast<size_t>(cfg.n_chan), 0));
+    for (int k = 0; k < cfg.n_ctx; ++k) {
+        for (int s = 0; s < cfg.n_chan; ++s) {
+            a.route[static_cast<size_t>(k)][static_cast<size_t>(s)] =
+                a.net.addSynapse(a.c[static_cast<size_t>(k)],
+                                 a.l[static_cast<size_t>(s)],
+                                 0.0, cfg.tau_s, /*delay=*/0);
         }
     }
     return a;
@@ -201,44 +230,66 @@ LRTrialResult runLRTrial(LRAgent& agent, const LRConfig& cfg,
         out.partner = -1;
     } else {
         out.queried_slot = map.phi[sched.ctx];
-        out.queried = (out.queried_slot == 0) ? sched.id0 : sched.id1;
-        out.partner = (out.queried_slot == 0) ? sched.id1 : sched.id0;
+        out.queried = sched.presented[static_cast<size_t>(out.queried_slot)];
+        out.partner = -1;  // STARK-L7: N-way; no single partner (was id0/id1 for N=2)
     }
 
     // ---- Mechanism selection (observable inputs + routing state only) ----
     // Attention shares from the routing state of the active context.
-    const double v0 = agent.net.getSynapse(agent.route[sched.ctx][0]).getWeight();
-    const double v1 = agent.net.getSynapse(agent.route[sched.ctx][1]).getWeight();
-    const double m0 = std::exp(v0 / cfg.softmax_T);
-    const double m1 = std::exp(v1 / cfg.softmax_T);
-    out.a0 = m0 / (m0 + m1);
-    out.a1 = m1 / (m0 + m1);
+    // STARK-L7: softmax over n_chan channels (N=2: identical to L6 v1.1).
+    std::vector<double> v(static_cast<size_t>(cfg.n_chan), 0.0);
+    std::vector<double> m(static_cast<size_t>(cfg.n_chan), 0.0);
+    double z = 0.0;
+    for (int s = 0; s < cfg.n_chan; ++s) {
+        v[static_cast<size_t>(s)] =
+            agent.net.getSynapse(agent.route[static_cast<size_t>(sched.ctx)]
+                                 [static_cast<size_t>(s)]).getWeight();
+        m[static_cast<size_t>(s)] = std::exp(v[static_cast<size_t>(s)] / cfg.softmax_T);
+        z += m[static_cast<size_t>(s)];
+    }
+    std::vector<double> a(static_cast<size_t>(cfg.n_chan), 0.0);
+    for (int s = 0; s < cfg.n_chan; ++s)
+        a[static_cast<size_t>(s)] = m[static_cast<size_t>(s)] / z;
+    out.shares = a;
+    out.a0 = a[0];
+    out.a1 = (cfg.n_chan > 1) ? a[1] : 0.0;
 
     // v1.1: single-sample trials carry NO selection decision (sole
-    // candidate); two-sample trials run the policy. sel_slot is scored only
-    // on two-sample trials.
+    // candidate); multi-candidate trials run the policy. sel_slot is scored
+    // only on multi-candidate trials.
     int sel = -1;
-    double gain0 = 1.0, gain1 = 1.0;
+    std::vector<double> gain(static_cast<size_t>(cfg.n_chan), 1.0);
     if (sched.single) {
-        if (sched.id0 < 0) gain0 = 0.0; // no candidate on that slot
-        if (sched.id1 < 0) gain1 = 0.0;
+        for (int s = 0; s < cfg.n_chan; ++s)
+            if (sched.presented[static_cast<size_t>(s)] < 0) gain[static_cast<size_t>(s)] = 0.0;
     } else {
         if (arm == LR_ORACLE) {
             sel = out.queried_slot; // reference: driver-supplied selection (phi)
         } else if (arm == LR_LEARNED || arm == LR_SHAM || arm == LR_NEGATIVE) {
-            int sampled = (sched.mech_u < out.a0) ? 0 : 1; // policy sampling
-            sel = (arm == LR_NEGATIVE) ? (1 - sampled) : sampled;
+            int sampled;
+            if (cfg.n_chan <= 2) {
+                sampled = (sched.mech_u < a[0]) ? 0 : 1; // L6 v1.1 byte-identity
+            } else {
+                // CDF sampling over n_chan channels.
+                double u = sched.mech_u;
+                sampled = 0;
+                while (sampled < cfg.n_chan - 1 && u > a[static_cast<size_t>(sampled)]) {
+                    u -= a[static_cast<size_t>(sampled)];
+                    ++sampled;
+                }
+            }
+            sel = (arm == LR_NEGATIVE) ? ((sampled + 1) % cfg.n_chan) : sampled;
         } // UNGATED / ABLATION: sel = -1 (no selection)
-        if (sel == 0) gain1 = 0.0;
-        if (sel == 1) gain0 = 0.0;
+        for (int s = 0; s < cfg.n_chan; ++s)
+            if (sel >= 0 && s != sel) gain[static_cast<size_t>(s)] = 0.0;
     }
 
     out.sel_slot = sel;
-    const int sel_id = (sel == 0) ? sched.id0 : (sel == 1) ? sched.id1 : -1;
+    const int sel_id = (sel >= 0) ? sched.presented[static_cast<size_t>(sel)] : -1;
 
     // ---- Actuators: attentional input gain + STARK-L5 eligibility gate ----
     // v1.1: eligibility gates on SINGLE-sample trials (mapping credit —
-    // distractor rows excluded); ALL gates OFF on two-sample selection
+    // distractor rows excluded); ALL gates OFF on multi-candidate selection
     // trials for every arm (identifiability prerequisite: the outcome
     // cannot disambiguate mapping- from selection-error there; see design).
     if (sched.single) {
@@ -250,22 +301,25 @@ LRTrialResult runLRTrial(LRAgent& agent, const LRConfig& cfg,
     } else {
         for (int i = 0; i < cfg.n_ids; ++i)
             agent.net.setEligibilityGate(agent.s[static_cast<size_t>(i)], false);
-        // Relevance quality (scored on two-sample trials): attention/per-
-        // ception of the queried vs the decoy sample.
+        // Relevance quality (scored on multi-candidate trials):
+        // attention/perception of the queried vs the decoy candidates.
         if (arm == LR_LEARNED || arm == LR_SHAM || arm == LR_NEGATIVE || arm == LR_ORACLE) {
-            const double gain_q = (out.queried_slot == 0) ? gain0 : gain1;
-            const double gain_p = (out.queried_slot == 0) ? gain1 : gain0;
-            out.fp_gate = (gain_p > 0.0);
+            const double gain_q = gain[static_cast<size_t>(out.queried_slot)];
+            out.fp_gate = false;
+            for (int s = 0; s < cfg.n_chan; ++s) {
+                if (s == out.queried_slot) continue;
+                if (gain[static_cast<size_t>(s)] > 0.0) out.fp_gate = true;
+            }
             out.miss_gate = (gain_q == 0.0);
         }
     }
 
     // ---- 1. Context window ----
     for (int k = 0; k < cfg.ctx_steps; ++k) {
-        for (int q = 0; q < 2; ++q)
+        for (int q = 0; q < cfg.n_ctx; ++q)
             agent.net.setExternalInput(agent.c[static_cast<size_t>(q)],
                                        (q == sched.ctx) ? cfg.cue_current : 0.0);
-        for (int q = 0; q < 2; ++q)
+        for (int q = 0; q < cfg.n_chan; ++q)
             agent.net.setExternalInput(agent.l[static_cast<size_t>(q)], 0.0);
         for (int i = 0; i < cfg.n_ids; ++i)
             agent.net.setExternalInput(agent.s[static_cast<size_t>(i)], 0.0);
@@ -275,17 +329,18 @@ LRTrialResult runLRTrial(LRAgent& agent, const LRConfig& cfg,
         agent.net.step(cfg.dt);
     }
 
-    // ---- 2. Sample window (both samples; attentional gain per selection) ----
+    // ---- 2. Sample window (candidates; attentional gain per selection) ----
     for (int k = 0; k < cfg.sample_steps; ++k) {
         for (int i = 0; i < cfg.n_ids; ++i) {
             double d = 0.0;
-            if (i == sched.id0) d = cfg.cue_current * gain0;
-            else if (i == sched.id1) d = cfg.cue_current * gain1;
+            for (int s = 0; s < cfg.n_chan; ++s)
+                if (sched.presented[static_cast<size_t>(s)] == i)
+                    d = cfg.cue_current * gain[static_cast<size_t>(s)];
             agent.net.setExternalInput(agent.s[static_cast<size_t>(i)], d);
         }
-        for (int q = 0; q < 2; ++q)
+        for (int q = 0; q < cfg.n_chan; ++q)
             agent.net.setExternalInput(agent.l[static_cast<size_t>(q)], cfg.cue_current);
-        for (int q = 0; q < 2; ++q)
+        for (int q = 0; q < cfg.n_ctx; ++q)
             agent.net.setExternalInput(agent.c[static_cast<size_t>(q)], 0.0);
         for (int r = 0; r < cfg.n_ids; ++r) {
             agent.net.setExternalInput(
@@ -301,9 +356,9 @@ LRTrialResult runLRTrial(LRAgent& agent, const LRConfig& cfg,
         for (int i = 0; i < cfg.n_ids; ++i)
             agent.net.setExternalInput(agent.s[static_cast<size_t>(i)],
                                        (i == j) ? cfg.cue_current : 0.0);
-        for (int q = 0; q < 2; ++q)
+        for (int q = 0; q < cfg.n_chan; ++q)
             agent.net.setExternalInput(agent.l[static_cast<size_t>(q)], 0.0);
-        for (int q = 0; q < 2; ++q)
+        for (int q = 0; q < cfg.n_ctx; ++q)
             agent.net.setExternalInput(agent.c[static_cast<size_t>(q)], 0.0);
         for (int r = 0; r < cfg.n_ids; ++r) {
             agent.net.setExternalInput(
@@ -320,9 +375,9 @@ LRTrialResult runLRTrial(LRAgent& agent, const LRConfig& cfg,
     for (int k = 0; k < cfg.decision_steps; ++k) {
         for (int i = 0; i < cfg.n_ids; ++i)
             agent.net.setExternalInput(agent.s[static_cast<size_t>(i)], 0.0);
-        for (int q = 0; q < 2; ++q)
+        for (int q = 0; q < cfg.n_chan; ++q)
             agent.net.setExternalInput(agent.l[static_cast<size_t>(q)], 0.0);
-        for (int q = 0; q < 2; ++q)
+        for (int q = 0; q < cfg.n_ctx; ++q)
             agent.net.setExternalInput(agent.c[static_cast<size_t>(q)], 0.0);
         for (int r = 0; r < cfg.n_ids; ++r) {
             agent.net.setExternalInput(
@@ -380,8 +435,8 @@ LRTrialResult runLRTrial(LRAgent& agent, const LRConfig& cfg,
     for (int k = 0; k < cfg.reward_delay; ++k) {
         for (int i = 0; i < cfg.n_ids; ++i)
             agent.net.setExternalInput(agent.s[static_cast<size_t>(i)], 0.0);
-        for (int q = 0; q < 2; ++q) agent.net.setExternalInput(agent.l[static_cast<size_t>(q)], 0.0);
-        for (int q = 0; q < 2; ++q) agent.net.setExternalInput(agent.c[static_cast<size_t>(q)], 0.0);
+        for (int q = 0; q < cfg.n_chan; ++q) agent.net.setExternalInput(agent.l[static_cast<size_t>(q)], 0.0);
+        for (int q = 0; q < cfg.n_ctx; ++q) agent.net.setExternalInput(agent.c[static_cast<size_t>(q)], 0.0);
         for (int r = 0; r < cfg.n_ids; ++r)
             agent.net.setExternalInput(agent.a[static_cast<size_t>(r)], cfg.background_current);
         agent.net.step(cfg.dt);
@@ -390,8 +445,8 @@ LRTrialResult runLRTrial(LRAgent& agent, const LRConfig& cfg,
     // ---- 6. Reward step: modulator + routing update ----
     for (int i = 0; i < cfg.n_ids; ++i)
         agent.net.setExternalInput(agent.s[static_cast<size_t>(i)], 0.0);
-    for (int q = 0; q < 2; ++q) agent.net.setExternalInput(agent.l[static_cast<size_t>(q)], 0.0);
-    for (int q = 0; q < 2; ++q) agent.net.setExternalInput(agent.c[static_cast<size_t>(q)], 0.0);
+    for (int q = 0; q < cfg.n_chan; ++q) agent.net.setExternalInput(agent.l[static_cast<size_t>(q)], 0.0);
+    for (int q = 0; q < cfg.n_ctx; ++q) agent.net.setExternalInput(agent.c[static_cast<size_t>(q)], 0.0);
     for (int r = 0; r < cfg.n_ids; ++r)
         agent.net.setExternalInput(agent.a[static_cast<size_t>(r)], cfg.background_current);
     if (learning_enabled) {
@@ -412,22 +467,25 @@ LRTrialResult runLRTrial(LRAgent& agent, const LRConfig& cfg,
 
     // v1.1 REINFORCE: unbiased policy gradient on the TAKEN action (the
     // mechanism's selection), evaluated by the outcome. LEARNED/SHAM/
-    // NEGATIVE only; two-sample selection trials only (single-sample trials
-    // carry no selection decision). No pi/phi access; association credit
-    // flows only through the eligibility gate.
+    // NEGATIVE only; multi-candidate selection trials only (single-sample
+    // trials carry no selection decision). No pi/phi access; association
+    // credit flows only through the eligibility gate.
+    // STARK-L7: gradient over all n_chan channels (N=2: identical to L6).
     if (learning_enabled && !sched.single && sel >= 0 &&
         (arm == LR_LEARNED || arm == LR_SHAM || arm == LR_NEGATIVE)) {
         const double m_v = (arm == LR_SHAM)
             ? ((sched.sham_u < 0.5) ? 1.0 : -1.0) // reward-independent control
             : out.modulator;
-        for (int s = 0; s < 2; ++s) {
-            const double grad = (s == sel) ? (1.0 - ((s == 0) ? out.a0 : out.a1))
-                                           : (0.0 - ((s == 0) ? out.a0 : out.a1));
-            double v = agent.net.getSynapse(agent.route[sched.ctx][s]).getWeight();
-            v += cfg.beta_route * m_v * grad;
-            if (v > cfg.v_clamp) v = cfg.v_clamp;
-            if (v < -cfg.v_clamp) v = -cfg.v_clamp;
-            agent.net.getSynapse(agent.route[sched.ctx][s]).setWeight(v);
+        for (int s = 0; s < cfg.n_chan; ++s) {
+            const double grad = (s == sel) ? (1.0 - a[static_cast<size_t>(s)])
+                                           : (0.0 - a[static_cast<size_t>(s)]);
+            double vw = agent.net.getSynapse(
+                agent.route[static_cast<size_t>(sched.ctx)][static_cast<size_t>(s)]).getWeight();
+            vw += cfg.beta_route * m_v * grad;
+            if (vw > cfg.v_clamp) vw = cfg.v_clamp;
+            if (vw < -cfg.v_clamp) vw = -cfg.v_clamp;
+            agent.net.getSynapse(
+                agent.route[static_cast<size_t>(sched.ctx)][static_cast<size_t>(s)]).setWeight(vw);
         }
     }
 
@@ -444,8 +502,19 @@ std::vector<std::vector<double>> lrWeights(const LRAgent& agent) {
     return w;
 }
 
-double lrRouteState(const LRAgent& agent, int ctx, int slot) {
-    return agent.net.getSynapse(agent.route[ctx][slot]).getWeight();
+double lrRouteState(const LRAgent& agent, int ctx, int channel) {
+    return agent.net.getSynapse(agent.route[static_cast<size_t>(ctx)]
+                                [static_cast<size_t>(channel)]).getWeight();
+}
+
+std::vector<std::vector<double>> lrRouteStateAll(const LRAgent& agent) {
+    std::vector<std::vector<double>> v(agent.route.size());
+    for (size_t k = 0; k < agent.route.size(); ++k) {
+        v[k].resize(agent.route[k].size());
+        for (size_t s = 0; s < agent.route[k].size(); ++s)
+            v[k][s] = agent.net.getSynapse(agent.route[k][s]).getWeight();
+    }
+    return v;
 }
 
 } // namespace learning
