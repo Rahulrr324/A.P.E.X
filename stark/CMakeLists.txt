@@ -273,6 +273,17 @@ add_executable(test_n_way_learned_relevance
 )
 target_compile_features(test_n_way_learned_relevance PUBLIC cxx_std_17)
 
+# STARK-L8 N-way learning recovery (F1b p1count80 + F2a softmax_half fix).
+# Frozen protocol: design/n_way_learning_recovery_milestone.md
+add_executable(n_way_learned_relevance_loop_L8
+    src/learning/n_way_learned_relevance_loop_L8.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(n_way_learned_relevance_loop_L8 PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.
