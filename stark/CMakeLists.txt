@@ -212,6 +212,27 @@ add_executable(test_associative_memory
 )
 target_compile_features(test_associative_memory PUBLIC cxx_std_17)
 
+# STARK-L5 eligibility-gated credit assignment (pre-synaptic eligibility
+# gate; training with distractors). Frozen protocol:
+# design/eligibility_gating_milestone.md
+add_executable(eligibility_gating_loop
+    src/learning/eligibility_gating_loop.cpp
+    src/learning/AssociativeMemoryTask.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(eligibility_gating_loop PUBLIC cxx_std_17)
+
+add_executable(test_eligibility_gating
+    tests/test_eligibility_gating.cpp
+    src/learning/AssociativeMemoryTask.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_eligibility_gating PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.

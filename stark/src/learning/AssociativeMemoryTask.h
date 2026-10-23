@@ -72,6 +72,14 @@ struct AMConfig {
     double w_self = 1.05;      // memory-structure ablation: 0.0
 
     bool reward_contingent = true; // false -> sham (m = +1 always)
+
+    // STARK-L5 eligibility gate (pre-synaptic side; default 0 = existing
+    // ungated rule, bit-identical behavior). 1 = query-only gate (candidate:
+    // eligibility created only for the queried cue's rows); 2 = inverted
+    // (query OFF, distractor cues ON) — signal-specificity control. The gate
+    // is set from the presented query identity only — never from pi, rewards,
+    // or evaluation labels. See stark/design/eligibility_gating_milestone.md.
+    int elig_gate_mode = 0;
 };
 
 /// Controlled association assignment (seeded, label-free construction).

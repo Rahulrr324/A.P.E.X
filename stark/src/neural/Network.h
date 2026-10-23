@@ -256,6 +256,30 @@ public:
     void clearModulatorySignal() { modulatory_signal_ = 0.0; }
 
     /**
+     * Set the eligibility gate of a neuron's OUTGOING three-factor synapses
+     * (STARK-L5). Eligibility accumulation (accumulateEligibility) runs only
+     * for THREEFACTOR synapses whose PRE-synaptic neuron gate is on. This
+     * gates eligibility at TRACE CREATION; decay, modulation, and the
+     * STARK-006 update rule are unchanged. Default: all gates on — existing
+     * behavior is preserved bit-for-bit when no gate is touched.
+     *
+     * The gate is per-trial TASK state (e.g. an attention/encoding signal
+     * marking the currently queried item). It is restored to true by reset()
+     * and is NOT serialized (default true after deserialize; the driver
+     * re-sets gates each trial after reset()).
+     *
+     * @param neuron_id Pre-synaptic neuron whose outgoing synapses are gated
+     * @param on true = accumulate eligibility (default); false = block
+     * @throws std::invalid_argument if neuron_id is invalid
+     */
+    void setEligibilityGate(size_t neuron_id, bool on);
+
+    /**
+     * Get the eligibility gate of a neuron (default true).
+     */
+    bool getEligibilityGate(size_t neuron_id) const;
+
+    /**
      * Enable three-factor modulator-gated plasticity for a synapse (STARK-006).
      *
      * Switches the synapse into THREEFACTOR mode, suppressing the immediate STDP weight
@@ -389,6 +413,10 @@ private:
 
     // STARK-006: modulatory signal (transient, cleared each step)
     double modulatory_signal_ = 0.0;
+
+    // STARK-L5: per-neuron eligibility gate (pre-synaptic side). Volatile
+    // per-trial task state; default true; restored by reset(); not serialized.
+    std::vector<bool> eligibility_gates_;
 
     // Helper methods
     void validateNeuronId(size_t id) const;

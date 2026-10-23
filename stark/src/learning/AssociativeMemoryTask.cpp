@@ -156,6 +156,17 @@ AMTrialResult runAMTrial(AMAgent& agent, const AMConfig& cfg,
     out.cue = sched.cue;
     const int correct = map.perm[static_cast<size_t>(sched.cue)];
 
+    // STARK-L5 eligibility gate (set after reset(), which restores all-on):
+    // mode 1 = query-only (candidate); mode 2 = inverted (control). Set from
+    // the presented query identity only — never from the response mapping.
+    if (cfg.elig_gate_mode == 1) {
+        for (int i = 0; i < cfg.n_cues; ++i)
+            agent.net.setEligibilityGate(agent.s[static_cast<size_t>(i)], i == sched.cue);
+    } else if (cfg.elig_gate_mode == 2) {
+        for (int i = 0; i < cfg.n_cues; ++i)
+            agent.net.setEligibilityGate(agent.s[static_cast<size_t>(i)], i != sched.cue);
+    }
+
     // 1. Encoding window: drive the queried cue for cue_steps (3 spikes).
     for (int k = 0; k < cfg.cue_steps; ++k) {
         for (int i = 0; i < cfg.n_cues; ++i) {

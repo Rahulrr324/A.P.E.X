@@ -41,6 +41,9 @@ void Network::ensureNeuronCapacity(size_t n) {
         external_inputs_.resize(n, 0.0);
         spikes_this_step_.resize(n, false);
         delayed_spikes_.resize(n);
+        // STARK-L5: keep eligibility gates sized with neurons (default true).
+        eligibility_gates_.resize(n, true);
+        (void)old_size;
     }
 }
 
@@ -60,6 +63,8 @@ size_t Network::addNeuron(const NeuralCell& neuron) {
     // Extend homeostatic state for the new neuron ONLY (preserve existing state)
     r_mean_.push_back(0.0);
     homeostatic_scale_.push_back(1.0);
+    // STARK-L5: eligibility gate defaults to on (existing behavior).
+    eligibility_gates_.push_back(true);
     return id;
 }
 
@@ -212,6 +217,9 @@ void Network::reset() {
 
     // Reset STARK-006 modulatory signal
     modulatory_signal_ = 0.0;
+
+    // STARK-L5: eligibility gates are per-trial task state; restore default.
+    std::fill(eligibility_gates_.begin(), eligibility_gates_.end(), true);
 }
 
 void Network::step(double dt) {
@@ -320,8 +328,12 @@ void Network::step(double dt) {
     // Step 6: Accumulate eligibility credit for STARK-006 three-factor synapses
     // Uses the same pre/post spike flags as STDP. The post contribution is applied
     // first (matching STARK-004's same-timestep convention), then the pre contribution.
+    // STARK-L5: eligibility gates (pre-synaptic side) block accumulation at trace
+    // creation for gated-off neurons. Default all-on: identical behavior to the
+    // ungated rule (the accumulate call is skipped exactly when the gate is off).
     for (size_t syn_id = 0; syn_id < E; ++syn_id) {
         if (synapses_[syn_id].synapse.getPlasticityMode() == PlasticityMode::THREEFACTOR) {
+            if (!eligibility_gates_[synapses_[syn_id].pre_neuron]) continue;
             bool pre_spiked = spikes_this_step_[synapses_[syn_id].pre_neuron];
             bool post_spiked = spikes_this_step_[synapses_[syn_id].post_neuron];
             synapses_[syn_id].synapse.accumulateEligibility(pre_spiked, post_spiked);
@@ -559,6 +571,16 @@ void Network::setModulatorySignal(double m) {
         );
     }
     modulatory_signal_ = m;
+}
+
+void Network::setEligibilityGate(size_t neuron_id, bool on) {
+    validateNeuronId(neuron_id);
+    eligibility_gates_[neuron_id] = on;
+}
+
+bool Network::getEligibilityGate(size_t neuron_id) const {
+    validateNeuronId(neuron_id);
+    return eligibility_gates_[neuron_id];
 }
 
 void Network::enableThreeFactor(size_t synapse_id, double E_plus, double E_minus,
@@ -968,6 +990,9 @@ void Network::deserialize(const std::string& data) {
     delayed_spikes_ = std::move(delayed_tmp);
     r_mean_ = std::move(r_mean_tmp);
     homeostatic_scale_ = std::move(scale_tmp);
+    // STARK-L5: eligibility gates are volatile per-trial task state and are
+    // NOT serialized; restore the default (all on) for the restored neurons.
+    eligibility_gates_.assign(neurons_.size(), true);
     homeostasis_tau_r_ = h_tau_r;
     homeostasis_kappa_ = h_kappa;
     homeostasis_target_hz_ = h_target;
