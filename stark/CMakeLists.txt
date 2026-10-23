@@ -233,6 +233,26 @@ add_executable(test_eligibility_gating
 )
 target_compile_features(test_eligibility_gating PUBLIC cxx_std_17)
 
+# STARK-L6 learned relevance routing (self-organized attention; REINFORCE
+# over routing state). Frozen protocol: design/learned_relevance_milestone.md
+add_executable(learned_relevance_loop
+    src/learning/learned_relevance_loop.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(learned_relevance_loop PUBLIC cxx_std_17)
+
+add_executable(test_learned_relevance
+    tests/test_learned_relevance.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_learned_relevance PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.
