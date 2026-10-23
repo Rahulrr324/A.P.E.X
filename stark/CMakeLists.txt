@@ -128,6 +128,26 @@ add_executable(serialization_demo
     src/experiment/Recorder.cpp
     src/experiment/Experiment.cpp
 )
+
+# STARK-L1 reproducible reward-modulated learning loop (toy association task).
+# Design + frozen success criteria: design/learning_loop_milestone.md
+add_executable(learning_loop
+    src/learning/learning_loop.cpp
+    src/learning/ToyAssociationTask.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(learning_loop PUBLIC cxx_std_17)
+
+add_executable(test_learning_loop
+    tests/test_learning_loop.cpp
+    src/learning/ToyAssociationTask.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_learning_loop PUBLIC cxx_std_17)
 target_compile_features(serialization_demo PUBLIC cxx_std_17)
 
 # ============================================================
