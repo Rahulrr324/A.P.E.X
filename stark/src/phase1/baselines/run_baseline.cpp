@@ -253,7 +253,7 @@ int run_experiment(const Args& args) {
     auto make_cfg = [&](const char* precision, bool deterministic) {
         BenchConfig c;
         c.warmup_count = 3;
-        c.measurement_count = 10;
+        c.measurement_count = 200;   // V009 §B L122/L125: N=200 (B6), 200× (B9)
         c.thread_count = args.threads;
         c.batch_size = 1;
         c.precision = precision;
@@ -279,7 +279,7 @@ int run_experiment(const Args& args) {
         r6.software = software_json();
         store.append(r6);
 
-        // B9: stability (200 repeats handled by repeated measurement? spec: 200 inferences)
+        // B9: stability; 200 timed repeats per V009 §B (L125)
         StabilityOutcome st = bench_inference_stability(model, cfg);
         ExperimentRecord r9 = make_benchmark_record(
             "P1-" + args.baseline + "-B9-" + std::to_string(std::hash<std::string>{}(stamp) % 100000),

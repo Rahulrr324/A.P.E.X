@@ -1,0 +1,64 @@
+ST PASS1 [2026-10-23T03:02:08Z]
+--- [2026-10-23T03:02:08Z] taskset -c 0 build/c1_bin/run_baseline --baseline E1 --out build/results-c1-20261023 --threads 1
+E1 complete: B6 median 297.503 us, bit_identical=true
+exit=0
+--- [2026-10-23T03:02:08Z] taskset -c 0 build/c1_bin/run_baseline --baseline E5 --out build/results-c1-20261023 --threads 1
+E5 complete: B6 median 297.018 us, bit_identical=true
+exit=0
+--- [2026-10-23T03:02:09Z] taskset -c 0 build/c1_bin/run_baseline --baseline B1 --out build/results-c1-20261023 --threads 1
+B1 complete
+exit=0
+--- [2026-10-23T03:04:16Z] taskset -c 0 build/c1_bin/run_baseline --baseline B2 --out build/results-c1-20261023 --threads 1
+B2 complete
+exit=0
+--- [2026-10-23T03:04:19Z] taskset -c 0 build/c1_bin/run_baseline --baseline B3 --out build/results-c1-20261023 --threads 1
+B3 complete
+exit=0
+ST PASS2 [2026-10-23T03:04:38Z]
+--- [2026-10-23T03:04:38Z] taskset -c 0 build/c1_bin/run_baseline --baseline E1 --out build/results-c1-20261023 --threads 1 (ST P2)
+E1 complete: B6 median 296.162 us, bit_identical=true
+exit=0
+--- [2026-10-23T03:04:39Z] taskset -c 0 build/c1_bin/run_baseline --baseline E5 --out build/results-c1-20261023 --threads 1 (ST P2)
+E5 complete: B6 median 295.51 us, bit_identical=true
+exit=0
+--- [2026-10-23T03:04:40Z] taskset -c 0 build/c1_bin/run_baseline --baseline B1 --out build/results-c1-20261023 --threads 1 (ST P2)
+B1 complete
+exit=0
+--- [2026-10-23T03:06:56Z] taskset -c 0 build/c1_bin/run_baseline --baseline B2 --out build/results-c1-20261023 --threads 1 (ST P2)
+B2 complete
+exit=0
+--- [2026-10-23T03:07:00Z] taskset -c 0 build/c1_bin/run_baseline --baseline B3 --out build/results-c1-20261023 --threads 1 (ST P2)
+B3 complete
+exit=0
+AC PASS1 [2026-10-23T03:07:18Z]
+--- [2026-10-23T03:07:18Z] taskset -c 0,1 build/c1_bin/run_baseline --baseline E1 --out build/results-c1-20261023 --threads 2
+E1 complete: B6 median 294.858 us, bit_identical=true
+exit=0
+--- [2026-10-23T03:07:19Z] taskset -c 0,1 build/c1_bin/run_baseline --baseline E5 --out build/results-c1-20261023 --threads 2
+E5 complete: B6 median 312.967 us, bit_identical=true
+exit=0
+--- [2026-10-23T03:07:20Z] taskset -c 0,1 build/c1_bin/run_baseline --baseline B1 --out build/results-c1-20261023 --threads 2
+B1 complete
+exit=0
+--- [2026-10-23T03:09:28Z] taskset -c 0,1 build/c1_bin/run_baseline --baseline B2 --out build/results-c1-20261023 --threads 2
+B2 complete
+exit=0
+--- [2026-10-23T03:09:31Z] taskset -c 0,1 build/c1_bin/run_baseline --baseline B3 --out build/results-c1-20261023 --threads 2
+B3 complete
+exit=0
+AC PASS2 [2026-10-23T03:09:49Z]
+--- [2026-10-23T03:09:49Z] taskset -c 0,1 build/c1_bin/run_baseline --baseline E1 --out build/results-c1-20261023 --threads 2 (AC P2)
+E1 complete: B6 median 293.761 us, bit_identical=true
+exit=0
+--- [2026-10-23T03:09:50Z] taskset -c 0,1 build/c1_bin/run_baseline --baseline E5 --out build/results-c1-20261023 --threads 2 (AC P2)
+E5 complete: B6 median 358.115 us, bit_identical=true
+exit=0
+--- [2026-10-23T03:09:51Z] taskset -c 0,1 build/c1_bin/run_baseline --baseline B1 --out build/results-c1-20261023 --threads 2 (AC P2)
+B1 complete
+exit=0
+--- [2026-10-23T03:11:42Z] taskset -c 0,1 build/c1_bin/run_baseline --baseline B2 --out build/results-c1-20261023 --threads 2 (AC P2)
+B2 complete
+exit=0
+--- [2026-10-23T03:11:45Z] taskset -c 0,1 build/c1_bin/run_baseline --baseline B3 --out build/results-c1-20261023 --threads 2 (AC P2)
+B3 complete
+exit=0
