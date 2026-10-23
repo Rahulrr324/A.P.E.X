@@ -170,6 +170,27 @@ add_executable(test_delayed_reward
 target_compile_features(test_delayed_reward PUBLIC cxx_std_17)
 target_compile_features(serialization_demo PUBLIC cxx_std_17)
 
+# STARK-L3 sequential-context learning (early cue + distractor sequence +
+# delayed reward; persistent-activity attractor). Frozen protocol:
+# design/sequential_context_milestone.md
+add_executable(sequential_context_loop
+    src/learning/sequential_context_loop.cpp
+    src/learning/ToyAssociationTask.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(sequential_context_loop PUBLIC cxx_std_17)
+
+add_executable(test_sequential_context
+    tests/test_sequential_context.cpp
+    src/learning/ToyAssociationTask.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_sequential_context PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.

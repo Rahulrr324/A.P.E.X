@@ -99,6 +99,9 @@ struct TrialResult {
     int choice = 0;     // 0 or 1
     double reward = 0;  // task reward +1 / -1 (from correctness)
     double modulator = 0; // m actually delivered (0 = none; +1 for sham)
+    // STARK-L3 diagnostics (0 when unused): total action-neuron spikes.
+    int spikes_a0 = 0;
+    int spikes_a1 = 0;
 };
 
 /**
@@ -144,5 +147,123 @@ TrialResult runTrial(Agent& agent, const TaskConfig& cfg,
 
 /// Current weights in synapse order [S0->A0, S0->A1, S1->A0, S1->A1].
 std::vector<double> weights(const Agent& agent);
+
+// ============================================================================
+// STARK-L3: sequential-context task (early cue, distractor sequence, delayed
+// reward). See stark/design/sequential_context_milestone.md (frozen protocol).
+// The L1/L2 sections above are untouched; the L3 section is additive.
+// ============================================================================
+
+/// Full parameterization of the sequential task / agent / protocol. Defaults
+/// implement the frozen milestone protocol v1.1.
+struct SeqConfig {
+    // Protocol
+    int cue_steps = 2;        // encoding window (S_cued spikes both steps)
+    int seq_steps = 4;        // K: distractor-sequence length (condition)
+    int decision_steps = 6;
+    int reward_delay = 2;     // D: quiet steps between decision and reward
+    int train_trials = 100;
+    int eval_trials = 50;
+    double dt = 1.0;
+
+    // Environment drive
+    double cue_current = 1.2;        // to the cued sensory neuron
+    double anti_cue_current = 1.2;   // probe: single step at last sequence step
+    double background_current = 0.08; // tonic drive on action neurons only
+    double noise_cue = 0.04;
+    double noise_seq = 0.04;
+    double noise_decision = 0.10;    // exploration noise (the decision window)
+    double p_dist_none = 0.25;       // distractor pattern: none | D0 | D1
+    double p_dist_d0 = 0.375;        // remainder -> D1
+    double dist_current = 1.2;       // drives the D neuron of the pattern
+
+    // Neuron parameters (STARK-001)
+    double tau_m = 10.0;
+    double tau_a = 20.0;
+    double theta_cue = 0.6;    // S/D: single-step pulses must transduce
+    double theta_action = 1.2;
+    double adapt_b = 0.0;      // no adaptation (see design v1.1)
+    double v_reset = -0.5;
+
+    // Synapse parameters (STARK-002/006)
+    double tau_s = 2.0;
+    double w_init = 0.5;
+    double w_min = 0.0;
+    double w_max = 0.7;
+    double E_plus = 0.05;
+    double E_minus = 0.02;
+    double tau_e = 8.0;
+    double eta_3f = 0.6;
+    double tau_pre = 20.0;
+    double tau_post = 20.0;
+    // Fixed architecture: WTA + persistent-activity attractor + distractor drive.
+    double w_inh = -1.2;
+    double w_self = 1.2;       // C4-ABLATE condition: 0.0
+    double w_dist = 0.15;
+
+    // Reproducibility
+    unsigned master_seed = 20261023u;
+    bool reward_contingent = true; // false -> sham (m = +1 always)
+};
+
+/// One sequential trial's precomputed schedule (from the seed).
+struct SeqTrialSchedule {
+    int cue = 0;                          // 0 or 1; correct action = cue id
+    std::vector<int> dist_pattern;        // seq_steps entries: 0 none, 1 D0, 2 D1
+    std::vector<double> noise_a0;         // cue+seq+decision steps
+    std::vector<double> noise_a1;
+    double tie_u = 0.5;
+    int anti_at = -1;                     // probe: sequence step of the anti-cue (-1 none)
+};
+
+/// Result of one executed sequential trial (TrialResult + retention diagnostic).
+struct SeqTrialResult {
+    TrialResult r;
+    int spikes_a0_seq = 0;  // action spikes during the SEQ window (attractor persistence)
+    int spikes_a1_seq = 0;
+};
+
+/**
+ * Sequential-task agent (6 neurons: S0,S1,A0,A1,D0,D1).
+ * Synapse order:
+ *   plastic[0..3] = S0->A0, S0->A1, S1->A0, S1->A1 (THREEFACTOR or NONE)
+ *   wta[0..1]     = A0->A1, A1->A0 (inhibition)
+ *   self[0..1]    = A0->A0, A1->A1 (attractor; weight cfg.w_self)
+ *   dist[0..3]    = D0->A0, D0->A1, D1->A0, D1->A1 (symmetric nuisance drive)
+ */
+struct SeqAgent {
+    Network net;
+    size_t s0 = 0, s1 = 0, a0 = 0, a1 = 0, d0 = 0, d1 = 0;
+    std::vector<size_t> plastic;
+    std::vector<size_t> wta;
+    std::vector<size_t> self;
+    std::vector<size_t> dist;
+};
+
+/// plastic=true -> THREEFACTOR; false -> NONE (frozen baseline).
+SeqAgent makeSeqAgent(const SeqConfig& cfg, bool plastic);
+
+/**
+ * Deterministic sequential schedules: cues exactly half/half (seeded shuffle),
+ * distractor patterns drawn independently of the cue value, action-neuron
+ * noise, tie draws. probe=true places a single anti-cue at the last sequence
+ * step (evaluation of context vs most-recent input); probe schedules use a
+ * distinct seed.
+ */
+std::vector<SeqTrialSchedule> makeSeqSchedule(const SeqConfig& cfg, int trials,
+                                              unsigned seed, bool probe);
+
+/**
+ * Execute one sequential trial: cue window -> distractor sequence -> decision
+ * window (spike-count majority; ties: first spike, then seeded draw) ->
+ * quiet reward-delay steps -> one outcome step with the modulator
+ * (sham: +1 when learning_enabled). network.reset() is called first; weights
+ * persist across trials exactly as in L1/L2.
+ */
+SeqTrialResult runSeqTrial(SeqAgent& agent, const SeqConfig& cfg,
+                           const SeqTrialSchedule& sched, bool learning_enabled);
+
+/// Current S->A weights [w00, w01, w10, w11].
+std::vector<double> seqWeights(const SeqAgent& agent);
 
 } // namespace learning
