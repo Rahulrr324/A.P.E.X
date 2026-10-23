@@ -284,6 +284,17 @@ add_executable(n_way_learned_relevance_loop_L8
 )
 target_compile_features(n_way_learned_relevance_loop_L8 PUBLIC cxx_std_17)
 
+# STARK-L9: Continual learning and catastrophic forgetting benchmark.
+# Frozen protocol: design/continual_learning_milestone.md
+add_executable(continual_learning_loop
+    src/learning/continual_learning_loop.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(continual_learning_loop PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.
