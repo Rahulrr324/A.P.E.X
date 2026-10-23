@@ -1,0 +1,30 @@
+--- [2026-10-22T15:43:04Z] taskset -c 0,1 build/preflight_20261022/bin/run_baseline --baseline E1 --out build/results --threads 2
+E1 complete: B6 median 238.939 us, bit_identical=true
+exit=0
+--- [2026-10-22T15:43:04Z] taskset -c 0,1 build/preflight_20261022/bin/run_baseline --baseline E5 --out build/results --threads 2
+E5 complete: B6 median 199.668 us, bit_identical=true
+exit=0
+--- [2026-10-22T15:43:04Z] taskset -c 0,1 build/preflight_20261022/bin/run_baseline --baseline B1 --out build/results --threads 2
+B1 complete
+exit=0
+--- [2026-10-22T15:48:04Z] taskset -c 0,1 build/preflight_20261022/bin/run_baseline --baseline B2 --out build/results --threads 2
+B2 complete
+exit=0
+--- [2026-10-22T15:48:08Z] taskset -c 0,1 build/preflight_20261022/bin/run_baseline --baseline B3 --out build/results --threads 2
+B3 complete
+exit=0
+--- [2026-10-22T15:48:27Z] taskset -c 0,1 build/preflight_20261022/bin/run_baseline --baseline E1 --out build/results --threads 2 (PASS 2)
+E1 complete: B6 median 253.351 us, bit_identical=true
+exit=0
+--- [2026-10-22T15:48:27Z] taskset -c 0,1 build/preflight_20261022/bin/run_baseline --baseline E5 --out build/results --threads 2 (PASS 2)
+E5 complete: B6 median 254.581 us, bit_identical=true
+exit=0
+--- [2026-10-22T15:48:27Z] taskset -c 0,1 build/preflight_20261022/bin/run_baseline --baseline B1 --out build/results --threads 2 (PASS 2)
+B1 complete
+exit=0
+--- [2026-10-22T15:53:35Z] taskset -c 0,1 build/preflight_20261022/bin/run_baseline --baseline B2 --out build/results --threads 2 (PASS 2)
+B2 complete
+exit=0
+--- [2026-10-22T15:53:38Z] taskset -c 0,1 build/preflight_20261022/bin/run_baseline --baseline B3 --out build/results --threads 2 (PASS 2)
+B3 complete
+exit=0

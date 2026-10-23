@@ -1,0 +1,10 @@
+PASS: test_phase1_profiler (34 assertions)
+exit=0
+PASS: test_phase1_accounting (67 assertions)
+exit=0
+PASS: <unknown> (55 assertions)
+exit=0
+PASS: test_phase1_records (72 assertions)
+exit=0
+PASS: test_phase1_reproducibility (37 assertions)
+exit=0
