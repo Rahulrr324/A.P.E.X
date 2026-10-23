@@ -148,6 +148,26 @@ add_executable(test_learning_loop
     src/neural/Network.cpp
 )
 target_compile_features(test_learning_loop PUBLIC cxx_std_17)
+
+# STARK-L2 delayed-reward learning (temporal credit assignment across a
+# decision->reward gap). Design + frozen protocol: design/delayed_reward_milestone.md
+add_executable(delayed_reward_loop
+    src/learning/delayed_reward_loop.cpp
+    src/learning/ToyAssociationTask.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(delayed_reward_loop PUBLIC cxx_std_17)
+
+add_executable(test_delayed_reward
+    tests/test_delayed_reward.cpp
+    src/learning/ToyAssociationTask.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_delayed_reward PUBLIC cxx_std_17)
 target_compile_features(serialization_demo PUBLIC cxx_std_17)
 
 # ============================================================

@@ -130,6 +130,13 @@ TrialResult runTrial(Agent& agent, const TaskConfig& cfg,
     r.choice = choice;
     r.reward = (choice == sched.cue) ? 1.0 : -1.0;
 
+    // Quiet delay (STARK-L2): zero input, no modulator. Eligibility and traces
+    // decay each step (inside Network::step); any residual post-decision
+    // spikes are deterministic. The delay cannot affect the choice above.
+    for (int k = 0; k < cfg.reward_delay; ++k) {
+        agent.net.step(cfg.dt);
+    }
+
     // Outcome step: modulator for exactly one timestep (task reward, or +1
     // for the sham negative control). Inputs are zero; timestep count is
     // identical with learning disabled.

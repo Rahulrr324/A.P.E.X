@@ -35,6 +35,10 @@ struct TaskConfig {
     int eval_trials  = 50;
     int cue_steps    = 12;    // decision window (timesteps)
     double dt        = 1.0;
+    // STARK-L2: quiet steps between the decision (end of cue window) and the
+    // reward step. Eligibility decays as exp(-D/tau_e) across the delay; the
+    // delay can never influence the choice because it occurs after it.
+    int reward_delay = 0;
 
     // Environment drive
     double cue_current       = 1.2;   // to the cued sensory neuron
@@ -120,6 +124,9 @@ Agent makeAgent(const TaskConfig& cfg, bool plastic);
  * Cue phase: external drive to the cued sensory neuron plus seeded noise on
  * the action neurons for cfg.cue_steps timesteps. The choice is the action
  * neuron with more spikes (tie: first spike wins; no spikes at all: action 0).
+ *
+ * Delay (STARK-L2): cfg.reward_delay quiet steps (zero input, no modulator)
+ * separate the decision from the reward step; eligibility decays across them.
  *
  * Outcome: reward = (choice == cue) ? +1 : -1. If learning_enabled, the
  * reward is set as the modulator for exactly one timestep
