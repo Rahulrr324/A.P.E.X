@@ -1,0 +1,31 @@
+HOST: Linux 6.1.158+ 2 cpus | model name	: Intel(R) Xeon(R) Processor @ 2.60GHz
+--- [2026-10-23T01:45:24Z] taskset -c 0,1 build/round2_bin/run_baseline --baseline E1 --out build/results --threads 2 (PASS 1)
+E1 complete: B6 median 311.332 us, bit_identical=true
+exit=0
+--- [2026-10-23T01:45:25Z] taskset -c 0,1 build/round2_bin/run_baseline --baseline E5 --out build/results --threads 2 (PASS 1)
+E5 complete: B6 median 294.472 us, bit_identical=true
+exit=0
+--- [2026-10-23T01:45:25Z] taskset -c 0,1 build/round2_bin/run_baseline --baseline B1 --out build/results --threads 2 (PASS 1)
+B1 complete
+exit=0
+--- [2026-10-23T01:47:10Z] taskset -c 0,1 build/round2_bin/run_baseline --baseline B2 --out build/results --threads 2 (PASS 1)
+B2 complete
+exit=0
+--- [2026-10-23T01:47:13Z] taskset -c 0,1 build/round2_bin/run_baseline --baseline B3 --out build/results --threads 2 (PASS 1)
+B3 complete
+exit=0
+--- [2026-10-23T01:47:30Z] taskset -c 0,1 build/round2_bin/run_baseline --baseline E1 --out build/results --threads 2 (PASS 2)
+E1 complete: B6 median 299.12 us, bit_identical=true
+exit=0
+--- [2026-10-23T01:47:30Z] taskset -c 0,1 build/round2_bin/run_baseline --baseline E5 --out build/results --threads 2 (PASS 2)
+E5 complete: B6 median 296.859 us, bit_identical=true
+exit=0
+--- [2026-10-23T01:47:30Z] taskset -c 0,1 build/round2_bin/run_baseline --baseline B1 --out build/results --threads 2 (PASS 2)
+B1 complete
+exit=0
+--- [2026-10-23T01:49:20Z] taskset -c 0,1 build/round2_bin/run_baseline --baseline B2 --out build/results --threads 2 (PASS 2)
+B2 complete
+exit=0
+--- [2026-10-23T01:49:23Z] taskset -c 0,1 build/round2_bin/run_baseline --baseline B3 --out build/results --threads 2 (PASS 2)
+B3 complete
+exit=0

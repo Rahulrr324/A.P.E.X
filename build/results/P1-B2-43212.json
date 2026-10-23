@@ -1,0 +1,164 @@
+{
+  "accounting": null,
+  "budget": null,
+  "configuration": {
+    "batch_size": 1,
+    "benchmark_id": "B2",
+    "measurement_count": 30,
+    "sequence_length": 0,
+    "thread_count": 2,
+    "warmup_count": 10,
+    "workload_params": {
+      "element": "float32",
+      "n": "67108864",
+      "op": "axpy"
+    }
+  },
+  "created_utc": "2026-10-23T01:47:13.631Z",
+  "determinism": {
+    "deterministic_mode_available": true,
+    "deterministic_mode_requested": false,
+    "outputs_bit_identical": null
+  },
+  "experiment_id": "B2",
+  "failures": [],
+  "hardware": {
+    "build_type": "Release",
+    "collected_utc": "2026-10-23T01:47:10.842Z",
+    "cpu_instruction_set_notes": "SSE4.2, OSXSAVE, AVX, SSE, SSE2, AVX2, AVX512F",
+    "cpu_model": "Intel(R) Xeon(R) Processor @ 2.60GHz",
+    "cuda_available": false,
+    "cuda_version": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_compute_capability_major": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_compute_capability_minor": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "gpu_model": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    },
+    "gpu_present": {
+      "reason": "unavailable: no physical GPU inventory source in Phase 1 (non-Windows)",
+      "value": null
+    },
+    "logical_cores": 2,
+    "os_name": "Linux",
+    "os_version": "6.1.158+",
+    "physical_cores": {
+      "reason": "unavailable: no portable POSIX source in Phase 1",
+      "value": null
+    },
+    "provenance": {
+      "cpu_model": "source: cpuid brand string (leaves 0x80000002..4)",
+      "cuda_available": "unavailable: binary built without CUDA (STARK_ENABLE_CUDA=OFF / no toolkit)",
+      "cuda_version": "unavailable: binary built without CUDA",
+      "gpu_model": "unavailable: binary built without CUDA",
+      "gpu_present": "unavailable: no physical GPU inventory source in Phase 1 (non-Windows)",
+      "logical_cores": "source: std::thread::hardware_concurrency()",
+      "os_version": "source: /proc/sys/kernel/osrelease",
+      "physical_cores": "unavailable: no portable POSIX source in Phase 1",
+      "pytorch_cuda_available_note": "unavailable: PyTorch runtime out of scope for C++ Phase 1 (spec §A / §L.7)",
+      "ram_total_bytes": "source: /proc/meminfo MemTotal",
+      "storage_volumes": "source: statvfs(/)"
+    },
+    "pytorch_cuda_available": null,
+    "ram_total_bytes": 4131278848,
+    "storage_volumes": [
+      {
+        "free_bytes": 19246886912,
+        "path": "/",
+        "total_bytes": 21834924032
+      }
+    ],
+    "theoretical_memory_bandwidth_gbps": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    },
+    "toolchain": "GCC 12.2.0",
+    "vram_total_bytes": {
+      "reason": "unavailable: no provenance recorded",
+      "value": null
+    }
+  },
+  "kind": "benchmark",
+  "measured_gflops": 2.4408920092777651,
+  "measured_memory_bandwidth_gbps": 14.64535205566659,
+  "peak_memory": {
+    "ram_measured": true,
+    "ram_peak_bytes": 540504064,
+    "vram_measured": false,
+    "vram_peak_bytes": {
+      "reason": "unavailable: binary built without CUDA",
+      "value": null
+    }
+  },
+  "precision": {
+    "compute_precision": "FP32",
+    "storage_format": "FP32"
+  },
+  "provenance": {
+    "cpu_model": "source: embedded hardware snapshot"
+  },
+  "record_id": "P1-B2-43212",
+  "schema_version": "STARKP1 1",
+  "skip_attestation": null,
+  "software": {
+    "benchmark_libs": "standard library only (no external deps)",
+    "build_type": "Release",
+    "compiler": "GCC 12.2.0",
+    "cuda_runtime": null,
+    "os": "Linux 6.1.158+"
+  },
+  "stark_phase": "P1",
+  "statistics": {
+    "computed": true,
+    "max": 0.059403875000000002,
+    "mean": 0.055325261533333323,
+    "median": 0.054987163500000005,
+    "min": 0.054149606000000003,
+    "p95": 0.058423576299999995,
+    "p99": 0.059248102949999999,
+    "samples": [
+      0.056326696000000002,
+      0.054486453999999997,
+      0.054983110000000002,
+      0.054440489000000002,
+      0.055754735999999999,
+      0.054462765000000003,
+      0.055160340000000002,
+      0.054209475999999999,
+      0.05427278,
+      0.054912269,
+      0.055268232,
+      0.055468281000000001,
+      0.057881943999999998,
+      0.055182261000000003,
+      0.055646633000000001,
+      0.054991217000000002,
+      0.054612755999999998,
+      0.054815349999999999,
+      0.055922365000000002,
+      0.059403875000000002,
+      0.058866729999999999,
+      0.055078793000000001,
+      0.055376206999999997,
+      0.054278425999999998,
+      0.054149606000000003,
+      0.055008988000000002,
+      0.054924679999999997,
+      0.054909133999999998,
+      0.054460940999999999,
+      0.054502311999999997
+    ],
+    "stdev": 0.0012809133272377266
+  },
+  "status": "PASSED",
+  "status_reason": null
+}

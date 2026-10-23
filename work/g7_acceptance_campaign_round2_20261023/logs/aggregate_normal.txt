@@ -1,0 +1,39 @@
+=== STARK Phase 1 (M0) Aggregator ===
+records directory: build/results
+records found: 43
+
+STATUS SUMMARY:
+  B1: 4 record(s)
+  B2: 4 record(s)
+  B3: 4 record(s)
+  B4: 1 record(s)
+  B5: 1 record(s)
+  E1: 12 record(s)
+  E2: 1 record(s)
+  E3: 1 record(s)
+  E4: 1 record(s)
+  E5: 12 record(s)
+  PROFILE: 1 record(s)
+  TELEMETRY: 1 record(s)
+  PASSED=38 FAILED=0 SKIPPED=3 NOT_ATTEMPTED=2
+
+GATE RESULTS:
+  [PASS] G1 hardware profile collected
+         cpu=Intel(R) Xeon(R) Processor @ 2.60GHz, ram_total=4131278848
+  [PASS] G2 CPU baselines present and complete
+         E1 and E5 present, distinct, each with >=10 samples
+  [PASS] G3 GPU branch complete-or-skipped with reason
+         B5: SKIPPED (cuda_unavailable) — skipped: CUDA unavailable in this build (STARK_ENABLE_CUDA=OFF / no CUDA toolkit); this does NOT imply the machine has no GPU -- physical GPU presence is recorded independently in hardware.gpu_present (spec G3 skipped-branch)
+  [PASS] G4 peak memory measured
+         E1 and E5 present, PASSED; every PASSED baseline: RAM peak measured; VRAM measured or structured unavailability corroborated by embedded capability evidence (physical capability unknown/unknown — informational, not a G4 criterion)
+  [PASS] G5 parameter accounting consistent
+         all accounting records pass G5 checks
+  [PASS] G6 budget evaluator rejects over-budget demands
+         VRAM-only violation detected; compute fields informational
+  [FAIL] G7 same-config medians reproducible across repeats
+         B7 medians differ 16.35% (allowed 15.00%) between runs 1 and 3
+B7 medians differ 25.50% (allowed 15.00%) between runs 2 and 3
+B7 medians differ 21.83% (allowed 15.00%) between runs 3 and 4
+
+
+OVERALL: FAIL (1 gate(s) failed)
