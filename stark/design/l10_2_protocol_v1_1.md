@@ -1,7 +1,8 @@
 # STARK-L10.2 — Frozen Protocol v1.1 (specification ratification)
 
-**Version:** 1.1
-**Status at registration:** **PROPOSED — NOT IN FORCE.**
+**Version:** 1.1.1 (v1.1 + the pre-run editorial correction in §10)
+**Status:** **v1.1 registered as PROPOSED; A-1 and A-3 RATIFIED by the repository
+owner; A-2 NOT RATIFIED.** L10-E keeps its original v1.0 criterion.
 This document is registered so that its hash is fixed *before* any evaluation
 runs. It becomes the governing protocol for L10-E/L10-F **only** if the
 repository owner records an approval decision (see §9). Until then every result
@@ -27,7 +28,7 @@ L10-F and is not edited by this document.
 |---|---|---|
 | **H1 — frozen L10 results** | `work/l10_raw/final_run/`, `determinism/`, `l9_reproduction/`, `protocol_v1.0_engineering_run/`, `work/dev_context_conditioned_memory_report_STARK-L10-1.{md,json}` | **immutable**; md5 `b38736bb…`, `17beb41e…`, `a00b62b3…` |
 | **H2 — L10.1 corrected diagnostics** | `work/l10_raw/control_validation_20261025/`, `work/L10_1_CONTROL_VALIDATION.{md,json}` | **immutable**; 275 hashes verified |
-| **N — L10.2 v1.1 results** | `work/l10_raw/spec_ratification_20261026/` | **new**; never merged into H1/H2 |
+| **N — L10.2 v1.1 results** | `work/l10_raw/spec_ratification_20261024/` | **new**; never merged into H1/H2 |
 
 No L10.2 result may overwrite, recompute or replace anything in H1 or H2.
 L10-E and L10-F are quoted from H1 in every table that reports them.
@@ -247,7 +248,7 @@ g++ -O2 -std=c++17 -Isrc -o harness src/learning/l10_validation_harness.cpp $COR
 # R6: --tasks 3 --banks 2 --reuse-seal 0   R7: --bank-mode frozen
 ```
 
-Artifacts: `work/l10_raw/spec_ratification_20261026/{R0..R8}/` with
+Artifacts: `work/l10_raw/spec_ratification_20261024/{R0..R8}/` with
 `metrics_*.csv`, `sealing_*.csv`, `trials_*.csv.gz`, `ctxperbank_*.csv`, a
 second full repetition for determinism, the independent recomputation script and
 its output, the regression logs, and `MANIFEST.md` (sha256 of every file).
@@ -260,19 +261,34 @@ as 0.
 |---|---|
 | Authority | repository owner (`Rahulrr324`) |
 | Decision requested on | A-1 (→ L10-F2), A-2 (→ L10-E3), A-3 (→ L10-G2, L10-R1, L10-S1) |
-| Decision | **PENDING** |
-| Date | — |
-| Approved protocol version | — |
-| Recorded in | — |
+| Decision | **A-1 RATIFIED, A-3 RATIFIED, A-2 NOT RATIFIED** |
+| Date | 2026-10-24 |
+| Approved protocol version | v1.1 (as editorially corrected by v1.1.1) |
+| Recorded in | `stark/reports/L10_2_OWNER_DECISION.md` |
 
-Until this table is completed by the owner, this protocol is **PROPOSED**, and
-any run made under it is labelled *provisional diagnostic* in every artifact and
-report. L10-E and L10-F remain **FAILED** in the official record regardless of
-what the provisional run shows.
+Consequences, binding on every artifact produced after this table was filled:
+
+- **L10-F2** (A-1) is an **official** acceptance criterion for this milestone.
+- **L10-G2** (A-3), and the informational records **L10-R1** / **L10-S1** (A-3),
+  are official.
+- **A-2 was not ratified.** L10-E therefore remains governed by protocol v1.0:
+  `context-off mean ≤ 0.40`, which measured **0.425926** and is **FAILED**.
+  Every context diagnostic in this milestone (E3a/E3b/E3c) is a **provisional
+  diagnostic**, is labelled as such, and cannot change L10-E's disposition.
+
+The table above is completed: the owner ratified A-1 and A-3 and declined A-2.
+Runs under v1.1 are therefore **official** for L10-F2, L10-G2, L10-R1 and L10-S1,
+and **provisional** for every context diagnostic. The historical L10-E failure
+stands exactly as published.
 
 ## 10. Version log
 
-- **v1.1** — 2026-10-26. Initial registration. Written before any L10.2 run;
+- **v1.1.1** — 2026-10-24. **Editorial correction only, made before any run
+  existed.** The registered artifact path `spec_ratification_20261026/` used a
+  wrong date label; corrected to `spec_ratification_20261024/`. No arm, metric,
+  threshold, seed or decision rule is touched. Recorded here rather than silently
+  edited because the v1.1 hash is already fixed in commit `2fa3100`.
+- **v1.1** — 2026-10-24. Initial registration. Written before any L10.2 run;
   thresholds derived from the frozen design's own bands (L10-A's 0.10) or from
   the analytic floor, not tuned to L10.1 measurements. Acknowledged as
   **post-hoc relative to the L10 failures** — the amendments were proposed after
