@@ -307,7 +307,7 @@ into the next phase.
 | `work/L10_2_SPECIFICATION_RATIFICATION.json` | machine-readable results, approval record, criterion dispositions |
 | `stark/design/l10_2_protocol_v1_1.md` | registered protocol v1.1.1 |
 | `stark/reports/L10_2_OWNER_DECISION.md` | owner decision record, 2026-10-24 |
-| `work/l10_raw/spec_ratification_20261024/` | 194 hashed artifacts: `protocol/`, `R0`–`R8`, `determinism/`, `analysis/` (incl. `recompute.py`), `regression/`, `restart/`, `MANIFEST.md` |
+| `work/l10_raw/spec_ratification_20261024/` | 195 hashed artifacts: `protocol/`, `R0`–`R8`, `determinism/`, `analysis/` (incl. `recompute.py`, `results_tables.txt`, `perm.csv`, `restart_check.txt`, `build_json.py`), `regression/`, `restart/`, `MANIFEST.md` |
 
 ### Reproduction
 
@@ -327,6 +327,8 @@ S=123456789,218213831,171473193
 ./harness --mode tasks --out DIR --seeds $S --seal 1 --ctxperbank --tag _R5
 ./harness --mode tasks --out DIR --seeds $S --tasks 3 --banks 2 --seal 1 --reuse-seal 0 --tag _R6
 ./harness --mode tasks --out DIR --seeds $S --bank-mode frozen --tag _R7
+./harness --mode frozen --out DIR          # R8: frozen seeds, CCM + SEQ-L9
 ./harness --mode perm  --seeds $S --tasks 3
-python3 work/l10_raw/spec_ratification_20261024/analysis/recompute.py DIR tasks_T3_K3 $S _R1_sealON
+# reproducibility: rerun into a second DIR and cmp every emitted CSV
+python3 ../work/l10_raw/spec_ratification_20261024/analysis/recompute.py DIR tasks_T3_K3 $S _R1_sealON
 ```
