@@ -1,0 +1,58 @@
+{
+  "calls": "work/l10_raw/context_contribution_20261024/KC_cross/calls_ctxnovel_T3_K3_218213831_KX.csv",
+  "eval_kind_filter": 4,
+  "published_comparison": {
+    "column": "cross_novel",
+    "match": true,
+    "per_task": {}
+  },
+  "reconstruction": {
+    "calls_involved": [
+      11,
+      17,
+      23
+    ],
+    "per_call": {
+      "0:11": {
+        "acc_given_routed": null,
+        "acc_given_unrouted": 0.13333333333333333,
+        "accuracy": 0.13333333333333333,
+        "call": 11,
+        "eval_kind": 4,
+        "n": 120,
+        "purpose": "cross_novel",
+        "routing": 0.0,
+        "task": 0
+      },
+      "1:17": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": 0.0,
+        "accuracy": 0.5416666666666666,
+        "call": 17,
+        "eval_kind": 4,
+        "n": 120,
+        "purpose": "cross_novel",
+        "routing": 0.5416666666666666,
+        "task": 1
+      },
+      "2:23": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "call": 23,
+        "eval_kind": 4,
+        "n": 120,
+        "purpose": "cross_novel",
+        "routing": 1.0,
+        "task": 2
+      }
+    },
+    "pooled": {
+      "accuracy": 0.5583333333333333,
+      "n": 360,
+      "routing": 0.5138888888888888
+    },
+    "ragged_task_sizes": {}
+  },
+  "trials": "work/l10_raw/context_contribution_20261024/KC_cross/trials_ctxnovel_T3_K3_218213831_KX.csv.gz"
+}

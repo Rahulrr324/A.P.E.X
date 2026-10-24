@@ -1,0 +1,32 @@
+# L11.2 legacy determinism check (unmodified harness)
+
+date: 2026-10-24
+binary: /tmp/l112/l11harness built from stark/src @ 6a43974433a0396f756536817f88421eb86edf8c
+g++: g++ (Debian 12.2.0-14+deb12u1) 12.2.0
+build: g++ -O2 -std=c++17 -Isrc (no cmake available)
+
+run A: cd /tmp/l112/runA && ../l11harness
+run B: cd /tmp/l112/runB && ../l11harness
+
+comparison: cmp -s runA/<f> runB/<f> for every produced file
+
+IDENTICAL  calls_ccm_123456789.csv
+IDENTICAL  calls_ccm_171473193.csv
+IDENTICAL  calls_ccm_218213831.csv
+IDENTICAL  calls_seql9_123456789.csv
+IDENTICAL  calls_seql9_171473193.csv
+IDENTICAL  calls_seql9_218213831.csv
+IDENTICAL  metrics_ccm_123456789.csv
+IDENTICAL  metrics_ccm_171473193.csv
+IDENTICAL  metrics_ccm_218213831.csv
+IDENTICAL  metrics_seql9_123456789.csv
+IDENTICAL  metrics_seql9_171473193.csv
+IDENTICAL  metrics_seql9_218213831.csv
+IDENTICAL  trials_ccm_123456789.csv
+IDENTICAL  trials_ccm_171473193.csv
+IDENTICAL  trials_ccm_218213831.csv
+IDENTICAL  trials_seql9_123456789.csv
+IDENTICAL  trials_seql9_171473193.csv
+IDENTICAL  trials_seql9_218213831.csv
+
+RESULT: 18/18 files byte-identical across two independent runs

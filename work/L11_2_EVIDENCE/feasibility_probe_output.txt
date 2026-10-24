@@ -1,0 +1,12 @@
+# L11.2 read-only feasibility probe output
+# probe source: work/L11_2_EVIDENCE/feasibility_probe.cpp (NOT part of the repository build)
+# compiled and run in /tmp against a copy of stark/src; repository unmodified
+
+serialize_len=25638 state_fingerprint=7465c02006d13411
+bank_state_size=3 reward_baseline_size=3 active_bank=-1
+router_weights=12x3 score=[0.000 0.000 0.000] preferred=0
+bank_weights=3x6x6
+result: queried=3 choice=2 bank=1 sel_slot=0 plastic_write=0 reward=-1.000000 a0=0.5000 a1=0.5000
+intended_slot=1 presented_size=2 ctx=1
+update_mass: bank=0.000000 queried=0.000000 router_l1=1.333333 baseline=-0.020000
+state_changed=1
