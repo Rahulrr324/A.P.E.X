@@ -1,0 +1,127 @@
+{
+  "milestone": "STARK-L11.10",
+  "title": "Cross-family cue constructor and instrument verification",
+  "base_commit": "9169794f672a768ff8a69ee7a1015f3e0dc0fd9e",
+  "branch": "validation/l11-10-cue-constructor",
+  "build": {
+    "compiler": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+    "standard": "c++17",
+    "flags": "-O2 -Wall -Wextra",
+    "cmake_available": false,
+    "cmake_build": "UNEXECUTED"
+  },
+  "tests": {
+    "test_l11_cue_constructor": {
+      "exit_code": 0,
+      "assertions": 276,
+      "failures": 0,
+      "runs": 2,
+      "deterministic": true
+    },
+    "test_context_conditioned_memory": {
+      "exit_code": 0,
+      "assertions": 330
+    },
+    "test_l10_structural_audit": {
+      "exit_code": 0,
+      "assertions": 357
+    },
+    "test_l10_1_sealing": {
+      "exit_code": 0,
+      "assertions": 276
+    },
+    "mutation_check": {
+      "mutations": 3,
+      "detected": 3
+    }
+  },
+  "scope": {
+    "existing_source_files_modified": 0,
+    "existing_tests_modified": 0,
+    "cmake_changes": "one additive target; no existing target altered",
+    "frozen_artifacts_modified": 0,
+    "official_arms_run": 0,
+    "official_trials_run": 0
+  },
+  "supports": {
+    "AMBIG11": {
+      "features": 2,
+      "ratio": "1:1",
+      "per_group_pair": 16
+    },
+    "CROSS21": {
+      "features": 3,
+      "ratio": "2:1",
+      "per_group_pair": 24
+    },
+    "CROSS31": {
+      "features": 4,
+      "ratio": "3:1",
+      "per_group_pair": 16
+    }
+  },
+  "authorization_state": {
+    "protocol_registered": false,
+    "criteria_ratified": false,
+    "implementation_authorized": false,
+    "official_evaluation_authorized": false
+  },
+  "closes": [
+    "IMP-4"
+  ],
+  "leaves_open": [
+    "CA-1",
+    "S3-1",
+    "DL-1",
+    "DL-2",
+    "S2-2",
+    "E-4",
+    "C1-C7",
+    "R1",
+    "R6",
+    "F4"
+  ],
+  "files": {
+    "stark/src/learning/L11CueConstruction.h": {
+      "sha256": "b65b6da6d4164bb835ad30fd4f7271a84f83e1fdd1c1f071f991d856711d1b5a",
+      "change": "new"
+    },
+    "stark/src/learning/L11CueConstruction.cpp": {
+      "sha256": "a48bb1a8656a3e025a92e31415ee80625151bbc03908ef6780e8a65033bc300f",
+      "change": "new"
+    },
+    "stark/tests/test_l11_cue_constructor.cpp": {
+      "sha256": "28ee14d31c8abd6f37bae52d273c37adde314a76bd983ccefd8288f76c99d171",
+      "change": "new"
+    },
+    "stark/CMakeLists.txt": {
+      "sha256": "d1b59328925e5bbe7fb308a1a834677ee077dd462659a7f4bb3af5f6270e03e2",
+      "change": "modified: +14 lines, additive target only"
+    },
+    "work/L11_10_cue_constructor_design.md": {
+      "sha256": "82864b76a33b6b49bd63a69077bcc100e5c748a1f572fb017c65fcde319e1a44",
+      "change": "new"
+    },
+    "work/L11_10_frozen_table_traceability.md": {
+      "sha256": "474a7fe50fbc899e53cb83954972598dc0eb251167a7db64f0edba31865707de",
+      "change": "new"
+    },
+    "work/L11_10_cue_constructor_test_report.md": {
+      "sha256": "e6c53e859eef336abd48a87e7b755ff92ca30cb9004859125de1e61b8fefc58b",
+      "change": "new"
+    },
+    "work/L11_10_leakage_and_separation_audit.md": {
+      "sha256": "d03529eab25660ed0ca04b96083a007f4a39bebf411a2e775848af4e7e94c6ec",
+      "change": "new"
+    },
+    "work/L11_10_readiness_report.md": {
+      "sha256": "8866a592f043d1c5f9bc1dabd5b5908d3bc560a7d05dce54b9c16dae09ca2d1a",
+      "change": "new"
+    }
+  },
+  "notes": [
+    "This manifest does not record its own hash.",
+    "The constructor is not wired into any evaluation driver; no L11 arm exists.",
+    "Verification is static reading plus unit tests; no model was trained or evaluated."
+  ]
+}

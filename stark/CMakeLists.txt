@@ -354,6 +354,20 @@ add_executable(test_l10_1_sealing
 )
 target_compile_features(test_l10_1_sealing PUBLIC cxx_std_17)
 
+# STARK-L11.10: the cross-family (2:1 / 3:1) cue constructor.
+# Additive only: a new source file, a new test target, no existing target is
+# touched and the L10 harness keeps its own cue construction unchanged.
+add_executable(test_l11_cue_constructor
+    tests/test_l11_cue_constructor.cpp
+    src/learning/L11CueConstruction.cpp
+    src/learning/ContextConditionedMemory.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_l11_cue_constructor PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.
