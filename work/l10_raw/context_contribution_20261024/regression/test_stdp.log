@@ -1,0 +1,19 @@
+STARK-004 STDP Tests
+====================
+Test: Synapse Plasticity Initialization... PASS
+Test: Synapse Trace Decay (exact exponential)... PASS
+Test: Synapse LTP unit (post spike uses pre trace)... PASS
+Test: Synapse LTD unit (pre spike uses post trace)... PASS
+Test: Synapse Weight Bounds... PASS
+Test: Network STDP Potentiation (pre before post)... PASS (w 0.5 -> 0.509512)
+Test: Network STDP Depression (post before pre)... PASS (w 0.5 -> 0.490488)
+Test: Same-timestep pre+post spikes... PASS (w 0.5 -> 0.5, symmetric cancellation)
+Test: Same-timestep spikes, asymmetric rates... PASS (w 0.5 -> 0.51)
+Test: Trace and weight invariants under repeated learning... PASS
+Test: Traces decay toward zero when spikes stop... PASS (x_pre=3.05902e-07)
+Test: dt constraint (Euler tau_s only, not tau_pre/tau_post)... PASS
+Test: Network deterministic repeated training... PASS (w=0.539331)
+Test: Learning experiment (response strengthens)... PASS (w 0.3 -> 0.394982)
+====================
+Total assertions: 255
+All tests passed!
