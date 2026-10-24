@@ -1,6 +1,11 @@
 # STARK-L10 — Context-Conditioned Memory and Continual Learning
 
-**Version:** 1.6 (frozen 2026-10-24, before the reported evaluation)
+**Version:** 1.7 (2026-10-24)
+**Version history:** **v1.6 (frozen 2026-10-24, before the reported evaluation)**
+is the version every L10 result was produced and reported under. **v1.7** makes
+one addition — the criterion **L10-K1** in §8, ratified by the repository owner
+on 2026-10-24 — and changes nothing else: no existing criterion, threshold,
+metric, seed or historical result is altered (see §13).
 **Schema:** STARK-L10-1
 **Baseline:** STARK-L9 (`continual_learning_loop`, report `STARK-L9-1`, branch
 `arena/c90f7329-a-p-e-x`, head commit `5f5a577`)
@@ -252,6 +257,7 @@ All arms use the same task stream, seeds and evaluation protocol.
 | L10-D | CCM held-out cue-combination accuracy ≥ 0.80 per task |
 | L10-E | shuffled-cue mean accuracy ≤ 0.40 **and** context-off mean ≤ 0.40 (see §13: the context-off half is arithmetically floored at ≈0.33; reported as-is) |
 | L10-E2 | correct-context minus context-off accuracy ≥ 0.60 for at least two of three tasks, and correct-context minus shuffled-cue ≥ 0.60 for at least two of three tasks |
+| L10-K1 | **context contribution** (added in v1.7, owner decision 2026-10-24). On **every** primary seed: (a) `CAA_pooled ≥ 0.40`; (b) `CAA(t) ≥ 0.25` for at least two of the three tasks; (c) `CRA_pooled ≥ 0.50`. Where `CAA(t) = acc_correct(t) − acc_null(t)`, `acc_null(t) = (1/K)·Σ_k A(k,t)` is the accuracy of a context-ignoring policy measured by forcing each bank with the cue removed, `CRA(t) = R_correct(t) − 1/K`, and `R_correct(t)` is the fraction of correct-cue trials whose selected bank is the task's bank. Per-seed aggregation is the unweighted mean over the three tasks. **L10-K1 is separate from L10-E and does not reinterpret it** (see §13). |
 | L10-F | NO-SEAL mean forgetting > CCM mean forgetting |
 | L10-G | K2-STRESS worse than CCM (forgetting or final average) |
 | L10-H | persistence + determinism + checkpoint resume exact |
@@ -260,6 +266,19 @@ All arms use the same task stream, seeds and evaluation protocol.
 
 A "PASS" requires the run output that supports it. Failures are reported as
 FAIL with their number.
+
+**Relationship between L10-E and L10-K1 (v1.7).** L10-E is retained exactly as
+frozen in v1.6 and its reported result stands: **FAILED**, measured pooled
+context-off 0.425926 > 0.40. L10-K1 is an additional, separately registered
+criterion that measures context *contribution* against a measured
+context-ignoring null; it is satisfied or not satisfied on its own evidence.
+**Passing L10-K1 does not convert L10-E into a pass, and does not rescind,
+reinterpret or downgrade L10-E's failure.** Both are reported side by side. The
+reason a second criterion exists is recorded in §13 and in
+`work/L10_3_CONTEXT_CONTRIBUTION.md`: the context-off half of L10-E is a
+deterministic function of the random task draw (the fixed-point agreement of the
+fallback bank's permutation), which a perfect model passes only 15.12 % of the
+time, so it cannot measure context use.
 
 ## 9. Seeds
 
@@ -396,3 +415,33 @@ Mechanism development after v1.0 used the single development seed
 hyperparameter of v1.1–v1.6 was selected on an evaluation seed, and no
 threshold in §8 was altered. The v1.0 engineering run *did* execute the
 evaluation seeds; that run is preserved in full above rather than discarded.
+
+### v1.7 — acceptance specification update: L10-K1 added (owner decision)
+
+**Trigger.** L10.3 (`work/L10_3_CONTEXT_CONTRIBUTION.md`,
+`stark/reports/L10_3_ACCEPTANCE_DECISION.md`) demonstrated, from the source and
+from the registered permutations rather than from any measurement, that the
+context-off half of L10-E is the fixed-point agreement between the fallback
+bank's permutation and each task's permutation, with expected pooled value
+4/9 = 0.4444 and attainable range [1/3, 1]. A perfect router therefore passes
+the ≤ 0.40 threshold with probability 0.1512. The criterion's own hypothesis
+(H3: *"if accuracy depends on the context cue, then … zeroing the cue must
+degrade accuracy substantially"*) is still tested by it in the weak sense that a
+degradation is observed, but the threshold cannot distinguish a system that uses
+context from one that does not.
+
+**Decision.** The repository owner was asked directly to choose among three
+dispositions and selected **Option B**: *retain L10-E unchanged and add L10-K1
+as a separate criterion*. Recorded 2026-10-24 in
+`stark/reports/L10_3_ACCEPTANCE_DECISION.md` §5, and transcribed into §8 here.
+The agent proposed the option and recorded the answer; it approved nothing.
+
+**What changed.** Exactly one row was added to §8 (L10-K1) plus the
+relationship note beneath the table. L10-E, L10-E2, L10-A–L10-J, their
+thresholds, the seeds, the evaluation semantics, the task distribution and every
+reported number are untouched. L10-E remains **FAILED at 0.425926** and is
+reported as such everywhere.
+
+**What did not change.** The frozen v1.6 content is preserved verbatim; this
+entry is appended, not substituted. Any future change to §8 must be recorded the
+same way, with an owner decision, in a new version — never edited in place.
