@@ -1,6 +1,6 @@
 # STARK-L10.4 — Official L10-K1 Evaluation Protocol
 
-**Version:** 1.0 (registered)
+**Version:** 1.1 (registered; v1.1 adds §16, a definitional clarification)
 **Schema:** STARK-L10-4
 **Date:** 2026-10-24
 **Status:** **registered before any official primary-seed measurement.**
@@ -250,3 +250,31 @@ recorded here so that a negative result cannot be described as surprising.
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-10-24 | Registered before the official run: revisions, seeds, arms, definitions, denominators, invalid-run rules, determinism/regression requirements, mechanical pass/fail rules, limitations. |
+| 1.1 | 2026-10-24 | §16 added: which of the (several) correct-cue evaluations is the scored cell for `acc_correct(m,t)`, and the matching validity rule. Written **after** the official run and **before** the disposition, as §11 requires. It changes no threshold, no formula and no number: every correct-cue evaluation call in the run scores 1.0000, so both readings give identical values (verified and reported in `work/L10_4_OFFICIAL_EVALUATION.md` §D). |
+
+## 16. Definitional clarification: which correct-cue evaluation is scored
+
+§5 defines `acc_correct(m,t)` over "the 120 `eval_kind 0` trials of task `t`".
+The harness evaluates every task with its correct cue more than once: at the
+task's acquisition step **and** at each later retention step. The row counts are
+therefore 360 / 240 / 120 for tasks 0 / 1 / 2 — legitimate, but it means a
+pooled-over-calls reading and a per-call reading are different statistics.
+
+**Registered definition (v1.1).** `acc_correct(m,t)` is the accuracy of the
+**final** correct-cue evaluation of task `t` after the complete task stream —
+i.e. the call with the largest `call` id among that task's `eval_kind 0` rows
+(`retention@step2` for tasks 0 and 1, `acquisition` for task 2). This is the same
+quantity the harness reports as `final_retention` in its metrics row and the same
+quantity L10-A calls "final average accuracy", so L10-K1 is expressed in the
+units the milestone already uses.
+
+**Validity, restated.** Every evaluation *call* must contain exactly 120 rows,
+and every (seed, task, condition) listed in §4 must be present. The number of
+calls per cell is not fixed — it follows the task stream.
+
+**Why this is a clarification and not a change.** `acc_correct` is 1.0000 for
+every call of every task of every seed in the official run, so the pooled
+reading and the final-call reading return the same vector and the same CAA. Both
+are computed and reported side by side in the evaluation report; the disposition
+is identical under either. No threshold, formula, seed or aggregation rule was
+touched.
