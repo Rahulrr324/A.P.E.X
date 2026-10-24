@@ -31,6 +31,13 @@
 //                                      identically to both sealing arms
 //   --ctxperbank                       evaluate every task with the cue zeroed and each
 //                                      allocated bank forced in turn (D-CTX-3)
+//
+// L10.2 additions (stark/design/l10_2_protocol_v1_1.md):
+//   --bank-mode learned|frozen         FROZEN-ROUTER arm: router never updated, selection
+//                                      is the argmax of zero scores (lowest allocated bank)
+//   --reuse-seal 0|1                   capacity-exhaustion branch: whether reusing a bank
+//                                      also un-seals the others (1 = frozen driver behaviour,
+//                                      0 = capacity stress WITHOUT the sealing confound)
 //   trial CSV gains `single` (single-candidate trial), `active` (active bank at that
 //   moment) and `opp` (sealing opportunity: single candidate routed to a non-active
 //   bank). Columns are APPENDED, so older readers are unaffected; the metric CSV is
@@ -143,6 +150,8 @@ struct StreamSpec {
     bool novel_context = false;
     double misroute_p = 0.0;      // L10.1 D-SEAL-B
     bool per_bank_ctxoff = false; // L10.1 D-CTX-3
+    CCBankMode bank_mode = CC_LEARNED;  // L10.2 FROZEN-ROUTER arm
+    bool reuse_unseals = true;          // L10.2 capacity stress without the seal confound
 };
 
 // ---------------------------------------------------------------- evaluation
@@ -156,7 +165,7 @@ double evalTask(CCAgent& ag, const std::vector<VTask>& tasks, int task, unsigned
                 CueMode mode, int task_bank, bool want_routing, bool read_only,
                 std::vector<TrialRow>* rows, unsigned shuffle_seed,
                 std::vector<double>* out_off, std::vector<double>* out_cross, int n_tasks,
-                int call_id = -1, int force_eval_bank = -1) {
+                int call_id = -1, int force_eval_bank = -1, CCBankMode bank_mode = CC_LEARNED) {
     std::string snap;
     if (read_only) snap = ccSerialize(ag);
 
@@ -209,8 +218,11 @@ double evalTask(CCAgent& ag, const std::vector<VTask>& tasks, int task, unsigned
         CCTrialSchedule s;
         s.lr = lr;
         s.cue = cue;
-        CCResult r = runCCTrial(ag, s, tasks[static_cast<size_t>(task)].map, task_bank,
-                                CC_LEARNED, /*learning=*/false, /*router_learning=*/false,
+        // FROZEN-ROUTER: the engine's CC_FROZEN mode selects bank 0 deterministically,
+        // which is what the unlearned router does (all scores zero -> lowest allocated).
+        CCResult r = runCCTrial(ag, s, tasks[static_cast<size_t>(task)].map,
+                                bank_mode == CC_FROZEN ? 0 : task_bank,
+                                bank_mode, /*learning=*/false, /*router_learning=*/false,
                                 force_eval_bank);
         ++n;
         const bool ok = (r.choice == tasks[static_cast<size_t>(task)].map.perm[static_cast<size_t>(r.queried)]);
@@ -352,7 +364,11 @@ StreamResult runStream(const StreamSpec& spec, unsigned master, bool dump_rows,
                     for (int k = 1; k < spec.n_banks; ++k)
                         if (rew[static_cast<size_t>(k)] < rew[static_cast<size_t>(worst)]) worst = k;
                     ag.bank_state[static_cast<size_t>(worst)] = CC_ACTIVE;
-                    if (cfg.seal_superseded)
+                    // Frozen driver behaviour unseals every bank here, which mixes a
+                    // capacity intervention with a sealing one (L10.1 finding). The
+                    // corrected L10.2 capacity arm sets --reuse-seal 0 and keeps the
+                    // other banks sealed, so capacity is the only thing that changes.
+                    if (cfg.seal_superseded && spec.reuse_unseals)
                         for (int k = 0; k < spec.n_banks; ++k)
                             if (k != worst) ag.bank_state[static_cast<size_t>(k)] = CC_ACTIVE;
                 }
@@ -402,7 +418,7 @@ StreamResult runStream(const StreamSpec& spec, unsigned master, bool dump_rows,
                 else
                     s.cue = cueOf(td.train_cues[static_cast<size_t>(cue_idx[i])]);
             }
-            CCResult r = runCCTrial(ag, s, td.map, -1, CC_LEARNED, true,
+            CCResult r = runCCTrial(ag, s, td.map, -1, spec.bank_mode, true,
                                     /*router_learning=*/!commit,
                                     /*forced_bank=*/commit ? active : -1);
             // L10.1: sealing opportunity telemetry
@@ -463,7 +479,7 @@ StreamResult runStream(const StreamSpec& spec, unsigned master, bool dump_rows,
             const int acq_call = next_call("acquisition", t, spec.eval_cue);
             double acc = evalTask(ag, tasks, t, es, spec.eval_cue, active, true, true,
                                   dump_rows ? &res.rows : nullptr, master + 9300u, nullptr, nullptr, T,
-                                  acq_call);
+                                  acq_call, -1, spec.bank_mode);
             tm.acquisition = acc;
             // routing accuracy, re-derived from the same schedule
             {
@@ -477,7 +493,7 @@ StreamResult runStream(const StreamSpec& spec, unsigned master, bool dump_rows,
                     s.lr = lr;
                     int ci = pick4(rng_cue);
                     if (spec.use_cue) s.cue = cueOf(td.train_cues[static_cast<size_t>(ci)]);
-                    CCResult r = runCCTrial(ag, s, td.map, active, CC_LEARNED, false, false);
+                    CCResult r = runCCTrial(ag, s, td.map, active, spec.bank_mode, false, false);
                     ++rn;
                     if (r.bank == active) ++rc;
                 }
@@ -495,7 +511,7 @@ StreamResult runStream(const StreamSpec& spec, unsigned master, bool dump_rows,
             const double acc = evalTask(ag, tasks, prev, es, spec.eval_cue,
                                         res.task_bank[static_cast<size_t>(prev)], false, true,
                                         dump_rows ? &res.rows : nullptr, master + 9300u, nullptr,
-                                        nullptr, T, rc_call);
+                                        nullptr, T, rc_call, -1, spec.bank_mode);
             res.ret[static_cast<size_t>(prev)][static_cast<size_t>(step)] = acc;
         }
     }
@@ -506,23 +522,26 @@ StreamResult runStream(const StreamSpec& spec, unsigned master, bool dump_rows,
         const unsigned hseed = master + 8001u + static_cast<unsigned>(t);
         const int hc = next_call("holdout", t, CM_HOLDOUT);
         res.holdout.push_back(evalTask(ag, tasks, t, hseed, CM_HOLDOUT, tb, false, true,
-                                       dump_rows ? &res.rows : nullptr, master + 9300u, nullptr, nullptr, T, hc));
+                                       dump_rows ? &res.rows : nullptr, master + 9300u, nullptr, nullptr, T, hc,
+                                       -1, spec.bank_mode));
         if (spec.context_controls) {
             const int oc = next_call("context_off", t, CM_OFF);
             res.off.push_back(evalTask(ag, tasks, t, master + 5001u + static_cast<unsigned>(t),
                                        CM_OFF, tb, true, true, dump_rows ? &res.rows : nullptr,
-                                       master + 9300u, nullptr, nullptr, T, oc));
+                                       master + 9300u, nullptr, nullptr, T, oc, -1, spec.bank_mode));
             const int sc = next_call("shuffled", t, CM_SHUFFLED);
             res.shuffled.push_back(evalTask(ag, tasks, t, master + 5001u + static_cast<unsigned>(t),
                                             CM_SHUFFLED, tb, false, true,
                                             dump_rows ? &res.rows : nullptr,
-                                            master + 9100u + static_cast<unsigned>(t), nullptr, nullptr, T, sc));
+                                            master + 9100u + static_cast<unsigned>(t), nullptr, nullptr, T, sc,
+                                            -1, spec.bank_mode));
         }
         if (spec.novel_context) {
             const int xc = next_call("cross_novel", t, CM_CROSS);
             res.cross.push_back(evalTask(ag, tasks, t, master + 5001u + static_cast<unsigned>(t),
                                          CM_CROSS, tb, true, true, dump_rows ? &res.rows : nullptr,
-                                         master + 9400u + static_cast<unsigned>(t), nullptr, nullptr, T, xc));
+                                         master + 9400u + static_cast<unsigned>(t), nullptr, nullptr, T, xc,
+                                         -1, spec.bank_mode));
         }
     }
 
@@ -653,6 +672,8 @@ int main(int argc, char** argv) {
     int n_tasks = 3, n_banks = 3, stage = 0, force_bank = -1, commit = 480, seal = 1;
     double misroute = 0.0;
     bool ctxperbank = false;
+    std::string bank_mode = "learned";
+    int reuse_seal = 1;
     std::string tag_suffix;   // L10.1: distinct file names for matched arms
 
     for (int i = 1; i < argc; ++i) {
@@ -670,6 +691,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--misroute") && i + 1 < argc) misroute = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--ctxperbank")) ctxperbank = true;
         else if (!std::strcmp(argv[i], "--tag") && i + 1 < argc) tag_suffix = argv[++i];
+        else if (!std::strcmp(argv[i], "--bank-mode") && i + 1 < argc) bank_mode = argv[++i];
+        else if (!std::strcmp(argv[i], "--reuse-seal") && i + 1 < argc) reuse_seal = std::atoi(argv[++i]);
     }
     if (n_tasks < 1 || n_tasks > 8) { std::cerr << "n_tasks must be 1..8\n"; return 2; }
     if (n_banks < 1 || n_banks > 8) { std::cerr << "n_banks must be 1..8\n"; return 2; }
@@ -691,6 +714,11 @@ int main(int argc, char** argv) {
     spec.seal = (seal != 0);
     spec.misroute_p = misroute;
     spec.per_bank_ctxoff = ctxperbank;
+    spec.reuse_unseals = (reuse_seal != 0);
+    if (bank_mode == "frozen") spec.bank_mode = CC_FROZEN;
+    else if (bank_mode == "oracle") spec.bank_mode = CC_ORACLE;
+    else if (bank_mode == "learned") spec.bank_mode = CC_LEARNED;
+    else { std::cerr << "--bank-mode must be learned|frozen|oracle\n"; return 2; }
     if (!order_arg.empty()) {
         for (const auto& s : split(order_arg, ',')) spec.order.push_back(std::stoi(s));
         // The order may be shorter, equal, or longer than n_tasks; a longer
