@@ -1,9 +1,10 @@
 # STARK-L10.3 — Context Contribution, Acceptance-Criterion Review, and L10-E Disposition
 
 **Milestone status:** diagnostics executed and independently recomputed. **No
-criterion changed. L10-E remains FAILED at 0.425926 against the unchanged 0.40
-threshold.** The proposed new criterion (**L10-K1**) is **pending owner
-decision** and has no pass/fail authority.
+historical criterion changed. L10-E remains FAILED at 0.425926 against the
+unchanged 0.40 threshold.** The new criterion (**L10-K1**) was **ratified by the
+owner on 2026-10-24 (Option B)** as a criterion *definition*; it is **ratified
+but unevaluated** and is not applied to any L10.3 number.
 
 **Headline**
 
@@ -15,7 +16,7 @@ decision** and has no pass/fail authority.
 | Context-off, recomputed from trials | diagnostic | 0.425926 | identical to analytic floor |
 | **CAA** (context accuracy advantage) | diagnostic | **0.5799** | per seed 0.5185 / 0.5917 / 0.6296 |
 | **CRA** (context routing advantage) | diagnostic | **0.6667** (= ceiling 1−1/K) | all seeds |
-| **L10-K1** (proposed) | **not ratified** | would pass all 3 primary seeds | **pending owner decision** |
+| **L10-K1** (ratified 2026-10-24, Option B) | v1.7 pending (L10.4) | diagnostics suggest it would pass; **not an evaluation** | **ratified but unevaluated** |
 
 ---
 
@@ -82,9 +83,11 @@ routing and random permutations the ceilings are 5/9 = 0.5556 and 0.6667.
 run); v1.1 entry `a046d38f…` (commit `f60d1e9`, K4 execution-path correction,
 labelled as written after inspection).
 
-**Authorization:** **exploratory.** No owner decision authorises a criterion
-change; therefore every value below is a diagnostic measurement. L10-K1 is a
-proposal only.
+**Authorization:** the diagnostics are **exploratory**. At the time of the run
+no owner decision existed; the owner ratified L10-K1 afterwards (2026-10-24,
+Option B) as a *definition*, which does not retroactively convert these
+measurements into an official evaluation. Every value below is a diagnostic
+measurement; no PASS/FAIL is assigned to L10-K1 here.
 
 **Matched controls.** Every condition runs on the identical trained state, the
 identical evaluation schedule and 120 trials per (seed, task). The only quantity
@@ -205,19 +208,27 @@ fallback rule, not of context use.
 
 Full memo: `stark/reports/L10_3_ACCEPTANCE_DECISION.md`.
 
-| Option | Meaning | Effect on history | Recommendation |
+| Option | Meaning | Effect on history | Outcome |
 |---|---|---|---|
-| **A** retain L10-E | keep threshold and metric; stays FAILED | none | defensible, leaves the criterion unable to express the capability |
-| **B** add a separate criterion | L10-E stays FAILED; add L10-K1 | none; L10-K1 has no history yet | **recommended** |
-| **C** replace L10-E prospectively | §8 row superseded | failure preserved but its criterion removed from §8 | only if the owner also wants a single context criterion going forward |
+| **A** retain L10-E | keep threshold and metric; stays FAILED | none | not selected |
+| **B** add a separate criterion | L10-E stays FAILED; add L10-K1 | none; L10-K1 has no history yet | **RATIFIED by the owner, 2026-10-24** |
+| **C** replace L10-E prospectively | §8 row superseded | failure preserved but its criterion removed from §8 | not selected |
 
-**Approval status: PENDING.** No owner decision exists for L10.3. The agent has
-not approved anything, has not inferred approval from L10.2's A-1/A-3
-ratification, and has not applied L10-K1 to any result. Until the owner decides,
-**L10-E remains FAILED** and L10-K1 remains a proposal with no authority.
+**Approval status: OPTION B RATIFIED by the repository owner on 2026-10-24**,
+asked directly in this session and recorded verbatim in
+`stark/reports/L10_3_ACCEPTANCE_DECISION.md` §6. The agent approved nothing on
+the owner's behalf and did not infer approval from L10.2's A-1/A-3.
 
-An owner decision **is** required — this is a change to the acceptance
-specification, which only the owner may make.
+Consequences, precisely:
+
+- **L10-E is unchanged and remains FAILED** at 0.425926 against 0.40.
+- **L10-K1 is ratified as a definition but is not evaluated.** The values in §C
+  are diagnostic; assigning them PASS would be exactly the substitution this
+  milestone exists to prevent.
+- `stark/design/context_conditioned_memory_milestone.md` is **not** modified: it
+  is frozen at v1.6. Inserting the ratified L10-K1 row into §8 is a versioned
+  change deferred to **L10.4**, which must also carry the official evaluation
+  under a fresh registration.
 
 ## F. Regression and integration
 
@@ -258,11 +269,13 @@ contradiction and made the remaining failure interpretable; it added no
 capability. Counting a milestone as progress for correcting its own metric would
 inflate the estimate.
 
-**Recommended next milestone: an owner decision on L10-E (Option A, B or C),
-then — only if B is ratified — a short L10.4 that moves L10-K1 into §8 by a
-versioned change and re-runs it inside a fresh registration.** L11 should not
-start before the acceptance specification is internally consistent, because L11
-would inherit the same defect.
+**The owner decided (Option B) on 2026-10-24. Recommended next milestone:
+L10.4 — bump the design document to v1.7 with the ratified L10-K1 row, register
+the protocol, run the primary seeds under that registration, recompute
+independently, run the full regression, and record the official disposition.**
+L11 should not start before that, because the acceptance specification is not yet
+internally consistent: §8 still contains only the superseded-in-effect L10-E
+context row.
 
 ## H. Deliverables and reproduction
 
@@ -271,7 +284,7 @@ would inherit the same defect.
 | `work/L10_3_CONTEXT_CONTRIBUTION.md` | this report |
 | `work/L10_3_CONTEXT_CONTRIBUTION.json` | machine-readable results, `null` where unmeasured |
 | `stark/design/l10_3_context_contribution_protocol.md` | registered protocol v1.0 (+ v1.1 K4 entry) |
-| `stark/reports/L10_3_ACCEPTANCE_DECISION.md` | Options A/B/C memo, approval PENDING |
+| `stark/reports/L10_3_ACCEPTANCE_DECISION.md` | Options A/B/C memo; **Option B ratified 2026-10-24** |
 | `work/l10_raw/context_contribution_20261024/` | raw evidence: `protocol/`, `K0/`, `K0b/`, `KX/`, `KC_cross/`, `GEN/`, `perm/`, `regress/`, `restart/`, `analysis/`, `regression/`, `MANIFEST.md` |
 
 ```bash

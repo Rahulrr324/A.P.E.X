@@ -1,7 +1,7 @@
 {
   "artifact": "STARK-L10.3 \u2014 context contribution, acceptance-criterion review and L10-E disposition",
   "date": "2026-10-24",
-  "status": "diagnostics complete; no criterion changed; L10-E remains FAILED; proposed L10-K1 pending owner decision",
+  "status": "diagnostics complete; L10-E unchanged and FAILED; L10-K1 ratified as a definition by owner Option B on 2026-10-24 but NOT evaluated",
   "provenance": {
     "repository": "https://github.com/Rahulrr324/A.P.E.X.git",
     "starting_branch": "validation/l10-2-spec-ratification",
@@ -231,7 +231,7 @@
   },
   "proposed_criterion": {
     "id": "L10-K1",
-    "status": "PENDING OWNER APPROVAL \u2014 not applied to any result",
+    "status": "RATIFIED AS A DEFINITION 2026-10-24 (Option B) \u2014 not evaluated; no PASS/FAIL assigned",
     "text": "on every primary seed: CAA_pooled >= 0.40; CAA(t) >= 0.25 for at least two of three tasks; CRA_pooled >= 0.50",
     "null_value": 0.0,
     "ceiling_CAA": 0.555556,
@@ -257,9 +257,18 @@
       }
     },
     "recommended": "B",
-    "approval_status": "PENDING",
-    "owner_decision_required": true,
-    "agent_approved_anything": false
+    "approval_status": "RATIFIED \u2014 Option B",
+    "owner_decision_required": false,
+    "agent_approved_anything": false,
+    "decision_date": "2026-10-24",
+    "decided_by": "repository owner (Rahulrr324)",
+    "decision_mechanism": "owner asked directly in session; selected Option B",
+    "effects": {
+      "L10-E": "unchanged; remains FAILED at 0.425926 against 0.40",
+      "L10-K1": "ratified as a criterion definition; remains unevaluated; L10.3 values are diagnostic only",
+      "design_document": "stark/design/context_conditioned_memory_milestone.md NOT modified (frozen v1.6); section 8 insertion deferred to L10.4 with a version bump",
+      "history": "no prior number changed"
+    }
   },
   "tests": {
     "targets": 26,
@@ -356,6 +365,6 @@
     "current": 0.5,
     "rationale": "a measurement contradiction was removed and the remaining failure made interpretable; no capability added"
   },
-  "recommended_next": "owner decision on L10-E (A/B/C); if B is ratified, L10.4 moves L10-K1 into section 8 by a versioned change and re-runs it under a fresh registration. Do not start L11 before the acceptance specification is internally consistent.",
+  "recommended_next": "L10.4 \u2014 bump the design document to v1.7 with the ratified L10-K1 row, register the protocol, run the primary seeds under that registration, recompute independently, run the full regression and record the official disposition. Do not start L11 before that.",
   "evidence_dir": "work/l10_raw/context_contribution_20261024"
 }

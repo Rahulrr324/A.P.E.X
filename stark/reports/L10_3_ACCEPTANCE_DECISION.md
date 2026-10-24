@@ -4,7 +4,11 @@
 **Date:** 2026-10-24
 **Author of the analysis:** engineering (Arena cloud agent)
 **Decision owner:** repository owner (`Rahulrr324`)
-**Status:** **PENDING OWNER DECISION.** Nothing in this memo is in force.
+**Status:** **OPTION B RATIFIED BY THE OWNER, 2026-10-24.** L10-E is retained
+unchanged and remains FAILED; **L10-K1 is ratified as a criterion definition but
+has not been evaluated** — it becomes official only inside a newly registered
+protocol (L10.4). This memo section 6 records the decision; the analysis in
+sections 1–4 is unchanged from the version that was pending.
 **Governing document:** `stark/design/context_conditioned_memory_milestone.md`
 §8, row `L10-E`. That document contains no delegation clause; an agent cannot
 amend it. The repository's decision mechanism is an Owner Decision Record under
@@ -65,7 +69,7 @@ L10-E = FAILED at 0.425926 permanently, with the derivation attached.
 
 - **Benefits:** zero risk of moving goalposts; the historical record stays
   literally true; no re-interpretation of any earlier number; nothing to
-  re-register.
+  re-register. *(Not selected — see §6.)*
 - **Limitations:** the specification keeps a criterion that a flawless system
   passes only 15 % of the time, so "L10-E failed" will keep being reported
   without indicating any deficiency of the system; the milestone can never be
@@ -74,7 +78,7 @@ L10-E = FAILED at 0.425926 permanently, with the derivation attached.
   Mitigated only by the accompanying explanation, not by the specification.
 - **Effect on history:** none.
 
-### Option B — Keep L10-E failed, add a separate context-contribution criterion (recommended)
+### Option B — Keep L10-E failed, add a separate context-contribution criterion (recommended and **RATIFIED**, §6)
 
 **What happens:** L10-E stays exactly as it is (FAILED, 0.425926, threshold
 0.40, unchanged). A **new** criterion L10-K1 is added to §8 with a distinct
@@ -113,6 +117,7 @@ criterion".
 
 - **Benefits:** the specification stops containing a criterion that cannot
   measure its own hypothesis; a single, clean context criterion going forward.
+  *(Not selected — see §6.)*
 - **Limitations:** this is the only option that *changes* the meaning of an
   acceptance row; it invites the reading that a failed criterion was removed
   after the fact, even though the change would be prospective.
@@ -147,13 +152,45 @@ retained as FAILED", never rewritten.
 
 | Field | Value |
 |---|---|
-| Decision | **PENDING** — no owner decision has been made |
-| Decided by | — (repository owner only) |
-| Date | — |
-| Effect until decided | **L10-E remains FAILED at 0.425926 under the unchanged 0.40 threshold; L10-K1 remains a proposal with no pass/fail authority** |
-| Agent authority | none; this memo proposes, it does not approve |
+| Decision | **OPTION B — retain L10-E unchanged and add L10-K1 as a separate criterion** |
+| Decided by | repository owner (`Rahulrr324`) |
+| Date | **2026-10-24** |
+| Mechanism | the owner was asked directly, in this session, to choose among Options A, B and C as specified in §3 of this memo; the owner selected **B** |
+| Recorded by | engineering (Arena cloud agent) — recorded verbatim, not interpreted |
+| Effect on L10-E | **unchanged: FAILED at 0.425926 against the 0.40 threshold; the criterion, its metric and its historical result are untouched** |
+| Effect on L10-K1 | **ratified as a criterion definition** (text below). It is **not** an evaluated criterion: the L10.3 diagnostics are exploratory and no PASS/FAIL is assigned to them |
+| Effect on history | none — every prior number stands as published |
+| Agent authority | none; the agent proposed and recorded, and approved nothing |
 
-To ratify, the owner replies with the option letter; this table is then filled
-in, the criterion text is moved into `stark/design/context_conditioned_memory_milestone.md`
-§8 by a versioned change, and L10-K1 is evaluated only inside a newly
-registered protocol.
+### Ratified criterion text (L10-K1)
+
+> On every primary seed: (a) `CAA_pooled ≥ 0.40`, where
+> `CAA(t) = acc_correct(t) − acc_null(t)` and
+> `acc_null(t) = (1/K) Σ_k A(k,t)` is the accuracy of a context-ignoring policy
+> measured by forcing each bank with the cue removed; (b) `CAA(t) ≥ 0.25` for at
+> least two of the three tasks; (c) `CRA_pooled ≥ 0.50`, where
+> `CRA(t) = R_correct(t) − 1/K` and `R_correct(t)` is the fraction of correct-cue
+> trials whose selected bank is the task's bank.
+
+This is the text registered in `stark/design/l10_3_context_contribution_protocol.md`
+§5 **before** the run; the owner ratified that text, not a value.
+
+### What the ratification does and does not do
+
+- **Does:** make L10-K1 the authoritative context criterion for future
+  milestones, alongside the retained L10-E.
+- **Does not:** pass L10-K1. The L10.3 measurement (CAA 0.5799, CRA 0.6667) is
+  diagnostic evidence indicating that a properly registered evaluation would
+  pass; it is not that evaluation.
+- **Does not:** amend `stark/design/context_conditioned_memory_milestone.md`.
+  That document is frozen at v1.6 and its §8 row for L10-E is unchanged. The
+  insertion of L10-K1 into §8 is a versioned change deferred to **L10.4**,
+  together with a fresh registration and the official evaluation.
+
+### Next step implied by this decision
+
+**L10.4 — register L10-K1 and evaluate it officially:** bump the design document
+to v1.7 with the ratified §8 row, re-register the protocol (frozen hash before
+the run), run the primary seeds under that registration, recompute independently,
+run the full regression, and record the disposition. Until that run, L10-K1 is
+*ratified but unevaluated*.

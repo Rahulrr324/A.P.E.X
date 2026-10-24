@@ -3,7 +3,7 @@
 Protocol: stark/design/l10_3_context_contribution_protocol.md v1.1
   v1.0 registered in commit 3500c03, sha256 7e90699b3db7d6c2f68998f46141f9f92c2dd1d26cc9dec0341f30aaed8cef82 (fixed before any registered run)
   v1.1 K4 execution-path entry in commit f60d1e9
-Decision memo: stark/reports/L10_3_ACCEPTANCE_DECISION.md (approval PENDING)
+Decision memo: stark/reports/L10_3_ACCEPTANCE_DECISION.md (Option B ratified 2026-10-24)
 Harness binary sha256: 6a69967a3148795159feb4aabcf6feca36bc663ed78d58bd232d5075ff3274a9
 
 ## Artifacts
@@ -254,10 +254,10 @@ b5f85d477569812101f5d6965dbf305b53350a1e6b259c36fd0a4ac702afe714  GEN/trials_wro
 ## Deliverables and changed sources
 
 ```
-63e8f006d9fd3894bacdf962db7ac880cb66647699f51ac42add04dda3aa9d16  work/L10_3_CONTEXT_CONTRIBUTION.md
-a544695aef8a3d0d37d3be9e235aa4a628457930d29582b2b907aa8e796dd9c3  work/L10_3_CONTEXT_CONTRIBUTION.json
+82ab830afaac38162d566b89b87f9bf78210486f4ebf337837ba70842e843c72  work/L10_3_CONTEXT_CONTRIBUTION.md
+92d76c7be1be3f6b212d10d4b37d6670aa8dc1df2f714a02e09e4988bcea7b62  work/L10_3_CONTEXT_CONTRIBUTION.json
 a046d38f35f88d131b825228d1a330212fcbcf5dc917d5ac383b5955eda9da6d  stark/design/l10_3_context_contribution_protocol.md
-c7f1a304c05b040aedab6dbe216b41dffc7fef57208570d2eca64658ec45b96f  stark/reports/L10_3_ACCEPTANCE_DECISION.md
+c83fe6c2b116626482296832e3f5a9af28cf7ca209daa58a43ccfeb304f08150  stark/reports/L10_3_ACCEPTANCE_DECISION.md
 697b5f8a23eed90324ae600fd868628dc257cd8ca0b0a3b5f509a1f42df1ffc7  stark/src/learning/l10_validation_harness.cpp
 b6eced69aa7e1b08b08d0919ad59d83a1fcb988dac795e70a6a14218bf452cbd  stark/src/learning/ContextConditionedMemory.cpp
 dd953fe03d11a33822169ee5b18b9977af522314c90f2caaac7e10f4e9a40626  stark/src/learning/ContextConditionedMemory.h
