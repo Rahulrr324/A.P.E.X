@@ -35,6 +35,9 @@
 // L10.2 additions (stark/design/l10_2_protocol_v1_1.md):
 //   --bank-mode learned|frozen         FROZEN-ROUTER arm: router never updated, selection
 //                                      is the argmax of zero scores (lowest allocated bank)
+//   --ctx-contribution                 L10.3: add PARTIAL (one-feature) and
+//                                      OFF-UNIFORM (explicit uniform fallback)
+//                                      diagnostics as extra trial rows
 //   --reuse-seal 0|1                   capacity-exhaustion branch: whether reusing a bank
 //                                      also un-seals the others (1 = frozen driver behaviour,
 //                                      0 = capacity stress WITHOUT the sealing confound)
@@ -77,7 +80,9 @@ std::vector<std::string> split(const std::string& s, char sep) {
     return out;
 }
 
-enum CueMode { CM_TRAIN = 0, CM_HOLDOUT = 1, CM_OFF = 2, CM_SHUFFLED = 3, CM_CROSS = 4 };
+enum CueMode { CM_TRAIN = 0, CM_HOLDOUT = 1, CM_OFF = 2, CM_SHUFFLED = 3, CM_CROSS = 4,
+                CM_PARTIAL = 5,      // L10.3: one of the two cue features removed
+                CM_OFF_UNIFORM = 6 };// L10.3: cue removed, explicit uniform fallback
 
 struct VTask {
     LRMapping map;
@@ -152,6 +157,7 @@ struct StreamSpec {
     bool per_bank_ctxoff = false; // L10.1 D-CTX-3
     CCBankMode bank_mode = CC_LEARNED;  // L10.2 FROZEN-ROUTER arm
     bool reuse_unseals = true;          // L10.2 capacity stress without the seal confound
+    bool ctx_contribution = false;      // L10.3: add PARTIAL + OFF-UNIFORM diagnostics
 };
 
 // ---------------------------------------------------------------- evaluation
@@ -176,6 +182,7 @@ double evalTask(CCAgent& ag, const std::vector<VTask>& tasks, int task, unsigned
     std::uniform_int_distribution<int> pick_pair(0, 3);
 
     int n = 0, correct = 0, rn = 0, rc = 0;
+    int trial_i = 0;   // L10.3: deterministic alternation for CM_PARTIAL
     double off_sum = 0.0;
     int off_n = 0;
     double cross_sum = 0.0;
@@ -183,6 +190,7 @@ double evalTask(CCAgent& ag, const std::vector<VTask>& tasks, int task, unsigned
 
     for (const auto& lr : sched) {
         std::vector<int> cue;
+        ++trial_i;
         switch (mode) {
             case CM_TRAIN:
                 cue = cueOf(tasks[static_cast<size_t>(task)].train_cues[static_cast<size_t>(pick4(rng_cue))]);
@@ -191,8 +199,19 @@ double evalTask(CCAgent& ag, const std::vector<VTask>& tasks, int task, unsigned
                 cue = cueOf(tasks[static_cast<size_t>(task)].holdout_cues[static_cast<size_t>(pick4(rng_cue) & 1)]);
                 break;
             case CM_OFF:
+            case CM_OFF_UNIFORM:
                 cue.clear();
                 break;
+            case CM_PARTIAL: {
+                // L10.3: reduced (one-feature) context. The two features of the
+                // correct cue are presented one at a time, alternating.
+                std::vector<int> full =
+                    cueOf(tasks[static_cast<size_t>(task)].train_cues[static_cast<size_t>(pick4(rng_cue))]);
+                cue.clear();
+                if (!full.empty())
+                    cue.push_back(full[static_cast<size_t>((trial_i - 1) % static_cast<int>(full.size()))]);
+                break;
+            }
             case CM_SHUFFLED: {
                 std::vector<int> others;
                 for (int t = 0; t < n_tasks; ++t) if (t != task) others.push_back(t);
@@ -220,9 +239,10 @@ double evalTask(CCAgent& ag, const std::vector<VTask>& tasks, int task, unsigned
         s.cue = cue;
         // FROZEN-ROUTER: the engine's CC_FROZEN mode selects bank 0 deterministically,
         // which is what the unlearned router does (all scores zero -> lowest allocated).
+        const CCBankMode bmode = (mode == CM_OFF_UNIFORM) ? CC_UNIFORM_FALLBACK : bank_mode;
         CCResult r = runCCTrial(ag, s, tasks[static_cast<size_t>(task)].map,
                                 bank_mode == CC_FROZEN ? 0 : task_bank,
-                                bank_mode, /*learning=*/false, /*router_learning=*/false,
+                                bmode, /*learning=*/false, /*router_learning=*/false,
                                 force_eval_bank);
         ++n;
         const bool ok = (r.choice == tasks[static_cast<size_t>(task)].map.perm[static_cast<size_t>(r.queried)]);
@@ -536,6 +556,19 @@ StreamResult runStream(const StreamSpec& spec, unsigned master, bool dump_rows,
                                             master + 9100u + static_cast<unsigned>(t), nullptr, nullptr, T, sc,
                                             -1, spec.bank_mode));
         }
+        if (spec.ctx_contribution) {
+            // L10.3 context-contribution diagnostics. Appended after every
+            // registered evaluation, read-only, so the registered numbers of a
+            // run are unchanged (verified by comparing its metrics CSV).
+            const int pc = next_call("partial_cue", t, CM_PARTIAL);
+            evalTask(ag, tasks, t, master + 5001u + static_cast<unsigned>(t),
+                     CM_PARTIAL, tb, true, true, dump_rows ? &res.rows : nullptr,
+                     master + 9300u, nullptr, nullptr, T, pc, -1, spec.bank_mode);
+            const int uc = next_call("context_off_uniform", t, CM_OFF_UNIFORM);
+            evalTask(ag, tasks, t, master + 5001u + static_cast<unsigned>(t),
+                     CM_OFF_UNIFORM, tb, true, true, dump_rows ? &res.rows : nullptr,
+                     master + 9300u, nullptr, nullptr, T, uc, -1, spec.bank_mode);
+        }
         if (spec.novel_context) {
             const int xc = next_call("cross_novel", t, CM_CROSS);
             res.cross.push_back(evalTask(ag, tasks, t, master + 5001u + static_cast<unsigned>(t),
@@ -672,6 +705,7 @@ int main(int argc, char** argv) {
     int n_tasks = 3, n_banks = 3, stage = 0, force_bank = -1, commit = 480, seal = 1;
     double misroute = 0.0;
     bool ctxperbank = false;
+    bool ctx_contribution = false;   // L10.3
     std::string bank_mode = "learned";
     int reuse_seal = 1;
     std::string tag_suffix;   // L10.1: distinct file names for matched arms
@@ -681,6 +715,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
         else if (!std::strcmp(argv[i], "--seeds") && i + 1 < argc) seed_arg = argv[++i];
         else if (!std::strcmp(argv[i], "--order") && i + 1 < argc) order_arg = argv[++i];
+        else if (!std::strcmp(argv[i], "--ctx-contribution")) ctx_contribution = true;
         else if (!std::strcmp(argv[i], "--tasks") && i + 1 < argc) n_tasks = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--banks") && i + 1 < argc) n_banks = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--state") && i + 1 < argc) state_file = argv[++i];
@@ -714,6 +749,7 @@ int main(int argc, char** argv) {
     spec.seal = (seal != 0);
     spec.misroute_p = misroute;
     spec.per_bank_ctxoff = ctxperbank;
+    spec.ctx_contribution = ctx_contribution;
     spec.reuse_unseals = (reuse_seal != 0);
     if (bank_mode == "frozen") spec.bank_mode = CC_FROZEN;
     else if (bank_mode == "oracle") spec.bank_mode = CC_ORACLE;

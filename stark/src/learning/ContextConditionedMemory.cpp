@@ -314,6 +314,21 @@ CCResult runCCTrial(CCAgent& agent, const CCTrialSchedule& sched,
         bank = 0;
     } else if (forced_bank >= 0) {
         bank = forced_bank; // commitment window (allocation structure)
+    } else if (mode == CC_UNIFORM_FALLBACK) {
+        // L10.3 diagnostic: context-independent fallback that is NOT the argmax
+        // tie-break. Uniform over the selectable banks, deterministic given the
+        // trial's seeded draw. Used only by the context-contribution harness.
+        std::vector<char> fmask = candidateMask(agent);
+        std::vector<int> cand;
+        for (int k = 0; k < K; ++k) if (fmask[static_cast<size_t>(k)]) cand.push_back(k);
+        if (cand.empty()) {
+            bank = 0;
+        } else {
+            int idx = static_cast<int>(s.mech_u * static_cast<double>(cand.size()));
+            if (idx < 0) idx = 0;
+            if (idx >= static_cast<int>(cand.size())) idx = static_cast<int>(cand.size()) - 1;
+            bank = cand[static_cast<size_t>(idx)];
+        }
     } else {
         if (learning_enabled) {
             // CDF sampling with the trial's seeded draw (deterministic).

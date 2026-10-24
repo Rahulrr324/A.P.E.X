@@ -40,6 +40,10 @@ enum CCBankMode {
     CC_LEARNED = 0,      // sample from the learned router (train) / argmax (eval)
     CC_ORACLE = 1,       // DIAGNOSTIC UPPER BOUND: driver forces the task's bank
     CC_FROZEN = 2,       // router never updated; selection = argmax of zero scores
+    // L10.3 DIAGNOSTIC ONLY: explicit context-independent fallback. When the cue
+    // carries no information the bank is drawn uniformly from the selectable set
+    // with the trial's seeded draw, instead of inheriting the argmax tie-break.
+    CC_UNIFORM_FALLBACK = 3,
 };
 
 struct CCConfig {
