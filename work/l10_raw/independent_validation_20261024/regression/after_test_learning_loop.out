@@ -1,0 +1,10 @@
+  schedule determinism OK
+  agent construction OK
+  frozen/unmodulated invariance OK
+  learning direction OK
+  mini: acc_trained=1 acc_baseline=0.525 acc_sham=0.275
+  end-to-end mini OK
+==========================================
+Total assertions: 55
+ALL TESTS PASSED
+==========================================

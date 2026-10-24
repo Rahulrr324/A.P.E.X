@@ -583,10 +583,14 @@ std::string jsonArm(const ArmSpec& spec, const std::vector<SeedRun>& runs,
            << "," << num(r.acq[2].routing_acc) << "]"
            << ", \"holdout\": [" << num(r.holdout[0].acc) << "," << num(r.holdout[1].acc)
            << "," << num(r.holdout[2].acc) << "]"
-           << ", \"shuffled\": [" << num(r.shuffled[0].acc) << "," << num(r.shuffled[1].acc)
-           << "," << num(r.shuffled[2].acc) << "]"
-           << ", \"ctx_off\": [" << num(r.ctx_off[0].acc) << "," << num(r.ctx_off[1].acc)
-           << "," << num(r.ctx_off[2].acc) << "]"
+           << ", \"shuffled\": " << (spec.context_controls
+                  ? ("[" + num(r.shuffled[0].acc) + "," + num(r.shuffled[1].acc) + "," +
+                     num(r.shuffled[2].acc) + "]")
+                  : std::string("null"))
+           << ", \"ctx_off\": " << (spec.context_controls
+                  ? ("[" + num(r.ctx_off[0].acc) + "," + num(r.ctx_off[1].acc) + "," +
+                     num(r.ctx_off[2].acc) + "]")
+                  : std::string("null"))
            << ", \"update_mass\": {\"intended_rows\": " << num(r.mean_I_rows)
            << ", \"unintended_rows\": " << num(r.mean_U)
            << ", \"unintended_banks\": " << num(r.mean_I_banks) << "}"
@@ -672,8 +676,15 @@ std::string jsonArm(const ArmSpec& spec, const std::vector<SeedRun>& runs,
        << "," << num(meanOf(routing[2])) << "],\n";
     js << indent << "    \"holdout_mean\": [" << num(meanOf(holdout[0])) << "," << num(meanOf(holdout[1]))
        << "," << num(meanOf(holdout[2])) << "],\n";
-    js << indent << "    \"shuffled_cue_mean\": " << num(meanOf(shuffled)) << ",\n";
-    js << indent << "    \"context_off_mean\": " << num(meanOf(ctx_off)) << ",\n";
+    // These two controls are only evaluated for arms that request them
+    // (spec.context_controls). Emitting 0.0 for an arm that never ran them
+    // would be indistinguishable from a measured 0% (fixed in L10 validation).
+    js << indent << "    \"context_controls_measured\": "
+       << (spec.context_controls ? "true" : "false") << ",\n";
+    js << indent << "    \"shuffled_cue_mean\": "
+       << (spec.context_controls ? num(meanOf(shuffled)) : std::string("null")) << ",\n";
+    js << indent << "    \"context_off_mean\": "
+       << (spec.context_controls ? num(meanOf(ctx_off)) : std::string("null")) << ",\n";
     js << indent << "    \"update_mass\": {\"intended_rows\": " << num(meanOf(u_rows))
        << ", \"unintended_rows\": " << num(meanOf(u_other_rows))
        << ", \"unintended_banks\": " << num(meanOf(u_banks)) << "},\n";

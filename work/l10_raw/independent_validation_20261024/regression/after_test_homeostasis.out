@@ -1,0 +1,27 @@
+==========================================
+STARK-005 Homeostatic Plasticity Tests
+==========================================
+Test 1: Physical Hz units (dt=0.1, one spike => 10 Hz)... PASS (r_mean=0.00099995 Hz)
+Test 2: Analytical EMA correctness... PASS (r_mean=2.92979)
+Test 3: Rate decay toward zero when spikes stop... PASS (r=6.16771 -> 2.29444e-43)
+Test 4: Hyperactive neuron => incoming weights decrease... PASS (w=0.5 -> 3.56007e-21)
+Test 5: Hypoactive neuron => incoming weights increase... PASS (w=0.1 -> 1, r_B=1.03276)
+Test 6: Multiplicative scaling (w_new ≈ w_old * scale)... PASS (scale=1.10517, w=0.5->0.610701)
+Test 7: Relative ratio preservation... PASS (ratio 2.5 -> 2.5)
+Test 8: Inhibitory sign preservation... PASS (exc=0.5->0.499923, inh=-0.4->-0.399938)
+Test 9: Zero-weight preservation under scaling... PASS
+Test 10: Hysteresis dead-zone (no scaling when |error| <= hz)... PASS (no-scale: w=0.5, scaled: w=0.5->0.00103382)
+Test 11: Per-synapse weight bounds enforced... PASS (exc=0.5, inh=-6.63367e-290)
+Test 12: STDP + homeostasis interaction... PASS (STDP: 0.5 -> 1)
+Test 13: Deterministic repeated execution... PASS (identical rates and weights)
+Test 14: Multi-neuron isolation (incoming-only scaling)... PASS (incoming changed, outgoing not directly scaled)
+Test 15: Parameter validation... PASS
+Test 16: Different dt values produce consistent Hz behavior... PASS
+Test 17: reset() restores homeostatic state... PASS
+Test 18: addNeuron() initializes new state without disturbing existing... PASS
+Test 19: Extreme parameter safety... PASS (w=0.01 -> 0.00845354)
+Test 20: Repeated homeostatic updates remain finite/stable... PASS
+==========================================
+Total assertions: 403
+ALL TESTS PASSED
+==========================================

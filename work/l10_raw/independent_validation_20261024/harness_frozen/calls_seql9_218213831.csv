@@ -1,0 +1,10 @@
+call,purpose,task,eval_kind
+0,acquisition,0,0
+1,acquisition,1,0
+2,retention@step1,0,0
+3,acquisition,2,0
+4,retention@step2,0,0
+5,retention@step2,1,0
+6,holdout,0,1
+7,holdout,1,1
+8,holdout,2,1

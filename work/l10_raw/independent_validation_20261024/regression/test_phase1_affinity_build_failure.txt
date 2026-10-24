@@ -1,0 +1,11 @@
+tests/test_phase1_affinity.cpp:138:37: error: 'DWORD_PTR' has not been declared
+  138 |         auto enumerateDWordPtr = [](DWORD_PTR mask) -> std::vector<uint32_t> {
+tests/test_phase1_affinity.cpp:140:45: error: 'DWORD_PTR' was not declared in this scope
+  140 |             for (uint32_t i = 0; i < sizeof(DWORD_PTR) * 8; ++i) {
+tests/test_phase1_affinity.cpp:150:13: error: 'DWORD_PTR' was not declared in this scope
+  150 |             DWORD_PTR mask = DWORD_PTR(1);
+tests/test_phase1_affinity.cpp:160:13: error: 'DWORD_PTR' was not declared in this scope
+  160 |             DWORD_PTR mask = DWORD_PTR(0xFFF);
+  172 |                 DWORD_PTR mask2 = DWORD_PTR(1) << 32;
+tests/test_phase1_affinity.cpp:186:13: error: 'DWORD_PTR' was not declared in this scope
+  186 |             DWORD_PTR rawProc = 0, rawSys = 0;

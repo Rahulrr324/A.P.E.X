@@ -1,0 +1,11 @@
+  timestep accounting OK
+  mapping validity OK
+  schedule balance + no leakage OK
+  no-learning invariance OK
+  forced binding retrieval OK
+  memory ablation + save/reload OK
+  mini multi-item learning OK
+==========================================
+Total assertions: 1463
+ALL TESTS PASSED
+==========================================

@@ -1,0 +1,35 @@
+Ten seeds (3 frozen + 7 exploratory), frozen 3-task / 3-bank protocol
+
+      seed  CCM forget  CCM final  L9 forget  L9 final
+ 123456789      0.0000     1.0000     0.3944    0.3306
+ 218213831      0.0000     1.0000     0.5972    0.2917
+ 171473193      0.0000     1.0000     0.4111    0.2056
+         1      0.0000     1.0000     0.4139    0.3722
+         2      0.0000     0.9944     0.3528    0.4222
+         3      0.0000     0.9972     0.4056    0.3694
+         7      0.0000     0.9972     0.3639    0.2500
+        42      0.0000     1.0000     0.4028    0.1667
+      1234      0.0000     1.0000     0.5556    0.2833
+    999983      0.0000     1.0000     0.4417    0.2278
+
+CCM mean_forget=0.0000 sd=0.0000  final_avg=0.9989 min=0.9944  min_acq=0.9833
+L9  mean_forget=0.4339 sd=0.0798  final_avg=0.2919
+
+Scaling / capacity (3 seeds each)
+  4 tasks / 3 banks (capacity exhaustion)    mean_forget=0.2125 final_avg=0.7187 min_acq=0.5083
+  5 tasks / 5 banks                          mean_forget=0.0000 final_avg=0.9989 min_acq=0.9917
+  6 tasks / 6 banks                          mean_forget=0.0000 final_avg=0.9894 min_acq=0.8333
+  2 tasks / 2 banks, order 0,1,0 (revisit)   mean_forget=0.0000 final_avg=1.0000 min_acq=1.0000
+  wrong-bank start                           mean_forget=0.2713 final_avg=0.6361 min_acq=0.5000
+
+Held-out vs cross-signature cue combinations (CCM, 3 frozen seeds)
+      seed task trained cue  held-out cross-signature
+ 123456789    0      1.0000    1.0000          0.2583
+ 123456789    1      1.0000    1.0000          0.6333
+ 123456789    2      1.0000    0.9917          1.0000
+ 218213831    0      1.0000    1.0000          0.1333
+ 218213831    1      1.0000    1.0000          0.5417
+ 218213831    2      1.0000    1.0000          1.0000
+ 171473193    0      1.0000    1.0000          0.0000
+ 171473193    1      1.0000    0.9917          0.4833
+ 171473193    2      1.0000    1.0000          1.0000

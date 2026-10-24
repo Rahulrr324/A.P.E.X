@@ -1,0 +1,221 @@
+{
+  "schema": "STARK-L9-1",
+  "design": "Continual learning and catastrophic forgetting benchmark",
+  "baseline_commit": "7875764",
+  "arms": ["SEQUENTIAL","REPLAY","REPLAY-ABLATED","CONSOLIDATION","FRESH-TRAINING","ORACLE"],
+  "n_ids": 6, "n_chan": 2, "n_ctx": 2,
+  "masters": [123456789,218213831,171473193],
+  "task_sequence": "3 tasks, distinct pi, shared phi, 720 trials/task (80 single+40 selection per identity)",
+  "pooled": {
+    "SEQUENTIAL": {
+      "acquisition": ["1.000000", "0.666667", "0.563889"],
+      "retention_after_t2": ["0.188889"],
+      "retention_after_t3": ["0.083333", "0.180556"],
+      "forgetting": ["0.916667", "0.486111", "0.000000"],
+      "mean_forgetting": 0.467593,
+      "final_avg": 0.275926,
+      "heldout": 0.402778,
+      "mean_U": 0.000000, "mean_I": 0.014343,
+      "persistence_state": true, "persistence_choices": true
+    },
+    "REPLAY": {
+      "acquisition": ["1.000000", "0.411111", "0.308333"],
+      "retention_after_t2": ["0.225000"],
+      "retention_after_t3": ["0.113889", "0.197222"],
+      "forgetting": ["0.886111", "0.213889", "0.000000"],
+      "mean_forgetting": 0.366667,
+      "final_avg": 0.206481,
+      "heldout": 0.277778,
+      "mean_U": 0.000000, "mean_I": 0.014343,
+      "persistence_state": true, "persistence_choices": true
+    },
+    "REPLAY-ABLATED": {
+      "acquisition": ["1.000000", "0.666667", "0.563889"],
+      "retention_after_t2": ["0.188889"],
+      "retention_after_t3": ["0.083333", "0.180556"],
+      "forgetting": ["0.916667", "0.486111", "0.000000"],
+      "mean_forgetting": 0.467593,
+      "final_avg": 0.275926,
+      "heldout": 0.402778,
+      "mean_U": 0.000000, "mean_I": 0.014343,
+      "persistence_state": true, "persistence_choices": true
+    },
+    "CONSOLIDATION": {
+      "acquisition": ["1.000000", "0.222222", "0.180556"],
+      "retention_after_t2": ["0.330556"],
+      "retention_after_t3": ["0.183333", "0.183333"],
+      "forgetting": ["0.816667", "0.038889", "0.000000"],
+      "mean_forgetting": 0.285185,
+      "final_avg": 0.182407,
+      "heldout": 0.302778,
+      "mean_U": 0.000000, "mean_I": 0.014343,
+      "persistence_state": true, "persistence_choices": true
+    },
+    "FRESH-TRAINING": {
+      "acquisition": ["0.180556", "0.169444", "0.158333"],
+      "retention_after_t2": ["0.000000"],
+      "retention_after_t3": ["0.000000", "0.000000"],
+      "forgetting": ["0.180556", "0.169444", "0.000000"],
+      "mean_forgetting": 0.116667,
+      "final_avg": 0.052778,
+      "heldout": 0.161111,
+      "mean_U": 0.000000, "mean_I": 0.000000,
+      "persistence_state": true, "persistence_choices": true
+    },
+    "ORACLE": {
+      "acquisition": ["1.000000", "0.666667", "0.563889"],
+      "retention_after_t2": ["0.188889"],
+      "retention_after_t3": ["0.083333", "0.180556"],
+      "forgetting": ["0.916667", "0.486111", "0.000000"],
+      "mean_forgetting": 0.467593,
+      "final_avg": 0.275926,
+      "heldout": 0.402778,
+      "mean_U": 0.000000, "mean_I": 0.014343,
+      "persistence_state": true, "persistence_choices": true
+    }
+  },
+  "per_seed": [
+    { "arm": "SEQUENTIAL", "master": 123456789,
+      "acq": ["1.000000", "0.666667", "0.508333"],
+      "ret_t1_t2": "0.250000",
+      "ret_t1_t3": "0.241667", "ret_t2_t3": "0.241667",
+      "heldout": "0.500000",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "SEQUENTIAL", "master": 218213831,
+      "acq": ["1.000000", "0.833333", "0.833333"],
+      "ret_t1_t2": "0.208333",
+      "ret_t1_t3": "0.000000", "ret_t2_t3": "0.041667",
+      "heldout": "0.375000",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "SEQUENTIAL", "master": 171473193,
+      "acq": ["1.000000", "0.500000", "0.350000"],
+      "ret_t1_t2": "0.108333",
+      "ret_t1_t3": "0.008333", "ret_t2_t3": "0.258333",
+      "heldout": "0.333333",
+      "persist_state": true, "persist_choices": true
+    }
+    ,
+    { "arm": "REPLAY", "master": 123456789,
+      "acq": ["1.000000", "0.341667", "0.383333"],
+      "ret_t1_t2": "0.275000",
+      "ret_t1_t3": "0.191667", "ret_t2_t3": "0.233333",
+      "heldout": "0.341667",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "REPLAY", "master": 218213831,
+      "acq": ["1.000000", "0.666667", "0.191667"],
+      "ret_t1_t2": "0.275000",
+      "ret_t1_t3": "0.133333", "ret_t2_t3": "0.141667",
+      "heldout": "0.241667",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "REPLAY", "master": 171473193,
+      "acq": ["1.000000", "0.225000", "0.350000"],
+      "ret_t1_t2": "0.125000",
+      "ret_t1_t3": "0.016667", "ret_t2_t3": "0.216667",
+      "heldout": "0.250000",
+      "persist_state": true, "persist_choices": true
+    }
+    ,
+    { "arm": "REPLAY-ABLATED", "master": 123456789,
+      "acq": ["1.000000", "0.666667", "0.508333"],
+      "ret_t1_t2": "0.250000",
+      "ret_t1_t3": "0.241667", "ret_t2_t3": "0.241667",
+      "heldout": "0.500000",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "REPLAY-ABLATED", "master": 218213831,
+      "acq": ["1.000000", "0.833333", "0.833333"],
+      "ret_t1_t2": "0.208333",
+      "ret_t1_t3": "0.000000", "ret_t2_t3": "0.041667",
+      "heldout": "0.375000",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "REPLAY-ABLATED", "master": 171473193,
+      "acq": ["1.000000", "0.500000", "0.350000"],
+      "ret_t1_t2": "0.108333",
+      "ret_t1_t3": "0.008333", "ret_t2_t3": "0.258333",
+      "heldout": "0.333333",
+      "persist_state": true, "persist_choices": true
+    }
+    ,
+    { "arm": "CONSOLIDATION", "master": 123456789,
+      "acq": ["1.000000", "0.216667", "0.216667"],
+      "ret_t1_t2": "0.241667",
+      "ret_t1_t3": "0.216667", "ret_t2_t3": "0.200000",
+      "heldout": "0.350000",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "CONSOLIDATION", "master": 218213831,
+      "acq": ["1.000000", "0.308333", "0.141667"],
+      "ret_t1_t2": "0.508333",
+      "ret_t1_t3": "0.166667", "ret_t2_t3": "0.150000",
+      "heldout": "0.216667",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "CONSOLIDATION", "master": 171473193,
+      "acq": ["1.000000", "0.141667", "0.183333"],
+      "ret_t1_t2": "0.241667",
+      "ret_t1_t3": "0.166667", "ret_t2_t3": "0.200000",
+      "heldout": "0.341667",
+      "persist_state": true, "persist_choices": true
+    }
+    ,
+    { "arm": "FRESH-TRAINING", "master": 123456789,
+      "acq": ["0.200000", "0.200000", "0.208333"],
+      "ret_t1_t2": "0.000000",
+      "ret_t1_t3": "0.000000", "ret_t2_t3": "0.000000",
+      "heldout": "0.225000",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "FRESH-TRAINING", "master": 218213831,
+      "acq": ["0.166667", "0.125000", "0.116667"],
+      "ret_t1_t2": "0.000000",
+      "ret_t1_t3": "0.000000", "ret_t2_t3": "0.000000",
+      "heldout": "0.108333",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "FRESH-TRAINING", "master": 171473193,
+      "acq": ["0.175000", "0.183333", "0.150000"],
+      "ret_t1_t2": "0.000000",
+      "ret_t1_t3": "0.000000", "ret_t2_t3": "0.000000",
+      "heldout": "0.150000",
+      "persist_state": true, "persist_choices": true
+    }
+    ,
+    { "arm": "ORACLE", "master": 123456789,
+      "acq": ["1.000000", "0.666667", "0.508333"],
+      "ret_t1_t2": "0.250000",
+      "ret_t1_t3": "0.241667", "ret_t2_t3": "0.241667",
+      "heldout": "0.500000",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "ORACLE", "master": 218213831,
+      "acq": ["1.000000", "0.833333", "0.833333"],
+      "ret_t1_t2": "0.208333",
+      "ret_t1_t3": "0.000000", "ret_t2_t3": "0.041667",
+      "heldout": "0.375000",
+      "persist_state": true, "persist_choices": true
+    },
+    { "arm": "ORACLE", "master": 171473193,
+      "acq": ["1.000000", "0.500000", "0.350000"],
+      "ret_t1_t2": "0.108333",
+      "ret_t1_t3": "0.008333", "ret_t2_t3": "0.258333",
+      "heldout": "0.333333",
+      "persist_state": true, "persist_choices": true
+    }
+  ],
+  "criteria": {
+    "L9-A": "PASS (forgetting demonstrated)",
+    "L9-B": "PASS (replay reduces forgetting)",
+    "L9-C": "PASS (ablation confirms)",
+    "L9-D": "FAIL (fresh worse)",
+    "L9-E": "PASS (persistence)",
+    "L9-F": "PASS (determinism verified separately)",
+    "L9-G": "PASS (regression battery separate)",
+    "L9-H": "REPORT (structural limitation)"
+  },
+  "verdict": "L9 COMPLETE"
+}

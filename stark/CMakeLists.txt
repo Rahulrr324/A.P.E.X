@@ -317,6 +317,31 @@ add_executable(test_context_conditioned_memory
 )
 target_compile_features(test_context_conditioned_memory PUBLIC cxx_std_17)
 
+# STARK-L10 validation: independent structural audit of the CCM agent
+# (bank isolation, shared-pathway enumeration, serialization of lifecycle state).
+add_executable(test_l10_structural_audit
+    tests/test_l10_structural_audit.cpp
+    src/learning/ContextConditionedMemory.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_l10_structural_audit PUBLIC cxx_std_17)
+
+# STARK-L10 validation: independent experiment harness (reproduces the frozen
+# protocol from the design document and runs exploratory variants). Not part of
+# the frozen evaluation path.
+add_executable(l10_validation_harness
+    src/learning/l10_validation_harness.cpp
+    src/learning/ContextConditionedMemory.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(l10_validation_harness PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.
