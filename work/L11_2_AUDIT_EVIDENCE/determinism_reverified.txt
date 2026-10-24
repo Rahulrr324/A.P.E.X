@@ -1,0 +1,25 @@
+# L11.2 audit — independent re-verification of legacy determinism
+# unmodified harness at commit c547aab, built in /tmp/audit with g++ -O2 -std=c++17 -Isrc
+# source identity: tree matches commit c547aab (blob hashes verified)
+
+BUILD_OK (6 translation units, no cmake available)
+IDENTICAL  calls_ccm_123456789.csv
+IDENTICAL  calls_ccm_171473193.csv
+IDENTICAL  calls_ccm_218213831.csv
+IDENTICAL  calls_seql9_123456789.csv
+IDENTICAL  calls_seql9_171473193.csv
+IDENTICAL  calls_seql9_218213831.csv
+IDENTICAL  metrics_ccm_123456789.csv
+IDENTICAL  metrics_ccm_171473193.csv
+IDENTICAL  metrics_ccm_218213831.csv
+IDENTICAL  metrics_seql9_123456789.csv
+IDENTICAL  metrics_seql9_171473193.csv
+IDENTICAL  metrics_seql9_218213831.csv
+IDENTICAL  trials_ccm_123456789.csv
+IDENTICAL  trials_ccm_171473193.csv
+IDENTICAL  trials_ccm_218213831.csv
+IDENTICAL  trials_seql9_123456789.csv
+IDENTICAL  trials_seql9_171473193.csv
+IDENTICAL  trials_seql9_218213831.csv
+
+RESULT: 18/18 files byte-identical across two independent runs

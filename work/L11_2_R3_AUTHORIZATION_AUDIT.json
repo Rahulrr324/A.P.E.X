@@ -1,0 +1,234 @@
+{
+  "artifact": "STARK-L11.2-R3-AUTHORIZATION-AUDIT",
+  "task": "STARK-L11.2-R3-AUDIT",
+  "date": "2026-10-24",
+  "mode": "READ_ONLY_AUDIT",
+  "patch_applied": false,
+  "source_modified": false,
+  "emit_l11_implemented": false,
+  "official_l11_evaluation_run": false,
+  "advisory_only": true,
+  "grants_r3": false,
+  "grants_r1": false,
+  "grants_r2": false,
+
+  "provenance": {
+    "workspace_state": "REPROVISIONED",
+    "current_branch": "arena/86da64f9-a-p-e-x",
+    "current_head": "5f5a57717509623bd4c79460d50c05f7cbc605c3",
+    "current_head_is_not_the_reported_start_commit": true,
+    "residue_authenticity": {"files_compared": 14, "identical": 14, "method": "git blob hash vs commit c547aab", "verdict": "residue is the authentic c547aab tree"},
+    "apparent_modified_file": "stark/CMakeLists.txt",
+    "apparent_modification_is_spurious": true,
+    "apparent_modification_evidence": "working-tree blob da737d0a7a equals c547aab blob da737d0a7a",
+    "refs_action": "fetched two validation branches into remote-tracking refs only; no local branch moved, no working-tree file changed",
+    "reported_shas_verified": {
+      "starting_commit": "6a43974433a0396f756536817f88421eb86edf8c",
+      "starting_commit_equals_remote_l11_1": true,
+      "readiness_head": "c547aab658cb1852b68bad2626e5a076346ec766",
+      "readiness_head_equals_remote": true,
+      "readiness_parent": "6a43974433a0396f756536817f88421eb86edf8c",
+      "ancestry_verified": true,
+      "l11_1_seal_commit": "77d261aa83ddbf3aac1abc800c7c5c89741a86c7"
+    },
+    "shallow_graft_points": ["563395f1ca7742ecb65bcef6134212f5bb66c3d8", "5f5a57717509623bd4c79460d50c05f7cbc605c3"],
+    "pull_requests": [
+      {"number": 2, "head": "5f5a57717509623bd4c79460d50c05f7cbc605c3", "state": "OPEN", "untouched": true},
+      {"number": 3, "head": "49cc6ba18650c0d9614bb9e8918fe65453ec5a02", "state": "OPEN", "untouched": true},
+      {"number": 1, "state": "MERGED", "untouched": true}
+    ],
+    "new_pr_opened": false,
+    "hashes": {
+      "l11_1_protocol_sha256": "322078c8345b5c72c4954a6de529329065d8875f2a103626039e92f09a810c32",
+      "protocol_hash_matches_preregistration": true,
+      "preregistration_sha256": "57a8139d6797b305dd7e2d4791b00f981ff84329d2e7329a55413fbf4ea6ce3b",
+      "trial_schema_sha256": "a8edd674bc9efd651e1c3a25dee1f5317dae442aaf236ae01f1b8240f8d87917",
+      "trial_schema_matches_preregistration": true,
+      "l10_spec_v1_8_sha256": "aafd00aad8c2b843410f2a88fdf3f64cbeb2c10c39f7470f43c5a2bafe33ffd1",
+      "l10_validation_harness_sha256": "697b5f8a23eed90324ae600fd868628dc257cd8ca0b0a3b5f509a1f42df1ffc7"
+    },
+    "changed_since_l11_1": {"source": false, "tests": false, "protocol": false, "l10_frozen_evidence": false, "thresholds": false, "outside_work_dir": false},
+    "preregistration_still_states": {"ratification": "PENDING_OWNER_DECISION", "official_evaluation_run": false}
+  },
+
+  "prepared_patch_scope": {
+    "file": "stark/src/learning/l10_validation_harness.cpp",
+    "file_lines": 854,
+    "parts": [
+      {"id": "P1", "location": "struct StreamSpec, lines 143-162", "additive": true, "default_off": true, "can_affect_execution": false},
+      {"id": "P2", "location": "TrialRow 106-117 / StreamResult 124-142", "additive": true, "default_off": true, "can_affect_execution": "memory only"},
+      {"id": "P3", "location": "evalTask loop 243-275 (existing row capture 263-274)", "additive": true, "default_off": true, "can_affect_execution": "only if misplaced (R3-1, R3-2)"},
+      {"id": "P4", "location": "training loop 421-487 (w0 at 429, trial at 441, w1 at 461)", "additive": true, "default_off": true, "can_affect_execution": "only if misplaced (R3-3, R3-4)"},
+      {"id": "P5", "location": "new writer beside writeTrialCsv 662-672", "additive": true, "default_off": true, "can_affect_execution": false},
+      {"id": "P6", "location": "main arg loop 701-729", "additive": true, "default_off": true, "can_affect_execution": "error paths only (R3-5)"},
+      {"id": "P7", "location": "new intendedBankByRule", "additive": true, "default_off": "n/a", "can_affect_execution": false, "semantic_status": "AMBIGUOUS - see S1"},
+      {"id": "P8", "location": "run start + task boundaries", "additive": true, "default_off": true, "can_affect_execution": false}
+    ],
+    "minimal": true,
+    "minimality_condition": "stays inside this one file, which the audit confirms is achievable"
+  },
+
+  "risk_assessment": {
+    "demonstrably_absent": [
+      {"area": "RNG state and consumption", "evidence": "runCCTrial contains zero RNG engines; all draws pre-computed in the harness; observation APIs contain no RNG"},
+      {"area": "trial ordering, sampling and selection", "evidence": "selection is a pure function of mech_u and weights; 240-trial probe shows 0 choice/bank/queried diffs"},
+      {"area": "routing and retrieval decisions", "evidence": "same probe, bank_diffs=0"},
+      {"area": "eligibility and plasticity", "evidence": "serialized state identical after 240 trials with observers on"},
+      {"area": "parameter and model state", "evidence": "final_state_equal=1, 28537 bytes"},
+      {"area": "legacy CSV columns, filenames, row order, serialization", "evidence": "separate writer; writeTrialCsv not edited"},
+      {"area": "timing-dependent behaviour", "evidence": "no thread, time, chrono or clock anywhere in the harness"},
+      {"area": "threading and process behaviour", "evidence": "single-threaded, single process"}
+    ],
+    "potential_risk_with_test": [
+      {"area": "reward, advantage, baseline", "risk": "reward_baseline is updated in place inside runCCTrial (line 490); a post-call read records the next trial's baseline", "test": "record-correctness test 10"},
+      {"area": "checkpoint and resume", "risk": "--dump-state must not interact with the --stage save/load files", "test": "T10 resume byte-equality"},
+      {"area": "floating-point evaluation order", "risk": "no fast-math or march flags, but source inspection cannot prove identical codegen of the callee; conservative classification retained", "test": "per-trial byte comparison"}
+    ],
+    "unresolved_from_source_inspection": [
+      {"area": "exception and error paths", "reason": "the CLI validation path does not exist yet; requirement is fail-closed with no partial artifacts"}
+    ],
+    "source_hazards_found": [
+      {"id": "R3-1", "hazard": "evalTask re-runs the model 120 extra times per task in the routing re-derivation block (lines 505-521); capturing at runCCTrial call sites would record those hidden trials and corrupt every accuracy metric", "severity": "high"},
+      {"id": "R3-2", "hazard": "the snapshot is restored at line 275; a capture after that line records the restored state, not the trial's", "severity": "medium"},
+      {"id": "R3-3", "hazard": "w0 is refreshed only when measure || maybe_opp (line 429); reusing a stale w0 on a pair trial yields a plausible but wrong update mass", "severity": "high"},
+      {"id": "R3-4", "hazard": "advantage requires a pre-call baseline snapshot at index 0 (baseline_per_bank defaults false and is never overridden by runStream)", "severity": "medium"},
+      {"id": "R3-5", "hazard": "error paths unauditable until written", "severity": "medium"},
+      {"id": "R3-6", "hazard": "per-trial ccSerialize costs about 9x per trial; boundary-only serialization recommended", "severity": "low"}
+    ]
+  },
+
+  "schema_audit": {
+    "checked": 9,
+    "passed": 7,
+    "failed": 2,
+    "results": [
+      {"item": "sel_slot meaning and -1 handling", "verdict": "PASS", "note": "sampled channel, not argmax; -1 means not-applicable on single-candidate trials and must be written as explicit absence"},
+      {"item": "queried not confused with presented[]", "verdict": "PASS_WITH_REQUIRED_ADDITION", "note": "queried is the identity at the INTENDED slot; presented[] is required to recover the attended identity"},
+      {"item": "reward_baseline captured pre-call", "verdict": "PASS", "note": "prepared text is correct; update is in-place at line 490"},
+      {"item": "legacy -1.0 sentinel becomes explicit missing status", "verdict": "PASS", "note": "writeTaskCsv emits -1.0; tooling reports NOT_MEASURED and never averages it"},
+      {"item": "missing values cannot silently become zero", "verdict": "PASS", "note": "validator rejects empty non-nullable fields; verified in the 17/17 self-tests"},
+      {"item": "routing and retrieval independently reconstructible", "verdict": "PASS", "note": "newly demonstrated on non-degenerate R7 data, 6/6 acquisition cells"},
+      {"item": "update mass not attributed without evidence", "verdict": "PASS", "note": "ccBankWeights covers bank S->A only; existing L10.1 telemetry already splits the same way"},
+      {"item": "trial keys unique and complete", "verdict": "PASS_WITH_CONSTRAINT", "note": "eval trial = global rows->size(); training trial = i per task; the new writer must mirror the legacy ordinal"},
+      {"item": "schema can represent all control conditions", "verdict": "FAIL", "note": "S1 and S2"}
+    ],
+    "defects": [
+      {"id": "S1", "severity": "high", "field": "intended_bank / routing_correct", "problem": "the field conflates the bank that owns the evaluated task (L10 meaning) with the bank the R-majority rule prescribes (L11 Comp meaning); for SHUFFLED the rule is defined and prescribes the WRONG bank, so a literal implementation records routing_correct=1 for a misled system, contradicting the published L10.3 shuffled routing of 0.0000", "coincide_for": ["TRAIN", "HOLDOUT", "PARTIAL", "CROSS21", "CROSS31", "AMBIG11"], "diverge_for": ["MISLEAD", "SHUFFLED"], "proposed_correction": "add task_bank and rule_bank; routing_correct := selected == task_bank; rule_compliant := selected == rule_bank; Comp uses rule_compliant"},
+      {"id": "S2", "severity": "high", "field": "Read for MISLEAD", "problem": "Read = acc | routing_correct == 1 is 0 by construction for MISLEAD, and the required question (does the resolved bank retrieve its own mapping) needs the resolved bank's own permutation, which is not recorded", "proposed_correction": "add choice_matches_resolved_bank_map computed driver-side"},
+      {"id": "S3", "severity": "medium", "field": "presented[]", "problem": "the identity actually attended is unrecoverable without it", "proposed_correction": "add presented[] to the schema"}
+    ],
+    "not_defects": ["sel_slot -1 handling", "legacy -1.0 sentinel (a defect of the legacy format, correctly excluded from L11)", "trial-key uniqueness under the documented constraint"]
+  },
+
+  "non_interference_protocol_audit": {
+    "checks_audited": 8,
+    "adequate_as_written": 7,
+    "weak": ["check 7 (legacy artifact compatibility) is vacuous with a separate writer: the legacy files come from code that was never edited"],
+    "ways_a_difference_could_hide": [
+      "vacuous legacy comparison",
+      "a saturated arm where every cell is 1.0 (the default frozen arm is all-1.0000)",
+      "unexercised branches if only training rows are compared",
+      "a recording bug that passes a behaviour-only test while producing wrong records"
+    ],
+    "proposed_additions": [
+      {"id": "7p", "name": "projection equality", "detail": "project the new records onto the 17 legacy columns and require row-for-row equality with trials_*.csv"},
+      {"id": "9", "name": "non-degenerate arm", "detail": "at least one arm with routing < 1 and accuracy < 1 (R7-style or K2/T3 stress)"},
+      {"id": "10", "name": "record-correctness test", "detail": "recompute advantage, update mass and router L1 from state dumps"},
+      {"id": "11", "name": "zero-file test", "detail": "--emit-l11 0 must produce no trials11_*.csv"},
+      {"id": "12", "name": "fail-closed test", "detail": "missing or malformed --protocol-sha exits non-zero and writes nothing"},
+      {"id": "13", "name": "boundary state hashes", "detail": "ccSerialize hash at each task boundary"},
+      {"id": "14", "name": "new-file determinism", "detail": "two runs produce byte-identical trials11_*.csv"}
+    ],
+    "acceptance_criteria_relaxed": false,
+    "criteria_affected": [],
+    "baseline_determinism_result_interpretation": "18/18 byte-identical unmodified-harness runs are BASELINE DETERMINISM EVIDENCE ONLY; they are not evidence that instrumentation is non-invasive"
+  },
+
+  "tooling_verification": {
+    "re_executed_in_this_audit": [
+      {"claim": "schema validator 17/17", "result": "17/17 PASS, exit 0", "classification": "VERIFIED"},
+      {"claim": "13 negative controls reject", "result": "13 negative + 4 positive, all negatives rejected with a named reason", "classification": "VERIFIED"},
+      {"claim": "coverage 13/35", "result": "0.37142857142857144, 13 present, 22 missing", "classification": "VERIFIED"},
+      {"claim": "fresh-run reconstruction", "result": "6 calls x 120 rows, no ragged sizes, published_comparison.match=true", "classification": "VERIFIED"},
+      {"claim": "L10.3 reconstruction 0.5611 / 0.5019", "result": "0.6306/0.5583/0.4944 -> 0.5611; routing 0.5250/0.5139/0.4667 -> 0.5019; pub_match true x3", "classification": "REPRODUCED"},
+      {"claim": "-1.0 sentinel handling", "result": "NOT_MEASURED_in_harness, never averaged", "classification": "VERIFIED"},
+      {"claim": "duplicate trial key fails", "result": "RECONSTRUCTION_FAILED, exit 2", "classification": "VERIFIED"},
+      {"claim": "empty selection fails", "result": "RECONSTRUCTION_FAILED, exit 2", "classification": "VERIFIED"},
+      {"claim": "protocol hash matches preregistration", "result": "match", "classification": "VERIFIED"},
+      {"claim": "legacy determinism 18/18", "result": "independently rebuilt and re-run: 18/18 byte-identical", "classification": "VERIFIED"},
+      {"claim": "prepared patch anchors", "result": "all line numbers verified, no drift", "classification": "VERIFIED"}
+    ],
+    "new_evidence_produced_by_audit": {
+      "observer_non_perturbation": {
+        "trials": 240,
+        "choice_diffs": 0, "bank_diffs": 0, "queried_diffs": 0, "reward_diffs": 0,
+        "final_state_bytes": 28537,
+        "final_state_equal": true,
+        "verdict": "OBSERVERS_NON_PERTURBING",
+        "scope": "proves the observation surface does not perturb; does NOT test the writer, file IO or capture placement"
+      },
+      "observation_overhead_ms_per_trial": {"plain": 0.13, "plus_ccSerialize": "1.20-1.53", "plus_weight_copies": 0.13, "plus_all_three": "1.22-1.42"},
+      "non_degenerate_reconstruction": {
+        "arm": "R7 (spec_ratification_20261024)",
+        "regime": "routing 0.0 with accuracy 0.1667-0.3333",
+        "acquisition_cells_compared": 6,
+        "all_match": true,
+        "significance": "first evidence that routing and retrieval are separable AND reconstructible where they disagree"
+      }
+    },
+    "defect_found_in_audit_tooling": {
+      "description": "the audit's first verification script used a 1e-9 tolerance and produced two FALSE mismatches at 0.166667 vs 0.1666666...",
+      "cause": "the harness writes aggregates with fixed 6-decimal precision, so the only defensible tolerance is 1e-6",
+      "resolution": "corrected in the audit script with the reason recorded in a code comment; no audited code was at fault"
+    },
+    "not_re_executed": [
+      {"item": "26/26 L10.4 regression battery", "status": "INHERITED_NOT_RERUN", "claim_made": false},
+      {"item": "test_phase1_affinity", "status": "UNKNOWN_UNEXECUTED", "note": "R2 unresolved; nothing simulated"}
+    ]
+  },
+
+  "unresolved": [
+    {"id": "S1", "severity": "high", "status": "open", "correction_specified_not_applied": true},
+    {"id": "S2", "severity": "high", "status": "open", "correction_specified_not_applied": true},
+    {"id": "S3", "severity": "medium", "status": "open"},
+    {"id": "R3-1", "severity": "high", "status": "open"},
+    {"id": "R3-2", "severity": "medium", "status": "open"},
+    {"id": "R3-3", "severity": "high", "status": "open"},
+    {"id": "R3-4", "severity": "medium", "status": "open"},
+    {"id": "R3-5", "severity": "medium", "status": "open"},
+    {"id": "R3-6", "severity": "low", "status": "open"},
+    {"id": "R3-7", "severity": "low", "status": "open", "detail": "recompute_metrics.py requires a calls_*.csv sidecar that older artifacts lack"},
+    {"id": "U1", "status": "scope", "detail": "six L11 cue categories still do not exist"},
+    {"id": "U2", "status": "open", "detail": "non-interference remains unproven"},
+    {"id": "U3", "status": "documented", "detail": "shallow clone"},
+    {"id": "U4", "status": "open", "detail": "L10.4 one-trial anomaly unresolved"}
+  ],
+
+  "recommendation": {
+    "decision": "APPROVE_R3_WITH_EXPLICIT_CONDITIONS",
+    "not_unqualified_because": "P7 encodes the ambiguous semantic that S1 identifies; writing it before S1 is resolved would bake a wrong field into every later L11 result, silently",
+    "not_do_not_approve_because": "the mechanism is sound and the defects are in the schema, not the mechanism; they are fully specified",
+    "conditions": [
+      {"id": "C1", "requirement": "separate writer only; writeTrialCsv and writeTaskCsv unedited; legacy files hash-match the disabled run", "addresses": ["check 7", "risk 10"]},
+      {"id": "C2", "requirement": "capture inside evalTask's if(rows) block before the restore at line 275; nothing captured at runCCTrial call sites; the routing re-derivation block emits no rows", "addresses": ["R3-1", "R3-2"]},
+      {"id": "C3", "requirement": "per-trial update mass with no stale w0 reuse; advantage from a pre-call baseline snapshot at index 0", "addresses": ["R3-3", "R3-4"]},
+      {"id": "C4", "requirement": "schema v0.2 first: add task_bank, rule_bank, rule_compliant, presented[], choice_matches_resolved_bank_map; routing_correct := selected == task_bank; implement P7 against rule_bank", "addresses": ["S1", "S2", "S3"]},
+      {"id": "C5", "requirement": "exactly one source file changes; no new RNG engine; no engine file touched", "addresses": ["risks 1,2,5,6"]},
+      {"id": "C6", "requirement": "non-interference run must include checks 1-8 plus 7p, 9, 10, 11, 12, 13, 14 before any arm is implemented", "addresses": ["the four hiding paths"]},
+      {"id": "C7", "requirement": "ccSerialize only at run start and task boundaries", "addresses": ["R3-6"]}
+    ],
+    "recommended_ordering": [
+      "documentation-only commit applying C4 (schema v0.2 + re-recorded hashes), no code",
+      "implementation under C1-C3, C5, C7",
+      "C6 non-interference test, before implementing any of the six cue categories",
+      "R1 and R2 remain separate decisions, not implied by R3",
+      "separate authorized preflight review, then an official run"
+    ],
+    "r3_authorizes_official_evaluation": false,
+    "evidence": ["schema_audit.defects S1, S2", "risk_assessment.source_hazards_found R3-1..R3-6", "new_evidence_produced_by_audit", "tooling_verification"]
+  },
+
+  "overall_progress_percent": 57,
+  "progress_changed": false,
+  "no_capability_claimed": true
+}

@@ -1,0 +1,10 @@
+# L11.2 audit — observer non-perturbation probe output
+# source: work/L11_2_AUDIT_EVIDENCE/observer_nonperturbation_probe.cpp (not a repo build target)
+# compiled and run in /tmp/audit against a copy of stark/src
+# method: two identical agents, same 240-trial stream; the observed arm calls
+#         ccSerialize + ccBankWeights + ccRouterWeights after every trial
+
+trials=240
+choice_diffs=0 bank_diffs=0 queried_diffs=0 reward_diffs=0
+final_state_bytes=28537 final_state_equal=1
+VERDICT=OBSERVERS_NON_PERTURBING

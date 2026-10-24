@@ -1,0 +1,13 @@
+# L11.2 audit — per-trial observation overhead (timing only, not semantics)
+# source: work/L11_2_AUDIT_EVIDENCE/overhead_probe.cpp
+# 300 learning trials per mode, two repeats
+
+plain                            0.127 ms/trial
++ccSerialize                     1.264 ms/trial
++ccBankWeights+ccRouterWeights   0.127 ms/trial
++all three                       1.265 ms/trial
+--- repeat ---
+plain                            0.130 ms/trial
++ccSerialize                     1.223 ms/trial
++ccBankWeights+ccRouterWeights   0.130 ms/trial
++all three                       1.221 ms/trial
