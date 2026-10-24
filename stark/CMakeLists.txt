@@ -342,6 +342,18 @@ add_executable(l10_validation_harness
 )
 target_compile_features(l10_validation_harness PUBLIC cxx_std_17)
 
+# STARK-L10.1: focused regression test for the sealing toggle (write predicate,
+# gate state, readability of a sealed bank, multi-candidate trials).
+add_executable(test_l10_1_sealing
+    tests/test_l10_1_sealing.cpp
+    src/learning/ContextConditionedMemory.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_l10_1_sealing PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.

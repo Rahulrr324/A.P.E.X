@@ -1,0 +1,9 @@
+after 480 single:            acc=0.55
+after +240 sel (learning ON):acc=1  weights_equal=1
+restored 480-single state:   acc=0.55  state_roundtrip_eq=1
+during 240 multi-candidate trials: |d channel-policy v| = 4.32448   |d bank S->A| = 0
+
+Attribution (channel_policy_weights_probe.cpp):
+  during the 240 multi-candidate trials: |d channel-policy v| = 4.32448, |d bank S->A| = 0
+=> the change is exactly the L9 channel policy (C->L), not bank memory. This is what
+   raises accuracy from 0.55 to 1.00, and it is not gated by the bank seal.

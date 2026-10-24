@@ -1,0 +1,545 @@
+{
+  "artifact": "STARK-L10.1 experimental control repair and sealing validation",
+  "version": "L10.1 v1.0",
+  "date_utc": "2026-10-24T03:28:58Z",
+  "provenance": {
+    "repository": "https://github.com/Rahulrr324/A.P.E.X.git",
+    "branch": "validation/l10-1-control-repair",
+    "starting_sha": "123ef65a6ad200dfafb4ce736f7ed94260267898",
+    "l10_milestone_commit": "49cc6ba18650c0d9614bb9e8918fe65453ec5a02",
+    "milestone_base": "5f5a57717509623bd4c79460d50c05f7cbc605c3",
+    "shallow_boundaries": [
+      "563395f1ca7742ecb65bcef6134212f5bb66c3d8",
+      "5f5a57717509623bd4c79460d50c05f7cbc605c3"
+    ],
+    "pull_requests": {
+      "2": {
+        "state": "OPEN",
+        "merged": false,
+        "head_sha": "5f5a57717509623bd4c79460d50c05f7cbc605c3",
+        "touched": false
+      },
+      "3": {
+        "state": "OPEN",
+        "merged": false,
+        "head_sha": "49cc6ba18650c0d9614bb9e8918fe65453ec5a02",
+        "touched": false
+      }
+    },
+    "new_pr_created": false,
+    "original_evidence_md5": {
+      "work/l10_raw/final_run/report_raw.json": "b38736bb8a2a4574e6226f192a617627",
+      "work/l10_raw/determinism/report_rerun.json": "17beb41e342fa268d7a6efa47512df08",
+      "work/l10_raw/l9_reproduction/report_reproduced.json": "a00b62b330bf231fdecf2b4991ec44fa"
+    },
+    "original_evidence_modified": false
+  },
+  "protocol": {
+    "path": "stark/design/l10_1_control_validation_protocol.md",
+    "version": "v1.0",
+    "written_before_runs": true,
+    "sha256": "39521bfc9c570e10f6af965e9a204db45d49758481fc087be3fb01028f74cdd0",
+    "tracks": [
+      "P-FROZEN",
+      "D-SEAL",
+      "D-CTX",
+      "D-CTRL",
+      "E-GEN"
+    ],
+    "frozen_l10_protocol_modified": false,
+    "l10_thresholds_modified": false
+  },
+  "environment": {
+    "compiler": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+    "flags": "-O2 -std=c++17",
+    "cmake_available": false,
+    "regression_cwd": "stark/",
+    "host": "Linux x86_64"
+  },
+  "p_frozen": {
+    "command": "./ccm (8 arms x 3 frozen seeds, frozen protocol v1.0)",
+    "normalized_sha256_run1": "fe76eb2a7a626be5714fa3c48a3943f56b2b4284a5fd911065586c6e2628787d",
+    "normalized_sha256_run2": "fe76eb2a7a626be5714fa3c48a3943f56b2b4284a5fd911065586c6e2628787d",
+    "deterministic": true,
+    "matches_previous_milestone": true,
+    "criteria_unchanged": true,
+    "criteria": {
+      "L10-A": "PASS",
+      "L10-B": "PASS",
+      "L10-C": "PASS",
+      "L10-D": "PASS",
+      "L10-E": "FAIL",
+      "L10-F": "FAIL",
+      "L10-G": "PASS",
+      "L10-H": "PASS",
+      "L10-I": "SEE-REPORT",
+      "L10-J": "SEE-REPORT"
+    }
+  },
+  "sealing": {
+    "mechanism": {
+      "seal_flag": "cfg.seal_superseded",
+      "single_consumer": "writable predicate in runCCTrial",
+      "mapping_credit": "sched.single && writable",
+      "sealing_opportunity": "single-candidate trial routed to a non-active allocated bank",
+      "protects": "per-bank S->A three-factor writes only (not cue->R router, not C->L channel policy)"
+    },
+    "frozen_control_vacuous": true,
+    "proof": [
+      "schedule arithmetic: makeLRTrials(80 single)/identity = 480 trials = commit_trials; the multi-candidate block is the remaining 240, which carries no mapping credit",
+      "telemetry: opp_total = 0 on every seed in both arms"
+    ],
+    "corrected_protocols": {
+      "D-SEAL-A": {
+        "commit_trials": 60,
+        "misroute_p": 0.0
+      },
+      "D-SEAL-A-prime": {
+        "commit_trials": 240,
+        "misroute_p": 0.0
+      },
+      "D-SEAL-B": {
+        "commit_trials": 240,
+        "misroute_p": 0.2
+      }
+    },
+    "matched_variables": [
+      "seeds",
+      "task permutations",
+      "cue stream",
+      "initialisation",
+      "training budget",
+      "probe schedule",
+      "evaluation schedules",
+      "evaluation conditions"
+    ],
+    "only_difference": "cfg.seal_superseded",
+    "seeds_primary": [
+      123456789,
+      218213831,
+      171473193
+    ],
+    "seeds_exploratory": [
+      1,
+      2,
+      7,
+      42
+    ],
+    "results": {
+      "frozen": {
+        "sealON": {
+          "min_acq": 1.0,
+          "final_avg": 1.0,
+          "mean_forgetting": 0.0,
+          "opp": 0,
+          "blocked": 0,
+          "executed": 0,
+          "exec_mass": 0.0
+        },
+        "sealOFF": {
+          "min_acq": 1.0,
+          "final_avg": 1.0,
+          "mean_forgetting": 0.0,
+          "opp": 0,
+          "blocked": 0,
+          "executed": 0,
+          "exec_mass": 0.0
+        }
+      },
+      "D-SEAL-A": {
+        "sealON": {
+          "min_acq": 1.0,
+          "final_avg": 1.0,
+          "mean_forgetting": 0.0,
+          "opp": 345,
+          "blocked": 345,
+          "executed": 0,
+          "exec_mass": 0.0
+        },
+        "sealOFF": {
+          "min_acq": 1.0,
+          "final_avg": 0.4667,
+          "mean_forgetting": 0.5333,
+          "opp": 342,
+          "blocked": 0,
+          "executed": 342,
+          "exec_mass": 43.143
+        }
+      },
+      "D-SEAL-A-prime": {
+        "sealON": {
+          "min_acq": 1.0,
+          "final_avg": 1.0,
+          "mean_forgetting": 0.0,
+          "opp": 185,
+          "blocked": 185,
+          "executed": 0,
+          "exec_mass": 0.0
+        },
+        "sealOFF": {
+          "min_acq": 1.0,
+          "final_avg": 0.5491,
+          "mean_forgetting": 0.4509,
+          "opp": 184,
+          "blocked": 0,
+          "executed": 184,
+          "exec_mass": 30.358
+        }
+      },
+      "D-SEAL-B": {
+        "sealON": {
+          "min_acq": 1.0,
+          "final_avg": 0.5194,
+          "mean_forgetting": 0.4806,
+          "opp": 403,
+          "blocked": 403,
+          "executed": 0,
+          "exec_mass": 0.0
+        },
+        "sealOFF": {
+          "min_acq": 1.0,
+          "final_avg": 0.4361,
+          "mean_forgetting": 0.5639,
+          "opp": 503,
+          "blocked": 0,
+          "executed": 503,
+          "exec_mass": 47.058
+        }
+      },
+      "D-SEAL-A_exploratory": {
+        "sealON": {
+          "mean_forgetting": 0.0,
+          "final_avg": 0.9979,
+          "opp": 563,
+          "blocked": 563,
+          "executed": 0
+        },
+        "sealOFF": {
+          "mean_forgetting": 0.4882,
+          "final_avg": 0.4958,
+          "opp": 673,
+          "blocked": 0,
+          "executed": 673
+        }
+      },
+      "D-SEAL-B_exploratory": {
+        "sealON": {
+          "mean_forgetting": 0.5146,
+          "final_avg": 0.4833,
+          "opp": 559,
+          "blocked": 559,
+          "executed": 0
+        },
+        "sealOFF": {
+          "mean_forgetting": 0.5347,
+          "final_avg": 0.4632,
+          "opp": 643,
+          "blocked": 0,
+          "executed": 643
+        }
+      }
+    },
+    "pre_declared_expectations_met": 5,
+    "verdict": "sealing genuinely prevents writes into non-active banks whenever opportunities exist; NO-SEAL == CCM under the frozen protocol is a theorem, not a null result",
+    "L10-F": {
+      "frozen_criterion": "NO-SEAL mean forgetting > CCM mean forgetting",
+      "status": "FAILED",
+      "changed": false,
+      "satisfiable_under_unchanged_protocol": false,
+      "reason": "zero sealing opportunities by construction"
+    },
+    "amendment_proposed": "A-1",
+    "amendment_applied": false
+  },
+  "context_off": {
+    "mechanism": "cue withheld -> all router scores 0 -> uniform softmax -> masked argmax -> lowest allocated bank (bank 0, task 0)",
+    "analytic": {
+      "formula": "A(t) = |{q: pi0(q)=pi_t(q)}|/6 ; pooled = mean_t A(t)",
+      "per_seed": {
+        "123456789": {
+          "A": [
+            1.0,
+            0.166667,
+            0.333333
+          ],
+          "pooled": 0.5
+        },
+        "218213831": {
+          "A": [
+            1.0,
+            0.166667,
+            0.166667
+          ],
+          "pooled": 0.444444
+        },
+        "171473193": {
+          "A": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "pooled": 0.333333
+        }
+      },
+      "pooled": 0.4259259
+    },
+    "measured": {
+      "pooled": 0.425926,
+      "per_seed": {
+        "123456789": 0.5,
+        "218213831": 0.444444,
+        "171473193": 0.333333
+      },
+      "per_task": {
+        "123456789": [
+          1.0,
+          0.166667,
+          0.333333
+        ],
+        "218213831": [
+          1.0,
+          0.166667,
+          0.166667
+        ],
+        "171473193": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "excess_over_fallback": 7.4e-08,
+    "per_bank_sweep": {
+      "description": "cue withheld, each allocated bank forced in turn",
+      "diagonal": "1.000 on every seed (every bank holds its own mapping perfectly)",
+      "conclusion": "the frozen number equals the bank-0 column: it measures the fallback bank's content, not the causal role of context"
+    },
+    "margins": {
+      "per_task": {
+        "123456789": {
+          "ctx_margin": [
+            0.0,
+            0.833333,
+            0.666667
+          ],
+          "shuffled_margin": [
+            0.733333,
+            0.833333,
+            0.741667
+          ]
+        },
+        "218213831": {
+          "ctx_margin": [
+            0.0,
+            0.833333,
+            0.833333
+          ],
+          "shuffled_margin": [
+            0.858333,
+            0.916667,
+            0.9
+          ]
+        },
+        "171473193": {
+          "ctx_margin": [
+            0.0,
+            1.0,
+            1.0
+          ],
+          "shuffled_margin": [
+            1.0,
+            0.9,
+            0.925
+          ]
+        }
+      },
+      "L10-E2": {
+        "criterion": "margin >= 0.60 on >= 2 of 3 tasks",
+        "result": "PASS on 3/3 seeds"
+      }
+    },
+    "L10-E": {
+      "frozen_criterion": "shuffled-cue <= 0.40 AND context-off <= 0.40",
+      "threshold_changed": false,
+      "status": "FAILED",
+      "observed_context_off": 0.425926,
+      "observed_shuffled": 0.132407,
+      "satisfiable_as_written": false,
+      "reason": "any implementation that answers when the cue is removed must fall back to one bank, which is correct for exactly one task; the floor is permutation-determined at 0.4259 for these seeds"
+    },
+    "original_report_error": "floor described as 'approximately 1/3'; the correct value is 0.4259 for these seeds",
+    "amendment_proposed": "A-2",
+    "amendment_applied": false
+  },
+  "controls": {
+    "SEQ-L9": {
+      "verdict": "valid",
+      "note": "reproduces L9 SEQUENTIAL exactly (0.467593 / 0.275926)"
+    },
+    "ORACLE-BANK": {
+      "verdict": "valid",
+      "note": "attains the same performance as CCM (ceiling is reached); diagnostic only"
+    },
+    "CCM": {
+      "verdict": "valid"
+    },
+    "K2-STRESS": {
+      "verdict": "confounded",
+      "confound": "reuses a bank AND un-seals it in the exhaustion branch",
+      "note": "the seal half is inert under the frozen protocol, but the arm still mixes two interventions"
+    },
+    "FROZEN-ROUTER": {
+      "verdict": "confounded",
+      "confound": "conflates routing error with wasted selection trials; field-for-field identical to CONTEXT-OFF (both fall back to bank 0, router weights exactly 0.0)"
+    },
+    "CONTEXT-OFF": {
+      "verdict": "uninformative as an absolute number",
+      "note": "measures the fallback bank's mapping"
+    },
+    "SHUFFLED-CUE": {
+      "verdict": "valid",
+      "observed_pooled": 0.132407
+    },
+    "NO-SEAL": {
+      "verdict": "vacuous under the frozen protocol",
+      "observed_opportunities": 0
+    }
+  },
+  "new_findings": [
+    {
+      "id": "L10.1-F1",
+      "claim": "multi-candidate (no-mapping-credit) trials still train the shared channel policy v (C->L)",
+      "evidence": {
+        "eval_accuracy_480_singles_only": 0.55,
+        "plus_240_multi_with_learning_on": 1.0,
+        "plus_240_multi_with_learning_off": 0.55,
+        "bank_weights_identical": true,
+        "delta_channel_policy": 4.32448,
+        "delta_bank_weights": 0.0
+      },
+      "impact": "'carries no mapping credit' describes the S->A three-factor path only; ablations removing selection trials are not learning-free",
+      "invalidates_l10": false
+    },
+    {
+      "id": "L10.1-F2",
+      "claim": "sealing protects bank memory but not shared policies (router, channel policy)",
+      "impact": "a mis-routed trial can still degrade routing while sealed content is untouched"
+    }
+  ],
+  "generalization": {
+    "label": "E-GEN exploratory, never frozen acceptance evidence",
+    "G1_heldout_recombination": 0.9981,
+    "G2_cross_signature": 0.5611,
+    "G3_four_tasks_four_banks": {
+      "forgetting": 0.0,
+      "final": 0.9993
+    },
+    "G5_five": 0.9989,
+    "G5_six": 0.9894,
+    "G5_eight": 0.992,
+    "G4_order_201": {
+      "forgetting": -0.0009,
+      "final": 1.0
+    },
+    "G4_revisit_010": 1.0,
+    "G6_ambiguous": {
+      "forgetting": 0.2778,
+      "final": 0.7222
+    },
+    "G7_wrong_bank": {
+      "forgetting": 0.2713,
+      "final": 0.6361
+    },
+    "conclusion": "recombination within a trained signature and order rotation generalise; cross-signature composition does not; this is not compositional intelligence"
+  },
+  "tests": {
+    "regression_cwd": "stark/",
+    "targets_built": 26,
+    "all_exit_zero": true,
+    "assertions": {
+      "test_context_conditioned_memory": 330,
+      "test_l10_structural_audit": 357,
+      "test_l10_1_sealing": 276,
+      "test_phase1_profiler": 34,
+      "test_phase1_accounting": 67,
+      "test_phase1_budget": 55,
+      "test_phase1_records": 72,
+      "test_phase1_reproducibility": 37,
+      "test_phase1_gates": 437
+    },
+    "not_executed": [
+      {
+        "target": "test_phase1_affinity",
+        "reason": "DWORD_PTR not declared on Linux (Win32-only source)",
+        "status": "UNKNOWN - not passed"
+      }
+    ],
+    "new_test": "stark/tests/test_l10_1_sealing.cpp",
+    "determinism": {
+      "frozen_driver_two_runs_identical": true,
+      "harness_metrics_byte_identical_to_previous_milestone": true
+    },
+    "new_failures": 0
+  },
+  "files_changed": [
+    {
+      "path": "stark/design/l10_1_control_validation_protocol.md",
+      "change": "new pre-registered protocol v1.0"
+    },
+    {
+      "path": "stark/src/learning/l10_validation_harness.cpp",
+      "change": "L10.1 modes/telemetry: --misroute, --ctxperbank, --tag, --mode perm; trial CSV gains single/active/opp; sealing and ctxperbank CSVs"
+    },
+    {
+      "path": "stark/tests/test_l10_1_sealing.cpp",
+      "change": "new focused regression test (276 assertions)"
+    },
+    {
+      "path": "stark/CMakeLists.txt",
+      "change": "test_l10_1_sealing target"
+    },
+    {
+      "path": "work/L10_1_CONTROL_VALIDATION.md",
+      "change": "this milestone report"
+    },
+    {
+      "path": "work/L10_1_CONTROL_VALIDATION.json",
+      "change": "machine-readable results"
+    },
+    {
+      "path": "work/l10_raw/control_validation_20261025/**",
+      "change": "new raw evidence (270 hashed artifacts)"
+    }
+  ],
+  "evidence_dir": "work/l10_raw/control_validation_20261025",
+  "manifest": "work/l10_raw/control_validation_20261025/MANIFEST.md",
+  "proposed_amendments": [
+    {
+      "id": "A-1",
+      "scope": "L10-F",
+      "proposal": "criterion applies to a protocol that provably contains sealing opportunities (count > 0 on every seed) with matched streams and only the seal flag differing",
+      "applied": false,
+      "requires_owner_approval": true
+    },
+    {
+      "id": "A-2",
+      "scope": "L10-E",
+      "proposal": "context-off excess over the analytic fallback <= 0.02 AND per-task context margin >= 0.60 on >= 2 of 3 tasks",
+      "applied": false,
+      "requires_owner_approval": true
+    },
+    {
+      "id": "A-3",
+      "scope": "controls",
+      "proposal": "split K2-STRESS (capacity vs seal-on-reuse); report FROZEN-ROUTER routing error separately from wasted selection trials",
+      "applied": false,
+      "requires_owner_approval": true
+    }
+  ],
+  "progress_estimate": {
+    "previous": 0.5,
+    "current": 0.5,
+    "rationale": "control repair and corrected descriptions only; no new capability; two criteria still failed"
+  },
+  "recommended_next": "L10.2: owner decision on A-1/A-2, fold into protocol v1.1, re-run under amended criteria. Do not begin L11."
+}

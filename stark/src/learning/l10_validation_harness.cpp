@@ -23,6 +23,18 @@
 //   --mode ctxnovel                    exploratory: cross-signature cue combinations
 //   --mode restart --stage save|load --state FILE   process-restart recovery
 //   --mode wrongbank                   exploratory: force the router to start on the wrong bank
+//   --mode perm                        dump the task permutations (analytic floor input)
+//
+// L10.1 additions (see stark/design/l10_1_control_validation_protocol.md):
+//   --misroute P                       declared context corruption during learning
+//                                      (P of the trials take another task's cue), applied
+//                                      identically to both sealing arms
+//   --ctxperbank                       evaluate every task with the cue zeroed and each
+//                                      allocated bank forced in turn (D-CTX-3)
+//   trial CSV gains `single` (single-candidate trial), `active` (active bank at that
+//   moment) and `opp` (sealing opportunity: single candidate routed to a non-active
+//   bank). Columns are APPENDED, so older readers are unaffected; the metric CSV is
+//   unchanged, which is what the frozen reproduction check compares.
 //
 // Output: CSV of per-trial rows and a CSV of per-task metrics. Nothing is
 // written outside the --out directory.
@@ -85,6 +97,9 @@ struct TrialRow {
     double reward = 0.0;
     int eval_kind = -1;   // -1 = training, else CueMode used at evaluation
     int call = -1;        // evaluation call id (-1 = training)
+    int single = 0;       // L10.1: single-candidate trial (mapping credit possible)
+    int active = -1;      // L10.1: active bank at this trial
+    int opp = 0;          // L10.1: sealing opportunity (single && bank != active)
 };
 
 struct TaskMetrics {
@@ -104,6 +119,13 @@ struct StreamResult {
     bool save_load_state = false, save_load_choices = false;
     std::vector<TrialRow> rows;
     std::vector<std::string> calls;   // call_id -> "<purpose>,<task>"
+    // L10.1 sealing telemetry
+    int opp_total = 0;        // single-candidate learning trials routed off the active bank
+    int opp_blocked = 0;      // ... where the seal predicate blocked the write
+    int opp_executed = 0;     // ... where a write was executed on the non-active bank
+    int opp_phase2 = 0;       // opportunities after the commitment window
+    double exec_mass = 0.0;   // total |dW| written into non-active banks on opportunities
+    std::vector<std::vector<double>> per_bank_off;   // [task][bank], -1 = not evaluated
 };
 
 struct StreamSpec {
@@ -119,6 +141,8 @@ struct StreamSpec {
     CueMode eval_cue = CM_TRAIN;
     bool context_controls = true;
     bool novel_context = false;
+    double misroute_p = 0.0;      // L10.1 D-SEAL-B
+    bool per_bank_ctxoff = false; // L10.1 D-CTX-3
 };
 
 // ---------------------------------------------------------------- evaluation
@@ -132,7 +156,7 @@ double evalTask(CCAgent& ag, const std::vector<VTask>& tasks, int task, unsigned
                 CueMode mode, int task_bank, bool want_routing, bool read_only,
                 std::vector<TrialRow>* rows, unsigned shuffle_seed,
                 std::vector<double>* out_off, std::vector<double>* out_cross, int n_tasks,
-                int call_id = -1) {
+                int call_id = -1, int force_eval_bank = -1) {
     std::string snap;
     if (read_only) snap = ccSerialize(ag);
 
@@ -186,7 +210,8 @@ double evalTask(CCAgent& ag, const std::vector<VTask>& tasks, int task, unsigned
         s.lr = lr;
         s.cue = cue;
         CCResult r = runCCTrial(ag, s, tasks[static_cast<size_t>(task)].map, task_bank,
-                                CC_LEARNED, /*learning=*/false, /*router_learning=*/false);
+                                CC_LEARNED, /*learning=*/false, /*router_learning=*/false,
+                                force_eval_bank);
         ++n;
         const bool ok = (r.choice == tasks[static_cast<size_t>(task)].map.perm[static_cast<size_t>(r.queried)]);
         if (ok) ++correct;
@@ -343,21 +368,59 @@ StreamResult runStream(const StreamSpec& spec, unsigned master, bool dump_rows,
         res.task_bank[static_cast<size_t>(t)] = active;
 
         // ---- training ----
+        // L10.1 D-SEAL-B: declared context corruption. The decisions are drawn
+        // from a stream seeded by (master, task) only, never by the sealing flag,
+        // so both arms receive exactly the same corrupted cue stream.
+        std::vector<int> mis_task(trials.size(), -1);
+        if (spec.misroute_p > 0.0 && spec.n_tasks > 1) {
+            std::mt19937 rng_m(master + 7100u + static_cast<unsigned>(t));
+            std::uniform_real_distribution<double> unif(0.0, 1.0);
+            std::uniform_int_distribution<int> pick_task(0, spec.n_tasks - 2);
+            for (size_t i = 0; i < trials.size(); ++i) {
+                if (unif(rng_m) >= spec.misroute_p) continue;
+                int ot = pick_task(rng_m);
+                if (ot >= t) ++ot;      // strictly another task's cue group
+                mis_task[i] = ot;
+            }
+        }
+
         double sum_int = 0.0, sum_ur = 0.0, sum_ub = 0.0;
         int n_mass = 0;
         std::vector<std::vector<std::vector<double>>> w0;
         for (size_t i = 0; i < trials.size(); ++i) {
             const bool measure = (i < 480) && trials[i].single;
-            if (measure) w0 = ccBankWeights(ag);
+            const bool maybe_opp = trials[i].single;   // only these can carry mapping credit
+            if (measure || maybe_opp) w0 = ccBankWeights(ag);
             const bool commit = (spec.commit_trials > 0) &&
                                 (static_cast<int>(i) < spec.commit_trials) && active >= 0;
             CCTrialSchedule s;
             s.lr = trials[i];
-            if (spec.use_cue)
-                s.cue = cueOf(td.train_cues[static_cast<size_t>(cue_idx[i])]);
+            if (spec.use_cue) {
+                if (mis_task[i] >= 0)
+                    s.cue = cueOf(tasks[static_cast<size_t>(mis_task[i])].train_cues[
+                                  static_cast<size_t>(cue_idx[i])]);
+                else
+                    s.cue = cueOf(td.train_cues[static_cast<size_t>(cue_idx[i])]);
+            }
             CCResult r = runCCTrial(ag, s, td.map, -1, CC_LEARNED, true,
                                     /*router_learning=*/!commit,
                                     /*forced_bank=*/commit ? active : -1);
+            // L10.1: sealing opportunity telemetry
+            const bool opp = trials[i].single && active >= 0 && r.bank != active;
+            if (opp) {
+                ++res.opp_total;
+                if (!commit) ++res.opp_phase2;
+                if (r.plastic_write) {
+                    ++res.opp_executed;
+                    auto w1o = ccBankWeights(ag);
+                    for (size_t k = 0; k < w1o.size(); ++k)
+                        for (size_t a2 = 0; a2 < w1o[k].size(); ++a2)
+                            for (size_t b2 = 0; b2 < w1o[k][a2].size(); ++b2)
+                                res.exec_mass += std::fabs(w1o[k][a2][b2] - w0[k][a2][b2]);
+                } else {
+                    ++res.opp_blocked;
+                }
+            }
             if (measure) {
                 auto w1 = ccBankWeights(ag);
                 double I = 0.0, UR = 0.0, UB = 0.0;
@@ -381,6 +444,9 @@ StreamResult runStream(const StreamSpec& spec, unsigned master, bool dump_rows,
                 tr.forced = commit ? 1 : 0;
                 tr.writable = r.plastic_write ? 1 : 0;
                 tr.eval_kind = -1;
+                tr.single = trials[i].single ? 1 : 0;
+                tr.active = active;
+                tr.opp = opp ? 1 : 0;
                 res.rows.push_back(tr);
             }
         }
@@ -460,6 +526,24 @@ StreamResult runStream(const StreamSpec& spec, unsigned master, bool dump_rows,
         }
     }
 
+    // ---- L10.1 D-CTX-3: per-bank context-off sweep ----
+    // The cue is withheld (as in CONTEXT-OFF) but each allocated bank is forced
+    // in turn, so the stored content of every bank is measured independently of
+    // the deterministic fallback rule.
+    if (spec.per_bank_ctxoff) {
+        res.per_bank_off.assign(static_cast<size_t>(T),
+                                std::vector<double>(static_cast<size_t>(spec.n_banks), -1.0));
+        for (int t = 0; t < T; ++t) {
+            for (int kb = 0; kb < spec.n_banks; ++kb) {
+                if (ag.bank_state[static_cast<size_t>(kb)] == CC_UNALLOCATED) continue;
+                res.per_bank_off[static_cast<size_t>(t)][static_cast<size_t>(kb)] =
+                    evalTask(ag, tasks, t, master + 5001u + static_cast<unsigned>(t), CM_OFF,
+                             res.task_bank[static_cast<size_t>(t)], false, true, nullptr,
+                             master + 9300u, nullptr, nullptr, T, -1, kb);
+            }
+        }
+    }
+
     // ---- persistence ----
     {
         const std::string snap = ccSerialize(ag);
@@ -525,13 +609,39 @@ void writeCallsCsv(const std::string& path, const StreamResult& r) {
 
 void writeTrialCsv(const std::string& path, unsigned master, const StreamResult& r) {
     std::ofstream f(path);
-    f << "master,task,phase,trial,queried,choice,bank,bank_is_task_bank,correct,reward,forced,writable,eval_kind,call\n";
+    f << "master,task,phase,trial,queried,choice,bank,bank_is_task_bank,correct,reward,forced,writable,eval_kind,call"
+         ",single,active,opp\n";
     for (const TrialRow& t : r.rows) {
         f << master << "," << t.task << "," << t.phase << "," << t.idx << "," << t.queried << ","
           << t.choice << "," << t.bank << "," << t.bank_is_task_bank << "," << t.correct << ","
           << t.reward << "," << t.forced << "," << t.writable << "," << t.eval_kind << ","
-          << t.call << "\n";
+          << t.call << "," << t.single << "," << t.active << "," << t.opp << "\n";
     }
+}
+
+void writeSealCsv(const std::string& path, unsigned master, const StreamSpec& spec,
+                  const StreamResult& r) {
+    std::ofstream f(path);
+    f.setf(std::ios::fixed);
+    f.precision(6);
+    f << "master,seal,commit_trials,misroute_p,opp_total,opp_phase2,opp_blocked,"
+         "opp_executed,exec_mass\n";
+    f << master << "," << (spec.seal ? 1 : 0) << "," << spec.commit_trials << ","
+      << spec.misroute_p << "," << r.opp_total << "," << r.opp_phase2 << ","
+      << r.opp_blocked << "," << r.opp_executed << "," << r.exec_mass << "\n";
+}
+
+void writePerBankCtxCsv(const std::string& path, unsigned master, const StreamSpec& spec,
+                        const StreamResult& r) {
+    std::ofstream f(path);
+    f.setf(std::ios::fixed);
+    f.precision(6);
+    f << "master,task,bank,acc_cue_off\n";
+    for (size_t t = 0; t < r.per_bank_off.size(); ++t)
+        for (size_t k = 0; k < r.per_bank_off[t].size(); ++k)
+            if (r.per_bank_off[t][k] >= 0.0)
+                f << master << "," << t << "," << k << "," << r.per_bank_off[t][k] << "\n";
+    (void)spec;
 }
 
 } // namespace
@@ -541,6 +651,9 @@ int main(int argc, char** argv) {
     std::string out = ".";
     std::string seed_arg, order_arg, state_file;
     int n_tasks = 3, n_banks = 3, stage = 0, force_bank = -1, commit = 480, seal = 1;
+    double misroute = 0.0;
+    bool ctxperbank = false;
+    std::string tag_suffix;   // L10.1: distinct file names for matched arms
 
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--mode") && i + 1 < argc) mode = argv[++i];
@@ -554,9 +667,12 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--force-bank") && i + 1 < argc) force_bank = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--commit") && i + 1 < argc) commit = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--seal") && i + 1 < argc) seal = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--misroute") && i + 1 < argc) misroute = std::atof(argv[++i]);
+        else if (!std::strcmp(argv[i], "--ctxperbank")) ctxperbank = true;
+        else if (!std::strcmp(argv[i], "--tag") && i + 1 < argc) tag_suffix = argv[++i];
     }
-    if (n_tasks < 1 || n_tasks > 6) { std::cerr << "n_tasks must be 1..6\n"; return 2; }
-    if (n_banks < 1 || n_banks > 6) { std::cerr << "n_banks must be 1..6\n"; return 2; }
+    if (n_tasks < 1 || n_tasks > 8) { std::cerr << "n_tasks must be 1..8\n"; return 2; }
+    if (n_banks < 1 || n_banks > 8) { std::cerr << "n_banks must be 1..8\n"; return 2; }
 
     std::vector<unsigned> masters;
     if (!seed_arg.empty()) {
@@ -573,6 +689,8 @@ int main(int argc, char** argv) {
     spec.force_initial_bank = force_bank;
     spec.commit_trials = commit;
     spec.seal = (seal != 0);
+    spec.misroute_p = misroute;
+    spec.per_bank_ctxoff = ctxperbank;
     if (!order_arg.empty()) {
         for (const auto& s : split(order_arg, ',')) spec.order.push_back(std::stoi(s));
         // The order may be shorter, equal, or longer than n_tasks; a longer
@@ -582,6 +700,21 @@ int main(int argc, char** argv) {
             if (t < 0 || t >= n_tasks) { std::cerr << "--order entries must be < --tasks\n"; return 2; }
     }
 
+    if (mode == "perm") {
+        // L10.1 D-CTX-1: emit the task permutations so the analytic context-off
+        // floor can be derived independently of any measurement.
+        std::cout << "master,task,pi0,pi1,pi2,pi3,pi4,pi5\n";
+        for (unsigned m : masters) {
+            for (int t = 0; t < n_tasks; ++t) {
+                VTask d = makeVTask(m, t);
+                std::cout << m << "," << t;
+                for (int i = 0; i < 6; ++i)
+                    std::cout << "," << d.map.perm[static_cast<size_t>(i)];
+                std::cout << "\n";
+            }
+        }
+        return 0;
+    }
     if (mode == "frozen" || mode == "seeds") {
         // CCM (3 banks, cue, probe, seal) and the single-bank L9-style arm
         for (unsigned m : masters) {
@@ -610,10 +743,13 @@ int main(int argc, char** argv) {
         for (unsigned m : masters) {
             StreamResult r = runStream(spec, m, true);
             std::string tag = mode + "_T" + std::to_string(n_tasks) + "_K" + std::to_string(n_banks) +
-                              "_" + std::to_string(m);
+                              "_" + std::to_string(m) + tag_suffix;
             writeTaskCsv(out + "/metrics_" + tag + ".csv", spec, m, r, {});
             writeTrialCsv(out + "/trials_" + tag + ".csv", m, r);
             writeCallsCsv(out + "/calls_" + tag + ".csv", r);
+            writeSealCsv(out + "/sealing_" + tag + ".csv", m, spec, r);
+            if (spec.per_bank_ctxoff)
+                writePerBankCtxCsv(out + "/ctxperbank_" + tag + ".csv", m, spec, r);
             std::cerr << tag << " done\n";
         }
     } else if (mode == "restart") {
