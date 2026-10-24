@@ -74,7 +74,13 @@ def main():
     # scored cell is the FINAL evaluation of the task (protocol v1.1, section 16).
     problems = []
     final_cell = {}
-    for m in SEEDS:
+    for m in sorted(seeds):        # scored cell for every seed present
+        for t in range(TASKS):
+            rs0 = cell.get((m, t, "0"), [])
+            if rs0:
+                last = max(int(r["call"]) for r in rs0)
+                final_cell[(m, t)] = [r for r in rs0 if int(r["call"]) == last]
+    for m in SEEDS:              # strict validity for the registered primary seeds
         if m not in seeds:
             problems.append("seed %d missing" % m)
             continue
@@ -91,16 +97,12 @@ def main():
                     if n != 120:
                         problems.append("seed %d task %d eval_kind %s call %d has %d rows (want 120)"
                                         % (m, t, kind, call, n))
-            rs0 = cell.get((m, t, "0"), [])
-            if rs0:
-                last = max(int(r["call"]) for r in rs0)
-                final_cell[(m, t)] = [r for r in rs0 if int(r["call"]) == last]
             if (m, t) not in sweep:
                 problems.append("seed %d task %d missing forced-bank sweep" % (m, t))
 
     # ---------- per-cell metrics ----------
     detail = {}
-    for m in [s for s in SEEDS if s in seeds]:
+    for m in sorted(seeds):   # every seed present; the criterion is applied to the registered ones
         detail[m] = {}
         for t in range(TASKS):
             corr = final_cell[(m, t)]
@@ -123,7 +125,12 @@ def main():
     result = {"run": os.path.abspath(run), "suffix": suffix, "valid": not problems,
               "problems": problems, "seeds": {}, "overall": None}
     all_ok = not problems
-    for m in detail:
+    registered = [m for m in detail if m in SEEDS]
+    if not registered:
+        result["overall"] = {"L10-K1": "NOT APPLICABLE",
+                             "note": "exploratory seeds only; no registered primary seed in this run"}
+        all_ok = False
+    for m in registered:
         caa = [detail[m][t]["CAA"] for t in range(TASKS)]
         cra = [detail[m][t]["CRA"] for t in range(TASKS)]
         caa_pooled = st.mean(caa)
@@ -137,11 +144,13 @@ def main():
                               "seed_pass": a and b and c}
         all_ok = all_ok and (a and b and c)
 
-    grand_caa = st.mean([detail[m][t]["CAA"] for m in detail for t in range(TASKS)])
-    grand_cra = st.mean([detail[m][t]["CRA"] for m in detail for t in range(TASKS)])
-    result["overall"] = {"L10-K1": "PASS" if all_ok else "FAIL",
+    pool = registered if registered else list(detail)
+    grand_caa = st.mean([detail[m][t]["CAA"] for m in pool for t in range(TASKS)]) if pool else None
+    grand_cra = st.mean([detail[m][t]["CRA"] for m in pool for t in range(TASKS)]) if pool else None
+    result["overall"] = {"L10-K1": "PASS" if (all_ok and registered) else ("FAIL" if registered else "NOT APPLICABLE"),
                          "grand_CAA": grand_caa, "grand_CRA": grand_cra,
-                         "rule": "per-seed (a) CAA_pooled>=0.40, (b) CAA(t)>=0.25 on >=2/3, (c) CRA_pooled>=0.50, all seeds"}
+                         "exploratory_seeds": [m for m in detail if m not in SEEDS],
+                         "rule": "per-seed (a) CAA_pooled>=0.40, (b) CAA(t)>=0.25 on >=2/3, (c) CRA_pooled>=0.50, all registered seeds"}
     result["detail"] = {str(m): {str(t): detail[m][t] for t in detail[m]} for m in detail}
 
     # ---------- null checks ----------
@@ -170,10 +179,11 @@ def main():
     print(f"\n{'seed':>10} {'CAA_pooled':>10} {'(a)':>5} {'CRA_pooled':>10} {'(c)':>5} "
           f"{'tasks>=0.25':>11} {'(b)':>5} {'seed':>5}")
     for m, r in result["seeds"].items():
+        tag = "" if m in SEEDS else "   (exploratory, no criterion)"
         ok = sum(1 for x in r["CAA_per_task"] if x >= THR_TASK)
         print(f"{m:>10} {r['CAA_pooled']:>10.4f} {str(r['a_CAA_pooled']):>5} "
               f"{r['CRA_pooled']:>10.4f} {str(r['c_CRA_pooled']):>5} {ok:>11} "
-              f"{str(r['b_two_tasks']):>5} {('PASS' if r['seed_pass'] else 'FAIL'):>5}")
+              f"{str(r['b_two_tasks']):>5} {('PASS' if r['seed_pass'] else 'FAIL'):>5}{tag}")
     o = result["overall"]
     print(f"\ngrand pooled CAA {o['grand_CAA']:.4f}   grand pooled CRA {o['grand_CRA']:.4f}")
     print(f"L10-K1 = {o['L10-K1']}")

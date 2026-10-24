@@ -1,0 +1,50 @@
+=== STARK-002 Integration Tests ===
+
+Test 1: Excitatory connection A -> B
+  ✓   Neuron A spiked PASSED
+  ✓   Synaptic current > 0 (excitatory) PASSED
+  ✓   Neuron B V increased PASSED
+    V_before=-0.5, V_after=-0.4, I_B=0.5
+
+Test 2: Inhibitory connection A -> B
+  ✓   Neuron A spiked PASSED
+  ✓   Synaptic current < 0 (inhibitory) PASSED
+  ✓   Neuron B V decreased PASSED
+    V_before=0.114265, V_after=0.0528385, I_B=-0.5
+
+Test 3: Temporal dynamics - single spike decay
+  ✓   Neuron A spiked once PASSED
+  ✓   First current = w * 1.0 = 1.0 PASSED
+  ✓   Synaptic state decayed correctly (Euler) PASSED
+    State after 5 decay steps: 0.59049 (expected 0.59049)
+
+Test 4: Multiple synapses converging on one neuron
+  ✓   Neuron A spiked PASSED
+  ✓   Neuron C spiked PASSED
+  ✓   Total current = sum of individual PASSED
+  ✓   Total current > individual currents PASSED
+  ✓   Neuron B V increased by combined input PASSED
+    I_A=0.3, I_C=0.4, I_total=0.7, V_before=-0.5, V_after=-0.38
+
+Test 5: Full two-neuron spike propagation
+  ✓   Neuron A spiked multiple times PASSED
+  ✓   Neuron B spiked at least once PASSED
+    A spikes: 5, B spikes: 2
+
+Test 6: Inhibitory input prevents spiking
+  ✓   B charged but below threshold PASSED
+  ✓   Inhibitory current < 0 PASSED
+  ✓   V decreased due to inhibition PASSED
+    V_before=2.64503, V_after=2.30052, I_inh=-0.8
+
+Test 7: Synapse reset clears state
+  ✓   State built up PASSED
+  ✓   State = 0 after reset PASSED
+
+Test 8: Non-finite input validation
+  ✓   NaN dt rejected PASSED
+  ✓   infinity dt rejected PASSED
+
+========================================
+Integration Tests: 23 passed, 0 failed
+========================================

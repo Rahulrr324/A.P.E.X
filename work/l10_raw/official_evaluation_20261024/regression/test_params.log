@@ -1,0 +1,31 @@
+=== Neural Cell Parameter Tests ===
+
+Test 1: Fast leak (tau_m=0.5)
+  After 1 step I=2.0, V=-0.35, theta=1
+
+Test 2: Slow leak (tau_m=3.0)
+  After 1 step I=2.0, V=-0.283333, theta=1
+
+Test 3: Fast adaptation (tau_a=1.0)
+  After 1 step I=2.0, V=-0.375, theta=1
+
+Test 4: Slow adaptation (tau_a=20.0)
+  After 1 step I=2.0, V=-0.25, theta=1
+
+Test 5: Low baseline (theta_0=0.5)
+  After 1 step I=2.0, V=-0.25, theta=0.5
+
+Test 6: High baseline (theta_0=2.0)
+  After 1 step I=2.0, V=-0.25, theta=2
+
+Test 7: Strong adaptation (b=1.0)
+  After 1 step I=2.0, V=-0.25, theta=1
+
+Test 8: Weak adaptation (b=0.1)
+  After 1 step I=2.0, V=-0.25, theta=1
+
+Test 9: Negative V_reset (-1.0)
+  After 1 step I=2.0, V=-0.7, theta=1
+
+Test 10: Mild V_reset (-0.1)
+  After 1 step I=2.0, V=0.11, theta=1

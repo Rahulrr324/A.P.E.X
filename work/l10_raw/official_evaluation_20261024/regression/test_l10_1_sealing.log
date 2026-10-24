@@ -1,0 +1,6 @@
+[test_l10_1_sealing] sealing toggle behaviour
+  sealed bank: write blocked (0 weight change)  ok
+  unsealed bank: write executed  ok
+  sealed bank still answers its own mapping (acc 0.55, unchanged by the seal)  ok
+  multi-candidate trials: no credit in either arm  ok
+PASS (276 assertions)
