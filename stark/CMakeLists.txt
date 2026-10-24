@@ -295,6 +295,28 @@ add_executable(continual_learning_loop
 )
 target_compile_features(continual_learning_loop PUBLIC cxx_std_17)
 
+# STARK-L10: Context-conditioned memory and continual learning (CCM).
+# Frozen protocol: design/context_conditioned_memory_milestone.md v1.6
+add_executable(context_conditioned_memory_loop
+    src/learning/context_conditioned_memory_loop.cpp
+    src/learning/ContextConditionedMemory.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(context_conditioned_memory_loop PUBLIC cxx_std_17)
+
+add_executable(test_context_conditioned_memory
+    tests/test_context_conditioned_memory.cpp
+    src/learning/ContextConditionedMemory.cpp
+    src/learning/RelevanceRouting.cpp
+    src/neural/NeuralCell.cpp
+    src/neural/Synapse.cpp
+    src/neural/Network.cpp
+)
+target_compile_features(test_context_conditioned_memory PUBLIC cxx_std_17)
+
 # ============================================================
 # STARK Phase 1 (M0): measurement infrastructure
 # New targets only; existing STARK-001..007 targets are unchanged.

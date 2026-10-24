@@ -1,0 +1,11 @@
+  timestep accounting OK
+  no-learning invariance OK
+  weight movement: D0=0.875087 D8=0.151079
+  delay reduces weight updates OK
+  baseline delay invariance OK
+  mini(D=4): trained=1 baseline=0.525 sham=0.475
+  mini delayed learning OK
+==========================================
+Total assertions: 18
+ALL TESTS PASSED
+==========================================
