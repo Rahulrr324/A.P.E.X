@@ -26,7 +26,7 @@ L11 must measure, and it is the most consequential result of this task.
 | Working tree at start | clean; no untracked residue |
 | Remote parity at start | `refs/heads/validation/l10-6-signoff` = `ba1cfb3…` — **the reported commit is reachable and matches** |
 | L11.1 branch | **`validation/l11-1-specification`**, created from `ba1cfb3` |
-| Final HEAD | `PENDING` → see §I.4 (filled at commit; local == remote verified after push) |
+| Final HEAD | `77d261a…` (protocol/docs commit); the seal commit follows and is recorded in §I.4 |
 | L10 specification | v1.8, sha256 `aafd00aa…`, identical in the working tree and in `git show HEAD:` |
 | L10.6 sign-off | reachable at `ba1cfb3`, message verified |
 | PR #2 | OPEN, head `5f5a577…`, base `main` — untouched |
@@ -350,9 +350,13 @@ any model training.
 
 ### I.4 Git
 
-Branch `validation/l11-1-specification` from `ba1cfb3`; single commit containing
-the eight files above; pushed to `origin` under the same name; local == remote and
-tree clean verified after the push; PR #2 and #3 untouched; **no new PR**.
+Branch `validation/l11-1-specification` from `ba1cfb3`. Two commits:
+`77d261aa83ddbf3aac1abc800c7c5c89741a86c7` (all artifacts; the protocol text is
+frozen there), then a seal commit that fills the commit fields in
+`work/L11_1_PREREGISTRATION.json`, this report and the manifest — the protocol
+hash `322078c8…` is identical in both. Pushed to `origin` under the same branch
+name; local == remote and tree clean verified after the push; PR #2 and #3
+untouched; **no new PR**.
 
 ### I.5 Limitations of this milestone
 

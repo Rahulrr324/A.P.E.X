@@ -8,8 +8,8 @@
     "path": "stark/design/l11_1_protocol.md",
     "version": "0.1",
     "sha256": "322078c8345b5c72c4954a6de529329065d8875f2a103626039e92f09a810c32",
-    "frozen_at_commit": "PENDING_FILL_AFTER_COMMIT",
-    "frozen_at_commit_note": "this record is amended in the immediately following commit to name the commit that contains the protocol text; the protocol hash itself is never changed"
+    "frozen_at_commit": "77d261aa83ddbf3aac1abc800c7c5c89741a86c7",
+    "frozen_at_commit_note": "the protocol text was committed at 77d261a; this record is amended in the immediately following commit to name that commit, and the protocol hash itself is never changed"
   },
 
   "companion_documents": {
