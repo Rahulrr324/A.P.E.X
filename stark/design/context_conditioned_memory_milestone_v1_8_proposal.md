@@ -1,16 +1,19 @@
 # STARK-L10 — Proposed Acceptance Specification v1.8 (PROPOSAL — NOT IN FORCE)
 
-**Status:** **PROPOSAL ONLY. NOT AUTHORITATIVE. NOT IN FORCE.**
-The authoritative acceptance specification remains
-`stark/design/context_conditioned_memory_milestone.md` **v1.7**
-(sha256 `a323378c680ebda8f6e23921b6fc95b8ad1ac2e6e37e81f04cdaa57fe5134bd5`),
-which this document does **not** modify.
+**Status:** **AUTHORISED AND PROMOTED on 2026-10-24.**
+This file is retained as the reviewable change set that was put to the owner. All
+three decisions (A, B, C) were answered **option 1** and the authorised patches
+were applied to the authoritative
+`stark/design/context_conditioned_memory_milestone.md`, which is now **v1.8**
+(sha256 `aafd00aad8c2b843410f2a88fdf3f64cbeb2c10c39f7470f43c5a2bafe33ffd1`,
+promoted from v1.7 `a323378c…`). Nothing in this document is normative: the
+authoritative text is the milestone document.
 
-**Why it is not in force.** The specification's §13 (v1.7 entry) requires that
-any change to §8 be made "with an owner decision, in a new version". As of this
-writing the three closure decisions in `stark/reports/L10_5_OWNER_DECISION.md`
-are **PENDING**. Under repository governance the agent may draft the text but may
-not promote it.
+**Why it was not in force when published.** The specification's §13 (v1.7 entry)
+requires that any change to §8 be made "with an owner decision, in a new
+version". The agent may draft that text but may not promote it. It was promoted
+only after the owner answered the three questions in
+`stark/reports/L10_5_OWNER_DECISION.md` §2 (2026-10-24).
 
 **How to use this document.** Each decision has a self-contained patch. Apply
 exactly the patches the owner authorises, in the owner's words, and nothing else.

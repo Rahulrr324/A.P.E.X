@@ -1,14 +1,16 @@
 # STARK-L10.5 — Owner-Governed Milestone Closure
 
 **Status:** documentation and governance only. **No experiment was run, no
-threshold changed, no result relabelled.** Three closure decisions were drafted
-and put to the owner; all three are **PENDING**.
+threshold changed, no result relabelled, no evidence regenerated.**
 
-**Bottom line: L10 is not closed.** Every criterion has a recorded outcome and
-every experiment has been run, but the three decisions that would turn those
-outcomes into a final milestone record await the owner's authorisation. The
-authoritative acceptance specification therefore remains at **v1.7**; the v1.8
-text exists only as a proposal.
+**Bottom line: L10 is formally CLOSED.** The three closure decisions were put to
+the repository owner separately on 2026-10-24 and all three were answered
+(**option 1** for each). The authorised text has been promoted to the
+authoritative acceptance specification **v1.8**
+(sha256 `aafd00aad8c2b843410f2a88fdf3f64cbeb2c10c39f7470f43c5a2bafe33ffd1`).
+Closure changed no measured value and no pass/fail outcome: L10-E is still
+**FAILED**, L10-F is still recorded **FAILED**, L10-G is still recorded as a PASS
+on a confounded arm, and L10-K1 is still an official **PASS**.
 
 ---
 
@@ -120,31 +122,34 @@ L10-J: failures and limitations reported honestly.
 Recorded **separately** in `stark/reports/L10_5_OWNER_DECISION.md`. No answer to
 one decision implies an answer to another, and none has been assumed.
 
-| ID | Subject | Options put | Recommendation | Status |
-|---|---|---|---|---|
-| **A** | L10-E | (1) retain the failure and formally close the criterion as historical; (2) leave unresolved; (3) other | **1** — retain and close, changing nothing | **PENDING** |
-| **B** | L10-F | (1) mark superseded and closed by L10-F2, preserving the failure; (2) leave unresolved; (3) other | **1** | **PENDING** |
-| **C** | L10-G | (1) record the historical confounded PASS as superseded by L10-G2, preserving both; (2) leave both as-is; (3) other | **1** | **PENDING** |
+| ID | Subject | Options put | Recommendation | Answer | Status |
+|---|---|---|---|---|---|
+| **A** | L10-E | (1) retain the failure and formally close the criterion as historical; (2) leave unresolved; (3) other | **1** | **option 1** | **APPROVED** |
+| **B** | L10-F | (1) mark superseded and closed by L10-F2, preserving the failure; (2) leave unresolved; (3) other | **1** | **option 1** | **APPROVED** |
+| **C** | L10-G | (1) record the historical confounded PASS as superseded by L10-G2, preserving both; (2) leave both as-is; (3) other | **1** | **option 1** | **APPROVED** |
 
-**The agent approved nothing.** It did not infer authorisation from the A-1/A-3
-ratifications (which ratified *protocols*, not closures), from the L10.3 Option B
-decision (which ratified a *criterion text*), or from any earlier engineering
-recommendation.
+Each was asked and answered **separately**; no answer was inferred from another,
+and the agent approved none of them. The agent did not treat the A-1/A-3
+ratifications (which ratified *protocols*), the L10.3 Option B decision (which
+ratified a *criterion text*), or any earlier engineering recommendation as
+authority for a closure — it asked.
 
 ## D. Specification
 
 | Item | Value |
 |---|---|
-| Authoritative version | **v1.7** — unchanged by this milestone, sha256 `a323378c680ebda8f6e23921b6fc95b8ad1ac2e6e37e81f04cdaa57fe5134bd5` |
-| Proposed version | `stark/design/context_conditioned_memory_milestone_v1_8_proposal.md` — **PROPOSAL ONLY, NOT IN FORCE** |
-| Why not authoritative | §13 requires an owner decision for any §8 change; all three decisions are PENDING |
+| Previous authoritative version | v1.7, sha256 `a323378c680ebda8f6e23921b6fc95b8ad1ac2e6e37e81f04cdaa57fe5134bd5` (unchanged until the answers existed) |
+| **Current authoritative version** | **v1.8**, sha256 `aafd00aad8c2b843410f2a88fdf3f64cbeb2c10c39f7470f43c5a2bafe33ffd1` |
+| Change set (reviewable) | `stark/design/context_conditioned_memory_milestone_v1_8_proposal.md` — the text that was put to the owner, retained as the applied record |
+| Approval authority | owner decisions A, B, C, 2026-10-24 (`stark/reports/L10_5_OWNER_DECISION.md` §2) |
+| Diff shape | **+51 / −5**: the five deletions are the old version header block; everything else is addition. All three annotation rows sit *beneath* the untouched criterion rows |
 
-The proposal is a **reviewable change set**, not a rewritten document: one
-self-contained patch per decision (**P-A**, **P-B**, **P-C**) plus a status line
-and a §13 entry (**P-H**). Each patch adds an *annotation row* beneath the
-existing criterion row and never edits it. Applying only the authorised patches
-produces the authoritative v1.8; deferring a decision simply omits its patch and
-leaves that criterion recorded exactly as in v1.7.
+The change set is deliberately structured as one self-contained patch per
+decision (**P-A**, **P-B**, **P-C**) plus a status line and a §13 entry
+(**P-H**). Each patch adds an *annotation row* beneath the existing criterion row
+and never edits it — so the authoritative v1.8 contains the v1.7 text verbatim
+plus three annotations. Had any decision been deferred, its patch would simply
+have been omitted.
 
 **Preserved in every combination:** all criterion texts, thresholds and metrics;
 all measured values and pass/fail outcomes (L10-E FAILED 0.425926, L10-F FAILED,
@@ -155,9 +160,18 @@ evaluation semantics, task distribution and every historical artifact.
 
 | Manifest | Entries | Problems |
 |---|---|---|
-| `work/l10_raw/official_evaluation_20261024/MANIFEST.md` (L10.4) | 129 | **0** |
+| `work/l10_raw/official_evaluation_20261024/MANIFEST.md` (L10.4) | 129 | **0 at its own commit**; currently **124/124 evidence artifacts verify**, with one deliberate difference explained below |
 | `work/l10_raw/context_contribution_20261024/MANIFEST.md` (L10.3) | 245 | **0** |
 | `work/l10_raw/spec_ratification_20261024/MANIFEST.md` (L10.2) | 200 | 1 — `stark/src/learning/l10_validation_harness.cpp` |
+
+**The one L10.4 difference is this milestone's own authorised change.** The L10.4
+manifest hashes the acceptance specification as part of its *deliverables* section
+(not its evidence section): it recorded v1.7 `a323378c…`, and L10.5 has now
+promoted that file to v1.8 `aafd00aa…` under the owner's decisions A/B/C. All
+**124/124** L10.4 **evidence artifacts** still verify byte-for-byte. The L10.4
+manifest was deliberately **not** rewritten — editing a historical manifest to
+match a later change is exactly what the evidence rules forbid; the supersession is
+recorded here and in the v1.8 §13 entry instead.
 
 The single L10.2 difference is the **expected, declared** one: that manifest hashes
 the harness source as it stood at the end of L10.2, and the file was extended
@@ -188,34 +202,42 @@ regression results remain valid for this tree unchanged.
 
 ## G. Final milestone status
 
-**L10 is formally OPEN.** Every experiment is complete and every criterion has a
-recorded outcome, but closure is an owner act that has not happened. Claiming
-closure because the experiments are finished would be exactly the substitution
-this milestone exists to prevent.
+**L10 is formally CLOSED**, by owner decisions A, B and C of 2026-10-24, and the
+acceptance specification is at v1.8. Closure followed the owner's answers — it was
+not claimed because the experiments were finished. The order matters and is
+preserved in the record: the experiments finished in L10.4, the decisions were
+drafted in L10.5, the owner answered, and only then was the specification promoted.
 
 | Layer | State |
 |---|---|
-| Owner-approved decisions in force | A-1 → L10-F2 protocol; A-3 → L10-G2 + informational L10-R1/L10-S1 (both L10.2, 2026-10-24); Option B → L10-K1 added to §8 as v1.7 (L10.3, 2026-10-24) |
-| Proposed, awaiting authorisation | Decision A (L10-E closure), Decision B (L10-F supersession), Decision C (L10-G supersession) — all **PENDING** |
+| Owner-approved decisions in force | A-1 → L10-F2 protocol; A-3 → L10-G2 + informational L10-R1/L10-S1 (both L10.2, 2026-10-24); Option B → L10-K1 added to §8 as v1.7 (L10.3, 2026-10-24); **A/B/C closure decisions → v1.8 (L10.5, 2026-10-24)** |
+| Decided in L10.5 | A → L10-E retained and closed as a historical failure; B → L10-F superseded and closed by L10-F2; C → L10-G superseded by L10-G2 (all owner-approved 2026-10-24, recorded separately) |
 | Historical experimental results | L10-E FAILED 0.425926; L10-F FAILED (0 opportunities); L10-G PASS (confounded arm); L10-A/B/C/D/E2/H PASS |
 | Current official criterion statuses | **L10-E FAILED**, L10-F FAILED (retained), L10-G PASS (confounded, retained), **L10-K1 PASS**, L10-F2 PASS, L10-G2 PASS, L10-A/B/C/D/E2/H PASS, L10-I no new failures, L10-J satisfied |
-| Formal milestone-closure status | **OPEN** — pending decisions A, B, C |
-| Acceptance specification | **v1.7 authoritative**; v1.8 proposed only |
+| Formal milestone-closure status | **CLOSED** (2026-10-24) |
+| Acceptance specification | **v1.8 authoritative** (sha256 `aafd00aad8c2b843410f2a88fdf3f64cbeb2c10c39f7470f43c5a2bafe33ffd1`) |
 
-**Completion estimate: ~55 % (unchanged from L10.4).** L10.5 added governance
-scaffolding and made the remaining gap explicit; it added no capability and
-changed no acceptance state, so moving the number would be inflation.
+**Completion estimate: ~57 % (from ~55 %).** The increase is small and covers one
+thing only: the milestone is now formally closed with a consistent acceptance
+record, which removes a standing governance debt. No capability was added and no
+measured outcome changed, so a larger increment would be inflation.
 
-**Recommended next milestone: the owner's three answers, then L10.6 — promotion
-of v1.8 and milestone sign-off.** That step is small and purely mechanical once
-the answers exist: apply the authorised patches, set the v1.8 header with the
-approval authority, verify by diff that no threshold or outcome line is deleted,
-commit, and flip this record from OPEN to CLOSED. Optionally fold in the
-separately registered channel-slot diagnostic proposed in L10.4 §H.
+**The promotion step is complete**, inside this milestone: the authorised patches
+were applied, the header now carries the approval authority, and a diff check
+confirms nothing but the version header was deleted. L10.6 is therefore reduced to
+sign-off rather than promotion.
 
-**L11 must not start before L10 is formally closed.** A successor milestone that
-inherits an unclosed acceptance record reproduces the ambiguity that L10.4 and
-L10.5 exist to remove.
+**Recommended next milestone: L10.6 — L10 sign-off and the L11 readiness
+assessment.** Scope: verify the v1.8 document against the decision record, confirm
+the evidence manifests still verify, publish a short milestone summary that points
+at what the milestone did and did not establish, and scope what an L11 pre-requisite
+would actually be. Optionally fold in the separately registered channel-slot
+diagnostic proposed in L10.4 §H, which is the only outstanding measurement gap left
+in the record.
+
+**L10 is now closed, so L11 is no longer blocked by an ambiguous acceptance
+record** — but it should still start from a sign-off milestone, not directly,
+because the v1.8 annotations have not yet been re-read end to end by a successor.
 
 ## H. Deliverables
 

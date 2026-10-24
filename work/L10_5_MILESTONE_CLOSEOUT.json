@@ -1,7 +1,7 @@
 {
   "artifact": "STARK-L10.5 \u2014 owner-governed milestone closure",
   "date": "2026-10-24",
-  "status": "governance closeout; decisions drafted and PENDING; L10 formally OPEN",
+  "status": "governance closeout; decisions A, B and C APPROVED by the owner 2026-10-24; L10 formally CLOSED; specification promoted to v1.8",
   "no_experiment_run": true,
   "no_source_changed": true,
   "provenance": {
@@ -163,9 +163,10 @@
         "other, with implications explained"
       ],
       "recommendation": "option 1 \u2014 retain and close, changing nothing",
-      "status": "PENDING",
-      "decided_by": null,
-      "date": null
+      "answer": "option 1",
+      "status": "APPROVED",
+      "decided_by": "repository owner (Rahulrr324)",
+      "date": "2026-10-24"
     },
     "B_L10_F": {
       "subject": "L10-F supersession",
@@ -175,9 +176,10 @@
         "other, with implications explained"
       ],
       "recommendation": "option 1",
-      "status": "PENDING",
-      "decided_by": null,
-      "date": null
+      "answer": "option 1",
+      "status": "APPROVED",
+      "decided_by": "repository owner (Rahulrr324)",
+      "date": "2026-10-24"
     },
     "C_L10_G": {
       "subject": "L10-G supersession",
@@ -187,10 +189,12 @@
         "other, with implications explained"
       ],
       "recommendation": "option 1",
-      "status": "PENDING",
-      "decided_by": null,
-      "date": null
+      "answer": "option 1",
+      "status": "APPROVED",
+      "decided_by": "repository owner (Rahulrr324)",
+      "date": "2026-10-24"
     },
+    "asked_separately": true,
     "bundled": false,
     "agent_approved_anything": false,
     "agent_inferred_from_prior_decisions": false,
@@ -229,18 +233,23 @@
       "L10-J": "satisfied",
       "L10-K1": "PASS"
     },
-    "formal_milestone_closure": "OPEN \u2014 pending owner decisions A, B, C"
+    "formal_milestone_closure": "CLOSED (2026-10-24) by owner decisions A, B, C"
   },
   "specification": {
-    "authoritative_version": "v1.7",
+    "authoritative_version": "v1.8",
     "authoritative_path": "stark/design/context_conditioned_memory_milestone.md",
-    "authoritative_sha256": "a323378c680ebda8f6e23921b6fc95b8ad1ac2e6e37e81f04cdaa57fe5134bd5",
-    "authoritative_modified_by_this_milestone": false,
+    "authoritative_sha256": "aafd00aad8c2b843410f2a88fdf3f64cbeb2c10c39f7470f43c5a2bafe33ffd1",
+    "authoritative_modified_by_this_milestone": true,
+    "previous_authoritative_version": "v1.7",
+    "previous_authoritative_sha256": "a323378c680ebda8f6e23921b6fc95b8ad1ac2e6e37e81f04cdaa57fe5134bd5",
+    "diff_shape": "+51 / -5; the only deletions are the old version-header block; three annotation rows added beneath untouched criterion rows",
+    "approval_authority": "owner decisions A, B, C, 2026-10-24",
     "proposed_version": "v1.8",
     "proposal_path": "stark/design/context_conditioned_memory_milestone_v1_8_proposal.md",
-    "proposal_sha256": "11a1a537c1221497f5518f7800b8f35a3879aa1a2e0b878006a5837a0eaa4250",
-    "proposal_in_force": false,
-    "why": "section 13 requires an owner decision for any section-8 change; all three decisions are pending",
+    "proposal_sha256": "0b5d7bfc9fb684362dfc50c0fb4496aec4a3cfc543a74ffa3f122f39d4239bba",
+    "proposal_in_force": true,
+    "proposal_role": "retained as the reviewable change set that was authorised and applied",
+    "why": "section 13 requires an owner decision for any section-8 change; the owner answered all three on 2026-10-24 and the authorised patches were applied",
     "change_set": {
       "P-A": "L10-E closure annotation (conditional)",
       "P-B": "L10-F supersession note (conditional)",
@@ -259,7 +268,10 @@
     "manifests": {
       "official_evaluation_20261024": {
         "entries": 129,
-        "problems": 0
+        "problems_now": 1,
+        "evidence_artifacts": 124,
+        "evidence_problems": 0,
+        "explanation": "the single difference is the deliverables-section entry for stark/design/context_conditioned_memory_milestone.md, which this milestone promoted from v1.7 (a323378c...) to v1.8 (aafd00aa...) under owner decisions A/B/C. All 124 evidence artifacts verify. The L10.4 manifest was deliberately not rewritten, because editing a historical manifest to match a later change is prohibited."
       },
       "context_contribution_20261024": {
         "entries": 245,
@@ -272,7 +284,8 @@
       }
     },
     "historical_evidence_modified": false,
-    "experiments_rerun_for_hash_refresh": false
+    "experiments_rerun_for_hash_refresh": false,
+    "manifest_rewritten_to_match_change": false
   },
   "tests": {
     "run_in_this_milestone": [],
@@ -305,8 +318,8 @@
   ],
   "progress_estimate": {
     "previous": 0.55,
-    "current": 0.55,
-    "rationale": "governance scaffolding only; no capability added and no acceptance state changed"
+    "current": 0.57,
+    "rationale": "the milestone is formally closed with a consistent acceptance record, removing a standing governance debt; no capability added and no measured outcome changed"
   },
-  "recommended_next": "obtain the owner's three answers, then L10.6 \u2014 promote the authorised patches to an authoritative v1.8 and sign the milestone off. Do not start L11 before L10 is formally closed."
+  "recommended_next": "L10.6 \u2014 L10 sign-off and L11 readiness assessment: verify v1.8 against the decision record, confirm the evidence manifests still verify, publish the milestone summary, and scope the L11 prerequisites. Optionally register the channel-slot diagnostic from L10.4 section H, the only outstanding measurement gap."
 }

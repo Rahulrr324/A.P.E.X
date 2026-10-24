@@ -8,8 +8,10 @@ clause, and its own §13 (v1.7 entry) states: *"Any future change to §8 must be
 recorded the same way, with an owner decision, in a new version — never edited in
 place."* No agent, tool or report may close a criterion or amend §8.
 **Milestone:** STARK-L10.5 — owner-governed milestone closure.
-**Status of every decision below: `PENDING`.** No closure decision has been
-authorised. Nothing in this record is in force.
+**Status: all three decisions ANSWERED AND AUTHORISED by the repository owner on
+2026-10-24.** Each was put and answered separately; none was inferred. This record
+now holds the answers, and the authorised text has been promoted to the
+authoritative acceptance specification **v1.8**.
 
 ---
 
@@ -176,21 +178,26 @@ honest.
 
 | Field | Value |
 |---|---|
-| Decision A (L10-E) | **PENDING** |
-| Decision B (L10-F) | **PENDING** |
-| Decision C (L10-G) | **PENDING** |
-| Decided by | — (repository owner only) |
-| Date | — |
-| Recorded by | engineering (Arena cloud agent) — drafted the options; approved nothing |
-| Agent authority | **none.** The agent has not inferred authorisation from the A-1/A-3 ratifications, from the L10.3 Option B decision, or from any earlier engineering recommendation |
-| Effect until decided | L10-E stays **FAILED**; L10-F stays **FAILED**; L10-G stays **PASS on a confounded arm**; §8 stays at **v1.7**; **L10 remains OPEN** |
+| Decision A (L10-E) | **APPROVED — option 1**: retain the original failure and formally close the criterion as a historical result |
+| Decision B (L10-F) | **APPROVED — option 1**: mark the original failure as superseded and closed by L10-F2, preserving the historical failure |
+| Decision C (L10-G) | **APPROVED — option 1**: record the historical confounded result as superseded by L10-G2, preserving the original result and the confound disclosure |
+| Decided by | repository owner (`Rahulrr324`) |
+| Date | 2026-10-24 |
+| Mechanism | the three decisions were put to the owner **separately**, as separate questions with the options listed above; the owner selected option 1 for each. The answers are recorded verbatim; they are not bundled and no one answer was inferred from another |
+| Recorded by | engineering (Arena cloud agent) — drafted the options and recorded the answers; approved nothing itself |
+| Agent authority | **none.** The agent did not infer authorisation from the A-1/A-3 ratifications, from the L10.3 Option B decision, or from any earlier engineering recommendation; it asked |
+| Effect of the decisions | L10-E: **retained, still FAILED**, now closed as a historical result. L10-F: **still recorded FAILED**, now superseded and closed by L10-F2. L10-G: **still recorded PASS on a confounded arm**, now superseded by L10-G2. §8 → **v1.8**. L10 → **CLOSED** |
+| Effect on measured values | **none.** No threshold, metric, measured value or pass/fail outcome changed |
 
-**What a decision would trigger.** On an explicit answer for each item, this
-table is filled in verbatim, the corresponding change is made to the **proposed**
-v1.8 document (`stark/design/context_conditioned_memory_milestone_v1_8_proposal.md`),
-and — only then — that text is promoted to the authoritative
-`context_conditioned_memory_milestone.md` v1.8 with the approval authority
-recorded. No criterion outcome changes at any step.
+**What the decisions triggered.** Each authorised patch from the published
+change set (`stark/design/context_conditioned_memory_milestone_v1_8_proposal.md`)
+was applied to the authoritative
+`stark/design/context_conditioned_memory_milestone.md`, which is now **v1.8**
+(sha256 `aafd00aad8c2b843410f2a88fdf3f64cbeb2c10c39f7470f43c5a2bafe33ffd1`).
+The promotion is purely additive apart from the version header: three annotation
+rows and one status line were **added beneath** the existing criterion rows, which
+are untouched, plus a §13 entry quoting the answers. No criterion outcome changed
+at any step.
 
 ## 3. Provenance of this record
 
@@ -199,4 +206,6 @@ recorded. No criterion outcome changes at any step.
 - No experiment was run for this record. Every number above is cited from
   committed evidence, and the L10-E figures were re-derived from the L10.4
   metrics artifacts rather than copied from a report.
-- This record quotes no owner answer, because none has been given.
+- The answers above were given after this record was drafted and are quoted as
+  selections; the drafting (options, evidence, recommendations) preceded them and
+  is preserved unchanged above.
