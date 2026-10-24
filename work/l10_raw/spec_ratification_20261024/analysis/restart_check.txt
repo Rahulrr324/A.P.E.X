@@ -1,0 +1,14 @@
+STARK-L10.2 — checkpoint-resume (process handover) and save/load check
+
+      seed task uninterrupted final  resumed final  match
+ 123456789    0            1.000000       1.000000   True
+ 123456789    1            1.000000       1.000000   True
+ 123456789    2            1.000000       1.000000   True
+ 218213831    0            1.000000       1.000000   True
+ 218213831    1            1.000000       1.000000   True
+ 218213831    2            1.000000       1.000000   True
+ 171473193    0            1.000000       1.000000   True
+ 171473193    1            1.000000       1.000000   True
+ 171473193    2            1.000000       1.000000   True
+
+checkpoint-resume exact (retention + bank map): True

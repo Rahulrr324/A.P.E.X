@@ -1,0 +1,78 @@
+STARK-L10.2 — registered run (protocol v1.1, A-1 + A-3 ratified, A-2 not)
+
+== R0 CCM reference (frozen configuration) ==
+   min_acq=1.0000 final=1.0000 forget=0.0000  (9 task-rows)
+
+== R1 SEAL-PAIR-240 (L10-F2) ==
+      seed  sealON forget  sealOFF forget  opp(ON)  blocked  executed(ON)  executed(OFF)  mass(ON)  mass(OFF)
+ 123456789         0.0000          0.3361       51       51             0             50     0.000      7.790
+ 171473193         0.0000          0.4889       67       67             0             67     0.000     11.437
+ 218213831         0.0000          0.5278       67       67             0             67     0.000     11.131
+    pooled         0.0000          0.4509
+
+  F2.1 opportunities>0 every seed .......... True
+  F2.2 sealed mean forgetting <= 0.10 ...... True
+  F2.3 unsealed >= sealed + 0.10 ........... True
+  F2.4 no write reached a sealed bank ...... True
+  ==> L10-F2 PASS
+
+== R2 SEAL-PAIR-60 (sensitivity, direction only) ==
+   sealON forget=0.0000  sealOFF forget=0.5333  opp ON=345 blocked=345 exec OFF=342
+
+== R3 SEAL-STRESS (misroute 0.20, informational L10-S1) ==
+   sealON final=0.5194 forget=0.4806 | sealOFF final=0.4361 forget=0.5639
+
+== R1 exploratory seeds 1,2,7,42 (no criterion) ==
+   sealON forget=0.0000 final=0.9979 | sealOFF forget=0.4458 final=0.5521
+
+== R6 K2-CAPACITY (seal fixed ON, no unseal-on-reuse) vs R0 ==
+   K2 final=0.6361 forget=0.2713 | CCM final=1.0000 forget=0.0000
+   ==> L10-G2 PASS (K2 worse on forgetting OR final average)
+
+== R7 FROZEN-ROUTER decomposition (informational L10-R1) ==
+
+== R7 FROZEN-ROUTER decomposition (informational L10-R1) ==
+      seed task routing acc   fallback bank(s) acc|right bank acc|wrong bank  task acc
+ 123456789    0      1.0000              0:120         1.0000            nan    1.0000
+ 123456789    1      0.0000              0:120            nan         0.1667    0.1667
+ 123456789    2      0.0000              0:120            nan         0.3333    0.3333
+ 218213831    0      1.0000              0:120         1.0000            nan    1.0000
+ 218213831    1      0.0000              0:120            nan         0.1667    0.1667
+ 218213831    2      0.0000              0:120            nan         0.1667    0.1667
+ 171473193    0      1.0000              0:120         1.0000            nan    1.0000
+ 171473193    1      0.0000              0:120            nan         0.0000    0.0000
+ 171473193    2      0.0000              0:120            nan         0.0000    0.0000
+
+  pooled routing accuracy      = 0.3333   (a learned router scores 1.0000)
+  pooled acc | correct bank    = 1.0000
+  pooled acc | wrong bank      = 0.1389
+  reading: the frozen-router arm selects bank 0 on essentially every trial, so its
+  task accuracy equals bank 0's stored content under each task's key -- the same
+  quantity the CONTEXT-OFF control measures. The two arms are therefore numerically
+  indistinguishable yet answer different questions; they are reported separately.
+
+== R4 CONTEXT-OFF: provisional diagnostics (A-2 NOT ratified) ==
+      seed task    acq  ctxoff    A(t)     excess  margin shuffled
+ 123456789    0 1.0000  1.0000  1.0000   0.00e+00  0.0000   0.2667
+ 123456789    1 1.0000  0.1667  0.1667   3.33e-07  0.8333   0.1667
+ 123456789    2 1.0000  0.3333  0.3333  -3.33e-07  0.6667   0.2583
+ 171473193    0 1.0000  1.0000  1.0000   0.00e+00  0.0000   0.0000
+ 171473193    1 1.0000  0.0000  0.0000   0.00e+00  1.0000   0.1000
+ 171473193    2 1.0000  0.0000  0.0000   0.00e+00  1.0000   0.0750
+ 218213831    0 1.0000  1.0000  1.0000   0.00e+00  0.0000   0.1417
+ 218213831    1 1.0000  0.1667  0.1667   3.33e-07  0.8333   0.0833
+ 218213831    2 1.0000  0.1667  0.1667   3.33e-07  0.8333   0.1000
+
+  pooled measured 0.425926   analytic 0.425926   excess 7.41e-08
+
+== R5 per-bank forced cue-off sweep (memory, NOT context-off performance) ==
+  seed 123456789: rows(task0..2) = [1.000 0.167 0.333 | 0.167 1.000 0.167 | 0.333 0.167 1.000]   diagonal=['1.000', '1.000', '1.000'] min=1.000 OK
+  seed 171473193: rows(task0..2) = [1.000 0.000 0.000 | 0.000 1.000 0.167 | 0.000 0.167 1.000]   diagonal=['1.000', '1.000', '1.000'] min=1.000 OK
+  seed 218213831: rows(task0..2) = [1.000 0.167 0.167 | 0.167 1.000 0.008 | 0.167 0.000 1.000]   diagonal=['1.000', '1.000', '1.000'] min=1.000 OK
+
+== provisional criterion outcomes (do NOT alter L10-E) ==
+  E3a |measured - analytic| <= 0.02 ........ True
+  E3b margin >= 0.60 on >=2 of 3 tasks ..... True  (per seed: 123456789:2/3, 171473193:2/3, 218213831:2/3)
+  E3c per-bank diagonal >= 0.99 ............ True
+  ==> provisional diagnostics all hold: True
+  ==> L10-E (v1.0, 0.40) remains FAILED at 0.425926 — unchanged.
