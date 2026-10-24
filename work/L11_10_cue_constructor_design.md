@@ -7,9 +7,9 @@ It does not build the experiment, and it authorizes nothing.
 
 | File | Lines | Role |
 |---|---|---|
-| `stark/src/learning/L11CueConstruction.h` | 128 | interface, types, error codes, scope contract |
-| `stark/src/learning/L11CueConstruction.cpp` | 220 | validation, canonicalisation, enumeration |
-| `stark/tests/test_l11_cue_constructor.cpp` | 486 | 276 assertions across 8 sections |
+| `stark/src/learning/L11CueConstruction.h` | 135 | interface, types, error codes, scope contract |
+| `stark/src/learning/L11CueConstruction.cpp` | 219 | validation, canonicalisation, enumeration |
+| `stark/tests/test_l11_cue_constructor.cpp` | 571 | 276 assertions across 8 sections |
 | `stark/CMakeLists.txt` | +14 | one additive test target; **no existing target touched** |
 
 No existing source file was modified. No model component was touched.
