@@ -11,7 +11,7 @@ structure.**
 | Working branch | `arena/86da64f9-a-p-e-x` |
 | Starting SHA | `5f5a57717509623bd4c79460d50c05f7cbc605c3` (`STARK-L9: Continual learning and catastrophic forgetting`) |
 | Implementation commit | `9930d7d02a73cdcfd909181feb9a994dbff9728e` |
-| Report commit | the commit that adds this file (its SHA is the tip of the branch) |
+| Report commit | `791ce828f4422e32d2275d10fd2744b8b87fbf3e` (adds this report and the JSON); the branch tip is that commit or its direct, metadata-only successor |
 | PR | #2, `OPEN`, unmerged; base `main` @ `563395f1…`, head `arena/c90f7329-a-p-e-x` @ `5f5a577` at the start. **Not merged, not closed, no new PR created.** |
 | Schema | `STARK-L10-1` |
 | Frozen protocol | `stark/design/context_conditioned_memory_milestone.md` v1.6 (with an append-only revision log, §13) |
