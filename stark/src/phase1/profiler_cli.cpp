@@ -8,7 +8,13 @@
  *   P1-TELEMETRY-<n>.json — one runtime telemetry sample (kind: "telemetry", id: "TELEMETRY")
  */
 
+#include <chrono>
 #include <iostream>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #include <string>
 
 #include "common/HardwareProfiler.h"
@@ -18,8 +24,16 @@ using namespace stark_p1;
 namespace {
 unsigned long long counter = 0;
 std::string unique_suffix() {
-    return std::to_string(RecordStore::utc_timestamp_now().size()) + "-" +
-           std::to_string(counter++);
+    // Timestamp LENGTH was always 24, so restarting the CLI reused the same ids.
+    // Process id + actual high-resolution epoch + counter avoids that deterministic
+    // collision. RecordStore also rejects a collision rather than overwriting.
+#ifdef _WIN32
+    const auto pid = _getpid();
+#else
+    const auto pid = getpid();
+#endif
+    return std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) +
+           "-" + std::to_string(pid) + "-" + std::to_string(counter++);
 }
 } // namespace
 
