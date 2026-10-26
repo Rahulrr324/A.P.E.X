@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <filesystem>
 
 using namespace learning;
 
@@ -113,6 +114,8 @@ static DiagOutcome runDiag(LRConfig cfg, const LRMapping& map, unsigned seed, in
 }
 
 int main(int argc, char** argv) {
+    // Create the existing persistence path; do not change Network::save.
+    std::filesystem::create_directories("build/dev_bin");
     const int kSeeds[3] = {123456789, 218213831, 171473193};
     const std::vector<int> NS = {2,4,8};
     const int kSeedsN=3;

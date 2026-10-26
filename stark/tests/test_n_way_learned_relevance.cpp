@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include <filesystem>
 using namespace learning;
 
 static int g_pass = 0, g_fail = 0;
@@ -22,6 +23,12 @@ static bool isBijection(const std::vector<int>& v, int n) {
 }
 
 int main() {
+
+    // C4: the persistence checks below write into build/dev_bin/. Git cannot store an
+    // empty directory, so a clean checkout does not have it and Network::save throws.
+    // Create it here (path unchanged, so existing evidence locations stay valid).
+    std::filesystem::create_directories("build/dev_bin");
+
     // --- makeLRMapping: perm and phi are bijections for N=2,4,8 ---
     for (int N : {2, 4, 8}) {
         LRConfig cfg;
