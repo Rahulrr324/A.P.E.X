@@ -1,6 +1,8 @@
 #include "common/ExperimentRecord.h"
 
 #include <algorithm>
+#include <atomic>
+#include <filesystem>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -731,23 +733,50 @@ static void ensure_directory(const std::string& dir) {
 }
 
 void RecordStore::append(const ExperimentRecord& record) const {
+    // A record id is a basename, never a path. Do this before creating anything.
+    const auto& id = record.record_id;
+    if (id.empty() || id == "." || id == ".." || id.size() > 200 ||
+        !std::all_of(id.begin(), id.end(), [](unsigned char c) {
+            return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                   (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+        })) throw std::runtime_error("record_id must be a safe basename (1..200 ASCII characters)");
+    const std::string content = record.serialize();
     ensure_directory(dir_);
-    // Use a short, unique temp name inside the store dir so the rename always
-    // stays within the same directory (no long-path rename across roots, which
-    // fails on Windows). The final file is written atomically via rename.
-    std::string path = dir_ + "/" + record.record_id + ".json";
-    std::string tmp = dir_ + "/" + record.record_id + ".tmp";
+    const std::filesystem::path directory(dir_);
+    const auto destination = directory / (id + ".json");
+
+    // Atomically reserve a private staging directory. Different writers (including
+    // different processes) cannot truncate each other's temporary payloads.
+    static std::atomic<unsigned long long> counter{0};
+    std::filesystem::path staging;
+    for (unsigned attempt = 0; attempt < 128; ++attempt) {
+        const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto candidate = directory / (".append-" + std::to_string(tick) + "-" +
+                                             std::to_string(counter.fetch_add(1)));
+        std::error_code error;
+        if (std::filesystem::create_directory(candidate, error)) { staging = candidate; break; }
+        if (error) throw std::runtime_error("cannot reserve record staging directory: " + error.message());
+    }
+    if (staging.empty()) throw std::runtime_error("could not reserve unique record staging directory");
+    struct Cleanup {
+        std::filesystem::path directory;
+        ~Cleanup() { std::error_code ignored; std::filesystem::remove_all(directory, ignored); }
+    } cleanup{staging};
+    const auto temporary = staging / "payload";
     {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out) throw std::runtime_error("cannot open for write: " + tmp);
-        out << record.serialize();
-        if (!out) throw std::runtime_error("write failed: " + tmp);
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        if (!out) throw std::runtime_error("cannot open record staging file");
+        out << content;
+        out.close();
+        if (!out) throw std::runtime_error("record staging write/close failed");
     }
-    // Atomic-ish rename into the append-only store
-    std::remove(path.c_str());
-    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
-        throw std::runtime_error("rename failed: " + tmp + " -> " + path);
-    }
+    // Hard-link publication is atomic and fails if destination exists. In
+    // particular, NEVER remove an existing record to make rename succeed.
+    // Filesystems without hard-link support fail closed. This is atomic visibility,
+    // not a promise of power-loss durability (no file/directory fsync is claimed).
+    std::error_code error;
+    std::filesystem::create_hard_link(temporary, destination, error);
+    if (error) throw std::runtime_error("record not published (duplicate id or unsupported storage): " + error.message());
 }
 
 std::vector<RecordStore::Entry> RecordStore::loadAll() const {

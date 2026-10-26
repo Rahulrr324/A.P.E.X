@@ -229,7 +229,10 @@ public:
     ~RecordStore();
 
     /// Append a record as <dir>/<record_id>.json.
-    /// Throws std::runtime_error on IO failure.
+    /// Never replaces an existing id; rejects unsafe path-like ids.
+    /// Requires a filesystem with hard-link support for atomic no-replace publication.
+    /// Throws std::runtime_error on duplicate id, unsafe id or IO failure.
+    /// Atomic visibility is provided; crash/power-loss fsync durability is not claimed.
     void append(const ExperimentRecord& record) const;
 
     /// Load and parse all *.json records in the directory (sorted by name).
