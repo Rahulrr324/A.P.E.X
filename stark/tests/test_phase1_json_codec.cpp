@@ -52,6 +52,12 @@ int main(int argc, char** argv) {
                             "\"\\uD800\"", "\"\\uDC00\"", "\"\\uD800\\u0041\""}) {
         CHECK_MSG(rejects(text), text);
     }
+    for (double boundary : {std::numeric_limits<double>::max(), std::numeric_limits<double>::lowest(),
+                            std::numeric_limits<double>::min(), std::numeric_limits<double>::denorm_min()}) {
+        const auto encoded = JsonValue::number(boundary).dump();
+        CHECK(JsonValue::parse(encoded).asDouble() == boundary);
+    }
+    CHECK(rejects("1e-9999"));
     CHECK(JsonValue::parse("18446744073709551615").asUInt() == std::numeric_limits<uint64_t>::max());
     CHECK(JsonValue::parse("-9223372036854775808").asInt() == std::numeric_limits<int64_t>::min());
     CHECK(rejects("18446744073709551616"));

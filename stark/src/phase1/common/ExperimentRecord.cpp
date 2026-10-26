@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
+#include <cstdlib>
 #include <filesystem>
 #include <chrono>
 #include <cmath>
@@ -394,8 +396,14 @@ struct Parser {
                 if (consumed != text.size()) fail("invalid integer suffix");
                 return JsonValue::uinteger(static_cast<uint64_t>(value));
             }
-            const auto value = std::stod(text, &consumed);
-            if (consumed != text.size()) fail("invalid double suffix");
+            // stod commonly throws ERANGE for representable subnormals. Preserve
+            // finite nonzero subnormal values, but reject overflow or underflow to
+            // zero rather than silently fabricating a zero measurement.
+            char* conversion_end = nullptr;
+            errno = 0;
+            const double value = std::strtod(text.c_str(), &conversion_end);
+            if (conversion_end != text.c_str() + text.size()) fail("invalid double suffix");
+            if (!std::isfinite(value) || (errno == ERANGE && value == 0.0)) fail("double outside representable range");
             return JsonValue::number(value);
         } catch (const std::exception&) { fail("number out of representable range"); }
     }
