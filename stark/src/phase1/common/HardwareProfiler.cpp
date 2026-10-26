@@ -21,6 +21,7 @@
 #else
 #include <cstdio>
 #include <cstring>
+#include <sys/statvfs.h>   // statvfs() used by collectStorage() on POSIX
 #endif
 
 #if defined(STARK_ENABLE_CUDA)
