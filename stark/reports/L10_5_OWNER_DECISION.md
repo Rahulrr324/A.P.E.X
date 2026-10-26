@@ -25,12 +25,13 @@ milestone.
 
 | ID | Subject | Recommendation | Status |
 |---|---|---|---|
-| **A** | L10-E (context) | retain the historical **FAILED** result and formally close the criterion | **PENDING** |
-| **B** | L10-F (sealing ablation) | record the historical **FAILED** result as **superseded and closed** by L10-F2 | **PENDING** |
-| **C** | L10-G (capacity, confounded arm) | record the historical **PASS** as **superseded** by L10-G2, preserving the result and the confound disclosure | **PENDING** |
+| **A** | L10-E (context) | retain the historical **FAILED** result and formally close the criterion | **APPROVED — option 1** |
+| **B** | L10-F (sealing ablation) | record the historical **FAILED** result as **superseded and closed** by L10-F2 | **APPROVED — option 1** |
+| **C** | L10-G (capacity, confounded arm) | record the historical **PASS** as **superseded** by L10-G2, preserving the result and the confound disclosure | **APPROVED — option 1** |
 
-Until all three are authorised, **L10 remains formally OPEN** even though every
-experiment has been run and every criterion has a recorded outcome.
+All three decisions were authorised on 2026-10-24. The authoritative
+acceptance specification is now v1.8 and **L10 is formally CLOSED**. The original
+criterion outcomes remain unchanged.
 
 ## 1. Facts common to all three decisions
 
@@ -155,8 +156,8 @@ criterion in the acceptance record is a distinct act and needs this decision.
 exhaustion branch both *reuses* a bank **and** *un-seals* the others, so two
 interventions were varied in one arm (`work/L10_1_CONTROL_VALIDATION.md` §C). The
 L10.2 report annotates the row as "historical, confounded arm; superseded in
-practice by L10-G2", but that is report prose — **no owner decision has recorded
-a supersession**, and §8 still lists the original L10-G rule.
+practice by L10-G2", but that is report prose — **the owner subsequently approved option 1 for Decision C on 2026-10-24,
+formally recording that supersession in the authoritative v1.8 acceptance specification**, and §8 still lists the original L10-G rule.
 
 **Evidence for the replacement.** A-3 (owner, 2026-10-24) ratified running the
 capacity arm with `--reuse-seal 0` so that the arm varies capacity only, with the
