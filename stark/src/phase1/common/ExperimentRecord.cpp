@@ -192,6 +192,7 @@ std::string JsonValue::dump(int indent) const {
 // ---------------------------------------------------------------------------
 namespace {
 struct Parser {
+    const char* begin;
     const char* p;
     const char* end;
 
@@ -200,7 +201,7 @@ struct Parser {
     }
     [[noreturn]] void fail(const std::string& msg) {
         throw std::runtime_error("json parse error at offset " +
-                                 std::to_string(p ? static_cast<size_t>(p - end + (end - p)) : 0) + ": " + msg);
+                                 std::to_string(static_cast<size_t>(p - begin)) + ": " + msg);
     }
     char peek() {
         if (p >= end) fail("unexpected end of input");
@@ -244,6 +245,8 @@ struct Parser {
             std::string key = parseString();
             skipWs();
             expect(':');
+            // Duplicate keys make security/configuration interpretation ambiguous.
+            if (obj.has(key)) fail("duplicate object key");
             obj.set(key, parseValue(depth + 1));
             skipWs();
             char c = peek();
@@ -268,16 +271,45 @@ struct Parser {
         }
         return arr;
     }
+    unsigned hex4() {
+        if (end - p < 4) fail("bad \\u escape");
+        unsigned code = 0;
+        for (int i = 0; i < 4; ++i) {
+            const char h = *p++;
+            code <<= 4;
+            if (h >= '0' && h <= '9') code |= static_cast<unsigned>(h - '0');
+            else if (h >= 'a' && h <= 'f') code |= static_cast<unsigned>(h - 'a' + 10);
+            else if (h >= 'A' && h <= 'F') code |= static_cast<unsigned>(h - 'A' + 10);
+            else fail("bad hex digit in \\u escape");
+        }
+        return code;
+    }
+    static void appendUtf8(std::string& out, unsigned code) {
+        if (code < 0x80) out += static_cast<char>(code);
+        else if (code < 0x800) {
+            out += static_cast<char>(0xC0 | (code >> 6));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        } else if (code < 0x10000) {
+            out += static_cast<char>(0xE0 | (code >> 12));
+            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        } else {
+            out += static_cast<char>(0xF0 | (code >> 18));
+            out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        }
+    }
     std::string parseString() {
         expect('"');
         std::string out;
         while (true) {
             if (p >= end) fail("unterminated string");
-            char c = *p++;
+            const unsigned char c = static_cast<unsigned char>(*p++);
             if (c == '"') break;
             if (c == '\\') {
                 if (p >= end) fail("unterminated escape");
-                char e = *p++;
+                const char e = *p++;
                 switch (e) {
                     case '"': out += '"'; break;
                     case '\\': out += '\\'; break;
@@ -288,33 +320,38 @@ struct Parser {
                     case 'b': out += '\b'; break;
                     case 'f': out += '\f'; break;
                     case 'u': {
-                        if (end - p < 4) fail("bad \\u escape");
-                        unsigned code = 0;
-                        for (int i = 0; i < 4; ++i) {
-                            char h = *p++;
-                            code <<= 4;
-                            if (h >= '0' && h <= '9') code |= static_cast<unsigned>(h - '0');
-                            else if (h >= 'a' && h <= 'f') code |= static_cast<unsigned>(h - 'a' + 10);
-                            else if (h >= 'A' && h <= 'F') code |= static_cast<unsigned>(h - 'A' + 10);
-                            else fail("bad hex digit in \\u escape");
-                        }
-                        // Encode as UTF-8 (BMP only; surrogates stored as-is via WTF-8-ish fallback)
-                        if (code < 0x80) {
-                            out += static_cast<char>(code);
-                        } else if (code < 0x800) {
-                            out += static_cast<char>(0xC0 | (code >> 6));
-                            out += static_cast<char>(0x80 | (code & 0x3F));
-                        } else {
-                            out += static_cast<char>(0xE0 | (code >> 12));
-                            out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
-                            out += static_cast<char>(0x80 | (code & 0x3F));
-                        }
+                        unsigned code = hex4();
+                        if (code >= 0xD800 && code <= 0xDBFF) {
+                            if (end - p < 2 || p[0] != '\\' || p[1] != 'u') fail("unpaired high surrogate");
+                            p += 2;
+                            const unsigned low = hex4();
+                            if (low < 0xDC00 || low > 0xDFFF) fail("invalid low surrogate");
+                            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                        } else if (code >= 0xDC00 && code <= 0xDFFF) fail("unpaired low surrogate");
+                        appendUtf8(out, code);
                         break;
                     }
                     default: fail("unknown escape");
                 }
+            } else if (c < 0x20) {
+                fail("unescaped control character");
+            } else if (c < 0x80) {
+                out += static_cast<char>(c);
             } else {
-                out += c;
+                // Raw UTF-8 must represent a Unicode scalar, without overlong forms.
+                const char* start = p - 1;
+                unsigned code = 0, minimum = 0;
+                int trailing = 0;
+                if (c >= 0xC2 && c <= 0xDF) { code = c & 0x1F; minimum = 0x80; trailing = 1; }
+                else if (c >= 0xE0 && c <= 0xEF) { code = c & 0x0F; minimum = 0x800; trailing = 2; }
+                else if (c >= 0xF0 && c <= 0xF4) { code = c & 0x07; minimum = 0x10000; trailing = 3; }
+                else fail("invalid UTF-8 leading byte");
+                for (int i = 0; i < trailing; ++i) {
+                    if (p >= end || (static_cast<unsigned char>(*p) & 0xC0) != 0x80) fail("invalid UTF-8 continuation");
+                    code = (code << 6) | (static_cast<unsigned char>(*p++) & 0x3F);
+                }
+                if (code < minimum || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) fail("invalid Unicode scalar");
+                out.append(start, static_cast<size_t>(p - start));
             }
         }
         return out;
@@ -322,36 +359,49 @@ struct Parser {
     JsonValue parseNumber() {
         skipWs();
         const char* start = p;
-        if (p < end && (*p == '-' || *p == '+')) ++p;
+        if (p < end && *p == '-') ++p;
+        // JSON numbers have a grammar; stod() alone accepts prefixes of malformed
+        // strings such as 1..2, 1e, +1 and 01. Never silently discard a suffix.
+        if (p >= end) fail("missing number");
+        if (*p == '0') ++p;
+        else if (*p >= '1' && *p <= '9') {
+            do { ++p; } while (p < end && *p >= '0' && *p <= '9');
+        } else fail("invalid number");
         bool isInt = true;
-        while (p < end) {
-            char c = *p;
-            if (c >= '0' && c <= '9') { ++p; continue; }
-            if (c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') { isInt = false; ++p; continue; }
-            break;
+        if (p < end && *p == '.') {
+            isInt = false; ++p;
+            if (p >= end || *p < '0' || *p > '9') fail("fraction requires digits");
+            do { ++p; } while (p < end && *p >= '0' && *p <= '9');
         }
-        if (p == start) fail("invalid number");
-        std::string text(start, p);
-        if (isInt) {
-            try {
-                if (!text.empty() && text[0] == '-') return JsonValue::integer(static_cast<int64_t>(std::stoll(text)));
-                unsigned long long u = std::stoull(text);
-                return JsonValue::uinteger(static_cast<uint64_t>(u));
-            } catch (const std::exception&) {
-                fail("integer out of range: " + text);
-            }
+        if (p < end && (*p == 'e' || *p == 'E')) {
+            isInt = false; ++p;
+            if (p < end && (*p == '+' || *p == '-')) ++p;
+            if (p >= end || *p < '0' || *p > '9') fail("exponent requires digits");
+            do { ++p; } while (p < end && *p >= '0' && *p <= '9');
         }
+        const std::string text(start, p);
         try {
-            return JsonValue::number(std::stod(text));
-        } catch (const std::exception&) {
-            fail("double out of range: " + text);
-        }
+            size_t consumed = 0;
+            if (isInt) {
+                if (text[0] == '-') {
+                    auto value = std::stoll(text, &consumed);
+                    if (consumed != text.size()) fail("invalid integer suffix");
+                    return JsonValue::integer(static_cast<int64_t>(value));
+                }
+                auto value = std::stoull(text, &consumed);
+                if (consumed != text.size()) fail("invalid integer suffix");
+                return JsonValue::uinteger(static_cast<uint64_t>(value));
+            }
+            const auto value = std::stod(text, &consumed);
+            if (consumed != text.size()) fail("invalid double suffix");
+            return JsonValue::number(value);
+        } catch (const std::exception&) { fail("number out of representable range"); }
     }
 };
 } // namespace
 
 JsonValue JsonValue::parse(const std::string& text) {
-    Parser parser{text.data(), text.data() + text.size()};
+    Parser parser{text.data(), text.data(), text.data() + text.size()};
     JsonValue v = parser.parseValue(0);
     parser.skipWs();
     if (parser.p != parser.end) parser.fail("trailing characters after JSON value");
