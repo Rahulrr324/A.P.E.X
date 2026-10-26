@@ -159,6 +159,16 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual("-DNDEBUG" in calls[0], mode == "Release")
             self.assertEqual("-O0" in calls[0], mode == "Debug")
 
+    def test_sanitizer_errors_are_not_recoverable_successes(self):
+        r = self.runner()
+        calls = []
+        def success(argv, label, cwd=None):
+            calls.append(argv)
+            return validate.Command(argv, str(self.source), 0, "EXECUTED", .1, "fixture")
+        with patch.object(r, "command", side_effect=success):
+            validate.compile_targets(r, [self.target], "c++", 1, "undefined")
+        self.assertTrue(all("-fno-sanitize-recover=all" in command for command in calls))
+
     def test_cmake_failure_prevents_build_and_tests(self):
         r = self.runner()
         calls = []

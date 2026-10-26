@@ -144,7 +144,7 @@ def compile_targets(runner: Runner, targets: list[dict], cxx: str,
     flags = ["-std=c++17", "-Wall", "-Wextra", "-Wpedantic"]
     flags += ["-O2", "-DNDEBUG"] if build_type == "Release" else ["-O0", "-g"]
     if sanitizer != "none":
-        flags += ["-g", "-fno-omit-frame-pointer", "-fsanitize=" + sanitizer]
+        flags += ["-g", "-fno-omit-frame-pointer", "-fno-sanitize-recover=all", "-fsanitize=" + sanitizer]
     includes = ["-I" + str(root / "src"), "-I" + str(root / "src/phase1"), "-I" + str(root)]
     # Pass command arguments as arrays. No shell, user flags or environment secrets in logs.
     units: dict[tuple, tuple[Path, list[str]]] = {}
