@@ -1,6 +1,7 @@
 /** Codec conformance tests, not a change to any acceptance gate/metric. */
 #include <cmath>
 #include <cstdint>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -13,7 +14,27 @@ bool rejects(const std::string& s) {
     try { (void)JsonValue::parse(s); return false; } catch (const std::exception&) { return true; }
 }
 }
-int main() {
+int main(int argc, char** argv) {
+    // Diagnostic protocol used by deterministic cross-language property tests.
+    // One JSON value per input line; an error is data, never silently accepted.
+    if (argc == 2 && std::string(argv[1]) == "--parse-lines") {
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            JsonValue response = JsonValue::object();
+            try {
+                if (line.size() > 65536) throw std::runtime_error("input line exceeds test budget");
+                auto value = JsonValue::parse(line);
+                response.set("ok", JsonValue::boolean(true));
+                response.set("value", std::move(value));
+            } catch (const std::exception& error) {
+                response.set("ok", JsonValue::boolean(false));
+                response.set("error", JsonValue::str(error.what()));
+            }
+            std::cout << response.dump() << '\n';
+        }
+        return std::cin.bad() ? 2 : 0;
+    }
+    if (argc != 1) return 2;
     test::set_test_name("test_phase1_json_codec");
     for (const auto& text : {"null", "true", "false", "0", "-0", "1", "-1", "1.0",
                             "1e0", "-1.25e+2", "1E-2", "[]", "{}", "[1,true,null]",

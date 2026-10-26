@@ -147,6 +147,18 @@ class ValidationTests(unittest.TestCase):
         report = json.loads((r.output / "report.json").read_text())
         self.assertIn("stark/src/new.cpp", report["input_changes"])
 
+    def test_debug_build_has_no_ndebug_and_release_has_it(self):
+        for mode in ["Debug", "Release"]:
+            r = validate.Runner(self.source, self.root / mode)
+            calls = []
+            def success(argv, label, cwd=None):
+                calls.append(argv)
+                return validate.Command(argv, str(self.source), 0, "EXECUTED", .1, "fixture")
+            with patch.object(r, "command", side_effect=success):
+                validate.compile_targets(r, [self.target], "c++", 1, "none", mode)
+            self.assertEqual("-DNDEBUG" in calls[0], mode == "Release")
+            self.assertEqual("-O0" in calls[0], mode == "Debug")
+
     def test_cmake_failure_prevents_build_and_tests(self):
         r = self.runner()
         calls = []

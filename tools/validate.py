@@ -134,14 +134,15 @@ def load_manifest(path: Path, source: Path) -> list[dict]:
 
 
 def compile_targets(runner: Runner, targets: list[dict], cxx: str,
-                    jobs: int, sanitizer: str) -> bool:
+                    jobs: int, sanitizer: str, build_type: str = "Release") -> bool:
     """Compile each unique (source, flags) once; link separately. Never execute CLIs."""
     root = runner.source / "stark"
     bins = runner.output / "bin"
     objects = runner.output / "objects"
     bins.mkdir()
     objects.mkdir()
-    flags = ["-std=c++17", "-O2", "-DNDEBUG", "-Wall", "-Wextra", "-Wpedantic"]
+    flags = ["-std=c++17", "-Wall", "-Wextra", "-Wpedantic"]
+    flags += ["-O2", "-DNDEBUG"] if build_type == "Release" else ["-O0", "-g"]
     if sanitizer != "none":
         flags += ["-g", "-fno-omit-frame-pointer", "-fsanitize=" + sanitizer]
     includes = ["-I" + str(root / "src"), "-I" + str(root / "src/phase1"), "-I" + str(root)]
@@ -217,7 +218,7 @@ def execute_tests(runner: Runner, targets: list[dict], repeats: int):
             runner.result(name, "test", state, repeat=repeat, seconds=cmd.seconds, log=cmd.log)
 
 
-def cmake_checks(runner: Runner, jobs: int, repeats: int, selected: list[str]):
+def cmake_checks(runner: Runner, jobs: int, repeats: int, selected: list[str], build_type: str = "Release"):
     build = runner.output / "cmake"
     for tool in ["cmake", "ctest"]:
         cmd = runner.command([tool, "--version"], tool + "_version")
@@ -225,7 +226,7 @@ def cmake_checks(runner: Runner, jobs: int, repeats: int, selected: list[str]):
             runner.result(tool, "tool", "BLOCKED", log=cmd.log)
             return
     cmd = runner.command(["cmake", "-S", str(runner.source / "stark"), "-B", str(build),
-                          "-DCMAKE_BUILD_TYPE=Release"], "configure")
+                          "-DCMAKE_BUILD_TYPE=" + build_type], "configure")
     runner.result("cmake", "configure", "PASS" if cmd.exit_code == 0 else "FAIL", log=cmd.log)
     if cmd.exit_code != 0:
         return
@@ -256,6 +257,7 @@ def main(argv=None):
     parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output", required=True, type=Path, help="NEW directory OUTSIDE source tree")
     parser.add_argument("--engine", choices=["cmake", "compiler"], default="cmake")
+    parser.add_argument("--build-type", choices=["Debug", "Release"], default="Release")
     parser.add_argument("--cxx", default="g++", help="GCC-compatible driver executable (not a shell command)")
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--repeat", type=int, default=2)
@@ -282,12 +284,12 @@ def main(argv=None):
         parser.error(str(exc))
     started = datetime.now(timezone.utc).isoformat()
     runner.environment = dict(platform=sys.platform, python=sys.version.split()[0],
-                              sanitizer=args.sanitize, compiler_requested=args.cxx)
+                              sanitizer=args.sanitize, compiler_requested=args.cxx, build_type=args.build_type)
     git = runner.command(["git", "rev-parse", "HEAD"], "git_head")
     # Missing Git metadata does not imply a different source is verified. Log the failure.
     runner.environment["git_metadata_available"] = git.exit_code == 0
     if args.engine == "cmake":
-        cmake_checks(runner, args.jobs, args.repeat, args.target)
+        cmake_checks(runner, args.jobs, args.repeat, args.target, args.build_type)
     else:
         print("COMPILER ENGINE: this does NOT verify CMake configuration or CTest registration.", flush=True)
         version = runner.command([args.cxx, "--version"], "compiler_version")
@@ -300,7 +302,7 @@ def main(argv=None):
                     runner.result(target["name"], "build", "SKIP", reason="Windows-only")
                 else:
                     runnable.append(target)
-            compile_targets(runner, runnable, args.cxx, args.jobs, args.sanitize)
+            compile_targets(runner, runnable, args.cxx, args.jobs, args.sanitize, args.build_type)
             execute_tests(runner, runnable, args.repeat)
     return runner.finish(args.engine, started)
 
