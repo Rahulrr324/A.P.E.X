@@ -1,0 +1,47 @@
+# C8: build output is not source.
+#
+# Applies to NEW files only. Several build directories, .exe and .obj files are
+# already tracked because historical reports and manifests reference them; those
+# remain tracked on purpose and must not be removed without an owner decision.
+
+# CMake build trees (any depth)
+build/
+stark/build/
+stark/build-*/
+build-*/
+
+# CMake-generated files outside a build tree
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# Compiler and linker output
+*.exe
+*.obj
+*.o
+*.a
+*.lib
+*.dll
+*.pdb
+*.ilk
+*.tlog
+*.ipdb
+*.iobj
+*.exp
+*.bin.tmp
+
+# Test scratch directory written by the persistence checks (relative to stark/)
+stark/build/dev_bin/
+build/dev_bin/
+
+# Editor / OS noise
+.vscode/settings.json
+*.swp
+.DS_Store
+
+# Python developer tools (no third-party dependencies)
+__pycache__/
+*.pyc
+.venv/

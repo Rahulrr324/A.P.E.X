@@ -218,7 +218,7 @@ def execute_tests(runner: Runner, targets: list[dict], repeats: int):
             runner.result(name, "test", state, repeat=repeat, seconds=cmd.seconds, log=cmd.log)
 
 
-def cmake_checks(runner: Runner, jobs: int, repeats: int, selected: list[str], build_type: str = "Release"):
+def cmake_checks(runner: Runner, jobs: int, repeats: int, selected: list[str], build_type: str = "Release", include_programs: bool = False):
     build = runner.output / "cmake"
     for tool in ["cmake", "ctest"]:
         cmd = runner.command([tool, "--version"], tool + "_version")
@@ -226,11 +226,13 @@ def cmake_checks(runner: Runner, jobs: int, repeats: int, selected: list[str], b
             runner.result(tool, "tool", "BLOCKED", log=cmd.log)
             return
     cmd = runner.command(["cmake", "-S", str(runner.source / "stark"), "-B", str(build),
-                          "-DCMAKE_BUILD_TYPE=" + build_type], "configure")
+                          "-DCMAKE_BUILD_TYPE=" + build_type,
+                          "-DSTARK_BUILD_RESEARCH_DRIVERS=" + ("ON" if include_programs else "OFF"),
+                          "-DSTARK_BUILD_DIAGNOSTICS=" + ("ON" if include_programs else "OFF")], "configure")
     runner.result("cmake", "configure", "PASS" if cmd.exit_code == 0 else "FAIL", log=cmd.log)
     if cmd.exit_code != 0:
         return
-    argv = ["cmake", "--build", str(build), "--parallel", str(jobs)]
+    argv = ["cmake", "--build", str(build), "--config", build_type, "--parallel", str(jobs)]
     if selected:
         argv += ["--target", *selected]
     cmd = runner.command(argv, "build")
@@ -238,7 +240,7 @@ def cmake_checks(runner: Runner, jobs: int, repeats: int, selected: list[str], b
     if cmd.exit_code != 0:
         return
     extra = ["-R", "^(" + "|".join(re.escape(n) for n in selected) + ")$"] if selected else []
-    cmd = runner.command(["ctest", "-N", *extra], "registration", build)
+    cmd = runner.command(["ctest", "-N", "-C", build_type, *extra], "registration", build)
     runner.result("ctest", "inventory", "PASS" if cmd.exit_code == 0 else "FAIL", log=cmd.log)
     if cmd.exit_code != 0:
         return
@@ -248,7 +250,7 @@ def cmake_checks(runner: Runner, jobs: int, repeats: int, selected: list[str], b
         runner.result("ctest", "inventory", "FAIL", reason="no automated tests selected")
         return
     for n in range(repeats):
-        cmd = runner.command(["ctest", "--output-on-failure", *extra], f"ctest_{n+1}", build)
+        cmd = runner.command(["ctest", "--output-on-failure", "-C", build_type, *extra], f"ctest_{n+1}", build)
         runner.result("ctest", "test", "PASS" if cmd.exit_code == 0 else "FAIL", repeat=n+1, log=cmd.log)
 
 
@@ -289,7 +291,7 @@ def main(argv=None):
     # Missing Git metadata does not imply a different source is verified. Log the failure.
     runner.environment["git_metadata_available"] = git.exit_code == 0
     if args.engine == "cmake":
-        cmake_checks(runner, args.jobs, args.repeat, args.target, args.build_type)
+        cmake_checks(runner, args.jobs, args.repeat, args.target, args.build_type, args.include_programs)
     else:
         print("COMPILER ENGINE: this does NOT verify CMake configuration or CTest registration.", flush=True)
         version = runner.command([args.cxx, "--version"], "compiler_version")
