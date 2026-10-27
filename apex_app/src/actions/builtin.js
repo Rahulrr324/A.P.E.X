@@ -143,11 +143,28 @@ export function builtinActions() {
           display: `Most recent memory records:\n${renderRecords(hits)}`,
         };
       },
+      async verify(ctx, { limit }, result) {
+        const fresh = await ctx.memory.list({ limit, includePrivate: ctx.origin !== ORIGIN_MODEL });
+        const expected = fresh.length;
+        if (result.data.hits.length !== expected || result.data.hits.some((h, i) => h.id !== fresh[i].id)) {
+          return { ok: false, detail: `listed ${result.data.hits.length}; an independent read gives ${expected}` };
+        }
+        for (let i = 1; i < result.data.hits.length; i += 1) {
+          if (result.data.hits[i - 1].createdAt < result.data.hits[i].createdAt) {
+            return { ok: false, detail: 'records are not newest-first' };
+          }
+        }
+        for (const h of result.data.hits) {
+          const rec = await ctx.memory.get(h.id);
+          if (!rec || rec.content !== h.content) return { ok: false, detail: `record ${shortId(h.id)} is missing or its content differs` };
+        }
+        return { ok: true, detail: `${expected} record(s) confirmed against the store` };
+      },
     },
 
-    // --- filesystem actions (registered separately by the composition root when configured) ---
-    // The two filesystem actions live in src/filesystem/actions.js. They are registered only when
-    // APEX_FILESYSTEM_ROOT is configured, because there is no default authorized root.
+    // Filesystem actions live in src/filesystem/actions.js and are registered by the composition
+    // root only when APEX_FILESYSTEM_ROOT is configured; there is no default authorized root.
+    {
       name: 'memory.add',
       description: 'Store a user-provided fact in memory. Write: user origin only.',
       inputHint: '{"content": "text to remember", "sensitivity": "normal or private"}',

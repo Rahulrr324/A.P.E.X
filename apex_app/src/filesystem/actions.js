@@ -1,259 +1,287 @@
 // Bounded, read-only filesystem inspection actions.
 //
-// These actions operate only against a single authorized root that is supplied
-// through the composition root (app.js) and never through model output. The root
-// is validated once at startup and bound into the action constructors.
+// The authorized root is supplied by the composition root (app.js) and never by
+// model output: it is validated once at startup and captured in the closure of
+// these action definitions. Nothing in an action's input can widen it.
 //
-// Security model:
-//  - All user-supplied paths are resolved relative to the authorized root and
-//    checked for containment before any filesystem access.
-//  - Traversal sequences, control characters, and Windows quirks are rejected.
-//  - Symbolic links and other reparse points are not followed for containment
-//    decisions; a link target outside the root is rejected.
-//  - Absolute paths that resolve outside the root are rejected regardless of
-//    how they were constructed.
-//  - The process working directory is never changed to enforce these checks.
+// Guarantees:
+//  - read-only: no write, rename, delete, shell, or process call exists here;
+//  - containment: every path goes through resolveInside() before any fs call;
+//  - bounded: listings are capped by `limit`, reads by `maxBytes`;
+//  - honest: permission and I/O failures are reported, never turned into success;
+//  - independent verification: each action re-reads the filesystem to confirm its
+//    own reported result instead of trusting the executor.
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import { ValidationError, ExecutionError } from '../errors.js';
+import { resolveInside, hasControlChars } from './path.js';
+import { ORIGIN_USER } from '../actions/origins.js';
 
-import { ValidationError } from '../errors.js';
-import {
-  resolveInside,
-  looksLikeTraversal,
-} from './path.js';
-import { CONTROL_CHARS } from '../util.js';
-import {
-  verifyLocallyReadableAndBounded,
-  verifyListingMatchesDirectory,
-} from './verification.js';
+export const DEFAULT_LIST_LIMIT = 200;
+export const MIN_LIST_LIMIT = 1;
+export const MAX_LIST_LIMIT = 1000;
 
-const DEFAULT_LIST_LIMIT = 1024;
-const MAX_LIST_LIMIT = 10_000;
+// Content may contain tab, newline, and carriage return; any other C0 control
+// character (or DEL) means the file is not plain text for our purposes.
+const NON_TEXT_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 
-// ---- shared path parsing ----
+const decoder = new TextDecoder('utf-8', { fatal: true });
 
-function parsePathInput(raw) {
-  if (raw == null || typeof raw !== 'string') return { path: null, error: 'path must be a non-empty string' };
-  const s = raw.trim();
-  if (s.length === 0) return { path: null, error: 'path must be a non-empty string' };
-  if (CONTROL_CHARS.test(s)) return { path: null, error: 'path contains control characters' };
-  return { path: s, error: null };
+function sha256(buf) {
+  return createHash('sha256').update(buf).digest('hex');
 }
 
-// ---- filesystem.list ----
-
-function makeListAction(root, maxReadBytes) {
-  return {
-    capability: 'filesystem.list',
-    action: 'filesystem.list',
-    description: 'List the entries of an authorized directory.',
-    inputSchema: { path: 'string', limit: 'number' },
-    validate(input) {
-      const o = parsePathInput(input?.path);
-      if (o.error) throw new ValidationError(o.error);
-      const limit = Number(input?.limit);
-      const limitOk = Number.isFinite(limit) && limit >= 0 && limit <= MAX_LIST_LIMIT;
-      if (!limitOk) throw new ValidationError(`limit must be a non-negative integer up to ${MAX_LIST_LIMIT}`);
-      return { path: o.path, limit: limit || DEFAULT_LIST_LIMIT };
-    },
-    execute(params, ctx) {
-      const resolved = resolveInside(root, params.path, ctx?.authorization);
-      if (!resolved.ok) return { outcome: 'security_error', reason: resolved.reason };
-
-      const entries = listDirEntries(resolved.path);
-
-      const payload = { path: params.path, entries, count: entries.length, limit: params.limit, rootRelative: true };
-
-      // Independent verification: re-read the same directory and compare the entry
-      // names/types we just reported with what the filesystem actually contains.
-      const verified = verifyListingMatchesDirectory(resolved.path, payload, maxReadBytes);
-
-      if (verified.kind === 'security_error') return { outcome: 'security_error', reason: verified.reason };
-      if (verified.kind === 'verification_failure') return { outcome: 'verification_failure', reason: verified.reason, payload };
-
-      // On the fixed backend there is no independent trust anchor to fully verify a
-      // listing, so we record a best-effort verification result. On the real backend
-      // this compares the returned entries with a fresh directory read.
-      if (verified.kind === 'verified_unsafe') return { outcome: 'verification_failure', reason: verified.reason, payload };
-
-      return { outcome: 'success', payload, verification: verified.kind };
-    },
-  };
+function expectObject(input, allowedKeys) {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    throw new ValidationError('input must be an object');
+  }
+  for (const key of Object.keys(input)) {
+    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+  }
+  return input;
 }
 
-// ---- filesystem.read ----
+function pathField(value) {
+  if (typeof value !== 'string') throw new ValidationError('path must be text');
+  const t = value.trim();
+  if (t.length === 0) throw new ValidationError('path is empty');
+  if (hasControlChars(t)) throw new ValidationError('path contains control characters');
+  return t;
+}
 
-function makeReadAction(root, maxReadBytes) {
+function entryType(dirent) {
+  if (dirent.isSymbolicLink()) return 'link';
+  if (dirent.isDirectory()) return 'directory';
+  if (dirent.isFile()) return 'file';
+  return 'other';
+}
+
+function displaySafe(name) {
+  return String(name).replace(/[\u0000-\u001f\u007f]/g, '?');
+}
+
+function byName(a, b) {
+  if (a.name < b.name) return -1;
+  if (a.name > b.name) return 1;
+  return 0;
+}
+
+// Map an fs error to a stable execution code. The message stays factual and never
+// includes an absolute path, so an operation record cannot leak the root's layout.
+function ioCode(err) {
+  const code = err?.code;
+  if (code === 'EACCES' || code === 'EPERM') return 'PERMISSION_DENIED';
+  if (code === 'ENOENT') return 'PATH_NOT_FOUND';
+  if (code === 'ELOOP') return 'TOO_MANY_LINKS';
+  return 'IO_ERROR';
+}
+
+// Resolve a path for an action. `root` is the validated real root. A symbolic link
+// at the requested path itself is refused outright: following it is never needed
+// for inspection, and refusing removes a whole class of link-based ambiguity.
+function resolveForAction(root, inputPath) {
+  const resolved = resolveInside(root, inputPath);
+  if (resolved.isLink) {
+    throw new ExecutionError('SYMLINK_REFUSED', 'refusing to follow a symbolic link');
+  }
+  return resolved.realPath;
+}
+
+// ---- filesystem.list --------------------------------------------------------
+
+export function listAction(root, { maxEntries = MAX_LIST_LIMIT, defaultLimit = DEFAULT_LIST_LIMIT } = {}) {
+  const limitCap = Math.min(maxEntries, MAX_LIST_LIMIT);
   return {
-    capability: 'filesystem.read',
-    action: 'filesystem.read',
-    description: 'Read a bounded text file inside the authorized root.',
-    inputSchema: { path: 'string', maxBytes: 'number' },
+    name: 'filesystem.list',
+    description: 'List one directory inside the authorized root. Read-only, one level, bounded.',
+    inputHint: `{"path": "relative/dir", "limit": optional ${MIN_LIST_LIMIT}-${limitCap}}`,
+    permission: 'read',
+    origins: [ORIGIN_USER],
     validate(input) {
-      const o = parsePathInput(input?.path);
-      if (o.error) throw new ValidationError(o.error);
-
-      const maxBytes = Math.max(0, Math.min(Number(input?.maxBytes) || 0, maxReadBytes));
-      if (!Number.isFinite(maxBytes) || maxBytes <= 0) throw new ValidationError(`maxBytes must be a positive integer`);
-
-      return { path: o.path, maxBytes };
-    },
-    execute(params, ctx) {
-      const resolved = resolveInside(root, params.path, ctx?.authorization);
-      if (!resolved.ok) return { outcome: 'security_error', reason: resolved.reason };
-
-      // Read only regular files; never follow symlinks for content, and never read
-      // directories or other non-regular entries.
-      const fileResult = readBoundedTextFile(resolved.path, params.maxBytes);
-
-      if (fileResult.kind !== 'ok') {
-        if (fileResult.kind === 'too_large') return { outcome: 'rejected', reason: 'file exceeds the maximum read size', path: params.path };
-        if (fileResult.kind === 'not_text') return { outcome: 'rejected', reason: 'file appears to be binary or invalid text', path: params.path };
-        return { outcome: 'error', reason: fileResult.kind, path: params.path };
+      const o = expectObject(input, ['path', 'limit']);
+      const p = pathField(o.path);
+      let limit = defaultLimit;
+      if (o.limit !== undefined) {
+        if (!Number.isInteger(o.limit) || o.limit < MIN_LIST_LIMIT || o.limit > limitCap) {
+          throw new ValidationError(`limit must be an integer from ${MIN_LIST_LIMIT} to ${limitCap}`);
+        }
+        limit = o.limit;
       }
+      return { path: p, limit };
+    },
+    async execute(ctx, { path: inputPath, limit }) {
+      const dir = resolveForAction(root, inputPath);
+      let stat;
+      try {
+        stat = fs.statSync(dir);
+      } catch (err) {
+        throw new ExecutionError(ioCode(err), `directory cannot be inspected (${err?.code ?? 'error'})`);
+      }
+      if (!stat.isDirectory()) throw new ExecutionError('NOT_A_DIRECTORY', 'path is not a directory');
 
-      const payload = {
-        path: params.path,
-        content: fileResult.text,
-        size: fileResult.size,
-        maxBytes: params.maxBytes,
-        rootRelative: true,
+      let dirents;
+      try {
+        dirents = fs.readdirSync(dir, { withFileTypes: true });
+      } catch (err) {
+        throw new ExecutionError(ioCode(err), `directory cannot be listed (${err?.code ?? 'error'})`);
+      }
+      dirents.sort(byName);
+      const entries = dirents.slice(0, limit).map((d) => ({ name: d.name, type: entryType(d) }));
+      const truncated = dirents.length > entries.length;
+      const data = {
+        path: inputPath,
+        entries,
+        count: entries.length,
+        total: dirents.length,
+        limit,
+        truncated,
       };
-
-      // Independent verification: confirm the reported content is consistent with the
-      // file we just opened, and that it is still within the authorized root.
-      const verified = verifyLocallyReadableAndBounded(resolved.path, payload, params.maxBytes, maxReadBytes);
-      if (verified.kind === 'security_error') return { outcome: 'security_error', reason: verified.reason };
-      if (verified.kind === 'verification_failure') return { outcome: 'verification_failure', reason: verified.reason, payload };
-
-      return { outcome: 'success', payload, verification: verified.kind };
+      // Entry names are shown in a terminal, so control characters (for example a
+      // crafted escape sequence in a file name) are neutralised for display only.
+      const shown = entries.map((e) => `  ${e.type === 'directory' ? 'dir ' : e.type === 'link' ? 'link' : '    '} ${displaySafe(e.name)}`);
+      const tail = truncated ? `\n  (showing the first ${entries.length} of ${dirents.length} entries)` : '';
+      return {
+        summary: `listed ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} in "${inputPath}"${truncated ? ' (truncated)' : ''}`,
+        data,
+        display: `Contents of "${inputPath}" (${dirents.length} ${dirents.length === 1 ? 'entry' : 'entries'}):\n${shown.join('\n')}${tail}`,
+      };
+    },
+    // Independent check: re-list the same directory and compare what was reported.
+    async verify(ctx, input, result) {
+      try {
+        const dir = resolveForAction(ctx.root ?? root, input.path);
+        const fresh = fs.readdirSync(dir, { withFileTypes: true }).sort(byName);
+        const reported = result.data.entries;
+        if (!Array.isArray(reported)) return { ok: false, detail: 'result contains no entry list' };
+        if (reported.length > result.data.limit) return { ok: false, detail: 'more entries were reported than the limit allows' };
+        if (fresh.length !== result.data.total) {
+          return { ok: false, detail: `directory now has ${fresh.length} entries; the action reported ${result.data.total}` };
+        }
+        if (result.data.truncated !== fresh.length > reported.length) {
+          return { ok: false, detail: 'truncation flag does not match the reported entries' };
+        }
+        for (let i = 0; i < reported.length; i += 1) {
+          const expected = fresh[i];
+          const got = reported[i];
+          if (!expected) return { ok: false, detail: `reported entry "${got.name}" is not present in the directory` };
+          if (got.name !== expected.name) return { ok: false, detail: `entry ${i} is "${expected.name}" on disk, not "${got.name}"` };
+          if (got.type !== entryType(expected)) {
+            return { ok: false, detail: `entry "${got.name}" is ${entryType(expected)} on disk, not ${got.type}` };
+          }
+        }
+        return { ok: true, detail: `${reported.length} entr${reported.length === 1 ? 'y' : 'ies'} confirmed by an independent listing` };
+      } catch (err) {
+        return { ok: false, detail: `listing could not be re-checked: ${err?.message ?? err}` };
+      }
     },
   };
 }
 
-// ---- directory listing helpers (no security logic here; containment is enforced by resolveInside) ----
+// ---- filesystem.read --------------------------------------------------------
 
-function listDirEntries(dirPath) {
-  const fs = Api.fsNow();
-  const names = fs.readdir(dirPath);
-  if (!names) return [];
-
-  const out = [];
-  const seen = new Set();
-  for (const name of names) {
-    if (seen.has(name)) continue;
-    seen.add(name);
-
-    const entryPath = fs.join(dirPath, name);
-    let type = 'unknown';
-    try {
-      const st = fs.lstat(entryPath);
-      if (st == null) type = 'unknown';
-      else if (st.isSymbolicLink()) {
-        // Record it as a link; do not dereference it for the listing result.
-        type = 'link';
-      } else if (st.isDirectory()) {
-        type = 'directory';
-      } else if (st.isFile()) {
-        type = 'file';
-      } else {
-        type = 'other';
-      }
-    } catch (e) {
-      type = 'unknown';
-    }
-
-    out.push({ name, type });
-  }
-  return out;
-}
-
-// ---- bounded text file reading ----
-
-function readBoundedTextFile(path, maxBytes) {
-  const fs = Api.fsNow();
-  try {
-    const stat = fs.lstat(path);
-    if (!stat || stat.isSymbolicLink()) return { kind: 'not_text' };
-    const size = stat.size;
-    if (size > maxBytes) return { kind: 'too_large', size, maxBytes };
-
-    const buf = fs.readFileBuffer(path, size);
-    if (!buf) return { kind: 'error', reason: 'unable to read file' };
-
-    // Reject paths/files that are too large for the bounded read even if the stat
-    // already passed; this is a belt-and-suspenders check.
-    if (buf.byteLength > maxBytes) return { kind: 'too_large', size: buf.byteLength, maxBytes };
-
-    // Decode as UTF-8 but reject non-text / invalid-UTF-8 content. A file that
-    // cannot be decoded cleanly is treated as binary/invalid rather than silently
-    // returning corrupted text.
-    let text;
-    try {
-      text = fs.decodeUtf8Lossy(buf);
-    } catch (e) {
-      return { kind: 'not_text' };
-    }
-
-    // Heuristic: if the file contained replacement characters from invalid sequences
-    // OR if it has a high proportion of control characters (excluding tab/newline),
-    // treat it as non-text. The control-char check here is the same one used for
-    // path validation, applied to content.
-    if (text !== fs.decodeUtf8Strict(buf)) return { kind: 'not_text' };
-
-    const controlChars = fs.hasControlChars(text);
-    if (controlChars) return { kind: 'not_text' };
-
-    return { kind: 'ok', text, size: buf.byteLength };
-  } catch (e) {
-    return { kind: 'error', reason: 'unable to read file' };
-  }
-}
-
-// ---- minimal fs shim used by the actions (real fs in the compiled app; the test
-// runner overrides these with TempDir / mocks). The shim is intentionally tiny so
-// the actions remain easy to reason about.
-
-let _fs = null;
-
-function setFs(fsImpl) {
-  _fs = fsImpl;
-}
-
-function resetFs() {
-  _fs = null;
-}
-
-function fsNow() {
-  return _fs || realFs();
-}
-
-function realFs() {
-  // This is the real implementation used in the running app; the test harness
-  // monkeypatches fsNow() / setFs() so the actions read from TempDir fixtures.
-  // Keeping it behind a function avoids importing 'node:fs' at module load time in
-  // environments where it is unavailable.
-  const fs = require('node:fs');
-  const path = require('node:path');
+export function readAction(root, { maxBytes = 1_048_576 } = {}) {
   return {
-    lstat: (p) => { try { return fs.lstatSync(p); } catch (e) { return null; } },
-    readdir: (p) => { try { return fs.readdirSync(p); } catch (e) { return null; } },
-    readFileBuffer: (p, max) => { try { const b = fs.readFileSync(p); return b.byteLength <= max ? b : null; } catch (e) { return null; } },
-    decodeUtf8Strict: (b) => { try { return b.toString('utf8'); } catch (e) { throw e; } },
-    decodeUtf8Lossy: (b) => { return b.toString('utf8'); },
-    hasControlChars: (s) => CONTROL_CHARS.test(s),
-    join: (a, b) => path.join(a, b),
+    name: 'filesystem.read',
+    description: 'Read a bounded UTF-8 text file inside the authorized root. Read-only.',
+    inputHint: `{"path": "relative/file.txt", "maxBytes": optional 1-${maxBytes}}`,
+    permission: 'read',
+    origins: [ORIGIN_USER],
+    validate(input) {
+      const o = expectObject(input, ['path', 'maxBytes']);
+      const p = pathField(o.path);
+      let limit = maxBytes;
+      if (o.maxBytes !== undefined) {
+        if (!Number.isInteger(o.maxBytes) || o.maxBytes < 1 || o.maxBytes > maxBytes) {
+          throw new ValidationError(`maxBytes must be an integer from 1 to ${maxBytes}`);
+        }
+        limit = o.maxBytes;
+      }
+      return { path: p, maxBytes: limit };
+    },
+    async execute(ctx, { path: inputPath, maxBytes: limit }) {
+      const file = resolveForAction(root, inputPath);
+      let stat;
+      try {
+        stat = fs.statSync(file);
+      } catch (err) {
+        throw new ExecutionError(ioCode(err), `file cannot be inspected (${err?.code ?? 'error'})`);
+      }
+      if (!stat.isFile()) throw new ExecutionError('NOT_A_REGULAR_FILE', 'path is not a regular file');
+      if (stat.size > limit) {
+        throw new ExecutionError('FILE_TOO_LARGE', `file is ${stat.size} bytes; the limit is ${limit}`);
+      }
+
+      let buf;
+      try {
+        // Read through a descriptor and re-check the size, so a file that grows
+        // between the stat and the read cannot exceed the bound.
+        const fd = fs.openSync(file, 'r');
+        try {
+          buf = fs.readFileSync(fd);
+        } finally {
+          fs.closeSync(fd);
+        }
+      } catch (err) {
+        throw new ExecutionError(ioCode(err), `file cannot be read (${err?.code ?? 'error'})`);
+      }
+      if (buf.length > limit) {
+        throw new ExecutionError('FILE_TOO_LARGE', `file grew to ${buf.length} bytes; the limit is ${limit}`);
+      }
+
+      let text;
+      try {
+        text = decoder.decode(buf);
+      } catch {
+        throw new ExecutionError('FILE_NOT_TEXT', 'file is not valid UTF-8 text');
+      }
+      if (NON_TEXT_CHARS.test(text)) {
+        throw new ExecutionError('FILE_NOT_TEXT', 'file contains binary control characters');
+      }
+
+      return {
+        summary: `read ${buf.length} bytes from "${inputPath}"`,
+        data: {
+          path: inputPath,
+          size: buf.length,
+          sha256: sha256(buf),
+          maxBytes: limit,
+          content: text,
+        },
+        display: `${inputPath} (${buf.length} bytes):\n${text}`,
+      };
+    },
+    // Independent check: re-read the file and compare size, hash, and content.
+    async verify(ctx, input, result) {
+      try {
+        const file = resolveForAction(ctx.root ?? root, input.path);
+        const stat = fs.statSync(file);
+        if (!stat.isFile()) return { ok: false, detail: 'path is no longer a regular file' };
+        if (stat.size !== result.data.size) {
+          return { ok: false, detail: `file is now ${stat.size} bytes; the action reported ${result.data.size}` };
+        }
+        if (stat.size > result.data.maxBytes) {
+          return { ok: false, detail: 'file now exceeds the size that was read' };
+        }
+        const fresh = fs.readFileSync(file);
+        if (fresh.length !== result.data.size) {
+          return { ok: false, detail: 'file changed size between the read and verification' };
+        }
+        if (sha256(fresh) !== result.data.sha256) {
+          return { ok: false, detail: 'file content changed between the read and verification' };
+        }
+        let text;
+        try {
+          text = decoder.decode(fresh);
+        } catch {
+          return { ok: false, detail: 'file is no longer valid UTF-8 text' };
+        }
+        if (text !== result.data.content) {
+          return { ok: false, detail: 're-read content differs from the reported content' };
+        }
+        return { ok: true, detail: `${fresh.length} bytes confirmed by an independent read (sha256 match)` };
+      } catch (err) {
+        return { ok: false, detail: `read could not be re-checked: ${err?.message ?? err}` };
+      }
+    },
   };
 }
-
-// Expose a stable API the tests and the app both use.
-const Api = {
-  setFs,
-  resetFs,
-  fsNow,
-};
-
-export { makeListAction, makeReadAction, Api, parsePathInput };
-
-// Keep these re-exports so existing imports from path.js and util.js keep working
-// if any other module pulls them in directly.
-export { resolveInside, looksLikeTraversal } from './path.js';
-export { CONTROL_CHARS } from '../util.js';

@@ -1,14 +1,42 @@
-// Deterministic capability routing for the first version. Requests that match a
-// known action pattern are routed to that action. Everything else goes to the
-// model path, which is itself subject to the same authorization policy.
-// This is a small, explicit table, not a substitute for the controller's
-// retrieval, verification, and audit steps.
+// Deterministic capability routing. Requests that match a known pattern are routed
+// to that action. Everything else goes to the model path, which is subject to the
+// same authorization policy. This is a small, explicit table, not a substitute for
+// the controller's retrieval, verification, and audit steps.
+//
+// The filesystem rules deliberately match only path-shaped text (a separator, a file
+// extension, or "."), so ordinary questions such as "list services" still go to the
+// model instead of being turned into a directory request. Even when a request is
+// routed here, the action re-validates the path: routing is never authorization.
+
+function looksLikePathToken(token) {
+  if (typeof token !== 'string') return false;
+  const t = token.trim();
+  if (t.length === 0) return false;
+  if (/[\u0000-\u001f\u007f]/.test(t)) return false;
+  if (t.length > 200) return false;
+  if (t === '.' || t === './' || t === '.\\') return true;
+  if (/[/\\]/.test(t)) return true;
+  // A bare file name is recognised by its extension, so "list services" stays a
+  // normal request while "read notes.txt" is a file read.
+  return /\.[A-Za-z0-9_]{1,16}$/.test(t);
+}
+
+function filesystemRoute(kind, token) {
+  const path = token.trim().replace(/^["']|["']$/g, '');
+  if (!looksLikePathToken(path)) return null;
+  return {
+    kind: 'action',
+    capability: `filesystem.${kind}`,
+    action: `filesystem.${kind}`,
+    input: { path },
+  };
+}
 
 export function route(request) {
   const r = String(request).trim();
   let m;
 
-  // \"remember privately\" must be tested first: it is never sent to a model.
+  // "remember privately" must be tested first: it is never sent to a model.
   m = /^remember\s+privately\b(?:\s+that)?\s*:?\s*([\s\S]*)$/i.exec(r);
   if (m) return { kind: 'action', capability: 'memory.add', action: 'memory.add', input: { content: m[1], sensitivity: 'private' } };
 
@@ -32,36 +60,27 @@ export function route(request) {
   m = /^(?:calc|calculate|compute)\s*:?\s+([\s\S]+)$/i.exec(r);
   if (m) return { kind: 'action', capability: 'calc.evaluate', action: 'calc.evaluate', input: { expression: m[1] } };
 
-  m = /^what\s+is\s+([0-9+\-*/()\s]*\d[0-9+\-*/()\s]*?)\s*\??$/i.exec(r);
+  m = /^what\s+is\s+([0-9+\-*/().\s]*\d[0-9+\-*/().\s]*?)\s*\??$/i.exec(r);
   if (m) return { kind: 'action', capability: 'calc.evaluate', action: 'calc.evaluate', input: { expression: m[1] } };
 
-  // Read-only filesystem inspection. These forms name the authorised root through the
-  // configured APEX_FILESYSTEM_ROOT, never through model output. The actions themselves enforce
-  // the boundary; the router just extracts the relative path the user named.
-  //
-  // Ordering matters: the memory forms above are matched first, so \"list memory\", \"show memory\",
-  // \"read memory\", and similar never leak into the filesystem actions.
-
-  m = /^(?:list|show)\s+(?:the\s+)?contents?\s+of\s+(?:the\s+)?([\s\S]+?)(?:\s*|\?\s*)$/i.exec(r);
-  if (m) return { kind: 'action', capability: 'filesystem.list', action: 'filesystem.list', input: { path: m[1].trim() } };
-
-  m = /^(?:list|show)\s+([\s\S]+?)(?:\s*|\?\s*)$/i.exec(r);
+  // Read-only filesystem inspection. The authorized root comes from configuration,
+  // never from the request; the request names only a relative path.
+  m = /^(?:ls|list|dir)\s+(?:the\s+)?(?:contents?\s+of\s+)?(.+)$/i.exec(r);
   if (m) {
-    const pathToken = m[1].trim();
-    if (pathToken && !/^(?:memory|memories)$/i.test(pathToken)) {
-      return { kind: 'action', capability: 'filesystem.list', action: 'filesystem.list', input: { path: pathToken } };
-    }
+    const routed = filesystemRoute('list', m[1]);
+    if (routed) return routed;
   }
 
-  // filesystem.read: the generic read/show/print/peek/display/cat verbs would otherwise match
-  // \"read memory\" and similar, so only route here when the token is unambiguously a path (contains
-  // a dot, or is a simple alphanumeric segment) and not one of the other supported actions.
-  m = /^(?:read|show|print|peek|display|cat)\s+(?:the\s+)?(?:file\s+)?([\s\S]+?)(?:\s*|\?\s*)$/i.exec(r);
+  m = /^show\s+(?:the\s+)?contents?\s+of\s+(.+)$/i.exec(r);
   if (m) {
-    const pathToken = m[1].trim();
-    if (pathToken && !/^(?:memory|memories)$/i.test(pathToken) && !/^what\b/i.test(pathToken) && !/^(?:recall|search|remember|list|show|calc|calculate|compute|contents?\s+of)$/i.test(pathToken) && (pathToken.includes('.') || /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(pathToken))) {
-      return { kind: 'action', capability: 'filesystem.read', action: 'filesystem.read', input: { path: pathToken } };
-    }
+    const routed = filesystemRoute('list', m[1]);
+    if (routed) return routed;
+  }
+
+  m = /^(?:read|cat|print|peek|display|open)\s+(?:the\s+)?(?:file\s+)?(.+)$/i.exec(r);
+  if (m) {
+    const routed = filesystemRoute('read', m[1]);
+    if (routed) return routed;
   }
 
   return { kind: 'model', capability: 'model.answer', action: null, input: null };

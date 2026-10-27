@@ -3,12 +3,13 @@
 import os from 'node:os';
 import path from 'node:path';
 import { ValidationError } from './errors.js';
+import { resolveRoot } from './filesystem/path.js';
 
 export const DEFAULT_MODEL_TIMEOUT_MS = 30000;
 export const MODEL_PROVIDERS = Object.freeze(['openai', 'ollama']);
 export const DEFAULT_FILESYSTEM_MAX_READ_BYTES = 1_048_576; // 1 MB
 export const FILESYSTEM_MAX_READ_BYTES_MAX = 10_485_760; // 10 MB
-export const FILESYSTEM_LIST_DEFAULT_LIMIT = 256;
+export const FILESYSTEM_LIST_DEFAULT_LIMIT = 200;
 export const FILESYSTEM_LIST_MAX_LIMIT = 1000;
 export function defaultDataDir() {
   return path.join(os.homedir(), '.apex', 'local-alpha');
@@ -72,27 +73,4 @@ export function loadConfig(env = process.env) {
       listMaxLimit: FILESYSTEM_LIST_MAX_LIMIT,
     },
   };
-}
-
-// Resolved, validated, absolute authorized root. Imported by the filesystem action module
-// and by the composition root. Throwing here is the configuration error path: no action
-// runs until the operator fixes the setting.
-function resolveRoot(rawRoot) {
-  if (typeof rawRoot !== 'string' || rawRoot.trim().length === 0) {
-    throw new ValidationError('APEX_FILESYSTEM_ROOT must be set', 'INVALID_CONFIG');
-  }
-  const trimmed = rawRoot.trim();
-  if (looksLikeUnc(trimmed)) {
-    throw new ValidationError('UNC roots are not supported', 'INVALID_CONFIG');
-  }
-  const resolved = path.resolve(trimmed);
-  if (!path.isAbsolute(resolved)) {
-    throw new ValidationError('APEX_FILESYSTEM_ROOT must resolve to an absolute path', 'INVALID_CONFIG');
-  }
-  return resolved;
-}
-
-function looksLikeUnc(p) {
-  if (typeof p !== 'string') return false;
-  return p.startsWith('\\\\') || p.startsWith('//');
 }

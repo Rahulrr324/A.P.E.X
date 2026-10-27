@@ -81,6 +81,7 @@ export class CognitiveController {
     contextTurns = 6,
     maxContextChars = MAX_CONTEXT_CHARS,
     taskStore = null,
+    rootForContext = null,
   }) {
     this.memory = memory;
     this.operations = operations;

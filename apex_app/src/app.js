@@ -11,11 +11,17 @@ import { CognitiveController } from './controller/controller.js';
 import { createGateway, ModelGateway, NoBackend } from './model/gateway.js';
 import { SessionState } from './session.js';
 import { APP_EXPANSION, APP_NAME, APP_STAGE, APP_VERSION } from './identity.js';
-import { loadConfig, DEFAULT_FILESYSTEM_MAX_READ_BYTES } from './config.js';
+import {
+  loadConfig,
+  DEFAULT_FILESYSTEM_MAX_READ_BYTES,
+  FILESYSTEM_LIST_DEFAULT_LIMIT,
+  FILESYSTEM_LIST_MAX_LIMIT,
+} from './config.js';
+import { resolveRoot, validateRoot } from './filesystem/path.js';
+import { listAction, readAction } from './filesystem/actions.js';
 import { TaskStore } from './tasks/store.js';
-import { validateRoot } from './filesystem/path.js';
 
-export async function createApp({
+export function createApp({
   dataDir,
   gateway = new ModelGateway({ backend: new NoBackend() }),
   extraActions = [],
@@ -24,6 +30,8 @@ export async function createApp({
   idFactory,
   filesystemRoot = null,
   filesystemMaxReadBytes = DEFAULT_FILESYSTEM_MAX_READ_BYTES,
+  filesystemListDefaultLimit = FILESYSTEM_LIST_DEFAULT_LIMIT,
+  filesystemListMaxLimit = FILESYSTEM_LIST_MAX_LIMIT,
 } = {}) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new Error('dataDir is required');
   const clock = now ?? (() => new Date());
@@ -34,20 +42,18 @@ export async function createApp({
   const taskStore = new TaskStore(path.join(dataDir, 'tasks.jsonl'), { now: clock, idFactory });
   const registry = new ActionRegistry();
 
-  // When a root is supplied to the factory, validate it and register the filesystem
-  // actions, so the capability is available in tests and in the env-driven path.
-  // The filesystem actions receive the resolved root through their constructor
-  // (listAction(root, ...) / readAction(root, ...)). They store it internally and expose it on
-  // the action context at execution time.
-  // Provide the authorized root on the action context so the actions can resolve paths against it.
-  // This is the only place the root is bound into an action; it cannot be supplied by a model.
-  const fsActions = [];
+  // Filesystem inspection exists only when a root is configured. The root is resolved
+  // and validated here, once, and captured by the action closures: no request, model
+  // proposal, or task step can change it. A configured-but-invalid root is a startup
+  // error rather than a silently disabled capability.
   let rootForContext = null;
-  if (filesystemRoot) {
-    const root = validateRoot(filesystemRoot);
-    const { listAction, readAction } = await import('./filesystem/actions.js');
-    fsActions.push(listAction(root, filesystemMaxReadBytes), readAction(root, filesystemMaxReadBytes));
-    rootForContext = root;
+  const fsActions = [];
+  if (filesystemRoot !== null && filesystemRoot !== undefined) {
+    rootForContext = validateRoot(resolveRoot(filesystemRoot));
+    fsActions.push(
+      listAction(rootForContext, { defaultLimit: filesystemListDefaultLimit, maxEntries: filesystemListMaxLimit }),
+      readAction(rootForContext, { maxBytes: filesystemMaxReadBytes }),
+    );
   }
 
   for (const def of [...builtinActions(), ...extraActions, ...fsActions]) registry.register(def);
@@ -69,6 +75,7 @@ export async function createApp({
       turnRecords: t.turns,
       sessionId: current.sessionId,
       model: gateway.describe(),
+      filesystemRoot: rootForContext,
     };
   };
 
@@ -87,22 +94,32 @@ export async function createApp({
     taskStore,
     rootForContext,
   });
-  return { controller, memory, conversation, session, operations, registry, gateway, getStatus, dataDir, taskStore };
+  return {
+    controller,
+    memory,
+    conversation,
+    session,
+    operations,
+    registry,
+    gateway,
+    getStatus,
+    dataDir,
+    taskStore,
+    filesystemRoot: rootForContext,
+  };
 }
 
-export async function createAppFromEnv(env = process.env) {
+export function createAppFromEnv(env = process.env) {
   const config = loadConfig(env);
   const gateway = createGateway(config.model);
-  const extraActions = [];
-  let rootForContext = null;
-  if (config.filesystem.root) {
-    // Validate the configured root at startup so a misconfigured boundary is caught before any
-    // action runs, not during the first listing.
-    const root = validateRoot(config.filesystem.root);
-    const { listAction, readAction } = await import('./filesystem/actions.js');
-    extraActions.push(listAction(root, config.filesystem.maxReadBytes));
-    extraActions.push(readAction(root, config.filesystem.maxReadBytes));
-    rootForContext = root;
-  }
-  return { config, ...createApp({ dataDir: config.dataDir, gateway, contextTurns: config.contextTurns, extraActions, rootForContext }) };
+  const app = createApp({
+    dataDir: config.dataDir,
+    gateway,
+    contextTurns: config.contextTurns,
+    filesystemRoot: config.filesystem.root,
+    filesystemMaxReadBytes: config.filesystem.maxReadBytes,
+    filesystemListDefaultLimit: config.filesystem.listDefaultLimit,
+    filesystemListMaxLimit: config.filesystem.listMaxLimit,
+  });
+  return { config, ...app };
 }

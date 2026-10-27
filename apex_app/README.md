@@ -141,6 +141,56 @@ handling and failure classification only. They say nothing about answer quality,
 no test in this repository runs a real model. See the report that accompanies this
 milestone for what was and was not run against a real server.
 
+## Optional: bounded filesystem inspection
+
+APEX can look at one directory you explicitly authorise. It cannot write, rename,
+delete, or execute anything, and there is no default: with no root configured the
+capability is not registered at all.
+
+```bash
+# Absolute path required. A relative value, a drive root, or a UNC path is refused.
+APEX_FILESYSTEM_ROOT=E:\Projects\thing node bin/apex.js ask list .
+APEX_FILESYSTEM_ROOT=/home/you/project node bin/apex.js ask read README.md
+
+APEX_FILESYSTEM_ROOT=/home/you/project APEX_FILESYSTEM_MAX_READ_BYTES=65536 node bin/apex.js chat
+```
+
+| Action | Permission | Origins | Input | Independent verification |
+|---|---|---|---|---|
+| `filesystem.list` | read | user only | `path` (relative), `limit` (1-1000, default 200) | a second listing of the same directory must return the same names, types, count, and truncation flag |
+| `filesystem.read` | read | user only | `path` (relative), `maxBytes` (1 to the configured cap) | a second read must match the reported size, SHA-256, and text |
+
+Requests that look like paths are routed to these actions, for example `list .`,
+`list src/`, `read README.md`, `cat notes/todo.txt`. Requests that do not look like
+paths (for example `list services`) still go to the model, so ordinary questions are
+not turned into directory reads.
+
+How the boundary is enforced:
+
+- The root is resolved and validated once, at startup, and captured by the action
+  definitions. No request, model proposal, or task step can widen it, and a request
+  that includes `root` or `authorizedRoot` is rejected as an unexpected field.
+- Paths are relative. Absolute paths, UNC paths, drive-letter paths, and any `..`
+  component are refused before any filesystem call.
+- The path is resolved (`realpath`), then the resolved target is compared against the
+  resolved root. Comparison is case-insensitive on Windows and macOS, case-sensitive
+  elsewhere, and boundary-exact, so `/data/allowed-2` is not inside `/data/allowed`.
+- A symbolic link or reparse point is never followed: a link whose target is outside
+  the root is refused by containment, and a link inside the root is refused outright
+  (`SYMLINK_REFUSED`).
+- Reads are limited to regular files. Anything larger than the configured maximum is
+  refused (`FILE_TOO_LARGE`), and content that is not valid UTF-8 text or that contains
+  binary control characters is refused (`FILE_NOT_TEXT`) instead of being returned
+  garbled.
+- A read re-checks the size after opening, so a file that grows mid-read cannot exceed
+  the limit. If the file or directory changes between the action and verification, the
+  result is `verification_failed`, not success.
+- Listings are one level deep (never recursive), capped by `limit`, sorted by name, and
+  report `total` and `truncated` so a large directory is visible as truncated rather
+  than silently shortened.
+- Reported paths are the relative path you asked for; the absolute root is not copied
+  into the audit record of a listing or read.
+
 ## How a request is answered
 
 1. The request is validated (length, control characters, credential-like text).
@@ -307,6 +357,11 @@ holds identity, memory, control, or persistence.
 | `memory.add` | **write** | user | `content` | record exists by id; content SHA-256 matches; provenance is `user` / `user_fact` |
 | `memory.save_conclusion` | **write** | user | `content`, `operationId`, `backend` | record exists; hash matches; provenance is `model` / `model_conclusion` |
 | `calc.evaluate` | read | user, model | `expression` (digits, `+ - * / ( )`, max 200 chars) | a different algorithm (shunting-yard) gives the same value |
+| `filesystem.list` | read | user | `path`, `limit` | a second listing matches names, types, count, and truncation flag |
+| `filesystem.read` | read | user | `path`, `maxBytes` | a second read matches size, SHA-256, and text |
+
+`filesystem.*` actions are registered only when `APEX_FILESYSTEM_ROOT` is set. They are
+not offered to the model origin, so a model proposal cannot trigger a file read.
 
 ### Outcomes
 
@@ -343,7 +398,9 @@ cd apex_app
 npm test
 ```
 
-This runs 135 tests across nine files with the built-in runner. They use only temporary
+This runs 166 tests across ten files with the built-in runner. On Windows 11 with Node
+26.4.0: 164 pass, 0 fail, 2 skipped (POSIX permission bits; control characters are
+invalid in Windows file names). They use only temporary
 directories under the OS temp folder (`apex-test-*`) and remove them afterwards.
 Tests never read or write `~/.apex`, and CLI tests point `HOME`/`USERPROFILE` at the
 temp directory too.
@@ -366,6 +423,7 @@ temp directory too.
 | 14. Task validation: cycles, unknown actions, malformed model plans | `tasks.test.js` "planning and validation"; "model-proposed plans" |
 | 15. Task runs with existing actions; failure stops it; no re-execution | `tasks.test.js` "execution" |
 | 16. Cancel and safe resume | `tasks.test.js` "cancel"; "interrupted running step" |
+| 17. Bounded read-only filesystem inspection | `filesystem.test.js` (listing, reading, bounds, traversal, absolute and UNC paths, links, model origin, audit failure) |
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
@@ -398,9 +456,18 @@ validation (`gateway.test.js`), and the verifier-independence check
   `APEX_CONTEXT_TURNS` turns. There is no summarisation of older history.
 - **Context size:** a request that exceeds the model's context window is reported as
   `CONTEXT_TOO_LARGE`; APEX does not know a model's window in advance.
-- **Windows:** not tested (see Requirements). The test script uses an explicit file
-  list so it does not depend on shell globbing.
-- Node 22 is the only verified runtime.
+- **Filesystem inspection is read-only and single-root.** One directory, no recursion,
+  no follow-symlink, no globbing, no search. Symlinks are refused even when they point
+  inside the root, which is stricter than necessary but easy to reason about.
+- **Filesystem verification re-reads the same path with the same code.** It catches a
+  changed file, a changed directory, a fabricated result, and a path that has escaped
+  the root, but not a bug shared by both reads. A file that changes and changes back
+  between the two reads is not detected.
+- **Windows:** the full suite for this milestone was run on Windows 11 with Node
+  26.4.0 (164 pass, 0 fail, 1 skipped: POSIX permission bits). The permission-denied
+  path is therefore untested here, and earlier milestones were validated on Linux. The
+  test script uses an explicit file list so it does not depend on shell globbing.
+- Node 22 is the documented runtime; Node 26.4.0 was used for the runs above.
 
 ## Future learning interface (not implemented)
 

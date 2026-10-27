@@ -35,12 +35,19 @@ Request examples (no model needed):
   list memory
   calc (2+3)*4          (or: what is 2+3*4?)
   status
+  list src/             list one directory inside the authorized root (no model needed)
+  read README.md        read a bounded text file inside the authorized root
 
 With a configured local model, any other request is answered from the model,
 using relevant memory and the recent conversation. Without one, APEX says so.
 
+Filesystem inspection is available only when APEX_FILESYSTEM_ROOT is set to an
+absolute directory. Paths are relative to it; it cannot be changed by a request.
+
 Environment:
   APEX_DATA_DIR            data directory (default: ~/.apex/local-alpha)
+  APEX_FILESYSTEM_ROOT     absolute directory APEX may inspect (unset: no filesystem access)
+  APEX_FILESYSTEM_MAX_READ_BYTES  maximum file size for a read (default: 1048576)
   APEX_MODEL_URL           local model server, e.g. http://127.0.0.1:11434 (Ollama) or http://127.0.0.1:8080 (llama.cpp)
   APEX_MODEL_PROVIDER      openai (default: llama.cpp / OpenAI-compatible) or ollama
   APEX_MODEL_NAME          model name to request (default: local; required for Ollama)
@@ -182,6 +189,9 @@ export async function main(argv, {
       out(`Conversation turns: ${s.turnRecords}`);
       out(`Operation records: ${s.operationRecords}`);
       out(modelLine(s, avail));
+      out(s.filesystemRoot
+        ? `Filesystem root: ${s.filesystemRoot} (read-only inspection)`
+        : 'Filesystem root: none configured. Filesystem inspection is unavailable.');
       return 0;
     }
 
