@@ -111,6 +111,10 @@ bin/apex.js           entry point
 src/cli.js            command line; maps results to exit codes
 src/app.js            composition root (wires the components)
 src/config.js         environment-variable configuration
+src/errors.js         error types with stable codes
+src/identity.js       application identity and version
+src/outcomes.js       the outcome status values (see Outcomes below)
+src/util.js           shared helpers: truncation, redaction of content fields, rounding
 src/controller/
   controller.js       Cognitive Controller: the workflow and the final status rule
   router.js           deterministic capability table (action pattern -> action)
