@@ -96,6 +96,7 @@ export class CognitiveController {
     this.contextTurns = contextTurns;
     this.maxContextChars = maxContextChars;
     this.taskStore = taskStore;
+    this.rootForContext = rootForContext;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -332,7 +333,10 @@ export class CognitiveController {
     }
 
     const def = this.registry.get(name);
-    const ctx = { memory: this.memory, getStatus: this.getStatus, operationId, origin };
+    const ctx = { memory: this.memory, getStatus: this.getStatus, operationId, origin, root: this.rootForContext };
+    // The filesystem actions receive the authorized root on ctx.root. It is set only by the
+    // composition root and cannot be supplied by a model proposal, so the boundary cannot be
+    // expanded from model output.
 
     // Execution.
     const exec = await executeAction(def, ctx, rawInput);

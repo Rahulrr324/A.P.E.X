@@ -6,7 +6,10 @@ import { ValidationError } from './errors.js';
 
 export const DEFAULT_MODEL_TIMEOUT_MS = 30000;
 export const MODEL_PROVIDERS = Object.freeze(['openai', 'ollama']);
-
+export const DEFAULT_FILESYSTEM_MAX_READ_BYTES = 1_048_576; // 1 MB
+export const FILESYSTEM_MAX_READ_BYTES_MAX = 10_485_760; // 10 MB
+export const FILESYSTEM_LIST_DEFAULT_LIMIT = 256;
+export const FILESYSTEM_LIST_MAX_LIMIT = 1000;
 export function defaultDataDir() {
   return path.join(os.homedir(), '.apex', 'local-alpha');
 }
@@ -33,6 +36,23 @@ export function loadConfig(env = process.env) {
 
   const timeoutMs = intEnv(env, 'APEX_MODEL_TIMEOUT_MS', DEFAULT_MODEL_TIMEOUT_MS, 100, 600000);
 
+  // Read-only filesystem inspection. The authorized root must be set explicitly; there is
+  // no default, so the capability is absent unless the operator opts in. The root is resolved
+  // once here, so it is fixed before any action runs, and it cannot be expanded by model output.
+  let filesystemRoot = null;
+  let filesystemMaxReadBytes = DEFAULT_FILESYSTEM_MAX_READ_BYTES;
+  const rawRoot = (env.APEX_FILESYSTEM_ROOT || '').trim();
+  if (rawRoot) {
+    filesystemRoot = resolveRoot(rawRoot);
+    filesystemMaxReadBytes = intEnv(
+      env,
+      'APEX_FILESYSTEM_MAX_READ_BYTES',
+      DEFAULT_FILESYSTEM_MAX_READ_BYTES,
+      4096,
+      FILESYSTEM_MAX_READ_BYTES_MAX,
+    );
+  }
+
   return {
     dataDir,
     model: {
@@ -45,5 +65,34 @@ export function loadConfig(env = process.env) {
       allowRemote: env.APEX_ALLOW_REMOTE_MODEL === '1',
     },
     contextTurns: intEnv(env, 'APEX_CONTEXT_TURNS', 6, 0, 50),
+    filesystem: {
+      root: filesystemRoot,
+      maxReadBytes: filesystemMaxReadBytes,
+      listDefaultLimit: FILESYSTEM_LIST_DEFAULT_LIMIT,
+      listMaxLimit: FILESYSTEM_LIST_MAX_LIMIT,
+    },
   };
+}
+
+// Resolved, validated, absolute authorized root. Imported by the filesystem action module
+// and by the composition root. Throwing here is the configuration error path: no action
+// runs until the operator fixes the setting.
+function resolveRoot(rawRoot) {
+  if (typeof rawRoot !== 'string' || rawRoot.trim().length === 0) {
+    throw new ValidationError('APEX_FILESYSTEM_ROOT must be set', 'INVALID_CONFIG');
+  }
+  const trimmed = rawRoot.trim();
+  if (looksLikeUnc(trimmed)) {
+    throw new ValidationError('UNC roots are not supported', 'INVALID_CONFIG');
+  }
+  const resolved = path.resolve(trimmed);
+  if (!path.isAbsolute(resolved)) {
+    throw new ValidationError('APEX_FILESYSTEM_ROOT must resolve to an absolute path', 'INVALID_CONFIG');
+  }
+  return resolved;
+}
+
+function looksLikeUnc(p) {
+  if (typeof p !== 'string') return false;
+  return p.startsWith('\\\\') || p.startsWith('//');
 }
