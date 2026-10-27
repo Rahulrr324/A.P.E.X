@@ -53,6 +53,11 @@ export function planFromText(goal, registry) {
       return;
     }
     const def = registry.get(r.action);
+    if (!def) {
+      // For example a filesystem step when no authorised root is configured.
+      problems.push(`${label}: action ${r.action} is not available in this configuration`);
+      return;
+    }
     let input;
     try {
       input = def.validate(r.input);

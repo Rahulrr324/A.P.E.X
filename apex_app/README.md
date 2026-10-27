@@ -398,8 +398,8 @@ cd apex_app
 npm test
 ```
 
-This runs 166 tests across ten files with the built-in runner. On Windows 11 with Node
-26.4.0: 164 pass, 0 fail, 2 skipped (POSIX permission bits; control characters are
+This runs 181 tests across eleven files with the built-in runner. On Windows 11 with
+Node 26.4.0: 179 pass, 0 fail, 2 skipped (POSIX permission bits; control characters are
 invalid in Windows file names). They use only temporary
 directories under the OS temp folder (`apex-test-*`) and remove them afterwards.
 Tests never read or write `~/.apex`, and CLI tests point `HOME`/`USERPROFILE` at the
@@ -424,6 +424,7 @@ temp directory too.
 | 15. Task runs with existing actions; failure stops it; no re-execution | `tasks.test.js` "execution" |
 | 16. Cancel and safe resume | `tasks.test.js` "cancel"; "interrupted running step" |
 | 17. Bounded read-only filesystem inspection | `filesystem.test.js` (listing, reading, bounds, traversal, absolute and UNC paths, links, model origin, audit failure) |
+| 18. Filesystem steps in controlled tasks | `tasks-filesystem.test.js` (plan, run, verify, model-plan rejection, traversal step, changed file, audit gaps, restart and retry, CLI exit codes) |
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
