@@ -16,6 +16,7 @@ export const PROMPT_RELEVANCE_MIN = 0.2;
 const KINDS = new Set(['user_fact', 'model_conclusion']);
 const SOURCES = new Set(['user', 'model']);
 const SENSITIVITIES = new Set(['normal', 'private']);
+const UPDATE_MODES = new Set(['user_confirmed', 'model_proposed', 'unresolved_conflict']);
 const OPERATION_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 const BACKEND_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const FUZZY_MIN_SIMILARITY = 0.6;
@@ -63,6 +64,11 @@ function sanitizeProvenance(p) {
   if (typeof p.origin === 'string' && p.origin.length <= 64) out.origin = p.origin;
   if (typeof p.operationId === 'string' && OPERATION_ID_RE.test(p.operationId)) out.operationId = p.operationId;
   if (typeof p.backend === 'string' && BACKEND_RE.test(p.backend)) out.backend = p.backend;
+  if (typeof p.updateMode === 'string' && UPDATE_MODES.has(p.updateMode)) out.updateMode = p.updateMode;
+  if (typeof p.context === 'string' && p.context.length <= 128) out.context = p.context;
+  if (Array.isArray(p.replaces)) {
+    out.replaces = p.replaces.filter((id) => typeof id === 'string' && id.length > 0).slice(0, 8);
+  }
   return out;
 }
 
@@ -79,6 +85,8 @@ export function validateMemoryRecord(r) {
   if (sha256Hex(r.content) !== r.contentSha256) return 'content hash mismatch';
   if (typeof r.createdAt !== 'string' || Number.isNaN(Date.parse(r.createdAt))) return 'bad timestamp';
   if (!r.provenance || typeof r.provenance !== 'object') return 'missing provenance';
+  if (r.provenance.updateMode !== undefined && !UPDATE_MODES.has(r.provenance.updateMode)) return 'bad provenance update mode';
+  if (r.provenance.replaces !== undefined && (!Array.isArray(r.provenance.replaces) || r.provenance.replaces.some((id) => typeof id !== 'string' || id.length === 0))) return 'bad provenance replaces list';
   return null;
 }
 
@@ -120,6 +128,14 @@ export function similarity(a, b) {
 
 export function isPromptEligible(record) {
   return record.sensitivity !== 'private' && !containsSecret(record.content);
+}
+
+export function getRecordStatus(record, conflictIds = []) {
+  const mode = record?.provenance?.updateMode ?? (record?.source === 'model' ? 'model_proposed' : 'user_confirmed');
+  if (mode === 'model_proposed') return 'model_proposed';
+  if (mode === 'user_confirmed') return conflictIds.length > 0 ? 'unresolved_conflict' : 'user_confirmed';
+  if (mode === 'unresolved_conflict') return 'unresolved_conflict';
+  return conflictIds.length > 0 ? 'unresolved_conflict' : 'stored';
 }
 
 function dedupeKey(record) {
@@ -177,13 +193,19 @@ export class MemoryStore {
     this.log = new JsonlStore(filePath, { validateRecord: validateMemoryRecord });
   }
 
-  async add({ content, kind = 'user_fact', source = 'user', sensitivity = 'normal', provenance = {} } = {}) {
+  async add({ content, kind = 'user_fact', source = 'user', sensitivity = 'normal', provenance = {}, updateMode, replaces = [] } = {}) {
     const text = validateContent(content);
     validateKindSource(kind, source);
     if (!SENSITIVITIES.has(sensitivity)) throw new ValidationError(`unknown sensitivity: ${String(sensitivity)}`);
+    const normalizedProvenance = sanitizeProvenance({ ...provenance, updateMode: updateMode ?? provenance.updateMode ?? (source === 'model' ? 'model_proposed' : 'user_confirmed'), replaces: replaces.length > 0 ? replaces : provenance.replaces });
+    if (source === 'model' && normalizedProvenance.updateMode !== 'model_proposed') {
+      throw new ValidationError('model-origin memory must be marked model_proposed');
+    }
+    if (source === 'user' && normalizedProvenance.updateMode === 'model_proposed') {
+      throw new ValidationError('user-origin memory cannot be marked model_proposed');
+    }
     const { records } = await this.log.load();
     const id = randomUUID();
-    // Never overwrite: a colliding identifier aborts the write.
     if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
     const record = {
       schema: MEMORY_SCHEMA,
@@ -194,7 +216,7 @@ export class MemoryStore {
       content: text,
       contentSha256: sha256Hex(text),
       createdAt: this.now().toISOString(),
-      provenance: sanitizeProvenance(provenance),
+      provenance: normalizedProvenance,
     };
     await this.log.append(record);
     return record;
@@ -284,6 +306,7 @@ export class MemoryStore {
       record,
       score,
       conflict: conflictIds.get(record.id) ?? [],
+      status: getRecordStatus(record, conflictIds.get(record.id) ?? []),
     }));
   }
 

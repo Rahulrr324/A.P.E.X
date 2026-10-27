@@ -103,6 +103,71 @@ describe('memory store', () => {
     assert.ok(hits.some((hit) => hit.conflict.includes(newer.id)));
   });
 
+  test('explicit user-confirmed updates preserve history and record the replacement metadata', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const older = await store.add({ content: 'The project codename is Lighthouse' });
+    const updated = await store.add({
+      content: 'The project codename is Bluebird',
+      provenance: { origin: 'user_request', updateMode: 'user_confirmed', replaces: [older.id] },
+    });
+    assert.equal(updated.provenance.updateMode, 'user_confirmed');
+    assert.deepEqual(updated.provenance.replaces, [older.id]);
+    assert.equal((await store.get(older.id))?.content, 'The project codename is Lighthouse');
+    assert.equal((await store.get(updated.id))?.provenance.updateMode, 'user_confirmed');
+  });
+
+  test('unconfirmed contradictory claims remain unresolved and do not claim user confirmation', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const first = await store.add({ content: 'The project codename is Lighthouse' });
+    const second = await store.add({ content: 'The project codename is Bluebird' });
+    const hits = await store.search('what is the project codename?');
+    assert.equal(hits.length, 2);
+    assert.ok(hits.every((hit) => hit.status === 'unresolved_conflict'));
+    assert.equal(first.provenance.updateMode, 'user_confirmed');
+    assert.equal(second.provenance.updateMode, 'user_confirmed');
+  });
+
+  test('model-proposed updates are never treated as confirmed user fact updates', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const modelRec = await store.add({
+      content: 'The project codename is Bluebird',
+      kind: 'model_conclusion',
+      source: 'model',
+      provenance: { origin: 'model_output', backend: 'stub' },
+    });
+    const hits = await store.search('project codename');
+    assert.ok(hits.some((hit) => hit.record.id === modelRec.id));
+    assert.equal(modelRec.provenance.updateMode, 'model_proposed');
+    assert.equal(hits.find((hit) => hit.record.id === modelRec.id)?.status, 'model_proposed');
+  });
+
+  test('newer timestamps alone do not establish correctness when a conflict remains', async () => {
+    const dir = tempDir();
+    const times = [
+      new Date('2026-10-27T00:00:00.000Z'),
+      new Date('2026-10-27T00:05:00.000Z'),
+    ];
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'), { now: () => times.shift() ?? new Date('2026-10-27T00:10:00.000Z') });
+    await store.add({ content: 'The project codename is Lighthouse' });
+    await store.add({ content: 'The project codename is Bluebird' });
+    const hits = await store.search('what is the project codename?');
+    assert.equal(hits.length, 2);
+    assert.ok(hits.every((hit) => hit.status === 'unresolved_conflict'));
+  });
+
+  test('context-dependent historical claims can coexist without false conflict warnings', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    await store.add({ content: 'I lived in Paris from 2020 to 2022' });
+    await store.add({ content: 'I lived in Berlin from 2022 to 2025' });
+    const hits = await store.search('I lived in');
+    assert.equal(hits.length, 2);
+    assert.ok(hits.every((hit) => hit.conflict.length === 0));
+  });
+
   test('user facts and model conclusions are kept distinct', async () => {
     const dir = tempDir();
     const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
