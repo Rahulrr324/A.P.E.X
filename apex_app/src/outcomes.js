@@ -7,6 +7,7 @@ export const Outcome = Object.freeze({
   EXECUTION_FAILED: 'execution_failed',
   VERIFICATION_FAILED: 'verification_failed',
   VERIFICATION_UNAVAILABLE: 'verification_unavailable',
+  AUDIT_INTEGRITY_FAILED: 'audit_integrity_failed',
   ACTION_DENIED: 'action_denied',
   INPUT_REJECTED: 'input_rejected',
   MODEL_UNAVAILABLE: 'model_unavailable',

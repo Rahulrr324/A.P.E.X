@@ -497,9 +497,29 @@ export class CognitiveController {
       op.request = `task ${mode} ${shortId(found.id)}`;
       const result = await this.taskStore.withLock(() => this.tasks.run(found.id, { mode }));
       const gaps = result.auditGaps.length;
-      if (gaps) op.errors.push({ stage: 'audit', code: 'AUDIT_WRITE_FAILED', message: `${gaps} step record(s) were not written to the operation log` });
-      const warning = gaps ? `\nWarning: ${gaps} step record(s) could not be written to the operation log.` : '';
-      return this.#finishTaskOp(op, result.status, `${renderTask(result.task)}${warning}`, result.task, { auditGaps: gaps });
+      if (gaps) {
+        op.errors.push({
+          stage: 'audit',
+          code: 'AUDIT_WRITE_FAILED',
+          message: `${gaps} step record(s) were not written to the operation log`,
+          steps: result.auditGaps,
+          underlyingStatus: result.underlyingStatus,
+        });
+      }
+      const warning = gaps
+        ? `\nAudit integrity failure: ${gaps} required task-step operation record(s) could not be written (${result.auditGaps.join(', ')}). Underlying task result: ${result.underlyingStatus}.`
+        : '';
+      return this.#finishTaskOp(
+        op,
+        result.status,
+        `${renderTask(result.task)}${warning}`,
+        result.task,
+        {
+          auditGaps: gaps,
+          auditGapSteps: result.auditGaps,
+          underlyingStatus: result.underlyingStatus,
+        },
+      );
     } catch (err) {
       return this.#refused(op, err);
     }
@@ -602,7 +622,15 @@ export class CognitiveController {
       const result = await this.taskStore.withLock(() => this.tasks.run(task.id, { mode: 'run' }));
       const fresh = result.task;
       const { completed, total } = progressOf(fresh);
-      if (result.auditGaps.length) op.errors.push({ stage: 'audit', code: 'AUDIT_WRITE_FAILED', message: `${result.auditGaps.length} step record(s) not written` });
+      if (result.auditGaps.length) {
+        op.errors.push({
+          stage: 'audit',
+          code: 'AUDIT_WRITE_FAILED',
+          message: `${result.auditGaps.length} step record(s) not written`,
+          steps: result.auditGaps,
+          underlyingStatus: result.underlyingStatus,
+        });
+      }
       op.task = { id: task.id, status: fresh.status };
       await this.#recordTurns(op, sid, op.request, [
         {
@@ -611,8 +639,18 @@ export class CognitiveController {
           verified: result.status === Outcome.SUCCESS_VERIFIED,
         },
       ]);
-      const display = renderTask(fresh);
-      return { status: result.status, output: display, display };
+      const warning = result.auditGaps.length
+        ? `\nAudit integrity failure: ${result.auditGaps.length} required task-step operation record(s) could not be written (${result.auditGaps.join(', ')}). Underlying task result: ${result.underlyingStatus}.`
+        : '';
+      const display = `${renderTask(fresh)}${warning}`;
+      return {
+        status: result.status,
+        output: display,
+        display,
+        auditGaps: result.auditGaps.length,
+        auditGapSteps: result.auditGaps,
+        underlyingStatus: result.underlyingStatus,
+      };
     } catch (err) {
       if (err instanceof ValidationError) return { status: Outcome.INPUT_REJECTED, output: err.message, display: err.message };
       if (err instanceof StoreError) return { status: Outcome.EXECUTION_FAILED, output: `task store unavailable: ${err.message}`, display: `task store unavailable: ${err.message}` };

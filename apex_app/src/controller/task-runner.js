@@ -158,7 +158,11 @@ export class TaskRunner {
       });
       task = await this.#task(taskId);
     }
-    return { ...this.#outcomeFor(task), auditGaps };
+    const outcome = this.#outcomeFor(task);
+    const status = auditGaps.length > 0 && outcome.status === Outcome.SUCCESS_VERIFIED
+      ? Outcome.AUDIT_INTEGRITY_FAILED
+      : outcome.status;
+    return { ...outcome, status, underlyingStatus: outcome.status, auditGaps };
   }
 
   async #recover(task) {

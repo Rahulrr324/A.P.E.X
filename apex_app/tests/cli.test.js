@@ -5,6 +5,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel } from './helpers.js';
+import { createApp } from '../src/app.js';
+import { ModelGateway, NoBackend } from '../src/model/gateway.js';
+import { main } from '../src/cli.js';
+import { Outcome } from '../src/outcomes.js';
 
 const dirs = [];
 const stubs = [];
@@ -18,7 +22,45 @@ function envFor(dataDir, extra = {}) {
 }
 function tempDir() { const d = makeTempDataDir(); dirs.push(d); return d; }
 
+function capture() {
+  return {
+    text: '',
+    write(chunk) {
+      this.text += chunk;
+      return true;
+    },
+  };
+}
+
 describe('command line', () => {
+  test('task run exits nonzero when a required step audit record is missing', async () => {
+    const dataDir = tempDir();
+    const app = createApp({ dataDir, gateway: new ModelGateway({ backend: new NoBackend() }) });
+    await app.controller.planTask('calc 1+1');
+    const task = (await app.taskStore.list())[0];
+    const originalAppend = app.operations.append.bind(app.operations);
+    app.operations.append = async (record) => {
+      if (record.capability === 'task.step') throw new Error('injected step audit failure');
+      return originalAppend(record);
+    };
+    const stdout = capture();
+    const stderr = capture();
+
+    const code = await main(['task', 'run', task.id], {
+      env: envFor(dataDir),
+      stdout,
+      stderr,
+      stdin: { isTTY: false },
+      appFactory: () => app,
+    });
+
+    assert.equal(code, 1);
+    assert.match(stdout.text, /Audit integrity failure/);
+    assert.match(stderr.text, /could not be written/);
+    assert.equal((await app.taskStore.get(task.id)).status, 'completed');
+    assert.equal((await app.operations.list({ limit: 20 })).records.some((r) => r.status === Outcome.AUDIT_INTEGRITY_FAILED), true);
+  });
+
   test('the application starts and reports status with no model configured', async () => {
     const dataDir = tempDir();
     const r = await runCli(['status'], envFor(dataDir));

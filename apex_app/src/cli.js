@@ -136,7 +136,13 @@ function modelLine(s, avail) {
   return `Model backend: ${who} - ${avail.available ? 'available' : `unavailable: ${avail.detail}`}`;
 }
 
-export async function main(argv, { env = process.env, stdout = process.stdout, stderr = process.stderr, stdin = process.stdin } = {}) {
+export async function main(argv, {
+  env = process.env,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  stdin = process.stdin,
+  appFactory = createAppFromEnv,
+} = {}) {
   const [command, ...args] = argv;
   const out = (s) => stdout.write(`${s}\n`);
   const err = (s) => stderr.write(`${s}\n`);
@@ -159,7 +165,7 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
 
   let app;
   try {
-    app = createAppFromEnv(env);
+    app = appFactory(env);
   } catch (e) {
     err(`configuration error: ${e.message}`);
     return 2;

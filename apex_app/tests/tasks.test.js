@@ -352,6 +352,65 @@ describe('model-proposed plans (test doubles and stub protocol)', () => {
 });
 
 describe('execution', () => {
+  test('a verified task reports audit-integrity failure when step audit persistence fails', async () => {
+    const dataDir = tempDir();
+    const app = appOn(dataDir);
+    const originalAppend = app.operations.append.bind(app.operations);
+    let stepAuditAttempts = 0;
+    app.operations.append = async (record) => {
+      if (record.capability === 'task.step') {
+        stepAuditAttempts += 1;
+        throw new Error('injected step audit failure');
+      }
+      return originalAppend(record);
+    };
+
+    await app.controller.planTask('calc 1+1');
+    const task = await onlyTask(app);
+    const res = await app.controller.runTask(task.id, 'run');
+
+    assert.equal(res.status, Outcome.AUDIT_INTEGRITY_FAILED);
+    assert.equal(res.underlyingStatus, Outcome.SUCCESS_VERIFIED);
+    assert.equal(res.auditGaps, 1);
+    assert.deepEqual(res.auditGapSteps, ['s1']);
+    assert.equal(stepAuditAttempts, 1);
+    assert.equal(res.recorded, true, 'the outer task operation still records');
+    const done = await app.taskStore.get(task.id);
+    assert.equal(done.status, TaskStatus.COMPLETED);
+    assert.equal(done.steps[0].outcome, Outcome.SUCCESS_VERIFIED);
+    assert.equal((await opsFor(app, 'task.step')).length, 0);
+
+    const restarted = appOn(dataDir);
+    const inspected = await restarted.taskStore.get(task.id);
+    assert.equal(inspected.status, TaskStatus.COMPLETED);
+    assert.equal(inspected.steps[0].outcome, Outcome.SUCCESS_VERIFIED);
+    const rerun = await restarted.controller.runTask(task.id, 'run');
+    assert.equal(rerun.status, Outcome.INPUT_REJECTED);
+    assert.equal(stepAuditAttempts, 1, 'the missing audit record does not cause re-execution');
+  });
+
+  test('preserves an action failure when its step audit write also fails', async () => {
+    const dataDir = tempDir();
+    const app = appOn(dataDir);
+    const originalAppend = app.operations.append.bind(app.operations);
+    app.operations.append = async (record) => {
+      if (record.capability === 'task.step') throw new Error('injected step audit failure');
+      return originalAppend(record);
+    };
+
+    await app.controller.planTask('calc 1/0');
+    const task = await onlyTask(app);
+    const res = await app.controller.runTask(task.id, 'run');
+
+    assert.equal(res.status, Outcome.EXECUTION_FAILED);
+    assert.equal(res.underlyingStatus, Outcome.EXECUTION_FAILED);
+    assert.equal(res.auditGaps, 1);
+    assert.match(res.display, /division by zero/);
+    const failed = await app.taskStore.get(task.id);
+    assert.equal(failed.status, TaskStatus.FAILED);
+    assert.equal(failed.steps[0].outcome, Outcome.EXECUTION_FAILED);
+  });
+
   test('a deterministic task runs existing actions and every verified result matches the operation log', async () => {
     const dataDir = tempDir();
     const app = appOn(dataDir);

@@ -318,6 +318,7 @@ Each action step and each operation has one status:
 | `execution_failed` | The action or model call failed. Verification was not run. |
 | `verification_failed` | The action ran, but the verifier found the postcondition does not hold. Never reported as success. |
 | `verification_unavailable` | No verifier exists, or the verifier could not read its evidence. For a model answer, this is the honest status: a model conclusion has no independent check. |
+| `audit_integrity_failed` | The task/action result is preserved, but a required task-step audit record could not be persisted. The overall operation is not successful. |
 | `action_denied` | Authorization refused it. The action did not run. |
 | `input_rejected` | Input failed validation. Nothing ran. |
 | `model_unavailable` | No backend configured. No answer was generated. |
