@@ -51,6 +51,7 @@ APEX_DATA_DIR=/path/to/dir node bin/apex.js status
 ```
 
 - `memory.jsonl`: personal memory records (append-only).
+- `knowledge.jsonl`: explicit entity relationships and evidence (append-only).
 - `operations.jsonl`: one audit record per operation (append-only).
 
 Both are plain JSON Lines files you can read and back up. The application never
@@ -74,6 +75,10 @@ deletes or rewrites them.
 | `task resume <id>` | Continues a paused task. A completed step is never run again. |
 | `task retry <id> <stepId>` | Retries one failed or uncertain step, only if it is read-only. |
 | `task cancel <id>` | Cancels a task that has not finished. Steps that have not run are cancelled. |
+| `knowledge add --subject <s> --relationship <r> --object <o> [--evidence <e>]` | Stores an explicit relationship triple. User origin only. |
+| `knowledge list [--limit N]` | Lists recent knowledge records with provenance and status. |
+| `knowledge search <query>` | Searches knowledge triples by keyword. |
+| `knowledge show <id>` | Shows a knowledge record in full with provenance and conflict details. |
 | `help`, `version` | Usage and version. |
 
 Request forms recognised without a model:
@@ -458,6 +463,27 @@ validation (`gateway.test.js`), and the verifier-independence check
   selected old record, which remains visible as `superseded` when no other conflict
   remains. Conflicts with any other claims stay unresolved; superseded history is not
   sent as an active fact in model context.
+
+## Knowledge System
+
+The Knowledge System introduces a minimal, persistent, inspectable foundation for
+explicit entity relationships, built alongside personal memory:
+
+- **Entity relationship triples:** Each record stores an explicit triple:
+  `subject --[relationship]--> object`, together with optional `evidence`,
+  canonical hash (`tripleHash`), timestamp, and explicit provenance.
+- **Write authority:** Knowledge writes (`knowledge add` / `knowledge.add`) require
+  explicit user origin. Model proposals cannot write knowledge.
+- **Conflict handling:** When a new relationship contradicts an existing one (same
+  subject and relationship, different object), the conflict is detected and both
+  records are preserved and marked `conflicting`. Contradictions are never silently
+  discarded or overwritten.
+- **Bounded retrieval into model context:** When answering requests, the controller
+  retrieves up to 3 relevant knowledge records via keyword search over the triple
+  and evidence. Injected records explicitly state their provenance (`user-supplied fact`
+  or `unconfirmed claim`) and conflict status (`[CONFLICTING: another record disagrees]`).
+- **Auditability:** Every write operation is recorded in `operations.jsonl` and
+  independently verified against the store log.
 - **Corrections are never inferred from `remember`.** Repeating `remember` records
   another user fact and leaves conflicting claims unresolved. Use the explicit
   `memory correct` command to select one conflicting record. Corrections are limited to

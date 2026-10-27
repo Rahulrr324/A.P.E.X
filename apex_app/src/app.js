@@ -6,6 +6,7 @@ import { ConversationStore } from './memory/conversation-store.js';
 import { OperationLog } from './operations/operation-log.js';
 import { ActionRegistry } from './actions/registry.js';
 import { builtinActions } from './actions/builtin.js';
+import { knowledgeActions } from './actions/knowledge-actions.js';
 import { Verifier } from './verify/verifier.js';
 import { CognitiveController } from './controller/controller.js';
 import { createGateway, ModelGateway, NoBackend } from './model/gateway.js';
@@ -20,6 +21,7 @@ import {
 import { resolveRoot, validateRoot } from './filesystem/path.js';
 import { listAction, readAction } from './filesystem/actions.js';
 import { TaskStore } from './tasks/store.js';
+import { KnowledgeStore } from './knowledge/knowledge-store.js';
 
 export function createApp({
   dataDir,
@@ -40,6 +42,7 @@ export function createApp({
   const operations = new OperationLog(path.join(dataDir, 'operations.jsonl'));
   const session = new SessionState(path.join(dataDir, 'session.json'), { now: clock });
   const taskStore = new TaskStore(path.join(dataDir, 'tasks.jsonl'), { now: clock, idFactory });
+  const knowledge = new KnowledgeStore(path.join(dataDir, 'knowledge.jsonl'), { now: clock });
   const registry = new ActionRegistry();
 
   // Filesystem inspection exists only when a root is configured. The root is resolved
@@ -56,7 +59,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...extraActions, ...fsActions]) registry.register(def);
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...extraActions, ...fsActions]) registry.register(def);
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -93,6 +96,7 @@ export function createApp({
     idFactory,
     taskStore,
     rootForContext,
+    knowledge,
   });
   return {
     controller,
@@ -106,6 +110,7 @@ export function createApp({
     dataDir,
     taskStore,
     filesystemRoot: rootForContext,
+    knowledge,
   };
 }
 

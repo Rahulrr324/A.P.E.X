@@ -19,6 +19,10 @@ Usage:
   node bin/apex.js status
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js history [--limit N]
+  node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>]
+  node bin/apex.js knowledge list [--limit N]
+  node bin/apex.js knowledge search <query words...>
+  node bin/apex.js knowledge show <id>
   node bin/apex.js task plan <goal...>   plan a multi-step task (checked; nothing runs yet)
   node bin/apex.js task list
   node bin/apex.js task show <id>
@@ -39,6 +43,13 @@ Request examples (no model needed):
   status
   list src/             list one directory inside the authorized root (no model needed)
   read README.md        read a bounded text file inside the authorized root
+
+Knowledge examples (explicit relationships; user-origin write only):
+  knowledge add --subject APEX --relationship has_subsystem --object "Cognitive Controller"
+  knowledge add --subject APEX --relationship has_subsystem --object "Memory Store" --evidence "README section 3"
+  knowledge list
+  knowledge search subsystem
+  knowledge show <record-id>
 
 With a configured local model, any other request is answered from the model,
 using relevant memory and the recent conversation. Without one, APEX says so.
@@ -77,6 +88,11 @@ function parseFlags(args, allowed) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError('--step needs a step id', 'USAGE');
         flags.step = v;
+        i += 1;
+      } else if (['subject', 'relationship', 'object', 'evidence'].includes(name)) {
+        const v = args[i + 1];
+        if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
+        flags[name] = v;
         i += 1;
       } else {
         flags[name] = true;
@@ -215,6 +231,45 @@ export async function main(argv, {
         throw new ValidationError('usage: memory correct --resolve <full-record-id> <replacement claim...>', 'USAGE');
       }
       return emit(await app.controller.correctMemory({ targetId: values[0], content: values.slice(1).join(' '), resolve: true }));
+    }
+
+    if (command === 'knowledge') {
+      const [sub, ...rest] = args;
+      if (sub === 'add') {
+        const { flags } = parseFlags(rest, ['subject', 'relationship', 'object', 'evidence']);
+        if (!flags.subject || !flags.relationship || !flags.object) {
+          err('usage: knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>]');
+          return 2;
+        }
+        return emit(await app.controller.knowledgeAdd({
+          subject: flags.subject,
+          relationship: flags.relationship,
+          object: flags.object,
+          evidence: flags.evidence ?? null,
+        }));
+      }
+      if (sub === 'list') {
+        const { flags } = parseFlags(rest, ['limit']);
+        return emit(await app.controller.knowledgeList({ limit: flags.limit }));
+      }
+      if (sub === 'search') {
+        const { rest: words } = parseFlags(rest, []);
+        if (words.length === 0) {
+          err('usage: knowledge search <query words...>');
+          return 2;
+        }
+        return emit(await app.controller.knowledgeSearch(words.join(' ')));
+      }
+      if (sub === 'show') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) {
+          err('usage: knowledge show <record-id>');
+          return 2;
+        }
+        return emit(await app.controller.knowledgeShow(ids[0]));
+      }
+      err('usage: knowledge add|list|search|show');
+      return 2;
     }
 
     if (command === 'ask') {
