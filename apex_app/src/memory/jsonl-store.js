@@ -19,7 +19,19 @@ export class JsonlStore {
     try {
       text = await fs.readFile(this.filePath, 'utf8');
     } catch (err) {
-      if (err && err.code === 'ENOENT') return { records: [], corrupt: [] };
+      if (err && err.code === 'ENOENT') {
+        const parent = path.dirname(this.filePath);
+        try {
+          const parentStat = await fs.stat(parent);
+          if (!parentStat.isDirectory()) {
+            throw Object.assign(new Error('parent path is not a directory'), { code: 'ENOTDIR' });
+          }
+        } catch (statErr) {
+          if (statErr && statErr.code === 'ENOENT') return { records: [], corrupt: [] };
+          throw new StoreError(`cannot read ${this.label}: ${statErr?.code || statErr?.message}`);
+        }
+        return { records: [], corrupt: [] };
+      }
       throw new StoreError(`cannot read ${this.label}: ${err?.code || err?.message}`);
     }
     const records = [];
