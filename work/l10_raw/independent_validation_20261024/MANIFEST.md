@@ -1,0 +1,269 @@
+# L10 independent validation — evidence manifest
+
+Generated: 2026-10-24T02:53:56Z (UTC)
+
+## Provenance
+
+- repository: https://github.com/Rahulrr324/A.P.E.X.git
+- validation branch: arena/86da64f9-a-p-e-x
+- validation start SHA: 49cc6ba18650c0d9614bb9e8918fe65453ec5a02
+- L10 milestone commit (audited): 49cc6ba18650c0d9614bb9e8918fe65453ec5a02
+- PR #2 head at validation time: 5f5a57717509623bd4c79460d50c05f7cbc605c3
+- checkout is shallow/grafted at 5f5a577 (boundary 563395f1); full history before L9 is not present locally
+
+## Source snapshot audited (sha256, from `git archive 49cc6ba`)
+
+- `stark/src/learning/ContextConditionedMemory.h`  
+  81f5472588d3dae16b37dd405869c1cd44ae57b5a5d6308b660fdce3cc0e0732
+- `stark/src/learning/ContextConditionedMemory.cpp`  
+  a32ef07b72d9d84a475529e31e338f165b693dab07f0ee8cacdd9efc4d40588d
+- `stark/src/learning/context_conditioned_memory_loop.cpp`  
+  audited (as at 49cc6ba): `ec4bbd77a5dc86440695f4b488af53cd6a019b8789c519508a21d1d6af86180f`  
+  after the validation fix in this branch: `8666404127490cbbbd0076af09e486ee147a16c1a47c994a2d9ac1efa6453dd8`
+- `stark/tests/test_context_conditioned_memory.cpp`  
+  97cf0b0c93f20ca0ebc5ce187c3e01843b1095e6812b8a5b27a0aa203bfc7cf6
+- `stark/design/context_conditioned_memory_milestone.md`  
+  739f20ee412a5b2506df7ccac8e4422cf0518ba955c7328be483d50e456ae2c0
+
+## Artifacts in this directory
+
+### reproduction/  (4 files)
+- `console.txt`
+- `independent_run_report.json`
+- `l9_console.txt`
+- `l9_reproduced.json`
+
+### harness_frozen/  (15 files)
+- `calls_ccm_123456789.csv`
+- `calls_ccm_171473193.csv`
+- `calls_ccm_218213831.csv`
+- `calls_seql9_123456789.csv`
+- `calls_seql9_171473193.csv`
+- `calls_seql9_218213831.csv`
+- `metrics_ccm_123456789.csv`
+- `metrics_ccm_171473193.csv`
+- `metrics_ccm_218213831.csv`
+- `metrics_seql9_123456789.csv`
+- `metrics_seql9_171473193.csv`
+- `metrics_seql9_218213831.csv`
+- `trials_ccm_123456789.csv`
+- `trials_ccm_171473193.csv.gz`
+- `trials_ccm_218213831.csv.gz`
+
+### exploratory/  (55 files)
+- `metrics_ccm_1.csv`
+- `metrics_ccm_1234.csv`
+- `metrics_ccm_123456789.csv`
+- `metrics_ccm_171473193.csv`
+- `metrics_ccm_2.csv`
+- `metrics_ccm_218213831.csv`
+- `metrics_ccm_3.csv`
+- `metrics_ccm_42.csv`
+- `metrics_ccm_7.csv`
+- `metrics_ccm_999983.csv`
+- `metrics_ctxnovel_T3_K3_123456789.csv`
+- `metrics_ctxnovel_T3_K3_171473193.csv`
+- `metrics_ctxnovel_T3_K3_218213831.csv`
+- `metrics_order_T2_K2_123456789.csv`
+- `metrics_order_T2_K2_171473193.csv`
+- `metrics_order_T2_K2_218213831.csv`
+- `metrics_provoked_sealOFF_123456789.csv`
+- `metrics_provoked_sealOFF_171473193.csv`
+- `metrics_provoked_sealOFF_218213831.csv`
+- `metrics_provoked_sealON_123456789.csv`
+- `metrics_provoked_sealON_171473193.csv`
+- `metrics_provoked_sealON_218213831.csv`
+- `metrics_sealOFF_123456789.csv`
+- `metrics_sealOFF_171473193.csv`
+- `metrics_sealOFF_218213831.csv`
+- `metrics_sealON_123456789.csv`
+- `metrics_sealON_171473193.csv`
+- `metrics_sealON_218213831.csv`
+- `metrics_seql9_1.csv`
+- `metrics_seql9_1234.csv`
+- `metrics_seql9_123456789.csv`
+- `metrics_seql9_171473193.csv`
+- `metrics_seql9_2.csv`
+- `metrics_seql9_218213831.csv`
+- `metrics_seql9_3.csv`
+- `metrics_seql9_42.csv`
+- `metrics_seql9_7.csv`
+- `metrics_seql9_999983.csv`
+- `metrics_tasks_T4_K3_123456789.csv`
+- `metrics_tasks_T4_K3_171473193.csv`
+- … 15 more
+
+### regression/  (28 files)
+- `after_test_associative_memory.out`
+- `after_test_context_conditioned_memory.out`
+- `after_test_delayed_reward.out`
+- `after_test_eligibility_gating.out`
+- `after_test_homeostasis.out`
+- `after_test_integration.out`
+- `after_test_l10_structural_audit.out`
+- `after_test_learned_relevance.out`
+- `after_test_learning_loop.out`
+- `after_test_n_way_learned_relevance.out`
+- `after_test_network.out`
+- `after_test_neuron.out`
+- `after_test_params.out`
+- `after_test_sequential_context.out`
+- `after_test_serialization.out`
+- `after_test_stdp.out`
+- `after_test_synapse.out`
+- `after_test_three_factor.out`
+- `phase1_accounting.out`
+- `phase1_budget.out`
+- `phase1_gates.out`
+- `phase1_profiler.out`
+- `phase1_records.out`
+- `phase1_reproducibility.out`
+- `results_after_fix.txt`
+- `results_before_fix.txt`
+- `test_phase1_affinity_build_failure.txt`
+- `test_phase1_gates_isolated_cwd.txt`
+
+### analysis/  (3 files)
+- `l10e_context_off_decomposition.txt`
+- `l10f_sealing_opportunity.txt`
+- `seed_sweep_and_scaling.txt`
+
+### post_fix/  (2 files)
+- `report_after_fix.json`
+- `report_after_fix_rerun.json`
+
+## Key hashes
+
+- `work/l10_raw/final_run/report_raw.json`  
+  8d2d4143aa800368677b5fc38f284da5bf42cc8b547c662026be9f09b9e6e080
+- `work/l10_raw/independent_validation_20261024/reproduction/independent_run_report.json`  
+  2868275d70fc6c96f14ec3ead34b329ab47b3d77dce359b02ba42ab4a7f7f33f
+- `work/l10_raw/independent_validation_20261024/reproduction/l9_reproduced.json`  
+  3cf2d5f73600a8d7f3a8455d554632ccc934c5a90caebd031b38eea6f867c158
+- `work/l10_raw/independent_validation_20261024/post_fix/report_after_fix.json`  
+  f28f95ebea87dc74011d6dce6e988319202cab871f93102830267042cb6cf57e
+
+## sha256 of every artifact in this directory (108 files)
+
+```
+01f28fe4da972f8a5b11861a7f3f4089a399a5562185106bab8abff85002f898  harness_frozen/trials_ccm_171473193.csv.gz
+030154f7dabf93b1e12a7fe9060951a386a4890d4f9826884ac41d7625de27b3  regression/results_before_fix.txt
+04d05c3402404ea6cebfac9a681c37161239168704651ae3bb7d00b5ad028237  harness_frozen/calls_seql9_123456789.csv
+04d05c3402404ea6cebfac9a681c37161239168704651ae3bb7d00b5ad028237  harness_frozen/calls_seql9_171473193.csv
+04d05c3402404ea6cebfac9a681c37161239168704651ae3bb7d00b5ad028237  harness_frozen/calls_seql9_218213831.csv
+063038b2541a54ff0e5d6c779c76cca37ac0090d3fa7f5a16a2265ea45e6c171  exploratory/metrics_provoked_sealOFF_123456789.csv
+07253ad9082cb18242b024dd8cd344903cfe070d71494d7775e8d9fcc30065db  exploratory/metrics_seql9_1234.csv
+0cf5be31b17147696eb3cd88ca7ef93f393491a45d200ac489fe20ba6220ef38  exploratory/metrics_ccm_42.csv
+0dc8dde6afbdf401fc9f89b5af6ede0a5b9b396bdcbcfd028818e020b91309fe  exploratory/metrics_tasks_T6_K6_171473193.csv
+0f38a3e351287e05a56b3ba2199f61b97a4e5a7b13fb09a073df6bc50399a69c  exploratory/metrics_tasks_T4_K3_171473193.csv
+1153c4aa4b1135992d42b30624449cbfe97f2e1ee3d33a22c5248abed5ef0c20  regression/after_test_neuron.out
+11b4c4fc32bbb8c57bf5e01fc357d33f4600796167ef93fa7622a914fd0d86b4  exploratory/restart_218213831.csv
+138dbf382e81f71506a8d7e31678c9760ec908cc717eeffd1ea4098168e3acb2  exploratory/metrics_sealOFF_171473193.csv
+158106d38c49969410e23e143f371343ce86d66c2f8f7d0eb216403b20496b18  regression/after_test_network.out
+1a61d6df44fa8634e85b1c0788084820e9d66d38bc6346b883ba158acef4d320  exploratory/trials_provoked_sealOFF_123456789.csv.gz
+1c9f487d0fafe5b25befdd56cfefa8ac9afb7f143e725206bfe89ffb2480ebd9  exploratory/metrics_order_T2_K2_123456789.csv
+1df3d1a6e9f2ad4fb84cdb32f1b1c29d63b3fb5eecfe110d32a1c397144c46f6  regression/test_phase1_gates_isolated_cwd.txt
+1fbdc3a034b9cb874d24a302d4c27e09f75ab102c80a04c4197ed5cabcc1f928  exploratory/metrics_ccm_3.csv
+1fce45d206a52defb4749a4f4123aa745fdd8768ae30156c847eba114836d37a  regression/phase1_records.out
+2277d558c170146cd67b600fbb5a13e19e850e7540833db8207ec0fcc89bff97  exploratory/metrics_seql9_123456789.csv
+2277d558c170146cd67b600fbb5a13e19e850e7540833db8207ec0fcc89bff97  harness_frozen/metrics_seql9_123456789.csv
+2337c92c6d615c04ad7f1a23260ee2d85a2402b3bb3c2ed00a69e26da9571a65  reproduction/console.txt
+23e18f1113af7e0e5fc1d6d8212e20c1136848cd172731527ea45baf1ae5a570  exploratory/metrics_ctxnovel_T3_K3_218213831.csv
+26546ffc3d0e2a00aad5d7c6ff589cbfcfcf9f635ebeabc780e17574b309330a  exploratory/metrics_tasks_T5_K5_171473193.csv
+2837a1f4040b2a5719201cd99e03f2a891ab808eda8e03e816f76ba82279f36d  regression/after_test_sequential_context.out
+2868275d70fc6c96f14ec3ead34b329ab47b3d77dce359b02ba42ab4a7f7f33f  reproduction/independent_run_report.json
+2a626036f5e399fe8503e5473bda676b8ea92542f93c94a8b958887d28c6e45e  exploratory/metrics_provoked_sealON_218213831.csv
+2b839b6a1309fd3a6a05bfa012a6dfecf83d4d16274c4413ef1b8e1e4275cfb2  regression/after_test_stdp.out
+2f52fad4701776d447d0c7896f090796d863a99b2eda7eaadec67beddbf74063  exploratory/metrics_tasks_T5_K5_123456789.csv
+2fca85642e1bdaf3b15e1d4133757dd266908da748086e45d161c87a51c04f97  exploratory/metrics_order_T2_K2_218213831.csv
+3cf2d5f73600a8d7f3a8455d554632ccc934c5a90caebd031b38eea6f867c158  reproduction/l9_reproduced.json
+44bc87ea7bdaff34cf6cd0b8b796bdd6be72c883c882ef8ec07f48264c2c8ebd  regression/after_test_n_way_learned_relevance.out
+44ea8ceca36c405befbc22e8f60c7bce9dc3577b6c1f1fbe1afa8b07db69ab47  regression/phase1_accounting.out
+466f56a832c1fb6dae21ecf00f419e2cf17632e33a4c53f74804929d45f6bd81  regression/after_test_serialization.out
+470b7a0be17a4843b4870fea55c9c9ef4112b289e9324194a11faac98e0068c6  post_fix/report_after_fix_rerun.json
+49781b5ea6520ffd94fce6c5266bc57c8e0a9cd502794730af080866ba7adf65  exploratory/metrics_tasks_T4_K3_123456789.csv
+4f008b021611552c6467c9ac80c6204069f3312e8466cbf910402648198bac77  analysis/seed_sweep_and_scaling.txt
+58593025425789a51a30799befafc5cfd6219dd9d452433b7471d69bdfa31931  exploratory/metrics_provoked_sealOFF_171473193.csv
+5a34105608c4da15a9083bf5f3586b7e26285aec1dda78d4971835653e924521  exploratory/metrics_provoked_sealOFF_218213831.csv
+5d66b0937c24316897a23a7529fd4a999ecd0460c2d288d22aa3103a432c9812  regression/after_test_context_conditioned_memory.out
+677dcb43b06807e04c09959da4815dbc21f2a041553b705c8ab8cd2096514f8e  harness_frozen/calls_ccm_123456789.csv
+677dcb43b06807e04c09959da4815dbc21f2a041553b705c8ab8cd2096514f8e  harness_frozen/calls_ccm_171473193.csv
+677dcb43b06807e04c09959da4815dbc21f2a041553b705c8ab8cd2096514f8e  harness_frozen/calls_ccm_218213831.csv
+68eb95d97b290cfd6f7eea117ce4615f4f724b319a5285dcbad6f7ae562ead48  regression/after_test_synapse.out
+6d74a6ab5e910bcf0cb3fea926a489e9b70d06612e5266f6e9fd6a66c189ff80  exploratory/metrics_seql9_171473193.csv
+6d74a6ab5e910bcf0cb3fea926a489e9b70d06612e5266f6e9fd6a66c189ff80  harness_frozen/metrics_seql9_171473193.csv
+70122babaf3175bb6d1ec8613c9eac4ca2453d055b61e83eb2c683aaa9a6b348  exploratory/metrics_ccm_999983.csv
+70edb57605795b89515cd1ad2bfb21261dad64e914c8634840e76e98541848f6  regression/after_test_delayed_reward.out
+73d3e894b557ea3b360f4058373430a85cd6b279acea4af7e242820d06b70e08  regression/phase1_gates.out
+7913449e9cb4b49243d86935fa7eb7dd3ed1ef15532fe04986683b4b07e2e396  exploratory/metrics_ccm_1234.csv
+7960a87c35c0be57fb406ab70b3eb32dd4952db37cce69d11fae446249095e79  analysis/l10f_sealing_opportunity.txt
+7de61e40c6bdb5d485617d5f3265d15497af77d841a406bb05748da1872f0ede  regression/phase1_profiler.out
+81a35a5a23bd7bbb3052f9d00b5471b56285f27b4af691580b4d5a78bb0e7e98  exploratory/metrics_seql9_3.csv
+83f8f6b0a885e83d339f7aaca9cd890a83a52129968c4475c13fe3ea2504db50  exploratory/metrics_seql9_999983.csv
+849181f5597fc4c6cc0bd461536985946b398650d0ce9f632244f5da43240583  regression/after_test_l10_structural_audit.out
+8561df87f56d3cf3dac8252ed52e167d3cf25d0735fd58fb473e72f6f54fefc7  exploratory/metrics_ccm_1.csv
+87d339dfabdc11baee5499df42b91157787efcf1e14aba8f4bdfd8e84f5647c1  exploratory/trials_provoked_sealON_123456789.csv.gz
+886459ba13bbe8f3fa4028993de89a3e889c433bb2429857915bbc65496e29a6  exploratory/metrics_sealOFF_218213831.csv
+888aedbd4671dc15eeb1584f10444edc1e3b518c4168b95ce4e6521b6e3ae4cd  regression/phase1_reproducibility.out
+8ba32947e29ef4a7d8280bb8b8686d2404660260fd58257e67c66f3cdbc06e0c  exploratory/restart_171473193.csv
+8e61c060861fe77846500705af0e33c54bf0353ee69f6cdad6c87a49a0873e3e  exploratory/metrics_seql9_1.csv
+8f0f000322607aeb687e5bfd563c316c8c6afdd32f0a156f5596b46a9b8552b6  exploratory/metrics_tasks_T4_K3_218213831.csv
+92e2f4fd624c98d435a077c41b6b80591f5b5f3b04867b830a0dfb14144c125f  regression/final_rerun_20261024.txt
+9538ca3fa3e34dd7b82be3537b8fa9b4256abc17ba47671ec68b0a9bc1422942  exploratory/metrics_order_T2_K2_171473193.csv
+96b03bbe4720d3d142cb42e6a928aed409d4323e9070b44533ecc988f641158b  regression/results_after_fix.txt
+97f9a3cccd0f4a455b78200b78110203351eda0ff0e104d0c9e522f9c2758248  exploratory/metrics_ccm_218213831.csv
+97f9a3cccd0f4a455b78200b78110203351eda0ff0e104d0c9e522f9c2758248  exploratory/metrics_sealON_218213831.csv
+97f9a3cccd0f4a455b78200b78110203351eda0ff0e104d0c9e522f9c2758248  harness_frozen/metrics_ccm_218213831.csv
+9aca45192a8eb03467960ea7ddd0e15a67b79908f22e39a6e0d111a1b6d2daf2  regression/after_test_homeostasis.out
+9b0e53fc97e05a4ad425258031f79f9218f46748b6d2faf3410d095cb1ab2b36  regression/after_test_three_factor.out
+9e2a05b65cf1c8247dc9dd91313a609da74377bc0e35d700b75a22ce5e4f678e  exploratory/metrics_ccm_2.csv
+a2a4b16f6305f81c3de6e5b6ae32217ae64334a234e1cf23f2897948299c5b22  reproduction/l9_console.txt
+a8d0d1994da336aba70bf719d3ffccee8219ea7ac081e0a4f2f0297757b0ae20  harness_frozen/trials_ccm_218213831.csv.gz
+ab833632c21c8c68ad7ddebd7cfa848a009300b797a7021a4586ca96932c2a3c  exploratory/metrics_ctxnovel_T3_K3_123456789.csv
+add6647bec5a7c38d7e3d4778d39c7425de8dbe9cefcc67f97f06b4ef72a3998  exploratory/metrics_ctxnovel_T3_K3_171473193.csv
+aec7f3f8f34ae4dd13d4334917bc02d5eef50be5812ea131c415bfff7deda8a7  exploratory/metrics_seql9_218213831.csv
+aec7f3f8f34ae4dd13d4334917bc02d5eef50be5812ea131c415bfff7deda8a7  harness_frozen/metrics_seql9_218213831.csv
+af84cc821e86129d65d95c464e61e17e89cbc1a0fef3030dd6885d8998c3d61d  harness_frozen/trials_ccm_123456789.csv
+b3de3880360fcd245f19dad9cf956356f14da08dd3f79077e47c9a1f540c27ed  regression/phase1_budget.out
+c1b9fb0f76d281edbd74d846df6514874665a7578cdee79cf3108a51b01191bb  exploratory/metrics_ccm_123456789.csv
+c1b9fb0f76d281edbd74d846df6514874665a7578cdee79cf3108a51b01191bb  exploratory/metrics_provoked_sealON_123456789.csv
+c1b9fb0f76d281edbd74d846df6514874665a7578cdee79cf3108a51b01191bb  exploratory/metrics_sealON_123456789.csv
+c1b9fb0f76d281edbd74d846df6514874665a7578cdee79cf3108a51b01191bb  harness_frozen/metrics_ccm_123456789.csv
+c64383ab410f45e6182234de2ff25e23ca0deb0c50d8be05c4ed06e00a637e7a  regression/after_test_eligibility_gating.out
+caaf72e8a33fdd0fc6d5c1adb1d1b4949489761977637a0a8a40fde0856c089c  exploratory/metrics_sealOFF_123456789.csv
+cbc22c82429b7bc2c289247eb13dc860eb51687cb04d1bb51a9c910d6cdf5447  exploratory/metrics_seql9_7.csv
+cc9aba10c5898aa409f43c5ae7c0fb38400bac54a7174d010c2a9e95042db50c  exploratory/metrics_tasks_T6_K6_123456789.csv
+cd1a75859e1257695a101bbe3184661a8c2de249f107fab30c76f9a35d1a61df  exploratory/restart_123456789.csv
+ce13dff5fa894a42e6a6d1468223a68febd4a6e9e06fda4a5f85822542ba08e4  analysis/l10e_context_off_decomposition.txt
+d780fd95691764fc19b973b67845fe3d60fe6908c127edab4e6ffb283b29b847  exploratory/metrics_seql9_42.csv
+daf9dee2723e0f9788872b671591a067842cbe44e77ba38076833b38a091e5eb  regression/after_test_integration.out
+db259b6a43d259772f07132c5384e0190f341c121982535de2f6936b317d96ba  regression/test_phase1_affinity_build_failure.txt
+dc80fe5877e80283241048c275eb61b1e3374bce71933d4f873269ea194345c5  regression/after_test_params.out
+dd9e91d43e83caa4a3100faa7529cfe16110b2653494555c80d02ed3461d72c1  exploratory/metrics_tasks_T6_K6_218213831.csv
+de13d5018919b79ec2c69e2407347143475995fab0dd4a13127a5fa681e587ac  regression/after_test_associative_memory.out
+de940d164aa9ad3f55f707292aaf49c2edfa2a7526ea9589359c20f894fd0f19  exploratory/metrics_tasks_T5_K5_218213831.csv
+e49ea07d25c349efb37d8e1ca6a7122d2d93e0988cfa34c5b655b36912211f8c  exploratory/metrics_ccm_7.csv
+e606d906f99d94cd22ac14f7a37826ec430071025a2459428cce622763347895  regression/after_test_learning_loop.out
+eb0571fe14842b029a053c18c0520e1a85ad9b9cf7382cc8c57581b90c6ee21d  exploratory/metrics_seql9_2.csv
+ec52dfceb94938115dead64ad4ce4f4536f9130dcdc89e70e66cb0f78c1dbdfe  exploratory/metrics_wrongbank_T3_K3_171473193.csv
+f28f95ebea87dc74011d6dce6e988319202cab871f93102830267042cb6cf57e  post_fix/report_after_fix.json
+f788097440988a4039ff424756186f5ebd7b6752f532e851e01d95a2004ec1bd  exploratory/metrics_ccm_171473193.csv
+f788097440988a4039ff424756186f5ebd7b6752f532e851e01d95a2004ec1bd  exploratory/metrics_provoked_sealON_171473193.csv
+f788097440988a4039ff424756186f5ebd7b6752f532e851e01d95a2004ec1bd  exploratory/metrics_sealON_171473193.csv
+f788097440988a4039ff424756186f5ebd7b6752f532e851e01d95a2004ec1bd  harness_frozen/metrics_ccm_171473193.csv
+f8c806e8baad29edc3657e09cce663574e1ba0a2baae8bc45a193f772941a34e  regression/after_test_learned_relevance.out
+f92e8a3822522abeb177eb9b0557b65a183e6331183ecfe8dfdf1cf5d51af4ab  exploratory/metrics_wrongbank_T3_K3_218213831.csv
+fb579776127c65bbf19d0730b207943c64c741dfc7b2cfddd3a60a91c7166384  exploratory/metrics_wrongbank_T3_K3_123456789.csv
+```
+
+## sha256 of the deliverables and changed sources
+
+```
+ae778505e72d5d1c2cf10590cd98c8abb52a02406a571a4cd30ec49f67639ce1  work/L10_INDEPENDENT_VALIDATION.md
+52daf146cc1e4ee6f82694a8bd576261df865a1552a6de83671ddf04909a1b62  work/L10_INDEPENDENT_VALIDATION.json
+9ea2324be1a9017de60631289f1ba36d988142534cc5e2ce704cf7c53a8362a6  work/l10_raw/check_report_integrity.py
+c20566b0a40a9e2d5e379b6d1a2e6dec11e61075b8cd30e4c83b777d927b5047  stark/src/learning/l10_validation_harness.cpp
+544c57d4439162293cbebc5888dbe1199c3797f32d690b35a86bd3804a86ec5b  stark/tests/test_l10_structural_audit.cpp
+8666404127490cbbbd0076af09e486ee147a16c1a47c994a2d9ac1efa6453dd8  stark/src/learning/context_conditioned_memory_loop.cpp
+99d895bc6ffa1990b044a814db3c105d7c98e0c8bb647c35b2253527dbfaf413  stark/CMakeLists.txt
+```

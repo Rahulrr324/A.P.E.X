@@ -1,0 +1,99 @@
+=== STARK-003 Network Tests ===
+
+Test 1: Single neuron with external input
+  ✓   Neuron count = 1 PASSED
+  ✓   Synapse count = 0 PASSED
+  ✓   Initial timestep = 0 PASSED
+  ✓   Timestep advanced to 1 PASSED
+  ✓   Neuron V changed PASSED
+  ✓   Neuron spiked with strong input PASSED
+    Spikes in 30 steps: 3
+
+Test 2: A -> B excitatory propagation
+  ✓   Neuron count = 2 PASSED
+  ✓   Synapse count = 1 PASSED
+  ✓   Connection exists PASSED
+  ✓   No reverse connection PASSED
+  ✓   A spiked multiple times PASSED
+  ✓   B spiked from synaptic input PASSED
+    A spikes: 5, B spikes: 2
+
+Test 3: A -> B inhibitory connection
+  ✓   Synapse weight is negative PASSED
+  ✓   B was depolarized at some point PASSED
+
+Test 4: Multiple synapses converging on one neuron
+  ✓   B has 2 incoming synapses PASSED
+  ✓   A has 1 outgoing synapse PASSED
+  ✓   C has 1 outgoing synapse PASSED
+  ✓   B spiked from convergent input PASSED
+    B spikes from 2 inputs: 3
+
+Test 5: One neuron -> multiple targets (divergence)
+  ✓   A has 2 outgoing synapses PASSED
+  ✓   B spiked from A PASSED
+  ✓   C spiked from A PASSED
+    B spikes: 2, C spikes: 2
+
+Test 6: Network reset
+  ✓   Timestep > 0 before reset PASSED
+  ✓   Neuron state changed PASSED
+  ✓   Timestep = 0 after reset PASSED
+  ✓   Neuron A V = v_reset PASSED
+  ✓   Neuron A theta = theta_0 PASSED
+  ✓   Synapse state = 0 PASSED
+
+Test 7: Deterministic repeated execution
+  ✓   Two identical runs produce identical spikes PASSED
+
+Test 8: STARK-001/002 regression (primitives unchanged)
+  ✓   NeuralCell still spikes correctly PASSED
+  ✓   NeuralCell V = v_reset after spike PASSED
+  ✓   Synapse still produces correct current PASSED
+
+Test 9: Invalid neuron/synapse references
+  ✓   Invalid neuron ID throws PASSED
+  ✓   Invalid synapse ID throws PASSED
+  ✓   addSynapse with invalid post throws PASSED
+  ✓   setExternalInput with invalid ID throws PASSED
+
+Test 10: Non-finite input / invalid timestep
+  ✓   NaN external input rejected PASSED
+  ✓   Infinity external input rejected PASSED
+  ✓   dt=0 rejected PASSED
+  ✓   Negative dt rejected PASSED
+  ✓   dt > tau_m rejected PASSED
+  ✓   validateDt(0.1) = true PASSED
+  ✓   validateDt(0.0) = false PASSED
+  ✓   validateDt(2.0) = false PASSED
+
+Test 11: Transmission delays
+  ✓   Synapse delay = 3 PASSED
+  ✓   A spiked PASSED
+  ✓   B spiked (after delay) PASSED
+  ✓   B spike delayed relative to A PASSED
+    A first spike at step 5, B first spike at step 16, observed delay: 11 steps
+
+Test 12: Structured connectivity builders
+  ✓   All-to-all: 5 neurons -> 20 synapses PASSED
+  ✓   Local radius=1: 5 neurons -> 8 synapses PASSED
+  ✓   Random sparse creates some synapses PASSED
+  ✓   Random sparse not too dense PASSED
+    Random sparse (p=0.3): 29 synapses
+
+Test 13: Disconnected neurons don't receive input
+  ✓   Disconnected neuron C never spikes PASSED
+  ✓   Disconnected neuron C V near 0 (leak equilibrium) PASSED
+
+Test 14: Empty network handling
+  ✓   Empty network has 0 neurons PASSED
+  ✓   Empty network has 0 synapses PASSED
+  ✓   Empty network step doesn't crash PASSED
+
+Test 15: Synaptic current sign verification
+  ✓   Excitatory weight > 0 PASSED
+  ✓   Inhibitory weight < 0 PASSED
+
+========================================
+Network Tests: 58 passed, 0 failed
+========================================

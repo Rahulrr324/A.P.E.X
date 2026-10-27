@@ -1,0 +1,396 @@
+{
+  "artifact": "STARK-L10.2 specification ratification and frozen protocol v1.1",
+  "date": "2026-10-24",
+  "provenance": {
+    "repository": "https://github.com/Rahulrr324/A.P.E.X.git",
+    "starting_branch": "validation/l10-1-control-repair",
+    "starting_sha": "127574506947d9fb193664868227665d47478252",
+    "branch": "validation/l10-2-spec-ratification",
+    "registration_commit": "2fa3100",
+    "decision_commit": "f935f07",
+    "l10_milestone_commit": "49cc6ba18650c0d9614bb9e8918fe65453ec5a02",
+    "pull_requests": {
+      "2": {
+        "state": "OPEN",
+        "merged": false,
+        "head_sha": "5f5a57717509623bd4c79460d50c05f7cbc605c3",
+        "touched": false
+      },
+      "3": {
+        "state": "OPEN",
+        "merged": false,
+        "head_sha": "49cc6ba18650c0d9614bb9e8918fe65453ec5a02",
+        "touched": false
+      }
+    },
+    "new_pr_created": false,
+    "prior_evidence_verified": {
+      "l10_1_manifest_entries": 275,
+      "mismatches": 0,
+      "frozen_l10_artifacts": {
+        "final_run": "b38736bb8a2a4574e6226f192a617627",
+        "determinism": "17beb41e342fa268d7a6efa47512df08",
+        "l9": "a00b62b330bf231fdecf2b4991ec44fa"
+      }
+    }
+  },
+  "specification_authority": {
+    "source": "stark/design/context_conditioned_memory_milestone.md section 8 (Frozen success criteria)",
+    "delegation_clause_present": false,
+    "authority": "repository owner (Rahulrr324)",
+    "decision_mechanism": "Owner Decision Record under stark/reports/",
+    "agent_approved_amendments": false,
+    "decision": {
+      "date": "2026-10-24",
+      "answer": "Ratify A-1 and A-3 only",
+      "record": "stark/reports/L10_2_OWNER_DECISION.md",
+      "A-1": "RATIFIED",
+      "A-2": "NOT RATIFIED",
+      "A-3": "RATIFIED"
+    }
+  },
+  "protocol": {
+    "path": "stark/design/l10_2_protocol_v1_1.md",
+    "version": "v1.1.1",
+    "sha256_at_registration": "e753d3fbd9ffa81c7a757cdcdbf71c6bd2d2e104d685d2901e14f593134c6cd5",
+    "sha256_at_decision": "a514703c39d368ad50e8c5e6c48b2dc710d04b2df59ecf7f93b84cb7d179870c",
+    "hash_fixed_before_any_run": true,
+    "post_registration_change": "v1.1.1 editorial only (artifact directory date label); no arm, metric, threshold, seed or rule changed",
+    "official_evaluation_authorized": "partial: L10-F2, L10-G2, L10-R1, L10-S1",
+    "context_diagnostics_status": "provisional (A-2 not ratified)"
+  },
+  "amendments": {
+    "A-1": {
+      "scope": "L10-F",
+      "status": "RATIFIED",
+      "new_criterion": "L10-F2",
+      "thresholds_declared_before_run": [
+        0.1,
+        0.1
+      ]
+    },
+    "A-2": {
+      "scope": "L10-E",
+      "status": "NOT RATIFIED",
+      "new_criterion": null
+    },
+    "A-3": {
+      "scope": "controls",
+      "status": "RATIFIED",
+      "new_criteria": [
+        "L10-G2"
+      ],
+      "informational": [
+        "L10-R1",
+        "L10-S1"
+      ]
+    }
+  },
+  "seeds": {
+    "primary": [
+      123456789,
+      218213831,
+      171473193
+    ],
+    "exploratory": [
+      1,
+      2,
+      7,
+      42
+    ]
+  },
+  "results": {
+    "R0_CCM_reference": {
+      "min_acquisition": 1.0,
+      "final_avg": 1.0,
+      "mean_forgetting": 0.0
+    },
+    "R1_SEAL_PAIR_240": {
+      "per_seed": {
+        "123456789": {
+          "sealed_forgetting": 0.0,
+          "unsealed_forgetting": 0.336111,
+          "opportunities": 51,
+          "blocked": 51,
+          "executed_unsealed": 50,
+          "mass_into_sealed_arm": 0.0,
+          "mass_non_active_unsealed_arm": 7.79
+        },
+        "171473193": {
+          "sealed_forgetting": 0.0,
+          "unsealed_forgetting": 0.488889,
+          "opportunities": 67,
+          "blocked": 67,
+          "executed_unsealed": 67,
+          "mass_into_sealed_arm": 0.0,
+          "mass_non_active_unsealed_arm": 11.437
+        },
+        "218213831": {
+          "sealed_forgetting": 0.0,
+          "unsealed_forgetting": 0.527778,
+          "opportunities": 67,
+          "blocked": 67,
+          "executed_unsealed": 67,
+          "mass_into_sealed_arm": 0.0,
+          "mass_non_active_unsealed_arm": 11.131
+        }
+      },
+      "pooled": {
+        "sealed_forgetting": 0.0,
+        "unsealed_forgetting": 0.450926,
+        "opportunities": 185,
+        "blocked": 185,
+        "executed": 184
+      },
+      "conditions": {
+        "F2.1_opportunities_gt_0": true,
+        "F2.2_sealed_le_0.10": true,
+        "F2.3_unsealed_ge_sealed_plus_0.10": true,
+        "F2.4_no_write_to_sealed": true
+      },
+      "L10-F2": "PASS"
+    },
+    "R2_SEAL_PAIR_60": {
+      "sealed_forgetting": 0.0,
+      "unsealed_forgetting": 0.533333,
+      "opportunities": 345,
+      "blocked": 345,
+      "executed_unsealed": 342,
+      "status": "sensitivity, direction only"
+    },
+    "R3_SEAL_STRESS": {
+      "sealed": {
+        "final_avg": 0.519444,
+        "forgetting": 0.480556
+      },
+      "unsealed": {
+        "final_avg": 0.436111,
+        "forgetting": 0.563889
+      },
+      "status": "informational L10-S1, no criterion"
+    },
+    "R1_exploratory_seeds": {
+      "sealed": {
+        "forgetting": 0.0,
+        "final": 0.997917
+      },
+      "unsealed": {
+        "forgetting": 0.445833,
+        "final": 0.552083
+      },
+      "status": "no criterion"
+    },
+    "R4_CONTEXT_OFF": {
+      "pooled_measured": 0.425926,
+      "pooled_analytic": 0.425926,
+      "excess": 7.41e-08,
+      "per_seed": {
+        "123456789": {
+          "per_task": [
+            1.0,
+            0.166667,
+            0.333333
+          ],
+          "pooled": 0.5
+        },
+        "171473193": {
+          "per_task": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "pooled": 0.333333
+        },
+        "218213831": {
+          "per_task": [
+            1.0,
+            0.166667,
+            0.166667
+          ],
+          "pooled": 0.444445
+        }
+      },
+      "margins_per_seed": {
+        "123456789": [
+          0.0,
+          0.833333,
+          0.666667
+        ],
+        "171473193": [
+          0.0,
+          1.0,
+          1.0
+        ],
+        "218213831": [
+          0.0,
+          0.833333,
+          0.833333
+        ]
+      },
+      "status": "provisional diagnostic (A-2 not ratified)"
+    },
+    "R5_CTX_SWEEP": {
+      "diagonal_per_seed": {
+        "123456789": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "171473193": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "218213831": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "note": "forced-bank memory measurement; NOT context-off performance",
+      "status": "provisional diagnostic"
+    },
+    "R6_K2_CAPACITY": {
+      "K": 2,
+      "sealing": "on",
+      "reuse_unseals": false,
+      "final_avg": 0.636111,
+      "mean_forgetting": 0.271296,
+      "reference_CCM": {
+        "final_avg": 1.0,
+        "mean_forgetting": 0.0
+      },
+      "L10-G2": "PASS"
+    },
+    "R7_FROZEN_ROUTER": {
+      "per_seed_task_accuracy": {
+        "123456789": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "171473193": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "218213831": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "routing_accuracy_pooled": 0.333333,
+      "accuracy_given_correct_bank": 1.0,
+      "accuracy_given_wrong_bank": 0.138889,
+      "fallback_bank": 0,
+      "fallback_share_per_task": 1.0,
+      "status": "informational L10-R1, no criterion"
+    }
+  },
+  "criteria_disposition": {
+    "L10-A": "PASS",
+    "L10-B": "PASS",
+    "L10-C": "PASS",
+    "L10-D": "PASS",
+    "L10-E": {
+      "status": "FAILED",
+      "value": 0.425926,
+      "threshold": 0.4,
+      "version": "v1.0",
+      "changed": false
+    },
+    "L10-E2": "PASS (unchanged supplement)",
+    "L10-E3a": {
+      "status": "provisional_pass",
+      "value": 7.4e-08,
+      "threshold": 0.02
+    },
+    "L10-E3b": {
+      "status": "provisional_pass",
+      "per_seed": "2 of 3 tasks each seed",
+      "threshold": 0.6
+    },
+    "L10-E3c": {
+      "status": "provisional_pass",
+      "value": 1.0,
+      "threshold": 0.99
+    },
+    "L10-F": {
+      "status": "FAILED",
+      "version": "v1.0",
+      "changed": false,
+      "reason": "zero sealing opportunities by construction"
+    },
+    "L10-F2": {
+      "status": "PASS",
+      "version": "v1.1",
+      "ratified": true
+    },
+    "L10-G": "PASS (historical, confounded arm)",
+    "L10-G2": {
+      "status": "PASS",
+      "version": "v1.1",
+      "ratified": true
+    },
+    "L10-H": "PASS",
+    "L10-I": "no new failures",
+    "L10-J": "reported honestly",
+    "L10-R1": "reported (no criterion)",
+    "L10-S1": "reported (no criterion)"
+  },
+  "tests": {
+    "cwd": "stark/",
+    "compiler": "g++ 12.2.0 -O2 -std=c++17",
+    "targets_built": 26,
+    "all_exit_zero": true,
+    "assertions": {
+      "test_context_conditioned_memory": 330,
+      "test_l10_structural_audit": 357,
+      "test_l10_1_sealing": 276,
+      "test_phase1_profiler": 34,
+      "test_phase1_accounting": 67,
+      "test_phase1_budget": 55,
+      "test_phase1_records": 72,
+      "test_phase1_reproducibility": 37,
+      "test_phase1_gates": 437
+    },
+    "not_executed": [
+      {
+        "target": "test_phase1_affinity",
+        "reason": "DWORD_PTR not declared (Win32-only)",
+        "status": "UNKNOWN"
+      }
+    ],
+    "new_failures": 0,
+    "determinism": {
+      "repetition": "rep2",
+      "result": "byte-identical for R0, R1 both arms, R5"
+    },
+    "independent_recomputation": {
+      "tool": "analysis/recompute.py",
+      "inputs": "per-trial rows only",
+      "groups_checked": 11,
+      "task_rows": 81,
+      "result": "ALL MATCH"
+    },
+    "checkpoint_resume": {
+      "seeds": [
+        123456789,
+        218213831,
+        171473193
+      ],
+      "final_retention_and_bankmap_match": true
+    }
+  },
+  "evidence_dir": "work/l10_raw/spec_ratification_20261024",
+  "blockers": [
+    "A-2 not ratified: L10-E remains unsatisfiable under v1.0 and failed"
+  ],
+  "progress_estimate": {
+    "previous": 0.5,
+    "current": 0.5,
+    "rationale": "one untestable criterion became testable and two control confounds were removed; no capability added; L10-E still fails"
+  },
+  "recommended_next": "L10.3: settle L10-E (ratify a context criterion or close the milestone with a documented permanent failure). Do not start L11."
+}

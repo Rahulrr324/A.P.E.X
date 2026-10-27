@@ -1,0 +1,874 @@
+{
+  "schema_version": 1,
+  "source_base": "371d06f16236204cc20af539f34bbdd643fc5c31",
+  "description": "Reviewed compiler-only target manifest; CMakeLists.txt remains authoritative. Includes production CLIs for compilation, never automatic execution.",
+  "targets": [
+    {
+      "name": "stark_002",
+      "sources": [
+        "src/main.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_neuron",
+      "sources": [
+        "src/test_neuron.cpp",
+        "src/neural/NeuralCell.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_params",
+      "sources": [
+        "src/test_params.cpp",
+        "src/neural/NeuralCell.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_synapse",
+      "sources": [
+        "src/test_synapse.cpp",
+        "src/neural/Synapse.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_integration",
+      "sources": [
+        "src/test_integration.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "network_demo",
+      "sources": [
+        "src/network_demo.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_stdp",
+      "sources": [
+        "tests/test_stdp.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "stdp_demo",
+      "sources": [
+        "tests/examples/stdp_demo.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_homeostasis",
+      "sources": [
+        "tests/test_homeostasis.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "homeostasis_demo",
+      "sources": [
+        "tests/examples/homeostasis_demo.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_network",
+      "sources": [
+        "src/test_network.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_three_factor",
+      "sources": [
+        "tests/test_three_factor.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "three_factor_demo",
+      "sources": [
+        "tests/examples/three_factor_demo.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_serialization",
+      "sources": [
+        "tests/test_serialization.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp",
+        "src/experiment/Recorder.cpp",
+        "src/experiment/Experiment.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "serialization_demo",
+      "sources": [
+        "tests/examples/serialization_demo.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp",
+        "src/experiment/Recorder.cpp",
+        "src/experiment/Experiment.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "learning_loop",
+      "sources": [
+        "src/learning/learning_loop.cpp",
+        "src/learning/ToyAssociationTask.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_learning_loop",
+      "sources": [
+        "tests/test_learning_loop.cpp",
+        "src/learning/ToyAssociationTask.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "delayed_reward_loop",
+      "sources": [
+        "src/learning/delayed_reward_loop.cpp",
+        "src/learning/ToyAssociationTask.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_delayed_reward",
+      "sources": [
+        "tests/test_delayed_reward.cpp",
+        "src/learning/ToyAssociationTask.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "sequential_context_loop",
+      "sources": [
+        "src/learning/sequential_context_loop.cpp",
+        "src/learning/ToyAssociationTask.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_sequential_context",
+      "sources": [
+        "tests/test_sequential_context.cpp",
+        "src/learning/ToyAssociationTask.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "associative_memory_loop",
+      "sources": [
+        "src/learning/associative_memory_loop.cpp",
+        "src/learning/AssociativeMemoryTask.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_associative_memory",
+      "sources": [
+        "tests/test_associative_memory.cpp",
+        "src/learning/AssociativeMemoryTask.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "eligibility_gating_loop",
+      "sources": [
+        "src/learning/eligibility_gating_loop.cpp",
+        "src/learning/AssociativeMemoryTask.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_eligibility_gating",
+      "sources": [
+        "tests/test_eligibility_gating.cpp",
+        "src/learning/AssociativeMemoryTask.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "learned_relevance_loop",
+      "sources": [
+        "src/learning/learned_relevance_loop.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_learned_relevance",
+      "sources": [
+        "tests/test_learned_relevance.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "n_way_learned_relevance_loop",
+      "sources": [
+        "src/learning/n_way_learned_relevance_loop.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_n_way_learned_relevance",
+      "sources": [
+        "tests/test_n_way_learned_relevance.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "n_way_learned_relevance_loop_L8",
+      "sources": [
+        "src/learning/n_way_learned_relevance_loop_L8.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "continual_learning_loop",
+      "sources": [
+        "src/learning/continual_learning_loop.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "context_conditioned_memory_loop",
+      "sources": [
+        "src/learning/context_conditioned_memory_loop.cpp",
+        "src/learning/ContextConditionedMemory.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_context_conditioned_memory",
+      "sources": [
+        "tests/test_context_conditioned_memory.cpp",
+        "src/learning/ContextConditionedMemory.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_l10_structural_audit",
+      "sources": [
+        "tests/test_l10_structural_audit.cpp",
+        "src/learning/ContextConditionedMemory.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "l10_validation_harness",
+      "sources": [
+        "src/learning/l10_validation_harness.cpp",
+        "src/learning/ContextConditionedMemory.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_l10_1_sealing",
+      "sources": [
+        "tests/test_l10_1_sealing.cpp",
+        "src/learning/ContextConditionedMemory.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_l11_cue_constructor",
+      "sources": [
+        "tests/test_l11_cue_constructor.cpp",
+        "src/learning/L11CueConstruction.cpp",
+        "src/learning/ContextConditionedMemory.cpp",
+        "src/learning/RelevanceRouting.cpp",
+        "src/neural/NeuralCell.cpp",
+        "src/neural/Synapse.cpp",
+        "src/neural/Network.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "profiler_cli",
+      "sources": [
+        "src/phase1/profiler_cli.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "run_baseline",
+      "sources": [
+        "src/phase1/baselines/run_baseline.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "aggregate",
+      "sources": [
+        "src/phase1/aggregate.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "g7_campaign",
+      "sources": [
+        "src/phase1/campaign/G7Campaign.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "test_phase1_profiler",
+      "sources": [
+        "tests/test_phase1_profiler.cpp",
+        "tests/test_main.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "test_phase1_accounting",
+      "sources": [
+        "tests/test_phase1_accounting.cpp",
+        "tests/test_main.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "test_phase1_budget",
+      "sources": [
+        "tests/test_phase1_budget.cpp",
+        "tests/test_main.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "test_phase1_records",
+      "sources": [
+        "tests/test_phase1_records.cpp",
+        "tests/test_main.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "test_phase1_reproducibility",
+      "sources": [
+        "tests/test_phase1_reproducibility.cpp",
+        "tests/test_main.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "test_phase1_gates",
+      "sources": [
+        "tests/test_phase1_gates.cpp",
+        "tests/test_main.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "test_phase1_affinity",
+      "sources": [
+        "tests/test_phase1_affinity.cpp",
+        "tests/test_main.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": true,
+      "windows_only": true,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "test_windows_affinity_diag",
+      "sources": [
+        "tests/test_windows_affinity_diag.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": false,
+      "windows_only": true,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "test_production_affinity_evidence",
+      "sources": [
+        "tests/test_production_affinity_evidence.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": false,
+      "windows_only": true,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "diag_frequency_evidence",
+      "sources": [
+        "tests/diag_frequency_evidence.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": false,
+      "windows_only": true,
+      "windows_libraries": [
+        "pdh",
+        "powrprof",
+        "psapi"
+      ]
+    },
+    {
+      "name": "power_scheme_control",
+      "sources": [
+        "tests/power_scheme_control.cpp"
+      ],
+      "test": false,
+      "windows_only": true,
+      "windows_libraries": [
+        "powrprof"
+      ]
+    },
+    {
+      "name": "diag_highres_frequency",
+      "sources": [
+        "tests/diag_highres_frequency.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": false,
+      "windows_only": true,
+      "windows_libraries": [
+        "pdh",
+        "psapi"
+      ]
+    },
+    {
+      "name": "bm_b7_diagnostic",
+      "sources": [
+        "src/phase1/diagnostics/bm_b7_diagnostic.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/common/ExperimentRecord.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": []
+    },
+    {
+      "name": "test_phase1_helper_equivalence",
+      "sources": [
+        "tests/test_phase1_helper_equivalence.cpp",
+        "tests/test_main.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "test_phase1_store_safety",
+      "sources": [
+        "tests/test_phase1_store_safety.cpp",
+        "tests/test_main.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ],
+      "threaded": true
+    },
+    {
+      "name": "test_phase1_json_codec",
+      "sources": [
+        "tests/test_phase1_json_codec.cpp",
+        "tests/test_main.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": true,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    },
+    {
+      "name": "record_inspector",
+      "sources": [
+        "src/phase1/record_inspector.cpp",
+        "src/phase1/common/ExperimentRecord.cpp",
+        "src/phase1/common/HardwareProfiler.cpp",
+        "src/phase1/common/HardwareAffinity.cpp",
+        "src/phase1/bench/BudgetLedger.cpp",
+        "src/phase1/bench/ParameterAccounting.cpp",
+        "src/phase1/bench/BenchmarkHarness.cpp",
+        "src/phase1/bench/TinyDenseModel.cpp",
+        "src/phase1/gates.cpp"
+      ],
+      "test": false,
+      "windows_only": false,
+      "windows_libraries": [
+        "psapi"
+      ]
+    }
+  ]
+}

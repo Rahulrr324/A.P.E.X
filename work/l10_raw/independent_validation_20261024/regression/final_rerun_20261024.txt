@@ -1,0 +1,29 @@
+Final re-run of the affected artifacts from the validation working tree (branch validation/l10-independent)
+host: Linux x86_64, g++ 12.2.0, cwd for builds: stark/, run dir: /home/user/apex_val/final_check
+
+build: ccm / t_ccm / t_audit / harness -> exit 0 (all four)
+
+L10 frozen evaluation (8 arms x 3 seeds): exit 0
+  normalized sha256 (env/seconds removed) = fe76eb2a7a626be5714fa3c48a3943f56b2b4284a5fd911065586c6e2628787d
+  (= the fixed build; the pre-fix build's normalized hash is 5554710d..., the frozen artifact's)
+  criteria block unchanged: L10-A..L10-J identical to the frozen report; L10-E FAIL, L10-F FAIL
+
+test_context_conditioned_memory : PASS (330 assertions), exit 0
+test_l10_structural_audit       : PASS (357 assertions), exit 0
+  synapse classes: A->A=108 C->L=4 S->A=108 c->R=36 ; cross-bank = 0
+
+l10_validation_harness --mode frozen (3 seeds, 3 tasks, 3 banks): exit 0
+  metrics_ccm_123456789.csv : byte-identical to harness_frozen/
+  metrics_ccm_171473193.csv : byte-identical to harness_frozen/
+  metrics_ccm_218213831.csv : byte-identical to harness_frozen/
+  metrics_seql9_123456789.csv : byte-identical to harness_frozen/
+  metrics_seql9_171473193.csv : byte-identical to harness_frozen/
+  metrics_seql9_218213831.csv : byte-identical to harness_frozen/
+
+check_report_integrity.py on the fixed report    : exit 0 (OK)
+check_report_integrity.py on the frozen pre-fix  : exit 1 (INCONSISTENT, 8 arms lack the flag) -> defect reproduced
+
+Frozen artifacts re-checked, unmodified:
+b38736bb8a2a4574e6226f192a617627  work/l10_raw/final_run/report_raw.json
+17beb41e342fa268d7a6efa47512df08  work/l10_raw/determinism/report_rerun.json
+a00b62b330bf231fdecf2b4991ec44fa  work/l10_raw/l9_reproduction/report_reproduced.json

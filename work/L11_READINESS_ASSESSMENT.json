@@ -1,0 +1,158 @@
+{
+  "artifact": "STARK-L11-READINESS-ASSESSMENT",
+  "task": "STARK-L10.6",
+  "date": "2026-10-24",
+  "status": "assessment_and_proposal_only",
+  "authorises_nothing": true,
+  "no_experiment_run": true,
+  "no_source_changed": true,
+  "verdict": "READY WITH PREREQUISITES",
+  "prerequisites": [
+    {"id": "P1", "name": "L11 acceptance specification v1.0 with owner-ratified thresholds, frozen before any official run", "blocking": true, "reason": "no L11 specification exists in the repository"},
+    {"id": "P2", "name": "trial-granular instrumentation for novel/mixed-cue arms", "blocking": true, "reason": "forced-bank sweeps store aggregate-only rows; ambiguous-cue decisions would be unobservable"},
+    {"id": "P3", "name": "declare composition semantics (rule) in the protocol text", "blocking": true, "reason": "without a declared rule, mixed-cue results are unfalsifiable"},
+    {"id": "P4", "name": "port or formally exclude test_phase1_affinity", "blocking": true, "reason": "Windows-only DWORD_PTR; currently neither pass nor fail"}
+  ],
+  "carried_limitations": [
+    "L10.4 one-trial anomaly unresolved; the context-ignoring null has a known sub-0.001 uncertainty"
+  ],
+  "dimensions": {
+    "specification_readiness": {
+      "rating": "adequate, needs one new document",
+      "l10_quality": "strong: frozen criteria, revision log, owner decisions, additive diffs verified",
+      "l11_specification_exists": false,
+      "risk": "ungoverned thresholds if work starts before a spec is frozen"
+    },
+    "reproducibility_readiness": {
+      "rating": "strong",
+      "manifests_verified": {"L10.1": 275, "L10.2": 275, "L10.3": 245, "L10.4_evidence": 124, "L10.4_full": 129, "L10.5": 10},
+      "discrepancies_explained_by_git_history": true,
+      "byte_identity_check": "6/6",
+      "determinism_verified_by": "L10-H",
+      "protocol_hashes_frozen_before_runs": true,
+      "known_friction": ["no cmake in this environment; explicit g++ -O2 -std=c++17 -Isrc", "harness --mode restart writes to cwd; per-seed --out required"]
+    },
+    "architectural_readiness": {
+      "rating": "sufficient, with one real gap",
+      "observable_api": ["ccPreferredBank", "ccRouterWeights", "ccBankWeights", "ccAllocateNext", "ccActiveBank", "ccSerialize", "ccDeserialize"],
+      "context_lever_levels": 1,
+      "context_lever_scope": "bank selection only; no within-bank or feature-level modulation",
+      "gap": "no representation for a cue that is partially task A and partially task B"
+    },
+    "learning_memory_limits": {
+      "routing_at_ceiling": true,
+      "cra_pooled": 0.6667,
+      "diagonal_accuracy": 1.0,
+      "capacity_binding_only_under_scarcity": true,
+      "bank_scarcity_k2_t3": {"final": 0.6361, "forgetting": 0.2713},
+      "adequate_banks": {"T4K4": 0.9993, "T5K5": 0.9989, "T8K8": 0.992},
+      "forgetting_tested_regime": 0.0,
+      "sealing_load_bearing": true,
+      "within_bank_context_modulation": "absent (structural)",
+      "cross_signature_weakness": {"pooled": 0.5611, "minimum": 0.0, "task_order_dependent": true}
+    },
+    "regression_readiness": {
+      "rating": "inherited, not re-executed, with one hole",
+      "inherited_battery": "26/26 from L10.4",
+      "re_executed_in_l10_6": false,
+      "holes": ["test_context_conditioned_memory.cpp has 2 assertions", "test_phase1_affinity unexecuted (Windows-only)"],
+      "implication": "an L11 that changes routing must ship behavioural tests"
+    },
+    "implementation_readiness": {
+      "rating": "ready",
+      "committed_targets": ["context_conditioned_memory_loop", "test_context_conditioned_memory", "test_l10_structural_audit", "l10_validation_harness", "test_l10_1_sealing"],
+      "work_needed": "instrumentation and a new protocol, not build infrastructure"
+    },
+    "acceptance_design_readiness": {
+      "rating": "ready with named discipline",
+      "template": "separately registered criterion, analytically defined metric, measured null, per-seed plus pooled reporting, explicit what-a-PASS-does-not-mean",
+      "lessons_carried": [
+        "define metrics against a measured null, not an absolute accuracy floor (L10-E is floored at ~1/3 by the task draw; perfect router passes only 15.12% of the time)",
+        "make rare deviations observable rather than explained away"
+      ]
+    }
+  },
+  "rejected_candidates": {
+    "more_capacity_or_banks": "capacity already at ceiling with zero forgetting",
+    "within_bank_context_modulation": "genuine gap but requires a new mechanism; needs a scoping study first",
+    "longer_horizons_or_scale_up": "cannot be evaluated honestly before the composition gap is characterised"
+  },
+  "proposal": {
+    "milestone": "STARK-L11",
+    "title": "Cross-Signature Compositional Generalization",
+    "label": "PROPOSED",
+    "capability": "when a cue mixes features of more than one learned signature, resolve it deterministically and consistently with a declared rule, and preserve correct within-bank readout from the resolved bank",
+    "architectural_justification": "context acts at exactly one level (cue -> bank); a mixed cue leaves the router's argmax undefined, which is what L10.3 measured (0.5611 pooled, 0.0 minimum, task-order dependent)",
+    "minimum_viable_scope": {
+      "tasks": 3,
+      "banks": 3,
+      "seeds": "3 primary + 4 exploratory, two held out from tuning",
+      "cue_arms": ["pure signature", "2-signature mixture (balanced and 2:1)", "unseen novel 3-feature combination", "single-feature partial cue"],
+      "new_learning_algorithm": false,
+      "phase_1": "measurement only; phase 2 mechanism only if a specific deficit is identified in a separate specification",
+      "declared_rule": "R-majority: bank whose task signature shares the most features wins; ties -> lowest bank index"
+    },
+    "metrics": {
+      "Comp(t)": "fraction of mixed-cue trials whose resolved bank equals the R-majority prediction",
+      "MixAcc(t)": "accuracy on mixed-cue trials",
+      "Null(t)": "mean accuracy over forced-bank trials with cue removed (measured null, as L10-K1)",
+      "Read(t)": "readout accuracy restricted to trials where the resolved bank was correct"
+    },
+    "baselines_controls_ablations_holdouts": {
+      "baselines": ["correct-cue ceiling", "shuffled-cue floor", "random-bank floor", "non-learned R-majority reference implementation"],
+      "controls": ["forced-bank null with cue removed", "bank-scarcity K=2/T=3 capacity control", "identical-seed rerun determinism control"],
+      "ablations": ["one feature dropped", "K=2 and K=6", "balanced vs unbalanced mixture", "router frozen vs plastic"],
+      "held_out": ["novel cue combinations never trained on", "two held-out seeds", "held-out task ordering"]
+    },
+    "requirements": {
+      "determinism": "two full reruns byte-identical across all seeds",
+      "persistence": "checkpoint save/resume exact per L10-H method",
+      "regression": "26/26 with zero new failures; test_phase1_affinity resolved or formally excluded; L10 criteria unchanged and not reinterpreted",
+      "provenance": "every artifact manifested and hashed at creation; no post-hoc repair"
+    },
+    "fixed_pass_fail_proposed_requires_owner_ratification": {
+      "L11-A": "Comp(t) >= 0.90 on every task on every seed",
+      "L11-B": "MixAcc(t) - Null(t) >= 0.50 on at least two of three tasks on every seed",
+      "L11-C": "MixAcc pooled >= 0.75 and no seed/task cell below 0.50",
+      "L11-D": "Read(t) >= 0.90 on every task",
+      "L11-E": "reruns byte-identical; checkpoint resume exact",
+      "L11-F": "regression: no new failures vs L10 baseline"
+    },
+    "genuine_failure_definitions": [
+      "a criterion missed under frozen thresholds with the protocol as written",
+      "Comp high but MixAcc low -> retrieval failure",
+      "Comp low but MixAcc high -> specification failure (the rule was wrong, not the model)",
+      "held-out seed failing while training seeds pass -> generalization failure, reported not averaged away"
+    ],
+    "redesign_triggers_not_threshold_adjustment": [
+      "Comp < 0.60 on a majority of seeds -> single-level router cannot express composition; add compositional cue representation or two-stage routing",
+      "Read fails while Comp passes -> composition is disturbing within-bank retrieval",
+      "held-out seeds fail systematically -> evaluation split is doing the work"
+    ],
+    "threshold_adjustment_policy": "never a response to a miss; only via a new versioned specification with an owner decision published before revised-threshold evidence exists, preserving the original threshold and result; structural inability to measure requires a new separate criterion"
+  },
+  "anomaly_diagnostic": {
+    "proposal_file": "work/L10_6_PROPOSED_channel_slot_diagnostic.md",
+    "status": "PROPOSED / NOT EXECUTED",
+    "separate_from_l11": true,
+    "prerequisite_for_l11": false,
+    "if_run_should_precede_l11_official_evaluation": true,
+    "if_never_run": "L11 specification must state the null carries a quantified sub-0.001 uncertainty"
+  },
+  "execution_sequence": [
+    "P4: port or record exclusion of test_phase1_affinity",
+    "P2: add opt-in per-trial instrumentation (default off), verified by rerunning the L10 K1 arm and confirming byte-identical aggregate CSVs",
+    "P1/P3: write and freeze L11 protocol + specification v1.0 with declared composition rule; owner ratification",
+    "run official L11 evaluation"
+  ],
+  "deliverables": [
+    "work/L11_READINESS_ASSESSMENT.md",
+    "work/L11_READINESS_ASSESSMENT.json",
+    "work/L10_6_MILESTONE_SIGNOFF.md",
+    "work/L10_6_MILESTONE_SIGNOFF.json",
+    "work/L10_6_PROPOSED_channel_slot_diagnostic.md"
+  ],
+  "recommended_next_milestone": "STARK-L11 - Cross-Signature Compositional Generalization",
+  "progress_estimate_percent": 57,
+  "progress_changed": false
+}

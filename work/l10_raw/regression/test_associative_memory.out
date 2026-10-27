@@ -1,0 +1,5 @@
+  timestep accounting OK
+  mapping validity OK
+  schedule balance + no leakage OK
+  no-learning invariance OK
+  forced binding retrieval OK

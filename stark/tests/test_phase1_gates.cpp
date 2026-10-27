@@ -120,7 +120,10 @@ const GateReport* find_gate(const std::vector<GateReport>& gs, const std::string
 }
 
 bool gate_pass(const std::vector<ExperimentRecord>& recs, const std::string& prefix) {
-    const GateReport* g = find_gate(evaluate_gates(recs), prefix);
+    // Keep reports alive while the pointer returned by find_gate is read.
+    // The previous temporary vector was destroyed at the end of this statement.
+    const auto reports = evaluate_gates(recs);
+    const GateReport* g = find_gate(reports, prefix);
     CHECK(g != nullptr);
     return g != nullptr && g->pass;
 }

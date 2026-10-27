@@ -1,0 +1,450 @@
+{
+  "artifact": "L10 independent validation",
+  "date_utc": "2026-10-24T02:55:16Z",
+  "disposition": "reproduced",
+  "disposition_qualifiers": [
+    "numerically identical reproduction (not byte-identical: raw JSON embeds wall-clock timings)",
+    "L10-E remains FAILED",
+    "L10-F remains FAILED",
+    "one reporting defect found and fixed (unmeasured controls serialized as 0.0)"
+  ],
+  "progress_estimate": {
+    "previous": 0.5,
+    "current": 0.5,
+    "rationale": "validation adds confidence, not capability; no new evidence beyond a 3-task toy domain"
+  },
+  "provenance": {
+    "repository": "https://github.com/Rahulrr324/A.P.E.X.git",
+    "private": true,
+    "default_branch": "main",
+    "audited_commit": "49cc6ba18650c0d9614bb9e8918fe65453ec5a02",
+    "audited_commits": [
+      "9930d7d",
+      "791ce82",
+      "49cc6ba"
+    ],
+    "branch_base": "5f5a57717509623bd4c79460d50c05f7cbc605c3",
+    "shallow_boundary": "563395f1",
+    "checkout_shallow": true,
+    "validation_branch": "validation/l10-independent",
+    "pull_requests": {
+      "2": {
+        "state": "OPEN",
+        "merged": false,
+        "head": "arena/c90f7329-a-p-e-x",
+        "head_sha": "5f5a57717509623bd4c79460d50c05f7cbc605c3",
+        "touched_by_this_validation": false
+      },
+      "3": {
+        "state": "OPEN",
+        "merged": false,
+        "head": "arena/86da64f9-a-p-e-x",
+        "head_sha": "49cc6ba18650c0d9614bb9e8918fe65453ec5a02",
+        "head_untouched_by_this_validation": true
+      }
+    },
+    "source_sha256": {
+      "stark/src/learning/ContextConditionedMemory.h": "81f5472588d3dae16b37dd405869c1cd44ae57b5a5d6308b660fdce3cc0e0732",
+      "stark/src/learning/ContextConditionedMemory.cpp": "a32ef07b72d9d84a475529e31e338f165b693dab07f0ee8cacdd9efc4d40588d",
+      "stark/src/learning/context_conditioned_memory_loop.cpp@49cc6ba": "ec4bbd77a5dc86440695f4b488af53cd6a019b8789c519508a21d1d6af86180f",
+      "stark/src/learning/context_conditioned_memory_loop.cpp@after_fix": "8666404127490cbbbd0076af09e486ee147a16c1a47c994a2d9ac1efa6453dd8",
+      "stark/tests/test_context_conditioned_memory.cpp": "97cf0b0c93f20ca0ebc5ce187c3e01843b1095e6812b8a5b27a0aa203bfc7cf6",
+      "stark/design/context_conditioned_memory_milestone.md": "739f20ee412a5b2506df7ccac8e4422cf0518ba955c7328be483d50e456ae2c0"
+    }
+  },
+  "environment": {
+    "compiler": "g++ (Debian 12.2.0-14+deb12u1) 12.2.0",
+    "flags": "-O2 -std=c++17",
+    "cmake_available": false,
+    "build_method": "explicit source lists from stark/CMakeLists.txt",
+    "source_origin": "git archive 49cc6ba (clean extracted snapshot, /home/user/apex_val/src_tree, 4997 files)",
+    "cpu_vcpu": 2,
+    "ram_gb": 3,
+    "canonical_regression_cwd": "stark/"
+  },
+  "reproduction": {
+    "frozen_protocol": {
+      "command": "./ccm  (8 arms x seeds 123456789,218213831,171473193; 3 tasks; 3 banks; 720 train trials/task; 480-trial commitment window)",
+      "normalized_sha256": "5554710d03619ac9118ad660d7030cc47f32cfc23154765a7934cc65b8d34c0e",
+      "normalized_identical_to_frozen_final_run": true,
+      "normalized_identical_to_frozen_determinism_rerun": true,
+      "byte_identical": false,
+      "byte_difference_cause": "env.total_seconds and per-seed seconds (wall clock)",
+      "fields_differing_after_timing_removal": [],
+      "runtime_seconds": 21.8
+    },
+    "l9_baseline": {
+      "artifact": "work/l9_raw/... report",
+      "md5": "a00b62b330bf231fdecf2b4991ec44fa",
+      "byte_identical": true
+    },
+    "independent_harness": {
+      "source": "stark/src/learning/l10_validation_harness.cpp (written for this validation)",
+      "modes": [
+        "frozen",
+        "seeds",
+        "tasks",
+        "order",
+        "ctxnovel",
+        "wrongbank",
+        "restart"
+      ],
+      "per_seed_match_1e-12": true,
+      "metrics_recomputed_from_trial_rows": true,
+      "pooled": {
+        "CCM": {
+          "forgetting": 0.0,
+          "final_average": 1.0
+        },
+        "SEQ-L9": {
+          "forgetting": 0.467593,
+          "final_average": 0.275926
+        }
+      },
+      "per_seed_seql9_forgetting": {
+        "123456789": 0.3944,
+        "218213831": 0.5972,
+        "171473193": 0.4111
+      }
+    }
+  },
+  "criteria": {
+    "all_other_l10_criteria": "pass, unchanged",
+    "L10-E": {
+      "frozen_threshold_changed": false,
+      "status": "FAILED",
+      "observed": {
+        "pooled": 0.425926,
+        "per_seed": {
+          "123456789": 0.5,
+          "218213831": 0.4444,
+          "171473193": 0.3333
+        }
+      },
+      "analytic_value": 0.425926,
+      "explanation": "all cue features zero => all router scores 0 => masked argmax => lowest allocated bank (bank 0, task 0). Measured accuracy equals the pi_0-vs-pi_t agreement rate exactly.",
+      "residual_context_information": false,
+      "original_report_error": "described the floor as 'approximately 1/3'; the true floor is 0.4259 for these seeds",
+      "criterion_achievable_as_written": false,
+      "note": "any correct implementation returns one bank when the cue is removed and is therefore exactly right for one task; only refusal-to-answer could score below 0.40",
+      "pre_registered_substitute": {
+        "criterion": "L10-E2 per-task margin >= 0.60 on >= 2 of 3 tasks",
+        "status": "PASSED"
+      },
+      "criterion": "shuffled-cue <= 0.40 AND context-off <= 0.40 (compound)",
+      "component_shuffled_cue": {
+        "observed": 0.132407,
+        "status": "PASS"
+      },
+      "component_context_off": {
+        "observed": 0.425926,
+        "status": "FAIL"
+      }
+    },
+    "L10-F": {
+      "criterion": "NO-SEAL must differ from CCM",
+      "frozen_threshold_changed": false,
+      "status": "FAILED",
+      "observed": "NO-SEAL numerically identical to CCM on every field, all 3 seeds",
+      "implementation_diff": "single config bit seal_superseded -> one writable predicate; nothing else",
+      "vacuous_by_construction": true,
+      "opportunity_analysis": {
+        "unforced_phase1_mapping_credit_trials": 0,
+        "phase1_trials_on_non_active_bank": 0,
+        "write_blocked_phase2_selection_trials": {
+          "123456789": 62,
+          "218213831": 67,
+          "171473193": 64
+        }
+      },
+      "causal_chain": "mapping credit only on single-candidate trials -> single-candidate trials only in phase 1 -> phase 1 is exactly the 480-trial commitment window -> router forced to active bank -> no write elsewhere is possible",
+      "provoked_experiment": {
+        "label": "EXPLORATORY (not frozen evidence)",
+        "intervention": "commit_trials = 0",
+        "mean_forgetting": {
+          "sealON": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "sealOFF": [
+            0.5222,
+            0.5333,
+            0.5111
+          ]
+        },
+        "conclusion": "sealing is genuine but masked by the commitment window"
+      },
+      "open_decision": "either make the commitment window partial (implementation change) or amend L10-F (specification change); neither was done here"
+    }
+  },
+  "controls": {
+    "SEQ-L9": {
+      "isolates": "baseline parity",
+      "confound": null,
+      "verdict": "valid"
+    },
+    "ORACLE-BANK": {
+      "isolates": "routing ceiling; equals CCM exactly",
+      "confound": "uses task index (diagnostic only)",
+      "verdict": "valid"
+    },
+    "SHUFFLED-CUE": {
+      "isolates": "cue causality",
+      "observed_pooled": 0.132,
+      "confound": null,
+      "verdict": "valid",
+      "observed_pooled_final_avg": 0.135185
+    },
+    "CONTEXT-OFF": {
+      "isolates": "cue necessity",
+      "verdict": "failed criterion, fully explained",
+      "note": "controls apply to the standard evaluation only; held-out evaluation uses intact cues"
+    },
+    "NO-SEAL": {
+      "isolates": "write protection",
+      "verdict": "vacuous under frozen protocol"
+    },
+    "K2-STRESS": {
+      "isolates": "capacity",
+      "observed": "mean forgetting 0.2713, final avg 0.6361, task-2 retention 0.025-0.325, routing 1.000 (bank forced)",
+      "confound": "also un-seals reused bank (measurably inert, still confounded)"
+    },
+    "FROZEN-ROUTER": {
+      "isolates": "learned routing",
+      "observed": "final avg 0.425926; routing 1.000/0.000/0.000; router weights exactly 0.0; evaluation metrics field-for-field identical to CONTEXT-OFF on all 3 seeds (fallback to bank 0); held-out pooled 0.9972/0.1111/0.1694",
+      "confound": "conflates routing error with wasted selection trials; also reduces to the same fallback as CONTEXT-OFF"
+    }
+  },
+  "leakage_audit": {
+    "leakage_found": false,
+    "checked": [
+      "no task index / pi / phi read inside the mechanism",
+      "no held-out pair in any training stream",
+      "no model or checkpoint selection on held-out data",
+      "baseline updated only from current-trial reward on learning trials",
+      "probe uses no labels",
+      "evaluation state-restoring (serialize/deserialize) in every L10 arm except the deliberate SEQ-L9 parity arm"
+    ],
+    "structural": {
+      "cross_bank_synapses": 0,
+      "pathway_census": {
+        "S->A": 108,
+        "A->A": 108,
+        "cue->R": 36,
+        "C->L": 4
+      },
+      "audit_test": "stark/tests/test_l10_structural_audit.cpp (357 assertions)"
+    }
+  },
+  "regressions": {
+    "built_from": "clean snapshot of 49cc6ba; cwd stark/",
+    "suites": {
+      "test_neuron": 0,
+      "test_params": 0,
+      "test_synapse": 0,
+      "test_integration": 0,
+      "test_network": 0,
+      "test_stdp": 0,
+      "test_homeostasis": 0,
+      "test_three_factor": 0,
+      "test_serialization": 0,
+      "test_learning_loop": 0,
+      "test_delayed_reward": 0,
+      "test_sequential_context": 0,
+      "test_associative_memory": 0,
+      "test_eligibility_gating": 0,
+      "test_learned_relevance": 0,
+      "test_n_way_learned_relevance": 0,
+      "test_context_conditioned_memory": 0,
+      "test_l10_structural_audit": 0,
+      "test_phase1_profiler": 0,
+      "test_phase1_accounting": 0,
+      "test_phase1_budget": 0,
+      "test_phase1_records": 0,
+      "test_phase1_reproducibility": 0,
+      "test_phase1_gates": 0,
+      "n_way_learned_relevance_loop_L8": 0
+    },
+    "assertion_counts": {
+      "test_context_conditioned_memory": 330,
+      "test_l10_structural_audit": 357,
+      "test_phase1_gates": 437,
+      "test_phase1_profiler": 34,
+      "test_phase1_accounting": 67,
+      "test_phase1_budget": 55,
+      "test_phase1_records": 72,
+      "test_phase1_reproducibility": 37
+    },
+    "not_executed": [
+      {
+        "suite": "test_phase1_affinity",
+        "reason": "does not compile on Linux (DWORD_PTR, Win32-only source)",
+        "status": "UNKNOWN - not passed"
+      }
+    ],
+    "fixture_dependence": {
+      "symptom": "4 learning suites abort (Network::save cannot open build/dev_bin/...), test_phase1_gates reports 19 failures",
+      "fix": "create build/dev_bin/ in cwd",
+      "verified_in_two_isolated_dirs": true,
+      "test_sources_modified": false
+    },
+    "new_failures": 0
+  },
+  "defect": {
+    "id": "L10-VAL-1",
+    "severity": "reporting integrity",
+    "computational_impact": "none",
+    "criteria_affected": [],
+    "description": "context_conditioned_memory_loop.cpp emitted shuffled_cue_mean=0.0 and context_off_mean=0.0 for all 8 arms although only CCM evaluates those controls (6 of 8 arms published an unmeasured 0.0)",
+    "fix": "emit null when not measured, plus explicit context_controls_measured flag",
+    "verification": {
+      "measured_values_changed": 0,
+      "CCM_shuffled_cue_mean": 0.132407,
+      "CCM_context_off_mean": 0.425926,
+      "criteria_block_identical": true,
+      "fixed_binary_reproducible": true,
+      "fixed_normalized_sha256": "fe76eb2a"
+    },
+    "regression_test": "work/l10_raw/check_report_integrity.py (exit 1 pre-fix, exit 0 post-fix)",
+    "original_evidence_preserved": true,
+    "corrected_report_path": "work/l10_raw/independent_validation_20261024/post_fix/"
+  },
+  "exploratory": {
+    "label": "EXPLORATORY - not frozen evidence, does not replace frozen results",
+    "seed_sweep_10": {
+      "CCM": {
+        "forgetting_mean": 0.0,
+        "forgetting_sd": 0.0,
+        "final_mean": 0.9989,
+        "final_min": 0.9944,
+        "min_acquisition": 0.9833
+      },
+      "L9": {
+        "forgetting_mean": 0.4339,
+        "forgetting_sd": 0.0798,
+        "final_mean": 0.2919
+      }
+    },
+    "tasks_banks": {
+      "T4_K3": {
+        "forgetting": 0.2125,
+        "final": 0.7187,
+        "min_acq": 0.5083
+      },
+      "T5_K5": {
+        "forgetting": 0.0,
+        "final": 0.9989
+      },
+      "T6_K6": {
+        "forgetting": 0.0,
+        "final": 0.9894,
+        "min_acq": 0.8333
+      }
+    },
+    "revisit_order_0_1_0": {
+      "result": "1.000 at all steps; sealed bank not consulted on revisit"
+    },
+    "wrong_bank_start": {
+      "forgetting": 0.2713,
+      "final": 0.6361
+    },
+    "cross_signature_novel_cues": {
+      "result": "0.000-1.000, mostly fails => router is not generally compositional; held-out success is within-bank cue composition",
+      "per_seed": [
+        [
+          0.258,
+          0.633,
+          1.0
+        ],
+        [
+          0.133,
+          0.542,
+          1.0
+        ],
+        [
+          0.0,
+          0.483,
+          1.0
+        ]
+      ]
+    },
+    "process_restart": {
+      "result": "3/3 seeds: final retention, bank map and post-restart acquisition identical to uninterrupted run"
+    },
+    "practicality": {
+      "state_bytes": 28000,
+      "runtime_s": 21.8,
+      "peak_rss_mb": 7.2
+    }
+  },
+  "limitations": [
+    "shallow/grafted checkout: history before 5f5a577 absent",
+    "test_phase1_affinity not executable on Linux",
+    "no cmake: build graph itself not exercised",
+    "validation harness is a re-implementation of the protocol, not of the mechanism",
+    "exploratory results are single-configuration, 3 seeds",
+    "K2-STRESS and FROZEN-ROUTER confounds characterised, not eliminated",
+    "L10-E and L10-F need a specification decision by the project owner"
+  ],
+  "files_changed": [
+    {
+      "path": "stark/src/learning/context_conditioned_memory_loop.cpp",
+      "change": "report serialization only (unmeasured context controls -> null + flag)"
+    },
+    {
+      "path": "stark/src/learning/l10_validation_harness.cpp",
+      "change": "new independent harness"
+    },
+    {
+      "path": "stark/tests/test_l10_structural_audit.cpp",
+      "change": "new structural audit, 357 assertions"
+    },
+    {
+      "path": "stark/CMakeLists.txt",
+      "change": "two targets added"
+    },
+    {
+      "path": "work/l10_raw/check_report_integrity.py",
+      "change": "new regression check for L10-VAL-1"
+    },
+    {
+      "path": "work/L10_INDEPENDENT_VALIDATION.md",
+      "change": "new human-readable report"
+    },
+    {
+      "path": "work/L10_INDEPENDENT_VALIDATION.json",
+      "change": "this file"
+    },
+    {
+      "path": "work/l10_raw/independent_validation_20261024/**",
+      "change": "new raw evidence; all pre-existing artifacts untouched"
+    }
+  ],
+  "evidence_dir": "work/l10_raw/independent_validation_20261024",
+  "manifest": "work/l10_raw/independent_validation_20261024/MANIFEST.md",
+  "final_rerun": {
+    "log": "work/l10_raw/independent_validation_20261024/regression/final_rerun_20261024.txt",
+    "builds_exit_0": 4,
+    "frozen_eval_normalized_sha256_fixed": "fe76eb2a7a626be5714fa3c48a3943f56b2b4284a5fd911065586c6e2628787d",
+    "criteria_block_unchanged": true,
+    "test_context_conditioned_memory": {
+      "exit": 0,
+      "assertions": 330
+    },
+    "test_l10_structural_audit": {
+      "exit": 0,
+      "assertions": 357
+    },
+    "harness_frozen_csvs_byte_identical": true,
+    "integrity_checker": {
+      "fixed_report_exit": 0,
+      "pre_fix_report_exit": 1
+    },
+    "frozen_artifacts_unmodified": {
+      "final_run/report_raw.json": "b38736bb8a2a4574e6226f192a617627",
+      "determinism/report_rerun.json": "17beb41e342fa268d7a6efa47512df08",
+      "l9_reproduction/report_reproduced.json": "a00b62b330bf231fdecf2b4991ec44fa"
+    }
+  }
+}

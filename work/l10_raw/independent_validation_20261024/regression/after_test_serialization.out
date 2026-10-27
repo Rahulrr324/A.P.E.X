@@ -1,0 +1,26 @@
+==========================================
+STARK-007 Serialization & Experiment Tests
+==========================================
+Test 1: empty_network... PASS
+Test 2: single_neuron... PASS
+Test 3: synaptic_network... PASS
+Test 4: delays_zero_and_positive... PASS
+Test 5: stdp_traces... PASS
+Test 6: three_factor_state... PASS
+Test 7: homeostatic_state... PASS
+Test 8: transient_state (spikes, ext inputs, modulator)... PASS
+Test 9: checkpoint_resume_continuity... PASS
+Test 10: deterministic_serialize_output... PASS
+Test 11: deterministic_resumed_execution... PASS
+Test 12: corrupted_truncated_input... PASS
+Test 13: nan_inf_input... PASS
+Test 14: invalid_topology... PASS
+Test 15: invalid_delay_queue... PASS
+Test 16: unsupported_version... PASS
+Test 17: failed_load_atomicity... PASS
+Test 18: reset_after_load... PASS
+Regression: all phases unchanged... PASS
+==========================================
+Total assertions: 98
+ALL TESTS PASSED
+==========================================

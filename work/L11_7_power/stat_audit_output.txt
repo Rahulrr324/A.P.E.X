@@ -1,0 +1,210 @@
+
+==============================================================================
+0. design constants (frozen)
+==============================================================================
+trials per cell n = 120; tasks = 3; primary seeds = 3
+L11-A cells = 9; pass threshold = 108/120 = 0.900000
+answer space = 6 identities -> per-identity chance = 1/6 = 0.1667
+
+==============================================================================
+1. L11-A per-cell power   P(X >= 108 | n=120, p)
+==============================================================================
+      p    P(pass)    P(fail)
+  0.800     0.0025     0.9975
+  0.850     0.0746     0.9254
+  0.875     0.2509     0.7491
+  0.880     0.3059     0.6941
+  0.900     0.5761     0.4239
+  0.910     0.7167     0.2833
+  0.920     0.8367     0.1633
+  0.930     0.9225     0.0775
+  0.950     0.9928     0.0072
+  0.970     0.9999     0.0001
+  0.990     1.0000     0.0000
+Wilson 95% interval at an observed 108/120: (0.8333, 0.9419); half-width 0.0543
+reproduces L11.1's published triple: P(pass|0.95)=0.9928  P(pass|0.90)=0.5761  P(pass|0.85)=0.0746
+
+==============================================================================
+2. L11-A joint power over 9 cells
+==============================================================================
+ true p  per-cell       indep      rho=.3      rho=.6      rho=.9  Frechet lo  comonotone
+   0.85    0.0746   7.182e-11      0.0001      0.0026      0.0240      0.0000      0.0746
+   0.90    0.5761   6.987e-03      0.0748      0.1931      0.3872      0.0000      0.5761
+   0.92    0.8367   2.009e-01      0.3680      0.5215      0.7016      0.0000      0.8367
+   0.93    0.9225   4.840e-01      0.6036      0.7140      0.8377      0.3029      0.9225
+   0.95    0.9928   9.371e-01      0.9447      0.9590      0.9795      0.9353      0.9928
+
+Frechet: for an intersection of 9 events each of probability q,
+  max(0, 9q-8) <= P(all) <= q.  Independence is one point inside;
+  it is not a bound and it is not implied by anything in the protocol.
+
+per-cell power required for a stated joint (independent) power:
+  joint 0.50 -> per-cell q >= 0.9259 -> true p >= 0.9305 = 111.7/120
+  joint 0.80 -> per-cell q >= 0.9755 -> true p >= 0.9412 = 112.9/120
+  joint 0.90 -> per-cell q >= 0.9884 -> true p >= 0.9468 = 113.6/120
+  joint 0.95 -> per-cell q >= 0.9943 -> true p >= 0.9514 = 114.2/120
+
+==============================================================================
+3. the four required L11-A cases
+==============================================================================
+case 1 -- all nine cells exactly at the target (p = 0.90 each)
+  per-cell 0.5761; independence 0.00699; Frechet [0.0000, 0.5761]; comonotone 0.5761
+
+case 2 -- six cells at 0.95, three at 0.88
+  q(0.88)=0.3059 q(0.95)=0.9928; independence 2.742e-02; comonotone (bounded by worst cell) 0.3059
+
+case 3 -- correlated: equicorrelated Gaussian copula, marginals all 0.90
+  rho=0.0 -> 0.0070
+  rho=0.3 -> 0.0748
+  rho=0.6 -> 0.1931
+  rho=0.9 -> 0.3872
+  rho=1.0 -> 0.5761
+
+case 4 -- genuine performance above the target
+  p=0.95: per-cell 0.9928, joint(indep) 0.9371
+  p=0.97: per-cell 0.9999, joint(indep) 0.9994
+  p=0.99: per-cell 1.0000, joint(indep) 1.0000
+
+==============================================================================
+4. L11-B -- MixAcc(A2,t) - Null(t) >= 0.50
+==============================================================================
+Null(t) is a MEASURED quantity: mean accuracy over OFF trials with each
+bank forced in turn, three forced cells averaged.  Its expectation is
+(1 + 1/6 + 1/6)/3 = 4/9 = 0.4444, NOT 1/6, because the aligned forced
+cell scores 1.0000.  Measured values (L10.4, same three primary seeds):
+      seed      t0      t1      t2 |              required MixAcc |   required k/120
+ 123456789  0.5000  0.4444  0.5000 |   1.0000/  0.9444/  1.0000 |  120/ 114/ 120
+ 218213831  0.4444  0.3917  0.3889 |   0.9444/  0.8917/  0.8889 |  114/ 108/ 107
+ 171473193  0.3333  0.3889  0.3889 |   0.8333/  0.8889/  0.8889 |  100/ 107/ 107
+
+implied Comp requirement if Read = 1.0 and WrongBankAcc = 0.132 (L10.3):
+  MixAcc = Comp*(Read - Wrong) + Wrong  =>  Comp = (MixAcc - 0.132)/0.868
+  MixAcc >= 1.0000 -> Comp >= 1.0000   <-- requires 120/120
+  MixAcc >= 0.9444 -> Comp >= 0.9359
+  MixAcc >= 0.8917 -> Comp >= 0.8752
+  MixAcc >= 0.8889 -> Comp >= 0.8720
+  MixAcc >= 0.8333 -> Comp >= 0.8079
+
+per-seed P('>= 2 of 3 tasks') at a uniform true MixAcc:
+  true    123456789    218213831    171473193   joint(3 seeds)
+  0.90      0.00000      0.41399      0.89883   9.189e-08
+  0.93      0.00009      0.91326      0.99827   7.755e-05
+  0.95      0.00257      0.99607      0.99999   2.563e-03
+  0.97      0.04751      0.99999      1.00000   4.751e-02
+  0.99      0.50904      1.00000      1.00000   5.090e-01
+
+same rule if the null were a 4-way chance level 0.25 (it is not):
+  trueMixAcc=0.80: per-cell 0.9279, per-seed(2of3) 0.9851, joint 0.9561
+  trueMixAcc=0.85: per-cell 0.9986, per-seed(2of3) 1.0000, joint 1.0000
+  trueMixAcc=0.90: per-cell 1.0000, per-seed(2of3) 1.0000, joint 1.0000
+  trueMixAcc=0.93: per-cell 1.0000, per-seed(2of3) 1.0000, joint 1.0000
+
+==============================================================================
+5. L11-C -- MixAcc >= 0.50
+==============================================================================
+scenario                                         Comp   Read  Wrong  MixAcc  @0.50
+perfect routing + perfect retrieval            1.0000 1.0000 0.1667  1.0000   PASS
+perfect routing + retrieval fails              1.0000 0.0000 0.1667  0.0000   FAIL
+routing fails + conditional retrieval 1.0      0.0000 1.0000 0.1667  0.1667   FAIL
+chance routing + chance retrieval              0.3333 0.1667 0.1667  0.1667   FAIL
+routing 0.50 uniform + Read 1.0 (L10.3-shaped) 0.5000 1.0000 0.1320  0.5660   PASS
+L10.3 pooled routing 0.5019 + Read 1.0         0.5019 1.0000 0.1320  0.5676   PASS
+L10.3 task 0: routing 0.0 + Read undefined     0.0000 0.0000 0.1320  0.1320   FAIL
+
+headroom above the measured context-ignoring null 4/9 = 0.4444:
+  the 0.50 floor sits 0.0556 above it and requires 10.0% of the remaining headroom
+  L11-A's 0.90 requires 82.0% of it
+
+'every cell >= 0.50' joint power at a uniform true MixAcc:
+  true 0.45: per-cell 0.1564  joint-18 3.151e-15  joint-9 5.613e-08
+  true 0.50: per-cell 0.5363  joint-18 1.349e-05  joint-9 3.673e-03
+  true 0.55: per-cell 0.8833  joint-18 1.072e-01  joint-9 3.274e-01
+  true 0.60: per-cell 0.9895  joint-18 8.276e-01  joint-9 9.097e-01
+
+==============================================================================
+6. L11-D -- Read >= 0.90, denominator = routing==1
+==============================================================================
+  Comp  n_elig     k  P(pass|0.90)  P(pass|0.95)
+  0.05       6     6         0.531         0.735
+  0.10      12    11         0.659         0.882
+  0.25      30    27         0.647         0.939
+  0.50      60    54         0.606         0.970
+  0.75      90    81         0.588         0.985
+  0.90     108    98         0.479         0.980
+  0.95     114   103         0.529         0.988
+  Comp = 0     0     --   UNDEFINED (zero rows; the metric does not exist)
+
+P(fail | true Read = 0.90) rises as n_elig falls; at n_elig = 6 the criterion is decided by one or two trials.
+
+==============================================================================
+7. L11-G -- Comp(A2) - Comp(A9) >= -0.10
+==============================================================================
+A2 and A9 are matched pairs: identical evaluation seed and identical
+streams; only training order differs.  The 360 evaluation cues are the
+same objects, so the two proportions are PAIRED and the correct test is
+McNemar.  var(d) = (psi - delta^2)/n, psi = P(discordant).
+     p    psi  sd paired  P(fail|delta=0)  sd unpaired  P(fail|delta=0)
+  0.90   0.02     0.0129         4.72e-15       0.0387         4.91e-03
+  0.90   0.05     0.0204         4.82e-07       0.0387         4.91e-03
+  0.90   0.10     0.0289         2.66e-04       0.0387         4.91e-03
+  0.90   0.20     0.0408         7.15e-03       0.0387         4.91e-03
+  0.95   0.02     0.0129         4.72e-15       0.0281         1.90e-04
+  0.95   0.05     0.0204         4.82e-07       0.0281         1.90e-04
+  0.95   0.10     0.0289         2.66e-04       0.0281         1.90e-04
+  0.95   0.20     0.0408         7.15e-03       0.0281         1.90e-04
+
+the criterion is one-sided with a 0.10 slack: at delta = 0 it fails with
+probability < 1e-4 for plausible discordance, i.e. it is nearly non-binding;
+at delta = -0.10 exactly it passes with probability 0.5.
+three seeds, no multiplicity control: family error <= 3 x the per-seed rate.
+
+==============================================================================
+8. candidate L11-A designs (per-cell gate 108/120 unchanged)
+==============================================================================
+design                                                  p=.90    p=.93    p=.95
+D0 all 9 cells (status quo, independence)             0.00699  0.48404  0.93710
+D1 >= 7 of 9 cells                                    0.18948  0.97264  0.99997
+D2 >= 8 of 9 cells                                    0.05326  0.84980  0.99820
+D3 every task passes on >= 2 of 3 seeds               0.23060  0.94966  0.99954
+
+D0 under comonotone dependence instead of independence:
+  p=0.90 -> 0.5761; p=0.93 -> 0.9225; p=0.95 -> 0.9928
+
+==============================================================================
+8b. pre-specified global statistic: 1080 pooled trials
+==============================================================================
+claim tested: 'the pooled composition rate exceeds 0.90' (a DIFFERENT
+claim from 'every task exceeds 0.90').
+  H0: p<=0.90 at alpha=0.05: need >= 989/1080 = 0.9157; power at 0.92 = 0.7199, at 0.95 = 1.0000
+  H0: p<=0.90 at alpha=0.01: need >= 995/1080 = 0.9213; power at 0.92 = 0.4660, at 0.95 = 1.0000
+  no-alpha version (threshold at 0.90, >= 972):
+    P(pass|0.90) = 0.5256
+    P(pass|0.91) = 0.8841
+    P(pass|0.92) = 0.9919
+    P(pass|0.95) = 1.0000
+
+==============================================================================
+8c. familywise control of a 9-cell conjunction
+==============================================================================
+  Bonferroni per-cell threshold (alpha = 0.05/9): >= 117/120 = 0.9750
+    P(cell passes | 0.90) = 0.0016; joint9 = 5.963e-26
+    P(cell passes | 0.95) = 0.1444; joint9 = 2.731e-08
+    P(cell passes | 0.97) = 0.5133; joint9 = 2.473e-03
+    P(cell passes | 0.99) = 0.9670; joint9 = 7.394e-01
+
+==============================================================================
+8d. non-inferiority reading of the frozen 108/120 gate
+==============================================================================
+  the largest p0 with P(X>=108|p0) <= 0.05 is 0.8430
+  so 108/120 is a one-sided 5% test of H0: p <= 0.8430
+  its power at a true 0.90 is 0.5761
+
+==============================================================================
+9. whole-contract conjunction
+==============================================================================
+cell predicates: L11-A 9, L11-B 3 seeds x (2 of 3), L11-C 18, L11-D 9, L11-G 3
+no alpha is stated anywhere; the criteria are fixed-cutoff screening
+gates, not tests of a null, so no familywise error rate is defined.
+model at Comp=Read=0.95 uniformly: A 0.9371, C 1.0000, B ~ 2.6e-3 (section 4)
+complete pass ~ 2.6e-3 x 0.94 x 0.83 = 2.0e-3 at best
+model at 0.99 uniformly: A 1.0000, C 1.0000, B 5.09e-1

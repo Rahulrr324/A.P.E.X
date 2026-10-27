@@ -1,0 +1,27 @@
+/home/user/A.P.E.X/stark
+EXIT 0  test_neuron  ========================================
+EXIT 0  test_params    After 1 step I=2.0, V=0.11, theta=1
+EXIT 0  test_synapse  ========================================
+EXIT 0  test_integration  ========================================
+EXIT 0  test_network  ========================================
+EXIT 0  test_stdp  All tests passed!
+EXIT 0  test_homeostasis  ==========================================
+EXIT 0  test_three_factor  ==========================================
+EXIT 0  test_serialization  ==========================================
+EXIT 0  test_learning_loop  ==========================================
+EXIT 0  test_delayed_reward  ==========================================
+EXIT 0  test_sequential_context  ==========================================
+EXIT 0  test_associative_memory  ==========================================
+EXIT 0  test_eligibility_gating  ==========================================
+EXIT 0  test_learned_relevance  ==========================================
+EXIT 0  test_n_way_learned_relevance  ALL TESTS PASSED
+EXIT 0  test_context_conditioned_memory  PASS (330 assertions)
+EXIT 0  test_l10_structural_audit    synapse classes: A->A=108 C->L=4 S->A=108 c->R=36 
+EXIT 0  test_l10_1_sealing  PASS (276 assertions)
+EXIT 0  n_way_learned_relevance_loop_L8  verdict: PASS
+EXIT 0  test_phase1_profiler  PASS: test_phase1_profiler (34 assertions)
+EXIT 0  test_phase1_accounting  PASS: test_phase1_accounting (67 assertions)
+EXIT 0  test_phase1_budget  PASS: <unknown> (55 assertions)
+EXIT 0  test_phase1_records  PASS: test_phase1_records (72 assertions)
+EXIT 0  test_phase1_reproducibility  PASS: test_phase1_reproducibility (37 assertions)
+EXIT 0  test_phase1_gates  PASS: test_phase1_gates (437 assertions)

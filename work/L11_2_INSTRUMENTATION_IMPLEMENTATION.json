@@ -1,0 +1,202 @@
+{
+  "artifact": "STARK-L11.2-INSTRUMENTATION-IMPLEMENTATION",
+  "task": "STARK-L11.2",
+  "date": "2026-10-24",
+  "status": "BLOCKED_BY_UNRESOLVED_AUTHORIZATION_R3",
+  "delivered": "read-only audit, feasibility verification and implementation-readiness package",
+  "source_modified": false,
+  "harness_modified": false,
+  "tests_modified": false,
+  "build_config_modified": false,
+  "official_l11_evaluation_run": false,
+  "official_l11_trials": 0,
+  "l11_arms_executed": 0,
+  "new_learning_algorithm": false,
+  "capability_claimed": false,
+
+  "provenance": {
+    "repository": "Rahulrr324/A.P.E.X",
+    "start_branch": "validation/l11-1-specification",
+    "start_commit": "6a43974433a0396f756536817f88421eb86edf8c",
+    "start_tree_clean": true,
+    "start_commit_equals_remote": true,
+    "work_branch": "validation/l11-2-instrumentation-readiness",
+    "branch_parent": "6a43974433a0396f756536817f88421eb86edf8c",
+    "clone_shallow": true,
+    "shallow_graft_points": ["563395f1ca7742ecb65bcef6134212f5bb66c3d8", "5f5a57717509623bd4c79460d50c05f7cbc605c3"],
+    "pull_requests": [
+      {"number": 2, "head": "5f5a577", "base": "main", "state": "OPEN", "untouched": true},
+      {"number": 3, "head": "49cc6ba", "base": "arena/c90f7329-a-p-e-x", "state": "OPEN", "untouched": true},
+      {"number": 1, "state": "MERGED", "untouched": true}
+    ],
+    "new_pr_opened": false
+  },
+
+  "authorization_gates": {
+    "R1_ratify_L11_criteria": {"recorded": false, "status": "UNRESOLVED", "evidence": "preregistration says PENDING_OWNER_DECISION; no owner decision file added after L10.5"},
+    "R2_test_phase1_affinity": {"recorded": false, "status": "UNRESOLVED", "evidence": "L11.1 proposed the port; nothing authorized or applied"},
+    "R3_authorize_instrumentation": {"recorded": false, "status": "UNRESOLVED", "evidence": "listed blocking in work/L11_1_SPECIFICATION_AND_INSTRUMENTATION.json; absence of prohibition is not authorization"},
+    "authorization_inferred_from_prior_recommendation": false,
+    "consequence": "no source or harness file modified; implementation replaced by a prepared, unapplied change description",
+    "decision_needed": "explicit owner authorization of R3 for the additive default-off harness change described in work/L11_2_PREPARED_DIFF.md"
+  },
+
+  "source_changes": {
+    "files_modified": [],
+    "files_created_in_repo": [
+      "work/L11_2_INSTRUMENTATION_IMPLEMENTATION.md",
+      "work/L11_2_INSTRUMENTATION_IMPLEMENTATION.json",
+      "work/L11_2_PREPARED_DIFF.md",
+      "work/L11_2_FIELD_PROVENANCE.md",
+      "work/L11_2_TEST_RECORD.md",
+      "work/L11_2_MANIFEST.md",
+      "work/l11_2_prototype/recompute_metrics.py",
+      "work/L11_2_EVIDENCE/determinism_legacy.txt",
+      "work/L11_2_EVIDENCE/feasibility_probe.cpp",
+      "work/L11_2_EVIDENCE/feasibility_probe_output.txt",
+      "work/L11_2_EVIDENCE/reconstruction_fresh_evalkind0.json",
+      "work/L11_2_EVIDENCE/reconstruction_L103_cross_123456789.json",
+      "work/L11_2_EVIDENCE/reconstruction_L103_cross_218213831.json",
+      "work/L11_2_EVIDENCE/reconstruction_L103_cross_171473193.json"
+    ],
+    "engine_files_touched": [],
+    "prepared_change": {"path": "work/L11_2_PREPARED_DIFF.md", "status": "PROPOSED_NOT_APPLIED", "target_file": "stark/src/learning/l10_validation_harness.cpp", "approx_lines": 180, "parts": ["P1 StreamSpec flags", "P2 TrialRow11", "P3 evalTask capture", "P4 training capture", "P5 separate writer trials11_*.csv", "P6 CLI flags", "P7 R-majority helper", "P8 state dump"]}
+  },
+
+  "instrumentation_coverage": {
+    "schema_fields": 35,
+    "direct": 16,
+    "driver_derived": 7,
+    "via_public_api": 5,
+    "operator_supplied": 4,
+    "blocked_missing_arms": 1,
+    "proposed_schema_additions": ["presented[] (identity actually attended)"],
+    "engine_change_required": false,
+    "key_source_facts": [
+      "CCResult.sel_slot is set unconditionally but equals -1 on single-candidate trials: -1 means not applicable, and must be written as explicit absence",
+      "sel_slot is the SAMPLED channel, not the argmax, so it is meaningful even with learning disabled",
+      "queried is the identity at the INTENDED slot, not at the selected slot; presented[] is needed to reconstruct what was attended",
+      "intended_bank must be computed driver-side (R-majority) because the engine must never see the task index",
+      "bank_score_margin is reproducible from ccRouterWeights(); no new accessor needed",
+      "update mass is reproducible from ccBankWeights(); the harness already snapshots it in L10.1 telemetry",
+      "advantage requires snapshotting reward_baseline BEFORE runCCTrial, which updates it internally",
+      "no SHA-256 exists in C++; state dumps are hashed by the runner instead of adding crypto code",
+      "legacy aggregate CSVs use -1.0 as a not-measured sentinel (observed cross_novel=-1.000000), the anti-pattern the L11 schema forbids"
+    ]
+  },
+
+  "feasibility_probe": {
+    "classification": "PROTOTYPE_ONLY",
+    "location": "work/L11_2_EVIDENCE/feasibility_probe.cpp",
+    "compiled_in": "/tmp (repository unmodified)",
+    "run": true,
+    "observations": {
+      "state_serialized_bytes": 25638,
+      "router_weights_shape": "12x3",
+      "bank_weights_shape": "3x6x6",
+      "sel_slot": 0,
+      "intended_slot": 1,
+      "plastic_write": 0,
+      "router_l1": 1.333333,
+      "reward_baseline_after": -0.02
+    },
+    "establishes": "every schema field except the missing arms is reachable without any engine change; instrumentation can be harness-only",
+    "does_not_establish": "that a writer reproduces legacy output, that non-interference holds, or that any L11 arm exists"
+  },
+
+  "non_interference": {
+    "status": "BLOCKED_NOT_CLAIMED",
+    "reason": "the instrumentation-enabled half of the comparison does not exist without R3",
+    "disabled_side_measured": {
+      "build": "unmodified harness, g++ -O2 -std=c++17 -Isrc",
+      "runs": 2,
+      "files_compared": 18,
+      "byte_identical": 18,
+      "conclusion": "legacy output is deterministic, so a future on/off difference will be attributable to the instrumentation rather than to noise"
+    },
+    "blocked_checks": [
+      "trial ordering",
+      "inputs and targets",
+      "predictions and routing",
+      "parameter updates and state transitions",
+      "final model state bytes",
+      "RNG consumption (sel_slot per trial)",
+      "legacy artifacts byte-identical",
+      "independent reconstruction of the instrumentation records"
+    ],
+    "stronger_requirement_adopted": "the prepared design writes a separate trials11_*.csv, so legacy artifacts are untouched rather than merely equal"
+  },
+
+  "metric_reconstruction": {
+    "tool": "work/l11_2_prototype/recompute_metrics.py",
+    "improvement_over_L11_1": "grouping by (task, eval_call) instead of task, because eval_kind=0 evaluates a task in several calls (per-task counts were 360/240/120 instead of 120 each)",
+    "effect_on_L11_1_finding": "none - the eval_kind=4 arm has exactly one call per task, so its per-task means were already correct",
+    "results": {
+      "fresh_run_evalkind0": {"calls": 6, "rows_per_call": 120, "ragged": false, "published_match": true},
+      "L10_3_cross_arm": {"seeds": [123456789, 218213831, 171473193], "pooled_accuracy": [0.6306, 0.5583, 0.4944], "mean_accuracy": 0.5611, "mean_routing": 0.5019, "published_match_all": true},
+      "sentinel_handling": "legacy -1.0 reported as NOT_MEASURED_in_harness, never averaged",
+      "negative_tests": ["duplicate (task,call,trial) -> exit 2", "empty selection -> exit 2"]
+    },
+    "traceability": "each number is reproducible from a named file, a named command and an explicit metric column argument"
+  },
+
+  "tests": {
+    "executed": [
+      {"id": "E1", "test": "build of unmodified harness", "result": "BUILD OK"},
+      {"id": "E2", "test": "legacy determinism, 2 runs, 18 files", "result": "18/18 byte-identical"},
+      {"id": "E3", "test": "public-API feasibility probe", "result": "PASS"},
+      {"id": "E4", "test": "reconstruction, fresh run", "result": "match=true"},
+      {"id": "E5", "test": "reconstruction, L10.3 cross arm (3 seeds)", "result": "0.5611 / 0.5019 reproduced"},
+      {"id": "E6", "test": "not-measured sentinel handling", "result": "PASS (explicit NOT_MEASURED)"},
+      {"id": "E7", "test": "negative: duplicate trial key", "result": "PASS (explicit failure, exit 2)"},
+      {"id": "E8", "test": "negative: empty selection", "result": "PASS (explicit failure, exit 2)"},
+      {"id": "E9", "test": "protocol hash integrity", "result": "match"}
+    ],
+    "defects_found_in_new_tooling": [
+      "v2 reconstructor initially did not accept gzip input - fixed in place",
+      "per-task grouping was insufficient for multi-call categories - fixed in place"
+    ],
+    "inherited_not_rerun": {"battery": "26/26 from L10.4", "re_executed": false, "claim_made": false},
+    "blocked": ["T7 writer round-trip", "T8 per-trial non-interference", "T9 instrumented determinism", "T10 checkpoint/resume", "T11 R-majority unit test"],
+    "unknown_unexecuted": ["test_phase1_affinity"],
+    "failed": []
+  },
+
+  "frozen_artifact_integrity": {
+    "l11_1_protocol_unchanged": true,
+    "protocol_sha256": "322078c8345b5c72c4954a6de529329065d8875f2a103626039e92f09a810c32",
+    "preregistration_unchanged": true,
+    "thresholds_changed": false,
+    "thresholds_ratified": false,
+    "mixtures_task_order_null_sample_size_tiebreak_changed": false,
+    "l10_evidence_modified": false,
+    "l10_specification_sha256": "aafd00aad8c2b843410f2a88fdf3f64cbeb2c10c39f7470f43c5a2bafe33ffd1",
+    "l10_results_relabelled": false,
+    "protocol_defects_found": 0,
+    "schema_gaps_found": ["six L11 cue categories require arms that do not exist", "presented[] should be recorded", "model_hash should be produced by an external hash step"]
+  },
+
+  "official_evaluation": {"run": false, "answer": "NO", "arms": 0, "trials": 0, "note": "the only executions were two runs of the UNMODIFIED harness default arm for determinism, and one single-trial API probe"},
+
+  "remaining_blockers": [
+    {"id": "B1", "blocker": "R3 not authorized", "owner_action": "authorize the prepared change"},
+    {"id": "B2", "blocker": "R1 not ratified", "owner_action": "ratify or amend L11-A..G"},
+    {"id": "B3", "blocker": "R2 unresolved", "owner_action": "choose port vs Windows-only exclusion"},
+    {"id": "B4", "blocker": "L11 arms unimplemented", "owner_action": "separate authorized change"},
+    {"id": "B5", "blocker": "non-interference unproven", "owner_action": "follows B1"},
+    {"id": "B6", "blocker": "26/26 battery not rerun on an instrumented binary", "owner_action": "follows B1"},
+    {"id": "B7", "blocker": "L10.4 one-trial anomaly unresolved", "owner_action": "separate authorized diagnostic, still PROPOSED / NOT EXECUTED"}
+  ],
+
+  "limitations": [
+    "no implementation was performed, so no instrumentation claim is made",
+    "non-interference cannot be claimed from the disabled-side determinism alone",
+    "the feasibility probe exercises the API surface, not a full writer",
+    "the L11 arms do not exist; instrumentation alone cannot produce an official result",
+    "the 26/26 battery status is inherited and unverified for this milestone"
+  ],
+
+  "progress_estimate_percent": 57,
+  "progress_changed": false,
+  "recommended_next_step": "on R3: implement the prepared change behind --emit-l11, run the per-trial non-interference test before implementing any arm; then request R1 and R2, then a separate authorized preflight review before any official L11 run"
+}

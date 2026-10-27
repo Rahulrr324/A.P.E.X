@@ -1,0 +1,99 @@
+{
+  "artifact": "STARK-L11.1-PREREGISTRATION",
+  "task": "STARK-L11.1",
+  "date": "2026-10-24",
+  "status": "PROTOCOL_FROZEN_FOR_REVIEW / THRESHOLDS_PENDING_OWNER_RATIFICATION",
+
+  "registered_protocol": {
+    "path": "stark/design/l11_1_protocol.md",
+    "version": "0.1",
+    "sha256": "322078c8345b5c72c4954a6de529329065d8875f2a103626039e92f09a810c32",
+    "frozen_at_commit": "77d261aa83ddbf3aac1abc800c7c5c89741a86c7",
+    "frozen_at_commit_note": "the protocol text was committed at 77d261a; this record is amended in the immediately following commit to name that commit, and the protocol hash itself is never changed"
+  },
+
+  "companion_documents": {
+    "specification": {
+      "path": "stark/design/l11_cross_signature_compositional_generalization.md",
+      "version": "0.1",
+      "sha256": "d9cd7dc4024e407317a083001aff40bd287cad0f301f777cdfc5082afc3ae542",
+      "status": "DRAFT_NOT_RATIFIED"
+    },
+    "trial_schema": {
+      "path": "stark/design/l11_trial_schema.md",
+      "version": "0.1",
+      "sha256": "a8edd674bc9efd651e1c3a25dee1f5317dae442aaf236ae01f1b8240f8d87917"
+    },
+    "validation_plan": {
+      "path": "work/L11_1_VALIDATION_PLAN.md",
+      "sha256": "04ca341429146b848e9086abc3d52aee240731a3b56070a586945489866f2fa7"
+    }
+  },
+
+  "declared_before_any_measurement": {
+    "capability": "resolve a cue whose features come from two training signatures, in a feature-count ratio absent from training, to the bank prescribed by R-majority, independently of bank allocation order, and retrieve correctly from that bank",
+    "declared_rule": {
+      "name": "R-majority",
+      "statement": "the bank owning the signature group contributing the most features wins; ties broken by lowest bank index",
+      "applies_to": ["CROSS21", "CROSS31", "AMBIG11 (tie-break clause)"]
+    },
+    "seeds": {
+      "primary": [123456789, 218213831, 171473193],
+      "development": [1, 2],
+      "held_out_from_l11_design": [7, 42],
+      "disclosure": "seeds 1, 2, 7, 42 were auxiliary seeds in L10.4; held-out means held out from L11 design tuning, not from all prior exposure"
+    },
+    "arms": ["A0 correct-cue ceiling", "A1 holdout combination", "A2 CROSS21 (primary)", "A3 CROSS31", "A4 AMBIG11", "A5 PARTIAL", "A6 MISLEAD", "A7 SHUFFLED", "A8 OFF", "A9 order-permuted CROSS21", "A10 frozen router"],
+    "trials_per_eval_cell": 120,
+    "configuration": {"n_tasks": 3, "n_banks": 3, "identities": 6, "n_feat": 12, "commit_trials": 480, "explore_eps": 0.2, "seal_superseded": true}
+  },
+
+  "criteria_candidate": {
+    "ratification": "PENDING_OWNER_DECISION",
+    "L11-A": "Comp(A2,t) >= 0.90 on every task and every seed",
+    "L11-B": "MixAcc(A2,t) - Null(t) >= 0.50 on at least two of three tasks, every seed",
+    "L11-C": "no (seed, task) cell in A2 or A3 below 0.50",
+    "L11-D": "Read(A2,t) >= 0.90 on every task and seed",
+    "L11-E": "reruns byte-identical; checkpoint/resume exact",
+    "L11-F": "no new failures vs the L10 regression baseline",
+    "L11-G": "Comp(A2) - Comp(A9) >= -0.10 on every seed"
+  },
+
+  "statistical_character": {
+    "n_per_cell": 120,
+    "pass_threshold_L11-A": "108/120",
+    "P_pass_given_true_0_95": 0.9928,
+    "P_pass_given_true_0_90": 0.5761,
+    "P_pass_given_true_0_85": 0.0746,
+    "wilson_halfwidth_95_at_0_90": 0.0537,
+    "interpretation": "discriminating against true=0.85 (92.5% rejection); a pass at n=120 is consistent with >=0.90, not proof of it",
+    "method": "exact binomial, computed in L11.1"
+  },
+
+  "invalid_data_rules": [
+    "selected_bank == -1 counts as a routing failure and is excluded from Read",
+    "an evaluation call with fewer than the expected trials is invalid as a whole, never partially aggregated",
+    "a row failing schema validation invalidates the call",
+    "missing values are empty/null, never 0",
+    "no post-hoc exclusion of arms, seeds, tasks or trials"
+  ],
+
+  "execution_state": {
+    "official_evaluation_run": false,
+    "official_evaluation_label": "OFFICIAL_EVALUATION_NOT_RUN",
+    "arms_executed": 0,
+    "note": "STARK-L11.1 delivered specification, protocol, schema, prototype tooling and validation plan only"
+  },
+
+  "prototype_checks_executed": {
+    "schema_selftest": {"result": "17/17 PASS", "path": "work/l11_1_prototype/schema_check.py"},
+    "metric_reconstruction": {"result": "reproduces L10.3 published aggregates for all three primary seeds (max abs diff < 5e-7)", "path": "work/l11_1_prototype/recompute_from_trials.py"},
+    "schema_coverage_of_existing_L10_record": {"present": 13, "required": 35, "fraction": 0.3714}
+  },
+
+  "owner_decisions_required": [
+    {"id": "R1", "subject": "L11 thresholds L11-A..L11-G", "default_recommended": "ratify as written", "blocking": true},
+    {"id": "R2", "subject": "test_phase1_affinity disposition", "options": ["port: guard Case C with #ifdef _WIN32 and use a portable mask type", "declare Windows-only and exclude from the Linux gate"], "default_recommended": "port (option a)", "blocking": true},
+    {"id": "R3", "subject": "authorise the instrumentation change to l10_validation_harness.cpp", "default_recommended": "authorise as specified in l11_trial_schema.md, additive and default-off", "blocking": true}
+  ]
+}

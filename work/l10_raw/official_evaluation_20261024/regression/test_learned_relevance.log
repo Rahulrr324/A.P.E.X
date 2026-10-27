@@ -1,0 +1,9 @@
+  timestep accounting OK
+  mapping + schedule validity OK
+  selection follows routing state OK
+  routing persistence OK
+  mini learned relevance OK
+==========================================
+Total assertions: 1699
+ALL TESTS PASSED
+==========================================

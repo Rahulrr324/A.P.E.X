@@ -1,0 +1,72 @@
+### CROSS-CHECK: the L10.3 recomputation (independent code) on the L10.4 official run
+run: /home/user/A.P.E.X/work/l10_raw/official_evaluation_20261024/K1 suffix: _K1 seeds: [123456789, 171473193, 218213831]
+
+== 1. conditions: pooled accuracy / routing ==
+   condition      acc  routing      n
+     correct   1.0000   1.0000   1080
+     holdout   0.9981   1.0000   1080
+         off   0.4259   0.3333   1080
+    shuffled   0.1324   0.0000   1080
+     partial   1.0000   1.0000   1080
+ off_uniform   0.4157   0.3407   1080
+
+== 2. CAA / CRA per seed ==
+      seed   CAA_t0   CAA_t1   CAA_t2      CAA      CRA
+ 123456789   0.5000   0.5556   0.5000   0.5185   0.6667
+ 171473193   0.6667   0.6111   0.6111   0.6296   0.6667
+ 218213831   0.5556   0.6083   0.6111   0.5917   0.6667
+    POOLED                               0.5799   0.6667
+
+== 3. context-off vs the analytic fallback floor ==
+      seed task  measured  analytic    excess  margin
+ 123456789    0    1.0000    1.0000   +0.0000  0.0000
+ 123456789    1    0.1667    0.1667   +0.0000  0.8333
+ 123456789    2    0.3333    0.3333   +0.0000  0.6667
+ 171473193    0    1.0000    1.0000   +0.0000  0.0000
+ 171473193    1    0.0000    0.0000   +0.0000  1.0000
+ 171473193    2    0.0000    0.0000   +0.0000  1.0000
+ 218213831    0    1.0000    1.0000   +0.0000  0.0000
+ 218213831    1    0.1667    0.1667   +0.0000  0.8333
+ 218213831    2    0.1667    0.1667   +0.0000  0.8333
+max |measured - analytic| = 0
+
+== 4. forced-bank competence A(k,t) (context removed) ==
+      seed task   bank0   bank1   bank2                    agreement
+ 123456789    0  1.0000  0.1667  0.3333       [1.0, 0.1667, 0.3333]
+ 123456789    1  0.1667  1.0000  0.1667       [0.1667, 1.0, 0.1667]
+ 123456789    2  0.3333  0.1667  1.0000       [0.3333, 0.1667, 1.0]
+ 171473193    0  1.0000  0.0000  0.0000             [1.0, 0.0, 0.0]
+ 171473193    1  0.0000  1.0000  0.1667          [0.0, 1.0, 0.1667]
+ 171473193    2  0.0000  0.1667  1.0000          [0.0, 0.1667, 1.0]
+ 218213831    0  1.0000  0.1667  0.1667       [1.0, 0.1667, 0.1667]
+ 218213831    1  0.1667  1.0000  0.0083          [0.1667, 1.0, 0.0]
+ 218213831    2  0.1667  0.0000  1.0000          [0.1667, 0.0, 1.0]
+
+== 5. fallback behaviour ==
+  eval_kind 2 (off): bank0=1.000  modal=0
+  eval_kind 6 (off_uniform): bank0=0.337, bank1=0.316, bank2=0.347  modal=2
+
+### ANALYTIC FLOOR (retained L10-E), from the permutations only
+== A. fixed-point distribution (n = 6) ==
+  counts D(6,k): [265, 264, 135, 40, 15, 0, 1]  total 720
+  pmf: [0.368056, 0.366667, 0.1875, 0.055556, 0.020833, 0.0, 0.001389]
+  E[a] = 1.0
+
+== B. deterministic bank-0 fallback (what L10-E's context-off half measures) ==
+  acc_off(t) = A(0,t) = fixed-point agreement of pi_0 and pi_t / 6
+  acc_off(0) = 1 exactly; each t != 0 has E = 1/6
+  E[per-seed context-off mean] = (1 + 2/6)/3 = 0.444444
+  P(single seed pooled <= 0.40) = 0.405372
+  P(pooled over 3 seeds <= 0.40) = 0.151207   <-- a PERFECT router passes only this often
+  attainable range of the pooled mean: [1/3, 1]
+
+== C. proposed L10-K1 (CAA) under a perfect router ==
+  E[sum of 3 pairwise agreements] = 3.0
+  P(CAA_pooled >= 0.40) for a perfect router = 0.999825
+  E[CAA_pooled] = 0.555556  (ceiling for K=3 and perfect routing: 5/9 = 0.555556 )
+  P(CAA_pooled >= 0.40) under the null (context ignored) = 0 by construction
+  null (context ignored): CAA = 0 by construction
+
+== D. A(k,t) vs agreement(perm_k, perm_t)/6 ==
+  cells checked: 27  deviating: 1
+    (218213831, 1, 2, 0.008333, 0.0, 1.0)

@@ -1,0 +1,13 @@
+STARK-L10.1  E-GEN: exploratory generalisation (3 frozen seeds, NOT frozen acceptance evidence)
+
+  G0 3 tasks / 3 banks       T= 3 K= 3 min_acq=1.0000 forget=0.0000 final=1.0000
+  G1 held-out recombination  T= 3 K= 3 min_acq=1.0000 forget=0.0000 final=1.0000 holdout mean=0.9981 min=0.9917
+  G2 cross-signature cues    T= 3 K= 3 min_acq=1.0000 forget=0.0000 final=1.0000 cross_novel mean=0.5611 min=0.0000
+  G3 4 tasks / 4 banks       T= 4 K= 4 min_acq=0.9917 forget=0.0000 final=0.9993
+  G5 5 tasks / 5 banks       T= 5 K= 5 min_acq=0.9917 forget=0.0000 final=0.9989
+  G5 6 tasks / 6 banks       T= 6 K= 6 min_acq=0.8333 forget=0.0000 final=0.9894
+  G5 8 tasks / 8 banks       T= 8 K= 8 min_acq=0.8333 forget=0.0000 final=0.9920
+  G4 order 2,0,1             T= 3 K= 3 min_acq=0.9917 forget=-0.0009 final=1.0000
+  G4 revisit 0,1,0 (2/2)     T= 2 K= 2 min_acq=1.0000 forget=0.0000 final=1.0000
+  G6 ambiguous (20% miscue)  T= 3 K= 3 min_acq=1.0000 forget=0.2778 final=0.7222
+  G7 wrong initial bank      T= 3 K= 3 min_acq=0.5000 forget=0.2713 final=0.6361

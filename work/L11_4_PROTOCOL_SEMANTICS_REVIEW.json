@@ -1,0 +1,217 @@
+{
+  "artifact": "STARK-L11.4-PROTOCOL-SEMANTICS-REVIEW",
+  "task": "STARK-L11.4",
+  "date": "2026-10-24",
+  "nature": "documentation_only",
+  "official_evaluation_run": false,
+  "official_arms": 0,
+  "official_trials": 0,
+  "source_modified": false,
+  "protocol_modified": false,
+  "preregistration_modified": false,
+  "schema_v0_2_modified": false,
+  "pr_created": false,
+  "history_rewritten": false,
+
+  "provenance": {
+    "origin": "https://github.com/Rahulrr324/A.P.E.X.git",
+    "branch": "validation/l11-4-protocol-semantics",
+    "derived_from": {
+      "commit": "e8955dfd6d87fe9de84bfe1746901825270e182e",
+      "description": "STARK-L11.3 schema v0.2 preparation",
+      "verified_local_and_remote": true
+    },
+    "ancestry": ["e8955df", "deac50f", "c547aab", "6a43974", "77d261a"],
+    "working_tree_at_start": "clean (0 entries)",
+    "hashes": {
+      "protocol": "322078c8345b5c72c4954a6de529329065d8875f2a103626039e92f09a810c32",
+      "preregistration": "57a8139d6797b305dd7e2d4791b00f981ff84329d2e7329a55413fbf4ea6ce3b",
+      "schema_v0_1": "a8edd674bc9efd651e1c3a25dee1f5317dae442aaf236ae01f1b8240f8d87917",
+      "schema_v0_2_proposal": "1ce1525b83f9c02a3f1d996ec2736b0d10fcc0beefe7c1b1362f886279d96ad8",
+      "specification": "d9cd7dc4024e407317a083001aff40bd287cad0f301f777cdfc5082afc3ae542",
+      "l11_3_completion_report": "2499af1f392a2020708dad13d079d316c0d2f15d5a54ffe659f9d9adeaeb8291",
+      "harness": "697b5f8a23eed90324ae600fd868628dc257cd8ca0b0a3b5f509a1f42df1ffc7",
+      "affinity_test": "9dab81ee7c0b825f96b3a4dc8d33859c8cb84814ec1efa9a65bc6a7250a76561"
+    },
+    "prereg_hash_matches_file": true,
+    "prereg_status": "PROTOCOL_FROZEN_FOR_REVIEW / THRESHOLDS_PENDING_OWNER_RATIFICATION",
+    "prior_scope_intact": true,
+    "pulls": {
+      "1": {"state": "MERGED", "head": "c32071e1ad618f9f9844182c5d6d2342e0909536", "modified": false},
+      "2": {"state": "OPEN", "head": "5f5a57717509623bd4c79460d50c05f7cbc605c3", "base": "main", "modified": false},
+      "3": {"state": "OPEN", "head": "49cc6ba18650c0d9614bb9e8918fe65453ec5a02", "base": "arena/c90f7329-a-p-e-x", "modified": false}
+    },
+    "branch_selection_discrepancy": {
+      "session_tracked_branch": "arena/86da64f9-a-p-e-x",
+      "remote_head_of_that_name": "49cc6ba18650c0d9614bb9e8918fe65453ec5a02",
+      "note": "that commit is the head of PR #3; committing there would modify PR #3, which the mission forbids",
+      "resolution": "dedicated validation branch, consistent with the established workflow"
+    }
+  },
+
+  "r4": {
+    "question": "Comp for AMBIG11: task-bank routing or declared-tie-break compliance?",
+    "status": "analytically_resolved_procedurally_open",
+    "root_cause": "specification 2.1 says the rule is declared in protocol 4, but protocol 4 contains no rule; the rule is split between the specification and one sentence of protocol 6, and the two disagree",
+    "competing_definitions": [
+      {"id": "C-a", "definition": "mean(routing_correct)", "verdict": "rejected", "reason": "penalises compliance with the declared tie-break; makes A4 a low-count CROSS21"},
+      {"id": "C-b", "definition": "mean(rule_compliant), tie-break = lowest bank index", "verdict": "adopted as one of two reported numbers"},
+      {"id": "C-c", "definition": "mean(rule_compliant), tie-break = lowest group index", "verdict": "equivalent to C-b under the frozen design (verified); wording defect only"},
+      {"id": "C-d", "definition": "report Comp_task(A4) and Comp_rule(A4) separately, named", "verdict": "RECOMMENDED"},
+      {"id": "C-e", "definition": "undefined / NA", "verdict": "rejected", "reason": "loses information at no saving"},
+      {"id": "C-f", "definition": "stability under ambiguity (modal-bank consistency)", "verdict": "rejected", "reason": "unimplementable: evaluation routing is a deterministic masked argmax"}
+    ],
+    "divergence_estimate": {
+      "per_task": {"0": 0.0, "1": 0.5, "2": 1.0},
+      "overall": 0.5,
+      "basis": "arithmetic on the 1:1 construction with o uniform over the two other tasks",
+      "label": "inferred; no AMBIG11 implementation exists"
+    },
+    "affects_criteria": [],
+    "recommendation": "report both, named; keep Comp restricted to CROSS21/CROSS31/ORDERPERM",
+    "sub_decisions": {
+      "R4b": {"question": "tie-break: lowest group index vs lowest bank index", "numeric_effect_today": 0.0, "recommendation": "pin to lowest bank index (matches prereg and spec)", "evidence": "AMBIG11 runs only in A4 standard order where task_bank=[0,1,2]"},
+      "R4c": {"question": "Read conditioning for AMBIG11", "recommendation": "add Read_rule(A4) alongside Read; do not replace"}
+    }
+  },
+
+  "r5": {
+    "question": "L11-C does not name its metric",
+    "status": "analytically_resolved_procedurally_open",
+    "frozen_text": "no cell (seed, task) in A2 or A3 below 0.50",
+    "metric_named_in_frozen_record": false,
+    "evidence": {
+      "readiness_proposal": {
+        "commit": "ba1cfb3",
+        "path": "work/L11_READINESS_ASSESSMENT.md:254",
+        "text": "MixAcc pooled >= 0.75 and no seed/task cell below 0.50",
+        "is_ancestor_of_freeze": true
+      },
+      "freeze_declares_unchanged": {
+        "path": "work/L11_1_SPECIFICATION_AND_INSTRUMENTATION.md:250-253",
+        "text": "unchanged from the readiness proposal except where marked",
+        "only_marked_change": "L11-G",
+        "conclusion": "the metric name was lost in drafting, not removed by decision"
+      },
+      "motivating_statistic": {
+        "path": "work/L10_6_MILESTONE_SIGNOFF.md:252",
+        "text": "pooled 0.5611 with a seed that reaches 0.0 on one task; spread 0.0-1.0",
+        "kind": "accuracy"
+      }
+    },
+    "non_redundancy": {
+      "identity": "MixAcc = Comp*Read + (1-Comp)*WrongBankAcc",
+      "a2_clause_implied_by": ["L11-A", "L11-D"],
+      "implied_lower_bound": 0.81,
+      "unique_bite": "A3 (CROSS31), covered by no other criterion",
+      "counterexample": "Comp(A3)=1.00, Read(A3)=0.00 passes the routing reading and fails MixAcc"
+    },
+    "recommendation": "L11-C := MixAcc, per (seed, task, arm in {A2,A3}) cell, threshold 0.50 unchanged",
+    "monotone": false,
+    "justified_by_score": false,
+    "r5b": {"clause": "MixAcc pooled >= 0.75", "present_in_frozen_record": false, "pooling_contract_defined": false, "disposition": "declined in this draft; separate owner decision"}
+  },
+
+  "schema_v0_2_review": {
+    "reviewed_sha256": "1ce1525b83f9c02a3f1d996ec2736b0d10fcc0beefe7c1b1362f886279d96ad8",
+    "concepts_properly_separated": true,
+    "runtime_behaviour_validated": false,
+    "method": "static source reading only; no binary built, no row produced",
+    "errata": [
+      {"id": "D1", "severity": "high", "finding": "selected_bank = -1 is unreachable; runCCTrial clamps bank<0 to 0", "evidence": "ContextConditionedMemory.cpp:345", "consequences": ["invariant 14 vacuous", "invariant 13 clause dead", "protocol 8(i) inert"]},
+      {"id": "D2", "severity": "high", "finding": "bank_score_margin defined over all banks but the router scores only candidate-masked banks", "evidence": "ccPreferredBank / candidateMask, ContextConditionedMemory.cpp:177-215; CCM.h:61 default true", "proposed_token": "NA:LT2_CANDIDATES"},
+      {"id": "D3", "severity": "medium", "finding": "invariant 10 references an X token that v0.2 never defines; source uses -1 placeholders", "evidence": "ContextConditionedMemory.cpp:257-260; schema v0.2 section 2 token set"},
+      {"id": "D4", "severity": "high", "finding": "P7 cannot be computed from the cue alone; the group-to-bank map is required", "evidence": "ccAllocateNext ContextConditionedMemory.cpp:163-172; harness:381,404", "effect": "L11.3 verification assertion V4 is wrong"},
+      {"id": "D5", "severity": "medium", "finding": "Read(AMBIG11) conditioned on task routing excludes rule-following trials", "owner_decision": "R4c"},
+      {"id": "D6", "severity": "medium", "finding": "advantage baseline index is baseline_per_bank ? bank : 0; index 0 correct only by default", "evidence": "ContextConditionedMemory.cpp:487; CCM.h:69"},
+      {"id": "D7", "severity": "low", "finding": "router-update predicate narrower than stated: forced_bank >= 0 suppresses the update", "evidence": "ContextConditionedMemory.cpp:483"},
+      {"id": "D8", "severity": "low", "finding": "invariant 20 excludes the legitimate per_bank_off forced sweep", "evidence": "harness:592"},
+      {"id": "D9", "severity": "none", "finding": "update_mass_* = NM on evaluation rows - verified consistent", "evidence": "harness:243-247"}
+    ]
+  },
+
+  "c1_c7": {
+    "C1": "BLOCKED-ON-CODE",
+    "C2": "BLOCKED-ON-CODE",
+    "C3": "BLOCKED-ON-CODE (new caveats D6, D7)",
+    "C4": "SPEC-ERRATUM",
+    "C5": "BLOCKED-ON-CODE",
+    "C6": "BLOCKED-ON-RUN",
+    "C7": "BLOCKED-ON-CODE",
+    "any_satisfied": false,
+    "c4_erratum": {
+      "audit_claim": "task_bank and rule_bank coincide for AMBIG11 by construction",
+      "actual": "AMBIG11 is a 1:1 tie; they coincide only when the evaluated task's bank is the lower-indexed of the two",
+      "requirement_unaffected": true,
+      "v4_assertion_corrected": "no task index in the signature; the read-only group-to-bank map is required"
+    }
+  },
+
+  "impact": {
+    "classes": {
+      "serialization_only": "D1, D3, D8 (partly)",
+      "instrumentation_only": "D4, D6, D7",
+      "metric_definition": "R4, R4b, R4c, D5",
+      "acceptance_criterion": "R5 (L11-C only); R5b declined",
+      "experimental_design": "none"
+    },
+    "criteria_affected": ["L11-C"],
+    "criteria_unaffected": ["L11-A", "L11-B", "L11-D", "L11-E", "L11-F", "L11-G"],
+    "mechanism_required": "versioned protocol amendment v0.1 -> v0.2 plus owner ratification",
+    "amendment_applied": false,
+    "protocol_described_as_unambiguous": false,
+    "thresholds_changed": false,
+    "sample_sizes_changed": false,
+    "task_order_changed": false,
+    "mixture_ratios_changed": false,
+    "null_construction_changed": false,
+    "tie_break_meaning_changed": false
+  },
+
+  "arms_implemented": {
+    "A0_TRAIN": true,
+    "A1_HOLDOUT": true,
+    "A2_CROSS21": false,
+    "A3_CROSS31": false,
+    "A4_AMBIG11": false,
+    "A5_PARTIAL": true,
+    "A6_MISLEAD": false,
+    "A7_SHUFFLED": true,
+    "A8_OFF": true,
+    "A9_ORDERPERM": false,
+    "A10_frozen_router": true,
+    "evidence": "CueMode enum l10_validation_harness.cpp:83-85 has 7 members; git grep AMBIG11/CROSS21 over stark/src returns nothing"
+  },
+
+  "decisions": {
+    "R1": {"status": "NOT_RATIFIED", "note": "unchanged; not assumed ratified"},
+    "R2": {"status": "approved_in_principle_unapplied", "note": "unchanged; no file touched"},
+    "R3": {"status": "conditionally_approved_in_principle_unapplied", "note": "prerequisite now includes the v0.2.1 errata"},
+    "R4": {"status": "analytically_resolved_procedurally_open"},
+    "R4b": {"status": "open_latent_zero_effect"},
+    "R4c": {"status": "open"},
+    "R5": {"status": "analytically_resolved_procedurally_open", "blocks": "every official run"},
+    "R5b": {"status": "open_not_adopted"},
+    "R6": {"status": "open", "note": "record schema v0.2.1 hash on adoption"},
+    "R7": {"status": "recommendation_only"}
+  },
+
+  "blockers_in_order": [
+    "R5 ratification (blocks every official run)",
+    "R4/R4b/R4c ratification (blocks calling the protocol unambiguous)",
+    "R5b decision",
+    "R6 hash re-record (schema v0.2.1)",
+    "R1 ratification (blocks any official run)",
+    "arm implementation (class X; five of eleven arms do not exist)",
+    "implementation under C1-C7, then the C6 battery"
+  ],
+
+  "status": {
+    "official_l11_evaluation": "NOT RUN",
+    "official_arms": 0,
+    "official_trials": 0,
+    "apex_progress_percent": 57,
+    "progress_changed": false,
+    "capability_claimed": false
+  }
+}

@@ -1,0 +1,142 @@
+{
+  "milestone": "STARK-L11.9",
+  "title": "Independent Acceptance-Contract Audit and Owner-Decision Reconciliation",
+  "nature": "documentation and statistical audit only; no protocol change, no implementation, no execution",
+  "base_commit": "ad595ab1e54d3e58d5332b2c915d55b56fa09279",
+  "branch": "validation/l11-9-independent-audit",
+  "authorization_state": {
+    "protocol_registered": false,
+    "implementation_authorized": false,
+    "official_evaluation_authorized": false,
+    "official_arms_run": 0,
+    "official_trials_run": 0,
+    "grants_authority": false
+  },
+  "audit_script": {
+    "path": "work/L11_9_claim_audit.py",
+    "dependencies": "python3 standard library only",
+    "command": "python3 work/L11_9_claim_audit.py",
+    "exit_code": 0,
+    "runs": 2,
+    "deterministic": true,
+    "checks": 32,
+    "pass": 32,
+    "fail": 0,
+    "unverified": 0
+  },
+  "key_results": {
+    "q_at_0.90": 0.576071,
+    "D0_all_9_cells": 0.006987,
+    "D3_2of3_per_task_complete": 0.230601,
+    "D4_run_mean": 0.161195,
+    "D5_pooled": 0.525597,
+    "D3_comonotone": 0.191174,
+    "D0_comonotone": 0.576071,
+    "catastrophic_run_D3_pass": 0.957613,
+    "S2_exact_pass_at_mixacc_0.90": 0.91636,
+    "S2_float_pass_at_mixacc_0.90": 0.914292,
+    "S2_exact_sd": 0.049634,
+    "S3_implication": "Comp>=0.90 and Read>=0.90 => MixAcc>=0.81 > 0.50",
+    "mission_0.972_reconciliation": "per-run pass probability 0.90 corresponds to true cell accuracy 0.9269; L11.8's 0.231 uses true accuracy 0.90",
+    "ledger_canonical": 26,
+    "ledger_value_judgments": 17,
+    "ledger_engineering": 5,
+    "ledger_authorization": 4,
+    "runtime_conditions_not_decisions": 7,
+    "L11_8_stated_count": 17,
+    "L11_8_queue": 19,
+    "L11_8_register": 22
+  },
+  "new_findings": [
+    {
+      "id": "IMP-4",
+      "severity": "blocking",
+      "summary": "harness cannot emit 3- or 4-feature cross-family cues; CROSS21/CROSS31 have no constructor; 0 matches in stark/src"
+    },
+    {
+      "id": "CA-1",
+      "severity": "high",
+      "summary": "claim states one aggregation rule; A is 2-of-3, D is all-9; 79x difference"
+    },
+    {
+      "id": "S3-1",
+      "severity": "medium",
+      "summary": "A and D together imply MixAcc >= 0.81, so L11-C at 0.50 is provably redundant on A2"
+    },
+    {
+      "id": "S2-2",
+      "severity": "medium",
+      "summary": "NG >= 0.75 is tie-sensitive; float evaluation loses 0.0021; exact integer rule required"
+    },
+    {
+      "id": "DL-1",
+      "severity": "low",
+      "summary": "L11.8's stated 17 decisions matches none of its own enumerations (19 queue / 22 register)"
+    },
+    {
+      "id": "DL-2",
+      "severity": "low",
+      "summary": "C1-C7 are runtime conditions, not approvable decisions"
+    },
+    {
+      "id": "E-4",
+      "severity": "low",
+      "summary": "pooling's danger is loss of structure, not a threshold artefact"
+    }
+  ],
+  "files": {
+    "L11_9_acceptance_contract_matrix.md": {
+      "sha256": "59b84dffd68b69c9e45aac135bcc7fbe02001ef81e22eecbba714e69f5e6bf13",
+      "bytes": 5165
+    },
+    "L11_9_audit_transcript.txt": {
+      "sha256": "4b9071d5834e46b72ca47984dc503735b15b7de894aa1bd19b50bffabd68f046",
+      "bytes": 10800
+    },
+    "L11_9_claim_audit.md": {
+      "sha256": "587e1e8df2ed9106503905330f5b6fe8335ad4c3536c0cca7ebbb5d3cdb0736a",
+      "bytes": 7976
+    },
+    "L11_9_claim_audit.py": {
+      "sha256": "2c9cb4bb31dee340613c41c412abcbe4b4352902be6be924feb1dd04a1365b01",
+      "bytes": 20205
+    },
+    "L11_9_decision_ledger.md": {
+      "sha256": "f505724d3fa90d94b927ae8e0aba88784dc28587105b78012824059ff07e9bff",
+      "bytes": 12065
+    },
+    "L11_9_learning_contrast_audit.md": {
+      "sha256": "272de372903793bf24f1f2ca1c0f44b669b839006df4091c3a4d1f445c909f35",
+      "bytes": 5161
+    },
+    "L11_9_owner_decision_sheet.md": {
+      "sha256": "e11b9c17de9a1fa056236066a9256d1461e0871521510bc311aade60de835dc4",
+      "bytes": 8890
+    },
+    "L11_9_readiness_report.md": {
+      "sha256": "7e5f85330b9b7935963e1ce64480fdba3810a25fdde454b348a654f95b6063fe",
+      "bytes": 6183
+    },
+    "L11_9_s1_aggregation_audit.md": {
+      "sha256": "4625d87320aa0538d7df75ae7ac1a0ef43e521c2d39c9bd10c5facccc0c1a1b6",
+      "bytes": 6489
+    },
+    "L11_9_s2_normalized_gain_audit.md": {
+      "sha256": "51677dd7d6a2a63115068d6e950896da2074d998e02709c0ff8ded958d15108b",
+      "bytes": 6359
+    },
+    "L11_9_s3_failure_coverage_audit.md": {
+      "sha256": "7d29d24ca2db83378897ec43e55e2bb8b7eb80fcb0d2c99274d7fbd407dc1a7e",
+      "bytes": 5685
+    },
+    "L11_9_s4_estimand_audit.md": {
+      "sha256": "12337b47ce7572baab9a36e8f270a4f350fb28eac203d1aece247043d1ac38cb",
+      "bytes": 4661
+    }
+  },
+  "notes": [
+    "This manifest does not record its own hash (it cannot).",
+    "All 12 sibling artifacts are hashed above.",
+    "Frozen artifacts were re-verified unchanged by the audit script (section AUDIT 0)."
+  ]
+}

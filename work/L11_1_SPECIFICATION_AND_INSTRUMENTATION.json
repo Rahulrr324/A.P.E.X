@@ -1,0 +1,210 @@
+{
+  "artifact": "STARK-L11.1-SPECIFICATION-AND-INSTRUMENTATION",
+  "task": "STARK-L11.1",
+  "date": "2026-10-24",
+  "status": "specification_and_instrumentation_design",
+  "official_evaluation_run": false,
+  "official_evaluation_label": "OFFICIAL_EVALUATION_NOT_RUN",
+  "learning_algorithm_implemented": false,
+  "source_modified": false,
+  "thresholds_changed": false,
+  "frozen_evidence_modified": false,
+
+  "provenance": {
+    "repository": "Rahulrr324/A.P.E.X",
+    "origin": "https://github.com/Rahulrr324/A.P.E.X.git",
+    "start_branch": "validation/l10-6-signoff",
+    "start_commit": "ba1cfb3ce7ac3b179846d70abf66fba42d99bcf5",
+    "start_tree_clean": true,
+    "start_commit_reachable_and_matching_remote": true,
+    "work_branch": "validation/l11-1-specification",
+    "branch_parent": "ba1cfb3ce7ac3b179846d70abf66fba42d99bcf5",
+    "l10_specification": {"version": "1.8", "sha256": "aafd00aad8c2b843410f2a88fdf3f64cbeb2c10c39f7470f43c5a2bafe33ffd1", "verified_in_tree_and_commit": true},
+    "clone_is_shallow": true,
+    "shallow_graft_points": ["563395f1ca7742ecb65bcef6134212f5bb66c3d8", "5f5a57717509623bd4c79460d50c05f7cbc605c3"],
+    "stale_local_ref": {"ref": "arena/86da64f9-a-p-e-x", "local": "5f5a577", "remote": "49cc6ba", "action_taken": "none (recorded, not altered)"},
+    "pull_requests": [
+      {"number": 2, "head": "5f5a577", "base": "main", "state": "OPEN", "untouched": true},
+      {"number": 3, "head": "49cc6ba", "base": "arena/c90f7329-a-p-e-x", "state": "OPEN", "untouched": true},
+      {"number": 1, "state": "MERGED", "untouched": true}
+    ],
+    "new_pr_opened": false
+  },
+
+  "key_finding": {
+    "label": "DERIVED",
+    "claim": "the published L10.3 cross-signature accuracy 0.5611 is a routing statistic, not a composition statistic",
+    "evidence": {
+      "source": "work/l10_raw/context_contribution_20261024/KC_cross/trials_ctxnovel_*_KX.csv.gz, eval_kind == 4",
+      "per_seed_pooled_accuracy": [0.6306, 0.5583, 0.4944],
+      "pooled_accuracy_mean": 0.5611,
+      "per_seed_pooled_routing": [0.5250, 0.5139, 0.4667],
+      "pooled_routing_mean": 0.5019,
+      "routing_by_task_index_all_seeds": {"task0": 0.0, "task1": [0.575, 0.5417, 0.4], "task2": 1.0},
+      "acc_given_resolved_bank": 1.0,
+      "acc_given_wrong_bank_range": [0.0, 0.1389],
+      "decomposition": "0.5611 = 0.5019 * 1.0 + 0.4981 * 0.132"
+    },
+    "interpretation": "retrieval is perfect once the bank is resolved; the whole number is bank selection, and the selection is a deterministic function of task/bank index identical across seeds, i.e. allocation-order weight mass rather than a compositional capability",
+    "effect_on_l10_record": "none; L10.3 and L10.6 reported the routing rate and the 0.0-1.0 per-task spread honestly, L11.1 adds the decomposition and the cross-seed invariance",
+    "effect_on_l11_design": [
+      "composition measured with unbalanced mixtures CROSS21/CROSS31 where the rule predicts a unique bank",
+      "1:1 mixture demoted to AMBIG11 tie-break compliance with no accuracy claim",
+      "routing and retrieval always reported separately (Comp, Read)",
+      "new order-permuted control arm A9",
+      "primary comparison against a measured null, never an absolute floor"
+    ]
+  },
+
+  "definition": {
+    "path": "stark/design/l11_cross_signature_compositional_generalization.md",
+    "version": "0.1",
+    "status": "DRAFT_NOT_RATIFIED",
+    "statement": "resolve a cue built from features of two or more training signatures, in a feature-count ratio absent from training, to the bank prescribed by the pre-declared R-majority rule, on every task, seed and allocation order, and retrieve correctly from that bank",
+    "declared_rule": "R-majority: bank owning the group with most features; ties -> lowest bank index",
+    "categories": ["TRAIN", "HOLDOUT", "CROSS21", "CROSS31", "AMBIG11", "PARTIAL", "MISLEAD", "OFF", "SHUFFLED", "ORDERPERM"],
+    "training_distribution_verified": {
+      "features_per_task": 4,
+      "groups_disjoint": true,
+      "train_pairs": 4,
+      "holdout_pairs": 2,
+      "training_cue_arity": 2,
+      "same_signature_only_in_training": true
+    },
+    "cannot_establish": [
+      "within-bank context modulation (no such mechanism exists)",
+      "generalization beyond two-signature cues at T=3,K=3",
+      "distinguishing R-majority from any other rule that predicts identical resolutions in a two-feature space",
+      "general intelligence or autonomous cognition"
+    ]
+  },
+
+  "instrumentation": {
+    "path": "stark/design/l11_trial_schema.md",
+    "required_fields": 35,
+    "nullable_fields": 11,
+    "existing_l10_columns": 17,
+    "existing_coverage": {"present": 13, "fraction": 0.3714},
+    "critical_gaps": [
+      "selected_slot exists in CCResult but is never written - the L10.4 anomaly is unattributable for exactly this reason",
+      "cue_features / cue_category absent - a mixed cue is indistinguishable from a correct one per trial",
+      "intended_bank absent - no record of what a declared rule prescribes",
+      "bank_score_margin absent - near-ties indistinguishable from decisive errors",
+      "run_id / protocol_sha256 / model_hash absent - provenance only in directory names"
+    ],
+    "design_rules": ["one row per trial", "explicit absence, never zero-imputation", "deterministic ordering and serialization", "no model dumps", "additive and default-off"],
+    "non_interference_standard": "per-trial byte comparison of the 17 projected L10 columns across paired on/off runs, plus aggregate equality as a secondary condition; aggregate equality alone is explicitly rejected as evidence",
+    "non_interference_status": "DESIGN_ONLY_NOT_EXECUTED",
+    "checkpoint_resume": "DESIGN_ONLY",
+    "determinism": "DESIGN_ONLY"
+  },
+
+  "prototype_checks": {
+    "classification": "PROTOTYPE_ONLY",
+    "schema_selftest": {"passed": 17, "total": 17, "exit_code": 0},
+    "negative_controls": {"count": 13, "all_rejected": true},
+    "expectation_correction_recorded": "an initially over-strict rule (nullable field rejected) was found by the self-test and corrected, not hidden",
+    "metric_reconstruction": {
+      "seeds": [123456789, 218213831, 171473193],
+      "match_all": true,
+      "max_abs_diff": "<5e-7",
+      "reproduced_pooled_accuracy": 0.5611,
+      "reproduced_pooled_routing": 0.5019
+    },
+    "coverage_audit": {"present": 13, "required": 35, "fraction": 0.3714},
+    "does_not_prove": "that the C++ writer works; test T7 is unexecuted"
+  },
+
+  "acceptance_protocol": {
+    "path": "stark/design/l11_1_protocol.md",
+    "version": "0.1",
+    "sha256": "322078c8345b5c72c4954a6de529329065d8875f2a103626039e92f09a810c32",
+    "state": "TEXT_FROZEN_FOR_REVIEW / THRESHOLDS_PENDING_OWNER_RATIFICATION",
+    "preregistration_record": "work/L11_1_PREREGISTRATION.json",
+    "criteria_candidate": {
+      "L11-A": "Comp(A2,t) >= 0.90 every task, every seed",
+      "L11-B": "MixAcc(A2,t) - Null(t) >= 0.50 on >=2 of 3 tasks, every seed",
+      "L11-C": "no (seed,task) cell in A2 or A3 below 0.50",
+      "L11-D": "Read(A2,t) >= 0.90 every task, every seed",
+      "L11-E": "byte-identical reruns; checkpoint/resume exact",
+      "L11-F": "no new regression failures",
+      "L11-G": "Comp(A2) - Comp(A9) >= -0.10 every seed (order control)"
+    },
+    "new_criterion_justification": "L11-G follows directly from the key finding: a rule that only tracks allocation order must not pass",
+    "statistical_character": {
+      "n_per_cell": 120,
+      "pass_counts": "108/120",
+      "P_pass_true_0_95": 0.9928,
+      "P_pass_true_0_90": 0.5761,
+      "P_pass_true_0_85": 0.0746,
+      "wilson_halfwidth_95_at_0_90": 0.0537,
+      "wording_rule": "a pass is 'consistent with >=0.90 at n=120', never '>=0.90 established'"
+    },
+    "seeds": {"primary": [123456789, 218213831, 171473193], "development": [1, 2], "held_out_from_l11_design": [7, 42]},
+    "arms": 11,
+    "invalid_data_rules": 5,
+    "no_result_exists_to_bias_the_thresholds": true
+  },
+
+  "validation_plan": {
+    "path": "work/L11_1_VALIDATION_PLAN.md",
+    "tests": 14,
+    "executed": ["T1", "T2", "T3", "T4", "T5", "T6"],
+    "not_executed": ["T7", "T8", "T9", "T10", "T11", "T12", "T13", "T14"],
+    "phase1_affinity": {
+      "status": "UNKNOWN / UNEXECUTED",
+      "assertions": 44,
+      "diagnosis": "compiles to failure at DWORD_PTR on Linux; a type alias alone is insufficient because Case C calls GetProcessAffinityMask outside any platform guard",
+      "verified_by": "g++ -fsyntax-only on the unmodified file and on a patched /tmp copy (repository file not modified)",
+      "portable_section": "Cases A and B, deterministic 64-bit mask enumeration regression",
+      "windows_only_section": "Case C, live Win32 API agreement, 3 direct CHECKs plus a per-CPU loop",
+      "repository_library_is_portable": true,
+      "defect_location": "the test file, not the library"
+    }
+  },
+
+  "regression": {
+    "executed_this_task": ["schema self-test 17/17", "negative controls 13/13 reject", "metric reconstruction 3/3 seeds", "coverage audit", "manifest verification of L10.3 evidence 245/245", "affinity compile diagnosis"],
+    "inherited_not_rerun": {"battery": "26/26 from L10.4", "re_executed": false, "expected_to_hold": true, "basis": "no source changed in L11.1; expectation, not measurement"},
+    "unknown_unexecuted": ["test_phase1_affinity", "L11 test set T7-T14", "any L11 arm"]
+  },
+
+  "governance": {
+    "owner_decisions_required": [
+      {"id": "R1", "subject": "ratify L11-A..L11-G", "recommended": "ratify as written", "blocking": true},
+      {"id": "R2", "subject": "test_phase1_affinity disposition", "recommended": "port: guard Case C with #ifdef _WIN32 and use a portable mask type", "alternatives": ["declare Windows-only and exclude from the Linux gate"], "blocking": true},
+      {"id": "R3", "subject": "authorise additive default-off instrumentation in l10_validation_harness.cpp", "recommended": "authorise as specified", "blocking": true}
+    ],
+    "agent_authority": "none",
+    "nothing_was_ratified_by_the_agent": true
+  },
+
+  "files_created": [
+    "stark/design/l11_cross_signature_compositional_generalization.md",
+    "stark/design/l11_1_protocol.md",
+    "stark/design/l11_trial_schema.md",
+    "work/L11_1_VALIDATION_PLAN.md",
+    "work/L11_1_PREREGISTRATION.json",
+    "work/L11_1_MANIFEST.md",
+    "work/L11_1_SPECIFICATION_AND_INSTRUMENTATION.md",
+    "work/L11_1_SPECIFICATION_AND_INSTRUMENTATION.json",
+    "work/l11_1_prototype/schema_check.py",
+    "work/l11_1_prototype/recompute_from_trials.py"
+  ],
+  "files_modified": [],
+  "files_deleted": [],
+  "prohibited_paths_touched": [],
+
+  "limitations": [
+    "defines a capability, demonstrates nothing about the system",
+    "definition scoped to a two-signature toy space and cannot distinguish R-majority from other rules with identical predictions there",
+    "seeds 7 and 42 held out from L11 design only, not from all prior exposure",
+    "instrumentation feasibility proven in Python over existing CSVs, not in the C++ writer",
+    "non-interference specified but not executed",
+    "thresholds unratified",
+    "test_phase1_affinity unexecuted"
+  ],
+
+  "progress_estimate_percent": 57,
+  "progress_changed": false
+}

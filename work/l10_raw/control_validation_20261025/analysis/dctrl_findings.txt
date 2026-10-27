@@ -1,0 +1,52 @@
+STARK-L10.1  D-CTRL: control audit findings (verified or newly established)
+
+1. NO-SEAL (L10-F) -- VACUOUS BY CONSTRUCTION
+   Verified independently. Two independent proofs:
+   (a) schedule structure: the training stream is makeLRTrials(80 single)/identity
+       followed by makeLRTrials(0,40)/identity. All 480 single-candidate trials are
+       therefore exactly the first 480 trials, which is exactly commit_trials=480 and
+       exactly the forced window. So every mapping-credit trial is forced to the
+       active bank, and the `writable` predicate can never bind.
+   (b) telemetry: opp_total = 0 on all 3 seeds and both arms (sealing CSV).
+   Consequence: NO-SEAL is analytically identical to CCM. This is a property of the
+   protocol, not a negative result about sealing.
+
+2. FROZEN-ROUTER == CONTEXT-OFF -- CONFIRMED, and now explained
+   Field-for-field identical evaluation metrics on all 3 seeds. Both reduce to
+   "always bank 0": FROZEN-ROUTER has router weights exactly 0.0, so its softmax is
+   uniform and the masked argmax takes the lowest allocated bank; CONTEXT-OFF zeroes
+   every cue so every score is 0. Same fallback, same numbers.
+
+3. K2-STRESS -- CONFOUNDED (confirmed)
+   The capacity-exhaustion branch both reuses a bank AND unseals it (sets every bank
+   ACTIVE when seal_superseded). Two interventions in one arm. The seal half is
+   measurably inert under the frozen protocol (finding 1), but the arm is still
+   confounded and should be split in a future protocol version.
+
+4. SEQ-L9 / ORACLE-BANK / CCM -- VALID
+   SEQ-L9 reproduces the published L9 SEQUENTIAL arm exactly; ORACLE-BANK equals CCM
+   on every performance metric (routing ceiling attained, not merely bounded);
+   CCM is the mechanism under test.
+
+5. SHUFFLED-CUE -- VALID NEGATIVE CONTROL
+   Pooled 0.132407; accuracy falls to the agreement rate of the wrong bank's mapping.
+
+6. NEW: multi-candidate ("no mapping credit") trials still train the shared channel
+   policy v (C->L weights), and that materially changes measured accuracy.
+   Evidence: analysis/channel_policy_probe_output.txt
+     - 480 single-candidate trials only .............. eval accuracy 0.55
+     - + 240 multi-candidate trials, learning ON ...... eval accuracy 1.00
+     - + 240 multi-candidate trials, learning OFF ..... eval accuracy 0.55
+     - bank S->A weights are IDENTICAL in all three cases (|dW| = 0 over the
+       multi-candidate block), and the state round-trips through ccSerialize.
+   Reading: "carries no mapping credit" is true of the S->A three-factor path only;
+   the same trials update the L9 channel policy, which is what makes the readout
+   usable. Any ablation that disables multi-candidate trials is therefore not a
+   "learning-free" control. This does not invalidate L10 (its arms all include the
+   multi-candidate block) but it corrects the description of what a selection trial
+   does, and it is the reason a single-bank agent trained on singles alone scores
+   0.55 rather than 1.00.
+
+7. NEW: sealing protects bank content, not the shared policies.
+   The seal predicate gates only the per-bank S->A credit. Router weights and the
+   channel policy v are shared and remain updatable while a bank is sealed.

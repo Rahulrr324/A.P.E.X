@@ -1,0 +1,156 @@
+{
+  "R7_dir": "work/l10_raw/spec_ratification_20261024/R7",
+  "all_match": true,
+  "seeds": {
+    "123456789": {
+      "0:0": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "match": true,
+        "n": 120,
+        "published_acquisition": 1.0,
+        "published_routing": 1.0,
+        "routing": 1.0
+      },
+      "0:2": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "n": 120,
+        "routing": 1.0
+      },
+      "0:4": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "n": 120,
+        "routing": 1.0
+      },
+      "1:1": {
+        "acc_given_routed": null,
+        "acc_given_unrouted": 0.16666666666666666,
+        "accuracy": 0.16666666666666666,
+        "match": true,
+        "n": 120,
+        "published_acquisition": 0.166667,
+        "published_routing": 0.0,
+        "routing": 0.0
+      },
+      "1:5": {
+        "acc_given_routed": null,
+        "acc_given_unrouted": 0.16666666666666666,
+        "accuracy": 0.16666666666666666,
+        "n": 120,
+        "routing": 0.0
+      },
+      "2:3": {
+        "acc_given_routed": null,
+        "acc_given_unrouted": 0.3333333333333333,
+        "accuracy": 0.3333333333333333,
+        "n": 120,
+        "routing": 0.0
+      }
+    },
+    "171473193": {
+      "0:0": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "match": true,
+        "n": 120,
+        "published_acquisition": 1.0,
+        "published_routing": 1.0,
+        "routing": 1.0
+      },
+      "0:2": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "n": 120,
+        "routing": 1.0
+      },
+      "0:4": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "n": 120,
+        "routing": 1.0
+      },
+      "1:1": {
+        "acc_given_routed": null,
+        "acc_given_unrouted": 0.0,
+        "accuracy": 0.0,
+        "match": true,
+        "n": 120,
+        "published_acquisition": 0.0,
+        "published_routing": 0.0,
+        "routing": 0.0
+      },
+      "1:5": {
+        "acc_given_routed": null,
+        "acc_given_unrouted": 0.0,
+        "accuracy": 0.0,
+        "n": 120,
+        "routing": 0.0
+      },
+      "2:3": {
+        "acc_given_routed": null,
+        "acc_given_unrouted": 0.0,
+        "accuracy": 0.0,
+        "n": 120,
+        "routing": 0.0
+      }
+    },
+    "218213831": {
+      "0:0": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "match": true,
+        "n": 120,
+        "published_acquisition": 1.0,
+        "published_routing": 1.0,
+        "routing": 1.0
+      },
+      "0:2": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "n": 120,
+        "routing": 1.0
+      },
+      "0:4": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "n": 120,
+        "routing": 1.0
+      },
+      "1:1": {
+        "acc_given_routed": null,
+        "acc_given_unrouted": 0.16666666666666666,
+        "accuracy": 0.16666666666666666,
+        "match": true,
+        "n": 120,
+        "published_acquisition": 0.166667,
+        "published_routing": 0.0,
+        "routing": 0.0
+      },
+      "1:5": {
+        "acc_given_routed": null,
+        "acc_given_unrouted": 0.16666666666666666,
+        "accuracy": 0.16666666666666666,
+        "n": 120,
+        "routing": 0.0
+      },
+      "2:3": {
+        "acc_given_routed": null,
+        "acc_given_unrouted": 0.16666666666666666,
+        "accuracy": 0.16666666666666666,
+        "n": 120,
+        "routing": 0.0
+      }
+    }
+  }
+}

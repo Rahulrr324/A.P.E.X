@@ -1,0 +1,149 @@
+
+==============================================================================
+0. design constants
+==============================================================================
+n = 120 trials per cell; 3 tasks; 3 primary seeds
+independent training runs = 3;  trials per task = 120
+total trials per arm = 1080 = 1080  (NOT 1080 independent units)
+per-identity chance = 0.1667
+Ungrouped E[Null] = (1 + 1/6 + 1/6)/3 = 0.4444
+
+==============================================================================
+1. S1 -- four aggregation rules for L11-A (per-cell gate unchanged: 108/120)
+==============================================================================
+ true p   q_cell    D0 all9    D3 2of3  D4 run-mean   D5 pooled
+   0.80   0.0025    0.00000    0.00000      0.00000     0.00000
+   0.85   0.0746    0.00000    0.00000      0.00000     0.00000
+   0.90   0.5761    0.00699    0.23060      0.16119     0.52560
+   0.92   0.8367    0.20095    0.80099      0.80131     0.99195
+   0.93   0.9225    0.48404    0.94966      0.96141     0.99990
+   0.95   0.9928    0.93710    0.99954      0.99990     1.00000
+
+dependence sensitivity of the SAME rules at a true 0.90
+  D0: independent 0.0070 | comonotone (all cells move together) 0.5761 | Frechet range [0, 0.5761]
+  D3: cells independent 0.2306 | within-seed comonotone (a run either passes every task or none) 0.1912
+      -> D3 spans 0.1912 .. 0.2306 : spread 0.0394, versus 0.5691 for D0
+      -> counter-intuitive but correct: positive dependence LOWERS a k-of-n
+         probability when k > n*q, so D3 is nearly dependence-robust while D0
+         spans two orders of magnitude under the same assumption.
+  D4: independent 0.1612 | perfectly correlated runs 0.5442
+  D5: one test, no multiplicity, no cell structure: 0.5256
+
+claim each rule supports
+  D0  'every task, on every run'                 <- highest bar, worst power
+  D3  'every task, on at least two of three runs'  <- matches a robustness claim
+  D4  'the battery mean reaches 0.90 on every run'  <- allows one task to compensate
+  D5  'the pooled rate exceeds 0.90'                <- a different, weaker claim
+
+==============================================================================
+2. S1 -- failure-model pass probabilities
+==============================================================================
+failure model                                        D0         D3         D4         D5
+uniform 0.85 (below target)                   7.182e-11  4.003e-06    0.00000    0.00000
+task-structured 0.99/0.99/0.60                1.244e-38  1.610e-25    0.00000    0.00005
+task-structured 0.99/0.99/0.13 (L10.3-shaped) 6.773e-242 4.985e-161    0.00000    0.00000
+uniform 0.50                                 3.506e-181 1.342e-119    0.00000    0.00000
+
+==============================================================================
+3. S2 -- NormalizedGain = (MixAcc - Null) / (1 - Null)
+==============================================================================
+identity: MixAcc = Comp*Read + (1-Comp)*WrongBankAcc
+criterion NG >= t  <=>  MixAcc >= t + (1-t)*Null
+
+implied MixAcc floor at t = 0.75, and at the frozen raw-difference rule:
+    Null  NG>=0.75 needs MixAcc headroom used  raw +0.50 needs raw headroom
+  0.0000                 0.7500        0.7500           0.5000       0.5000
+  0.0500                 0.7625        0.7500           0.5500       0.5263
+  0.1667                 0.7917        0.7500           0.6667       0.6000
+  0.2500                 0.8125        0.7500           0.7500       0.6667
+  0.3333                 0.8333        0.7500           0.8333       0.7500
+  0.4444                 0.8611        0.7500           0.9444       0.9000
+  0.5000                 0.8750        0.7500           1.0000       1.0000
+  0.6000                 0.9000        0.7500           1.1000       1.0000
+  0.7500                 0.9375        0.7500           1.2500       1.0000
+  0.9000                 0.9750        0.7500           1.4000       1.0000
+  the normalized rule consumes exactly 75 % of headroom on every cell;
+  the frozen raw rule consumes 50 % (Null=0) to 100 % (Null=0.50).
+  1.0000 -> NG = 0/0 UNDEFINED (structural NA, never a pass, never a fail)
+
+sensitivity: d(required MixAcc)/d(Null)
+  normalized rule : 0.25      (four times less sensitive than the raw difference)
+  raw-difference  : 1.00
+  a Null swing from 0.3333 to 0.5000 (the measured range) moves the required
+  MixAcc by 0.1667 under the raw rule and by 0.0417 under the normalized rule.
+
+noise amplification: NG = (M-N)/(1-N)
+  dNG/dM = 1/(1-N);  dNG/dN = -(1-NG)/(1-N)
+    Null    sd(M)   sd(Null)   amp on M    sd(NG)
+  0.0000   0.0274     0.0000      1.000    0.0274
+  0.1667   0.0274     0.0196      1.200    0.0330
+  0.4444   0.0274     0.0160      1.800    0.0496
+  0.2778   0.0274     0.0221      1.385    0.0382
+  (the third row is the protocol's actual forced-bank construction)
+
+exact P(NG >= 0.75) with X ~ Bin(120, MixAcc) and the three forced cells
+enumerated exactly (S = sum of the three forced-bank counts):
+ true MixAcc         Null shape  P(NG>=0.75)
+        0.85        1, 1/6, 1/6       0.3816
+        0.90        1, 1/6, 1/6       0.9164
+        0.95        1, 1/6, 1/6       0.9999
+        0.85           1/6 each       0.9577
+        0.90           1/6 each       0.9998
+        0.95           1/6 each       1.0000
+        0.85      0.5, 1/6, 1/6       0.8256
+        0.90      0.5, 1/6, 1/6       0.9963
+        0.95      0.5, 1/6, 1/6       1.0000
+
+==============================================================================
+4. S2 -- alternatives, side by side at the measured null
+==============================================================================
+Null shape of the protocol = (1, 1/6, 1/6), so E[Null] = 4/9 = 0.4444
+  MixAcc 0.86: raw gain +0.4156 (needs +0.50 -> FAIL);  NG 0.7480 (needs 0.75 -> FAIL)
+  MixAcc 0.88: raw gain +0.4356 (needs +0.50 -> FAIL);  NG 0.7840 (needs 0.75 -> PASS)
+  MixAcc 0.90: raw gain +0.4556 (needs +0.50 -> FAIL);  NG 0.8200 (needs 0.75 -> PASS)
+  MixAcc 0.92: raw gain +0.4756 (needs +0.50 -> FAIL);  NG 0.8560 (needs 0.75 -> PASS)
+  MixAcc 0.95: raw gain +0.5056 (needs +0.50 -> PASS);  NG 0.9100 (needs 0.75 -> PASS)
+
+reported-separately option: no gate, both numbers printed with intervals.
+  weakest possible criterion set: A (routing) and D (retrieval) only.
+
+==============================================================================
+5. candidate contract vs the frozen contract -- scenario table
+==============================================================================
+candidate contract: A(2-of-3 seeds per task) AND B(NG>=0.75 on >=2 of 3
+tasks, per seed) AND D(Read>=0.90, n_elig>=30) AND G AND E AND F
+frozen contract  : A(all 9) AND B(raw +0.50 vs measured Null) AND C(18) AND D AND G
+scenario                            MixAcc    A all9   A 2of3   B frozen   B norm       D    frozen  candidate
+perfect (Comp .99, Read 1)          0.9917 1.000e+00   1.0000  5.984e-01   1.0000  1.0000 5.984e-01     1.0000
+good (Comp .95, Read 1)             0.9583 9.371e-01   0.9995  9.242e-03   1.0000  1.0000 8.661e-03     0.9995
+on target (Comp .90, Read 1)        0.9167 6.987e-03   0.2306  5.022e-06   0.9964  1.0000 3.509e-08     0.2298
+leakage, same Comp/Read as on-target  0.9600 6.987e-03   0.2306  1.181e-02   1.0000  1.0000 8.251e-05     0.2306
+retrieval drop, Comp .90 Read .90   0.8267 6.987e-03   0.2306  2.295e-19   0.0004  0.0013 2.122e-24     0.0000
+retrieval collapse (Comp .99, Read 0)  0.0017 1.000e+00   1.0000  0.000e+00   0.0000  0.0000 0.000e+00     0.0000
+uniform wrong routing (Comp .50, Read 1)  0.5660 3.506e-181   0.0000 3.613e-103   0.0000  1.0000 4.082e-284     0.0000
+
+note: every figure assumes independence across cells; that assumption is
+stated, not justified by the design. See the Frechet bounds of L11.7 section 2.
+
+==============================================================================
+6. effective sample size / experimental unit
+==============================================================================
+  trials per cell         120   -> measurement precision for ONE fixed checkpoint
+  seeds (independent runs)  3   -> the only real replication of the training procedure
+  tasks (fixed battery)     3   -> a fixed factor, not a random sample
+  a claim about the METHOD therefore has n = 3, not 9 and not 1080
+  Wilson 95% interval at 108/120 = (0.8333, 0.9419); half-width 0.0543
+
+==============================================================================
+7. S3 -- coverage arithmetic for the 0.50 floor
+==============================================================================
+failure mode                                     A       D   C@0.50
+routing collapse on one task (Comp 0)         FAIL   UNDEF     FAIL   (MixAcc 0.132)
+uniform wrong routing (Comp .50, Read 1)      FAIL    PASS     PASS   (MixAcc 0.566)
+retrieval collapse (Comp .99, Read 0)         PASS    FAIL     FAIL   (MixAcc 0.002)
+leakage, same Comp/Read as on-target          PASS    PASS     PASS   (MixAcc 0.960)
+retrieval drop, Comp .90 Read .90             PASS    PASS     PASS   (MixAcc 0.827)
+on target (Comp .90, Read 1)                  PASS    PASS     PASS   (MixAcc 0.917)
+
+C@0.50 never rejects a mode that A or D accepts, and it PASSES two modes
+(uniform wrong routing, leakage) that A rejects. It is the weakest gate.

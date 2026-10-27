@@ -1,0 +1,9 @@
+  network gate semantics OK
+  default path unchanged OK
+  update mass by gate mode OK
+  mini learning with training distractors OK
+  serialization compatibility OK
+==========================================
+Total assertions: 28
+ALL TESTS PASSED
+==========================================

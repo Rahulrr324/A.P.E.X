@@ -1,0 +1,222 @@
+{
+  "artifact": "STARK-L10.6-MILESTONE-SIGNOFF",
+  "task": "STARK-L10.6",
+  "title": "Milestone Sign-off and L11 Readiness Assessment",
+  "date": "2026-10-24",
+  "status": "verification_and_readiness_only",
+  "no_experiment_run": true,
+  "no_source_changed": true,
+  "no_threshold_changed": true,
+  "no_evidence_regenerated": true,
+  "no_full_l10_rerun": true,
+  "provenance": {
+    "repository": "Rahulrr324/A.P.E.X",
+    "origin": "https://github.com/Rahulrr324/A.P.E.X.git",
+    "start_branch": "validation/l10-5-milestone-closeout",
+    "start_commit": "0155fdb4d4e8b2c2a0dd44781f9863a31e51adce",
+    "start_tree_clean": true,
+    "local_equals_remote_at_start": true,
+    "validation_branch": "validation/l10-6-signoff",
+    "validation_branch_parent": "0155fdb4d4e8b2c2a0dd44781f9863a31e51adce",
+    "specification_version": "1.8",
+    "specification_sha256": "aafd00aad8c2b843410f2a88fdf3f64cbeb2c10c39f7470f43c5a2bafe33ffd1",
+    "specification_hash_verified_in_tree_and_in_commit": true,
+    "k1_protocol": {
+      "path": "work/l10_raw/official_evaluation_20261024/protocol/l10_4_official_evaluation_protocol.md",
+      "version": "1.1",
+      "sha256_prefix": "249d5074",
+      "registration_commit": "e32043c",
+      "correction_commit": "9b8f5af"
+    },
+    "ancestry_verified": ["aed9c30", "082856c"],
+    "pull_requests": [
+      {"number": 2, "head": "5f5a577", "base": "main", "state": "OPEN", "untouched": true},
+      {"number": 3, "head": "49cc6ba", "base": "arena/c90f7329-a-p-e-x", "state": "OPEN", "untouched": true},
+      {"number": 1, "state": "MERGED", "untouched": true}
+    ],
+    "new_pr_opened": false
+  },
+  "scope": {
+    "executed": [
+      "manifest hash verification of all L10 evidence sets",
+      "recomputation of L10-K1, L10-E, L10-E2 from committed per-seed rows",
+      "recomputation of all 27 forced-bank cells",
+      "cross-signature and capacity aggregate inspection",
+      "git-history harness hash cross-check",
+      "byte-identity comparison L10.2 R0 vs L10.4 K1"
+    ],
+    "not_executed": [
+      "full L10 evaluation re-run",
+      "any new experiment",
+      "channel-slot diagnostic run",
+      "regression suite re-run",
+      "C++ or test modification"
+    ]
+  },
+  "governance_audit": {
+    "decisions": [
+      {"id": "A", "subject": "L10-E", "answer": "retain original failure, close as historical", "answer_option": 1, "spec_effect": "annotation row only"},
+      {"id": "B", "subject": "L10-F", "answer": "superseded and closed by L10-F2, failure preserved", "answer_option": 1, "spec_effect": "annotation row only"},
+      {"id": "C", "subject": "L10-G", "answer": "historical confounded result superseded by L10-G2, both preserved", "answer_option": 1, "spec_effect": "annotation row only"}
+    ],
+    "decision_record": "stark/reports/L10_5_OWNER_DECISION.md",
+    "asked_separately": true,
+    "owner": "Rahulrr324",
+    "agent_authority": "none",
+    "spec_diff_v17_to_v18": {"added_lines": 51, "deleted_lines": 5, "deletions_confined_to_version_header": true},
+    "original_criterion_rows_identical_v16_to_v18": true,
+    "original_criteria_checked": ["L10-A", "L10-B", "L10-C", "L10-D", "L10-E", "L10-F", "L10-G", "L10-H", "L10-I", "L10-J", "L10-E2"],
+    "historical_measurement_rewritten": false,
+    "measured_value_changed": false,
+    "pass_fail_changed": false,
+    "closure_meaning": "governance act: every criterion has a final recorded outcome; does not convert any failure to a pass, does not close the anomaly"
+  },
+  "evidence_integrity": {
+    "verified_by": "independent script written in this task; read-only",
+    "sets": [
+      {"set": "spec_ratification_20261024", "milestone": "L10.2", "entries": 275, "diffs": 1, "explained": true, "explanation": "manifest records l10_validation_harness.cpp as of the L10.2 commit f501730f; file legitimately amended later"},
+      {"set": "control_validation_20261025", "milestone": "L10.1", "entries": 275, "diffs": 1, "explained": true, "explanation": "manifest records l10_validation_harness.cpp as of the L10.1 commit afdf6c8b; file legitimately amended later"},
+      {"set": "context_contribution_20261024", "milestone": "L10.3", "entries": 245, "diffs": 0},
+      {"set": "official_evaluation_20261024", "milestone": "L10.4", "entries": 124, "scope": "evidence artifacts only", "diffs": 0},
+      {"set": "official_evaluation_20261024", "milestone": "L10.4", "entries": 129, "scope": "full manifest including spec deliverable", "diffs": 1, "explained": true, "explanation": "spec entry records v1.7; repository now carries v1.8 after promotion"},
+      {"set": "closeout_20261024", "milestone": "L10.5", "entries": 10, "diffs": 0}
+    ],
+    "manifests_repaired": false,
+    "manifests_should_be_repaired": false,
+    "harness_amendment_changed_any_number": false,
+    "byte_identity_check": {"comparison": "L10.2 R0 metrics+sealing vs L10.4 K1 metrics+sealing, three masters", "result": "6/6 byte-identical"}
+  },
+  "recomputed_results": {
+    "note": "recomputed from committed per-seed rows; no model executed",
+    "l10_k1": {
+      "verdict": "PASS",
+      "per_seed": [
+        {"seed": 123456789, "caa_pooled": 0.5185, "cra_pooled": 0.6667},
+        {"seed": 218213831, "caa_pooled": 0.5917, "cra_pooled": 0.6667},
+        {"seed": 171473193, "caa_pooled": 0.6296, "cra_pooled": 0.6667}
+      ],
+      "grand_pooled_caa": 0.5799,
+      "matches_published": true
+    },
+    "l10_e": {
+      "verdict": "FAILED",
+      "context_off_pooled": 0.425926,
+      "threshold": 0.4,
+      "shuffled_cue_pooled": 0.132407,
+      "matches_published": true,
+      "retained": true
+    },
+    "l10_e2": {
+      "verdict": "PASS",
+      "margins_vs_off": {"123456789": [0.0, 0.8333, 0.6667], "218213831": [0.0, 0.8333, 0.8333], "171473193": [0.0, 1.0, 1.0]},
+      "margins_vs_shuffled": {"123456789": [0.7333, 0.8333, 0.7417], "218213831": [0.8583, 0.9167, 0.9], "171473193": [1.0, 0.9, 0.925]},
+      "matches_published": true
+    },
+    "forced_bank_structure": {
+      "cells": 27,
+      "cells_fitting_agreement_over_6_model": 26,
+      "diagonal_cells": 9,
+      "diagonal_accuracy": 1.0,
+      "diagonal_trials": 1080,
+      "diagonal_slips": 0,
+      "off_diagonal_value_histogram": {"0": 5, "1": 1, "20": 10, "40": 2},
+      "off_diagonal_denominator": 120
+    }
+  },
+  "read_only_inspection": {
+    "cross_signature": {
+      "source": "work/l10_raw/context_contribution_20261024/KC_cross/",
+      "per_seed": [[0.2583, 0.6333, 1.0], [0.1333, 0.5417, 1.0], [0.0, 0.4833, 1.0]],
+      "pooled": 0.5611,
+      "minimum": 0.0,
+      "criterion_status": "none (exploratory)"
+    },
+    "holdout_combined_single_signature": {"accuracy": 0.99815, "slips": 2, "trials": 1080},
+    "capacity": {
+      "T4K4": 0.9993, "T5K5": 0.9989, "T8K8": 0.992, "min_acquisition": 0.8333,
+      "forgetting": 0.0,
+      "bank_scarcity_k2_t3": {"final": 0.6361, "forgetting": 0.2713, "ccm_final": 1.0, "ccm_forgetting": 0.0},
+      "criterion_status": "none (exploratory)"
+    }
+  },
+  "anomaly": {
+    "status": "UNRESOLVED",
+    "cell": {"seed": 218213831, "task": 1, "forced_bank": 2},
+    "observed": 0.008333,
+    "expected": 0.0,
+    "trials": 120,
+    "mechanism_ruled_out": "systematic channel-attention mis-selection (would produce far more than one match)",
+    "modal_explanation": "single spike-count win under thermal noise in the decision window; posterior proportional to exp(beta*delta_count) near uniform at delta_count ~ 0",
+    "alternative_not_excluded": "tie-break or eligibility edge case on a near-tie, or interference-window off-by-one",
+    "missing_observable": "per-trial rows for the forced-bank sweep; harness writes aggregate only (writePerBankCtxCsv: master,task,bank,acc_cue_off; runStream passes rows=nullptr)",
+    "decision_relevant": false,
+    "sensitivity": {
+      "zeroing_cell_delta_caa_pooled": 0.000926,
+      "margin_to_clause_a_floor": 0.1917,
+      "trials_needed_to_flip_clause_a": 69,
+      "trials_needed_to_flip_clause_b": 30,
+      "routing_misses_per_task_to_flip_clause_c": 20
+    },
+    "diagnostic_run": false,
+    "proposal_file": "work/L10_6_PROPOSED_channel_slot_diagnostic.md",
+    "proposal_status": "PROPOSED / NOT EXECUTED",
+    "proposal_registered": false
+  },
+  "established": [
+    "context-selective bank allocation works at this scale on every primary and exploratory seed",
+    "context contributes measurably against a measured context-ignoring null (L10-K1 PASS, grand pooled CAA 0.5799)",
+    "forgetting is effectively absent under the tested regime and sealing is load-bearing (L10-F2)",
+    "capacity, not routing, is the binding constraint (K=2/T=3 degrades to 0.6361 / 0.2713)",
+    "determinism, persistence and checkpoint resume are exact (L10-H); the evidence chain is hash-auditable"
+  ],
+  "not_established": [
+    "L10-E remains a historical FAILURE at 0.425926 against 0.40; L10-K1 does not convert it",
+    "context selects a bank, not context-modulated retrieval within a bank",
+    "cross-signature compositional generalization is weak (pooled 0.5611, minimum 0.0, task-order dependent)",
+    "toy scale does not imply general compositional intelligence",
+    "test_phase1_affinity is unexecuted (Windows-only DWORD_PTR); neither pass nor fail",
+    "one forced-bank trial is unexplained"
+  ],
+  "criteria_disposition": {
+    "L10-A": "satisfied",
+    "L10-B": "satisfied",
+    "L10-C": "satisfied",
+    "L10-D": "satisfied",
+    "L10-E": "FAILED - retained and closed as historical failure",
+    "L10-E2": "satisfied",
+    "L10-K1": "PASS",
+    "L10-F": "FAILED - superseded and closed by L10-F2",
+    "L10-F2": "satisfied",
+    "L10-G": "PASS on confounded arm - superseded by L10-G2",
+    "L10-G2": "satisfied",
+    "L10-H": "satisfied",
+    "L10-I": "satisfied on L9 baseline (inherited, not re-executed)",
+    "L10-J": "satisfied"
+  },
+  "milestone_disposition": "L10 CLOSED 2026-10-24",
+  "limitations": [
+    "all numbers derive from evidence sealed by earlier tasks; no model executed in L10.6",
+    "regression suite not re-run; status inherited",
+    "forced-bank arm is aggregate-only, so trial-granular attribution is impossible",
+    "test_context_conditioned_memory.cpp has 2 assertions for the whole CCM subsystem",
+    "cross-signature and capacity numbers are exploratory with high per-seed spread",
+    "this document cannot authorise an L11 protocol"
+  ],
+  "tests": {
+    "executed_in_this_task": ["manifest hash verification", "criteria recomputation from committed rows", "git-history harness hash cross-check", "byte-identity comparison"],
+    "inherited_previously_verified": {"battery": "26/26", "source": "L10.4", "re_executed_here": false, "includes": ["test_l10_1_sealing (276 assertions)", "n_way_learned_relevance_loop_L8 (PASS)", "test_phase1_profiler (34)", "test_phase1_accounting (67)", "test_phase1_budget (55)", "test_phase1_records (72)", "test_phase1_reproducibility (37)", "test_phase1_gates (437)"]},
+    "unknown_unexecuted": ["test_phase1_affinity"]
+  },
+  "readiness_verdict": "READY WITH PREREQUISITES",
+  "recommended_next_milestone": "STARK-L11 - Cross-Signature Compositional Generalization",
+  "deliverables": [
+    "work/L10_6_MILESTONE_SIGNOFF.md",
+    "work/L10_6_MILESTONE_SIGNOFF.json",
+    "work/L11_READINESS_ASSESSMENT.md",
+    "work/L11_READINESS_ASSESSMENT.json",
+    "work/L10_6_PROPOSED_channel_slot_diagnostic.md"
+  ],
+  "files_changed_outside_new_work_files": [],
+  "progress_estimate_percent": 57,
+  "progress_changed": false
+}

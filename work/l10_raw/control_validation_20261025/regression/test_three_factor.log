@@ -1,0 +1,30 @@
+==========================================
+STARK-006 Three-Factor Learning Tests
+==========================================
+Test 1: m=0 => no weight change despite pairing... PASS (w=0.5 -> 0.5, e=0.0573604)
+Test 2: m>0 => weight change with positive eligibility... PASS (w=0.5 -> 0.504756)
+Test 3: Causal direction (pre->post up, post->pre down)... PASS
+Test 4: m<0 => reverses learning direction... PASS (w=0.5 -> 0.495244)
+Test 5: Eligibility decay fades weight change... PASS (delayed dw=3.60634e-12 vs immediate dw=0.00475615)
+Test 6: No pairing + m>0 => no change... PASS (w=0.5 -> 0.5)
+Test 7: Repeated pairing accumulates eligibility... PASS
+Test 8: Weight bounds saturation... PASS (w_max=1, w_min=0)
+Test 9: Inhibitory sign preservation... PASS (w=-0.5 -> -0.495244)
+Test 10: Zero weight stays zero... PASS (w=0 -> 0.00475615, e=0.00951229)
+Test 10b: Zero weight with [0,0] bounds stays zero... PASS (w=0 -> 0)
+Test 11: Same-timestep policy (exact net)... PASS
+Test 12: Mode exclusivity... PASS (TF: 0.5->0.5, STDP: 0.5->0.509512)
+Test 13: STDP + three-factor + homeostasis coherence... PASS (STDP w=0.5->0.186841, TF w=0.3->0.112105)
+Test 14: Deterministic repeated execution... PASS
+Test 15: reset() resets eligibility and modulator... PASS
+Test 16: Parameter validation... PASS
+Test 17: Numerical edge cases... PASS
+Test 18: addNeuron isolation... PASS
+Test 19: Worked example (analytical)... PASS (e=0.00913931, w=0.50457)
+Test: Serialization round-trip (three-factor state)... PASS (w=0.561244->0.561244, e=0.0377194->-0.0221121)
+Test: Primary signature (m=0 blocks all learning)... PASS (w=0.5 -> 0.5, e=0.520142)
+Test: Empty network three-factor operations... PASS
+==========================================
+Total assertions: 80
+ALL TESTS PASSED
+==========================================

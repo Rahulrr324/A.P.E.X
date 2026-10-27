@@ -1,0 +1,110 @@
+{
+  "calls": "/tmp/l112/runA/calls_ccm_123456789.csv",
+  "eval_kind_filter": 0,
+  "published_comparison": {
+    "column": "acquisition",
+    "match": true,
+    "per_task": {
+      "0": {
+        "abs_diff": 0.0,
+        "published": 1.0,
+        "reconstructed": 1.0
+      },
+      "1": {
+        "abs_diff": 0.0,
+        "published": 1.0,
+        "reconstructed": 1.0
+      },
+      "2": {
+        "abs_diff": 0.0,
+        "published": 1.0,
+        "reconstructed": 1.0
+      }
+    }
+  },
+  "reconstruction": {
+    "calls_involved": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "per_call": {
+      "0:0": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "call": 0,
+        "eval_kind": 0,
+        "n": 120,
+        "purpose": "acquisition",
+        "routing": 1.0,
+        "task": 0
+      },
+      "0:2": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "call": 2,
+        "eval_kind": 0,
+        "n": 120,
+        "purpose": "retention@step1",
+        "routing": 1.0,
+        "task": 0
+      },
+      "0:4": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "call": 4,
+        "eval_kind": 0,
+        "n": 120,
+        "purpose": "retention@step2",
+        "routing": 1.0,
+        "task": 0
+      },
+      "1:1": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "call": 1,
+        "eval_kind": 0,
+        "n": 120,
+        "purpose": "acquisition",
+        "routing": 1.0,
+        "task": 1
+      },
+      "1:5": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "call": 5,
+        "eval_kind": 0,
+        "n": 120,
+        "purpose": "retention@step2",
+        "routing": 1.0,
+        "task": 1
+      },
+      "2:3": {
+        "acc_given_routed": 1.0,
+        "acc_given_unrouted": null,
+        "accuracy": 1.0,
+        "call": 3,
+        "eval_kind": 0,
+        "n": 120,
+        "purpose": "acquisition",
+        "routing": 1.0,
+        "task": 2
+      }
+    },
+    "pooled": {
+      "accuracy": 1.0,
+      "n": 720,
+      "routing": 1.0
+    },
+    "ragged_task_sizes": {}
+  },
+  "trials": "/tmp/l112/runA/trials_ccm_123456789.csv"
+}

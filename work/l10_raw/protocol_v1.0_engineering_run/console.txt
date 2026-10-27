@@ -1,0 +1,33 @@
+[arm] SEQ-L9 ... done
+[arm] CCM ... done
+[arm] ORACLE-BANK ... done
+[arm] SHUFFLED-CUE ... done
+[arm] CONTEXT-OFF ... done
+[arm] NO-SEAL ... done
+[arm] K2-STRESS ... done
+[arm] FROZEN-ROUTER ... done
+
+=== STARK-L10 pooled (3 seeds) ===
+SEQ-L9: acq=[1.000000,0.669444,0.563889] mean_forget=0.458333 final_avg=0.286111 routing=1.000000 holdout_min=0.050000
+CCM: acq=[0.447222,0.719444,0.519444] mean_forget=-0.004630 final_avg=0.566667 routing=0.000000 holdout_min=0.125000
+ORACLE-BANK: acq=[1.000000,1.000000,1.000000] mean_forget=0.000000 final_avg=1.000000 routing=1.000000 holdout_min=0.991667
+SHUFFLED-CUE: acq=[0.455556,0.163889,0.288889] mean_forget=0.052778 final_avg=0.250000 routing=0.000000 holdout_min=0.125000
+CONTEXT-OFF: acq=[0.455556,0.169444,0.202778] mean_forget=-0.000926 final_avg=0.276852 routing=0.000000 holdout_min=0.125000
+NO-SEAL: acq=[0.447222,0.886111,1.000000] mean_forget=0.208333 final_avg=0.569444 routing=0.000000 holdout_min=0.041667
+K2-STRESS: acq=[0.447222,0.811111,0.691667] mean_forget=0.137963 final_avg=0.512037 routing=0.000000 holdout_min=0.133333
+FROZEN-ROUTER: acq=[0.663889,0.280556,0.116667] mean_forget=-0.044444 final_avg=0.398148 routing=0.000000 holdout_min=0.000000
+
+=== criteria ===
+L10-A: FAIL  (CCM mean forgetting <= 0.10 and final avg >= 0.85)
+L10-B: FAIL  (CCM acquisition >= 0.85 on every task)
+L10-C: FAIL  (CCM routing accuracy >= 0.90 on every task)
+L10-D: FAIL  (CCM held-out cue combination >= 0.80 per task)
+L10-E: PASS  (shuffled-cue <= 0.40 and context-off <= 0.40)
+L10-F: PASS  (NO-SEAL mean forgetting > CCM mean forgetting)
+L10-G: PASS  (K2-STRESS worse than CCM (forgetting or final avg))
+L10-H: FAIL  (persistence + determinism + checkpoint resume exact)
+L10-I: SEE-REPORT  (no new regressions vs L9 baseline (see markdown report))
+L10-J: SEE-REPORT  (limitations reported honestly; no threshold nudged)
+
+wrote work/dev_context_conditioned_memory_report_STARK-L10-1.json and work/l10_raw/per_seed.csv
+total_seconds=18.753098 peak_rss_kb=7156

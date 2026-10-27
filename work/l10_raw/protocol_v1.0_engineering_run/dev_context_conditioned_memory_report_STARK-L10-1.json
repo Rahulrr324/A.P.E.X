@@ -1,0 +1,197 @@
+{
+  "schema": "STARK-L10-1",
+  "design": "Context-conditioned memory and continual learning",
+  "protocol": "stark/design/context_conditioned_memory_milestone.md v1.0 (frozen before evaluation)",
+  "baseline": "STARK-L9 continual_learning_loop (report STARK-L9-1)",
+  "n_ids": 6, "n_chan": 2, "n_ctx": 2, "n_feat": 12,
+  "masters": [123456789, 218213831, 171473193],
+  "task_sequence": "3 tasks, distinct pi, shared phi, 720 learning trials/task (80 single + 40 selection per identity); L10 adds a 60-trial bank probe per task",
+  "cue_structure": "12 features, signature groups of 4 per task; 4 training pairs, 2 held-out pairs per task",
+  "curve_checkpoints_trials": [0,120,240,360,480,600,720],
+  "arms": ["SEQ-L9","CCM","ORACLE-BANK","SHUFFLED-CUE","CONTEXT-OFF","NO-SEAL","K2-STRESS","FROZEN-ROUTER"],
+  "results": {
+    "SEQ-L9": {
+      "per_seed": [
+        { "master": 123456789, "acq": [1.000000,0.666667,0.508333], "ret_t1_t2": 0.258333, "ret_t1_t3": 0.125000, "ret_t2_t3": 0.266667, "final_avg": 0.300000, "routing": [1.000000,1.000000,1.000000], "holdout": [0.108333,0.283333,0.516667], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.046418, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,0,0], "allocations": 0, "curve": [0.191667,0.516667,0.416667,0.483333,0.400000,0.991667,1.000000,0.166667,0.333333,0.491667,0.525000,0.666667,0.666667,0.666667,0.200000,0.508333,0.500000,0.508333,0.500000,0.500000,0.500000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,-1.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.350631 },
+        { "master": 218213831, "acq": [1.000000,0.833333,0.833333], "ret_t1_t2": 0.733333, "ret_t1_t3": 0.191667, "ret_t2_t3": 0.016667, "final_avg": 0.347222, "routing": [1.000000,1.000000,1.000000], "holdout": [0.216667,0.050000,0.833333], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.040471, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,0,0], "allocations": 0, "curve": [0.150000,0.525000,0.425000,0.425000,0.458333,0.991667,1.000000,0.666667,0.833333,0.833333,0.833333,0.816667,0.833333,0.841667,0.050000,0.833333,0.833333,0.825000,0.833333,0.825000,0.833333], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,120.000000,120.000000], "persist_state": true, "persist_choices": true, "seconds": 0.351106 },
+        { "master": 171473193, "acq": [1.000000,0.508333,0.350000], "ret_t1_t2": 0.083333, "ret_t1_t3": 0.141667, "ret_t2_t3": 0.141667, "final_avg": 0.211111, "routing": [1.000000,1.000000,1.000000], "holdout": [0.166667,0.216667,0.341667], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.052293, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,0,0], "allocations": 0, "curve": [0.125000,0.416667,0.558333,0.458333,0.600000,1.000000,1.000000,0.000000,0.508333,0.508333,0.500000,0.500000,0.500000,0.508333,0.075000,0.350000,0.350000,0.333333,0.341667,0.358333,0.341667], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,-1.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.349523 }
+      ],
+      "pooled": {
+        "acquisition_mean": [1.000000,0.669444,0.563889],
+        "acquisition_sd": [0.000000,0.162518,0.246409],
+        "forgetting_mean": [0.847222,0.527778,0.000000],
+        "mean_forgetting": 0.458333, "mean_forgetting_sd": 0.072648,
+        "final_avg_mean": 0.286111, "final_avg_sd": 0.069110,
+        "routing_mean": [1.000000,1.000000,1.000000],
+        "holdout_mean": [0.163889,0.183333,0.563889],
+        "shuffled_cue_mean": 0.000000,
+        "context_off_mean": 0.000000,
+        "update_mass": {"intended_rows": 0.046394, "unintended_rows": 0.000000, "unintended_banks": 0.000000},
+        "persistence_state_all": true,
+        "persistence_choices_all": true
+      }
+    },
+    "CCM": {
+      "per_seed": [
+        { "master": 123456789, "acq": [1.000000,1.000000,0.316667], "ret_t1_t2": 1.000000, "ret_t1_t3": 1.000000, "ret_t2_t3": 1.000000, "final_avg": 0.772222, "routing": [1.000000,1.000000,0.233333], "holdout": [1.000000,1.000000,0.325000], "shuffled": [1.000000,0.166667,0.241667], "ctx_off": [1.000000,0.166667,0.166667], "update_mass": {"intended_rows": 0.037397, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.191667,0.266667,0.416667,0.483333,0.400000,0.991667,1.000000,0.166667,0.583333,0.941667,1.000000,0.991667,1.000000,0.991667,0.166667,0.333333,0.325000,0.333333,0.333333,0.333333,0.316667], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,240.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.986884 },
+        { "master": 218213831, "acq": [0.175000,0.983333,1.000000], "ret_t1_t2": 0.175000, "ret_t1_t3": 0.166667, "ret_t2_t3": 1.000000, "final_avg": 0.722222, "routing": [0.000000,1.000000,1.000000], "holdout": [0.166667,1.000000,1.000000], "shuffled": [0.208333,0.158333,0.550000], "ctx_off": [0.208333,0.175000,0.200000], "update_mass": {"intended_rows": 0.041744, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.150000,0.183333,0.116667,0.116667,0.175000,0.191667,0.200000,0.200000,0.058333,0.000000,0.000000,0.025000,0.000000,0.983333,0.191667,0.200000,0.450000,0.975000,0.983333,0.991667,1.000000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,720.000000,360.000000], "persist_state": true, "persist_choices": true, "seconds": 0.963148 },
+        { "master": 171473193, "acq": [0.166667,0.175000,0.241667], "ret_t1_t2": 0.166667, "ret_t1_t3": 0.150000, "ret_t2_t3": 0.225000, "final_avg": 0.205556, "routing": [0.000000,0.000000,0.000000], "holdout": [0.125000,0.208333,0.150000], "shuffled": [0.158333,0.166667,0.158333], "ctx_off": [0.158333,0.166667,0.241667], "update_mass": {"intended_rows": 0.006601, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.125000,0.116667,0.225000,0.100000,0.141667,0.166667,0.125000,0.125000,0.125000,0.125000,0.166667,0.141667,0.166667,0.175000,0.158333,0.175000,0.241667,0.200000,0.175000,0.166667,0.125000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,-1.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.938421 }
+      ],
+      "pooled": {
+        "acquisition_mean": [0.447222,0.719444,0.519444],
+        "acquisition_sd": [0.478738,0.471576,0.417859],
+        "forgetting_mean": [0.008333,-0.022222,0.000000],
+        "mean_forgetting": -0.004630, "mean_forgetting_sd": 0.005782,
+        "final_avg_mean": 0.566667, "final_avg_sd": 0.313729,
+        "routing_mean": [0.333333,0.666667,0.411111],
+        "holdout_mean": [0.430556,0.736111,0.491667],
+        "shuffled_cue_mean": 0.312037,
+        "context_off_mean": 0.275926,
+        "update_mass": {"intended_rows": 0.028581, "unintended_rows": 0.000000, "unintended_banks": 0.000000},
+        "persistence_state_all": true,
+        "persistence_choices_all": true
+      }
+    },
+    "ORACLE-BANK": {
+      "per_seed": [
+        { "master": 123456789, "acq": [1.000000,1.000000,1.000000], "ret_t1_t2": 1.000000, "ret_t1_t3": 1.000000, "ret_t2_t3": 1.000000, "final_avg": 1.000000, "routing": [1.000000,1.000000,1.000000], "holdout": [1.000000,1.000000,0.991667], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.053984, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.191667,0.516667,0.416667,0.483333,0.400000,0.991667,1.000000,0.166667,1.000000,0.991667,1.000000,0.991667,1.000000,0.158333,0.158333,1.000000,0.991667,1.000000,1.000000,1.000000,0.166667], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,120.000000,120.000000], "persist_state": true, "persist_choices": true, "seconds": 0.904403 },
+        { "master": 218213831, "acq": [1.000000,1.000000,1.000000], "ret_t1_t2": 1.000000, "ret_t1_t3": 1.000000, "ret_t2_t3": 1.000000, "final_avg": 1.000000, "routing": [1.000000,1.000000,1.000000], "holdout": [1.000000,1.000000,1.000000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.062554, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.150000,0.525000,0.425000,0.425000,0.458333,0.991667,1.000000,0.183333,1.000000,1.000000,1.000000,0.983333,1.000000,0.666667,0.150000,0.983333,1.000000,0.991667,1.000000,0.991667,0.166667], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,120.000000,120.000000], "persist_state": true, "persist_choices": true, "seconds": 0.815521 },
+        { "master": 171473193, "acq": [1.000000,1.000000,1.000000], "ret_t1_t2": 1.000000, "ret_t1_t3": 1.000000, "ret_t2_t3": 1.000000, "final_avg": 1.000000, "routing": [1.000000,1.000000,1.000000], "holdout": [1.000000,1.000000,1.000000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.061035, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.125000,0.416667,0.558333,0.458333,0.600000,1.000000,1.000000,0.150000,1.000000,1.000000,1.000000,1.000000,1.000000,0.000000,0.200000,0.958333,1.000000,1.000000,1.000000,1.000000,0.000000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,120.000000,120.000000], "persist_state": true, "persist_choices": true, "seconds": 0.850278 }
+      ],
+      "pooled": {
+        "acquisition_mean": [1.000000,1.000000,1.000000],
+        "acquisition_sd": [0.000000,0.000000,0.000000],
+        "forgetting_mean": [0.000000,0.000000,0.000000],
+        "mean_forgetting": 0.000000, "mean_forgetting_sd": 0.000000,
+        "final_avg_mean": 1.000000, "final_avg_sd": 0.000000,
+        "routing_mean": [1.000000,1.000000,1.000000],
+        "holdout_mean": [1.000000,1.000000,0.997222],
+        "shuffled_cue_mean": 0.000000,
+        "context_off_mean": 0.000000,
+        "update_mass": {"intended_rows": 0.059191, "unintended_rows": 0.000000, "unintended_banks": 0.000000},
+        "persistence_state_all": true,
+        "persistence_choices_all": true
+      }
+    },
+    "SHUFFLED-CUE": {
+      "per_seed": [
+        { "master": 123456789, "acq": [1.000000,0.166667,0.233333], "ret_t1_t2": 0.583333, "ret_t1_t3": 0.166667, "ret_t2_t3": 0.475000, "final_avg": 0.291667, "routing": [1.000000,0.000000,0.000000], "holdout": [1.000000,1.000000,0.325000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.037397, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.191667,0.266667,0.416667,0.483333,0.400000,0.991667,1.000000,0.166667,0.583333,0.941667,1.000000,0.991667,1.000000,0.991667,0.166667,0.333333,0.325000,0.333333,0.333333,0.333333,0.316667], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,240.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.864637 },
+        { "master": 218213831, "acq": [0.208333,0.150000,0.458333], "ret_t1_t2": 0.433333, "ret_t1_t3": 0.366667, "ret_t2_t3": 0.000000, "final_avg": 0.275000, "routing": [1.000000,0.000000,0.458333], "holdout": [0.166667,1.000000,1.000000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.041744, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.150000,0.183333,0.116667,0.116667,0.175000,0.191667,0.200000,0.200000,0.058333,0.000000,0.000000,0.025000,0.000000,0.983333,0.191667,0.200000,0.450000,0.975000,0.983333,0.991667,1.000000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,720.000000,360.000000], "persist_state": true, "persist_choices": true, "seconds": 0.837027 },
+        { "master": 171473193, "acq": [0.158333,0.175000,0.175000], "ret_t1_t2": 0.166667, "ret_t1_t3": 0.175000, "ret_t2_t3": 0.200000, "final_avg": 0.183333, "routing": [1.000000,0.000000,0.825000], "holdout": [0.125000,0.208333,0.150000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.006601, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.125000,0.116667,0.225000,0.100000,0.141667,0.166667,0.125000,0.125000,0.125000,0.125000,0.166667,0.141667,0.166667,0.175000,0.158333,0.175000,0.241667,0.200000,0.175000,0.166667,0.125000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,-1.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.832183 }
+      ],
+      "pooled": {
+        "acquisition_mean": [0.455556,0.163889,0.288889],
+        "acquisition_sd": [0.472165,0.012729,0.149614],
+        "forgetting_mean": [0.219444,-0.061111,0.000000],
+        "mean_forgetting": 0.052778, "mean_forgetting_sd": 0.105993,
+        "final_avg_mean": 0.250000, "final_avg_sd": 0.058333,
+        "routing_mean": [1.000000,0.000000,0.427778],
+        "holdout_mean": [0.430556,0.736111,0.491667],
+        "shuffled_cue_mean": 0.000000,
+        "context_off_mean": 0.000000,
+        "update_mass": {"intended_rows": 0.028581, "unintended_rows": 0.000000, "unintended_banks": 0.000000},
+        "persistence_state_all": true,
+        "persistence_choices_all": true
+      }
+    },
+    "CONTEXT-OFF": {
+      "per_seed": [
+        { "master": 123456789, "acq": [1.000000,0.166667,0.166667], "ret_t1_t2": 1.000000, "ret_t1_t3": 1.000000, "ret_t2_t3": 0.166667, "final_avg": 0.444444, "routing": [1.000000,0.000000,0.000000], "holdout": [1.000000,1.000000,0.325000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.037397, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.191667,0.266667,0.416667,0.483333,0.400000,0.991667,1.000000,0.166667,0.583333,0.941667,1.000000,0.991667,1.000000,0.991667,0.166667,0.333333,0.325000,0.333333,0.333333,0.333333,0.316667], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,240.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.881502 },
+        { "master": 218213831, "acq": [0.208333,0.175000,0.200000], "ret_t1_t2": 0.216667, "ret_t1_t3": 0.216667, "ret_t2_t3": 0.175000, "final_avg": 0.197222, "routing": [1.000000,0.000000,0.000000], "holdout": [0.166667,1.000000,1.000000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.041744, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.150000,0.183333,0.116667,0.116667,0.175000,0.191667,0.200000,0.200000,0.058333,0.000000,0.000000,0.025000,0.000000,0.983333,0.191667,0.200000,0.450000,0.975000,0.983333,0.991667,1.000000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,720.000000,360.000000], "persist_state": true, "persist_choices": true, "seconds": 0.898438 },
+        { "master": 171473193, "acq": [0.158333,0.166667,0.241667], "ret_t1_t2": 0.158333, "ret_t1_t3": 0.158333, "ret_t2_t3": 0.166667, "final_avg": 0.188889, "routing": [1.000000,0.000000,0.000000], "holdout": [0.125000,0.208333,0.150000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.006601, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.125000,0.116667,0.225000,0.100000,0.141667,0.166667,0.125000,0.125000,0.125000,0.125000,0.166667,0.141667,0.166667,0.175000,0.158333,0.175000,0.241667,0.200000,0.175000,0.166667,0.125000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,-1.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.870022 }
+      ],
+      "pooled": {
+        "acquisition_mean": [0.455556,0.169444,0.202778],
+        "acquisition_sd": [0.472165,0.004811,0.037577],
+        "forgetting_mean": [-0.002778,0.000000,0.000000],
+        "mean_forgetting": -0.000926, "mean_forgetting_sd": 0.001604,
+        "final_avg_mean": 0.276852, "final_avg_sd": 0.145199,
+        "routing_mean": [1.000000,0.000000,0.000000],
+        "holdout_mean": [0.430556,0.736111,0.491667],
+        "shuffled_cue_mean": 0.000000,
+        "context_off_mean": 0.000000,
+        "update_mass": {"intended_rows": 0.028581, "unintended_rows": 0.000000, "unintended_banks": 0.000000},
+        "persistence_state_all": true,
+        "persistence_choices_all": true
+      }
+    },
+    "NO-SEAL": {
+      "per_seed": [
+        { "master": 123456789, "acq": [1.000000,0.675000,1.000000], "ret_t1_t2": 0.200000, "ret_t1_t3": 0.058333, "ret_t2_t3": 0.500000, "final_avg": 0.519444, "routing": [1.000000,1.000000,0.000000], "holdout": [0.041667,0.441667,0.991667], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.054561, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,0,0], "allocations": 3, "curve": [0.191667,0.266667,0.416667,0.483333,0.400000,0.991667,1.000000,0.166667,0.666667,0.658333,0.683333,0.666667,0.666667,0.666667,0.008333,1.000000,0.991667,1.000000,1.000000,1.000000,1.000000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,-1.000000,120.000000], "persist_state": true, "persist_choices": true, "seconds": 0.865703 },
+        { "master": 218213831, "acq": [0.175000,0.983333,1.000000], "ret_t1_t2": 0.175000, "ret_t1_t3": 0.183333, "ret_t2_t3": 0.875000, "final_avg": 0.686111, "routing": [0.000000,1.000000,0.000000], "holdout": [0.158333,0.850000,1.000000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.056817, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,0,0], "allocations": 3, "curve": [0.150000,0.183333,0.116667,0.116667,0.175000,0.191667,0.200000,0.200000,0.033333,0.000000,0.000000,0.025000,0.000000,0.983333,0.000000,1.000000,0.975000,0.975000,0.983333,0.991667,1.000000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,720.000000,120.000000], "persist_state": true, "persist_choices": true, "seconds": 0.832010 },
+        { "master": 171473193, "acq": [0.166667,1.000000,1.000000], "ret_t1_t2": 0.166667, "ret_t1_t3": 0.166667, "ret_t2_t3": 0.341667, "final_avg": 0.502778, "routing": [0.000000,1.000000,0.000000], "holdout": [0.141667,0.350000,1.000000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.055249, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,0,0], "allocations": 3, "curve": [0.125000,0.116667,0.225000,0.100000,0.141667,0.166667,0.125000,0.125000,0.766667,0.916667,0.891667,0.950000,1.000000,1.000000,0.000000,0.916667,0.991667,1.000000,1.000000,1.000000,1.000000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,240.000000,120.000000], "persist_state": true, "persist_choices": true, "seconds": 0.875285 }
+      ],
+      "pooled": {
+        "acquisition_mean": [0.447222,0.886111,1.000000],
+        "acquisition_sd": [0.478738,0.183017,0.000000],
+        "forgetting_mean": [0.311111,0.313889,0.000000],
+        "mean_forgetting": 0.208333, "mean_forgetting_sd": 0.169717,
+        "final_avg_mean": 0.569444, "final_avg_sd": 0.101379,
+        "routing_mean": [0.333333,1.000000,0.000000],
+        "holdout_mean": [0.113889,0.547222,0.997222],
+        "shuffled_cue_mean": 0.000000,
+        "context_off_mean": 0.000000,
+        "update_mass": {"intended_rows": 0.055542, "unintended_rows": 0.000000, "unintended_banks": 0.000000},
+        "persistence_state_all": true,
+        "persistence_choices_all": true
+      }
+    },
+    "K2-STRESS": {
+      "per_seed": [
+        { "master": 123456789, "acq": [1.000000,1.000000,0.675000], "ret_t1_t2": 1.000000, "ret_t1_t3": 0.675000, "ret_t2_t3": 0.333333, "final_avg": 0.561111, "routing": [1.000000,1.000000,0.000000], "holdout": [0.666667,0.333333,0.658333], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.052438, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,0], "allocations": 3, "curve": [0.191667,0.516667,0.416667,0.483333,0.400000,0.991667,1.000000,0.166667,0.166667,0.416667,1.000000,0.991667,1.000000,0.991667,0.166667,0.666667,0.658333,0.675000,0.666667,0.675000,0.666667], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,360.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.614153 },
+        { "master": 218213831, "acq": [0.175000,0.983333,1.000000], "ret_t1_t2": 0.641667, "ret_t1_t3": 0.566667, "ret_t2_t3": 0.633333, "final_avg": 0.733333, "routing": [0.000000,1.000000,1.000000], "holdout": [0.566667,0.666667,1.000000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.038890, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,0], "allocations": 3, "curve": [0.150000,0.183333,0.116667,0.116667,0.175000,0.191667,0.200000,0.175000,0.000000,0.000000,0.000000,0.025000,0.000000,0.983333,0.208333,1.000000,0.975000,0.975000,0.983333,0.991667,1.000000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,720.000000,120.000000], "persist_state": true, "persist_choices": true, "seconds": 0.626459 },
+        { "master": 171473193, "acq": [0.166667,0.450000,0.400000], "ret_t1_t2": 0.133333, "ret_t1_t3": 0.150000, "ret_t2_t3": 0.175000, "final_avg": 0.241667, "routing": [0.000000,1.000000,1.000000], "holdout": [0.133333,0.266667,0.483333], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.047500, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,0], "allocations": 3, "curve": [0.125000,0.116667,0.225000,0.100000,0.141667,0.166667,0.125000,0.133333,0.308333,0.525000,0.458333,0.583333,0.558333,0.516667,0.216667,0.558333,0.475000,0.550000,0.491667,0.500000,0.525000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,-1.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.649410 }
+      ],
+      "pooled": {
+        "acquisition_mean": [0.447222,0.811111,0.691667],
+        "acquisition_sd": [0.478738,0.312842,0.300347],
+        "forgetting_mean": [-0.016667,0.430556,0.000000],
+        "mean_forgetting": 0.137963, "mean_forgetting_sd": 0.175799,
+        "final_avg_mean": 0.512037, "final_avg_sd": 0.249480,
+        "routing_mean": [0.333333,1.000000,0.666667],
+        "holdout_mean": [0.455556,0.422222,0.713889],
+        "shuffled_cue_mean": 0.000000,
+        "context_off_mean": 0.000000,
+        "update_mass": {"intended_rows": 0.046276, "unintended_rows": 0.000000, "unintended_banks": 0.000000},
+        "persistence_state_all": true,
+        "persistence_choices_all": true
+      }
+    },
+    "FROZEN-ROUTER": {
+      "per_seed": [
+        { "master": 123456789, "acq": [0.550000,0.150000,0.175000], "ret_t1_t2": 0.550000, "ret_t1_t3": 0.550000, "ret_t2_t3": 0.150000, "final_avg": 0.291667, "routing": [1.000000,0.000000,0.000000], "holdout": [0.641667,0.141667,0.158333], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.052459, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.191667,0.258333,0.350000,0.483333,0.400000,0.483333,0.450000,0.133333,0.191667,0.158333,0.175000,0.150000,0.283333,0.125000,0.175000,0.175000,0.241667,0.108333,0.208333,0.158333,0.125000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,-1.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.863640 },
+        { "master": 218213831, "acq": [0.441667,0.691667,0.175000], "ret_t1_t2": 0.833333, "ret_t1_t3": 0.841667, "ret_t2_t3": 0.691667, "final_avg": 0.569444, "routing": [1.000000,0.000000,0.000000], "holdout": [0.858333,0.691667,0.191667], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.056370, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.150000,0.308333,0.450000,0.350000,0.366667,0.450000,0.450000,0.416667,0.391667,0.391667,0.341667,0.400000,0.375000,0.691667,0.208333,0.175000,0.200000,0.183333,0.191667,0.183333,0.225000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [-1.000000,-1.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.866850 },
+        { "master": 171473193, "acq": [1.000000,0.000000,0.000000], "ret_t1_t2": 1.000000, "ret_t1_t3": 1.000000, "ret_t2_t3": 0.000000, "final_avg": 0.333333, "routing": [1.000000,0.000000,0.000000], "holdout": [0.983333,0.000000,0.000000], "shuffled": [0.000000,0.000000,0.000000], "ctx_off": [0.000000,0.000000,0.000000], "update_mass": {"intended_rows": 0.053325, "unintended_rows": 0.000000, "unintended_banks": 0.000000}, "task_bank": [0,1,2], "allocations": 3, "curve": [0.125000,0.191667,0.408333,0.391667,0.600000,1.000000,1.000000,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000], "curve_layout": "task-major, 6 checkpoints each", "acq_speed_trials": [600.000000,-1.000000,-1.000000], "persist_state": true, "persist_choices": true, "seconds": 0.858547 }
+      ],
+      "pooled": {
+        "acquisition_mean": [0.663889,0.280556,0.116667],
+        "acquisition_sd": [0.296078,0.363846,0.101036],
+        "forgetting_mean": [-0.133333,0.000000,0.000000],
+        "mean_forgetting": -0.044444, "mean_forgetting_sd": 0.076980,
+        "final_avg_mean": 0.398148, "final_avg_sd": 0.149803,
+        "routing_mean": [1.000000,0.000000,0.000000],
+        "holdout_mean": [0.827778,0.277778,0.116667],
+        "shuffled_cue_mean": 0.000000,
+        "context_off_mean": 0.000000,
+        "update_mass": {"intended_rows": 0.054051, "unintended_rows": 0.000000, "unintended_banks": 0.000000},
+        "persistence_state_all": true,
+        "persistence_choices_all": true
+      }
+    }
+  },
+  "criteria": {
+    "L10-A": {"criterion": "CCM mean forgetting <= 0.10 and final avg >= 0.85", "result": "FAIL"},
+    "L10-B": {"criterion": "CCM acquisition >= 0.85 on every task", "result": "FAIL"},
+    "L10-C": {"criterion": "CCM routing accuracy >= 0.90 on every task", "result": "FAIL"},
+    "L10-D": {"criterion": "CCM held-out cue combination >= 0.80 per task", "result": "FAIL"},
+    "L10-E": {"criterion": "shuffled-cue <= 0.40 and context-off <= 0.40", "result": "PASS"},
+    "L10-F": {"criterion": "NO-SEAL mean forgetting > CCM mean forgetting", "result": "PASS"},
+    "L10-G": {"criterion": "K2-STRESS worse than CCM (forgetting or final avg)", "result": "PASS"},
+    "L10-H": {"criterion": "persistence + determinism + checkpoint resume exact", "result": "FAIL"},
+    "L10-I": {"criterion": "no new regressions vs L9 baseline (see markdown report)", "result": "SEE-REPORT"},
+    "L10-J": {"criterion": "limitations reported honestly; no threshold nudged", "result": "SEE-REPORT"}
+  },
+  "selftest": {"load_state_identical": true, "load_choices_identical": false, "checkpoint_resume_identical": true, "checkpoint_trial": 360, "state_signature": "accf842397a461c7:28012"},
+  "env": {"compiler": "g++ 12.2.0 (Debian 12.2.0-14+deb12u1)", "cxx_std": 17, "total_seconds": 18.753098, "peak_rss_kb": 7156},
+  "verdict": "SEE work/dev_context_conditioned_memory_report_STARK-L10-1.md"
+}

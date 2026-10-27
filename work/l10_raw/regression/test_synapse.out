@@ -1,0 +1,67 @@
+=== STARK-002 Synapse Tests ===
+
+Test 1: Synapse initialization
+  ✓   Initial state x=0 PASSED
+  ✓   Weight=0.5 PASSED
+  ✓   tau_s=2.0 PASSED
+
+Test 2: Positive weight (excitatory)
+  ✓   I > 0 after spike PASSED
+  ✓   I = w * x = 0.5 * 1.0 = 0.5 PASSED
+
+Test 3: Negative weight (inhibitory)
+  ✓   I < 0 after spike PASSED
+  ✓   I = w * x = -0.5 * 1.0 = -0.5 PASSED
+
+Test 4: Zero weight
+  ✓   I = 0 PASSED
+
+Test 5: Spike transmission and state update
+  ✓   Initial x=0 PASSED
+  ✓   After spike: x=1.0 PASSED
+  ✓   I = 1.0 * 1.0 = 1.0 PASSED
+  ✓   After no spike: x decayed PASSED
+  ✓   I decayed PASSED
+
+Test 6: No-spike behavior (Euler discretization decay)
+  ✓   State decayed via Euler discretization PASSED
+  ✓   State > 0 PASSED
+  ✓   State < initial PASSED
+
+Test 7: Temporal response to single spike
+  ✓   Peak state = 1.0 PASSED
+  ✓   State after 5 steps = (1 - dt/tau_s)^5 = 0.9^5 PASSED
+
+Test 8: Multiple spikes accumulate
+  ✓   Second spike adds to decayed first PASSED
+  ✓   State > 1.0 (summed) PASSED
+
+Test 9: dt validation
+  ✓   dt=0.5 < tau_s=2.0 accepted PASSED
+  ✓   dt=0 rejected PASSED
+  ✓   dt=3.0 > tau_s=2.0 rejected PASSED
+  ✓   dt=2.0 == tau_s rejected PASSED
+  ✓   NaN dt rejected PASSED
+  ✓   infinity dt rejected PASSED
+
+Test 10: Reset behavior
+  ✓   State > 0 before reset PASSED
+  ✓   State = 0 after reset PASSED
+  ✓   Weight unchanged PASSED
+
+Test 11: Parameter validation
+  ✓   tau_s=0 rejected PASSED
+  ✓   tau_s=-1.0 rejected PASSED
+  ✓   infinite weight rejected PASSED
+  ✓   NaN weight rejected PASSED
+  ✓   Negative weight accepted PASSED
+  ✓   Zero weight accepted PASSED
+
+Test 12: setWeight (for future plasticity)
+  ✓   Initial weight=0.5 PASSED
+  ✓   Weight changed to -0.3 PASSED
+  ✓   New weight affects output PASSED
+
+========================================
+Synapse Tests: 38 passed, 0 failed
+========================================

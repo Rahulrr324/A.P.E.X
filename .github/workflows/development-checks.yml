@@ -1,0 +1,36 @@
+name: Development checks (not acceptance)
+# Deliberately manual-only: pushing code does not spend hosted-runner minutes.
+# Owner may dispatch after reviewing private-repository runner/billing policy.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bin_suffix: ''
+          - os: windows-latest
+            bin_suffix: '/Release'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Python developer-tool tests
+        run: python -m unittest discover -s tools/tests -v
+      - name: CMake configure, build and genuine tests
+        run: python tools/validate.py --engine cmake --output "${{ runner.temp }}/apex-check" --include-programs --repeat 2
+      - name: Process restart, collision and codec integration
+        env:
+          APEX_NATIVE_BIN: ${{ runner.temp }}/apex-check/cmake${{ matrix.bin_suffix }}
+        run: python -m unittest discover -s tools/tests -v
+      - name: Preserve actual command logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: development-checks-${{ matrix.os }}
+          path: ${{ runner.temp }}/apex-check
+          retention-days: 7

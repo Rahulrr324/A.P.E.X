@@ -1,0 +1,23 @@
+== A. fixed-point distribution (n = 6) ==
+  counts D(6,k): [265, 264, 135, 40, 15, 0, 1]  total 720
+  pmf: [0.368056, 0.366667, 0.1875, 0.055556, 0.020833, 0.0, 0.001389]
+  E[a] = 1.0
+
+== B. deterministic bank-0 fallback (what L10-E's context-off half measures) ==
+  acc_off(t) = A(0,t) = fixed-point agreement of pi_0 and pi_t / 6
+  acc_off(0) = 1 exactly; each t != 0 has E = 1/6
+  E[per-seed context-off mean] = (1 + 2/6)/3 = 0.444444
+  P(single seed pooled <= 0.40) = 0.405372
+  P(pooled over 3 seeds <= 0.40) = 0.151207   <-- a PERFECT router passes only this often
+  attainable range of the pooled mean: [1/3, 1]
+
+== C. proposed L10-K1 (CAA) under a perfect router ==
+  E[sum of 3 pairwise agreements] = 3.0
+  P(CAA_pooled >= 0.40) for a perfect router = 0.999825
+  E[CAA_pooled] = 0.555556  (ceiling for K=3 and perfect routing: 5/9 = 0.555556 )
+  P(CAA_pooled >= 0.40) under the null (context ignored) = 0 by construction
+  null (context ignored): CAA = 0 by construction
+
+== D. A(k,t) vs agreement(perm_k, perm_t)/6 ==
+  cells checked: 27  deviating: 1
+    (218213831, 1, 2, 0.008333, 0.0, 1.0)

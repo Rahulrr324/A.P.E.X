@@ -1,0 +1,9 @@
+wrote work/dev_continual_learning_report_STARK-L9-1.json
+
+=== POOLED RESULTS ===
+SEQUENTIAL: acq=[1.000000,0.666667,0.563889] forget=[0.916667,0.486111,0.000000] mean_forget=0.467593 final_avg=0.275926 heldout=0.402778
+REPLAY: acq=[1.000000,0.411111,0.308333] forget=[0.886111,0.213889,0.000000] mean_forget=0.366667 final_avg=0.206481 heldout=0.277778
+REPLAY-ABLATED: acq=[1.000000,0.666667,0.563889] forget=[0.916667,0.486111,0.000000] mean_forget=0.467593 final_avg=0.275926 heldout=0.402778
+CONSOLIDATION: acq=[1.000000,0.222222,0.180556] forget=[0.816667,0.038889,0.000000] mean_forget=0.285185 final_avg=0.182407 heldout=0.302778
+FRESH-TRAINING: acq=[0.180556,0.169444,0.158333] forget=[0.180556,0.169444,0.000000] mean_forget=0.116667 final_avg=0.052778 heldout=0.161111
+ORACLE: acq=[1.000000,0.666667,0.563889] forget=[0.916667,0.486111,0.000000] mean_forget=0.467593 final_avg=0.275926 heldout=0.402778

@@ -1,0 +1,3 @@
+[test_l10_structural_audit] CCM bank isolation audit
+PASS (357 assertions)
+  synapse classes: A->A=108 C->L=4 S->A=108 c->R=36 

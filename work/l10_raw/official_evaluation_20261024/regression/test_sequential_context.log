@@ -1,0 +1,10 @@
+  timestep accounting OK
+  structural no-cue-leakage OK
+  no-learning invariance OK
+  attractor persistence + ablation OK
+  schedule determinism OK
+  mini sequential learning OK
+==========================================
+Total assertions: 1887
+ALL TESTS PASSED
+==========================================

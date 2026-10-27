@@ -1,0 +1,11 @@
+[test_context_conditioned_memory] STARK-L10 CCM
+  geometry_isolation ok
+  determinism ok
+  sealed_bank_write_protection ok
+  active_bank_learning + router_update ok
+  allocation_sealing ok
+  serialization_roundtrip ok
+  cue_conditioning + no_answer_leakage ok
+  forced_bank_off_policy ok
+  eval_read_only ok
+PASS (330 assertions)

@@ -19,6 +19,7 @@
 #include <vector>
 #include <set>
 
+#include <filesystem>
 static int g_checks = 0;
 
 #define CHECK(cond)                                                        \
@@ -282,6 +283,12 @@ static void test_mini_multiitem_learning() {
 
 // ---------------------------------------------------------------------------
 int main() {
+
+    // C4: the persistence checks below write into build/dev_bin/. Git cannot store an
+    // empty directory, so a clean checkout does not have it and Network::save throws.
+    // Create it here (path unchanged, so existing evidence locations stay valid).
+    std::filesystem::create_directories("build/dev_bin");
+
     test_timestep_accounting();
     std::cout << "  timestep accounting OK" << std::endl;
     test_mapping_validity();

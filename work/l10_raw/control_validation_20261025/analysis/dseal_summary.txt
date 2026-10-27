@@ -1,0 +1,22 @@
+STARK-L10.1  D-SEAL: matched-pair sealing diagnostics
+identical streams/seeds/eval; the ONLY difference between arms is cfg.seal_superseded
+
+protocol               arm       min_acq   final  forget   opp  blocked  executed  exec_mass
+P-FROZEN (commit 480)  sealON     1.0000  1.0000  0.0000     0        0         0      0.000
+P-FROZEN (commit 480)  sealOFF    1.0000  1.0000  0.0000     0        0         0      0.000
+
+D-SEAL-A (commit 60)   sealON     1.0000  1.0000  0.0000   345      345         0      0.000
+D-SEAL-A (commit 60)   sealOFF    1.0000  0.4667  0.5333   342        0       342     43.143
+
+D-SEAL-A' (commit 240) sealON     1.0000  1.0000  0.0000   185      185         0      0.000
+D-SEAL-A' (commit 240) sealOFF    1.0000  0.5491  0.4509   184        0       184     30.358
+
+D-SEAL-B (240+mis 0.20) sealON     1.0000  0.5194  0.4806   403      403         0      0.000
+D-SEAL-B (240+mis 0.20) sealOFF    1.0000  0.4361  0.5639   503        0       503     47.058
+
+A extra seeds (60)     sealON     0.9833  0.9979  0.0000   563      563         0      0.000
+A extra seeds (60)     sealOFF    0.8333  0.4958  0.4882   673        0       673     55.729
+
+B extra seeds (240+mis) sealON     0.9833  0.4833  0.5146   559      559         0      0.000
+B extra seeds (240+mis) sealOFF    0.9833  0.4632  0.5347   643        0       643     61.346
+

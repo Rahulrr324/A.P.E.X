@@ -1,0 +1,370 @@
+{
+  "artifact": "STARK-L10.3 \u2014 context contribution, acceptance-criterion review and L10-E disposition",
+  "date": "2026-10-24",
+  "status": "diagnostics complete; L10-E unchanged and FAILED; L10-K1 ratified as a definition by owner Option B on 2026-10-24 but NOT evaluated",
+  "provenance": {
+    "repository": "https://github.com/Rahulrr324/A.P.E.X.git",
+    "starting_branch": "validation/l10-2-spec-ratification",
+    "starting_sha": "8218615397ab5cfddad13765683788967d33d558",
+    "branch": "validation/l10-3-context-contribution",
+    "protocol_registration_commit": "3500c03",
+    "protocol_v1_1_commit": "f60d1e9",
+    "prior_evidence": {
+      "l10_2_manifest_entries": 200,
+      "mismatches": 0,
+      "l10_1_manifest_entries": 275,
+      "l10_1_expected_difference": "stark/src/learning/l10_validation_harness.cpp (additive extension; frozen reproduction re-verified byte-identical)"
+    },
+    "pull_requests": {
+      "2": {
+        "state": "OPEN",
+        "merged": false,
+        "head_sha": "5f5a57717509623bd4c79460d50c05f7cbc605c3"
+      },
+      "3": {
+        "state": "OPEN",
+        "merged": false,
+        "head_sha": "49cc6ba18650c0d9614bb9e8918fe65453ec5a02"
+      }
+    },
+    "new_pr_created": false
+  },
+  "protocol": {
+    "path": "stark/design/l10_3_context_contribution_protocol.md",
+    "version": "v1.1",
+    "sha256_registered_v1_0": "7e90699b3db7d6c2f68998f46141f9f92c2dd1d26cc9dec0341f30aaed8cef82",
+    "sha256_current": "a046d38f35f88d131b825228d1a330212fcbcf5dc917d5ac383b5955eda9da6d",
+    "hash_fixed_before_any_registered_run": true,
+    "post_registration_change": "v1.1: K4 (cross/ambiguous) execution path documented after that arm had been run and inspected; labelled as such; no definition, threshold, seed, hypothesis, failure condition or analysis formula changed",
+    "authorization": "exploratory (no owner decision authorises a criterion change)"
+  },
+  "original_criterion": {
+    "id": "L10-E",
+    "source": "stark/design/context_conditioned_memory_milestone.md section 8",
+    "text": "shuffled-cue mean accuracy <= 0.40 and context-off mean <= 0.40",
+    "threshold": 0.4,
+    "threshold_changed": false,
+    "shuffled_measured": 0.132407,
+    "context_off_measured": 0.425926,
+    "status": "FAILED"
+  },
+  "analytic_floor": {
+    "formula": "acc_off(t) = A(0,t) = (1/6) * #{i : pi_0[i] == pi_t[i]}; acc_off(0) = 1",
+    "derangement_distribution_n6": {
+      "counts": [
+        265,
+        264,
+        135,
+        40,
+        15,
+        0,
+        1
+      ],
+      "total": 720
+    },
+    "expected_pooled_context_off": 0.444444,
+    "attainable_range": [
+      0.333333,
+      1.0
+    ],
+    "p_pass_perfect_router_single_seed": 0.405372,
+    "p_pass_perfect_router_three_seeds": 0.151207,
+    "measured_minus_analytic_max_abs": 0.0,
+    "cells_checked": 9
+  },
+  "diagnostic": {
+    "definitions": {
+      "A(k,t)": "accuracy of bank k answering task t with the cue removed (forced-bank sweep)",
+      "acc_null(t)": "(1/K) * sum_k A(k,t) \u2014 accuracy of a context-ignoring policy on this draw",
+      "CAA(t)": "acc_correct(t) - acc_null(t)",
+      "CRA(t)": "routing_correct(t) - 1/K",
+      "degradation": "acc_correct_pooled - acc_condition_pooled"
+    },
+    "conditions": {
+      "correct": {
+        "pooled_accuracy": 1.0,
+        "pooled_routing": 1.0
+      },
+      "holdout": {
+        "pooled_accuracy": 0.998148,
+        "pooled_routing": 1.0
+      },
+      "off": {
+        "pooled_accuracy": 0.425926,
+        "pooled_routing": 0.333333
+      },
+      "shuffled": {
+        "pooled_accuracy": 0.132407,
+        "pooled_routing": 0.0
+      },
+      "cross": {
+        "pooled_accuracy": 0.561111,
+        "pooled_routing": 0.501852
+      },
+      "partial": {
+        "pooled_accuracy": 1.0,
+        "pooled_routing": 1.0
+      },
+      "off_uniform": {
+        "pooled_accuracy": 0.415741,
+        "pooled_routing": 0.340741
+      }
+    },
+    "per_seed": {
+      "123456789": {
+        "CAA": 0.518518,
+        "CRA": 0.666667,
+        "CAA_per_task": [
+          0.5,
+          0.555555,
+          0.5
+        ],
+        "acc_null_per_task": [
+          0.5,
+          0.444445,
+          0.5
+        ]
+      },
+      "171473193": {
+        "CAA": 0.62963,
+        "CRA": 0.666667,
+        "CAA_per_task": [
+          0.666667,
+          0.611111,
+          0.611111
+        ],
+        "acc_null_per_task": [
+          0.333333,
+          0.388889,
+          0.388889
+        ]
+      },
+      "218213831": {
+        "CAA": 0.591667,
+        "CRA": 0.666667,
+        "CAA_per_task": [
+          0.555555,
+          0.608333,
+          0.611111
+        ],
+        "acc_null_per_task": [
+          0.444445,
+          0.391667,
+          0.388889
+        ]
+      }
+    },
+    "pooled": {
+      "CAA": 0.579938,
+      "CRA": 0.666667,
+      "degradation": {
+        "holdout": 0.001852,
+        "off": 0.574074,
+        "shuffled": 0.867593,
+        "cross": 0.438889,
+        "partial": 0.0,
+        "off_uniform": 0.584259
+      }
+    },
+    "exploratory_seeds": {
+      "seeds": [
+        1,
+        2,
+        7,
+        42
+      ],
+      "CAA_per_seed": {
+        "1": 0.555556,
+        "2": 0.401852,
+        "7": 0.553704,
+        "42": 0.592592
+      },
+      "CAA_pooled": 0.525926,
+      "CRA_pooled": 0.666667,
+      "note": "no criterion; reported separately"
+    },
+    "fallback": {
+      "off": {
+        "share_by_bank": {
+          "0": 1.0
+        },
+        "modal_bank": 0,
+        "modal_share": 1.0
+      },
+      "off_uniform": {
+        "share_by_bank": {
+          "0": 0.337,
+          "1": 0.3157,
+          "2": 0.3472
+        },
+        "modal_bank": 2,
+        "modal_share": 0.3472
+      }
+    },
+    "model_check": {
+      "cells": 27,
+      "max_abs_deviation": 0.008333,
+      "deviating_cells": [
+        {
+          "master": 218213831,
+          "task": 1,
+          "bank": 2,
+          "measured": 0.008333,
+          "predicted": 0.0,
+          "delta_trials": 1.0
+        }
+      ]
+    },
+    "hypotheses": {
+      "H1_CAA_ge_0_40_every_seed": "holds",
+      "H2_CRA_ge_0_50": "holds",
+      "H3_correct_ge_partial_ge_off": "holds",
+      "H4_fallback_policy_band": "holds (|0.4259 - 0.4157| = 0.0102)",
+      "H5_routing_under_off_equals_1_over_K": "holds (0.3333; bank 0 on 1080/1080 trials)",
+      "H6_analytic_A_equals_agreement": "26 of 27 cells exact; 1 cell deviates by exactly one trial (see limitations)"
+    },
+    "unmeasured": {
+      "ambiguity_resolution_curve": null,
+      "channel_misselection_attribution": null,
+      "human_review": null
+    }
+  },
+  "proposed_criterion": {
+    "id": "L10-K1",
+    "status": "RATIFIED AS A DEFINITION 2026-10-24 (Option B) \u2014 not evaluated; no PASS/FAIL assigned",
+    "text": "on every primary seed: CAA_pooled >= 0.40; CAA(t) >= 0.25 for at least two of three tasks; CRA_pooled >= 0.50",
+    "null_value": 0.0,
+    "ceiling_CAA": 0.555556,
+    "ceiling_CRA": 0.666667,
+    "p_pass_perfect_router": 0.999825,
+    "would_pass_on_primary_seeds": true,
+    "discriminating_evidence": "exploratory seed 2 scores CAA 0.4019 (barely above the threshold), so the criterion is not trivially satisfied"
+  },
+  "acceptance_decision": {
+    "memo": "stark/reports/L10_3_ACCEPTANCE_DECISION.md",
+    "options": {
+      "A": {
+        "description": "retain L10-E unchanged",
+        "effect_on_history": "none"
+      },
+      "B": {
+        "description": "keep L10-E FAILED and add L10-K1 as a separate criterion",
+        "effect_on_history": "none; L10-K1 has no history yet"
+      },
+      "C": {
+        "description": "replace L10-E prospectively",
+        "effect_on_history": "failure preserved; the criterion row is superseded"
+      }
+    },
+    "recommended": "B",
+    "approval_status": "RATIFIED \u2014 Option B",
+    "owner_decision_required": false,
+    "agent_approved_anything": false,
+    "decision_date": "2026-10-24",
+    "decided_by": "repository owner (Rahulrr324)",
+    "decision_mechanism": "owner asked directly in session; selected Option B",
+    "effects": {
+      "L10-E": "unchanged; remains FAILED at 0.425926 against 0.40",
+      "L10-K1": "ratified as a criterion definition; remains unevaluated; L10.3 values are diagnostic only",
+      "design_document": "stark/design/context_conditioned_memory_milestone.md NOT modified (frozen v1.6); section 8 insertion deferred to L10.4 with a version bump",
+      "history": "no prior number changed"
+    }
+  },
+  "tests": {
+    "targets": 26,
+    "all_exit_zero": true,
+    "assertions": {
+      "test_context_conditioned_memory": 330,
+      "test_l10_structural_audit": 357,
+      "test_l10_1_sealing": 276,
+      "test_phase1_profiler": 34,
+      "test_phase1_accounting": 67,
+      "test_phase1_budget": 55,
+      "test_phase1_records": 72,
+      "test_phase1_reproducibility": 37,
+      "test_phase1_gates": 437
+    },
+    "not_executed": [
+      {
+        "target": "test_phase1_affinity",
+        "reason": "DWORD_PTR not declared (Win32-only)",
+        "status": "UNKNOWN"
+      }
+    ],
+    "new_failures": 0,
+    "cwd": "stark/",
+    "compiler": "g++ 12.2.0 -O2 -std=c++17"
+  },
+  "generalization_exploratory": {
+    "T4_K4": {
+      "cells": 12,
+      "min_acquisition": 0.991667,
+      "mean_final": 0.999306,
+      "mean_forgetting": 0.0,
+      "min_holdout": 0.991667
+    },
+    "T5_K5": {
+      "cells": 15,
+      "min_acquisition": 0.991667,
+      "mean_final": 0.998889,
+      "mean_forgetting": 0.0,
+      "min_holdout": 0.991667
+    },
+    "T8_K8": {
+      "cells": 24,
+      "min_acquisition": 0.833333,
+      "mean_final": 0.992014,
+      "mean_forgetting": 0.0,
+      "min_holdout": 0.833333
+    },
+    "order_201": {
+      "cells": 9,
+      "min_acquisition": 0.991667,
+      "mean_final": 1.0,
+      "mean_forgetting": -0.000926,
+      "min_holdout": 0.991667
+    },
+    "revisit_task0": {
+      "cells": 12,
+      "min_acquisition": 1.0,
+      "mean_final": 1.0,
+      "mean_forgetting": 0.0,
+      "min_holdout": 0.991667
+    },
+    "misroute_0_20": {
+      "cells": 9,
+      "min_acquisition": 1.0,
+      "mean_final": 0.722222,
+      "mean_forgetting": 0.277778,
+      "min_holdout": 0.0
+    },
+    "forced_wrong_bank": {
+      "cells": 9,
+      "min_acquisition": 0.341667,
+      "mean_final": 0.613889,
+      "mean_forgetting": 0.257407,
+      "min_holdout": 0.066667
+    }
+  },
+  "verification": {
+    "determinism": "15/15 artifacts byte-identical between two runs",
+    "non_perturbation": "metrics_*.csv and sealing_*.csv identical to the L10.2 R0 artifacts",
+    "unflagged_reproduction": "12/12 R0 artifacts byte-identical with the modified binary",
+    "checkpoint_resume": "3/3 seeds exact",
+    "independent_recomputation": "analysis/recompute.py from per-trial rows only"
+  },
+  "limitations": [
+    "one forced-bank cell deviates by exactly one trial (0.008333 vs 0.0); explained consistently by a channel-attention mis-selection but not verified",
+    "CAA uses a measured forced-bank matrix and inherits its ~0.2% attention noise",
+    "the floor derivation is specific to K=3, T=3 and n_ids=6",
+    "the partial-cue condition is deterministic-alternating, not random dropout",
+    "the proposed threshold is justified by headroom, not by a theory of sufficiency"
+  ],
+  "progress_estimate": {
+    "previous": 0.5,
+    "current": 0.5,
+    "rationale": "a measurement contradiction was removed and the remaining failure made interpretable; no capability added"
+  },
+  "recommended_next": "L10.4 \u2014 bump the design document to v1.7 with the ratified L10-K1 row, register the protocol, run the primary seeds under that registration, recompute independently, run the full regression and record the official disposition. Do not start L11 before that.",
+  "evidence_dir": "work/l10_raw/context_contribution_20261024"
+}

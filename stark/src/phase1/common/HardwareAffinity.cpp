@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <sched.h>
 #include <stdlib.h>
+#include <string.h>   // strerror() used by affinity_reason_from_errno()
 #include <unistd.h>
 #endif
 

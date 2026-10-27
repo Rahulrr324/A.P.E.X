@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include <filesystem>
 using namespace learning;
 
 static double v(double x) {
@@ -229,6 +230,12 @@ static SaveCheck checkSaveReloadN(const LRConfig& cfg, const LRMapping& map, uns
 
 
 int main(int argc, char** argv) {
+
+    // C4: the persistence checks below write into build/dev_bin/. Git cannot store an
+    // empty directory, so a clean checkout does not have it and Network::save throws.
+    // Create it here (path unchanged, so existing evidence locations stay valid).
+    std::filesystem::create_directories("build/dev_bin");
+
     const int kSeeds[3] = {123456789, 218213831, 171473193};
     const char *kArms[6] = {"UNGATED", "ORACLE", "LEARNED", "SHAM", "ABLATION", "NEGATIVE"};
     const std::vector<int> NS = {2, 4, 8};

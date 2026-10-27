@@ -1,0 +1,20 @@
+L10-F: does the NO-SEAL ablation ever have an opportunity to act under the frozen protocol?
+
+      seed  train trials  unforced phase-1  p1 on non-active bank  write-blocked
+ 123456789          2160                 0                      0             62
+ 218213831          2160                 0                      0             67
+ 171473193          2160                 0                      0             64
+
+Mapping credit exists only on single-candidate trials, which occur only in phase 1.
+Phase 1 (480 trials) is exactly the commitment window, during which the router is forced to
+the active bank. Therefore a write to a non-active bank is impossible by construction and the
+seal predicate can never bind: NO-SEAL must be numerically identical to CCM under this protocol.
+
+Provoked configuration (commit window disabled) -- sealing does bind and does matter:
+      seed   seal             acq T1/T2/T3  mean forget  final avg
+ 123456789 sealON          [1.0, 1.0, 1.0]       0.0000     1.0000
+ 123456789 sealOFF          [1.0, 1.0, 1.0]       0.5222     0.4778
+ 218213831 sealON          [1.0, 1.0, 1.0]       0.0000     1.0000
+ 218213831 sealOFF      [1.0, 0.833, 0.842]       0.5333     0.3583
+ 171473193 sealON          [1.0, 1.0, 1.0]       0.0000     1.0000
+ 171473193 sealOFF          [1.0, 1.0, 1.0]       0.5111     0.4889
