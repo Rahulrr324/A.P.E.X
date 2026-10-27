@@ -73,6 +73,36 @@ describe('memory store', () => {
     assert.equal((await store.get(newer.id))?.content, 'The project codename is Bluebird');
   });
 
+  test('same-attribute contradictions are flagged while compatible non-contradictions stay clear', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    await store.add({ content: 'The project codename is Lighthouse' });
+    await store.add({ content: 'The project code name is Bluebird' });
+    await store.add({ content: 'Alice likes tea' });
+    await store.add({ content: 'Alice likes coffee' });
+
+    const projectHits = await store.search('project codename');
+    assert.equal(projectHits.length, 2);
+    assert.ok(projectHits.every((hit) => hit.conflict.length > 0));
+
+    const likesHits = await store.search('Alice likes');
+    assert.equal(likesHits.length, 2);
+    assert.ok(likesHits.every((hit) => hit.conflict.length === 0));
+  });
+
+  test('conflict references remain deterministic when timestamps tie', async () => {
+    const dir = tempDir();
+    const now = () => new Date('2026-10-27T00:00:00.000Z');
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'), { now });
+    const older = await store.add({ content: 'The project codename is Lighthouse' });
+    const newer = await store.add({ content: 'The project codename is Bluebird' });
+    const hits = await store.search('what is the project codename?');
+    assert.equal(hits.length, 2);
+    assert.deepEqual(new Set(hits.flatMap((hit) => hit.conflict)).size, 2);
+    assert.ok(hits.some((hit) => hit.conflict.includes(older.id)));
+    assert.ok(hits.some((hit) => hit.conflict.includes(newer.id)));
+  });
+
   test('user facts and model conclusions are kept distinct', async () => {
     const dir = tempDir();
     const store = new MemoryStore(path.join(dir, 'memory.jsonl'));

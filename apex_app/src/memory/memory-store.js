@@ -126,15 +126,48 @@ function dedupeKey(record) {
   return `${record.kind}|${record.source}|${record.sensitivity ?? 'normal'}|${String(record.content).trim().toLowerCase()}`;
 }
 
+function normalizeConflictText(text) {
+  let normalized = String(text).toLowerCase();
+  normalized = normalized.replace(/\bcode\s+name\b/g, 'codename');
+  normalized = normalized.replace(/\bcode-name\b/g, 'codename');
+  normalized = normalized.replace(/[^\p{L}\p{N}\s]/gu, ' ');
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+  return tokenize(normalized).join(' ');
+}
+
+function extractConflictClause(text) {
+  const cleaned = String(text).trim().replace(/\s+/g, ' ');
+  const patterns = [
+    /^(.*?)(?:\s+(?:is|are|was|were|be|been))\s+(.+)$/i,
+    /^(.*?)(?:\s+(?:called|named|known as|nicknamed))\s+(.+)$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = cleaned.match(pattern);
+    if (!match) continue;
+    const subject = normalizeConflictText(match[1]);
+    const value = normalizeConflictText(match[2]);
+    if (subject && value) return { subject, value };
+  }
+  return null;
+}
+
 function isPotentialConflict(a, b) {
   if (!a || !b || a.id === b.id) return false;
   const aText = String(a.content).trim();
   const bText = String(b.content).trim();
   if (aText === bText) return false;
-  const aWords = new Set(tokenize(a.content));
-  const bWords = new Set(tokenize(b.content));
-  const overlap = [...aWords].filter((word) => bWords.has(word));
-  return overlap.length >= 2 && aWords.size >= 2 && bWords.size >= 2;
+
+  const left = extractConflictClause(aText);
+  const right = extractConflictClause(bText);
+  if (!left || !right) return false;
+  if (left.subject !== right.subject) return false;
+  if (left.value === right.value) return false;
+
+  const dateWords = new Set(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december', 'today', 'tomorrow', 'yesterday']);
+  if (left.value.split(' ').some((word) => dateWords.has(word)) || right.value.split(' ').some((word) => dateWords.has(word))) {
+    return false;
+  }
+  return true;
 }
 
 export class MemoryStore {
