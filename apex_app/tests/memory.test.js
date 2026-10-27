@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { MemoryStore, sha256Hex } from '../src/memory/memory-store.js';
+import { buildPrompt } from '../src/controller/context.js';
 import { StoreError, ValidationError } from '../src/errors.js';
 import { makeTempDataDir, cleanup } from './helpers.js';
 
@@ -51,6 +52,25 @@ describe('memory store', () => {
     assert.equal(hits[0].record.id, newer.id);
     assert.equal(hits[0].record.createdAt, newer.createdAt);
     assert.equal((await store.get(older.id))?.content, 'The project codename is Lighthouse');
+  });
+
+  test('conflicting memories are flagged conservatively and kept in context without deleting either record', async () => {
+    const dir = tempDir();
+    const times = [
+      new Date('2026-10-27T00:00:00.000Z'),
+      new Date('2026-10-27T00:05:00.000Z'),
+    ];
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'), { now: () => times.shift() ?? new Date('2026-10-27T00:10:00.000Z') });
+    const older = await store.add({ content: 'The project codename is Lighthouse' });
+    const newer = await store.add({ content: 'The project codename is Bluebird' });
+    const hits = await store.search('what is the project codename?');
+    assert.equal(hits.length, 2);
+    assert.ok(hits[0].conflict?.includes(older.id) || hits[0].conflict?.includes(newer.id));
+    assert.ok(hits[1].conflict?.includes(older.id) || hits[1].conflict?.includes(newer.id));
+    const prompt = buildPrompt({ request: 'what is the project codename?', memoryHits: hits, turns: [], maxChars: 6000 }).prompt;
+    assert.match(prompt, /conflict|competing claim|disagree/i);
+    assert.equal((await store.get(older.id))?.content, 'The project codename is Lighthouse');
+    assert.equal((await store.get(newer.id))?.content, 'The project codename is Bluebird');
   });
 
   test('user facts and model conclusions are kept distinct', async () => {

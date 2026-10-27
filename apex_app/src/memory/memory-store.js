@@ -126,6 +126,17 @@ function dedupeKey(record) {
   return `${record.kind}|${record.source}|${record.sensitivity ?? 'normal'}|${String(record.content).trim().toLowerCase()}`;
 }
 
+function isPotentialConflict(a, b) {
+  if (!a || !b || a.id === b.id) return false;
+  const aText = String(a.content).trim();
+  const bText = String(b.content).trim();
+  if (aText === bText) return false;
+  const aWords = new Set(tokenize(a.content));
+  const bWords = new Set(tokenize(b.content));
+  const overlap = [...aWords].filter((word) => bWords.has(word));
+  return overlap.length >= 2 && aWords.size >= 2 && bWords.size >= 2;
+}
+
 export class MemoryStore {
   constructor(filePath, { now = () => new Date() } = {}) {
     this.filePath = filePath;
@@ -213,6 +224,21 @@ export class MemoryStore {
       return b.index - a.index;
     });
 
+    const conflictIds = new Map();
+    for (let i = 0; i < scored.length; i += 1) {
+      for (let j = i + 1; j < scored.length; j += 1) {
+        const left = scored[i].record;
+        const right = scored[j].record;
+        if (!isPotentialConflict(left, right)) continue;
+        const leftIds = conflictIds.get(left.id) ?? [];
+        leftIds.push(right.id);
+        conflictIds.set(left.id, leftIds);
+        const rightIds = conflictIds.get(right.id) ?? [];
+        rightIds.push(left.id);
+        conflictIds.set(right.id, rightIds);
+      }
+    }
+
     const unique = [];
     const seen = new Set();
     for (const item of scored) {
@@ -221,7 +247,11 @@ export class MemoryStore {
       seen.add(key);
       unique.push(item);
     }
-    return unique.slice(0, Math.max(1, limit)).map(({ record, score }) => ({ record, score }));
+    return unique.slice(0, Math.max(1, limit)).map(({ record, score }) => ({
+      record,
+      score,
+      conflict: conflictIds.get(record.id) ?? [],
+    }));
   }
 
   async status() {
