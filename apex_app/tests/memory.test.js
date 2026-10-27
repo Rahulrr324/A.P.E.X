@@ -37,6 +37,22 @@ describe('memory store', () => {
     assert.equal((await store.search('quantum chromodynamics')).length, 0);
   });
 
+  test('duplicate memory entries are collapsed in retrieval results with the newest record winning', async () => {
+    const dir = tempDir();
+    const times = [
+      new Date('2026-10-27T00:00:00.000Z'),
+      new Date('2026-10-27T00:05:00.000Z'),
+    ];
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'), { now: () => times.shift() ?? new Date('2026-10-27T00:10:00.000Z') });
+    const older = await store.add({ content: 'The project codename is Lighthouse' });
+    const newer = await store.add({ content: 'The project codename is Lighthouse' });
+    const hits = await store.search('what is the project codename?');
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].record.id, newer.id);
+    assert.equal(hits[0].record.createdAt, newer.createdAt);
+    assert.equal((await store.get(older.id))?.content, 'The project codename is Lighthouse');
+  });
+
   test('user facts and model conclusions are kept distinct', async () => {
     const dir = tempDir();
     const store = new MemoryStore(path.join(dir, 'memory.jsonl'));

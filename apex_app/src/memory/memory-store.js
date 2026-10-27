@@ -122,6 +122,10 @@ export function isPromptEligible(record) {
   return record.sensitivity !== 'private' && !containsSecret(record.content);
 }
 
+function dedupeKey(record) {
+  return `${record.kind}|${record.source}|${record.sensitivity ?? 'normal'}|${String(record.content).trim().toLowerCase()}`;
+}
+
 export class MemoryStore {
   constructor(filePath, { now = () => new Date() } = {}) {
     this.filePath = filePath;
@@ -201,8 +205,23 @@ export class MemoryStore {
       }
       if (matched > 0) scored.push({ record, score: matched / totalWeight, index });
     });
-    scored.sort((a, b) => b.score - a.score || b.index - a.index);
-    return scored.slice(0, Math.max(1, limit)).map(({ record, score }) => ({ record, score }));
+    scored.sort((a, b) => {
+      const scoreDelta = b.score - a.score;
+      if (scoreDelta !== 0) return scoreDelta;
+      const timeDelta = Date.parse(b.record.createdAt) - Date.parse(a.record.createdAt);
+      if (timeDelta !== 0) return timeDelta;
+      return b.index - a.index;
+    });
+
+    const unique = [];
+    const seen = new Set();
+    for (const item of scored) {
+      const key = dedupeKey(item.record);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(item);
+    }
+    return unique.slice(0, Math.max(1, limit)).map(({ record, score }) => ({ record, score }));
   }
 
   async status() {
