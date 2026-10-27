@@ -398,9 +398,10 @@ cd apex_app
 npm test
 ```
 
-This runs 181 tests across eleven files with the built-in runner. On Windows 11 with
-Node 26.4.0: 179 pass, 0 fail, 2 skipped (POSIX permission bits; control characters are
-invalid in Windows file names). They use only temporary
+This runs 182 tests across eleven files with the built-in runner. On Windows 11 with
+Node 26.4.0: 180 pass, 0 fail, 2 skipped (POSIX permission bits; control characters are
+invalid in Windows file names). On Linux (WSL Ubuntu) with Node 22.23.4: 181 pass,
+0 fail, 1 skipped (the Windows-only separator test). They use only temporary
 directories under the OS temp folder (`apex-test-*`) and remove them afterwards.
 Tests never read or write `~/.apex`, and CLI tests point `HOME`/`USERPROFILE` at the
 temp directory too.

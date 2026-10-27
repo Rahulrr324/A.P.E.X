@@ -470,7 +470,9 @@ export class CognitiveController {
     const memoryLines = selectPromptMemory(hits).map(
       (h, i) => `[${i + 1}] ${h.record.kind === 'model_conclusion' ? 'model conclusion (UNVERIFIED)' : 'user-provided fact'}: ${truncate(h.record.content, MEMORY_SHOWN_CHARS)}`,
     );
-    const { system, prompt } = planningPrompt({ goal: safeGoal, registry: this.registry, memoryLines });
+    // The prompt offers only the actions a model-origin plan may actually use, so the
+    // model is not invited to propose user-only actions such as filesystem inspection.
+    const { system, prompt } = planningPrompt({ goal: safeGoal, registry: this.registry, memoryLines, origin: 'model' });
     const res = await this.gateway.complete({ system, prompt });
     op.backend = res.backend ?? null;
     op.model = res.ok

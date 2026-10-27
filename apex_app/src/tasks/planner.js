@@ -175,9 +175,15 @@ export function parseModelPlan(text) {
 
 // Prompt for a model-proposed plan. The memory section is data, and only records
 // that the caller already filtered for relevance and privacy are passed in.
-export function planningPrompt({ goal, registry, memoryLines }) {
+//
+// The action list must agree with the policy that checkSteps() applies, otherwise the
+// model is invited to use actions that are then always refused. For the model origin
+// that means write actions (they wait for user approval) and read actions the model
+// may request. User-only actions, such as filesystem inspection, are not offered.
+export function planningPrompt({ goal, registry, memoryLines, origin = 'model' }) {
   const actions = registry.list()
     .filter((d) => d.plannable !== false)
+    .filter((d) => d.permission === 'write' || d.origins.includes(origin))
     .map((d) => `- ${d.name} (${d.permission}): ${d.description} Input: ${d.inputHint ?? '{}'}`)
     .join('\n');
   const system = [

@@ -14,7 +14,7 @@ import { createApp } from '../src/app.js';
 import { ModelGateway, NoBackend } from '../src/model/gateway.js';
 import { Outcome } from '../src/outcomes.js';
 import { TaskStatus, StepStatus, progressOf } from '../src/tasks/model.js';
-import { checkSteps } from '../src/tasks/planner.js';
+import { checkSteps, planningPrompt } from '../src/tasks/planner.js';
 import { makeTempDataDir, cleanup, runCli, cleanEnv } from './helpers.js';
 
 const dirs = [];
@@ -130,6 +130,30 @@ describe('task execution: filesystem steps', () => {
     assert.deepEqual(task.steps.map((s) => s.action), ['filesystem.list', 'filesystem.list']);
     assert.match(task.steps[1].summary, /listed 3 entries/);
     assert.equal((await opsFor(app, 'task.step')).length, 2);
+  });
+
+  test('the planning prompt offers a model exactly the actions it may use', () => {
+    const root = tempRoot();
+    const app = appOn(tempDir(), root);
+
+    const { system } = planningPrompt({ goal: 'read notes.txt', registry: app.registry, memoryLines: [] });
+    // User-only actions are not offered, so a model is not invited to propose them.
+    assert.ok(!system.includes('- filesystem.list ('), 'filesystem.list must not be offered to a model');
+    assert.ok(!system.includes('- filesystem.read ('), 'filesystem.read must not be offered to a model');
+    // Write actions stay, because a model-proposed write waits for explicit approval.
+    assert.match(system, /- memory\.add \(write\)/);
+
+    // Invariant: every action is offered if and only if a model-origin plan could use it.
+    for (const def of app.registry.list()) {
+      const offered = system.includes(`- ${def.name} (`);
+      const usable = def.plannable !== false
+        && (def.permission === 'write' || app.registry.authorize(def.name, 'model').decision === 'allow');
+      assert.equal(offered, usable, `${def.name}: offered=${offered}, usable at model origin=${usable}`);
+    }
+
+    // The user-origin variant still lists them, so a future user planning path keeps them.
+    const userPrompt = planningPrompt({ goal: 'read notes.txt', registry: app.registry, memoryLines: [], origin: 'user' });
+    assert.match(userPrompt.system, /- filesystem\.read \(read\)/);
   });
 
   test('a model-proposed plan containing a filesystem step is rejected and stores nothing', async () => {
