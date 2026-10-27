@@ -117,6 +117,40 @@ describe('memory store', () => {
     assert.equal((await store.get(updated.id))?.provenance.updateMode, 'user_confirmed');
   });
 
+  test('model-origin metadata cannot forge user confirmation', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    await assert.rejects(
+      () => store.add({
+        content: 'The project codename is Bluebird',
+        kind: 'model_conclusion',
+        source: 'model',
+        provenance: { origin: 'model_output', updateMode: 'user_confirmed' },
+      }),
+      ValidationError,
+    );
+    const rec = await store.add({
+      content: 'The project codename is Bluebird',
+      kind: 'model_conclusion',
+      source: 'model',
+      provenance: { origin: 'model_output', backend: 'stub' },
+    });
+    assert.equal(rec.provenance.updateMode, 'model_proposed');
+    assert.equal(rec.provenance.replaces, undefined);
+  });
+
+  test('replacement references must point to existing records', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    await assert.rejects(
+      () => store.add({
+        content: 'The project codename is Bluebird',
+        provenance: { origin: 'user_request', updateMode: 'user_confirmed', replaces: ['missing-id'] },
+      }),
+      ValidationError,
+    );
+  });
+
   test('unconfirmed contradictory claims remain unresolved and do not claim user confirmation', async () => {
     const dir = tempDir();
     const store = new MemoryStore(path.join(dir, 'memory.jsonl'));

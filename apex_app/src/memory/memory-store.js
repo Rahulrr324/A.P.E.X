@@ -64,12 +64,59 @@ function sanitizeProvenance(p) {
   if (typeof p.origin === 'string' && p.origin.length <= 64) out.origin = p.origin;
   if (typeof p.operationId === 'string' && OPERATION_ID_RE.test(p.operationId)) out.operationId = p.operationId;
   if (typeof p.backend === 'string' && BACKEND_RE.test(p.backend)) out.backend = p.backend;
-  if (typeof p.updateMode === 'string' && UPDATE_MODES.has(p.updateMode)) out.updateMode = p.updateMode;
   if (typeof p.context === 'string' && p.context.length <= 128) out.context = p.context;
   if (Array.isArray(p.replaces)) {
     out.replaces = p.replaces.filter((id) => typeof id === 'string' && id.length > 0).slice(0, 8);
   }
   return out;
+}
+
+function finalizeProvenance({ source, provenance = {}, updateMode, replaces = [], existingRecords = [] }) {
+  const base = sanitizeProvenance(provenance);
+  const rawExplicitMode = typeof updateMode === 'string'
+    ? updateMode
+    : (provenance && typeof provenance === 'object' && typeof provenance.updateMode === 'string' ? provenance.updateMode : undefined);
+  const explicitMode = rawExplicitMode;
+  const explicitReplaces = (Array.isArray(replaces) && replaces.length > 0)
+    ? replaces
+    : (Array.isArray(provenance?.replaces) ? provenance.replaces : []);
+
+  if (source === 'model') {
+    if (explicitMode !== undefined && explicitMode !== 'model_proposed') {
+      throw new ValidationError('model-origin memory must be marked model_proposed');
+    }
+    const out = { ...base, updateMode: 'model_proposed' };
+    delete out.replaces;
+    return out;
+  }
+
+  if (source !== 'user') {
+    throw new ValidationError(`unsupported source: ${String(source)}`);
+  }
+
+  if (explicitMode === 'model_proposed') {
+    throw new ValidationError('user-origin memory cannot be marked model_proposed');
+  }
+
+  const origin = base.origin ?? 'user_request';
+  const allowedOrigins = new Set(['user_request', 'user_approved', 'user_confirmation']);
+  if ((explicitMode === 'user_confirmed' || explicitMode === 'unresolved_conflict') && !allowedOrigins.has(origin)) {
+    throw new ValidationError('explicit user confirmation requires an authorized user-origin provenance');
+  }
+
+  const replacedIds = explicitReplaces.filter((id) => typeof id === 'string' && id.length > 0);
+  for (const id of replacedIds) {
+    const found = existingRecords.some((record) => record.id === id);
+    if (!found) throw new ValidationError(`replacement target ${id} not found in the store`);
+  }
+
+  const resolvedMode = explicitMode === 'user_confirmed' || explicitMode === 'unresolved_conflict' ? explicitMode : 'user_confirmed';
+  return {
+    ...base,
+    origin,
+    updateMode: resolvedMode,
+    replaces: replacedIds,
+  };
 }
 
 // Returns a problem description for a stored line, or null when it is valid.
@@ -197,14 +244,8 @@ export class MemoryStore {
     const text = validateContent(content);
     validateKindSource(kind, source);
     if (!SENSITIVITIES.has(sensitivity)) throw new ValidationError(`unknown sensitivity: ${String(sensitivity)}`);
-    const normalizedProvenance = sanitizeProvenance({ ...provenance, updateMode: updateMode ?? provenance.updateMode ?? (source === 'model' ? 'model_proposed' : 'user_confirmed'), replaces: replaces.length > 0 ? replaces : provenance.replaces });
-    if (source === 'model' && normalizedProvenance.updateMode !== 'model_proposed') {
-      throw new ValidationError('model-origin memory must be marked model_proposed');
-    }
-    if (source === 'user' && normalizedProvenance.updateMode === 'model_proposed') {
-      throw new ValidationError('user-origin memory cannot be marked model_proposed');
-    }
     const { records } = await this.log.load();
+    const normalizedProvenance = finalizeProvenance({ source, provenance, updateMode, replaces, existingRecords: records });
     const id = randomUUID();
     if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
     const record = {
