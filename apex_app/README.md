@@ -61,21 +61,34 @@ deletes or rewrites them.
 | Command | What it does |
 |---|---|
 | `status` | Application identity, memory and operation counts, model status. Makes no model call. |
+| `chat` | Interactive conversation. Reads one message per line from the terminal (or stdin); `/new` starts a new session, `/exit` ends. Memory and history persist across runs. |
 | `ask <request>` | Runs the full Cognitive Controller workflow for a request and records it. |
 | `ask --save-answer <request>` | As `ask`, and also stores a model answer as a `model_conclusion`. Only with this explicit flag. |
+| `new` | Starts a new conversation session. Memory is kept; earlier turns are no longer sent to the model. |
 | `history [--limit N]` | Lists recent operation records. |
+| `task plan <goal>` | Plans a multi-step task and stores it. Runs nothing. See [Tasks](#tasks). |
+| `task list`, `task show <id>` | Lists tasks, or shows one with its steps, status, and progress. An id may be shortened to 4 or more characters. |
+| `task run <id>` | Runs a pending task step by step. Stops at the first failed or uncertain step, and pauses before a write that needs approval. |
+| `task approve <id>` | Approves a model-proposed plan. `task approve <id> --step <stepId>` approves one write step that is waiting for it. |
+| `task resume <id>` | Continues a paused task. A completed step is never run again. |
+| `task retry <id> <stepId>` | Retries one failed or uncertain step, only if it is read-only. |
+| `task cancel <id>` | Cancels a task that has not finished. Steps that have not run are cancelled. |
 | `help`, `version` | Usage and version. |
 
 Request forms recognised without a model:
 
 - `remember that <fact>` / `remember <fact>`: store a user fact (a write action).
-- `recall <query>`, `search memory for <query>`, `what do you know about <query>`: keyword search.
+- `recall <query>`, `search memory for <query>`, `what do you know about <query>`: memory search. Matches words, common word forms (`codenames` finds `codename`), and close misspellings (`lighthose` finds `Lighthouse`).
 - `list memory` / `show memory`: most recent records.
 - `calc <expression>`, `calculate ...`, or `what is 2+3*4?`: plain arithmetic (`+ - * /`, parentheses).
 - `status`: application status.
 
-Anything else goes to the model path. With no model configured, APEX says so and
-**generates nothing**.
+A request of two or more parts separated by `;` or `then`, where every part is one of
+the forms above, runs as a task (see [Tasks](#tasks)). For example:
+`calc (2+3)*4; calc 10/2`.
+
+Anything else goes to the model path. With no model configured, APEX says so,
+shows any relevant memory it found (without summarising it), and **generates nothing**.
 
 ### Exit codes
 
@@ -88,23 +101,143 @@ Anything else goes to the model path. With no model configured, APEX says so and
 
 ## Optional: a local model
 
-No model is bundled, downloaded, or required. To use one, run a local server that
-exposes an OpenAI-compatible `/v1/chat/completions` endpoint (for example Ollama or
-the llama.cpp server), then:
+No model is bundled, downloaded, or required. APEX talks to a model server you run
+yourself, on this machine. Two protocols are supported; the choice is made in the
+Model Gateway (`src/model/gateway.js`), and nothing else in APEX knows about either one.
+
+| Server | `APEX_MODEL_PROVIDER` | `APEX_MODEL_URL` example | Endpoints used |
+|---|---|---|---|
+| Ollama (native API) | `ollama` | `http://127.0.0.1:11434` | `/api/tags`, `/api/chat` |
+| llama.cpp `llama-server`, or any OpenAI-compatible local server | `openai` (default) | `http://127.0.0.1:8080` | `/v1/models`, `/v1/chat/completions` |
 
 ```bash
-APEX_MODEL_URL=http://127.0.0.1:11434 APEX_MODEL_NAME=<your-model> node bin/apex.js status
-APEX_MODEL_URL=http://127.0.0.1:11434 APEX_MODEL_NAME=<your-model> node bin/apex.js ask what is the capital of France?
+# Ollama (after you have pulled the model yourself: ollama pull <model>)
+APEX_MODEL_PROVIDER=ollama APEX_MODEL_URL=http://127.0.0.1:11434 APEX_MODEL_NAME=<model> node bin/apex.js chat
+
+# llama.cpp
+APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
 ```
 
 - Only loopback hosts (`127.0.0.1`, `localhost`, `::1`) are accepted by default. A
   remote host needs `APEX_ALLOW_REMOTE_MODEL=1`. URLs with credentials are refused.
-- `APEX_MODEL_TIMEOUT_MS` sets the call timeout (default 30000).
-- **Not tested against a real model in this milestone.** The adapter is covered by
-  tests against a local stub server, which imitates the endpoint's shape. Real
-  model behaviour is UNVERIFIED.
+- `APEX_MODEL_NAME` is sent with each request. For Ollama it must be a model that is
+  already installed; otherwise APEX reports `MODEL_NOT_FOUND` and the command to run.
+- Temperature is 0. Answers are capped by `APEX_MODEL_MAX_TOKENS` (default 512); a cut-off answer
+  is shown with a notice that it was truncated. On a slow machine a long answer can
+  exceed `APEX_MODEL_TIMEOUT_MS` (default 30000) and is reported as `TIMEOUT`. Lower
+  `APEX_MODEL_MAX_TOKENS` (for example to 256) or raise the timeout. In a protocol run
+  on a 2-CPU sandbox against a random-weight test model, the default 512-token answer did
+  not finish within 120 s, and a 24-token answer did.
+- Failures are named, never turned into an answer: `UNREACHABLE`, `TIMEOUT` (never
+  retried), `INTERRUPTED` (connection dropped mid-answer), `MODEL_NOT_FOUND`,
+  `CONTEXT_TOO_LARGE`, `EMPTY_RESPONSE`, `MALFORMED_RESPONSE`, `HTTP_ERROR`. Only
+  unreachable and interrupted calls are retried, up to `APEX_MODEL_RETRIES` times.
+- Control characters in model output (including terminal escape codes) are removed
+  before the text is shown, stored, or logged.
+
+**Verification status.** The automated tests use local stand-in servers that copy the
+documented request and response shapes of both protocols. They check protocol
+handling and failure classification only. They say nothing about answer quality, and
+no test in this repository runs a real model. See the report that accompanies this
+milestone for what was and was not run against a real server.
+
+## How a request is answered
+
+1. The request is validated (length, control characters, credential-like text).
+2. Deterministic requests (`remember`, `recall`, `calc`, `status`, `list memory`) are
+   routed to actions. They are authorized, executed, and independently verified, with
+   or without a model. A model never executes them.
+3. Any other request goes to the model path:
+   - **Retrieval**: the personal memory is searched for the request (words, word
+     forms, and close misspellings; see Architecture). Only records that score above
+     a threshold, are not private, and do not look like credentials are placed in the
+     prompt.
+   - **Conversation**: the last `APEX_CONTEXT_TURNS` turns of the current session are
+     included. Earlier model answers are labelled `UNVERIFIED`.
+   - **Prompt**: memory and conversation are labelled as data, not instructions. Each
+     memory item shows its provenance: `user-provided fact` or `model conclusion
+     (UNVERIFIED)`. Memory and conversation are trimmed to fit about 6000 characters in
+     total: the oldest turns and the least relevant memories go first, one at a time.
+   - **Generation** through the Model Gateway. The reply is shown with its status and
+     source, and recorded.
+4. Model answers are **never** stored as memory automatically. `ask --save-answer` is
+   the only way, and it stores the answer as a `model_conclusion`, never as a user fact.
+5. Every operation writes an audit record with the retrieved memory ids and prompt
+   sizes, not the memory text.
+
+## Tasks
+
+A task is a short sequence of steps that APEX carries out one at a time. It is a
+controlled capability: it runs only supported actions, under the same authorization and
+verification as any single request.
+
+**What a task stores.** An id, a creation time, the goal (with personal memory content
+removed), and the steps. Each step has an id, a description, an action, its permission
+(`read` or `write`), its validated input, and the steps it depends on. The task also
+stores its status, its progress, each step's result, and the reason it stopped. Tasks
+are kept in `tasks.jsonl` in the data directory. The file is append-only: each change
+is one event, validated against the current state before it is written. The task state
+is rebuilt from these events at every start, so progress survives a restart after each
+step.
+
+**States.** A task is `proposed` (a model's plan, waiting for your approval), `pending`,
+`running`, `paused`, `completed`, `failed`, or `cancelled`. A step is `pending`,
+`awaiting_approval`, `running`, `completed`, `failed`, `uncertain`, `skipped`, or
+`cancelled`. Only the transitions in `src/tasks/model.js` are allowed. Any other change
+is refused and is not written.
+
+**Planning.**
+- *From your request.* Each part must be a supported request (the table above). Each
+  input is validated. The plan is checked before it is stored and is shown with its
+  steps. `task plan` stores the plan and runs nothing; you run it with `task run`. A
+  multi-part request in `ask` or `chat` is planned and run at once, as one task.
+- *From a model (optional).* The model is asked for a JSON object `{"steps": [...]}`
+  with at most 8 steps. Its reply is parsed strictly. A reply with extra fields, unknown
+  actions, actions that are not plannable, bad or cyclic dependencies, or a private
+  memory write is rejected, and nothing is stored. A valid reply is stored as a
+  `proposed` task. It does not run until you run `task approve <id>`.
+
+**Running.** Each step goes through the controller's normal action path: authorization,
+execution, then verification. The step is recorded as `running` before it executes.
+A failed step, or one whose result cannot be verified, stops the task. The steps that
+depend on it are skipped. A write step proposed by a model stops the task at
+`awaiting_approval`. You approve that one step with `task approve <id> --step <stepId>`,
+and the approval applies to that step's exact input only. Nothing is retried
+automatically.
+
+**Interruptions.** If the process stops while a step is running, the next start finds
+that step's outcome unknown. It is marked `uncertain`, never `completed`, and it is
+not run again. A read-only uncertain step can be retried on request. A write step
+cannot be; cancel the task instead.
+
+**Audit and memory.** Every step writes its own operation record (capability
+`task.step`), with the task id and step id. Planning, approval, retry, and cancel also
+write records. Task events never write to long-term memory. Plans, responses, and
+intermediate results are not saved as memory. A private memory write (`remember
+privately`) is refused inside a task and is handled as a single request, so its content
+never reaches `tasks.jsonl`.
+
+**Model authority.** A model can only propose a plan. It cannot approve anything, write
+task state, or change memory. Its read steps run as the model origin. A write step runs
+only after you approve it, and then runs as you.
+
+**Limits.**
+- Free-text planning recognises only the request forms above and the `;` and `then`
+  separators. Anything else needs a model to propose a plan.
+- Ordinary `remember` content is part of a step's input, so it is kept in `tasks.jsonl`
+  as well as in memory. Private content is not.
+- Steps run one after another, in dependency order. There is no parallelism and no time
+  limit on a step.
+- A lock file (`tasks.jsonl.lock`) stops two processes from running tasks at once. A
+  second process is refused, not queued. A lock left by a process that is no longer
+  running is removed.
+- Every task read replays the whole task log. That is fine at this scale; it is not a
+  design for many tasks.
+- Model planning has been tested only with test doubles and stub servers. No real model
+  was used to plan a task. See the Mission 003 report for what was and was not run.
 
 ## Architecture (as implemented)
+
 
 ```
 bin/apex.js           entry point
@@ -117,8 +250,15 @@ src/outcomes.js       the outcome status values (see Outcomes below)
 src/util.js           shared helpers: truncation, redaction of content fields, rounding
 src/controller/
   controller.js       Cognitive Controller: the workflow and the final status rule
+  context.js          prompt construction: labelled memory, turns, size budget, system prompt
   router.js           deterministic capability table (action pattern -> action)
   proposals.js        parser for model output; proposals are untrusted requests
+  task-runner.js      runs a task's steps through the controller's action path; owns task transitions
+src/tasks/
+  model.js            task and step states, allowed transitions, dependency checks, event reducer
+  store.js            tasks.jsonl: validated appends, replay, and the single-process lock
+  planner.js          deterministic plans and strict model-plan checks; nothing here runs an action
+  format.js           plain-text rendering of tasks, shared by replies and the CLI
 src/actions/
   registry.js         action registry and the authorization policy
   origins.js          request origins: user | model
@@ -130,10 +270,14 @@ src/verify/
 src/memory/
   jsonl-store.js      append-only JSON Lines with fsync and damage tolerance
   memory-store.js     personal memory: validation, provenance, content hash, retrieval
+  conversation-store.js  conversation turns with origin; credential-like text is never stored
+src/session.js        conversation session id (persists until `new`)
+src/security/
+  secrets.js          credential-like text detection and redaction (no dependencies)
 src/operations/
   operation-log.js    audit records
 src/model/
-  gateway.js          Model Gateway: replaceable backend; NoBackend; OpenAI-compatible adapter
+  gateway.js          Model Gateway: replaceable backend; NoBackend; OpenAI-compatible and Ollama adapters
 ```
 
 **Separation of concerns.** The executor runs an action and reports the raw
@@ -198,7 +342,7 @@ cd apex_app
 npm test
 ```
 
-This runs 63 tests across five files with the built-in runner. They use only temporary
+This runs 135 tests across nine files with the built-in runner. They use only temporary
 directories under the OS temp folder (`apex-test-*`) and remove them afterwards.
 Tests never read or write `~/.apex`, and CLI tests point `HOME`/`USERPROFILE` at the
 temp directory too.
@@ -217,6 +361,10 @@ temp directory too.
 | 10. Operation produces an auditable record | `controller.test.js` "every operation produces an auditable record" |
 | 11. Invalid input rejected safely | `controller.test.js` "invalid requests are rejected"; `actions.test.js` "invalid expressions"; `memory.test.js` "invalid content" |
 | 12. End-to-end workflow with restart | `controller.test.js` "end to end across a simulated restart" |
+| 13. Task created, persisted, and inspected | `tasks.test.js` "creation and persistence"; "command line" |
+| 14. Task validation: cycles, unknown actions, malformed model plans | `tasks.test.js` "planning and validation"; "model-proposed plans" |
+| 15. Task runs with existing actions; failure stops it; no re-execution | `tasks.test.js` "execution" |
+| 16. Cancel and safe resume | `tasks.test.js` "cancel"; "interrupted running step" |
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
@@ -225,8 +373,12 @@ validation (`gateway.test.js`), and the verifier-independence check
 
 ## Known limitations
 
-- **Retrieval is keyword overlap**, not semantic search. It finds records that share
-  words with the request (with a trivial plural stem), so paraphrases can be missed.
+- **Retrieval is lightweight lexical matching, not semantic search.** It matches words,
+  simple word forms, and close misspellings (character-trigram similarity), all local.
+  It does not understand meaning: a true paraphrase that shares no word forms with the
+  stored record will be missed. Retrieval quality is not measured beyond these tests.
+- **Answer quality depends entirely on the model you run.** APEX checks the protocol,
+  not the truth of what a model says. Model answers are shown as unverified.
 - **Routing is a fixed pattern table.** Requests outside the table go to the model
   path. Without a model they get `model_unavailable`.
 - **Verification of `memory.search` / `memory.list`** re-reads the same store with
@@ -238,7 +390,13 @@ validation (`gateway.test.js`), and the verifier-independence check
 - **Single-user, local only.** No authentication, encryption, or sync. Anyone with
   read access to the data directory can read the memory.
 - **Audit content:** the `request` and model `output` fields contain your text. The
-  audit log is not redacted except for memory-write payloads.
+  audit log is not redacted except for memory-write payloads and credential-like
+  requests. The audit records memory ids and prompt sizes, not the memory text sent to
+  the model. A model's own answer is recorded as output, and it could repeat memory.
+- **Conversation history** is replayed as summaries and text, limited to
+  `APEX_CONTEXT_TURNS` turns. There is no summarisation of older history.
+- **Context size:** a request that exceeds the model's context window is reported as
+  `CONTEXT_TOO_LARGE`; APEX does not know a model's window in advance.
 - **Windows:** not tested (see Requirements). The test script uses an explicit file
   list so it does not depend on shell globbing.
 - Node 22 is the only verified runtime.

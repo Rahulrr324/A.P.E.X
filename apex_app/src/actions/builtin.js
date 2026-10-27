@@ -59,6 +59,7 @@ export function builtinActions() {
     {
       name: 'app.status',
       description: 'Report APEX application and memory status. No side effects.',
+      inputHint: '{}',
       permission: 'read',
       origins: [ORIGIN_USER, ORIGIN_MODEL],
       validate(input) {
@@ -86,6 +87,7 @@ export function builtinActions() {
     {
       name: 'memory.search',
       description: 'Search personal memory by keyword. Read-only.',
+      inputHint: '{"query": "text", "limit": optional 1-50}',
       permission: 'read',
       origins: [ORIGIN_USER, ORIGIN_MODEL],
       validate(input) {
@@ -96,7 +98,8 @@ export function builtinActions() {
         };
       },
       async execute(ctx, { query, limit }) {
-        const found = await ctx.memory.search(query, { limit });
+        // Private memories are visible to the user only, never to a model-origin request.
+        const found = await ctx.memory.search(query, { limit, includePrivate: ctx.origin !== ORIGIN_MODEL });
         const data = {
           query,
           hits: found.map((h) => ({ ...hitsFromRecords([h.record])[0], score: round3(h.score) })),
@@ -108,7 +111,7 @@ export function builtinActions() {
         };
       },
       async verify(ctx, { query, limit }, result) {
-        const fresh = await ctx.memory.search(query, { limit });
+        const fresh = await ctx.memory.search(query, { limit, includePrivate: ctx.origin !== ORIGIN_MODEL });
         const claimed = result.data.hits.map((h) => h.id);
         const actual = fresh.map((h) => h.record.id);
         if (claimed.length !== actual.length || claimed.some((id, i) => id !== actual[i])) {
@@ -125,6 +128,7 @@ export function builtinActions() {
     {
       name: 'memory.list',
       description: 'List the most recent personal memory records. Read-only.',
+      inputHint: '{"limit": optional 1-100}',
       permission: 'read',
       origins: [ORIGIN_USER, ORIGIN_MODEL],
       validate(input) {
@@ -132,7 +136,7 @@ export function builtinActions() {
         return { limit: intField(o.limit, 'limit', 20, 1, 100) };
       },
       async execute(ctx, { limit }) {
-        const hits = hitsFromRecords(await ctx.memory.list({ limit }));
+        const hits = hitsFromRecords(await ctx.memory.list({ limit, includePrivate: ctx.origin !== ORIGIN_MODEL }));
         return {
           summary: `${hits.length} memory record(s) listed`,
           data: { limit, hits },
@@ -140,10 +144,10 @@ export function builtinActions() {
         };
       },
       async verify(ctx, { limit }, result) {
-        const fresh = await ctx.memory.status();
-        const expected = Math.min(limit, fresh.records);
-        if (result.data.hits.length !== expected) {
-          return { ok: false, detail: `listed ${result.data.hits.length}; store holds ${fresh.records} (expected ${expected})` };
+        const fresh = await ctx.memory.list({ limit, includePrivate: ctx.origin !== ORIGIN_MODEL });
+        const expected = fresh.length;
+        if (result.data.hits.length !== expected || result.data.hits.some((h, i) => h.id !== fresh[i].id)) {
+          return { ok: false, detail: `listed ${result.data.hits.length}; an independent read gives ${expected}` };
         }
         for (let i = 1; i < result.data.hits.length; i += 1) {
           if (result.data.hits[i - 1].createdAt < result.data.hits[i].createdAt) {
@@ -161,37 +165,44 @@ export function builtinActions() {
     {
       name: 'memory.add',
       description: 'Store a user-provided fact in memory. Write: user origin only.',
+      inputHint: '{"content": "text to remember", "sensitivity": "normal or private"}',
       permission: 'write',
       origins: [ORIGIN_USER],
       validate(input) {
-        const o = expectObject(input, ['content']);
-        return { content: validateContent(o.content) };
+        const o = expectObject(input, ['content', 'sensitivity']);
+        const sensitivity = o.sensitivity === undefined ? 'normal' : o.sensitivity;
+        if (sensitivity !== 'normal' && sensitivity !== 'private') throw new ValidationError('sensitivity must be normal or private');
+        return { content: validateContent(o.content), sensitivity };
       },
-      async execute(ctx, { content }) {
+      async execute(ctx, { content, sensitivity }) {
         const rec = await ctx.memory.add({
           content,
           kind: 'user_fact',
           source: 'user',
+          sensitivity,
           provenance: { origin: 'user_request', operationId: ctx.operationId },
         });
+        const label = sensitivity === 'private' ? 'private user fact' : 'user fact';
         return {
-          summary: `stored user memory ${shortId(rec.id)}`,
-          data: { id: rec.id, kind: rec.kind, source: rec.source, content: rec.content },
-          display: `Stored (user fact) ${shortId(rec.id)}`,
+          summary: `stored ${label} ${shortId(rec.id)}`,
+          data: { id: rec.id, kind: rec.kind, source: rec.source, sensitivity: rec.sensitivity, content: rec.content },
+          display: `Stored (${label}) ${shortId(rec.id)}${sensitivity === 'private' ? ' - never sent to a model' : ''}`,
         };
       },
-      async verify(ctx, { content }, result) {
+      async verify(ctx, { content, sensitivity }, result) {
         const rec = await ctx.memory.get(result.data.id);
         if (!rec) return { ok: false, detail: 'record not found in store after write' };
         if (rec.contentSha256 !== sha256Hex(content)) return { ok: false, detail: 'stored content hash differs from the requested content' };
         if (rec.kind !== 'user_fact' || rec.source !== 'user') return { ok: false, detail: 'stored provenance differs from the request' };
-        return { ok: true, detail: 'record present; content hash and provenance match' };
+        if ((rec.sensitivity ?? 'normal') !== sensitivity) return { ok: false, detail: 'stored sensitivity differs from the request' };
+        return { ok: true, detail: 'record present; content hash, provenance, and sensitivity match' };
       },
     },
 
     {
       name: 'memory.save_conclusion',
       description: 'Store a model answer as a model_conclusion after explicit user approval. Write: user origin only.',
+      plannable: false,
       permission: 'write',
       origins: [ORIGIN_USER],
       validate(input) {
@@ -228,6 +239,7 @@ export function builtinActions() {
     {
       name: 'calc.evaluate',
       description: 'Evaluate a plain arithmetic expression (+ - * / and parentheses). Deterministic.',
+      inputHint: '{"expression": "e.g. (2+3)*4"}',
       permission: 'read',
       origins: [ORIGIN_USER, ORIGIN_MODEL],
       validate(input) {

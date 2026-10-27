@@ -10,6 +10,11 @@ export const Outcome = Object.freeze({
   ACTION_DENIED: 'action_denied',
   INPUT_REJECTED: 'input_rejected',
   MODEL_UNAVAILABLE: 'model_unavailable',
+  PLAN_CREATED: 'plan_created', // a validated deterministic task plan was stored
+  PLAN_PROPOSED: 'plan_proposed', // a validated model plan was stored; waits for user approval
+  PLAN_REJECTED: 'plan_rejected', // a plan failed validation; nothing was stored
+  TASK_PAUSED: 'task_paused', // stopped for an explicit user decision
+  TASK_CANCELLED: 'task_cancelled',
 });
 
 export const OUTCOME_VALUES = new Set(Object.values(Outcome));

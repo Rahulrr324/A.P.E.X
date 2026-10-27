@@ -8,6 +8,10 @@ export function route(request) {
   const r = String(request).trim();
   let m;
 
+  // "remember privately" must be tested first: it is never sent to a model.
+  m = /^remember\s+privately\b(?:\s+that)?\s*:?\s*([\s\S]*)$/i.exec(r);
+  if (m) return { kind: 'action', capability: 'memory.add', action: 'memory.add', input: { content: m[1], sensitivity: 'private' } };
+
   m = /^remember\b(?:\s+that)?\s*:?\s*([\s\S]*)$/i.exec(r);
   if (m) return { kind: 'action', capability: 'memory.add', action: 'memory.add', input: { content: m[1] } };
 
