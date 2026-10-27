@@ -1,0 +1,39 @@
+name: APEX Local Alpha Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apex_app/**"
+      - ".github/workflows/apex-app-tests.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apex_app/**"
+      - ".github/workflows/apex-app-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apex-app-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Node.js test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify Node.js version
+        run: node --version
+      - name: Run APEX tests
+        working-directory: apex_app
+        run: npm test
