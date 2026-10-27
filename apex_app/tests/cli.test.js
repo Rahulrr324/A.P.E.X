@@ -1,0 +1,135 @@
+// The real entry point, run as separate processes. The restart tests start one
+// process, exit, and start another against the same data directory.
+import { test, describe, afterEach, after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel } from './helpers.js';
+
+const dirs = [];
+const stubs = [];
+afterEach(() => { while (dirs.length) cleanup(dirs.pop()); });
+after(async () => { for (const s of stubs) await s.close(); });
+
+// Each test gets its own data directory. The home directory is pointed at the same
+// temp directory so the default data path cannot touch the real ~/.apex either.
+function envFor(dataDir, extra = {}) {
+  return cleanEnv({ APEX_DATA_DIR: dataDir, HOME: dataDir, USERPROFILE: dataDir, ...extra });
+}
+function tempDir() { const d = makeTempDataDir(); dirs.push(d); return d; }
+
+describe('command line', () => {
+  test('the application starts and reports status with no model configured', async () => {
+    const dataDir = tempDir();
+    const r = await runCli(['status'], envFor(dataDir));
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /^APEX Local Alpha 0\.1\.0/);
+    assert.match(r.stdout, /Model backend: none configured/);
+    assert.match(r.stdout, /Memory records: 0/);
+  });
+
+  test('help and version work without any configuration', async () => {
+    const dataDir = tempDir();
+    const help = await runCli(['help'], envFor(dataDir));
+    assert.equal(help.code, 0);
+    assert.match(help.stdout, /node bin\/apex\.js ask/);
+    const version = await runCli(['version'], envFor(dataDir));
+    assert.equal(version.stdout.trim(), 'APEX Local Alpha 0.1.0');
+  });
+
+  test('memory and records survive a restart: a second process reads what the first wrote', async () => {
+    const dataDir = tempDir();
+    const env = envFor(dataDir);
+
+    const first = await runCli(['ask', 'remember that the project codename is Lighthouse'], env);
+    assert.equal(first.code, 0, first.stdout + first.stderr);
+    assert.match(first.stdout, /Status:\s+success_verified/);
+    const firstOp = first.stdout.match(/Operation: ([0-9a-f-]{36})/)[1];
+
+    // New process, same data directory.
+    const second = await runCli(['ask', 'recall codename'], env);
+    assert.equal(second.code, 0, second.stdout + second.stderr);
+    assert.match(second.stdout, /the project codename is Lighthouse/);
+
+    const history = await runCli(['history'], env);
+    assert.equal(history.code, 0);
+    assert.ok(history.stdout.includes(firstOp), 'the first operation record must survive the restart');
+    assert.equal(history.stdout.trim().split('\n').length, 2);
+
+    const status = await runCli(['status'], env);
+    assert.match(status.stdout, /Memory records: 1/);
+    assert.match(status.stdout, /Operation records: 2/);
+  });
+
+  test('a verified calculation is shown with its verification result', async () => {
+    const dataDir = tempDir();
+    const r = await runCli(['ask', 'calc', '(2+3)*4'], envFor(dataDir));
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /verification success_verified/);
+    assert.match(r.stdout, /\(2\+3\)\*4 = 20/);
+  });
+
+  test('a request needing a model, with no model configured, exits 1 and says nothing was generated', async () => {
+    const dataDir = tempDir();
+    const r = await runCli(['ask', 'what is the capital of France'], envFor(dataDir));
+    assert.equal(r.code, 1);
+    assert.match(r.stdout, /Status:\s+model_unavailable/);
+    assert.match(r.stdout, /Nothing has been generated/);
+  });
+
+  test('ask with --save-answer stores a model answer as a model_conclusion only on explicit request', async () => {
+    const dataDir = tempDir();
+    const s = await startStubModel();
+    stubs.push(s);
+    s.behavior.reply = 'You appear to work best in the morning.';
+    const env = envFor(dataDir, { APEX_MODEL_URL: s.url, APEX_MODEL_NAME: 'stub' });
+
+    const without = await runCli(['ask', 'when do I work best?'], env);
+    assert.equal(without.code, 0, without.stdout + without.stderr);
+    assert.match(without.stdout, /model answer; APEX cannot independently verify/);
+    let status = await runCli(['status'], env);
+    assert.match(status.stdout, /Memory records: 0/);
+
+    const withSave = await runCli(['ask', '--save-answer', 'when do I work best again?'], env);
+    assert.equal(withSave.code, 0, withSave.stdout + withSave.stderr);
+    status = await runCli(['status'], env);
+    assert.match(status.stdout, /Memory records: 1/);
+    const recall = await runCli(['ask', 'recall', 'morning'], env);
+    assert.match(recall.stdout, /model_conclusion from model/);
+    assert.match(status.stdout, /Model backend: http:\/\/127\.0\.0\.1:\d+/);
+  });
+
+  test('usage errors exit 2 with a clear message', async () => {
+    const dataDir = tempDir();
+    const env = envFor(dataDir);
+    const noText = await runCli(['ask'], env);
+    assert.equal(noText.code, 2);
+    assert.match(noText.stderr, /usage: ask/);
+    const unknown = await runCli(['launch-missiles'], env);
+    assert.equal(unknown.code, 2);
+    const badFlag = await runCli(['history', '--bogus'], env);
+    assert.equal(badFlag.code, 2);
+  });
+
+  test('invalid configuration is refused with exit 2 (remote endpoint without the explicit opt-in)', async () => {
+    const dataDir = tempDir();
+    const r = await runCli(['status'], envFor(dataDir, { APEX_MODEL_URL: 'https://api.example.com' }));
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /not loopback/);
+    const t = await runCli(['status'], envFor(dataDir, { APEX_MODEL_TIMEOUT_MS: 'soon' }));
+    assert.equal(t.code, 2);
+  });
+
+  test('an unavailable data store fails safely: status exits 1, and a write is not reported as recorded', async () => {
+    const dataDir = tempDir();
+    const blocker = path.join(dataDir, 'data-is-a-file');
+    await fs.writeFile(blocker, 'x');
+    const env = envFor(blocker);
+    const status = await runCli(['status'], env);
+    assert.equal(status.code, 1);
+    assert.match(status.stderr, /memory store unavailable/);
+    const write = await runCli(['ask', 'remember that nothing can be stored'], env);
+    assert.equal(write.code, 3, 'an unrecorded operation must exit 3');
+    assert.match(write.stdout, /Audit:\s+NOT RECORDED/);
+  });
+});

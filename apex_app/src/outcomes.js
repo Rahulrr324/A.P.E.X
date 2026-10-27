@@ -1,0 +1,15 @@
+// Outcome vocabulary. A result is reported as verified success ONLY when the
+// independent verifier confirms the postcondition (SUCCESS_VERIFIED).
+export const OPERATION_SCHEMA = 1;
+
+export const Outcome = Object.freeze({
+  SUCCESS_VERIFIED: 'success_verified',
+  EXECUTION_FAILED: 'execution_failed',
+  VERIFICATION_FAILED: 'verification_failed',
+  VERIFICATION_UNAVAILABLE: 'verification_unavailable',
+  ACTION_DENIED: 'action_denied',
+  INPUT_REJECTED: 'input_rejected',
+  MODEL_UNAVAILABLE: 'model_unavailable',
+});
+
+export const OUTCOME_VALUES = new Set(Object.values(Outcome));
