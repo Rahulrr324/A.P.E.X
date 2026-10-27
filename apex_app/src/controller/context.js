@@ -35,16 +35,23 @@ function dateOf(iso) {
 // Returns the eligible memory hits (score above the threshold, not private, not
 // credential-like). Everything else stays out of the prompt.
 export function selectPromptMemory(hits) {
-  return hits.filter((h) => h.score >= PROMPT_RELEVANCE_MIN && isPromptEligible(h.record));
+  const eligible = hits.filter((h) => h.score >= PROMPT_RELEVANCE_MIN && isPromptEligible(h.record));
+  const eligibleIds = new Set(eligible.map((h) => h.record.id));
+  return eligible.map((h) => ({
+    ...h,
+    conflict: (h.conflict ?? []).filter((id) => eligibleIds.has(id)),
+  }));
 }
 
 export function buildPrompt({ request, memoryHits, turns, maxChars = MAX_CONTEXT_CHARS }) {
   // Memory is listed most relevant first. Turns are oldest first.
-  let memory = memoryHits.map((h) => ({ id: h.record.id, record: h.record, conflict: h.conflict ?? [] }));
+  let memory = selectPromptMemory(memoryHits).map((h) => ({ id: h.record.id, record: h.record, conflict: h.conflict }));
   let history = turns.map((t) => ({ id: t.id, text: turnLine(t) }));
 
   const memoryLine = (m, i) => {
-    const conflictSuffix = m.conflict.length ? ` [conflicting memory: ${m.conflict.length} other record(s) disagree; treat as competing claims, not established fact]` : '';
+    const visibleIds = new Set(memory.map((item) => item.id));
+    const visibleConflicts = m.conflict.filter((id) => visibleIds.has(id));
+    const conflictSuffix = visibleConflicts.length ? ` [conflicting memory: ${visibleConflicts.length} other record(s) disagree; treat as competing claims, not established fact]` : '';
     return `[${i + 1}] ${labelFor(m.record)}, recorded ${dateOf(m.record.createdAt)}: ${truncate(m.record.content, MEMORY_ITEM_CHARS)}${conflictSuffix}`;
   };
 
@@ -53,7 +60,8 @@ export function buildPrompt({ request, memoryHits, turns, maxChars = MAX_CONTEXT
       ? memory.map(memoryLine).join('\n')
       : '(no relevant memory found)';
     const histText = history.length ? history.map((t) => t.text).join('\n') : '(no earlier messages in this session)';
-    const warning = memory.some((m) => m.conflict.length)
+    const visibleIds = new Set(memory.map((item) => item.id));
+    const warning = memory.some((m) => m.conflict.some((id) => visibleIds.has(id)))
       ? 'WARNING: at least one recalled memory entry conflicts with another recalled entry; treat these as competing claims rather than established fact.'
       : '';
     return [

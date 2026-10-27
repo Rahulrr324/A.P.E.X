@@ -109,6 +109,10 @@ export function checkSteps(steps, registry, origin) {
       problems.push(`${label}: action ${s.action} is not permitted in this plan (${auth.reason})`);
       continue;
     }
+    if (origin === 'model' && s.action === 'memory.add') {
+      problems.push(`${label}: a model-proposed memory write cannot be stored as a user fact`);
+      continue;
+    }
     let input;
     try {
       input = def.validate(s.input ?? {});

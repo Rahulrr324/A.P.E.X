@@ -466,9 +466,20 @@ export class CognitiveController {
   // Asks the model for a plan. The prompt gets the redacted goal and only relevant,
   // non-private memory. The reply is parsed strictly and checked against the registry.
   async #modelPlan(op, safeGoal) {
-    const hits = await this.memory.search(safeGoal, { limit: this.retrievalLimit }).catch(() => []);
+    let hits;
+    try {
+      hits = await this.memory.search(safeGoal, { limit: this.retrievalLimit });
+    } catch (err) {
+      op.errors.push({ stage: 'retrieval', code: err.code || 'STORE_ERROR', message: err.message });
+      return this.#finishTaskOp(op, Outcome.EXECUTION_FAILED, `Memory retrieval failed (${err.code || 'STORE_ERROR'}). No plan was created.`);
+    }
     const memoryLines = selectPromptMemory(hits).map(
-      (h, i) => `[${i + 1}] ${h.record.kind === 'model_conclusion' ? 'model conclusion (UNVERIFIED)' : 'user-provided fact'}: ${truncate(h.record.content, MEMORY_SHOWN_CHARS)}`,
+      (h, i) => {
+        const conflictNote = h.conflict.length > 0
+          ? ' [conflicting memory: competing claims, not established fact]'
+          : '';
+        return `[${i + 1}] ${h.record.kind === 'model_conclusion' ? 'model conclusion (UNVERIFIED)' : 'user-provided fact'}: ${truncate(h.record.content, MEMORY_SHOWN_CHARS)}${conflictNote}`;
+      },
     );
     // The prompt offers only the actions a model-origin plan may actually use, so the
     // model is not invited to propose user-only actions such as filesystem inspection.
@@ -669,6 +680,16 @@ export class CognitiveController {
   // Model path. `ctx.relevant` is what may enter the prompt (filtered); `ctx.context`
   // is everything retrieved, which the user can see but the model does not get.
   async answerWithModel(request, { context, relevant, turns }, op) {
+    const retrievalError = op.errors.find((error) => error.stage === 'retrieval');
+    if (retrievalError) {
+      return {
+        status: Outcome.EXECUTION_FAILED,
+        answer: `Memory retrieval failed (${retrievalError.code}). APEX did not generate an answer because stored context could not be checked.`,
+        hasText: false,
+        backend: null,
+        error: null,
+      };
+    }
     if (!this.gateway.isConfigured()) {
       const shown = context.filter((h) => h.score >= PROMPT_RELEVANCE_MIN);
       const memoryNote = shown.length

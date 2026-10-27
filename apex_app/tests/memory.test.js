@@ -90,6 +90,46 @@ describe('memory store', () => {
     assert.ok(likesHits.every((hit) => hit.conflict.length === 0));
   });
 
+  test('duplicate claims do not hide a distinct conflicting claim or its conflict metadata', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const first = await store.add({ content: 'The project codename is Lighthouse' });
+    const duplicate = await store.add({ content: 'The project codename is Lighthouse' });
+    const conflict = await store.add({ content: 'The project codename is Bluebird' });
+    const hits = await store.search('project codename', { limit: 10 });
+    assert.deepEqual(new Set(hits.map((hit) => hit.record.content)), new Set([
+      'The project codename is Lighthouse',
+      'The project codename is Bluebird',
+    ]));
+    assert.equal(hits.length, 2);
+    assert.ok(hits.some((hit) => hit.record.id === duplicate.id));
+    assert.ok(hits.every((hit) => hit.conflict.length === 1));
+    assert.ok(hits.find((hit) => hit.record.id === duplicate.id).conflict.includes(conflict.id));
+    assert.equal((await store.get(first.id))?.content, 'The project codename is Lighthouse');
+  });
+
+  test('same-predicate compatible elaborations are not automatically marked as conflicts', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    await store.add({ content: 'The project codename is Bluebird' });
+    await store.add({ content: 'The project codename is Bluebird for the summer campaign' });
+    const hits = await store.search('project codename', { limit: 10 });
+    assert.equal(hits.length, 2);
+    assert.ok(hits.every((hit) => hit.conflict.length === 0));
+  });
+
+  test('private conflicting records do not leak through prompt conflict metadata', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    await store.add({ content: 'The launch phrase is Harbor' });
+    await store.add({ content: 'The launch phrase is Seaglass', sensitivity: 'private' });
+    const hits = await store.search('launch phrase', { limit: 10 });
+    const prompt = buildPrompt({ request: 'what is the launch phrase?', memoryHits: hits, turns: [] }).prompt;
+    assert.match(prompt, /Harbor/);
+    assert.doesNotMatch(prompt, /Seaglass/);
+    assert.doesNotMatch(prompt, /conflict|competing claims|disagree/i);
+  });
+
   test('conflict references remain deterministic when timestamps tie', async () => {
     const dir = tempDir();
     const now = () => new Date('2026-10-27T00:00:00.000Z');
@@ -149,6 +189,27 @@ describe('memory store', () => {
       }),
       ValidationError,
     );
+    await assert.rejects(
+      () => store.add({
+        content: 'The project codename is Bluebird',
+        provenance: { origin: 'user_request', updateMode: 'user_confirmed', replaces: ['missing-id', 42] },
+      }),
+      ValidationError,
+    );
+  });
+
+  test('tokenless searches and corrupt stores do not masquerade as empty memory', async () => {
+    const dir = tempDir();
+    const blocker = path.join(dir, 'not-a-directory');
+    await fs.writeFile(blocker, 'x');
+    const unavailable = new MemoryStore(path.join(blocker, 'memory.jsonl'));
+    await assert.rejects(() => unavailable.search('the'), StoreError);
+
+    const file = path.join(dir, 'corrupt.jsonl');
+    await fs.writeFile(file, '{not json}\n');
+    const corrupt = new MemoryStore(file);
+    await assert.rejects(() => corrupt.search('codename'), StoreError);
+    await assert.rejects(() => corrupt.list(), StoreError);
   });
 
   test('unconfirmed contradictory claims remain unresolved and do not claim user confirmation', async () => {

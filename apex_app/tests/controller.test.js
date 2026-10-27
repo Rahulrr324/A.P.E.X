@@ -108,6 +108,23 @@ describe('controller: user requests', () => {
     assert.ok(later.operation.retrieval.some((r) => r.id === recordId), 'retrieved record must be referenced');
   });
 
+  test('a user correction appends confirmed evidence without deleting the earlier claim', async () => {
+    const app = appWith();
+    const first = await app.controller.handle('remember that the project codename is Lighthouse');
+    assert.equal(first.status, Outcome.SUCCESS_VERIFIED);
+    const original = (await app.memory.search('project codename'))[0].record;
+
+    const correction = await app.controller.handle('remember that the project codename is Bluebird');
+    assert.equal(correction.status, Outcome.SUCCESS_VERIFIED);
+    assert.equal(correction.operation.steps[0].origin, 'user');
+
+    const hits = await app.memory.search('project codename', { limit: 10 });
+    assert.equal(hits.length, 2);
+    assert.ok(hits.every((hit) => hit.status === 'unresolved_conflict'));
+    assert.equal((await app.memory.get(original.id))?.content, 'the project codename is Lighthouse');
+    assert.ok(hits.some((hit) => hit.record.content === 'the project codename is Bluebird'));
+  });
+
   test('invalid requests are rejected safely and still produce an auditable record', async () => {
     const dataDir = tempDir();
     const app = appWith({ dataDir });
@@ -135,6 +152,16 @@ describe('controller: user requests', () => {
     assert.equal(res.recorded, false, 'audit cannot be written either, and this must be reported');
     assert.match(res.recordError, /cannot write/);
     assert.equal((await app.memory.status()).records, 0);
+  });
+
+  test('an unavailable store cannot verify an empty tokenless memory search', async () => {
+    const parentFile = path.join(tempDir(), 'not-a-directory');
+    await fs.writeFile(parentFile, 'x');
+    const app = appWith({ dataDir: parentFile });
+    const step = await app.controller.runAction('memory.search', { query: 'the' }, 'user', 'op-store-down');
+    assert.equal(step.execution.status, 'failed');
+    assert.equal(step.outcome, Outcome.EXECUTION_FAILED);
+    assert.notEqual(step.outcome, Outcome.SUCCESS_VERIFIED);
   });
 });
 
@@ -214,6 +241,19 @@ describe('controller: model path and model-originated proposals', () => {
     assert.equal(res.status, Outcome.EXECUTION_FAILED);
     assert.match(res.output, /HTTP_ERROR/);
     assert.equal(res.operation.errors[0].stage, 'model');
+  });
+
+  test('memory retrieval failure is not passed to the model as empty context', async () => {
+    const s = await stub();
+    s.behavior.reply = 'This should never be used.';
+    const app = appWith({ model: s });
+    app.memory.search = async () => { throw new StoreError('memory unavailable'); };
+    const res = await app.controller.handle('what should I do next?');
+    assert.equal(res.status, Outcome.EXECUTION_FAILED);
+    assert.match(res.output, /Memory retrieval failed/);
+    assert.match(res.output, /did not generate an answer/);
+    assert.equal(s.requests.length, 0);
+    assert.equal(res.operation.errors[0].stage, 'retrieval');
   });
 
   test('a model answer can be saved only by explicit user approval, as a model_conclusion', async () => {

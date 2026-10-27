@@ -65,24 +65,20 @@ function sanitizeProvenance(p) {
   if (typeof p.operationId === 'string' && OPERATION_ID_RE.test(p.operationId)) out.operationId = p.operationId;
   if (typeof p.backend === 'string' && BACKEND_RE.test(p.backend)) out.backend = p.backend;
   if (typeof p.context === 'string' && p.context.length <= 128) out.context = p.context;
-  if (Array.isArray(p.replaces)) {
-    out.replaces = p.replaces.filter((id) => typeof id === 'string' && id.length > 0).slice(0, 8);
-  }
   return out;
 }
 
 function finalizeProvenance({ source, provenance = {}, updateMode, replaces = [], existingRecords = [] }) {
   const base = sanitizeProvenance(provenance);
-  const rawExplicitMode = typeof updateMode === 'string'
-    ? updateMode
-    : (provenance && typeof provenance === 'object' && typeof provenance.updateMode === 'string' ? provenance.updateMode : undefined);
-  const explicitMode = rawExplicitMode;
-  const explicitReplaces = (Array.isArray(replaces) && replaces.length > 0)
-    ? replaces
-    : (Array.isArray(provenance?.replaces) ? provenance.replaces : []);
+  const provenanceObject = provenance && typeof provenance === 'object' ? provenance : {};
+  const hasExplicitMode = updateMode !== undefined || provenanceObject.updateMode !== undefined;
+  const explicitMode = updateMode !== undefined ? updateMode : provenanceObject.updateMode;
+  const explicitReplaces = Array.isArray(replaces) && replaces.length === 0 && provenanceObject.replaces !== undefined
+    ? provenanceObject.replaces
+    : replaces;
 
   if (source === 'model') {
-    if (explicitMode !== undefined && explicitMode !== 'model_proposed') {
+    if (hasExplicitMode && explicitMode !== 'model_proposed') {
       throw new ValidationError('model-origin memory must be marked model_proposed');
     }
     const out = { ...base, updateMode: 'model_proposed' };
@@ -94,6 +90,9 @@ function finalizeProvenance({ source, provenance = {}, updateMode, replaces = []
     throw new ValidationError(`unsupported source: ${String(source)}`);
   }
 
+  if (hasExplicitMode && (typeof explicitMode !== 'string' || !UPDATE_MODES.has(explicitMode))) {
+    throw new ValidationError('unknown memory update mode');
+  }
   if (explicitMode === 'model_proposed') {
     throw new ValidationError('user-origin memory cannot be marked model_proposed');
   }
@@ -104,7 +103,11 @@ function finalizeProvenance({ source, provenance = {}, updateMode, replaces = []
     throw new ValidationError('explicit user confirmation requires an authorized user-origin provenance');
   }
 
-  const replacedIds = explicitReplaces.filter((id) => typeof id === 'string' && id.length > 0);
+  if (!Array.isArray(explicitReplaces) || explicitReplaces.length > 8
+    || explicitReplaces.some((id) => typeof id !== 'string' || id.length === 0)) {
+    throw new ValidationError('replacement references must be a list of up to 8 non-empty record ids');
+  }
+  const replacedIds = [...explicitReplaces];
   for (const id of replacedIds) {
     const found = existingRecords.some((record) => record.id === id);
     if (!found) throw new ValidationError(`replacement target ${id} not found in the store`);
@@ -225,6 +228,9 @@ function isPotentialConflict(a, b) {
   if (!left || !right) return false;
   if (left.subject !== right.subject) return false;
   if (left.value === right.value) return false;
+  // A longer value that merely qualifies an existing value is not enough
+  // evidence to call the claims contradictory.
+  if (left.value.startsWith(`${right.value} `) || right.value.startsWith(`${left.value} `)) return false;
 
   const dateWords = new Set(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december', 'today', 'tomorrow', 'yesterday']);
   if (left.value.split(' ').some((word) => dateWords.has(word)) || right.value.split(' ').some((word) => dateWords.has(word))) {
@@ -269,8 +275,16 @@ export class MemoryStore {
     return records.find((r) => r.id === id) ?? null;
   }
 
+  async #loadComplete() {
+    const { records, corrupt } = await this.log.load();
+    if (corrupt.length > 0) {
+      throw new StoreError(`memory store contains ${corrupt.length} corrupt line(s); refusing incomplete retrieval`);
+    }
+    return records;
+  }
+
   async list({ limit = 20, includePrivate = true } = {}) {
-    const { records } = await this.log.load();
+    const records = await this.#loadComplete();
     const visible = records.filter((r) => includePrivate || r.sensitivity !== 'private');
     return visible.slice(-Math.max(1, limit)).reverse();
   }
@@ -281,8 +295,8 @@ export class MemoryStore {
   // Ties go to the newer record. `includePrivate: false` omits private records.
   async search(query, { limit = 5, includePrivate = true } = {}) {
     const terms = [...new Set(tokenize(query))];
+    const records = await this.#loadComplete();
     if (terms.length === 0) return [];
-    const { records } = await this.log.load();
     const pool = records.filter((r) => includePrivate || r.sensitivity !== 'private');
     const docs = pool.map((record) => new Set(tokenize(record.content)));
 
@@ -320,11 +334,19 @@ export class MemoryStore {
       return b.index - a.index;
     });
 
+    const unique = [];
+    const seen = new Set();
+    for (const item of scored) {
+      const key = dedupeKey(item.record);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(item);
+    }
     const conflictIds = new Map();
-    for (let i = 0; i < scored.length; i += 1) {
-      for (let j = i + 1; j < scored.length; j += 1) {
-        const left = scored[i].record;
-        const right = scored[j].record;
+    for (let i = 0; i < unique.length; i += 1) {
+      for (let j = i + 1; j < unique.length; j += 1) {
+        const left = unique[i].record;
+        const right = unique[j].record;
         if (!isPotentialConflict(left, right)) continue;
         const leftIds = conflictIds.get(left.id) ?? [];
         leftIds.push(right.id);
@@ -333,15 +355,6 @@ export class MemoryStore {
         rightIds.push(left.id);
         conflictIds.set(right.id, rightIds);
       }
-    }
-
-    const unique = [];
-    const seen = new Set();
-    for (const item of scored) {
-      const key = dedupeKey(item.record);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      unique.push(item);
     }
     return unique.slice(0, Math.max(1, limit)).map(({ record, score }) => ({
       record,

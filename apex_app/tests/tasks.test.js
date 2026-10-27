@@ -12,6 +12,7 @@ import path from 'node:path';
 import { createApp } from '../src/app.js';
 import { createGateway, ModelGateway, NoBackend } from '../src/model/gateway.js';
 import { Outcome } from '../src/outcomes.js';
+import { StoreError } from '../src/errors.js';
 import { planFromText, checkSteps, parseModelPlan, redactGoal } from '../src/tasks/planner.js';
 import { canTransition, dependencyProblems, topologicalOrder, TASK_TRANSITIONS, TaskStatus, StepStatus, progressOf } from '../src/tasks/model.js';
 import { ActionRegistry } from '../src/actions/registry.js';
@@ -33,8 +34,26 @@ function tempDir() {
 }
 
 // Creates an app on a data directory. Calling it again on the same directory is a restart.
-function appOn(dataDir, gateway = new ModelGateway({ backend: new NoBackend() })) {
-  return createApp({ dataDir, gateway });
+function appOn(dataDir, gateway = new ModelGateway({ backend: new NoBackend() }), extraActions = []) {
+  return createApp({ dataDir, gateway, extraActions });
+}
+
+function taskWriteAction(writes) {
+  return {
+    name: 'test.write',
+    description: 'test-only write used to test task approvals',
+    permission: 'write',
+    origins: ['user'],
+    inputHint: '{"content":"text"}',
+    validate: (input) => input,
+    async execute(_ctx, input) {
+      writes.push(input.content);
+      return { summary: 'test write stored', data: { content: input.content } };
+    },
+    async verify(_ctx, input) {
+      return { ok: writes.includes(input.content), detail: 'write appears in the test sink' };
+    },
+  };
 }
 
 // TEST DOUBLE: a model backend that returns `reply` and records each request it receives.
@@ -75,7 +94,7 @@ async function onlyTask(app) {
 const modelPlanWithWrite = JSON.stringify({
   steps: [
     { id: 's1', description: 'work out the total', action: 'calc.evaluate', input: { expression: '2+3' }, depends_on: [] },
-    { id: 's2', description: 'save the total as a fact', action: 'memory.add', input: { content: 'The total is five' }, depends_on: ['s1'] },
+    { id: 's2', description: 'save the total as a fact', action: 'test.write', input: { content: 'The total is five' }, depends_on: ['s1'] },
   ],
 });
 
@@ -158,6 +177,60 @@ describe('planning and validation', () => {
     for (const def of builtinActions()) registry.register(def);
     const r = checkSteps([{ id: 's1', description: 'save a conclusion', action: 'memory.save_conclusion', input: { content: 'x' }, dependsOn: [] }], registry, 'model');
     assert.ok(r.problems.some((p) => /cannot be part of a plan/.test(p)));
+  });
+
+  test('a model plan cannot turn model-authored memory content into a user fact', async () => {
+    const dataDir = tempDir();
+    const reply = JSON.stringify({ steps: [{ id: 's1', description: 'remember the codename', action: 'memory.add', input: { content: 'The codename is Bluebird' }, depends_on: [] }] });
+    const app = appOn(dataDir, testDoubleModel(reply));
+    const result = await app.controller.planTask('save the project codename');
+    assert.equal(result.status, Outcome.PLAN_REJECTED);
+    assert.match(result.display, /cannot be stored as a user fact/);
+    assert.equal((await app.taskStore.list()).length, 0);
+    assert.equal((await app.memory.status()).records, 0);
+  });
+
+  test('user-authored memory writes still run and verify through deterministic tasks', async () => {
+    const dataDir = tempDir();
+    const app = appOn(dataDir);
+    const plan = await app.controller.planTask('calc 1+1; remember that the project codename is Lighthouse');
+    assert.equal(plan.status, Outcome.PLAN_CREATED);
+    const task = await onlyTask(app);
+    const result = await app.controller.runTask(task.id, 'run');
+    assert.equal(result.status, Outcome.SUCCESS_VERIFIED);
+    const record = (await app.memory.search('project codename'))[0].record;
+    assert.equal(record.content, 'the project codename is Lighthouse');
+    assert.equal(record.source, 'user');
+    assert.equal(record.provenance.origin, 'user_request');
+  });
+
+  test('a failed memory write in task execution is not reported as verified success', async () => {
+    const dataDir = tempDir();
+    const app = appOn(dataDir);
+    await app.controller.planTask('calc 1+1; remember that the project codename is Lighthouse');
+    const task = await onlyTask(app);
+    app.memory.add = async () => { throw new StoreError('memory write unavailable'); };
+
+    const result = await app.controller.runTask(task.id, 'run');
+    assert.equal(result.status, Outcome.EXECUTION_FAILED);
+    assert.notEqual(result.status, Outcome.SUCCESS_VERIFIED);
+    const fresh = await app.taskStore.get(task.id);
+    assert.equal(fresh.status, TaskStatus.FAILED);
+    assert.equal(fresh.steps[1].outcome, Outcome.EXECUTION_FAILED);
+    const stepOps = await opsFor(app, 'task.step');
+    const memoryWriteOp = stepOps.find((record) => record.steps[0].action === 'memory.add');
+    assert.ok(memoryWriteOp, 'the failed memory write is audited');
+    assert.equal(memoryWriteOp.steps[0].outcome, Outcome.EXECUTION_FAILED);
+  });
+
+  test('a model plan does not treat failed memory retrieval as no relevant memory', async () => {
+    const dataDir = tempDir();
+    const app = appOn(dataDir, testDoubleModel(JSON.stringify({ steps: [] })));
+    app.memory.search = async () => { throw new StoreError('memory unavailable'); };
+    const result = await app.controller.planTask('organise my notes');
+    assert.equal(result.status, Outcome.EXECUTION_FAILED);
+    assert.match(result.display, /Memory retrieval failed/);
+    assert.equal((await app.taskStore.list()).length, 0);
   });
 
   test('a private memory write is refused inside a task, and its content never reaches the task log', async () => {
@@ -251,7 +324,8 @@ describe('creation and persistence', () => {
 describe('model-proposed plans (test doubles and stub protocol)', () => {
   test('model plan is stored as a proposal, does not run, and needs approval before it can run', async () => {
     const dataDir = tempDir();
-    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite));
+    const writes = [];
+    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite), [taskWriteAction(writes)]);
     const memoryBefore = readRaw(dataDir, 'memory.jsonl');
     const res = await app.controller.planTask('organise my week and save the total');
     assert.equal(res.status, Outcome.PLAN_PROPOSED);
@@ -269,7 +343,7 @@ describe('model-proposed plans (test doubles and stub protocol)', () => {
   test('the model prompt gets the redacted goal and never private memory content', async () => {
     const dataDir = tempDir();
     const captured = [];
-    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite, captured));
+    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite, captured), [taskWriteAction([])]);
     await app.controller.planTask('remember privately that my dentist is Dr Rao and organise my week');
     assert.equal(captured.length, 1);
     assert.doesNotMatch(captured[0].prompt, /Dr Rao|dentist/);
@@ -277,22 +351,33 @@ describe('model-proposed plans (test doubles and stub protocol)', () => {
     assert.match(captured[0].system, /cannot approve anything/);
   });
 
+  test('the planning prompt marks conflicting eligible memories as competing claims', async () => {
+    const dataDir = tempDir();
+    const captured = [];
+    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite, captured), [taskWriteAction([])]);
+    await app.memory.add({ content: 'The project codename is Lighthouse' });
+    await app.memory.add({ content: 'The project codename is Bluebird' });
+    await app.controller.planTask('what is the project codename and save the result');
+    assert.equal(captured.length, 1);
+    assert.match(captured[0].prompt, /competing claims, not established fact/);
+  });
+
   test('approval, then a read runs, then the write waits for its own approval, then resumes safely after a restart', async () => {
     const dataDir = tempDir();
-    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite));
+    const writes = [];
+    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite), [taskWriteAction(writes)]);
     await app.controller.planTask('organise my week and save the total');
     const task = await onlyTask(app);
     const approved = await app.controller.approveTask(task.id.slice(0, 8));
     assert.equal(approved.status, Outcome.SUCCESS_VERIFIED);
 
-    const memoryBefore = readRaw(dataDir, 'memory.jsonl');
     const paused = await app.controller.runTask(task.id, 'run');
     assert.equal(paused.status, Outcome.TASK_PAUSED);
     const mid = await app.taskStore.get(task.id);
     assert.deepEqual(mid.steps.map((s) => s.status), ['completed', 'awaiting_approval']);
-    assert.equal(readRaw(dataDir, 'memory.jsonl'), memoryBefore, 'the model-proposed write has not run');
+    assert.deepEqual(writes, [], 'the model-proposed write has not run');
 
-    const restarted = appOn(dataDir, testDoubleModel(modelPlanWithWrite));
+    const restarted = appOn(dataDir, testDoubleModel(modelPlanWithWrite), [taskWriteAction(writes)]);
     const gate = await restarted.controller.approveTask(task.id, { stepId: 's2' });
     assert.equal(gate.status, Outcome.SUCCESS_VERIFIED);
     const done = await restarted.controller.runTask(task.id, 'resume');
@@ -301,12 +386,12 @@ describe('model-proposed plans (test doubles and stub protocol)', () => {
     // No re-execution: the calculation ran exactly once.
     const calcOps = (await opsFor(restarted, 'task.step')).filter((r) => r.task.stepId === 's1');
     assert.equal(calcOps.length, 1);
-    assert.notEqual(readRaw(dataDir, 'memory.jsonl'), memoryBefore, 'the approved write ran');
+    assert.deepEqual(writes, ['The total is five'], 'the approved write ran once');
   });
 
   test('a step can be approved only while it is waiting for approval', async () => {
     const dataDir = tempDir();
-    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite));
+    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite), [taskWriteAction([])]);
     await app.controller.planTask('organise my week and save the total');
     const task = await onlyTask(app);
     await app.controller.approveTask(task.id);
@@ -515,8 +600,8 @@ describe('execution', () => {
 
   test('an uncertain write step is never retried automatically or on request', async () => {
     const dataDir = tempDir();
-    const reply = JSON.stringify({ steps: [{ id: 's1', description: 'save a fact', action: 'memory.add', input: { content: 'Lighthouse is the codename' }, depends_on: [] }] });
-    const app = appOn(dataDir, testDoubleModel(reply));
+    const reply = JSON.stringify({ steps: [{ id: 's1', description: 'save a fact', action: 'test.write', input: { content: 'Lighthouse is the codename' }, depends_on: [] }] });
+    const app = appOn(dataDir, testDoubleModel(reply), [taskWriteAction([])]);
     await app.controller.planTask('save the codename');
     const task = await onlyTask(app);
     await app.controller.approveTask(task.id);
@@ -550,7 +635,7 @@ describe('cancel', () => {
 
   test('a paused task can be cancelled after part of it ran; completed steps keep their results', async () => {
     const dataDir = tempDir();
-    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite));
+    const app = appOn(dataDir, testDoubleModel(modelPlanWithWrite), [taskWriteAction([])]);
     await app.controller.planTask('organise my week and save the total');
     const task = await onlyTask(app);
     await app.controller.approveTask(task.id);

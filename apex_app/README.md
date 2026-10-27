@@ -208,6 +208,7 @@ How the boundary is enforced:
      memory item shows its provenance: `user-provided fact` or `model conclusion
      (UNVERIFIED)`. Memory and conversation are trimmed to fit about 6000 characters in
      total: the oldest turns and the least relevant memories go first, one at a time.
+     Conflict warnings only refer to other eligible memories retained in that prompt.
    - **Generation** through the Model Gateway. The reply is shown with its status and
      source, and recorded.
 4. Model answers are **never** stored as memory automatically. `ask --save-answer` is
@@ -244,8 +245,10 @@ is refused and is not written.
 - *From a model (optional).* The model is asked for a JSON object `{"steps": [...]}`
   with at most 8 steps. Its reply is parsed strictly. A reply with extra fields, unknown
   actions, actions that are not plannable, bad or cyclic dependencies, or a private
-  memory write is rejected, and nothing is stored. A valid reply is stored as a
-  `proposed` task. It does not run until you run `task approve <id>`.
+  memory write is rejected, and nothing is stored. A model-proposed `memory.add` is
+  also rejected: task approval must not relabel model-authored text as a user fact.
+  A valid reply is stored as a `proposed` task. It does not run until you run
+  `task approve <id>`.
 
 **Running.** Each step goes through the controller's normal action path: authorization,
 execution, then verification. The step is recorded as `running` before it executes.
@@ -269,7 +272,8 @@ never reaches `tasks.jsonl`.
 
 **Model authority.** A model can only propose a plan. It cannot approve anything, write
 task state, or change memory. Its read steps run as the model origin. A write step runs
-only after you approve it, and then runs as you.
+only after you approve it, and then runs as you. Model-proposed `memory.add` steps are
+not accepted because the task display intentionally omits the content being stored.
 
 **Limits.**
 - Free-text planning recognises only the request forms above and the `;` and `then`
@@ -438,6 +442,18 @@ validation (`gateway.test.js`), and the verifier-independence check
   simple word forms, and close misspellings (character-trigram similarity), all local.
   It does not understand meaning: a true paraphrase that shares no word forms with the
   stored record will be missed. Retrieval quality is not measured beyond these tests.
+- **Contradiction detection is deliberately narrow and heuristic.** It compares simple
+  “subject is value” / “subject called value” clauses with the same normalized subject.
+  It can miss paraphrases, negation, or complex temporal/contextual relationships, and
+  different values may still be compatible in context. A longer value that merely
+  elaborates the shorter one is not flagged. Warnings preserve claims; they do not
+  determine which claim is true. Exact duplicate retrieval hits collapse to the newest
+  matching record, while distinct contents remain separate.
+- **There is no dedicated CLI correction command.** Repeating `remember` records another
+  user fact and leaves conflicting claims unresolved. Replacement metadata is available
+  to the trusted memory-store call path; previous records remain append-only.
+- **Corrupt memory logs fail closed for search and list.** `status` still reports the
+  corrupt-line count, and records are not deleted or rewritten. Repair is not automatic.
 - **Answer quality depends entirely on the model you run.** APEX checks the protocol,
   not the truth of what a model says. Model answers are shown as unverified.
 - **Routing is a fixed pattern table.** Requests outside the table go to the model
