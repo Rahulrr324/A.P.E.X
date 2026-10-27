@@ -103,6 +103,39 @@ describe('command line', () => {
     assert.match(status.stdout, /Operation records: 2/);
   });
 
+  test('memory correction CLI requires explicit resolution and preserves inspectable history', async () => {
+    const dataDir = tempDir();
+    const env = envFor(dataDir);
+    const stored = await runCli(['ask', 'remember that the project codename is Lighthouse'], env);
+    assert.equal(stored.code, 0, stored.stderr);
+
+    const listed = await runCli(['ask', 'list memory'], env);
+    assert.equal(listed.code, 0, listed.stderr);
+    const targetId = listed.stdout.match(/\[([0-9a-f]{8}-[0-9a-f-]{27})\]/i)?.[1];
+    assert.ok(targetId, `expected a full memory ID in list output: ${listed.stdout}`);
+
+    const missingConsent = await runCli(['memory', 'correct', targetId, 'The', 'project', 'codename', 'is', 'Bluebird'], env);
+    assert.equal(missingConsent.code, 2);
+    assert.match(missingConsent.stderr, /--resolve/);
+
+    const corrected = await runCli(['memory', 'correct', '--resolve', targetId, 'The', 'project', 'codename', 'is', 'Bluebird'], env);
+    assert.equal(corrected.code, 0, corrected.stderr + corrected.stdout);
+    assert.match(corrected.stdout, new RegExp(`corrects ${targetId}`));
+    assert.match(corrected.stdout, /Earlier evidence remains stored/);
+
+    const after = await runCli(['ask', 'list memory'], env);
+    assert.equal(after.code, 0);
+    assert.match(after.stdout, new RegExp(`${targetId}.*superseded`));
+    assert.match(after.stdout, new RegExp(`corrects ${targetId}`));
+
+    const history = await runCli(['history'], env);
+    assert.equal(history.code, 0);
+    assert.match(history.stdout, /memory\.correct/);
+    assert.doesNotMatch(history.stdout, /The project codename is Bluebird/);
+    const rawAudit = await fs.readFile(path.join(dataDir, 'operations.jsonl'), 'utf8');
+    assert.doesNotMatch(rawAudit, /The project codename is Bluebird/);
+  });
+
   test('a verified calculation is shown with its verification result', async () => {
     const dataDir = tempDir();
     const r = await runCli(['ask', 'calc', '(2+3)*4'], envFor(dataDir));

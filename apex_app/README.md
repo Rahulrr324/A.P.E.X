@@ -64,6 +64,7 @@ deletes or rewrites them.
 | `chat` | Interactive conversation. Reads one message per line from the terminal (or stdin); `/new` starts a new session, `/exit` ends. Memory and history persist across runs. |
 | `ask <request>` | Runs the full Cognitive Controller workflow for a request and records it. |
 | `ask --save-answer <request>` | As `ask`, and also stores a model answer as a `model_conclusion`. Only with this explicit flag. |
+| `memory correct --resolve <full-record-id> <replacement claim...>` | Explicitly corrects one selected claim. Appends a user-confirmed record and preserves the original. |
 | `new` | Starts a new conversation session. Memory is kept; earlier turns are no longer sent to the model. |
 | `history [--limit N]` | Lists recent operation records. |
 | `task plan <goal>` | Plans a multi-step task and stores it. Runs nothing. See [Tasks](#tasks). |
@@ -80,6 +81,9 @@ Request forms recognised without a model:
 - `remember that <fact>` / `remember <fact>`: store a user fact (a write action).
 - `recall <query>`, `search memory for <query>`, `what do you know about <query>`: memory search. Matches words, common word forms (`codenames` finds `codename`), and close misspellings (`lighthose` finds `Lighthouse`).
 - `list memory` / `show memory`: most recent records.
+- `memory correct --resolve <full-record-id> <replacement claim...>`: explicitly resolve
+  the conflict with one identified record. Get the full UUID from `list memory`; the
+  replacement must be a conflicting claim. The correction is a new append-only record.
 - `calc <expression>`, `calculate ...`, or `what is 2+3*4?`: plain arithmetic (`+ - * /`, parentheses).
 - `status`: application status.
 
@@ -359,6 +363,7 @@ holds identity, memory, control, or persistence.
 | `memory.search` | read | user, model | `query`, `limit` | returned ids equal a fresh store search; each record's content matches the store |
 | `memory.list` | read | user, model | `limit` | count equals the store count (up to limit); newest-first; content matches |
 | `memory.add` | **write** | user | `content` | record exists by id; content SHA-256 matches; provenance is `user` / `user_fact` |
+| `memory.correct` | **write** | user | full `targetId`, replacement `content`, explicit `resolve` | correction record, user-confirmed provenance, exact target link, and preserved target are re-read |
 | `memory.save_conclusion` | **write** | user | `content`, `operationId`, `backend` | record exists; hash matches; provenance is `model` / `model_conclusion` |
 | `calc.evaluate` | read | user, model | `expression` (digits, `+ - * / ( )`, max 200 chars) | a different algorithm (shunting-yard) gives the same value |
 | `filesystem.list` | read | user | `path`, `limit` | a second listing matches names, types, count, and truncation flag |
@@ -449,9 +454,15 @@ validation (`gateway.test.js`), and the verifier-independence check
   elaborates the shorter one is not flagged. Warnings preserve claims; they do not
   determine which claim is true. Exact duplicate retrieval hits collapse to the newest
   matching record, while distinct contents remain separate.
-- **There is no dedicated CLI correction command.** Repeating `remember` records another
-  user fact and leaves conflicting claims unresolved. Replacement metadata is available
-  to the trusted memory-store call path; previous records remain append-only.
+- **Correction resolves only its explicitly selected pair.** The new record links to the
+  selected old record, which remains visible as `superseded` when no other conflict
+  remains. Conflicts with any other claims stay unresolved; superseded history is not
+  sent as an active fact in model context.
+- **Corrections are never inferred from `remember`.** Repeating `remember` records
+  another user fact and leaves conflicting claims unresolved. Use the explicit
+  `memory correct` command to select one conflicting record. Corrections are limited to
+  one selected record per operation and to the detector's narrow clause patterns;
+  previous records remain append-only and continue to be inspectable.
 - **Corrupt memory logs fail closed for search and list.** `status` still reports the
   corrupt-line count, and records are not deleted or rewritten. Repair is not automatic.
 - **Answer quality depends entirely on the model you run.** APEX checks the protocol,

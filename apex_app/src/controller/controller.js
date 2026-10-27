@@ -278,6 +278,46 @@ export class CognitiveController {
     }
   }
 
+  async correctMemory({ targetId, content, resolve } = {}) {
+    const op = this.#newOp({
+      capability: 'memory.correct',
+      origin: 'user',
+      request: `memory correct ${String(targetId ?? '')} [replacement omitted: ${typeof content === 'string' ? content.length : 0} chars] --resolve`,
+    });
+    const operationId = op.id;
+
+    const step = await this.runAction(
+      'memory.correct',
+      { targetId, content, resolve },
+      'user',
+      operationId,
+    );
+    op.steps.push(step);
+    op.status = step.outcome;
+    op.output = step.summary ? truncate(step.summary, MAX_OUTPUT_CHARS) : null;
+    op.finishedAt = this.now().toISOString();
+
+    let recorded = true;
+    let recordError = null;
+    try {
+      await this.operations.append({ ...op, steps: op.steps.map(stripDisplay) });
+    } catch (err) {
+      recorded = false;
+      recordError = err.message;
+      op.errors.push({ stage: 'audit', code: 'AUDIT_WRITE_FAILED', message: err.message });
+      op.status = Outcome.AUDIT_INTEGRITY_FAILED;
+      op.output = 'The correction may have been stored, but its audit record could not be written; it is not reported as verified success.';
+    }
+    return {
+      operation: op,
+      status: op.status,
+      output: op.output,
+      display: recorded ? (step.display ?? step.summary) : op.output,
+      recorded,
+      recordError,
+    };
+  }
+
   async #recentTurns(sid, op) {
     if (!this.conversation || !sid) return [];
     try {

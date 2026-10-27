@@ -27,6 +27,7 @@ describe('authorization policy', () => {
     assert.equal(r.authorize('calc.evaluate', 'user').decision, 'allow');
     assert.equal(r.authorize('calc.evaluate', 'model').decision, 'allow');
     assert.equal(r.authorize('memory.search', 'model').decision, 'allow');
+    assert.equal(r.authorize('memory.correct', 'user').decision, 'allow');
   });
 
   test('write actions are denied to the model origin (a model request is not authorization)', () => {
@@ -34,6 +35,7 @@ describe('authorization policy', () => {
     assert.deepEqual(r.authorize('memory.add', 'model'), { decision: 'deny', reason: 'ORIGIN_NOT_PERMITTED' });
     assert.equal(r.authorize('memory.add', 'user').decision, 'allow');
     assert.equal(r.authorize('memory.save_conclusion', 'model').decision, 'deny');
+    assert.equal(r.authorize('memory.correct', 'model').decision, 'deny');
   });
 
   test('unknown actions, unknown origins, and prototype-like names are denied', () => {

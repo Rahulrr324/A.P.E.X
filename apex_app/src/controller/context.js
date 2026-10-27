@@ -35,7 +35,9 @@ function dateOf(iso) {
 // Returns the eligible memory hits (score above the threshold, not private, not
 // credential-like). Everything else stays out of the prompt.
 export function selectPromptMemory(hits) {
-  const eligible = hits.filter((h) => h.score >= PROMPT_RELEVANCE_MIN && isPromptEligible(h.record));
+  const eligible = hits.filter((h) => h.score >= PROMPT_RELEVANCE_MIN
+    && h.status !== 'superseded'
+    && isPromptEligible(h.record));
   const eligibleIds = new Set(eligible.map((h) => h.record.id));
   return eligible.map((h) => ({
     ...h,

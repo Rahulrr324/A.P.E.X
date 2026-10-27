@@ -190,6 +190,20 @@ describe('planning and validation', () => {
     assert.equal((await app.memory.status()).records, 0);
   });
 
+  test('a model plan cannot invoke the user-only memory correction operation', () => {
+    const registry = new ActionRegistry();
+    for (const def of builtinActions()) registry.register(def);
+    const result = checkSteps([{
+      id: 's1',
+      description: 'correct a stored claim',
+      action: 'memory.correct',
+      input: { targetId: '00000000-0000-4000-8000-000000000001', content: 'The project codename is Bluebird', resolve: true },
+      dependsOn: [],
+    }], registry, 'model');
+    assert.ok(result.problems.some((problem) => /cannot be part of a plan/.test(problem)));
+    assert.equal(result.steps.length, 0);
+  });
+
   test('user-authored memory writes still run and verify through deterministic tasks', async () => {
     const dataDir = tempDir();
     const app = appOn(dataDir);

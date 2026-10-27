@@ -11,6 +11,7 @@ import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 
 const OPERATION_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 const BACKEND_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+const MEMORY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function expectObject(input, allowedKeys) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -41,7 +42,13 @@ function intField(value, name, fallback, min, max) {
 
 function renderRecords(hits) {
   if (hits.length === 0) return '  (no matching memory records)';
-  return hits.map((h) => `  [${shortId(h.id)}] ${h.kind} from ${h.source}: ${h.content}`).join('\n');
+  return hits.map((h) => {
+    const status = h.status ?? h.updateMode;
+    const replacements = h.replaces?.length ? `; corrects ${h.replaces.join(', ')}` : '';
+    const replacedBy = h.replacedBy?.length ? `; superseded by ${h.replacedBy.join(', ')}` : '';
+    const state = status ? ` [${status}${replacements}${replacedBy}]` : '';
+    return `  [${h.id}] ${h.kind} from ${h.source}: ${h.content}${state}`;
+  }).join('\n');
 }
 
 function hitsFromRecords(records) {
@@ -51,6 +58,9 @@ function hitsFromRecords(records) {
     source: r.source,
     createdAt: r.createdAt,
     content: r.content,
+    updateMode: r.status ?? r.provenance?.updateMode,
+    replaces: r.provenance?.replaces ?? [],
+    replacedBy: r.replacedBy ?? [],
   }));
 }
 
@@ -102,7 +112,13 @@ export function builtinActions() {
         const found = await ctx.memory.search(query, { limit, includePrivate: ctx.origin !== ORIGIN_MODEL });
         const data = {
           query,
-          hits: found.map((h) => ({ ...hitsFromRecords([h.record])[0], score: round3(h.score) })),
+          hits: found.map((h) => ({
+            ...hitsFromRecords([h.record])[0],
+            score: round3(h.score),
+            status: h.status,
+            replaces: h.replaces,
+            replacedBy: h.replacedBy,
+          })),
         };
         return {
           summary: `${data.hits.length} matching memory record(s)`,
@@ -198,6 +214,48 @@ export function builtinActions() {
         if (rec.kind !== 'user_fact' || rec.source !== 'user') return { ok: false, detail: 'stored provenance differs from the request' };
         if ((rec.sensitivity ?? 'normal') !== sensitivity) return { ok: false, detail: 'stored sensitivity differs from the request' };
         return { ok: true, detail: 'record present; content hash, provenance, and sensitivity match' };
+      },
+    },
+
+    {
+      name: 'memory.correct',
+      description: 'Append a user-confirmed correction to one explicitly identified memory claim. User origin only.',
+      inputHint: '{"targetId":"full memory record ID", "content":"replacement claim", "resolve":true}',
+      plannable: false,
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      validate(input) {
+        const o = expectObject(input, ['targetId', 'content', 'resolve']);
+        if (typeof o.targetId !== 'string' || !MEMORY_ID_RE.test(o.targetId)) {
+          throw new ValidationError('targetId must be a full memory record ID');
+        }
+        if (o.resolve !== true) throw new ValidationError('explicit --resolve confirmation is required');
+        return { targetId: o.targetId, content: validateContent(o.content), resolve: true };
+      },
+      async execute(ctx, { targetId, content }) {
+        const rec = await ctx.memory.correct({ targetId, content, origin: ctx.origin });
+        return {
+          summary: `stored user-confirmed correction ${shortId(rec.id)} for ${shortId(targetId)}`,
+          data: { id: rec.id, targetId, contentSha256: rec.contentSha256, sensitivity: rec.sensitivity },
+          display: `Stored correction ${rec.id}; it explicitly corrects ${targetId}. Earlier evidence remains stored.`,
+        };
+      },
+      async verify(ctx, { targetId, content }, result) {
+        const rec = await ctx.memory.get(result.data.id);
+        const target = await ctx.memory.get(targetId);
+        if (!rec || !target) return { ok: false, detail: 'correction or original claim is missing from memory' };
+        if (rec.contentSha256 !== sha256Hex(content)) return { ok: false, detail: 'stored correction hash differs from the requested replacement' };
+        if (rec.source !== 'user' || rec.kind !== 'user_fact') return { ok: false, detail: 'correction is not stored as a user fact' };
+        if ((rec.sensitivity ?? 'normal') !== (target.sensitivity ?? 'normal')) {
+          return { ok: false, detail: 'correction sensitivity differs from the original claim' };
+        }
+        if (rec.provenance.origin !== 'user_memory_correction' || rec.provenance.updateMode !== 'user_confirmed') {
+          return { ok: false, detail: 'correction provenance is not user-confirmed' };
+        }
+        if (rec.provenance.replaces?.length !== 1 || rec.provenance.replaces[0] !== targetId) {
+          return { ok: false, detail: 'replacement link does not match the selected claim' };
+        }
+        return { ok: true, detail: 'correction and exact historical replacement link confirmed in memory' };
       },
     },
 

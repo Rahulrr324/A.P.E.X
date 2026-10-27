@@ -125,6 +125,86 @@ describe('controller: user requests', () => {
     assert.ok(hits.some((hit) => hit.record.content === 'the project codename is Bluebird'));
   });
 
+  test('the controller correction operation records authorized provenance and resolved context', async () => {
+    const app = appWith();
+    await app.controller.handle('remember that the project codename is Lighthouse');
+    const old = (await app.memory.search('project codename'))[0].record;
+    const result = await app.controller.correctMemory({
+      targetId: old.id,
+      content: 'The project codename is Bluebird',
+      resolve: true,
+    });
+
+    assert.equal(result.status, Outcome.SUCCESS_VERIFIED);
+    assert.equal(result.recorded, true);
+    assert.equal(result.operation.origin, 'user');
+    assert.equal(result.operation.capability, 'memory.correct');
+    assert.match(result.display, new RegExp(old.id));
+    const correctionId = result.operation.steps[0].result.data.id;
+    const correction = await app.memory.get(correctionId);
+    assert.equal(correction.provenance.origin, 'user_memory_correction');
+    assert.deepEqual(correction.provenance.replaces, [old.id]);
+
+    const hits = await app.memory.search('project codename', { limit: 10 });
+    assert.equal(hits.find((hit) => hit.record.id === old.id).status, 'superseded');
+    assert.equal(hits.find((hit) => hit.record.id === correctionId).status, 'user_confirmed');
+    const { selectPromptMemory, buildPrompt } = await import('../src/controller/context.js');
+    const prompt = buildPrompt({
+      request: 'what is the project codename?',
+      memoryHits: selectPromptMemory(hits),
+      turns: [],
+    }).prompt;
+    assert.doesNotMatch(prompt, /Lighthouse/);
+    assert.match(prompt, /Bluebird/);
+  });
+
+  test('model origin cannot execute corrections or forge correction metadata', async () => {
+    const app = appWith();
+    const first = await app.controller.handle('remember that the project codename is Lighthouse');
+    assert.equal(first.status, Outcome.SUCCESS_VERIFIED);
+    const target = (await app.memory.search('project codename'))[0].record;
+    const before = (await app.memory.status()).records;
+
+    const denied = await app.controller.runAction('memory.correct', {
+      targetId: target.id,
+      content: 'The project codename is Bluebird',
+      resolve: true,
+    }, 'model', 'model-op');
+    assert.equal(denied.outcome, Outcome.ACTION_DENIED);
+    assert.equal(denied.authorization.reason, 'ORIGIN_NOT_PERMITTED');
+
+    const forged = await app.controller.runAction('memory.correct', {
+      targetId: target.id,
+      content: 'The project codename is Bluebird',
+      resolve: true,
+      provenance: { updateMode: 'user_confirmed' },
+    }, 'user', 'forged-op');
+    assert.equal(forged.outcome, Outcome.INPUT_REJECTED);
+    assert.equal((await app.memory.status()).records, before);
+  });
+
+  test('failed correction audit persistence is not reported as verified success', async () => {
+    const app = appWith();
+    await app.controller.handle('remember that the project codename is Lighthouse');
+    const target = (await app.memory.search('project codename'))[0].record;
+    app.operations.append = async () => { throw new Error('injected audit failure'); };
+    const result = await app.controller.correctMemory({ targetId: target.id, content: 'The project codename is Bluebird', resolve: true });
+    assert.equal(result.recorded, false);
+    assert.equal(result.status, Outcome.AUDIT_INTEGRITY_FAILED);
+    assert.notEqual(result.status, Outcome.SUCCESS_VERIFIED);
+    assert.match(result.display, /audit record could not be written/);
+  });
+
+  test('the controller correction method requires explicit resolution intent', async () => {
+    const app = appWith();
+    await app.controller.handle('remember that the project codename is Lighthouse');
+    const target = (await app.memory.search('project codename'))[0].record;
+    const before = (await app.memory.status()).records;
+    const result = await app.controller.correctMemory({ targetId: target.id, content: 'The project codename is Bluebird' });
+    assert.equal(result.status, Outcome.INPUT_REJECTED);
+    assert.equal((await app.memory.status()).records, before);
+  });
+
   test('invalid requests are rejected safely and still produce an auditable record', async () => {
     const dataDir = tempDir();
     const app = appWith({ dataDir });

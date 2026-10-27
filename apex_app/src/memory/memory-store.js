@@ -19,6 +19,7 @@ const SENSITIVITIES = new Set(['normal', 'private']);
 const UPDATE_MODES = new Set(['user_confirmed', 'model_proposed', 'unresolved_conflict']);
 const OPERATION_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 const BACKEND_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+const MEMORY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const FUZZY_MIN_SIMILARITY = 0.6;
 const FUZZY_MIN_LENGTH = 4;
 
@@ -68,57 +69,29 @@ function sanitizeProvenance(p) {
   return out;
 }
 
-function finalizeProvenance({ source, provenance = {}, updateMode, replaces = [], existingRecords = [] }) {
+function finalizeProvenance({ source, provenance = {} }) {
   const base = sanitizeProvenance(provenance);
   const provenanceObject = provenance && typeof provenance === 'object' ? provenance : {};
-  const hasExplicitMode = updateMode !== undefined || provenanceObject.updateMode !== undefined;
-  const explicitMode = updateMode !== undefined ? updateMode : provenanceObject.updateMode;
-  const explicitReplaces = Array.isArray(replaces) && replaces.length === 0 && provenanceObject.replaces !== undefined
-    ? provenanceObject.replaces
-    : replaces;
+  if (provenanceObject.updateMode !== undefined || provenanceObject.replaces !== undefined) {
+    throw new ValidationError('correction provenance can only be created by an authorized correction operation');
+  }
 
   if (source === 'model') {
-    if (hasExplicitMode && explicitMode !== 'model_proposed') {
-      throw new ValidationError('model-origin memory must be marked model_proposed');
-    }
-    const out = { ...base, updateMode: 'model_proposed' };
-    delete out.replaces;
-    return out;
+    return { ...base, updateMode: 'model_proposed' };
   }
 
   if (source !== 'user') {
     throw new ValidationError(`unsupported source: ${String(source)}`);
   }
 
-  if (hasExplicitMode && (typeof explicitMode !== 'string' || !UPDATE_MODES.has(explicitMode))) {
-    throw new ValidationError('unknown memory update mode');
-  }
-  if (explicitMode === 'model_proposed') {
-    throw new ValidationError('user-origin memory cannot be marked model_proposed');
-  }
-
   const origin = base.origin ?? 'user_request';
-  const allowedOrigins = new Set(['user_request', 'user_approved', 'user_confirmation']);
-  if ((explicitMode === 'user_confirmed' || explicitMode === 'unresolved_conflict') && !allowedOrigins.has(origin)) {
-    throw new ValidationError('explicit user confirmation requires an authorized user-origin provenance');
+  if (!['user_request', 'user_approved', 'user_confirmation'].includes(origin)) {
+    throw new ValidationError('user memory provenance must come from an authorized user operation');
   }
-
-  if (!Array.isArray(explicitReplaces) || explicitReplaces.length > 8
-    || explicitReplaces.some((id) => typeof id !== 'string' || id.length === 0)) {
-    throw new ValidationError('replacement references must be a list of up to 8 non-empty record ids');
-  }
-  const replacedIds = [...explicitReplaces];
-  for (const id of replacedIds) {
-    const found = existingRecords.some((record) => record.id === id);
-    if (!found) throw new ValidationError(`replacement target ${id} not found in the store`);
-  }
-
-  const resolvedMode = explicitMode === 'user_confirmed' || explicitMode === 'unresolved_conflict' ? explicitMode : 'user_confirmed';
   return {
     ...base,
     origin,
-    updateMode: resolvedMode,
-    replaces: replacedIds,
+    updateMode: 'user_confirmed',
   };
 }
 
@@ -180,12 +153,18 @@ export function isPromptEligible(record) {
   return record.sensitivity !== 'private' && !containsSecret(record.content);
 }
 
-export function getRecordStatus(record, conflictIds = []) {
+export function getRecordStatus(record, conflictIds = [], replacedByIds = []) {
+  if (conflictIds.length > 0) return 'unresolved_conflict';
+  if (replacedByIds.length > 0) return 'superseded';
   const mode = record?.provenance?.updateMode ?? (record?.source === 'model' ? 'model_proposed' : 'user_confirmed');
   if (mode === 'model_proposed') return 'model_proposed';
-  if (mode === 'user_confirmed') return conflictIds.length > 0 ? 'unresolved_conflict' : 'user_confirmed';
+  if (mode === 'user_confirmed') return 'user_confirmed';
   if (mode === 'unresolved_conflict') return 'unresolved_conflict';
-  return conflictIds.length > 0 ? 'unresolved_conflict' : 'stored';
+  return 'stored';
+}
+
+function replacesRecord(a, b) {
+  return a?.provenance?.replaces?.includes(b?.id) || b?.provenance?.replaces?.includes(a?.id);
 }
 
 function dedupeKey(record) {
@@ -246,12 +225,12 @@ export class MemoryStore {
     this.log = new JsonlStore(filePath, { validateRecord: validateMemoryRecord });
   }
 
-  async add({ content, kind = 'user_fact', source = 'user', sensitivity = 'normal', provenance = {}, updateMode, replaces = [] } = {}) {
+  async add({ content, kind = 'user_fact', source = 'user', sensitivity = 'normal', provenance = {} } = {}) {
     const text = validateContent(content);
     validateKindSource(kind, source);
     if (!SENSITIVITIES.has(sensitivity)) throw new ValidationError(`unknown sensitivity: ${String(sensitivity)}`);
     const { records } = await this.log.load();
-    const normalizedProvenance = finalizeProvenance({ source, provenance, updateMode, replaces, existingRecords: records });
+    const normalizedProvenance = finalizeProvenance({ source, provenance });
     const id = randomUUID();
     if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
     const record = {
@@ -265,6 +244,45 @@ export class MemoryStore {
       createdAt: this.now().toISOString(),
       provenance: normalizedProvenance,
     };
+    await this.log.append(record);
+    return record;
+  }
+
+  async correct({ targetId, content, origin } = {}) {
+    if (origin !== 'user') throw new ValidationError('memory corrections require an authorized user-origin operation');
+    if (typeof targetId !== 'string' || !MEMORY_ID_RE.test(targetId)) {
+      throw new ValidationError('replacement target must be a full memory record ID');
+    }
+    const text = validateContent(content);
+    const records = await this.#loadComplete();
+    const target = records.find((record) => record.id === targetId);
+    if (!target) throw new ValidationError(`replacement target ${targetId} not found in memory`);
+    if (records.some((record) => record.provenance?.replaces?.includes(targetId))) {
+      throw new ValidationError('that claim was already corrected; target the current claim instead');
+    }
+    if (!SENSITIVITIES.has(target.sensitivity ?? 'normal')) {
+      throw new ValidationError('replacement target has invalid sensitivity metadata');
+    }
+
+    const record = {
+      schema: MEMORY_SCHEMA,
+      id: randomUUID(),
+      kind: 'user_fact',
+      source: 'user',
+      sensitivity: target.sensitivity ?? 'normal',
+      content: text,
+      contentSha256: sha256Hex(text),
+      createdAt: this.now().toISOString(),
+      provenance: {
+        origin: 'user_memory_correction',
+        updateMode: 'user_confirmed',
+        replaces: [target.id],
+      },
+    };
+    if (!isPotentialConflict(target, record)) {
+      throw new ValidationError('replacement content does not contradict the selected claim; nothing was changed');
+    }
+    if (records.some((existing) => existing.id === record.id)) throw new StoreError('identifier collision; nothing written');
     await this.log.append(record);
     return record;
   }
@@ -286,7 +304,22 @@ export class MemoryStore {
   async list({ limit = 20, includePrivate = true } = {}) {
     const records = await this.#loadComplete();
     const visible = records.filter((r) => includePrivate || r.sensitivity !== 'private');
-    return visible.slice(-Math.max(1, limit)).reverse();
+    const replacedByIds = new Map();
+    for (const record of records) {
+      for (const targetId of record.provenance?.replaces ?? []) {
+        const ids = replacedByIds.get(targetId) ?? [];
+        ids.push(record.id);
+        replacedByIds.set(targetId, ids);
+      }
+    }
+    return visible.slice(-Math.max(1, limit)).reverse().map((record) => {
+      const replacedBy = replacedByIds.get(record.id) ?? [];
+      return {
+        ...record,
+        replacedBy,
+        status: getRecordStatus(record, [], replacedBy),
+      };
+    });
   }
 
   // Ranked retrieval. Each query term is weighted by its rarity in the store
@@ -335,18 +368,34 @@ export class MemoryStore {
     });
 
     const unique = [];
-    const seen = new Set();
+    const seen = new Map();
     for (const item of scored) {
       const key = dedupeKey(item.record);
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const existingIndex = seen.get(key);
+      if (existingIndex !== undefined) {
+        const existing = unique[existingIndex];
+        const existingIsCorrection = (existing.record.provenance?.replaces?.length ?? 0) > 0;
+        const itemIsCorrection = (item.record.provenance?.replaces?.length ?? 0) > 0;
+        if (itemIsCorrection && !existingIsCorrection) unique[existingIndex] = item;
+        continue;
+      }
+      seen.set(key, unique.length);
       unique.push(item);
     }
     const conflictIds = new Map();
+    const replacedByIds = new Map();
+    for (const item of unique) {
+      for (const targetId of item.record.provenance?.replaces ?? []) {
+        const replacements = replacedByIds.get(targetId) ?? [];
+        replacements.push(item.record.id);
+        replacedByIds.set(targetId, replacements);
+      }
+    }
     for (let i = 0; i < unique.length; i += 1) {
       for (let j = i + 1; j < unique.length; j += 1) {
         const left = unique[i].record;
         const right = unique[j].record;
+        if (replacesRecord(left, right)) continue;
         if (!isPotentialConflict(left, right)) continue;
         const leftIds = conflictIds.get(left.id) ?? [];
         leftIds.push(right.id);
@@ -360,7 +409,9 @@ export class MemoryStore {
       record,
       score,
       conflict: conflictIds.get(record.id) ?? [],
-      status: getRecordStatus(record, conflictIds.get(record.id) ?? []),
+      replaces: record.provenance?.replaces ?? [],
+      replacedBy: replacedByIds.get(record.id) ?? [],
+      status: getRecordStatus(record, conflictIds.get(record.id) ?? [], replacedByIds.get(record.id) ?? []),
     }));
   }
 

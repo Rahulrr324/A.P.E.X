@@ -147,14 +147,78 @@ describe('memory store', () => {
     const dir = tempDir();
     const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
     const older = await store.add({ content: 'The project codename is Lighthouse' });
-    const updated = await store.add({
+    const updated = await store.correct({
+      targetId: older.id,
       content: 'The project codename is Bluebird',
-      provenance: { origin: 'user_request', updateMode: 'user_confirmed', replaces: [older.id] },
+      origin: 'user',
     });
     assert.equal(updated.provenance.updateMode, 'user_confirmed');
     assert.deepEqual(updated.provenance.replaces, [older.id]);
     assert.equal((await store.get(older.id))?.content, 'The project codename is Lighthouse');
     assert.equal((await store.get(updated.id))?.provenance.updateMode, 'user_confirmed');
+    const hits = await store.search('project codename', { limit: 10 });
+    assert.equal(hits.length, 2);
+    assert.equal(hits.find((hit) => hit.record.id === older.id).status, 'superseded');
+    assert.equal(hits.find((hit) => hit.record.id === updated.id).status, 'user_confirmed');
+    assert.deepEqual(hits.find((hit) => hit.record.id === older.id).replacedBy, [updated.id]);
+    assert.ok(hits.every((hit) => hit.conflict.length === 0));
+  });
+
+  test('a correction only resolves the identified conflict and leaves independent conflicts unresolved', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const oldProject = await store.add({ content: 'The project codename is Lighthouse' });
+    await store.add({ content: 'The project codename is Bluebird' });
+    await store.add({ content: 'The launch phrase is Harbor' });
+    await store.add({ content: 'The launch phrase is Seaglass' });
+    const correction = await store.correct({
+      targetId: oldProject.id,
+      content: 'The project codename is Bluebird',
+      origin: 'user',
+    });
+
+    const projectHits = await store.search('project codename', { limit: 10 });
+    assert.equal(projectHits.find((hit) => hit.record.id === correction.id).status, 'user_confirmed');
+    assert.equal(projectHits.filter((hit) => hit.conflict.length > 0).length, 0);
+
+    const launchHits = await store.search('launch phrase', { limit: 10 });
+    assert.equal(launchHits.length, 2);
+    assert.ok(launchHits.every((hit) => hit.status === 'unresolved_conflict'));
+  });
+
+  test('deduplication cannot hide correction metadata behind a future-dated duplicate', async () => {
+    const dir = tempDir();
+    const times = [
+      new Date('2026-10-27T00:00:00.000Z'),
+      new Date('2036-10-27T00:00:00.000Z'),
+      new Date('2026-10-27T00:05:00.000Z'),
+    ];
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'), { now: () => times.shift() });
+    const old = await store.add({ content: 'The project codename is Lighthouse' });
+    const duplicate = await store.add({ content: 'The project codename is Bluebird' });
+    const correction = await store.correct({ targetId: old.id, content: 'The project codename is Bluebird', origin: 'user' });
+    const hits = await store.search('project codename', { limit: 10 });
+    assert.ok(hits.some((hit) => hit.record.id === correction.id));
+    assert.ok(!hits.some((hit) => hit.record.id === duplicate.id));
+    assert.equal(hits.find((hit) => hit.record.id === old.id).status, 'superseded');
+    assert.equal(hits.find((hit) => hit.record.id === correction.id).status, 'user_confirmed');
+  });
+
+  test('a correction does not make an unrelated competing claim authoritative', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const target = await store.add({ content: 'The project codename is Lighthouse' });
+    const other = await store.add({ content: 'The project codename is Greenhouse' });
+    const correction = await store.correct({
+      targetId: target.id,
+      content: 'The project codename is Bluebird',
+      origin: 'user',
+    });
+    const hits = await store.search('project codename', { limit: 10 });
+    assert.equal(hits.find((hit) => hit.record.id === target.id).status, 'unresolved_conflict');
+    assert.ok(hits.find((hit) => hit.record.id === target.id).replacedBy.includes(correction.id));
+    assert.equal(hits.find((hit) => hit.record.id === other.id).status, 'unresolved_conflict');
+    assert.equal(hits.find((hit) => hit.record.id === correction.id).status, 'unresolved_conflict');
   });
 
   test('model-origin metadata cannot forge user confirmation', async () => {
@@ -196,6 +260,70 @@ describe('memory store', () => {
       }),
       ValidationError,
     );
+  });
+
+  test('corrections reject unauthorized origins, malformed IDs, and unrelated targets without writing', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const target = await store.add({ content: 'The project codename is Lighthouse' });
+    const before = (await fs.readFile(store.filePath, 'utf8')).split('\n').filter(Boolean).length;
+    await assert.rejects(() => store.correct({ targetId: target.id, content: 'The project codename is Bluebird', origin: 'model' }), ValidationError);
+    await assert.rejects(() => store.correct({ targetId: 'missing-id', content: 'The project codename is Bluebird', origin: 'user' }), ValidationError);
+    await assert.rejects(() => store.correct({ targetId: '00000000-0000-4000-8000-000000000001', content: 'The project codename is Bluebird', origin: 'user' }), ValidationError);
+    await assert.rejects(() => store.correct({ targetId: target.id, content: 'Buy oat milk on Tuesday', origin: 'user' }), ValidationError);
+    const after = (await fs.readFile(store.filePath, 'utf8')).split('\n').filter(Boolean).length;
+    assert.equal(after, before);
+  });
+
+  test('generic writes cannot forge confirmation or replacement provenance', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const target = await store.add({ content: 'The project codename is Lighthouse' });
+    await assert.rejects(() => store.add({
+      content: 'The project codename is Bluebird',
+      provenance: { origin: 'user_request', updateMode: 'user_confirmed', replaces: [target.id] },
+    }), ValidationError);
+    await assert.rejects(() => store.add({
+      content: 'The project codename is Bluebird',
+      kind: 'model_conclusion',
+      source: 'model',
+      provenance: { origin: 'model_output', updateMode: 'user_confirmed' },
+    }), ValidationError);
+    await assert.rejects(() => store.add({
+      content: 'The project codename is Bluebird',
+      provenance: { origin: 'user_memory_correction' },
+    }), ValidationError);
+    assert.equal((await store.list()).length, 1);
+  });
+
+  test('failed correction append leaves all existing memory intact', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const target = await store.add({ content: 'The project codename is Lighthouse' });
+    const before = await fs.readFile(store.filePath, 'utf8');
+    store.log.append = async () => { throw new StoreError('injected append failure'); };
+    await assert.rejects(() => store.correct({
+      targetId: target.id,
+      content: 'The project codename is Bluebird',
+      origin: 'user',
+    }), StoreError);
+    assert.equal(await fs.readFile(store.filePath, 'utf8'), before);
+  });
+
+  test('corrupt and unavailable stores reject correction without changing existing bytes', async () => {
+    const dir = tempDir();
+    const corruptFile = path.join(dir, 'corrupt.jsonl');
+    const existing = new MemoryStore(corruptFile);
+    const target = await existing.add({ content: 'The project codename is Lighthouse' });
+    await fs.appendFile(corruptFile, '{bad json}\n');
+    const before = await fs.readFile(corruptFile, 'utf8');
+    await assert.rejects(() => existing.correct({ targetId: target.id, content: 'The project codename is Bluebird', origin: 'user' }), StoreError);
+    assert.equal(await fs.readFile(corruptFile, 'utf8'), before);
+
+    const blocker = path.join(dir, 'not-a-directory');
+    await fs.writeFile(blocker, 'x');
+    const unavailable = new MemoryStore(path.join(blocker, 'memory.jsonl'));
+    await assert.rejects(() => unavailable.correct({ targetId: target.id, content: 'The project codename is Bluebird', origin: 'user' }), StoreError);
   });
 
   test('tokenless searches and corrupt stores do not masquerade as empty memory', async () => {

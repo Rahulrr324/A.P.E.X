@@ -17,6 +17,7 @@ Usage:
   node bin/apex.js ask [--save-answer] <request words...>
   node bin/apex.js new                   start a new conversation session
   node bin/apex.js status
+  node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js history [--limit N]
   node bin/apex.js task plan <goal...>   plan a multi-step task (checked; nothing runs yet)
   node bin/apex.js task list
@@ -33,6 +34,7 @@ Request examples (no model needed):
   remember privately that my pin is kept at the bank   (never sent to a model)
   recall codename
   list memory
+  memory correct --resolve <full-record-id> <replacement claim...>
   calc (2+3)*4          (or: what is 2+3*4?)
   status
   list src/             list one directory inside the authorized root (no model needed)
@@ -200,6 +202,19 @@ export async function main(argv, {
       out(`Started a new session: ${state.sessionId}`);
       out('Earlier conversation stays in history but is not sent to the model.');
       return 0;
+    }
+
+    if (command === 'memory') {
+      const [sub, ...rest] = args;
+      if (sub !== 'correct') {
+        err('usage: memory correct --resolve <full-record-id> <replacement claim...>');
+        return 2;
+      }
+      const { flags, rest: values } = parseFlags(rest, ['resolve']);
+      if (!flags.resolve || values.length < 2) {
+        throw new ValidationError('usage: memory correct --resolve <full-record-id> <replacement claim...>', 'USAGE');
+      }
+      return emit(await app.controller.correctMemory({ targetId: values[0], content: values.slice(1).join(' '), resolve: true }));
     }
 
     if (command === 'ask') {
