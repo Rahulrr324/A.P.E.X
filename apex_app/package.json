@@ -14,7 +14,7 @@
   "scripts": {
     "start": "node bin/apex.js",
     "status": "node bin/apex.js status",
-    "test": "node --test tests/memory.test.js tests/actions.test.js tests/gateway.test.js tests/controller.test.js tests/cli.test.js tests/model-protocol.test.js tests/intelligence.test.js tests/chat.test.js tests/tasks.test.js tests/filesystem.test.js tests/tasks-filesystem.test.js tests/knowledge.test.js"
+    "test": "node --test tests/memory.test.js tests/actions.test.js tests/gateway.test.js tests/controller.test.js tests/decision.test.js tests/cli.test.js tests/model-protocol.test.js tests/intelligence.test.js tests/chat.test.js tests/tasks.test.js tests/filesystem.test.js tests/tasks-filesystem.test.js tests/knowledge.test.js"
   },
   "dependencies": {},
   "devDependencies": {}

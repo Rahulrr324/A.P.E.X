@@ -10,6 +10,7 @@ export const Outcome = Object.freeze({
   AUDIT_INTEGRITY_FAILED: 'audit_integrity_failed',
   ACTION_DENIED: 'action_denied',
   INPUT_REJECTED: 'input_rejected',
+  CLARIFICATION_REQUIRED: 'clarification_required', // the request is missing information needed to proceed
   MODEL_UNAVAILABLE: 'model_unavailable',
   PLAN_CREATED: 'plan_created', // a validated deterministic task plan was stored
   PLAN_PROPOSED: 'plan_proposed', // a validated model plan was stored; waits for user approval

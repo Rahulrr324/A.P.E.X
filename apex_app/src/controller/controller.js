@@ -13,6 +13,7 @@ import { executeAction } from '../actions/executor.js';
 import { CONTROL_CHARS, redact, round3, shortId, truncate } from '../util.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
 import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptMemory, systemPrompt, MAX_CONTEXT_CHARS } from './context.js';
+import { classifyDecision, clarificationFor, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret } from '../security/secrets.js';
 import { planFromText, redactGoal, splitGoal, checkSteps, parseModelPlan, planningPrompt } from '../tasks/planner.js';
@@ -174,6 +175,7 @@ export class CognitiveController {
       model: null,
       steps: [],
       status: null,
+      decision: null,
       output: null,
       errors: [],
       finishedAt: null,
@@ -228,6 +230,35 @@ export class CognitiveController {
         op.request = `[request omitted: it combined a memory write with other requests; ${request.length} chars]`;
       }
 
+      const blocked = unsupportedOperationFor(request);
+      // A lookup with no topic or a file request with no target cannot proceed.
+      // Ask before any retrieval, action, or model call. Follow-ups that depend on
+      // conversation context are checked after recent turns are loaded.
+      const clarification = origin === 'user' && !blocked
+        ? clarificationFor(request, { checkContinuation: false })
+        : null;
+      if (blocked) {
+        // The requested operation does not exist in APEX. Refuse before any model
+        // call, so no model can imply that it was carried out.
+        op.capability = 'none';
+        op.errors.push({ stage: 'policy', code: 'UNSUPPORTED_OPERATION', message: blocked });
+        status = Outcome.ACTION_DENIED;
+        output = blocked;
+        displayText = blocked;
+        await this.#recordTurns(op, sid, op.request, [
+          { origin: TURN_ORIGINS.NOTICE, text: blocked, verified: false },
+        ]);
+      } else if (clarification) {
+        // Missing target or topic: ask instead of guessing. No action runs and no
+        // model is called, so nothing can be implied to have happened.
+        op.capability = 'none';
+        status = Outcome.CLARIFICATION_REQUIRED;
+        output = clarification;
+        displayText = clarification;
+        await this.#recordTurns(op, sid, op.request, [
+          { origin: TURN_ORIGINS.NOTICE, text: clarification, verified: false },
+        ]);
+      } else {
       // 1. Retrieve persistent context for this request (ids go to the audit).
       let context = [];
       try {
@@ -260,17 +291,37 @@ export class CognitiveController {
         // 3. Model path. The model produces text only; any proposal it makes goes
         // through the same authorization and verification as a user request.
         const turns = await this.#recentTurns(sid, op);
+        const followUpClarification = origin === 'user'
+          ? clarificationFor(request, { hasContext: turns.length > 0 })
+          : null;
+        if (followUpClarification) {
+          // A follow-up with nothing to refer back to: ask instead of guessing, and
+          // do not let a model imply that an action was carried out.
+          status = Outcome.CLARIFICATION_REQUIRED;
+          output = followUpClarification;
+          displayText = followUpClarification;
+          await this.#recordTurns(op, sid, op.request, [
+            { origin: TURN_ORIGINS.NOTICE, text: followUpClarification, verified: false },
+          ]);
+        } else {
         const m = await this.answerWithModel(request, { relevant: selectPromptMemory(context), turns }, op);
         status = m.status;
+        // Any model proposal that did not execute and verify gets a deterministic
+        // counter-notice, even if the model's own text claims success.
+        const failedProposals = op.steps.filter((s) => s.origin === 'model' && s.outcome !== Outcome.SUCCESS_VERIFIED);
+        const failedLabel = failedProposals.length === 1 ? 'a proposed action' : `${failedProposals.length} proposed actions`;
+        const actionNotice = failedProposals.length
+          ? `[APEX did not execute ${failedLabel}: ${failedProposals.map((s) => s.summary).join('; ')}]`
+          : '';
         // The audit output never includes content copied out of the stores. When no
         // model is configured, the directly shown records live only in `display`.
-        output = m.annotation ? `${m.answer}\n\n${m.annotation}` : m.answer;
+        output = [m.answer, m.annotation, actionNotice].filter(Boolean).join('\n\n');
         // Results of verified, model-proposed read actions are shown too, so the
         // user sees what was actually retrieved, not only the model's wording.
         const shownSteps = op.steps
           .filter((s) => s.origin === 'model' && s.outcome === Outcome.SUCCESS_VERIFIED && s.display)
           .map((s) => s.display);
-        displayText = [m.display ?? m.answer, ...shownSteps, m.annotation].filter(Boolean).join('\n\n');
+        displayText = [m.display ?? m.answer, ...shownSteps, m.annotation, actionNotice].filter(Boolean).join('\n\n');
         op.backend = m.backend;
         if (m.error) op.errors.push(m.error);
         const turnRows = [];
@@ -292,11 +343,14 @@ export class CognitiveController {
           op.steps.push(step);
           displayText = `${displayText}\n\n${step.display ?? step.summary}`;
         }
+        }
+      }
       }
       }
     }
 
     op.status = status;
+    op.decision = classifyDecision(op);
     op.output = output ? truncate(output, MAX_OUTPUT_CHARS) : null;
     op.finishedAt = this.now().toISOString();
 
@@ -309,7 +363,7 @@ export class CognitiveController {
       recorded = false;
       recordError = err.message;
     }
-    return { operation: persisted, status, output: op.output, display: displayText, recorded, recordError };
+    return { operation: persisted, status, decision: persisted.decision, output: op.output, display: displayText, recorded, recordError };
   }
 
   async #resolveSession(sessionId, op) {
@@ -339,6 +393,7 @@ export class CognitiveController {
     );
     op.steps.push(step);
     op.status = step.outcome;
+    op.decision = classifyDecision(op);
     op.output = step.summary ? truncate(step.summary, MAX_OUTPUT_CHARS) : null;
     op.finishedAt = this.now().toISOString();
 
@@ -351,11 +406,13 @@ export class CognitiveController {
       recordError = err.message;
       op.errors.push({ stage: 'audit', code: 'AUDIT_WRITE_FAILED', message: err.message });
       op.status = Outcome.AUDIT_INTEGRITY_FAILED;
+      op.decision = classifyDecision(op);
       op.output = 'The correction may have been stored, but its audit record could not be written; it is not reported as verified success.';
     }
     return {
       operation: op,
       status: op.status,
+      decision: op.decision,
       output: op.output,
       display: recorded ? (step.display ?? step.summary) : op.output,
       recorded,
@@ -375,6 +432,7 @@ export class CognitiveController {
   async #finishKnowledgeOp(op, step, failMsg) {
     op.steps.push(step);
     op.status = step.outcome;
+    op.decision = classifyDecision(op);
     op.output = step.summary ? truncate(step.summary, MAX_OUTPUT_CHARS) : null;
     op.finishedAt = this.now().toISOString();
     let recorded = true;
@@ -387,10 +445,19 @@ export class CognitiveController {
       if (failMsg) {
         op.errors.push({ stage: 'audit', code: 'AUDIT_WRITE_FAILED', message: err.message });
         op.status = Outcome.AUDIT_INTEGRITY_FAILED;
+        op.decision = classifyDecision(op);
         op.output = failMsg;
       }
     }
-    return { operation: op, status: op.status, output: op.output, display: step.display ?? step.summary, recorded, recordError };
+    return {
+      operation: op,
+      status: op.status,
+      decision: op.decision,
+      output: op.output,
+      display: step.display ?? step.summary,
+      recorded,
+      recordError,
+    };
   }
 
   async knowledgeAdd({ subject, relationship, object: obj, evidence = null } = {}) {
@@ -423,11 +490,27 @@ export class CognitiveController {
     const records = await this.knowledge.findByPrefix(idPrefix);
     if (records.length === 0) {
       const output = `No knowledge record found with id prefix "${idPrefix.trim()}"`;
-      return { operation: null, status: Outcome.INPUT_REJECTED, output, display: output, recorded: false, recordError: null };
+      return {
+        operation: null,
+        status: Outcome.INPUT_REJECTED,
+        decision: classifyDecision({ status: Outcome.INPUT_REJECTED }),
+        output,
+        display: output,
+        recorded: false,
+        recordError: null,
+      };
     }
     if (records.length > 1) {
       const output = `Id prefix "${idPrefix.trim()}" matches ${records.length} knowledge records; use a longer prefix.`;
-      return { operation: null, status: Outcome.INPUT_REJECTED, output, display: output, recorded: false, recordError: null };
+      return {
+        operation: null,
+        status: Outcome.INPUT_REJECTED,
+        decision: classifyDecision({ status: Outcome.INPUT_REJECTED }),
+        output,
+        display: output,
+        recorded: false,
+        recordError: null,
+      };
     }
     const match = records[0];
     const conflictLine = match.conflictsWith?.length
@@ -450,7 +533,15 @@ export class CognitiveController {
       match.provenance?.operationId ? `  Operation:     ${match.provenance.operationId}` : '',
       `  Recorded at:   ${match.createdAt}`,
     ].filter(Boolean).join('\n');
-    return { operation: null, status: Outcome.SUCCESS_VERIFIED, output: display, display, recorded: false, recordError: null };
+    return {
+      operation: null,
+      status: Outcome.SUCCESS_VERIFIED,
+      decision: classifyDecision({ status: Outcome.SUCCESS_VERIFIED }),
+      output: display,
+      display,
+      recorded: false,
+      recordError: null,
+    };
   }
 
   async #recentTurns(sid, op) {
@@ -575,6 +666,7 @@ export class CognitiveController {
       model: null,
       steps: [],
       status: null,
+      decision: null,
       output: null,
       errors: [],
       finishedAt: null,
@@ -583,6 +675,7 @@ export class CognitiveController {
 
   async #finishTaskOp(op, status, display, task = null, extra = {}) {
     op.status = status;
+    op.decision = classifyDecision(op);
     op.output = truncate(display ?? '', MAX_OUTPUT_CHARS);
     op.finishedAt = this.now().toISOString();
     if (task) op.task = { id: task.id, status: task.status };
@@ -594,7 +687,7 @@ export class CognitiveController {
       recorded = false;
       recordError = err.message;
     }
-    return { status, display, output: op.output, operation: op, recorded, recordError, task, ...extra };
+    return { status, decision: op.decision, display, output: op.output, operation: op, recorded, recordError, task, ...extra };
   }
 
   // A refusal is a result, not a crash: the reason is shown and nothing changes.
