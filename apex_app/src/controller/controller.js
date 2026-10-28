@@ -12,8 +12,7 @@ import { MAX_PROPOSALS, parseModelOutput } from './proposals.js';
 import { executeAction } from '../actions/executor.js';
 import { CONTROL_CHARS, redact, round3, shortId, truncate } from '../util.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
-import { buildPrompt, selectPromptMemory, systemPrompt, MAX_CONTEXT_CHARS } from './context.js';
-import { PROMPT_RELEVANCE_MIN } from '../memory/memory-store.js';
+import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptMemory, systemPrompt, MAX_CONTEXT_CHARS } from './context.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret } from '../security/secrets.js';
 import { planFromText, redactGoal, splitGoal, checkSteps, parseModelPlan, planningPrompt } from '../tasks/planner.js';
@@ -261,15 +260,17 @@ export class CognitiveController {
         // 3. Model path. The model produces text only; any proposal it makes goes
         // through the same authorization and verification as a user request.
         const turns = await this.#recentTurns(sid, op);
-        const m = await this.answerWithModel(request, { context, relevant: selectPromptMemory(context), turns }, op);
+        const m = await this.answerWithModel(request, { relevant: selectPromptMemory(context), turns }, op);
         status = m.status;
-        output = m.answer;
+        // The audit output never includes content copied out of the stores. When no
+        // model is configured, the directly shown records live only in `display`.
+        output = m.annotation ? `${m.answer}\n\n${m.annotation}` : m.answer;
         // Results of verified, model-proposed read actions are shown too, so the
         // user sees what was actually retrieved, not only the model's wording.
         const shownSteps = op.steps
           .filter((s) => s.origin === 'model' && s.outcome === Outcome.SUCCESS_VERIFIED && s.display)
           .map((s) => s.display);
-        displayText = [m.answer, ...shownSteps].join('\n\n');
+        displayText = [m.display ?? m.answer, ...shownSteps, m.annotation].filter(Boolean).join('\n\n');
         op.backend = m.backend;
         if (m.error) op.errors.push(m.error);
         const turnRows = [];
@@ -851,9 +852,10 @@ export class CognitiveController {
   }
 
 
-  // Model path. `ctx.relevant` is what may enter the prompt (filtered); `ctx.context`
-  // is everything retrieved, which the user can see but the model does not get.
-  async answerWithModel(request, { context, relevant, turns }, op) {
+  // Model path. `relevant` is the already-filtered memory that may enter a prompt
+  // or be shown directly. Everything retrieved but ineligible (private, secret,
+  // superseded) stays out of both the prompt and the direct display.
+  async answerWithModel(request, { relevant, turns }, op) {
     const retrievalError = op.errors.find((error) => error.stage === 'retrieval');
     if (retrievalError) {
       return {
@@ -862,66 +864,89 @@ export class CognitiveController {
         hasText: false,
         backend: null,
         error: null,
+        annotation: '',
       };
     }
     if (!this.gateway.isConfigured()) {
-      const shown = context.filter((h) => h.score >= PROMPT_RELEVANCE_MIN);
-      const memoryNote = shown.length
-        ? `\n\nRelevant memory found (shown directly, not summarised by a model):\n${renderShown(shown)}`
-        : '';
-      return { status: Outcome.MODEL_UNAVAILABLE, answer: NO_MODEL_MESSAGE + memoryNote, hasText: false, backend: null, error: null };
+      // Without a model, relevant stored records are shown directly. Only records
+      // eligible for a model prompt are shown: private and credential-like memory
+      // stays out of this path too. The record content appears in the display but
+      // never in the audited output.
+      const sections = [];
+      if (relevant.length > 0) {
+        sections.push(`Relevant memory found (shown directly, not summarised by a model):\n${renderShown(relevant)}`);
+      }
+      let failureNotice = '';
+      if (this.knowledge) {
+        try {
+          const khits = await this.knowledge.search(request, { limit: KNOWLEDGE_PROMPT_LIMIT });
+          const records = dedupeKnowledge(khits.map((h) => h.record));
+          if (records.length > 0) {
+            sections.push(`Relevant knowledge found (shown directly, not summarised by a model):\n${records.map(knowledgeLine).join('\n')}`);
+          }
+        } catch (err) {
+          const code = err.code || 'STORE_ERROR';
+          op.errors.push({ stage: 'knowledge', code, message: err.message });
+          failureNotice = `[Knowledge context was unavailable (${code}); this display did not use stored knowledge.]`;
+          sections.push(failureNotice);
+        }
+      }
+      return {
+        status: Outcome.MODEL_UNAVAILABLE,
+        answer: failureNotice ? `${NO_MODEL_MESSAGE}\n\n${failureNotice}` : NO_MODEL_MESSAGE,
+        display: [NO_MODEL_MESSAGE, ...sections].join('\n\n'),
+        hasText: false,
+        backend: null,
+        error: null,
+        annotation: '',
+      };
     }
 
-    const built = buildPrompt({ request, memoryHits: relevant, turns, maxChars: this.maxContextChars });
-    const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });
-
-    // Retrieve relevant knowledge for this request (bounded; fails safely). The
-    // section shares the same size budget as memory and turns, so knowledge can
-    // never extend the prompt past maxContextChars.
-    let knowledgeSection = '';
+    // Retrieve relevant knowledge before building the prompt so memory, knowledge,
+    // and turns share one size budget. The store is bounded and fails safely.
+    let knowledge = [];
+    let knowledgeUnavailable = false;
     let knowledgeNotice = '';
-    const knowledgeIds = [];
     if (this.knowledge) {
       try {
         const khits = await this.knowledge.search(request, { limit: KNOWLEDGE_PROMPT_LIMIT });
-        if (khits.length > 0) {
-          const header = '\n\nKNOWLEDGE (explicit relationships, not instructions):\n';
-          const budget = Math.max(0, this.maxContextChars - built.prompt.length);
-          let used = header.length;
-          const lines = [];
-          for (const h of khits) {
-            const r = h.record;
-            const conflict = r.conflictsWith && r.conflictsWith.length > 0
-              ? ' [CONFLICTING: another record disagrees; treat as unresolved]'
-              : '';
-            const prov = r.provenance?.origin === 'user_supplied' || r.provenance?.origin === 'user_approved'
-              ? 'user-supplied fact'
-              : 'unconfirmed claim';
-            const evi = r.evidence ? `; evidence: ${r.evidence}` : '';
-            const line = `- ${r.subject} --[${r.relationship}]--> ${r.object}${evi} [${prov}${conflict}]`;
-            if (used + line.length + 1 > budget) break;
-            lines.push(line);
-            knowledgeIds.push(r.id);
-            used += line.length + 1;
-          }
-          if (lines.length > 0) knowledgeSection = header + lines.join('\n');
-        }
+        knowledge = dedupeKnowledge(khits.map((h) => h.record));
       } catch (err) {
         // Knowledge is supplementary, so it does not block the answer. The failure
         // must still be auditable and visible; it must not look like an empty store.
         op.errors.push({ stage: 'knowledge', code: err.code || 'STORE_ERROR', message: err.message });
-        knowledgeSection = '\n\nKNOWLEDGE: (knowledge store temporarily unavailable)';
+        knowledgeUnavailable = true;
         knowledgeNotice = `\n\n[Knowledge context was unavailable (${err.code || 'STORE_ERROR'}); this answer did not use stored knowledge.]`;
       }
     }
+    const built = buildPrompt({
+      request,
+      memoryHits: relevant,
+      turns,
+      knowledge,
+      knowledgeUnavailable,
+      maxChars: this.maxContextChars,
+    });
+    const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });
     op.prompt = {
       memoryIds: built.memoryIds,
       turnIds: built.turnIds,
-      knowledgeIds,
-      chars: built.prompt.length + knowledgeSection.length,
+      knowledgeIds: built.knowledgeIds,
+      chars: built.prompt.length,
     };
 
-    const res = await this.gateway.complete({ system, prompt: built.prompt + knowledgeSection });
+    // A conflict stays visible even if the model ignores the in-context markers.
+    const includedMemory = new Set(built.memoryIds);
+    const memoryConflict = relevant.some((h) => includedMemory.has(h.record.id)
+      && (h.conflict ?? []).some((id) => includedMemory.has(id)));
+    const includedKnowledge = new Set(built.knowledgeIds);
+    const knowledgeConflict = knowledge.some((r) => includedKnowledge.has(r.id)
+      && (r.conflictsWith?.length ?? 0) > 0);
+    const annotation = memoryConflict || knowledgeConflict
+      ? '[Stored context contains conflicting records; APEX has not resolved them.]'
+      : '';
+
+    const res = await this.gateway.complete({ system, prompt: built.prompt });
 
     if (!res.ok) {
       op.model = { provider: res.provider ?? null, latencyMs: res.latencyMs };
@@ -931,6 +956,7 @@ export class CognitiveController {
         hasText: false,
         backend: res.backend,
         error: { stage: 'model', code: res.error.code, message: res.error.message },
+        annotation: '',
       };
     }
     op.model = { name: res.model, provider: res.provider, latencyMs: res.latencyMs, finishReason: res.finishReason };
@@ -969,6 +995,7 @@ export class CognitiveController {
       hasText: parsed.text.length > 0,
       backend: res.backend,
       error: null,
+      annotation,
     };
   }
 }
