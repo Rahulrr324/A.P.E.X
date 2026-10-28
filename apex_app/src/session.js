@@ -14,14 +14,23 @@ export class SessionState {
   }
 
   async #read() {
+    let text;
     try {
-      const obj = JSON.parse(await fs.readFile(this.filePath, 'utf8'));
-      if (obj && typeof obj.sessionId === 'string' && obj.sessionId.length > 0) return obj;
-      return null;
+      text = await fs.readFile(this.filePath, 'utf8');
     } catch (err) {
-      if (err?.code === 'ENOENT' || err instanceof SyntaxError) return null;
+      if (err?.code === 'ENOENT') return null;
       throw new StoreError(`cannot read session state: ${err?.code || err?.message}`);
     }
+    let obj;
+    try {
+      obj = JSON.parse(text);
+    } catch {
+      throw new StoreError('session state is corrupt (invalid JSON); run "apex new" to start a new session');
+    }
+    // Writes are atomic, so a readable file without a session id is damaged, not
+    // a half-written state. A missing file is handled above and is not corruption.
+    if (obj && typeof obj.sessionId === 'string' && obj.sessionId.length > 0) return obj;
+    throw new StoreError('session state is corrupt (missing session id); run "apex new" to start a new session');
   }
 
   async #write(state) {

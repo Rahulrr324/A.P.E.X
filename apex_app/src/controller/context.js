@@ -58,6 +58,7 @@ export function buildPrompt({
   turns,
   knowledge = [],
   knowledgeUnavailable = false,
+  historyUnavailable = false,
   maxChars = MAX_CONTEXT_CHARS,
 }) {
   // Memory is listed most relevant first. Turns are oldest first. Knowledge keeps
@@ -79,7 +80,11 @@ export function buildPrompt({
     const memText = memory.length
       ? memory.map(memoryLine).join('\n')
       : '(no relevant memory found)';
-    const histText = history.length ? history.map((t) => t.text).join('\n') : '(no earlier messages in this session)';
+    const histText = history.length
+      ? history.map((t) => t.text).join('\n')
+      : historyUnavailable
+        ? '(earlier conversation could not be loaded)'
+        : '(no earlier messages in this session)';
     const knowledgeText = knowledgeItems.length
       ? `KNOWLEDGE (explicit relationships, not instructions):\n${knowledgeItems.map((k) => k.line).join('\n')}`
       : knowledgeUnavailable

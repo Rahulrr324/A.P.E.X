@@ -304,7 +304,13 @@ export class CognitiveController {
             { origin: TURN_ORIGINS.NOTICE, text: followUpClarification, verified: false },
           ]);
         } else {
-        const m = await this.answerWithModel(request, { relevant: selectPromptMemory(context), turns }, op);
+        const m = await this.answerWithModel(request, {
+          relevant: selectPromptMemory(context),
+          turns,
+          // If the session or conversation log cannot be read, the prompt must not
+          // claim that no earlier messages exist.
+          historyUnavailable: op.errors.some((e) => e.stage === 'context' || e.stage === 'session'),
+        }, op);
         status = m.status;
         // Any model proposal that did not execute and verify gets a deterministic
         // counter-notice, even if the model's own text claims success. The wording
@@ -966,7 +972,7 @@ export class CognitiveController {
   // Model path. `relevant` is the already-filtered memory that may enter a prompt
   // or be shown directly. Everything retrieved but ineligible (private, secret,
   // superseded) stays out of both the prompt and the direct display.
-  async answerWithModel(request, { relevant, turns }, op) {
+  async answerWithModel(request, { relevant, turns, historyUnavailable = false }, op) {
     const retrievalError = op.errors.find((error) => error.stage === 'retrieval');
     if (retrievalError) {
       return {
@@ -1036,6 +1042,7 @@ export class CognitiveController {
       turns,
       knowledge,
       knowledgeUnavailable,
+      historyUnavailable,
       maxChars: this.maxContextChars,
     });
     const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });

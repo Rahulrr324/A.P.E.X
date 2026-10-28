@@ -72,6 +72,10 @@ const CLARIFY_CONTINUATION = new RegExp(
 // An instruction with a pronoun but no target, or a question with no subject.
 const CLARIFY_CHANGE = new RegExp(`^(?:change|update|modify|edit|adjust)\\s+${PRONOUN}\\s*[?.!]*$`, 'i');
 const CLARIFY_QUESTION = /^(?:why|how|what\s+for)\s*[?.!]*$/i;
+// A pronoun-only question ("what is it?") has no referent without earlier turns.
+// With context it is left to the model, which sees the history and can use it.
+const CLARIFY_PRONOUN_QUESTION = new RegExp(`^(?:what|who|which)\\s+(?:is|are|was|were)\\s+${PRONOUN}\\s*[?.!]*$`, 'i');
+const CLARIFY_PRONOUN_ABOUT = new RegExp(`^what\\s+about\\s+${PRONOUN}\\s*[?.!]*$`, 'i');
 
 export function clarificationFor(request, { hasContext = false, checkContinuation = true } = {}) {
   const text = String(request).trim();
@@ -86,6 +90,9 @@ export function clarificationFor(request, { hasContext = false, checkContinuatio
   }
   if (checkContinuation && !hasContext && CLARIFY_QUESTION.test(text)) {
     return 'What would you like APEX to explain? Please include the subject.';
+  }
+  if (checkContinuation && !hasContext && (CLARIFY_PRONOUN_QUESTION.test(text) || CLARIFY_PRONOUN_ABOUT.test(text))) {
+    return 'What are you referring to? Please include the subject.';
   }
   if (checkContinuation && !hasContext && CLARIFY_CONTINUATION.test(text)) {
     return 'What would you like APEX to do? Please state the action and its target.';

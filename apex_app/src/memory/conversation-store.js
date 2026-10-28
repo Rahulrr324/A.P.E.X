@@ -4,7 +4,7 @@
 // Turns are append-only JSON Lines and are used only as short-term context.
 import { randomUUID } from 'node:crypto';
 import { JsonlStore } from './jsonl-store.js';
-import { ValidationError } from '../errors.js';
+import { StoreError, ValidationError } from '../errors.js';
 import { containsSecret } from '../security/secrets.js';
 import { truncate } from '../util.js';
 
@@ -68,10 +68,15 @@ export class ConversationStore {
     return turn;
   }
 
-  // The last `limit` replayable turns of one session, oldest first.
+  // The last `limit` replayable turns of one session, oldest first. A damaged log
+  // is refused rather than replayed partially: an omitted turn could make an
+  // earlier conversation look different from what the user actually said.
   async recent(sessionId, limit) {
     if (!Number.isInteger(limit) || limit <= 0) return [];
-    const { records } = await this.log.load();
+    const { records, corrupt } = await this.log.load();
+    if (corrupt.length > 0) {
+      throw new StoreError(`conversation store contains ${corrupt.length} corrupt line(s); refusing incomplete history`);
+    }
     return records
       .filter((t) => t.sessionId === sessionId && REPLAYED.has(t.origin))
       .slice(-limit);

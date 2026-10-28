@@ -29,12 +29,25 @@ export class TaskStore {
     this.log = new JsonlStore(filePath, { validateRecord: validateEventShape });
   }
 
-  // Replays the log. Returns tasks (Map), problems (events that did not apply),
-  // and corrupt lines that could not be parsed.
-  async load() {
+  // Replays the log. An incomplete log is refused: a corrupt line or an event
+  // that cannot be applied would otherwise be reported as a different task state.
+  async #readComplete() {
     const { records, corrupt } = await this.log.load();
+    if (corrupt.length > 0) {
+      throw new StoreError(`task log contains ${corrupt.length} corrupt line(s); refusing incomplete task state`);
+    }
     const { tasks, problems } = reduceEvents(records);
-    return { tasks, problems, corrupt: corrupt.length, events: records.length };
+    if (problems.length > 0) {
+      throw new StoreError(`task log contains ${problems.length} event(s) that cannot be applied; refusing incomplete task state`);
+    }
+    return { records, tasks, problems };
+  }
+
+  // Replays the log. Returns tasks (Map) and the number of events. The counts of
+  // corrupt lines and unapplied events are zero: those cases refuse above.
+  async load() {
+    const { records, tasks, problems } = await this.#readComplete();
+    return { tasks, problems, corrupt: 0, events: records.length };
   }
 
   async get(taskId) {
@@ -94,9 +107,10 @@ export class TaskStore {
     }
   }
 
-  // Validates by replay, then appends. Refused events are never written.
+  // Validates by replay, then appends. Refused events are never written, and a
+  // damaged log is not extended: its state cannot be trusted as a base.
   async #append(event) {
-    const { records } = await this.log.load();
+    const { records } = await this.#readComplete();
     const { problems } = reduceEvents([...records, event]);
     const refused = problems.find((p) => p.index === records.length);
     if (refused) throw new ValidationError(`refused: ${refused.reason}`, 'ILLEGAL_TRANSITION');
