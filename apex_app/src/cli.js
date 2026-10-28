@@ -266,7 +266,11 @@ export async function main(argv, {
           err('usage: knowledge show <record-id>');
           return 2;
         }
-        return emit(await app.controller.knowledgeShow(ids[0]));
+        // A direct, unaudited read, like `task show`: there is no operation record,
+        // so exit 0/1 reflects whether the record was found, not audit persistence.
+        const res = await app.controller.knowledgeShow(ids[0]);
+        out(res.display ?? res.output ?? '(none)');
+        return res.status === Outcome.SUCCESS_VERIFIED ? 0 : 1;
       }
       err('usage: knowledge add|list|search|show');
       return 2;
@@ -350,7 +354,7 @@ export async function main(argv, {
       return 2;
     }
     if (e instanceof StoreError) {
-      err(`memory store unavailable: ${e.message}. Check APEX_DATA_DIR and its permissions.`);
+      err(`data store unavailable: ${e.message}. Check APEX_DATA_DIR and its permissions.`);
       return 1;
     }
     err(`unexpected error: ${e?.message ?? e}`);

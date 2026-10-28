@@ -202,7 +202,7 @@ describe('command line', () => {
     const env = envFor(blocker);
     const status = await runCli(['status'], env);
     assert.equal(status.code, 1);
-    assert.match(status.stderr, /memory store unavailable/);
+    assert.match(status.stderr, /store unavailable/);
     const write = await runCli(['ask', 'remember that nothing can be stored'], env);
     assert.equal(write.code, 3, 'an unrecorded operation must exit 3');
     assert.match(write.stdout, /Audit:\s+NOT RECORDED/);

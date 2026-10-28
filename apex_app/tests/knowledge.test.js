@@ -4,10 +4,81 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { makeTempDataDir, cleanup, runCli, cleanEnv } from './helpers.js';
 import { createApp } from '../src/app.js';
-import { KnowledgeStore, validateKnowledgeRecord } from '../src/knowledge/knowledge-store.js';
+import { KnowledgeStore, validateKnowledgeRecord, sha256Hex } from '../src/knowledge/knowledge-store.js';
 import { knowledgeActions } from '../src/actions/knowledge-actions.js';
 import { Outcome } from '../src/outcomes.js';
-import { ModelGateway } from '../src/model/gateway.js';
+import { ModelGateway, NoBackend } from '../src/model/gateway.js';
+import { main } from '../src/cli.js';
+
+// TEST DOUBLE: a model backend that returns fixed text and records the request it
+// receives. It proves how APEX handles a reply, not what a real model would say.
+function scriptedGateway(reply, captured = {}) {
+  const backend = {
+    name: 'test-double',
+    provider: 'test-double',
+    configured: true,
+    describe: () => ({ configured: true, provider: 'test-double', endpoint: 'test-double', model: 'test-double' }),
+    health: async () => ({ available: true, detail: 'test double' }),
+    complete: async (req) => {
+      captured.request = req;
+      const text = typeof reply === 'function' ? reply(req) : reply;
+      return {
+        ok: true,
+        backend: 'test-double',
+        provider: 'test-double',
+        model: 'test-double',
+        text,
+        finishReason: 'stop',
+        truncated: false,
+        latencyMs: 0,
+      };
+    },
+  };
+  return { gateway: new ModelGateway({ backend }), captured };
+}
+
+function appOn(dir, gateway = new ModelGateway({ backend: new NoBackend() })) {
+  return createApp({ dataDir: dir, gateway });
+}
+
+// A record shaped exactly as validateKnowledgeRecord accepts. Used to represent
+// records that only a future ingestion path could produce (model_proposed) or
+// historical supersession metadata that no current write path sets.
+function seededRecord({
+  id,
+  subject,
+  relationship,
+  object,
+  status = 'supported',
+  evidence = null,
+  origin = 'user_supplied',
+  updateMode = 'user_confirmed',
+  supersededBy = null,
+}) {
+  return {
+    schema: 1,
+    id,
+    subject,
+    relationship,
+    object,
+    evidence,
+    tripleHash: sha256Hex(`${subject}\x00${relationship}\x00${object}`),
+    status,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    provenance: { origin, updateMode },
+    ...(supersededBy ? { supersededBy } : {}),
+  };
+}
+
+function seedKnowledge(dir, records) {
+  const file = path.join(dir, 'knowledge.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${records.map((r) => JSON.stringify(r)).join('\n')}\n`, 'utf8');
+}
+
+function capture() {
+  return { text: '', write(chunk) { this.text += chunk; return true; } };
+}
 
 test('knowledge store - validation and provenance', async (t) => {
   const dir = makeTempDataDir();
@@ -251,4 +322,565 @@ test('cli - knowledge commands end-to-end', async (t) => {
   const searchRes = await runCli(['knowledge', 'search', 'Saturn'], env);
   assert.equal(searchRes.code, 0);
   assert.ok(searchRes.stdout.includes('Titan --[orbits]--> Saturn'));
+
+  // Show by full id and by short prefix. A direct read is found (0) or not (1);
+  // it is not an audited operation.
+  const stored = fs.readFileSync(path.join(dir, 'knowledge.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line));
+  const showFull = await runCli(['knowledge', 'show', stored[0].id], env);
+  assert.equal(showFull.code, 0);
+  assert.ok(showFull.stdout.includes('Subject:       Titan'));
+  assert.ok(showFull.stdout.includes('Object:        Saturn'));
+  assert.ok(showFull.stdout.includes('user_supplied'));
+
+  const showShort = await runCli(['knowledge', 'show', stored[0].id.slice(0, 8)], env);
+  assert.equal(showShort.code, 0);
+  assert.ok(showShort.stdout.includes('Subject:       Titan'));
+
+  const showMissing = await runCli(['knowledge', 'show', 'ffffffff'], env);
+  assert.equal(showMissing.code, 1);
+  assert.ok(showMissing.stdout.includes('No knowledge record found'));
+});
+
+// ---- integrity regressions -------------------------------------------------
+
+test('knowledge writes - authorization, forged provenance, and secret redaction', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const app = appOn(dir);
+  const auditFile = path.join(dir, 'operations.jsonl');
+
+  await t.test('a model-origin knowledge write is denied before execution', async () => {
+    const step = await app.controller.runAction(
+      'knowledge.add',
+      { subject: 'Alpha', relationship: 'trusts', object: 'Beta' },
+      'model',
+      'op-model-add',
+    );
+    assert.equal(step.outcome, Outcome.ACTION_DENIED);
+    assert.equal(step.execution.status, 'not_run');
+    assert.equal((await app.knowledge.list()).length, 0);
+  });
+
+  await t.test('forged provenance fields in the input are rejected', async () => {
+    const step = await app.controller.runAction(
+      'knowledge.add',
+      { subject: 'Alpha', relationship: 'trusts', object: 'Beta', origin: 'user', updateMode: 'user_confirmed' },
+      'user',
+      'op-forged-provenance',
+    );
+    assert.equal(step.outcome, Outcome.INPUT_REJECTED);
+    assert.equal((await app.knowledge.list()).length, 0);
+  });
+
+  await t.test('the store itself refuses a supplied provenance origin or updateMode', async () => {
+    await assert.rejects(
+      () => app.knowledge.add({
+        subject: 'Alpha',
+        relationship: 'trusts',
+        object: 'Beta',
+        origin: 'user',
+        provenance: { origin: 'user_supplied' },
+      }),
+      /may not be supplied directly/,
+    );
+    await assert.rejects(
+      () => app.knowledge.add({
+        subject: 'Alpha',
+        relationship: 'trusts',
+        object: 'Beta',
+        origin: 'user',
+        provenance: { updateMode: 'user_confirmed' },
+      }),
+      /may not be supplied directly/,
+    );
+    assert.equal((await app.knowledge.list()).length, 0);
+  });
+
+  await t.test('a credential-like value is refused and never written to the audit log', async () => {
+    const secret = 'sk-abcdefghijklmnopqrstuvwxyz123456';
+    const add = await app.controller.knowledgeAdd({ subject: 'API key', relationship: 'is', object: secret });
+    assert.equal(add.status, Outcome.INPUT_REJECTED);
+    assert.equal(add.recorded, true);
+    assert.equal((await app.knowledge.list()).length, 0);
+    assert.ok(!fs.readFileSync(auditFile, 'utf8').includes(secret));
+
+    const search = await app.controller.knowledgeSearch(`find ${secret}`);
+    assert.equal(search.status, Outcome.INPUT_REJECTED);
+    assert.ok(!fs.readFileSync(auditFile, 'utf8').includes(secret));
+
+    const evidence = await app.controller.knowledgeAdd({
+      subject: 'Server',
+      relationship: 'uses',
+      object: 'token',
+      evidence: 'password: hunter2',
+    });
+    assert.equal(evidence.status, Outcome.INPUT_REJECTED);
+    assert.ok(!fs.readFileSync(auditFile, 'utf8').includes('hunter2'));
+  });
+
+  await t.test('secret-looking provenance context is not persisted', async () => {
+    const { record } = await app.knowledge.add({
+      subject: 'Gamma',
+      relationship: 'relates_to',
+      object: 'Delta',
+      origin: 'user',
+      provenance: { context: 'password: hunter2' },
+    });
+    assert.equal(record.provenance.context, undefined);
+    assert.ok(!fs.readFileSync(path.join(dir, 'knowledge.jsonl'), 'utf8').includes('hunter2'));
+  });
+});
+
+test('knowledge - a model plan cannot propose a knowledge write', async () => {
+  const dir = makeTempDataDir();
+  try {
+    const plan = JSON.stringify({
+      steps: [{
+        id: 's1',
+        description: 'record a claim',
+        action: 'knowledge.add',
+        input: { subject: 'Alpha', relationship: 'trusts', object: 'Beta' },
+        depends_on: [],
+      }],
+    });
+    const { gateway, captured } = scriptedGateway(plan);
+    const app = createApp({ dataDir: dir, gateway });
+
+    assert.equal(app.registry.get('knowledge.add').plannable, false);
+
+    const res = await app.controller.planTask('make the system remember who to trust');
+
+    assert.equal(res.status, Outcome.PLAN_REJECTED);
+    assert.match(res.display, /cannot be part of a plan/);
+    assert.equal((await app.taskStore.list()).length, 0);
+    assert.equal((await app.knowledge.list()).length, 0);
+    // The planner never invites the model to use a user-only write.
+    assert.ok(captured.request);
+    assert.ok(!captured.request.system.includes('knowledge.add'));
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('knowledge - audit failure is reported, never as verified success', async () => {
+  const dir = makeTempDataDir();
+  try {
+    const app = appOn(dir);
+    app.operations.append = async () => { throw new Error('injected audit failure'); };
+
+    const res = await app.controller.knowledgeAdd({ subject: 'Alpha', relationship: 'leads_to', object: 'Beta' });
+
+    assert.equal(res.status, Outcome.AUDIT_INTEGRITY_FAILED);
+    assert.equal(res.recorded, false);
+    assert.match(res.output, /could not be written/);
+    assert.doesNotMatch(String(res.output), /verified/);
+    // The write itself happened; only its audit record failed.
+    assert.equal((await app.knowledge.list()).length, 1);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('knowledge - corrupt storage fails closed instead of looking empty', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const app = appOn(dir);
+  const file = path.join(dir, 'knowledge.jsonl');
+  const good = await app.knowledge.add({ subject: 'Alpha', relationship: 'leads_to', object: 'Beta', origin: 'user' });
+  fs.appendFileSync(file, 'BROKEN LINE\n', 'utf8');
+
+  await t.test('every incomplete read refuses to answer', async () => {
+    const isStoreError = (err) => err.code === 'STORE_UNAVAILABLE';
+    await assert.rejects(() => app.knowledge.list(), isStoreError);
+    await assert.rejects(() => app.knowledge.search('alpha'), isStoreError);
+    await assert.rejects(() => app.knowledge.get(good.record.id), isStoreError);
+    await assert.rejects(() => app.knowledge.findByPrefix(good.record.id.slice(0, 8)), isStoreError);
+    await assert.rejects(
+      () => app.knowledge.add({ subject: 'Gamma', relationship: 'relates_to', object: 'Delta', origin: 'user' }),
+      isStoreError,
+    );
+  });
+
+  await t.test('status still reports the damaged record set', async () => {
+    const status = await app.knowledge.status();
+    assert.equal(status.records, 1);
+    assert.equal(status.corrupt, 1);
+    // The refused add wrote nothing.
+    assert.equal(fs.readFileSync(file, 'utf8').trim().split('\n').length, 2);
+  });
+
+  await t.test('controller operations fail visibly, not as an empty store', async () => {
+    const list = await app.controller.knowledgeList();
+    assert.equal(list.status, Outcome.EXECUTION_FAILED);
+    assert.equal(list.recorded, true);
+
+    const add = await app.controller.knowledgeAdd({ subject: 'Gamma', relationship: 'relates_to', object: 'Delta' });
+    assert.equal(add.status, Outcome.EXECUTION_FAILED);
+    assert.equal(add.recorded, true);
+
+    const search = await app.controller.knowledgeSearch('alpha');
+    assert.equal(search.status, Outcome.EXECUTION_FAILED);
+    assert.equal(search.recorded, true);
+  });
+
+  await t.test('show surfaces the storage error rather than a "not found" result', async () => {
+    await assert.rejects(() => app.controller.knowledgeShow(good.record.id), (err) => err.code === 'STORE_UNAVAILABLE');
+  });
+});
+
+test('knowledge - conflict detection is conservative and normalized', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const app = appOn(dir);
+
+  const add = (subject, relationship, object) => app.controller.knowledgeAdd({ subject, relationship, object });
+  const forSubject = async (subject) => (await app.knowledge.list({ limit: 100 })).filter((r) => r.subject === subject);
+
+  await t.test('the same triple is a duplicate, not a conflict', async () => {
+    assert.equal((await add('Server', 'default_port', '8080')).status, Outcome.SUCCESS_VERIFIED);
+    assert.equal((await add('Server', 'default_port', '8080')).status, Outcome.SUCCESS_VERIFIED);
+    const rows = await forSubject('Server');
+    assert.equal(rows.length, 2);
+    for (const row of rows) {
+      assert.equal(row.status, 'supported');
+      assert.deepEqual(row.conflictsWith, []);
+    }
+  });
+
+  await t.test('case variants of the same triple are also duplicates', async () => {
+    await add('server', 'DEFAULT_PORT', '8080');
+    const rows = await forSubject('server');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'supported');
+    assert.deepEqual(rows[0].conflictsWith, []);
+    assert.equal((await forSubject('Server')).length, 2);
+  });
+
+  await t.test('same subject+relationship with a different object conflicts', async () => {
+    await add('Cache', 'size_mb', '512');
+    await add('Cache', 'size_mb', '1024');
+    const rows = await forSubject('Cache');
+    assert.equal(rows.length, 2);
+    for (const row of rows) {
+      assert.equal(row.status, 'conflicting');
+      assert.equal(row.conflictsWith.length, 1);
+    }
+  });
+
+  await t.test('a different subject or relationship is not a conflict', async () => {
+    await add('Alpha', 'depends_on', 'Shared');
+    await add('Beta', 'depends_on', 'Shared');
+    await add('Gamma', 'uses', 'Library');
+    await add('Gamma', 'maintains', 'Library');
+    for (const subject of ['Alpha', 'Beta', 'Gamma']) {
+      for (const row of await forSubject(subject)) {
+        assert.equal(row.status, 'supported');
+        assert.deepEqual(row.conflictsWith, []);
+      }
+    }
+  });
+
+  await t.test('multiple competing objects are all reported as conflicting', async () => {
+    await add('Queue', 'backend', 'Redis');
+    await add('Queue', 'backend', 'Kafka');
+    await add('Queue', 'backend', 'RabbitMQ');
+    const rows = await forSubject('Queue');
+    assert.equal(rows.length, 3);
+    for (const row of rows) {
+      assert.equal(row.status, 'conflicting');
+      assert.equal(row.conflictsWith.length, 2);
+    }
+    // A newer timestamp never turns the newest claim into the supported one.
+    assert.ok(rows.every((row) => row.status !== 'supported'));
+  });
+});
+
+test('knowledge - superseded records are historical, not live conflicts', async () => {
+  const dir = makeTempDataDir();
+  try {
+    const file = path.join(dir, 'knowledge.jsonl');
+    const a = seededRecord({ id: 'a0000000-0000-4000-8000-000000000001', subject: 'Engine', relationship: 'fuel', object: 'Petrol' });
+    const b = seededRecord({ id: 'b0000000-0000-4000-8000-000000000002', subject: 'Engine', relationship: 'fuel', object: 'Diesel', status: 'conflicting' });
+    // c restates A's claim and explicitly supersedes B.
+    const c = seededRecord({
+      id: 'c0000000-0000-4000-8000-000000000003',
+      subject: 'Engine',
+      relationship: 'fuel',
+      object: 'Petrol',
+      supersededBy: [b.id],
+    });
+    // d carries the legacy raw superseded status with no replacement.
+    const d = seededRecord({ id: 'd0000000-0000-4000-8000-000000000004', subject: 'Engine', relationship: 'fuel', object: 'Coal', status: 'superseded' });
+    seedKnowledge(dir, [a, b, c, d]);
+    const store = new KnowledgeStore(file);
+
+    const byId = new Map((await store.list({ limit: 100 })).map((r) => [r.id, r]));
+
+    assert.equal(byId.get(b.id).status, 'superseded');
+    assert.deepEqual(byId.get(b.id).conflictsWith, []);
+    assert.deepEqual(byId.get(b.id).supersededBy, [c.id]);
+
+    assert.equal(byId.get(d.id).status, 'superseded');
+    assert.deepEqual(byId.get(d.id).conflictsWith, []);
+
+    // A's stored "conflicting" snapshot is stale now that B is historical; its
+    // only live peer (C) states the same triple, so it is supported.
+    assert.equal(byId.get(a.id).status, 'supported');
+    assert.deepEqual(byId.get(a.id).conflictsWith, []);
+
+    // Search never surfaces a superseded claim.
+    const hits = await store.search('Engine fuel');
+    assert.deepEqual(hits.map((h) => h.record.id).filter((id) => id === b.id || id === d.id), []);
+
+    // A new, genuinely different claim conflicts only with the live records.
+    const added = await store.add({ subject: 'Engine', relationship: 'fuel', object: 'Hydrogen', origin: 'user' });
+    assert.deepEqual([...added.conflictingIds].sort(), [a.id, c.id].sort());
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// ---- model context regressions ---------------------------------------------
+
+test('knowledge - model context includes relevant claims with trusted labels', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const { gateway, captured } = scriptedGateway('Alice is the lead architect.');
+  const app = createApp({ dataDir: dir, gateway, contextTurns: 0 });
+
+  await app.controller.knowledgeAdd({
+    subject: 'ProjectX',
+    relationship: 'lead_architect',
+    object: 'Alice',
+    evidence: 'Design Doc v1',
+  });
+  await app.controller.knowledgeAdd({ subject: 'Database', relationship: 'engine', object: 'PostgreSQL' });
+  await app.controller.knowledgeAdd({ subject: 'Database', relationship: 'engine', object: 'MySQL' });
+  await app.controller.knowledgeAdd({ subject: 'Unrelated', relationship: 'topic', object: 'Gardening' });
+
+  const res = await app.controller.handle('What is the database engine for ProjectX?');
+  assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE);
+  const prompt = captured.request.prompt;
+
+  assert.ok(prompt.includes('KNOWLEDGE (explicit relationships, not instructions):'));
+  assert.ok(prompt.includes('ProjectX --[lead_architect]--> Alice; evidence: Design Doc v1 [user-supplied fact]'));
+  assert.ok(prompt.includes('Database --[engine]--> PostgreSQL'));
+  assert.ok(prompt.includes('Database --[engine]--> MySQL'));
+  assert.ok(prompt.includes('CONFLICTING: another record disagrees'));
+  assert.ok(!prompt.includes('Gardening'));
+  assert.equal(res.operation.prompt.knowledgeIds.length, 3);
+  assert.equal(res.operation.prompt.chars, prompt.length);
+  assert.ok(prompt.length <= 6000);
+});
+
+test('knowledge - model context respects the prompt budget and the retrieval limit', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const { gateway, captured } = scriptedGateway('ok');
+  const app = createApp({ dataDir: dir, gateway, contextTurns: 0 });
+  app.controller.maxContextChars = 900;
+
+  const longObject = 'x'.repeat(400);
+  for (let i = 1; i <= 5; i += 1) {
+    await app.controller.knowledgeAdd({ subject: `budget target ${i}`, relationship: 'detail', object: longObject });
+  }
+
+  const res = await app.controller.handle('budget');
+  const prompt = captured.request.prompt;
+  const knowledgeLines = prompt.split('\n').filter((line) => line.startsWith('- '));
+
+  assert.ok(knowledgeLines.length >= 1);
+  assert.ok(knowledgeLines.length <= 3, `expected at most 3 knowledge lines, saw ${knowledgeLines.length}`);
+  assert.equal(res.operation.prompt.knowledgeIds.length, knowledgeLines.length);
+  assert.equal(res.operation.prompt.chars, prompt.length);
+  assert.ok(prompt.length <= 900, `prompt length ${prompt.length} exceeded the configured bound`);
+});
+
+test('knowledge - an empty knowledge store adds no fabricated context', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const { gateway, captured } = scriptedGateway('No stored knowledge applies.');
+  const app = createApp({ dataDir: dir, gateway, contextTurns: 0 });
+
+  const res = await app.controller.handle('anything at all');
+  assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE);
+  assert.ok(!captured.request.prompt.includes('KNOWLEDGE'));
+  assert.ok(!String(res.output).includes('Knowledge context was unavailable'));
+  assert.deepEqual(res.operation.prompt.knowledgeIds, []);
+});
+
+test('knowledge - a model-proposed claim is labelled unconfirmed; labels come from stored provenance', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  // No current write path creates model_proposed records; this seeds the retrieval
+  // path with the shape a future ingestion path would have to produce.
+  seedKnowledge(dir, [seededRecord({
+    id: 'e0000000-0000-4000-8000-000000000005',
+    subject: 'Quasar',
+    relationship: 'distance',
+    object: '42 light years',
+    origin: 'model_proposed',
+    updateMode: 'model_proposed',
+  })]);
+  const { gateway, captured } = scriptedGateway('About 42 light years.');
+  const app = createApp({ dataDir: dir, gateway, contextTurns: 0 });
+
+  await app.controller.knowledgeAdd({ subject: 'model_proposed', relationship: 'appears_in', object: 'literal subject' });
+
+  await app.controller.handle('How far is Quasar?');
+  assert.ok(captured.request.prompt.includes('Quasar --[distance]--> 42 light years [unconfirmed claim]'));
+
+  const userRes = await app.controller.handle('literal subject');
+  assert.ok(captured.request.prompt.includes('model_proposed --[appears_in]--> literal subject [user-supplied fact]'));
+  assert.ok(!captured.request.prompt.includes('literal subject [unconfirmed claim]'));
+  assert.equal(userRes.operation.prompt.knowledgeIds.length, 1);
+});
+
+test('knowledge - corrupt knowledge does not block memory context and is reported', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const { gateway, captured } = scriptedGateway('Lighthouse.');
+  const app = createApp({ dataDir: dir, gateway, contextTurns: 0 });
+
+  await app.controller.handle('remember that the project codename is Lighthouse');
+  await app.knowledge.add({ subject: 'Lighthouse', relationship: 'is', object: 'a codename', origin: 'user' });
+  fs.appendFileSync(path.join(dir, 'knowledge.jsonl'), 'CORRUPT\n', 'utf8');
+
+  const res = await app.controller.handle('What is the project codename Lighthouse?');
+  const prompt = captured.request.prompt;
+
+  assert.ok(prompt.includes('KNOWLEDGE: (knowledge store temporarily unavailable)'));
+  assert.ok(prompt.includes('user-provided fact'), 'memory context should still reach the model');
+  assert.ok(prompt.includes('Lighthouse'));
+  assert.match(res.output, /\[Knowledge context was unavailable \(STORE_UNAVAILABLE\)/);
+  const knowledgeError = res.operation.errors.find((error) => error.stage === 'knowledge');
+  assert.equal(knowledgeError.code, 'STORE_UNAVAILABLE');
+  assert.equal(res.operation.prompt.chars, prompt.length);
+});
+
+test('knowledge - action operations never receive knowledge context', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const { gateway, captured } = scriptedGateway('unused');
+  const app = createApp({ dataDir: dir, gateway, contextTurns: 0 });
+
+  await app.controller.knowledgeAdd({ subject: 'Arithmetic', relationship: 'is', object: 'math' });
+
+  const res = await app.controller.handle('calc 2+2');
+  assert.equal(res.status, Outcome.SUCCESS_VERIFIED);
+  assert.equal(captured.request, undefined);
+  assert.equal(res.operation.prompt, null);
+});
+
+// ---- CLI contract regressions ----------------------------------------------
+
+test('cli - knowledge errors, ambiguity, and audit failures', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const env = cleanEnv({ APEX_DATA_DIR: dir });
+  const file = path.join(dir, 'knowledge.jsonl');
+  const auditFile = path.join(dir, 'operations.jsonl');
+
+  await t.test('usage errors exit 2', async () => {
+    const missing = await runCli(['knowledge', 'add', '--subject', 'OnlySubject'], env);
+    assert.equal(missing.code, 2);
+    assert.match(missing.stderr, /usage: knowledge add/);
+
+    const emptySearch = await runCli(['knowledge', 'search'], env);
+    assert.equal(emptySearch.code, 2);
+    assert.match(emptySearch.stderr, /usage: knowledge search/);
+
+    const badLimit = await runCli(['knowledge', 'list', '--limit', 'abc'], env);
+    assert.equal(badLimit.code, 2);
+  });
+
+  await t.test('an invalid limit is rejected by the action, not silently clamped', async () => {
+    const zero = await runCli(['knowledge', 'list', '--limit', '0'], env);
+    assert.equal(zero.code, 1);
+    assert.match(zero.stdout, /limit must be an integer from 1 to 50/);
+  });
+
+  await t.test('secrets are refused with no leak into stdout or the audit log', async () => {
+    const secret = 'sk-abcdefghijklmnopqrstuvwxyz123456';
+    const res = await runCli([
+      'knowledge', 'add',
+      '--subject', 'API key',
+      '--relationship', 'is',
+      '--object', secret,
+    ], env);
+    assert.equal(res.code, 1);
+    assert.ok(!res.stdout.includes(secret));
+    assert.ok(!res.stderr.includes(secret));
+    assert.ok(!fs.readFileSync(auditFile, 'utf8').includes(secret));
+    assert.equal(fs.existsSync(file), false);
+  });
+
+  await t.test('an ambiguous id prefix is reported, not guessed', async () => {
+    seedKnowledge(dir, [
+      seededRecord({ id: 'aaaaaaaa-0000-4000-8000-000000000001', subject: 'One', relationship: 'is', object: 'first' }),
+      seededRecord({ id: 'aaaaaaaa-0000-4000-8000-000000000002', subject: 'Two', relationship: 'is', object: 'second' }),
+    ]);
+    const res = await runCli(['knowledge', 'show', 'aaaaaaaa'], env);
+    assert.equal(res.code, 1);
+    assert.match(res.stdout, /matches 2 knowledge records/);
+  });
+
+  await t.test('corrupt storage fails list, add, and show', async () => {
+    const corruptDir = makeTempDataDir();
+    t.after(() => cleanup(corruptDir));
+    const corruptEnv = cleanEnv({ APEX_DATA_DIR: corruptDir });
+    const corruptFile = path.join(corruptDir, 'knowledge.jsonl');
+    fs.writeFileSync(corruptFile, 'NOT JSON\n', 'utf8');
+    const before = fs.readFileSync(corruptFile, 'utf8');
+
+    const list = await runCli(['knowledge', 'list'], corruptEnv);
+    assert.equal(list.code, 1);
+    assert.match(list.stdout, /corrupt line/);
+
+    const add = await runCli([
+      'knowledge', 'add',
+      '--subject', 'Alpha', '--relationship', 'relates_to', '--object', 'Beta',
+    ], corruptEnv);
+    assert.equal(add.code, 1);
+    assert.match(add.stdout, /corrupt line/);
+    assert.equal(fs.readFileSync(corruptFile, 'utf8'), before);
+
+    const show = await runCli(['knowledge', 'show', 'aaaaaaaa'], corruptEnv);
+    assert.equal(show.code, 1);
+    assert.match(show.stderr, /data store unavailable/);
+  });
+
+  await t.test('an audit write failure exits 3 for add and list', async () => {
+    const auditDir = makeTempDataDir();
+    t.after(() => cleanup(auditDir));
+    const auditEnv = cleanEnv({ APEX_DATA_DIR: auditDir });
+    const app = appOn(auditDir);
+    app.operations.append = async () => { throw new Error('injected audit failure'); };
+
+    const stdout = capture();
+    const stderr = capture();
+    const addCode = await main(['knowledge', 'add', '--subject', 'Alpha', '--relationship', 'relates_to', '--object', 'Beta'], {
+      env: auditEnv,
+      stdout,
+      stderr,
+      stdin: { isTTY: false },
+      appFactory: () => app,
+    });
+    assert.equal(addCode, 3);
+    assert.match(stderr.text, /NOT RECORDED/);
+    assert.doesNotMatch(stdout.text, /verified/);
+
+    const listOut = capture();
+    const listErr = capture();
+    const listCode = await main(['knowledge', 'list'], {
+      env: auditEnv,
+      stdout: listOut,
+      stderr: listErr,
+      stdin: { isTTY: false },
+      appFactory: () => app,
+    });
+    assert.equal(listCode, 3);
+    assert.match(listErr.text, /NOT RECORDED/);
+  });
 });

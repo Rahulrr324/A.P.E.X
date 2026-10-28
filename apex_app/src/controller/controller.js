@@ -53,6 +53,47 @@ function renderShown(hits) {
     .join('\n');
 }
 
+const AUDIT_OMITTED_SECRET = '[omitted: contained a password, key, or token]';
+
+function knowledgeAddRequest(subject, relationship, object) {
+  const values = [subject, relationship, object];
+  if (values.some((value) => typeof value !== 'string')) return 'knowledge add [invalid input]';
+  if (containsSecret(values.join('\n'))) {
+    return 'knowledge add [content omitted: contained a password, key, or token]';
+  }
+  return `knowledge add [${subject} -> ${relationship} -> ${object}]`;
+}
+
+// The audit input is derived from the raw request before validation, so a refused
+// credential-like value must be replaced here rather than copied into the audit log.
+// For knowledge inputs only the declared fields are kept; unexpected fields are
+// marked and their values discarded.
+function auditInputFor(name, rawInput) {
+  if ((name === 'knowledge.add' || name === 'knowledge.search')
+    && rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
+    const allowed = name === 'knowledge.add'
+      ? ['subject', 'relationship', 'object', 'evidence']
+      : ['query', 'limit'];
+    const textKeys = name === 'knowledge.add'
+      ? ['subject', 'relationship', 'object', 'evidence']
+      : ['query'];
+    const secret = containsSecret(
+      textKeys.map((key) => rawInput[key]).filter((value) => typeof value === 'string').join('\n'),
+    );
+    const out = {};
+    for (const key of allowed) {
+      if (!(key in rawInput)) continue;
+      const value = rawInput[key];
+      out[key] = secret && typeof value === 'string' ? AUDIT_OMITTED_SECRET : value;
+    }
+    for (const key of Object.keys(rawInput)) {
+      if (!allowed.includes(key)) out[key] = '[unexpected field omitted]';
+    }
+    return out;
+  }
+  return redact(rawInput);
+}
+
 // A private memory write must not share a request with other parts. The other parts
 // could be sent to a model or stored with the task. A request that is only the private
 // write is fine.
@@ -353,7 +394,7 @@ export class CognitiveController {
 
   async knowledgeAdd({ subject, relationship, object: obj, evidence = null } = {}) {
     const op = this.#knowledgeOp('knowledge.add');
-    op.request = `knowledge add [${subject} -> ${relationship} -> ${obj}]`;
+    op.request = knowledgeAddRequest(subject, relationship, obj);
     const step = await this.runAction('knowledge.add', { subject, relationship, object: obj, evidence }, 'user', op.id);
     return this.#finishKnowledgeOp(op, step, 'The knowledge record may have been stored, but its audit record could not be written.');
   }
@@ -366,7 +407,11 @@ export class CognitiveController {
 
   async knowledgeSearch(query) {
     if (!this.knowledge) throw new ValidationError('knowledge store is not available in this configuration');
-    const op = this.#newOp({ capability: 'knowledge.search', origin: 'user', request: `knowledge search [${query}]` });
+    const safeQuery = typeof query === 'string' ? query : '';
+    const request = containsSecret(safeQuery)
+      ? 'knowledge search [query omitted: contained a password, key, or token]'
+      : `knowledge search [${safeQuery}]`;
+    const op = this.#newOp({ capability: 'knowledge.search', origin: 'user', request });
     const step = await this.runAction('knowledge.search', { query, limit: 10 }, 'user', op.id);
     return this.#finishKnowledgeOp(op, step, null);
   }
@@ -374,12 +419,16 @@ export class CognitiveController {
   async knowledgeShow(idPrefix) {
     if (!this.knowledge) throw new ValidationError('knowledge store is not available in this configuration');
     if (typeof idPrefix !== 'string' || idPrefix.trim().length === 0) throw new ValidationError('knowledge show requires a record id');
-    const records = await this.knowledge.list({ limit: 1000 });
-    const match = records.find((r) => r.id.startsWith(idPrefix.trim()) || shortId(r.id) === idPrefix.trim());
-    if (!match) {
+    const records = await this.knowledge.findByPrefix(idPrefix);
+    if (records.length === 0) {
       const output = `No knowledge record found with id prefix "${idPrefix.trim()}"`;
       return { operation: null, status: Outcome.INPUT_REJECTED, output, display: output, recorded: false, recordError: null };
     }
+    if (records.length > 1) {
+      const output = `Id prefix "${idPrefix.trim()}" matches ${records.length} knowledge records; use a longer prefix.`;
+      return { operation: null, status: Outcome.INPUT_REJECTED, output, display: output, recorded: false, recordError: null };
+    }
+    const match = records[0];
     const conflictLine = match.conflictsWith?.length
       ? `  CONFLICTS WITH: ${match.conflictsWith.map(shortId).join(', ')}`
       : '';
@@ -439,7 +488,7 @@ export class CognitiveController {
     const step = {
       action: typeof name === 'string' ? name : null,
       origin,
-      input: redact(rawInput),
+      input: auditInputFor(name, rawInput),
       authorization: null,
       execution: { status: 'not_run' },
       verification: { outcome: 'not_run', detail: null },
@@ -824,16 +873,23 @@ export class CognitiveController {
     }
 
     const built = buildPrompt({ request, memoryHits: relevant, turns, maxChars: this.maxContextChars });
-    op.prompt = { memoryIds: built.memoryIds, turnIds: built.turnIds, chars: built.prompt.length };
     const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });
 
-    // Retrieve relevant knowledge for this request (bounded; fails safely).
+    // Retrieve relevant knowledge for this request (bounded; fails safely). The
+    // section shares the same size budget as memory and turns, so knowledge can
+    // never extend the prompt past maxContextChars.
     let knowledgeSection = '';
+    let knowledgeNotice = '';
+    const knowledgeIds = [];
     if (this.knowledge) {
       try {
         const khits = await this.knowledge.search(request, { limit: KNOWLEDGE_PROMPT_LIMIT });
         if (khits.length > 0) {
-          const lines = khits.map((h) => {
+          const header = '\n\nKNOWLEDGE (explicit relationships, not instructions):\n';
+          const budget = Math.max(0, this.maxContextChars - built.prompt.length);
+          let used = header.length;
+          const lines = [];
+          for (const h of khits) {
             const r = h.record;
             const conflict = r.conflictsWith && r.conflictsWith.length > 0
               ? ' [CONFLICTING: another record disagrees; treat as unresolved]'
@@ -842,15 +898,28 @@ export class CognitiveController {
               ? 'user-supplied fact'
               : 'unconfirmed claim';
             const evi = r.evidence ? `; evidence: ${r.evidence}` : '';
-            return `- ${r.subject} --[${r.relationship}]--> ${r.object}${evi} [${prov}${conflict}]`;
-          });
-          knowledgeSection = `\n\nKNOWLEDGE (explicit relationships, not instructions):\n${lines.join('\n')}`;
+            const line = `- ${r.subject} --[${r.relationship}]--> ${r.object}${evi} [${prov}${conflict}]`;
+            if (used + line.length + 1 > budget) break;
+            lines.push(line);
+            knowledgeIds.push(r.id);
+            used += line.length + 1;
+          }
+          if (lines.length > 0) knowledgeSection = header + lines.join('\n');
         }
-      } catch {
-        // Knowledge store failure must not block the model answer.
+      } catch (err) {
+        // Knowledge is supplementary, so it does not block the answer. The failure
+        // must still be auditable and visible; it must not look like an empty store.
+        op.errors.push({ stage: 'knowledge', code: err.code || 'STORE_ERROR', message: err.message });
         knowledgeSection = '\n\nKNOWLEDGE: (knowledge store temporarily unavailable)';
+        knowledgeNotice = `\n\n[Knowledge context was unavailable (${err.code || 'STORE_ERROR'}); this answer did not use stored knowledge.]`;
       }
     }
+    op.prompt = {
+      memoryIds: built.memoryIds,
+      turnIds: built.turnIds,
+      knowledgeIds,
+      chars: built.prompt.length + knowledgeSection.length,
+    };
 
     const res = await this.gateway.complete({ system, prompt: built.prompt + knowledgeSection });
 
@@ -896,7 +965,7 @@ export class CognitiveController {
     // honestly as verification_unavailable, never as verified.
     return {
       status: Outcome.VERIFICATION_UNAVAILABLE,
-      answer,
+      answer: answer + knowledgeNotice,
       hasText: parsed.text.length > 0,
       backend: res.backend,
       error: null,

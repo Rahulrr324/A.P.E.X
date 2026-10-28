@@ -4,6 +4,7 @@
 // Read actions (knowledge.search, knowledge.list) may be offered to the model.
 import { ValidationError } from '../errors.js';
 import { CONTROL_CHARS, shortId } from '../util.js';
+import { containsSecret } from '../security/secrets.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 
 const MAX_FIELD_CHARS = 500;
@@ -17,6 +18,12 @@ function textField(value, name, max = MAX_FIELD_CHARS) {
   if (t.length === 0) throw new ValidationError(`${name} is empty`);
   if (t.length > max) throw new ValidationError(`${name} exceeds ${max} characters`);
   if (CONTROL_CHARS.test(t)) throw new ValidationError(`${name} contains control characters`);
+  if (containsSecret(t)) {
+    throw new ValidationError(
+      `${name} looks like a password, key, or token; it was not stored`,
+      'SECRET_REFUSED',
+    );
+  }
   return t;
 }
 
@@ -58,6 +65,9 @@ export function knowledgeActions(knowledge) {
       inputHint: '{"subject":"text","relationship":"text","object":"text","evidence":"optional text"}',
       permission: 'write',
       origins: [ORIGIN_USER],
+      // A model-proposed write would be approved without showing the triple, then run
+      // as the user. That would relabel model-authored text as a user-confirmed fact.
+      plannable: false,
       validate(input) {
         const o = expectObject(input, ['subject', 'relationship', 'object', 'evidence']);
         return {

@@ -12,7 +12,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS } from '../util.js';
+import { CONTROL_CHARS, shortId } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 
 export const KNOWLEDGE_SCHEMA = 1;
@@ -134,24 +134,25 @@ export class KnowledgeStore {
     // Validate and sanitize provenance.
     const sanitized = sanitizeProvenance(provenance, origin);
 
-    const { records } = await this.log.load();
+    // Conflict detection reads the whole store, so it must refuse a damaged store
+    // rather than silently compare against an incomplete record set.
+    const records = await this.#loadComplete();
     const id = randomUUID();
     if (records.some((r) => r.id === id)) {
       throw new StoreError('identifier collision; nothing written');
     }
 
-    // Detect conflicts: another non-superseded record with the same subject+relationship
-    // but a different object is a conflict.
+    // Detect conflicts: another live record with the same subject+relationship but a
+    // different object is a conflict. Equality is trimmed and case-insensitive for all
+    // three fields, so case variants of the same triple are duplicates, not conflicts.
     const tHash = tripleHash(sub, rel, obj);
+    const reqKey = normalizedTriple(sub, rel, obj);
+    const supersededByMap = buildSupersededByMap(records);
     const conflictingIds = records
       .filter((r) => {
-        if (r.tripleHash === tHash) return false; // exact match, not a conflict
-        if (r.status === 'superseded') return false;
-        const rSubject = r.subject.trim().toLowerCase();
-        const rRel = r.relationship.trim().toLowerCase();
-        const reqSub = sub.trim().toLowerCase();
-        const reqRel = rel.trim().toLowerCase();
-        return rSubject === reqSub && rRel === reqRel;
+        if (isSuperseded(r, supersededByMap)) return false;
+        if (normalizedTriple(r.subject, r.relationship, r.object) === reqKey) return false;
+        return sameSubjectRelationship(r, sub, rel);
       })
       .map((r) => r.id);
 
@@ -176,7 +177,7 @@ export class KnowledgeStore {
 
   async get(id) {
     if (typeof id !== 'string' || id.length === 0) return null;
-    const { records } = await this.log.load();
+    const records = await this.#loadComplete();
     return records.find((r) => r.id === id) ?? null;
   }
 
@@ -184,9 +185,20 @@ export class KnowledgeStore {
   async #loadComplete() {
     const { records, corrupt } = await this.log.load();
     if (corrupt.length > 0) {
-      throw new StoreError(`knowledge store contains ${corrupt.length} corrupt line(s); refusing incomplete retrieval`);
+      throw new StoreError(`knowledge store contains ${corrupt.length} corrupt line(s); refusing an incomplete knowledge operation`);
     }
     return records;
+  }
+
+  // Resolve a full id or an id prefix. Never returns a partial or guessed match.
+  async findByPrefix(prefix) {
+    const p = typeof prefix === 'string' ? prefix.trim() : '';
+    if (p.length === 0) return [];
+    const records = await this.#loadComplete();
+    const supersededByMap = buildSupersededByMap(records);
+    return records
+      .filter((r) => r.id === p || r.id.startsWith(p) || shortId(r.id) === p)
+      .map((r) => annotate(r, records, supersededByMap));
   }
 
   async list({ limit = 20 } = {}) {
@@ -251,7 +263,7 @@ function sanitizeProvenance(p, origin) {
     }
     if (typeof p.context === 'string' && p.context.trim().length > 0) {
       const ctx = p.context.trim().slice(0, MAX_CONTEXT_CHARS);
-      if (!CONTROL_CHARS.test(ctx)) base.context = ctx;
+      if (!CONTROL_CHARS.test(ctx) && !containsSecret(ctx)) base.context = ctx;
     }
     // Reject attempts to inject provenance fields that must be derived.
     if (p.updateMode !== undefined || p.origin !== undefined) {
@@ -280,25 +292,45 @@ function buildSupersededByMap(records) {
   return map;
 }
 
+function normalizedTriple(subject, relationship, object) {
+  return [subject, relationship, object]
+    .map((value) => String(value).trim().toLowerCase())
+    .join('\x00');
+}
+
+function sameSubjectRelationship(record, subject, relationship) {
+  return record.subject.trim().toLowerCase() === subject.trim().toLowerCase()
+    && record.relationship.trim().toLowerCase() === relationship.trim().toLowerCase();
+}
+
+function isSuperseded(record, supersededByMap) {
+  return record.status === 'superseded' || (supersededByMap.get(record.id)?.length ?? 0) > 0;
+}
+
 function annotate(record, allRecords, supersededByMap) {
   const sby = supersededByMap.get(record.id) ?? [];
-  // Detect live conflicts: other non-superseded records with same subject+rel, different object.
-  const conflictIds = allRecords
+  const selfSuperseded = isSuperseded(record, supersededByMap);
+  // Detect live conflicts: other non-superseded records with the same subject+relationship
+  // but a different object. A superseded record is historical and has no live conflicts.
+  const recordKey = normalizedTriple(record.subject, record.relationship, record.object);
+  const conflictIds = selfSuperseded ? [] : allRecords
     .filter((r) => {
       if (r.id === record.id) return false;
-      if (r.tripleHash === record.tripleHash) return false;
-      // r is itself superseded
-      if ((supersededByMap.get(r.id) ?? []).length > 0) return false;
-      return r.subject.trim().toLowerCase() === record.subject.trim().toLowerCase()
-        && r.relationship.trim().toLowerCase() === record.relationship.trim().toLowerCase();
+      if (isSuperseded(r, supersededByMap)) return false;
+      if (normalizedTriple(r.subject, r.relationship, r.object) === recordKey) return false;
+      return sameSubjectRelationship(r, record.subject, record.relationship);
     })
     .map((r) => r.id);
 
-  const effectiveStatus = sby.length > 0
+  // The stored status is a snapshot from write time. A conflict that has since been
+  // superseded is not live, so a stale "conflicting" status becomes "supported".
+  const effectiveStatus = selfSuperseded
     ? 'superseded'
     : conflictIds.length > 0
       ? 'conflicting'
-      : record.status;
+      : record.status === 'conflicting'
+        ? 'supported'
+        : record.status;
 
   return {
     ...record,
