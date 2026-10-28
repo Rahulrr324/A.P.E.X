@@ -50,9 +50,24 @@ describe('Ollama native API (protocol)', () => {
     const sent = seen[0];
     assert.equal(sent.model, 'llama3.2');
     assert.equal(sent.stream, false);
+    assert.equal(sent.think, false, 'APEX asks for the answer, not a separate reasoning stream');
     assert.equal(sent.options.num_predict, 64);
     assert.equal(sent.options.temperature, 0);
     assert.deepEqual(sent.messages.map((m) => m.role), ['system', 'user']);
+  });
+
+  test('a thinking-only response has no answer text and never exposes the reasoning as the answer', async () => {
+    const url = await rawServer((req, body, res) => json(res, 200, {
+      model: 'm',
+      message: { role: 'assistant', content: '', thinking: 'internal reasoning that is not an answer' },
+      done: true,
+      done_reason: 'length',
+    }));
+    const gw = createGateway({ provider: 'ollama', url, name: 'm', timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'EMPTY_RESPONSE');
+    assert.equal(res.text, undefined);
   });
 
   test('a model that is not pulled is reported as MODEL_NOT_FOUND with the fix, never as an answer', async () => {
@@ -94,6 +109,33 @@ describe('Ollama native API (protocol)', () => {
     const gw = createGateway({ provider: 'ollama', url, name: 'm', timeoutMs: 5000, retries: 0, allowRemote: false });
     assert.equal((await gw.complete({ prompt: 'hi' })).error.code, 'MALFORMED_RESPONSE');
   });
+
+  test('unexpected Ollama response shapes are MALFORMED_RESPONSE, never answer text', async () => {
+    const cases = [
+      { model: 'm', message: 'not an object' },
+      { model: 'm', message: { content: 42 } },
+      { model: 'm', message: { content: ['array'] } },
+      [],
+    ];
+    for (const shape of cases) {
+      const url = await rawServer((req, body, res) => json(res, 200, shape));
+      const gw = createGateway({ provider: 'ollama', url, name: 'm', timeoutMs: 5000, retries: 0, allowRemote: false });
+      const res = await gw.complete({ prompt: 'hi' });
+      assert.equal(res.ok, false, JSON.stringify(shape));
+      assert.equal(res.error.code, 'MALFORMED_RESPONSE', JSON.stringify(shape));
+      assert.equal(res.text, undefined);
+    }
+  });
+
+  test('credential-looking text in an Ollama diagnostic is redacted', async () => {
+    const secret = 'sk-abcdefghijklmnopqrstuvwx';
+    const url = await rawServer((req, body, res) => json(res, 500, { error: `authentication failed for ${secret}` }));
+    const gw = createGateway({ provider: 'ollama', url, name: 'm', timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.error.code, 'HTTP_ERROR');
+    assert.equal(res.error.message.includes(secret), false, 'the token is not echoed');
+    assert.match(res.error.message, /\[redacted-secret\]/);
+  });
 });
 
 describe('OpenAI-compatible servers (llama.cpp protocol)', () => {
@@ -105,6 +147,35 @@ describe('OpenAI-compatible servers (llama.cpp protocol)', () => {
     const res = await gw.complete({ prompt: 'hi' });
     assert.equal(res.ok, false);
     assert.equal(res.error.code, 'EMPTY_RESPONSE');
+  });
+
+  test('unexpected OpenAI-compatible response shapes are MALFORMED_RESPONSE, never answer text', async () => {
+    const shapes = [
+      { choices: 'not an array' },
+      { choices: [] },
+      { choices: [{ message: { content: 42 } }] },
+      { choices: [{ message: 'not an object' }] },
+      { choices: [{ message: { content: null } }] },
+      null,
+    ];
+    for (const shape of shapes) {
+      const url = await rawServer((req, body, res) => json(res, 200, shape));
+      const gw = createGateway({ url, name: 'x', timeoutMs: 5000, retries: 0, allowRemote: false });
+      const res = await gw.complete({ prompt: 'hi' });
+      assert.equal(res.ok, false, JSON.stringify(shape));
+      assert.equal(res.error.code, 'MALFORMED_RESPONSE', JSON.stringify(shape));
+      assert.equal(res.text, undefined);
+    }
+  });
+
+  test('credential-looking text in an OpenAI-compatible diagnostic is redacted', async () => {
+    const secret = 'sk-abcdefghijklmnopqrstuvwx';
+    const url = await rawServer((req, body, res) => json(res, 500, { error: { message: `bad key ${secret}` } }));
+    const gw = createGateway({ url, name: 'x', timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.error.code, 'HTTP_ERROR');
+    assert.equal(res.error.message.includes(secret), false, 'the token is not echoed');
+    assert.match(res.error.message, /\[redacted-secret\]/);
   });
 
   test('a length-limited answer is kept and flagged as truncated', async () => {

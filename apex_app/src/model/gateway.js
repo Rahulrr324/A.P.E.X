@@ -278,6 +278,11 @@ export class OllamaBackend extends HttpBackend {
     const body = {
       model: this.model,
       stream: false,
+      // APEX needs the final answer text, not a separate reasoning stream. Some
+      // thinking models otherwise spend the whole token budget on `message.thinking`
+      // and return an empty `message.content`, which is correctly reported as
+      // EMPTY_RESPONSE but leaves the user with no answer.
+      think: false,
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: prompt },
