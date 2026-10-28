@@ -307,12 +307,30 @@ export class CognitiveController {
         const m = await this.answerWithModel(request, { relevant: selectPromptMemory(context), turns }, op);
         status = m.status;
         // Any model proposal that did not execute and verify gets a deterministic
-        // counter-notice, even if the model's own text claims success.
+        // counter-notice, even if the model's own text claims success. The wording
+        // distinguishes a proposal that never ran from one that ran but failed or
+        // could not be verified, so the notice never claims an execution did not
+        // happen when it did.
         const failedProposals = op.steps.filter((s) => s.origin === 'model' && s.outcome !== Outcome.SUCCESS_VERIFIED);
-        const failedLabel = failedProposals.length === 1 ? 'a proposed action' : `${failedProposals.length} proposed actions`;
-        const actionNotice = failedProposals.length
-          ? `[APEX did not execute ${failedLabel}: ${failedProposals.map((s) => s.summary).join('; ')}]`
-          : '';
+        const notExecuted = failedProposals.filter((s) => s.outcome !== Outcome.EXECUTION_FAILED
+          && s.outcome !== Outcome.VERIFICATION_FAILED
+          && s.outcome !== Outcome.VERIFICATION_UNAVAILABLE);
+        const executedNotVerified = failedProposals.filter((s) => !notExecuted.includes(s));
+        const noticeParts = [];
+        if (notExecuted.length) {
+          const label = notExecuted.length === 1 ? 'a proposed action' : `${notExecuted.length} proposed actions`;
+          noticeParts.push(`did not execute ${label}: ${notExecuted.map((s) => s.summary).join('; ')}`);
+        }
+        for (const s of executedNotVerified) {
+          if (s.outcome === Outcome.EXECUTION_FAILED) {
+            noticeParts.push(`proposed an action that did not complete: ${s.summary}`);
+          } else if (s.outcome === Outcome.VERIFICATION_FAILED) {
+            noticeParts.push(`executed a proposed action but its result was NOT confirmed: ${s.summary}`);
+          } else {
+            noticeParts.push(`executed a proposed action but could not be independently verified: ${s.summary}`);
+          }
+        }
+        const actionNotice = noticeParts.length ? `[APEX ${noticeParts.join('; ')}]` : '';
         // The audit output never includes content copied out of the stores. When no
         // model is configured, the directly shown records live only in `display`.
         output = [m.answer, m.annotation, actionNotice].filter(Boolean).join('\n\n');

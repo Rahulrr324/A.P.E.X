@@ -7,6 +7,11 @@
 //   propose_action  an action went through (or is waiting in) the existing workflow
 //   refuse_or_block an unavailable, unauthorized, or failed operation was refused
 //
+// refuse_or_block is the coarse blocking label. It deliberately does not erase
+// which thing went wrong: the operation's `status` still distinguishes a denied
+// action, an execution or verification failure, an unavailable prerequisite, and
+// an audit failure.
+//
 // The classifier is deterministic and reads only recorded outcomes. It never
 // grants authority: proposals still pass through the action registry.
 import { Outcome } from '../outcomes.js';
@@ -44,26 +49,44 @@ const PRONOUN = '(?:it|that|this|them|those|these)';
 
 // A lookup with no topic, or a file request with no path, cannot be answered
 // reliably. These are the narrow cases where APEX asks instead of guessing.
-const CLARIFY_MEMORY = /^(?:what\s+do\s+you\s+(?:remember|know)\s+about|recall|search\s+memor(?:y|ies)(?:\s+for)?)\s*[?.!]*$/i;
-const CLARIFY_PATH = new RegExp(
-  `^(?:read|open|cat|print|peek|display|show|ls|list|dir)\\s+(?:the\\s+)?(?:(?:file|folder|directory|path)\\s*)?${PRONOUN}\\s*[?.!]*$`,
+// A pronoun alone is not a topic: searching memory for "it" would only return
+// an accidental match that looks authoritative.
+const CLARIFY_MEMORY = new RegExp(
+  `^(?:what\\s+do\\s+you\\s+(?:remember|know)\\s+about|recall|search\\s+memor(?:y|ies)(?:\\s+for)?)\\s*(?:${PRONOUN})?\\s*[?.!]*$`,
   'i',
 );
-const CLARIFY_NAMED_PATH = /^(?:read|open|cat|print|peek|display|show|ls|list|dir)\s+(?:the\s+)?(?:file|folder|directory|path)\s*[?.!]*$/i;
+const FILE_VERB = '(?:read|open|cat|print|peek|display|show|ls|list|dir)';
+const CLARIFY_PATH = new RegExp(
+  `^${FILE_VERB}\\s+(?:me\\s+)?(?:the\\s+)?(?:${PRONOUN}\\s+)?(?:files?|folders?|director(?:y|ies)|paths?)\\s*[?.!]*$`,
+  'i',
+);
+const CLARIFY_PRONOUN_PATH = new RegExp(
+  `^${FILE_VERB}\\s+(?:me\\s+)?(?:the\\s+)?${PRONOUN}\\s*[?.!]*$`,
+  'i',
+);
 // A follow-up with no prior conversation has nothing to resolve "it" against.
 const CLARIFY_CONTINUATION = new RegExp(
   `^(?:do|handle|fix|continue|go\\s+ahead|proceed|carry\\s+on)(?:\\s+(?:${PRONOUN}|so|with\\s+${PRONOUN}))?\\s*[?.!]*$`,
   'i',
 );
+// An instruction with a pronoun but no target, or a question with no subject.
+const CLARIFY_CHANGE = new RegExp(`^(?:change|update|modify|edit|adjust)\\s+${PRONOUN}\\s*[?.!]*$`, 'i');
+const CLARIFY_QUESTION = /^(?:why|how|what\s+for)\s*[?.!]*$/i;
 
 export function clarificationFor(request, { hasContext = false, checkContinuation = true } = {}) {
   const text = String(request).trim();
   if (CLARIFY_MEMORY.test(text)) return 'What topic should I search your memory for?';
-  if (CLARIFY_PATH.test(text) || CLARIFY_NAMED_PATH.test(text)) {
+  if (CLARIFY_PATH.test(text) || CLARIFY_PRONOUN_PATH.test(text)) {
     return 'Which file or directory do you mean? Please give a path.';
   }
   // Continuation needs the conversation context, so callers that have not loaded
   // recent turns can skip it rather than guessing.
+  if (checkContinuation && !hasContext && CLARIFY_CHANGE.test(text)) {
+    return 'What should APEX change? Please name the item and the change you want.';
+  }
+  if (checkContinuation && !hasContext && CLARIFY_QUESTION.test(text)) {
+    return 'What would you like APEX to explain? Please include the subject.';
+  }
   if (checkContinuation && !hasContext && CLARIFY_CONTINUATION.test(text)) {
     return 'What would you like APEX to do? Please state the action and its target.';
   }
