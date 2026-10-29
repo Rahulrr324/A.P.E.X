@@ -7,6 +7,7 @@
 // transition is not in the tables below, so the log cannot describe an impossible
 // history (for example a step completed twice).
 import { createHash } from 'node:crypto';
+import { Outcome } from '../outcomes.js';
 
 export const TASK_SCHEMA = 1;
 export const MAX_STEPS = 8;
@@ -34,6 +35,17 @@ export const StepStatus = Object.freeze({
   SKIPPED: 'skipped', // depends on a step that did not complete
   CANCELLED: 'cancelled',
 });
+
+// The outcomes a single task step can record. Task-level outcomes (plan_created,
+// task_paused, ...) belong to operation records, never to a step.
+export const STEP_OUTCOMES = new Set([
+  Outcome.SUCCESS_VERIFIED,
+  Outcome.EXECUTION_FAILED,
+  Outcome.VERIFICATION_FAILED,
+  Outcome.VERIFICATION_UNAVAILABLE,
+  Outcome.ACTION_DENIED,
+  Outcome.INPUT_REJECTED,
+]);
 
 export const TASK_TRANSITIONS = Object.freeze({
   proposed: ['pending', 'cancelled'],
@@ -193,6 +205,7 @@ export function validateEventShape(e) {
     if (!Array.isArray(e.steps)) return 'missing step changes';
     for (const s of e.steps) {
       if (!s || typeof s.id !== 'string' || typeof s.from !== 'string' || typeof s.to !== 'string') return 'bad step change';
+      if (s.outcome !== undefined && s.outcome !== null && !STEP_OUTCOMES.has(s.outcome)) return `unknown step outcome ${String(s.outcome)}`;
     }
     if (e.approval !== null && e.approval !== undefined && (typeof e.approval.stepId !== 'string' || typeof e.approval.inputSha256 !== 'string')) {
       return 'bad approval';
@@ -259,6 +272,12 @@ export function applyEvent(tasks, e) {
     if (!step) return `unknown step ${c.id}`;
     if (step.status !== c.from) return `step ${c.id} is ${step.status}, event expected ${c.from}`;
     if (!canTransition(STEP_TRANSITIONS, c.from, c.to)) return `illegal step transition ${c.from} -> ${c.to} for ${c.id}`;
+    // A step's status and its recorded outcome must tell the same story. Without this,
+    // a damaged or mistyped event could record a failed step as a verified success.
+    if (c.outcome !== undefined && c.outcome !== null) {
+      if (c.to === StepStatus.COMPLETED && c.outcome !== Outcome.SUCCESS_VERIFIED) return `step ${c.id}: a completed step needs a verified outcome`;
+      if ((c.to === StepStatus.FAILED || c.to === StepStatus.UNCERTAIN) && c.outcome === Outcome.SUCCESS_VERIFIED) return `step ${c.id}: a ${c.to} step cannot have a verified outcome`;
+    }
   }
   if (e.approval) {
     const step = byId.get(e.approval.stepId);

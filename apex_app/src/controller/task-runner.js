@@ -169,7 +169,7 @@ export class TaskRunner {
     const running = task.steps.filter((s) => s.status === StepStatus.RUNNING);
     await this.#transition(task.id, 'interrupted: the running step has an unknown outcome and was not run again', {
       task: { from: TaskStatus.RUNNING, to: TaskStatus.PAUSED },
-      steps: running.map((s) => ({ id: s.id, from: StepStatus.RUNNING, to: StepStatus.UNCERTAIN, outcome: null, summary: 'interrupted before its outcome was recorded; not run again' })),
+      steps: running.map((s) => ({ id: s.id, from: StepStatus.RUNNING, to: StepStatus.UNCERTAIN, outcome: null, summary: 'interrupted before its outcome was recorded in the task log; not run again' })),
     });
   }
 
@@ -211,7 +211,10 @@ export class TaskRunner {
     if (task.status === TaskStatus.CANCELLED) return { status: Outcome.TASK_CANCELLED, task };
     const bad = task.steps.find((s) => s.status === StepStatus.FAILED || s.status === StepStatus.UNCERTAIN);
     if (bad?.status === StepStatus.UNCERTAIN) return { status: Outcome.VERIFICATION_UNAVAILABLE, task };
-    return { status: bad?.outcome ?? Outcome.EXECUTION_FAILED, task };
+    // A failed step can never make a task report verified success, even if a damaged
+    // log claimed a verified outcome for it.
+    const status = bad?.outcome && bad.outcome !== Outcome.SUCCESS_VERIFIED ? bad.outcome : Outcome.EXECUTION_FAILED;
+    return { status, task };
   }
 
   // Approves a model-proposed plan as a whole: proposed -> pending.
@@ -253,16 +256,26 @@ export class TaskRunner {
       throw new ValidationError(`step ${stepId} (${step.action}) changes data, so it is never retried automatically or on request. Cancel this task and create a new one if you need it again`);
     }
     const back = dependentsOf(task.steps, stepId).filter((id) => task.steps.find((s) => s.id === id).status === StepStatus.SKIPPED);
+    // The previous attempt's outcome, summary, and operation link are cleared: a pending
+    // step must not still read as failed, and the re-run gets a new operation id.
+    const cleared = { outcome: null, summary: null, operationId: null };
     await this.#transition(taskId, `step ${stepId} set to retry by the user`, {
       task: task.status === TaskStatus.FAILED ? { from: TaskStatus.FAILED, to: TaskStatus.PAUSED } : null,
-      steps: [{ id: stepId, from: step.status, to: StepStatus.PENDING }, ...back.map((id) => ({ id, from: StepStatus.SKIPPED, to: StepStatus.PENDING }))],
+      steps: [{ id: stepId, from: step.status, to: StepStatus.PENDING, ...cleared }, ...back.map((id) => ({ id, from: StepStatus.SKIPPED, to: StepStatus.PENDING, ...cleared }))],
     });
     return this.#task(taskId);
   }
 
   async cancel(taskId) {
-    const task = await this.#task(taskId);
+    let task = await this.#task(taskId);
     if (task.status === TaskStatus.COMPLETED || task.status === TaskStatus.CANCELLED) throw new ValidationError(`this task is already ${task.status}`);
+    if (task.status === TaskStatus.RUNNING) {
+      // The caller holds the store lock, so no live process is running this task; it
+      // was interrupted. The step that was running keeps an unknown outcome, so it is
+      // made uncertain (never run again) before the rest of the task is cancelled.
+      await this.#recover(task);
+      task = await this.#task(taskId);
+    }
     const open = task.steps.filter((s) => s.status === StepStatus.PENDING || s.status === StepStatus.AWAITING_APPROVAL);
     await this.#transition(taskId, 'cancelled by the user', {
       task: { from: task.status, to: TaskStatus.CANCELLED },
