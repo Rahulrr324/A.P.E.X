@@ -50,13 +50,14 @@ describe('Ollama native API (protocol)', () => {
     const sent = seen[0];
     assert.equal(sent.model, 'llama3.2');
     assert.equal(sent.stream, false);
-    assert.equal(sent.think, false, 'APEX asks for the answer, not a separate reasoning stream');
+    assert.equal('think' in sent, false,
+      'the provider default is used: thinking models separate reasoning into message.thinking, and models without thinking support are not sent a field they reject');
     assert.equal(sent.options.num_predict, 64);
     assert.equal(sent.options.temperature, 0);
     assert.deepEqual(sent.messages.map((m) => m.role), ['system', 'user']);
   });
 
-  test('a thinking-only response has no answer text and never exposes the reasoning as the answer', async () => {
+  test('a thinking-only response is an actionable empty-answer failure, never the reasoning as the answer', async () => {
     const url = await rawServer((req, body, res) => json(res, 200, {
       model: 'm',
       message: { role: 'assistant', content: '', thinking: 'internal reasoning that is not an answer' },
@@ -68,6 +69,28 @@ describe('Ollama native API (protocol)', () => {
     assert.equal(res.ok, false);
     assert.equal(res.error.code, 'EMPTY_RESPONSE');
     assert.equal(res.text, undefined);
+    assert.match(res.error.message, /reasoning but no final answer/);
+    assert.match(res.error.message, /APEX_MODEL_MAX_TOKENS/);
+    assert.equal(res.error.message.includes('internal reasoning'), false, 'the reasoning text is not echoed');
+  });
+
+  test('separate reasoning is excluded from the final answer', async () => {
+    const url = await rawServer((req, body, res) => json(res, 200, {
+      model: 'm',
+      message: {
+        role: 'assistant',
+        content: '391',
+        thinking: 'I need to multiply 17 by 23. Seventeen times twenty is 340, plus fifty-one is 391.',
+      },
+      done: true,
+      done_reason: 'stop',
+    }));
+    const gw = createGateway({ provider: 'ollama', url, name: 'm', timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, true);
+    assert.equal(res.text, '391', 'only message.content is the answer');
+    assert.equal(res.text.includes('Seventeen times twenty'), false, 'reasoning is never returned as text');
+    assert.equal(res.truncated, false);
   });
 
   test('an Ollama answer stopped by num_predict is kept and flagged as truncated', async () => {

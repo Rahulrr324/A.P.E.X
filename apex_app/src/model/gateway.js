@@ -183,13 +183,25 @@ class HttpBackend {
     }
   }
 
-  finishAnswer({ content, finishReason, reportedModel, latencyMs }) {
+  finishAnswer({ content, reasoning, finishReason, reportedModel, latencyMs }) {
     if (typeof content !== 'string') {
       return failure(this.name, this.provider, 'MALFORMED_RESPONSE', 'endpoint response has no message content', latencyMs);
     }
     const text = content.replace(CONTROL_CHARS_GLOBAL, '').trim();
     if (text.length === 0) {
-      return failure(this.name, this.provider, 'EMPTY_RESPONSE', 'endpoint returned an empty answer', latencyMs);
+      // Reasoning is never a substitute for an answer, but its presence explains
+      // why the answer is empty: the generation budget was spent before any final
+      // text was produced.
+      const spentOnReasoning = typeof reasoning === 'string' && reasoning.trim().length > 0;
+      return failure(
+        this.name,
+        this.provider,
+        'EMPTY_RESPONSE',
+        spentOnReasoning
+          ? 'the model produced reasoning but no final answer; the token budget was likely spent on reasoning, so raise APEX_MODEL_MAX_TOKENS or use a model that can skip thinking'
+          : 'endpoint returned an empty answer',
+        latencyMs,
+      );
     }
     return {
       ok: true,
@@ -278,11 +290,13 @@ export class OllamaBackend extends HttpBackend {
     const body = {
       model: this.model,
       stream: false,
-      // APEX needs the final answer text, not a separate reasoning stream. Some
-      // thinking models otherwise spend the whole token budget on `message.thinking`
-      // and return an empty `message.content`, which is correctly reported as
-      // EMPTY_RESPONSE but leaves the user with no answer.
-      think: false,
+      // The provider default is used deliberately. For a thinking model, Ollama
+      // then returns reasoning in `message.thinking` and the final answer in
+      // `message.content`. Sending think:false does NOT suppress reasoning for
+      // templates that always open a think block (for example the installed Qwen3
+      // GGUF): that reasoning arrives inside `message.content` and cannot be
+      // separated reliably. think:true would be rejected by models that do not
+      // support thinking.
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: prompt },
@@ -303,6 +317,9 @@ export class OllamaBackend extends HttpBackend {
     }
     return this.finishAnswer({
       content: parsed.value?.message?.content,
+      // Only ever used to explain an empty answer. Reasoning is never returned as
+      // text, shown, or stored.
+      reasoning: parsed.value?.message?.thinking,
       finishReason: parsed.value?.done_reason ?? null,
       reportedModel: typeof parsed.value?.model === 'string' ? parsed.value.model : null,
       latencyMs: r.latencyMs,

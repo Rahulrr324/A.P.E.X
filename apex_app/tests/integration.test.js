@@ -198,6 +198,89 @@ describe('A. conversation and context', () => {
       'the stored turn is the same unmodified model text');
   });
 
+  test('separate reasoning is not shown or stored; only the final answer reaches the user', async () => {
+    const reasoning = 'The user asks about France. From my knowledge, its capital is Paris.';
+    const server = http.createServer((req, res) => {
+      req.resume();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        model: 'm',
+        message: { role: 'assistant', content: 'Paris.', thinking: reasoning },
+        done: true,
+        done_reason: 'stop',
+      }));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    stubs.push({ close: () => new Promise((resolve) => server.close(resolve)) });
+    const app = appOn({
+      gateway: createGateway({
+        provider: 'ollama',
+        url: `http://127.0.0.1:${server.address().port}`,
+        name: 'm',
+        maxTokens: 128,
+        timeoutMs: 3000,
+        retries: 0,
+        allowRemote: false,
+      }),
+    });
+
+    const res = await app.controller.handle('What is the capital of France?');
+
+    assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE, 'still an unverified answer');
+    assert.equal(res.decision, Decision.ANSWER);
+    assert.equal(res.display, 'Paris.', 'display is the final answer only');
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.equal(turns.find((t) => t.origin === 'model').text, 'Paris.', 'the stored turn is the final answer only');
+    assert.equal(fs.readFileSync(path.join(app.dataDir, 'conversation.jsonl'), 'utf8').includes('From my knowledge'), false);
+    assert.equal(fs.readFileSync(path.join(app.dataDir, 'operations.jsonl'), 'utf8').includes('The user asks about France'), false,
+      'reasoning is not stored in the audit record');
+  });
+
+  test('a reasoning-only generation is an honest failure, never an answer or a stored model turn', async () => {
+    const reasoning = 'The user asks about France. Let me recall the capital carefully step by step.';
+    const server = http.createServer((req, res) => {
+      req.resume();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        model: 'm',
+        message: { role: 'assistant', content: '', thinking: reasoning },
+        done: true,
+        done_reason: 'length',
+      }));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    stubs.push({ close: () => new Promise((resolve) => server.close(resolve)) });
+    const app = appOn({
+      gateway: createGateway({
+        provider: 'ollama',
+        url: `http://127.0.0.1:${server.address().port}`,
+        name: 'm',
+        maxTokens: 64,
+        timeoutMs: 3000,
+        retries: 0,
+        allowRemote: false,
+      }),
+    });
+
+    const res = await app.controller.handle('What is the capital of France?');
+
+    assert.equal(res.status, Outcome.EXECUTION_FAILED);
+    assert.equal(res.decision, Decision.REFUSE_OR_BLOCK);
+    assert.match(res.display, /reasoning but no final answer/);
+    assert.match(res.display, /APEX_MODEL_MAX_TOKENS/);
+    assert.match(res.display, /No answer has been generated\./);
+    assert.equal(res.display.includes(reasoning), false, 'reasoning text is not shown');
+    assert.equal(res.operation.errors[0].stage, 'model');
+    assert.equal(res.operation.errors[0].code, 'EMPTY_RESPONSE');
+    const raw = fs.readFileSync(path.join(app.dataDir, 'conversation.jsonl'), 'utf8');
+    const kept = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.deepEqual(kept.map((t) => t.origin), ['user', 'apex_notice'], 'only the request and a failure notice are kept');
+    assert.equal(kept.some((t) => t.origin === 'model'), false);
+    assert.equal(raw.includes('Let me compute carefully'), false);
+    const audit = readJsonl(path.join(app.dataDir, 'operations.jsonl'));
+    assert.equal(audit[0].status, Outcome.EXECUTION_FAILED);
+  });
+
   test('a model timeout is a failure, not an answer, and a late reply changes no state', async () => {
     const { url, count } = await delayedOllama(300);
     const app = appOn({

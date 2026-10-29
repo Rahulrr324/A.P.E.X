@@ -182,22 +182,32 @@ APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
 - Control characters in model output (including terminal escape codes) are removed
   before the text is shown, stored, or logged.
 
-**Reasoning text in answers (confirmed with Qwen3 GGUF on Ollama 0.35.0).** APEX sends
-`think: false` so it receives the final answer rather than a separate reasoning
-stream. Some thinking models still generate reasoning: the installed
-`hf.co/Qwen/Qwen3-4B-GGUF:Q5_K_M` template unconditionally opens a `<think>` block.
-With `think: false`, Ollama returns that reasoning inside `message.content` (and no
-`message.thinking`), so APEX shows it as part of the answer, including a literal
-`</think>` marker. If the token budget runs out first, Ollama reports
-`done_reason: "length"` and APEX appends the truncation notice. APEX deliberately
-does not strip reasoning or marker text: the same text can be legitimate content, and
-silently removing it would hide what the model produced. Observed on 2026-10-29: a
-120-token request was cut off inside reasoning; a 300-token request finished
-(`done_reason: "stop"`) with reasoning, `</think>`, then the answer `4`. Raising
-`APEX_MODEL_MAX_TOKENS` only leaves room for an answer after the reasoning; it does
-not remove the reasoning or change the template. The safest remedies are a model or
-template that honours `think: false`, a non-thinking model, or accepting the extra
-output and token use. APEX does not attempt to separate or delete the reasoning.
+**Reasoning text in answers (confirmed with Qwen3 GGUF on Ollama 0.35.0).** APEX does
+not send a `think` flag: it uses the provider default so that a thinking model puts
+reasoning in `message.thinking` and the final answer in `message.content`. Only
+`message.content` is shown, stored, or audited; reasoning is never treated as an
+answer. Sending `think: false` was not reliable: the installed
+`hf.co/Qwen/Qwen3-4B-GGUF:Q5_K_M` template unconditionally opens a think block and
+ignores the flag, so the reasoning arrived inside `message.content` with a literal
+`</think>` marker and was displayed as the answer. Sending `think: true` instead is
+rejected by models without thinking support. APEX does not strip markers or reasoning
+text from `message.content` (the same text can be legitimate content), so a provider
+that genuinely mixes reasoning into content is passed through unchanged.
+
+Reasoning tokens count toward `APEX_MODEL_MAX_TOKENS`. If the budget is exhausted
+before any final answer is produced, `message.content` is empty and APEX reports
+`EMPTY_RESPONSE` with a message that the budget was likely spent on reasoning and
+suggests raising `APEX_MODEL_MAX_TOKENS` or using a model that can skip thinking. No
+partial reasoning is shown as an answer, and no model turn is stored. Observed on
+2026-10-29 with a 256-token budget: one request produced the answer `391` after 251
+generated tokens; another produced only reasoning and no answer, which is reported as
+that failure rather than as text.
+
+Measured on 2026-10-29 after switching to the provider default: a warm two-turn run
+through APEX took 35.4 s and 41.5 s (APEX overhead 26-46 ms), both
+`done_reason: "stop"` with clean final answers and no reasoning in the display or the
+stored turns. A cold direct request took 63.6 s including 16.4 s of model loading,
+0.5 s of prompt evaluation, and 46.7 s generating 251 tokens (about 5.4 tokens/s).
 
 **Verification status.** The automated tests use local stand-in servers that copy the
 documented request and response shapes of both protocols. They check protocol
