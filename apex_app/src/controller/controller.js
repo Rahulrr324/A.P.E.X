@@ -13,7 +13,7 @@ import { executeAction } from '../actions/executor.js';
 import { CONTROL_CHARS, redact, round3, shortId, truncate } from '../util.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
 import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptMemory, systemPrompt, MAX_CONTEXT_CHARS } from './context.js';
-import { classifyDecision, clarificationFor, unsupportedOperationFor } from './decision.js';
+import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret } from '../security/secrets.js';
 import { planFromText, redactGoal, splitGoal, checkSteps, parseModelPlan, planningPrompt } from '../tasks/planner.js';
@@ -292,7 +292,7 @@ export class CognitiveController {
         // through the same authorization and verification as a user request.
         const turns = await this.#recentTurns(sid, op);
         const followUpClarification = origin === 'user'
-          ? clarificationFor(request, { hasContext: turns.length > 0 })
+          ? clarificationFor(request, { hasContext: turnsResolveContext(turns) })
           : null;
         if (followUpClarification) {
           // A follow-up with nothing to refer back to: ask instead of guessing, and

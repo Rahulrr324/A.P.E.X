@@ -77,6 +77,14 @@ const CLARIFY_QUESTION = /^(?:why|how|what\s+for)\s*[?.!]*$/i;
 const CLARIFY_PRONOUN_QUESTION = new RegExp(`^(?:what|who|which)\\s+(?:is|are|was|were)\\s+${PRONOUN}\\s*[?.!]*$`, 'i');
 const CLARIFY_PRONOUN_ABOUT = new RegExp(`^what\\s+about\\s+${PRONOUN}\\s*[?.!]*$`, 'i');
 
+// A follow-up can only be resolved by a turn that carries a referent. A stored
+// user turn that was itself unanswerable on its own (it was met with a
+// clarification) provides none, so asking the same follow-up again must ask
+// again rather than treat the earlier attempt as context.
+export function turnsResolveContext(turns) {
+  return (turns ?? []).some((turn) => !(turn && turn.role === 'user' && clarificationFor(turn.text) !== null));
+}
+
 export function clarificationFor(request, { hasContext = false, checkContinuation = true } = {}) {
   const text = String(request).trim();
   if (CLARIFY_MEMORY.test(text)) return 'What topic should I search your memory for?';

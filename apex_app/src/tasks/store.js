@@ -116,6 +116,28 @@ export class TaskStore {
     }
   }
 
+  // Read-only view of the lock. It never creates, removes, or waits for the lock.
+  // A dead holder and an unreadable lock are reported rather than treated as free,
+  // so a caller can tell "nobody is running this now" from "cannot tell".
+  async lockState() {
+    let raw;
+    try {
+      raw = await fs.readFile(this.lockPath, 'utf8');
+    } catch (err) {
+      if (err?.code === 'ENOENT') return { present: false, pid: null, alive: false };
+      return { present: true, pid: null, alive: null, error: err?.code || 'unreadable' };
+    }
+    let holder = null;
+    try {
+      holder = JSON.parse(raw);
+    } catch {
+      holder = null;
+    }
+    const pid = Number(holder?.pid);
+    if (!Number.isInteger(pid) || pid <= 0) return { present: true, pid: null, alive: null };
+    return { present: true, pid, alive: processAlive(pid) };
+  }
+
   // Validates by replay, then appends. Refused events are never written, and a
   // damaged log is not extended: its state cannot be trusted as a base.
   async #append(event) {

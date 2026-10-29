@@ -307,6 +307,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   const uncertainSteps = [];
   const awaitingApproval = [];
   const pausedTasks = [];
+  const runningTasks = [];
   const tasksFullyReadable = taskInspect !== null
     && subsystems.tasks.state !== State.CORRUPT
     && taskInspect.problems.length === 0
@@ -317,6 +318,15 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     for (const task of taskInspect.tasks) {
       if (task.status === TaskStatus.PAUSED) {
         pausedTasks.push({ id: task.id, goal: null });
+      } else if (task.status === TaskStatus.RUNNING && tasksFullyReadable) {
+        // A "running" task is only interpretable against the lock: with no live
+        // holder the log describes an interrupted run whose step outcome is unknown.
+        runningTasks.push({
+          id: task.id,
+          runningSteps: task.steps.filter((s) => s.status === StepStatus.RUNNING).map((s) => s.id),
+          live: null,
+          pid: null,
+        });
       }
       for (const step of task.steps) {
         if (step.status === StepStatus.UNCERTAIN) {
@@ -327,6 +337,20 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
       }
     }
   }
+
+  if (runningTasks.length > 0) {
+    let lock;
+    try {
+      lock = await app.taskStore.lockState();
+    } catch (err) {
+      lock = { present: true, pid: null, alive: null, error: errorDetail(err) };
+    }
+    for (const task of runningTasks) {
+      task.live = lock.alive;
+      task.pid = lock.pid;
+    }
+  }
+  const unresolvedRunning = runningTasks.filter((task) => task.live !== true);
 
   if (!taskInspect) {
     unchecked.push('task step -> operation links were not checked because the task log is unavailable');
@@ -484,6 +508,13 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     const sample = uncertainSteps[0];
     recovery.push(`Task ${safeId(sample.taskId)} step ${safeText(sample.stepId, 32)} is uncertain: it may have executed. Review it with "apex task show ${safeId(sample.taskId)}" before deciding. Do not repeat the action blindly; resume, retry, or cancel only as an explicit user decision.`);
   }
+  if (unresolvedRunning.length > 0) {
+    const sample = unresolvedRunning[0];
+    const why = sample.live === false
+      ? 'no live process holds the task lock'
+      : 'the task lock could not be read';
+    recovery.push(`Task ${safeId(sample.id)} is recorded as running, but ${why}: its running step has an unknown outcome. Review it with "apex task show ${safeId(sample.id)}". "apex task resume ${safeId(sample.id)}" records the step as uncertain and pauses the task; "apex task cancel ${safeId(sample.id)}" is also available. Nothing was replayed or retried.`);
+  }
   if (suspicions.length > 0) {
     recovery.push('Audit links: do not repeat an action merely because its audit record is missing or inconsistent; it may have executed. Compare the task and audit records before deciding.');
   }
@@ -499,12 +530,13 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     dataDir: app.dataDir,
     subsystems,
     integrity: { confirmed, suspicions, unchecked },
-    taskState: { uncertainSteps, awaitingApproval, pausedTasks },
+    taskState: { uncertainSteps, awaitingApproval, pausedTasks, runningTasks },
     recovery,
     localDefects,
     needsAttention: localDefects
       || modelState === State.UNAVAILABLE
       || uncertainSteps.length > 0
+      || unresolvedRunning.length > 0
       || suspicions.length > 0,
   };
 }
@@ -538,9 +570,23 @@ export function renderDiagnostics(diag) {
   for (const item of diag.taskState.pausedTasks) {
     attention.push(`task ${safeId(item.id)} is paused; no action was taken`);
   }
+  for (const item of diag.taskState.runningTasks.filter((t) => t.live !== true)) {
+    const why = item.live === false
+      ? 'no live process holds the task lock'
+      : 'the task lock could not be read';
+    attention.push(`task ${safeId(item.id)} is recorded as running but ${why}: its running step${item.runningSteps.length === 1 ? '' : 's'}${item.runningSteps.length ? ` (${item.runningSteps.map((s) => safeText(s, 32)).join(', ')})` : ''} may have executed; no action was taken`);
+  }
   if (attention.length > 0) {
     lines.push('Task state requiring a decision:');
     for (const item of attention) lines.push(`  - ${item}`);
+  }
+
+  const runningNow = diag.taskState.runningTasks.filter((t) => t.live === true);
+  if (runningNow.length > 0) {
+    lines.push('Tasks running now (task lock held by a live process):');
+    for (const item of runningNow) {
+      lines.push(`  - task ${safeId(item.id)} is running under process ${safeText(item.pid, 16)}; diagnostics did not change it`);
+    }
   }
 
   lines.push('Note: matching operation identifiers do not prove exactly-once execution; a missing audit record does not prove an action did not execute.');
