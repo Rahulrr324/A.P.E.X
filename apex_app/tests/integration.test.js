@@ -282,6 +282,87 @@ describe('A. conversation and context', () => {
     assert.match(prompt, /Lighthouse/, 'memory is a separate persistent source');
   });
 
+  test('a corrupt conversation log produces an answer with a visible limitation, not silent history loss', async () => {
+    const s = await stub('Paris is the capital of France.');
+    const app = appOn({ model: s });
+    const file = path.join(app.dataDir, 'conversation.jsonl');
+    const damaged = '{broken\n';
+    fs.writeFileSync(file, damaged);
+
+    const res = await app.controller.handle('What is the capital of France?');
+
+    assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE);
+    assert.equal(res.decision, Decision.ANSWER);
+    assert.match(res.display, /Paris is the capital of France\./);
+    assert.match(res.display, /\[Earlier conversation was unavailable \(STORE_UNAVAILABLE\); this answer did not use earlier turns\.\]/);
+    assert.equal(s.requests.length, 1);
+    assert.match(promptOf(s), /\(earlier conversation could not be loaded\)/);
+    assert.equal(res.operation.errors[0].stage, 'context');
+    const stored = fs.readFileSync(file, 'utf8');
+    assert.ok(stored.startsWith(damaged), 'the damaged line is preserved');
+    const turns = stored.split('\n').filter(Boolean).slice(1).map((line) => JSON.parse(line));
+    const modelTurn = turns.find((t) => t.origin === 'model');
+    assert.equal(modelTurn.text, 'Paris is the capital of France.', 'the limitation notice is not stored as model text');
+  });
+
+  test('a corrupt session produces an answer with a visible notice that it was not saved', async () => {
+    const s = await stub('Paris.');
+    const app = appOn({ model: s });
+    fs.writeFileSync(path.join(app.dataDir, 'session.json'), '{bad');
+
+    const res = await app.controller.handle('What is the capital of France?');
+
+    assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE);
+    assert.match(res.display, /\[The session could not be loaded \(STORE_UNAVAILABLE\); this answer was not saved to conversation history\.\]/);
+    assert.equal(res.operation.errors[0].stage, 'session');
+    assert.equal(fs.existsSync(path.join(app.dataDir, 'conversation.jsonl')), false, 'no turn is recorded without a session');
+    assert.equal(fs.readFileSync(path.join(app.dataDir, 'session.json'), 'utf8'), '{bad', 'the damaged session is preserved');
+  });
+
+  test('a failure notice is kept for history but never replayed as assistant context', async () => {
+    const s = await stub('Recovered answer.');
+    const app = appOn({ model: s });
+
+    s.behavior.status = 500;
+    const failed = await app.controller.handle('What is the answer?');
+    assert.equal(failed.status, Outcome.EXECUTION_FAILED);
+    const notice = readJsonl(path.join(app.dataDir, 'conversation.jsonl')).find((t) => t.origin === 'apex_notice');
+    assert.ok(notice, 'the failure is kept in conversation history');
+
+    s.behavior.status = 200;
+    const ok = await app.controller.handle('What is the answer now?');
+    assert.equal(ok.status, Outcome.VERIFICATION_UNAVAILABLE);
+    const prompt = promptOf(s);
+    assert.doesNotMatch(prompt, /did not produce an answer/, 'the failure notice is not replayed as context');
+    assert.doesNotMatch(prompt, /No answer has been generated/);
+    assert.match(prompt, /User: What is the answer\?/);
+    assert.equal(ok.operation.prompt.turnIds.length, 1, 'only the user turn is replayed');
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.ok(turns.some((t) => t.origin === 'apex_notice'), 'the failure remains visible in history');
+  });
+
+  test('a fresh session after a recoverable failure starts clean but preserves the failure record', async () => {
+    const s = await stub('A fresh answer.');
+    const app = appOn({ model: s });
+
+    s.behavior.status = 500;
+    const failed = await app.controller.handle('the first question');
+    assert.equal(failed.status, Outcome.EXECUTION_FAILED);
+    await app.session.rotate();
+
+    s.behavior.status = 200;
+    const ok = await app.controller.handle('the second question');
+    assert.equal(ok.status, Outcome.VERIFICATION_UNAVAILABLE);
+    assert.equal(ok.operation.prompt.turnIds.length, 0, 'the old session is not replayed');
+    assert.doesNotMatch(promptOf(s), /the first question/);
+    const ops = readJsonl(path.join(app.dataDir, 'operations.jsonl'));
+    assert.equal(ops.length, 2);
+    assert.equal(ops[0].status, Outcome.EXECUTION_FAILED, 'the original failure stays in the audit');
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.ok(turns.some((t) => t.origin === 'apex_notice' && /did not produce an answer/.test(t.text)),
+      'the original failure is not hidden by the new session');
+  });
+
   test('memory and knowledge are labelled distinctly and conflicting claims stay visible', async () => {
     const s = await stub('The stored records disagree.');
     const app = appOn({ model: s });
@@ -479,6 +560,24 @@ describe('C. knowledge and memory', () => {
     assert.equal(diag.code, 1);
     assert.match(diag.stdout, /Knowledge: corrupt \(0 readable record\(s\), 2 corrupt line\(s\)/);
     assert.match(diag.stdout, /knowledge reads and writes stay blocked/);
+  });
+
+  test('a corrupt memory store blocks the answer with a limitation instead of guessing', async () => {
+    const s = await stub('This must not be called.');
+    const app = appOn({ model: s });
+    const file = path.join(app.dataDir, 'memory.jsonl');
+    const damaged = '{"schema":1}\n{broken\n';
+    fs.writeFileSync(file, damaged);
+
+    const res = await app.controller.handle('What is the meeting room?');
+
+    assert.equal(res.status, Outcome.EXECUTION_FAILED);
+    assert.match(res.display, /Memory retrieval failed \(STORE_UNAVAILABLE\)\. APEX did not generate an answer because stored context could not be checked\./);
+    assert.equal(s.requests.length, 0, 'no model call without checked stored context');
+    assert.equal(res.operation.errors[0].stage, 'retrieval');
+    assert.equal(fs.readFileSync(file, 'utf8'), damaged, 'the damaged store is preserved');
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.equal(turns.some((t) => t.origin === 'model'), false, 'no model turn is invented');
   });
 
   test('secret-like memory and knowledge values are refused and never stored', async () => {

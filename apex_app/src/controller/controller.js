@@ -1019,6 +1019,20 @@ export class CognitiveController {
       };
     }
 
+    // A damaged conversation log or session is not silently ignored. The model is
+    // told that history is unavailable; the user gets the same limitation. The
+    // notice is added to the display only, never to the stored model turn, so it
+    // cannot be replayed later as if the model had said it.
+    const contextError = op.errors.find((error) => error.stage === 'context');
+    const sessionError = op.errors.find((error) => error.stage === 'session');
+    const historyNotice = !historyUnavailable
+      ? ''
+      : contextError
+        ? `[Earlier conversation was unavailable (${contextError.code || 'STORE_ERROR'}); this answer did not use earlier turns.]`
+        : sessionError
+          ? `[The session could not be loaded (${sessionError.code || 'STORE_ERROR'}); this answer was not saved to conversation history.]`
+          : '[Earlier conversation was unavailable; this answer did not use earlier turns.]';
+
     // Retrieve relevant knowledge before building the prompt so memory, knowledge,
     // and turns share one size budget. The store is bounded and fails safely.
     let knowledge = [];
@@ -1107,9 +1121,11 @@ export class CognitiveController {
     }
     // The model's own conclusion has no independent check, so it is reported
     // honestly as verification_unavailable, never as verified.
+    const answerText = answer + knowledgeNotice;
     return {
       status: Outcome.VERIFICATION_UNAVAILABLE,
-      answer: answer + knowledgeNotice,
+      answer: answerText,
+      display: historyNotice ? `${answerText}\n\n${historyNotice}` : undefined,
       hasText: parsed.text.length > 0,
       backend: res.backend,
       error: null,
