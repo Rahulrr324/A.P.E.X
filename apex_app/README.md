@@ -438,10 +438,17 @@ holds identity, memory, control, or persistence.
   request it).
 - `write` actions are offered only to the `user` origin. The registry refuses to
   register a write action for `model`.
-- A model proposal (`PROPOSE_ACTION {"action": ..., "input": {...}}`) is only a
-  request. It goes through the same policy as a user request. Model output is
-  never executed as code. At most three proposal lines are considered per reply;
-  the prompt states this limit, and the user is told when extra lines were ignored.
+- A model proposal is one line: `PROPOSE_ACTION` followed by a single JSON object
+  `{"action": "<registered name>", "input": { <that action's named parameters> }}`.
+  `action` must be a string and `input` must be an object — `{}` for an action that
+  takes no parameters, never a bare string or number. A proposal that violates this is
+  rejected before it is authorized: the audit step records `input_rejected`, names the
+  field that was wrong and its JSON type (never the value it carried), and reports
+  `not_run` for both execution and verification.
+- A proposal is only a request. It goes through the same policy as a user request.
+  Model output is never executed as code. At most three proposal lines are considered
+  per reply; the prompt states this limit, and the user is told when extra lines were
+  ignored.
 - Unknown actions and unknown origins are denied.
 
 ### Actions

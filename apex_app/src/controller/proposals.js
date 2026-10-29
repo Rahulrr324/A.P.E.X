@@ -1,9 +1,33 @@
 // Model output is untrusted text. The only structured thing the controller
-// reads from it is a line beginning with PROPOSE_ACTION followed by a JSON
-// object {"action": "<name>", "input": {...}}. Each proposal is only a request.
-// It is authorized and validated like any other request. Nothing is evaluated.
+// reads from it is one line: PROPOSE_ACTION followed by a single JSON object
+// {"action": "<a registered action name>", "input": { <that action's parameters> }}.
+// "input" is always an object of named parameters, and {} when the action takes
+// none. Each proposal is only a request. It is authorized and validated like any
+// other request. Nothing is evaluated.
 export const PROPOSAL_PREFIX = 'PROPOSE_ACTION';
 export const MAX_PROPOSALS = 3;
+
+function jsonType(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
+// Names the first schema violation found, so a rejected proposal says what was
+// wrong instead of restating the whole protocol. A reason carries a JSON type and
+// never the value: a proposal is model output, and its text must not reach the
+// display, the audit log, or conversation history through a rejection reason.
+function shapeViolation(obj) {
+  const type = jsonType(obj);
+  if (type !== 'object') return `proposal must be a JSON object, got ${type}`;
+  if (obj.action === undefined) return 'proposal has no "action"';
+  if (typeof obj.action !== 'string') return `proposal "action" must be a string, got ${jsonType(obj.action)}`;
+  if (obj.input === undefined) return 'proposal has no "input"';
+  if (jsonType(obj.input) !== 'object') {
+    return `proposal "input" must be an object of the action's parameters, got ${jsonType(obj.input)}`;
+  }
+  return null;
+}
 
 export function parseModelOutput(text) {
   const answerLines = [];
@@ -23,12 +47,9 @@ export function parseModelOutput(text) {
       malformed.push({ reason: 'proposal is not valid JSON' });
       continue;
     }
-    if (
-      !obj || typeof obj !== 'object' || Array.isArray(obj) ||
-      typeof obj.action !== 'string' ||
-      !obj.input || typeof obj.input !== 'object' || Array.isArray(obj.input)
-    ) {
-      malformed.push({ reason: 'proposal must be {"action": string, "input": object}' });
+    const reason = shapeViolation(obj);
+    if (reason) {
+      malformed.push({ reason });
       continue;
     }
     proposals.push({ action: obj.action, input: obj.input });

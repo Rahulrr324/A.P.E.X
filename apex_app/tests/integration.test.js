@@ -866,6 +866,36 @@ describe('D. actions and tasks', () => {
     assert.equal(fs.existsSync(path.join(app.dataDir, 'memory.jsonl')), false);
   });
 
+  test('the proposal shape a real model sent is rejected, and the documented shape still executes and verifies', async () => {
+    // The exact reply two real-model runs produced: valid JSON, correct keys, and a
+    // bare string where the action's parameter object belongs.
+    const s = await stub('Working on it.\nPROPOSE_ACTION {"action": "calc.evaluate", "input": "123*456"}');
+    const app = appOn({ model: s });
+
+    const rejected = await app.controller.handle('Use an action to compute 123*456.');
+
+    assert.equal(rejected.operation.steps.length, 1);
+    const step = rejected.operation.steps[0];
+    assert.equal(step.outcome, Outcome.INPUT_REJECTED);
+    assert.equal(step.authorization, null, 'a proposal with no parameter object is rejected before authorization');
+    assert.equal(step.execution.status, 'not_run');
+    assert.match(step.summary, /"input" must be an object of the action's parameters, got string/);
+    assert.match(rejected.display, /APEX did not execute a proposed action/);
+    assert.equal(rejected.decision, Decision.REFUSE_OR_BLOCK);
+
+    // The same action in the documented shape is still accepted: the change refuses
+    // nothing that used to work.
+    s.behavior.reply = 'The result is 56088.\nPROPOSE_ACTION {"action": "calc.evaluate", "input": {"expression": "123*456"}}';
+    const accepted = await app.controller.handle('Use an action to compute 123*456 again.');
+
+    assert.equal(accepted.operation.steps.length, 1);
+    assert.equal(accepted.operation.steps[0].action, 'calc.evaluate');
+    assert.equal(accepted.operation.steps[0].outcome, Outcome.SUCCESS_VERIFIED);
+    assert.equal(accepted.operation.steps[0].verification.outcome, Outcome.SUCCESS_VERIFIED);
+    assert.equal(accepted.decision, Decision.PROPOSE_ACTION);
+    assert.match(accepted.display, /56088|56,088/);
+  });
+
   test('a malformed model proposal is recorded in history, not only its text claim', async () => {
     const s = await stub('Done - I did what you asked.\nPROPOSE_ACTION this is not json');
     const app = appOn({ model: s });

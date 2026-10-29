@@ -313,6 +313,68 @@ describe('controller: model path and model-originated proposals', () => {
     assert.equal((await app.memory.status()).records, 0);
   });
 
+  // The protocol is one line carrying {"action": string, "input": object}. A reply
+  // that put a bare string in "input" was produced twice by the real local model,
+  // and the old rejection restated the whole schema instead of saying which field
+  // was wrong. Every violation must still be rejected before authorization, with
+  // nothing executed and nothing verified.
+  test('each proposal shape violation names its own field, and nothing runs', async () => {
+    const cases = [
+      ['a string where the parameter object belongs',
+        'PROPOSE_ACTION {"action":"calc.evaluate","input":"123*456"}',
+        'proposal "input" must be an object of the action\'s parameters, got string'],
+      ['a bare number as input', 'PROPOSE_ACTION {"action":"app.status","input":7}',
+        'proposal "input" must be an object of the action\'s parameters, got number'],
+      ['an array as input', 'PROPOSE_ACTION {"action":"memory.search","input":["launch"]}',
+        'proposal "input" must be an object of the action\'s parameters, got array'],
+      ['null as input', 'PROPOSE_ACTION {"action":"memory.search","input":null}',
+        'proposal "input" must be an object of the action\'s parameters, got null'],
+      ['no input at all', 'PROPOSE_ACTION {"action":"calc.evaluate"}', 'proposal has no "input"'],
+      ['no action', 'PROPOSE_ACTION {"input":{"expression":"1+1"}}', 'proposal has no "action"'],
+      ['a number as action', 'PROPOSE_ACTION {"action":7,"input":{}}',
+        'proposal "action" must be a string, got number'],
+      ['an array instead of an object', 'PROPOSE_ACTION [{"action":"app.status","input":{}}]',
+        'proposal must be a JSON object, got array'],
+      ['nothing parseable', 'PROPOSE_ACTION {not json}', 'proposal is not valid JSON'],
+    ];
+    for (const [label, reply, reason] of cases) {
+      const s = await stub();
+      s.behavior.reply = reply;
+      const app = appWith({ model: s });
+      const res = await app.controller.handle('do something');
+
+      assert.equal(res.operation.steps.length, 1, label);
+      const step = res.operation.steps[0];
+      assert.equal(step.outcome, Outcome.INPUT_REJECTED, label);
+      assert.equal(step.action, null, `${label}: a rejected proposal has no action name`);
+      assert.equal(step.authorization, null, `${label}: never reaches authorization`);
+      assert.equal(step.execution.status, 'not_run', label);
+      assert.equal(step.verification.outcome, 'not_run', label);
+      assert.ok(step.summary.startsWith(`malformed proposal rejected: ${reason}`),
+        `${label}\n  actual: ${step.summary}`);
+      assert.equal((await app.memory.status()).records, 0, `${label}: nothing stored`);
+      assert.equal(res.decision, 'refuse_or_block', label);
+    }
+  });
+
+  test('a rejected proposal reports a JSON type, never the model text it carried', async () => {
+    const secret = 'sk-live-abcdefghijklmnopqrstuvwxyz';
+    const s = await stub();
+    s.behavior.reply = `PROPOSE_ACTION {"action":"calc.evaluate","input":"${secret}"}`;
+    const app = appWith({ model: s });
+
+    const res = await app.controller.handle('do something');
+
+    assert.match(res.operation.steps[0].summary, /got string$/);
+    assert.ok(!res.display.includes(secret), 'the rejected payload is not shown');
+    const audit = await readOps(app.dataDir);
+    assert.ok(!JSON.stringify(audit).includes(secret), 'the rejected payload is not audited');
+    const turns = (await fs.readFile(path.join(app.dataDir, 'conversation.jsonl'), 'utf8'))
+      .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    assert.ok(!JSON.stringify(turns).includes(secret), 'the rejected payload is not replayed later');
+    assert.equal(turns.some((t) => t.origin === 'model'), false, 'no answer text was produced');
+  });
+
   test('a model call failure is reported as execution_failed; no answer is invented', async () => {
     const s = await stub();
     s.behavior.status = 503;
