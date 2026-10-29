@@ -274,6 +274,20 @@ describe('OpenAI-compatible servers (llama.cpp protocol)', () => {
     assert.equal((await gw.complete({ prompt: 'hi' })).error.code, 'CONTEXT_TOO_LARGE');
   });
 
+  test('a body that stalls after the headers is TIMEOUT, never a partial answer', async () => {
+    const url = await rawServer((req, body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"choices":[{"message":{"content":"partial');
+    });
+    const gw = createGateway({ url, name: 'm', timeoutMs: 100, retries: 2, allowRemote: false });
+    const started = Date.now();
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'TIMEOUT');
+    assert.equal(res.text, undefined);
+    assert.ok(Date.now() - started < 500, 'the stalled body does not extend the wait');
+  });
+
   test('a connection dropped while the answer is being read is INTERRUPTED, not an answer', async () => {
     const url = await rawServer((req, body, res) => {
       res.writeHead(200, { 'content-type': 'application/json', 'content-length': '500' });
@@ -302,6 +316,29 @@ describe('OpenAI-compatible servers (llama.cpp protocol)', () => {
     assert.equal(calls, 2);
     assert.equal(res.ok, true);
     assert.equal(res.text, 'recovered');
+  });
+
+  test('a response that arrives after the timeout is not retried or used', async () => {
+    let requests = 0;
+    let closed = false;
+    const url = await rawServer((req, body, res) => {
+      requests += 1;
+      res.on('close', () => { closed = true; });
+      setTimeout(() => {
+        if (!res.writableEnded && !res.destroyed) {
+          json(res, 200, { model: 'm', choices: [{ message: { content: 'late answer' }, finish_reason: 'stop' }] });
+        }
+      }, 300);
+    });
+    const gw = createGateway({ url, name: 'm', timeoutMs: 50, retries: 2, allowRemote: false });
+    const started = Date.now();
+    const res = await gw.complete({ prompt: 'hi' });
+    const elapsed = Date.now() - started;
+    assert.equal(res.error.code, 'TIMEOUT');
+    assert.ok(elapsed < 250, `the call returned near its timeout, not after the late response (${elapsed} ms)`);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(requests, 1, 'a timeout is not retried');
+    assert.equal(closed, true, 'APEX closes the connection instead of waiting for a late body');
   });
 
   test('a timeout is never retried (the user would wait twice)', async () => {

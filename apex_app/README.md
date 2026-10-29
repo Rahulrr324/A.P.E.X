@@ -136,6 +136,17 @@ APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
   `APEX_MODEL_MAX_TOKENS` (for example to 256) or raise the timeout. In a protocol run
   on a 2-CPU sandbox against a random-weight test model, the default 512-token answer did
   not finish within 120 s, and a 24-token answer did.
+- Measured on 2026-10-29 with the installed Qwen3-4B GGUF on Windows, a 200-token
+  budget, and a short prompt: the first request after the model was unloaded took
+  48.4 s total (19.8 s loading, 1.3 s prompt evaluation, 26.7 s generating 128 tokens);
+  the same request with the model already loaded took 25.1 s total (0.03 s loading,
+  0.9 s prompt evaluation, 23.3 s generating 113 tokens). Both completed
+  (`done_reason: "stop"`) and were reported as unverified answers. These are
+  machine-specific observations, not guarantees. The default 30 s timeout covers the
+  warm request here but not a cold start; raise `APEX_MODEL_TIMEOUT_MS` if cold starts
+  must succeed. A timeout aborts the HTTP request and records a failure; a late reply
+  is not stored, and a timeout is not retried. APEX cannot stop computation already
+  running inside the model server.
 - Failures are named, never turned into an answer: `UNREACHABLE`, `TIMEOUT` (never
   retried), `INTERRUPTED` (connection dropped mid-answer), `MODEL_NOT_FOUND`,
   `CONTEXT_TOO_LARGE`, `EMPTY_RESPONSE`, `MALFORMED_RESPONSE`, `HTTP_ERROR`. Only

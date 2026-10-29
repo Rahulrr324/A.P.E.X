@@ -50,6 +50,30 @@ async function stub(reply = 'stub answer') {
   return s;
 }
 
+// A real HTTP endpoint that answers only after delayMs, so a short gateway
+// timeout is exercised with an actual late response rather than a fake fetch.
+async function delayedOllama(delayMs, content = 'late answer') {
+  let requests = 0;
+  const server = http.createServer((req, res) => {
+    requests += 1;
+    req.resume();
+    setTimeout(() => {
+      if (!res.writableEnded && !res.destroyed) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          model: 'm',
+          message: { role: 'assistant', content },
+          done: true,
+          done_reason: 'stop',
+        }));
+      }
+    }, delayMs);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  stubs.push({ close: () => new Promise((resolve) => server.close(resolve)) });
+  return { url: `http://127.0.0.1:${server.address().port}`, count: () => requests };
+}
+
 // The OpenAI-compatible adapter sends the prompt as the user message.
 function promptOf(s, index = -1) {
   const req = s.requests.at(index);
@@ -172,6 +196,40 @@ describe('A. conversation and context', () => {
     const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
     assert.equal(turns.some((t) => t.origin === 'model' && t.text.includes('</think>')), true,
       'the stored turn is the same unmodified model text');
+  });
+
+  test('a model timeout is a failure, not an answer, and a late reply changes no state', async () => {
+    const { url, count } = await delayedOllama(300);
+    const app = appOn({
+      gateway: createGateway({
+        provider: 'ollama',
+        url,
+        name: 'm',
+        timeoutMs: 50,
+        retries: 2,
+        allowRemote: false,
+      }),
+    });
+
+    const res = await app.controller.handle('Explain why the sky appears blue.');
+
+    assert.equal(res.status, Outcome.EXECUTION_FAILED);
+    assert.equal(res.decision, Decision.REFUSE_OR_BLOCK);
+    assert.match(res.display, /TIMEOUT/);
+    assert.match(res.display, /No answer has been generated/);
+    assert.equal(res.operation.errors[0].code, 'TIMEOUT');
+    assert.equal(count(), 1, 'a timeout is not retried, even when retries are configured');
+    const before = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.equal(before.some((t) => t.origin === 'model'), false, 'no model turn is invented');
+    assert.equal(before.some((t) => t.origin === 'apex_notice' && /did not produce an answer/.test(t.text)), true);
+    const opsBefore = readJsonl(path.join(app.dataDir, 'operations.jsonl'));
+    assert.equal(opsBefore.length, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    assert.deepEqual(readJsonl(path.join(app.dataDir, 'conversation.jsonl')), before, 'a late reply adds no turn');
+    assert.deepEqual(readJsonl(path.join(app.dataDir, 'operations.jsonl')), opsBefore, 'a late reply adds no operation');
+    assert.equal(fs.existsSync(path.join(app.dataDir, 'tasks.jsonl')), false, 'a timed-out answer creates no task');
   });
 
   test('an ambiguous follow-up asks for the missing referent before any model call, even when repeated', async () => {
@@ -460,6 +518,36 @@ describe('D. actions and tasks', () => {
     assert.equal(audit.length, 1);
     assert.equal(audit[0].id, res.operation.id);
     assert.equal(audit[0].status, Outcome.SUCCESS_VERIFIED);
+  });
+
+  test('a model-plan timeout creates no task, and a late plan is never stored', async () => {
+    const { url, count } = await delayedOllama(300);
+    const app = appOn({
+      gateway: createGateway({
+        provider: 'ollama',
+        url,
+        name: 'm',
+        timeoutMs: 50,
+        retries: 2,
+        allowRemote: false,
+      }),
+    });
+
+    const res = await app.controller.planTask('organise my week and save the total');
+
+    assert.equal(res.status, Outcome.EXECUTION_FAILED);
+    assert.match(res.display, /did not return a plan/);
+    assert.match(res.display, /TIMEOUT/);
+    assert.equal(res.operation.errors[0].code, 'TIMEOUT');
+    assert.equal((await app.taskStore.list()).length, 0);
+    assert.equal(count(), 1, 'a timeout is not retried');
+    const opsBefore = readJsonl(path.join(app.dataDir, 'operations.jsonl'));
+    assert.equal(opsBefore.length, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    assert.equal((await app.taskStore.list()).length, 0, 'a late reply does not create a task');
+    assert.deepEqual(readJsonl(path.join(app.dataDir, 'operations.jsonl')), opsBefore);
   });
 
   test('unknown and malformed model proposals never execute', async () => {
