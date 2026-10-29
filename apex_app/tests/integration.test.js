@@ -1363,10 +1363,16 @@ describe('F. acceptance: a multi-step request stays consistent end to end', () =
       'proposal lines are not stored as model speech');
     assert.ok(turns.some((t) => t.origin === 'apex_action' && t.verified && /matching memory record\(s\) \(verified\)/.test(t.text)),
       'the verified model-proposed read is replayable history, without copying stored content');
-    // Pinned known limitation: `task run` and `task resume` write no conversation
-    // turn, so a task's step results live only in the task log and the audit. A
-    // follow-up question after a task run therefore cannot see what it produced.
-    assert.equal(turns.some((t) => /2\+2 = 4/.test(t.text)), false, 'task steps are not replayed as conversation');
+    // Implementation 046 replaced this known limitation: a task run now writes exactly
+    // one system-generated result turn, so a follow-up can see what the task did. The
+    // step output itself is still never copied into history - only the state and the
+    // verified outcomes are.
+    assert.equal(turns.some((t) => /2\+2 = 4/.test(t.text)), false, 'task step output is not replayed as conversation');
+    const taskTurn = turns.filter((t) => t.origin === 'apex_task');
+    assert.equal(taskTurn.length, 1, 'the recovered run is stated once, not once per attempt');
+    assert.equal(taskTurn[0].verified, true);
+    assert.match(taskTurn[0].text, /completed - 2 of 2 step\(s\) verified complete/);
+    assert.match(taskTurn[0].text, /the earlier run was interrupted/);
     const ops = readJsonl(path.join(app.dataDir, 'operations.jsonl'));
     assert.ok(ops.length >= 7, `${ops.length} operation(s) audited for the session`);
     assert.equal(ops.some((r) => r.status === Outcome.AUDIT_INTEGRITY_FAILED), false);

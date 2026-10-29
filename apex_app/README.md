@@ -367,6 +367,26 @@ task state, or change memory. Its read steps run as the model origin. A write st
 only after you approve it, and then runs as you. Model-proposed `memory.add` steps are
 not accepted because the task display intentionally omits the content being stored.
 
+**What history keeps.** A task run writes one conversation turn of its own, origin
+`apex_task`, built only from the replayed task state and the step audit records: the task
+id, its verdict (`completed`, `partially completed, then failed`, `stopped on a step
+whose outcome is uncertain`, `interrupted partway through`, `paused for your approval`,
+`cancelled`), the step counts, and which steps are unresolved. It is capped at 480
+characters and copies in no step output, memory content, file content, or model text. A
+task whose state is already stated in the session is not stated again, so repeated resume
+attempts write no stack of summaries. Only the system can create such a turn: it needs
+the task id and the state signature, and a model that writes the same opening line is
+stored as model text and replayed as `APEX (model, UNVERIFIED)`.
+
+**Asking about a task afterwards.** Five follow-up forms are answered from the task log
+without a model call: "What happened to that task?", "Which steps succeeded?", "What is
+still pending?", "Did it actually finish?", and "Can you explain why it stopped?". A task
+id in the question selects it (`did task 1f3a finish?`); with more than one task in the
+conversation and nothing to identify one, APEX asks which one instead of guessing. The
+answer never claims more than the records establish: an uncertain step is named as
+unresolved, a held step as awaiting your approval rather than as stopped, and a step
+whose `task.step` record could not be written is named as evidence APEX cannot show.
+
 **Limits.**
 - Free-text planning recognises only the request forms above and the `;` and `then`
   separators. Anything else needs a model to propose a plan.
@@ -378,7 +398,12 @@ not accepted because the task display intentionally omits the content being stor
   second process is refused, not queued. A lock left by a process that is no longer
   running is removed.
 - Every task read replays the whole task log. That is fine at this scale; it is not a
-  design for many tasks.
+  design for many tasks. A task follow-up also reads the operation log once, to check
+  that each recorded step result has its own record.
+- If a task-result turn cannot be saved, the answer and the operation record both say so,
+  and the turn is not re-issued later: the task is not run again to make up for a missing
+  history line. A follow-up then has nothing in the conversation to refer back to and
+  asks for the task id instead of guessing.
 - Model planning has been tested only with test doubles and stub servers. No real model
   was used to plan a task. See the Mission 003 report for what was and was not run.
 

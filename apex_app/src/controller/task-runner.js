@@ -70,30 +70,44 @@ export class TaskRunner {
   // interruption) a task. Caller must hold the store lock.
   async run(taskId, { mode }) {
     const auditGaps = [];
+    let recovery = null;
     let task = await this.#task(taskId);
 
     if (task.status === TaskStatus.RUNNING) {
       // No live process holds the lock, so an earlier run was interrupted. Each step
       // recorded as running is resolved from its own audit record, or left uncertain,
       // and it is never executed again.
-      await this.#recover(task);
+      recovery = await this.#recover(task);
       task = await this.#task(taskId);
     }
 
-    if (task.status === TaskStatus.PROPOSED) throw new ValidationError(`this is a model proposal and needs your approval first: task approve ${shortId(task.id)}`);
-    if (task.status === TaskStatus.COMPLETED) throw new ValidationError('this task is already completed; nothing to run');
-    if (task.status === TaskStatus.CANCELLED) throw new ValidationError('this task was cancelled');
-    if (task.status === TaskStatus.FAILED) throw new ValidationError(`this task stopped after a failed step. Retry a read-only step (task retry ${shortId(task.id)} <step>) or cancel it (task cancel ${shortId(task.id)})`);
-    if (mode === 'run' && task.status !== TaskStatus.PENDING) throw new ValidationError(`this task is ${task.status}; use: task resume ${shortId(task.id)}`);
-    if (mode === 'resume' && task.status !== TaskStatus.PAUSED) throw new ValidationError(`this task is ${task.status}; use: task run ${shortId(task.id)}`);
+    // A refusal below can follow a recovery. The recovery is attached to the error so the
+    // caller can still record what was established: an interrupted step whose outcome is
+    // unknown is a fact about the run, and it is exactly why the run is being refused.
+    // It grants nothing and changes no state.
+    const refuse = (message) => {
+      const err = new ValidationError(message);
+      if (recovery) {
+        err.recovery = recovery;
+        err.taskId = task.id;
+      }
+      throw err;
+    };
+
+    if (task.status === TaskStatus.PROPOSED) refuse(`this is a model proposal and needs your approval first: task approve ${shortId(task.id)}`);
+    if (task.status === TaskStatus.COMPLETED) refuse('this task is already completed; nothing to run');
+    if (task.status === TaskStatus.CANCELLED) refuse('this task was cancelled');
+    if (task.status === TaskStatus.FAILED) refuse(`this task stopped after a failed step. Retry a read-only step (task retry ${shortId(task.id)} <step>) or cancel it (task cancel ${shortId(task.id)})`);
+    if (mode === 'run' && task.status !== TaskStatus.PENDING) refuse(`this task is ${task.status}; use: task resume ${shortId(task.id)}`);
+    if (mode === 'resume' && task.status !== TaskStatus.PAUSED) refuse(`this task is ${task.status}; use: task run ${shortId(task.id)}`);
 
     const first = this.nextStep(task);
     if (first.blocked) {
       const s = first.blocked;
-      throw new ValidationError(`step ${s.id} is ${s.status} and was not run again. Retry it only if it is read-only (task retry ${shortId(task.id)} ${s.id}); otherwise cancel the task (task cancel ${shortId(task.id)})`);
+      refuse(`step ${s.id} is ${s.status} and was not run again. Retry it only if it is read-only (task retry ${shortId(task.id)} ${s.id}); otherwise cancel the task (task cancel ${shortId(task.id)})`);
     }
     if (first.step && first.step.status === StepStatus.AWAITING_APPROVAL) {
-      throw new ValidationError(`step ${first.step.id} needs your approval: task approve ${shortId(task.id)} --step ${first.step.id}`);
+      refuse(`step ${first.step.id} needs your approval: task approve ${shortId(task.id)} --step ${first.step.id}`);
     }
 
     await this.#transition(task.id, mode === 'run' ? 'started' : 'resumed', {
@@ -165,7 +179,7 @@ export class TaskRunner {
     const status = auditGaps.length > 0 && outcome.status === Outcome.SUCCESS_VERIFIED
       ? Outcome.AUDIT_INTEGRITY_FAILED
       : outcome.status;
-    return { ...outcome, status, underlyingStatus: outcome.status, auditGaps };
+    return { ...outcome, status, underlyingStatus: outcome.status, auditGaps, recovery };
   }
 
   async #recover(task) {
@@ -182,6 +196,7 @@ export class TaskRunner {
     }
     const byId = new Map((records ?? []).map((op) => [op.id, op]));
     const changes = [];
+    const basis = [];
     let resolvedFromAudit = 0;
     for (const step of running) {
       const op = typeof step.operationId === 'string' ? byId.get(step.operationId) : null;
@@ -199,9 +214,11 @@ export class TaskRunner {
             ? 'interrupted, and the audit log could not be read to check it; outcome unknown, not run again'
             : 'interrupted before its outcome was recorded in the task log; not run again',
         });
+        basis.push(records === null ? 'unreadable' : 'unknown');
         continue;
       }
       resolvedFromAudit += 1;
+      basis.push('audit');
       if (op.status === Outcome.SUCCESS_VERIFIED) {
         changes.push({
           id: step.id,
@@ -238,6 +255,9 @@ export class TaskRunner {
       task: { from: TaskStatus.RUNNING, to: TaskStatus.PAUSED },
       steps: changes,
     });
+    // Read-only description of what this recovery established, for the caller's
+    // task-result turn. It grants nothing and changes nothing.
+    return { interrupted: true, steps: changes.map((c, i) => ({ id: c.id, to: c.to, basis: basis[i] })) };
   }
 
   // Writes the step's operation record. Returns false if the audit log refused it.
