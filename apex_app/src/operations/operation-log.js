@@ -25,6 +25,12 @@ export class OperationLog {
     return { records: records.slice(-Math.max(1, limit)).reverse(), corrupt: corrupt.length };
   }
 
+  // Read-only diagnostics view: valid records plus the lines skipped as corrupt.
+  // Unreadable storage still throws a StoreError (unavailable, not empty).
+  async inspect() {
+    return this.store.load();
+  }
+
   async status() {
     const { records, corrupt } = await this.store.load();
     return { records: records.length, corrupt: corrupt.length };

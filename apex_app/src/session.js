@@ -13,24 +13,41 @@ export class SessionState {
     this.idFactory = idFactory;
   }
 
-  async #read() {
+  // Read-only classification used by status and diagnostics. It never creates or
+  // repairs the file: missing is a valid fresh state, corrupt is reported as such.
+  async #inspect() {
     let text;
     try {
       text = await fs.readFile(this.filePath, 'utf8');
     } catch (err) {
-      if (err?.code === 'ENOENT') return null;
-      throw new StoreError(`cannot read session state: ${err?.code || err?.message}`);
+      if (err?.code === 'ENOENT') return { status: 'missing', state: null, detail: 'no session file yet' };
+      return { status: 'unavailable', state: null, detail: `cannot read session state: ${err?.code || err?.message}` };
     }
     let obj;
     try {
       obj = JSON.parse(text);
     } catch {
-      throw new StoreError('session state is corrupt (invalid JSON); run "apex new" to start a new session');
+      return { status: 'corrupt', state: null, detail: 'session state is corrupt (invalid JSON)' };
     }
     // Writes are atomic, so a readable file without a session id is damaged, not
     // a half-written state. A missing file is handled above and is not corruption.
-    if (obj && typeof obj.sessionId === 'string' && obj.sessionId.length > 0) return obj;
-    throw new StoreError('session state is corrupt (missing session id); run "apex new" to start a new session');
+    if (obj && typeof obj.sessionId === 'string' && obj.sessionId.length > 0) return { status: 'ok', state: obj, detail: null };
+    return { status: 'corrupt', state: null, detail: 'session state is corrupt (missing session id)' };
+  }
+
+  async #read() {
+    const inspected = await this.#inspect();
+    if (inspected.status === 'missing') return null;
+    if (inspected.status === 'corrupt') {
+      throw new StoreError(`${inspected.detail}; run "apex new" to start a new session`);
+    }
+    if (inspected.status === 'unavailable') throw new StoreError(inspected.detail);
+    return inspected.state;
+  }
+
+  // Does not write. Used by callers that must inspect state without creating it.
+  async peek() {
+    return this.#inspect();
   }
 
   async #write(state) {

@@ -9,6 +9,7 @@ import { APP_EXPANSION, APP_NAME, APP_STAGE, APP_VERSION } from './identity.js';
 import { Outcome } from './outcomes.js';
 import { ValidationError, StoreError } from './errors.js';
 import { shortId } from './util.js';
+import { State, collectDiagnostics, renderDiagnostics, safeText } from './diagnostics.js';
 
 export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION})
 
@@ -16,7 +17,8 @@ Usage:
   node bin/apex.js chat                  interactive conversation (same session across restarts)
   node bin/apex.js ask [--save-answer] <request words...>
   node bin/apex.js new                   start a new conversation session
-  node bin/apex.js status
+  node bin/apex.js status [--model]      subsystem counts (--model also probes the model backend)
+  node bin/apex.js diagnose [--model]    read-only integrity checks and recovery guidance
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js history [--limit N]
   node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>]
@@ -154,11 +156,24 @@ function exitCodeFor(res) {
   return 1;
 }
 
-function modelLine(s, avail) {
-  const m = s.model;
-  if (!m.configured) return 'Model backend: none configured. Non-model functions are available.';
-  const who = `${m.endpoint} (provider ${m.provider}, model "${m.model}")`;
-  return `Model backend: ${who} - ${avail.available ? 'available' : `unavailable: ${avail.detail}`}`;
+function modelLine(model) {
+  if (model.state === State.NOT_CONFIGURED) {
+    return 'Model backend: none configured. Non-model functions are available.';
+  }
+  const m = model.describe;
+  const who = `${safeText(m.endpoint)} (provider ${safeText(m.provider, 32)}, model "${safeText(m.model, 80)}")`;
+  if (model.state === State.NOT_CHECKED) {
+    return `Model backend: ${who} - connectivity not checked (run "status --model")`;
+  }
+  if (model.state === State.OK) return `Model backend: ${who} - available`;
+  return `Model backend: ${who} - unavailable: ${safeText(model.detail)}`;
+}
+
+function sessionLine(session) {
+  if (session.state === State.OK) return `Session: ${shortId(session.sessionId)}`;
+  if (session.state === State.MISSING) return 'Session: none yet (a new session starts on the first request)';
+  if (session.state === State.CORRUPT) return 'Session: corrupt (the current session cannot be loaded)';
+  return 'Session: unavailable';
 }
 
 export async function main(argv, {
@@ -198,19 +213,32 @@ export async function main(argv, {
 
   try {
     if (command === 'status') {
-      const s = await app.getStatus();
-      const avail = await app.gateway.checkAvailability();
+      const { flags } = parseFlags(args, ['model']);
+      const diag = await collectDiagnostics(app, { checkModel: Boolean(flags.model) });
+      const { session, conversation, memory, audit, model, filesystem } = diag.subsystems;
       out(`${APP_NAME} ${APP_STAGE} ${APP_VERSION} (${APP_EXPANSION})`);
-      out(`Data directory: ${s.dataDir}`);
-      out(`Session: ${shortId(s.sessionId)}`);
-      out(`Memory records: ${s.memoryRecords} (corrupt lines skipped: ${s.corruptMemoryLines})`);
-      out(`Conversation turns: ${s.turnRecords}`);
-      out(`Operation records: ${s.operationRecords}`);
-      out(modelLine(s, avail));
-      out(s.filesystemRoot
-        ? `Filesystem root: ${s.filesystemRoot} (read-only inspection)`
+      out(`Data directory: ${safeText(diag.dataDir)}`);
+      out(sessionLine(session));
+      out(`Memory records: ${memory.state === State.UNAVAILABLE ? 'unavailable' : memory.count} (corrupt lines skipped: ${memory.corruptLines})`);
+      out(`Conversation turns: ${conversation.state === State.UNAVAILABLE ? 'unavailable' : conversation.count}`);
+      out(`Operation records: ${audit.state === State.UNAVAILABLE ? 'unavailable' : audit.count}`);
+      out(modelLine(model));
+      out(filesystem.state === State.OK
+        ? `Filesystem root: ${safeText(filesystem.root)} (root validated at startup, read-only)`
         : 'Filesystem root: none configured. Filesystem inspection is unavailable.');
-      return 0;
+      if (diag.needsAttention) {
+        out('Integrity: attention required; run "node bin/apex.js diagnose" for read-only details and recovery guidance.');
+        const unavailable = Object.values(diag.subsystems).find((s) => s.state === State.UNAVAILABLE);
+        if (unavailable) err(`data store unavailable: ${safeText(unavailable.detail)}. Check APEX_DATA_DIR and its permissions.`);
+      }
+      return diag.needsAttention ? 1 : 0;
+    }
+
+    if (command === 'diagnose') {
+      const { flags } = parseFlags(args, ['model']);
+      const diag = await collectDiagnostics(app, { checkModel: Boolean(flags.model) });
+      out(renderDiagnostics(diag));
+      return diag.needsAttention ? 1 : 0;
     }
 
     if (command === 'new') {

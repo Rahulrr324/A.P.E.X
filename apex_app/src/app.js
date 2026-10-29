@@ -1,6 +1,7 @@
 // Composition root: wires the components together. Tests and the CLI both
 // build the application through these functions.
 import path from 'node:path';
+import { StoreError } from './errors.js';
 import { MemoryStore } from './memory/memory-store.js';
 import { ConversationStore } from './memory/conversation-store.js';
 import { OperationLog } from './operations/operation-log.js';
@@ -61,11 +62,17 @@ export function createApp({
 
   for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...extraActions, ...fsActions]) registry.register(def);
 
+  // Reporting must not create a session as a side effect. A missing session is
+  // reported as absent; a damaged state still raises (it must not look empty).
   const getStatus = async () => {
     const m = await memory.status();
     const o = await operations.status();
     const t = await conversation.status();
-    const current = await session.current();
+    const current = await session.peek();
+    if (current.status === 'corrupt') {
+      throw new StoreError(`${current.detail}; run "apex new" to start a new session`);
+    }
+    if (current.status === 'unavailable') throw new StoreError(current.detail);
     return {
       app: APP_NAME,
       expansion: APP_EXPANSION,
@@ -76,7 +83,7 @@ export function createApp({
       corruptMemoryLines: m.corrupt,
       operationRecords: o.records,
       turnRecords: t.turns,
-      sessionId: current.sessionId,
+      sessionId: current.state?.sessionId ?? null,
       model: gateway.describe(),
       filesystemRoot: rootForContext,
     };

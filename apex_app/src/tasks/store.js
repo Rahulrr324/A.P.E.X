@@ -50,6 +50,15 @@ export class TaskStore {
     return { tasks, problems, corrupt: 0, events: records.length };
   }
 
+  // Read-only diagnostics view. It does not throw on corrupt lines or events that
+  // cannot be replayed: it reports them so a caller can distinguish damage from
+  // an empty store. An unreadable file still throws, which means unavailable.
+  async inspect() {
+    const { records, corrupt } = await this.log.load();
+    const { tasks, problems } = reduceEvents(records);
+    return { events: records.length, tasks: [...tasks.values()], corrupt, problems };
+  }
+
   async get(taskId) {
     const { tasks } = await this.load();
     return tasks.get(taskId) ?? null;
