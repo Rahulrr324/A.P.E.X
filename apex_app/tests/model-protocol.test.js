@@ -70,6 +70,60 @@ describe('Ollama native API (protocol)', () => {
     assert.equal(res.text, undefined);
   });
 
+  test('an Ollama answer stopped by num_predict is kept and flagged as truncated', async () => {
+    const url = await rawServer((req, body, res) => json(res, 200, {
+      model: 'm',
+      message: { role: 'assistant', content: 'The answer starts but was cut' },
+      done: true,
+      done_reason: 'length',
+    }));
+    const gw = createGateway({ provider: 'ollama', url, name: 'm', timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, true);
+    assert.equal(res.finishReason, 'length');
+    assert.equal(res.truncated, true, 'done_reason "length" is reported as an incomplete answer');
+    assert.equal(res.text, 'The answer starts but was cut');
+  });
+
+  test('reasoning text and a think marker inside message.content are preserved, not stripped', async () => {
+    const content = 'I should work this out step by step.\n</think>\n\n4';
+    const url = await rawServer((req, body, res) => json(res, 200, {
+      model: 'm',
+      message: { role: 'assistant', content },
+      done: true,
+      done_reason: 'stop',
+    }));
+    const gw = createGateway({ provider: 'ollama', url, name: 'm', timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, true);
+    assert.equal(res.text, content, 'content is returned verbatim; no marker heuristic is applied');
+    assert.equal(res.truncated, false);
+  });
+
+  test('a response that exhausts its budget inside reasoning is truncated, not completed', async () => {
+    const url = await rawServer((req, body, res) => json(res, 200, {
+      model: 'm',
+      message: { role: 'assistant', content: 'Okay, the user is asking. Let me think about the answer and' },
+      done: true,
+      done_reason: 'length',
+    }));
+    const gw = createGateway({ provider: 'ollama', url, name: 'm', timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, true, 'the visible text is kept rather than discarded');
+    assert.equal(res.truncated, true, 'budget exhaustion is reported from done_reason, without inferring the cause');
+    assert.equal(res.text, 'Okay, the user is asking. Let me think about the answer and');
+  });
+
+  test('an Ollama error object in a 200 response is MODEL_ERROR, never an answer', async () => {
+    const url = await rawServer((req, body, res) => json(res, 200, { error: 'model failed to load' }));
+    const gw = createGateway({ provider: 'ollama', url, name: 'm', timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'MODEL_ERROR');
+    assert.match(res.error.message, /model failed to load/);
+    assert.equal(res.text, undefined);
+  });
+
   test('a model that is not pulled is reported as MODEL_NOT_FOUND with the fix, never as an answer', async () => {
     const url = await rawServer((req, body, res) => json(res, 404, { error: "model 'nope' not found" }));
     const gw = createGateway({ provider: 'ollama', url, name: 'nope', timeoutMs: 5000, retries: 0, allowRemote: false });
@@ -139,6 +193,25 @@ describe('Ollama native API (protocol)', () => {
 });
 
 describe('OpenAI-compatible servers (llama.cpp protocol)', () => {
+  test('an OpenAI-compatible request applies stream=false, temperature 0, max_tokens, and message roles', async () => {
+    let sent;
+    const url = await rawServer((req, body, res) => {
+      if (req.url === '/v1/chat/completions') {
+        sent = JSON.parse(body);
+        return json(res, 200, { model: 'm', choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] });
+      }
+      res.writeHead(404).end();
+    });
+    const gw = createGateway({ url, name: 'm', maxTokens: 64, timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ system: 'sys', prompt: 'hi' });
+    assert.equal(res.ok, true);
+    assert.equal(sent.stream, false);
+    assert.equal(sent.temperature, 0);
+    assert.equal(sent.max_tokens, 64);
+    assert.equal(sent.model, 'm');
+    assert.deepEqual(sent.messages.map((m) => m.role), ['system', 'user']);
+  });
+
   test('an empty answer is EMPTY_RESPONSE, never a successful answer', async () => {
     const s = await startStubModel();
     servers.push({ close: (cb) => s.close().then(() => cb && cb()) });

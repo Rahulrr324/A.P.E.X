@@ -106,11 +106,15 @@ describe('endpoint validation and configuration', () => {
     assert.equal(d.model.url, null);
     assert.equal(d.model.name, 'local');
     assert.equal(d.model.timeoutMs, 30000);
+    assert.equal(d.model.maxTokens, 512);
     assert.match(d.dataDir, /[\\/]\.apex[\\/]local-alpha$/);
     const o = loadConfig({ APEX_DATA_DIR: '/tmp/x', APEX_MODEL_URL: 'http://127.0.0.1:1', APEX_MODEL_TIMEOUT_MS: '500' });
     assert.equal(o.model.timeoutMs, 500);
     assert.equal(o.model.url, 'http://127.0.0.1:1');
     assert.throws(() => loadConfig({ APEX_MODEL_TIMEOUT_MS: 'soon' }), ValidationError);
     assert.throws(() => loadConfig({ APEX_MODEL_TIMEOUT_MS: '5' }), ValidationError);
+    assert.equal(loadConfig({ APEX_MODEL_MAX_TOKENS: '64' }).model.maxTokens, 64);
+    assert.throws(() => loadConfig({ APEX_MODEL_MAX_TOKENS: '0' }), ValidationError);
+    assert.throws(() => loadConfig({ APEX_MODEL_MAX_TOKENS: '8193' }), ValidationError);
   });
 });

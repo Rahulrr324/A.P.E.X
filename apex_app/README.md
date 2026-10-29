@@ -21,9 +21,8 @@ identifiers are preserved there and are not used by this application.
 - Nothing is downloaded at startup, and no network access is needed unless you
   configure a model endpoint.
 
-Windows 11: the code uses only `node:` built-ins and `path.join`, so it should run
-under Node 22 for Windows. **This has not been tested on Windows.** Treat Windows
-as unverified until someone runs `npm test` there.
+Verified on Node 22 (Linux) and Node 26.4.0 (Windows 11); see Tests below for the
+platform-specific skips.
 
 ## Setup and run
 
@@ -143,6 +142,23 @@ APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
   unreachable and interrupted calls are retried, up to `APEX_MODEL_RETRIES` times.
 - Control characters in model output (including terminal escape codes) are removed
   before the text is shown, stored, or logged.
+
+**Reasoning text in answers (confirmed with Qwen3 GGUF on Ollama 0.35.0).** APEX sends
+`think: false` so it receives the final answer rather than a separate reasoning
+stream. Some thinking models still generate reasoning: the installed
+`hf.co/Qwen/Qwen3-4B-GGUF:Q5_K_M` template unconditionally opens a `<think>` block.
+With `think: false`, Ollama returns that reasoning inside `message.content` (and no
+`message.thinking`), so APEX shows it as part of the answer, including a literal
+`</think>` marker. If the token budget runs out first, Ollama reports
+`done_reason: "length"` and APEX appends the truncation notice. APEX deliberately
+does not strip reasoning or marker text: the same text can be legitimate content, and
+silently removing it would hide what the model produced. Observed on 2026-10-29: a
+120-token request was cut off inside reasoning; a 300-token request finished
+(`done_reason: "stop"`) with reasoning, `</think>`, then the answer `4`. Raising
+`APEX_MODEL_MAX_TOKENS` only leaves room for an answer after the reasoning; it does
+not remove the reasoning or change the template. The safest remedies are a model or
+template that honours `think: false`, a non-thinking model, or accepting the extra
+output and token use. APEX does not attempt to separate or delete the reasoning.
 
 **Verification status.** The automated tests use local stand-in servers that copy the
 documented request and response shapes of both protocols. They check protocol
@@ -412,13 +428,17 @@ cd apex_app
 npm test
 ```
 
-This runs 182 tests across eleven files with the built-in runner. On Windows 11 with
-Node 26.4.0: 180 pass, 0 fail, 2 skipped (POSIX permission bits; control characters are
-invalid in Windows file names). On Linux (WSL Ubuntu) with Node 22.23.4: 181 pass,
-0 fail, 1 skipped (the Windows-only separator test). They use only temporary
-directories under the OS temp folder (`apex-test-*`) and remove them afterwards.
-Tests never read or write `~/.apex`, and CLI tests point `HOME`/`USERPROFILE` at the
-temp directory too.
+`npm test` runs every test file listed in `package.json` with the built-in runner and
+prints the current test, pass, fail, and skip counts for your platform. Those counts
+change as tests are added, so the command output is authoritative. On Windows 11 with
+Node 26.4.0, two tests are skipped (POSIX permission bits; control characters are
+invalid in Windows file names). On Linux with Node 22, one Windows-only separator test
+is skipped. The suite uses only temporary directories under the OS temp folder
+(`apex-test-*`) and removes them afterwards. Tests never read or write `~/.apex`, and
+CLI tests point `HOME`/`USERPROFILE` at the temp directory too.
+
+A bounded manual smoke test against the installed Ollama model was run outside this
+suite; it is not an automated regression test and is reported separately.
 
 | Acceptance test | Where |
 |---|---|

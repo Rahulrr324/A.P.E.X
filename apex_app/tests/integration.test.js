@@ -8,6 +8,7 @@
 import { test, describe, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { createApp } from '../src/app.js';
 import { createGateway, ModelGateway, NoBackend } from '../src/model/gateway.js';
@@ -130,6 +131,47 @@ describe('A. conversation and context', () => {
     assert.equal(res.decision, Decision.ANSWER);
     assert.equal(s.requests.length, 1, 'the model is called exactly once');
     assert.match(res.display, /Paris is the capital of France\./);
+  });
+
+  test('Ollama reasoning text and a think marker reach the user unchanged, and a token cut is reported', async () => {
+    const content = 'I should work this out step by step.\n</think>\n\nPartial ans';
+    const server = http.createServer((req, res) => {
+      req.resume();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        model: 'm',
+        message: { role: 'assistant', content },
+        done: true,
+        done_reason: 'length',
+      }));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    stubs.push({ close: () => new Promise((resolve) => server.close(resolve)) });
+    const app = appOn({
+      gateway: createGateway({
+        provider: 'ollama',
+        url: `http://127.0.0.1:${server.address().port}`,
+        name: 'm',
+        maxTokens: 64,
+        timeoutMs: 3000,
+        retries: 0,
+        allowRemote: false,
+      }),
+    });
+
+    const res = await app.controller.handle('Explain why the sky appears blue.');
+
+    assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE);
+    assert.equal(res.decision, Decision.ANSWER);
+    assert.match(res.display, /I should work this out step by step\./);
+    assert.match(res.display, /<\/think>/, 'marker text is preserved, not stripped');
+    assert.match(res.display, /Partial ans/);
+    assert.match(res.display, /cut off at the model output limit/);
+    assert.equal(res.operation.model.finishReason, 'length');
+    assert.equal(res.operation.errors.some((e) => e.code === 'TRUNCATED'), true);
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.equal(turns.some((t) => t.origin === 'model' && t.text.includes('</think>')), true,
+      'the stored turn is the same unmodified model text');
   });
 
   test('an ambiguous follow-up asks for the missing referent before any model call, even when repeated', async () => {
