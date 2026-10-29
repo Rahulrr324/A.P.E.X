@@ -277,7 +277,10 @@ How the boundary is enforced:
      a threshold, are not private, and do not look like credentials are placed in the
      prompt.
    - **Conversation**: the last `APEX_CONTEXT_TURNS` turns of the current session are
-     included. Earlier model answers are labelled `UNVERIFIED`.
+     included. Earlier model answers are labelled `UNVERIFIED`. An action result is
+     stored as a turn too (summary only, never retrieved memory or file content), so a
+     follow-up can see that a model-proposed action was verified, denied, or failed.
+     Failure notices are kept for the user's history but are not replayed.
    - **Prompt**: memory and conversation are labelled as data, not instructions. Each
      memory item shows its provenance: `user-provided fact` or `model conclusion
      (UNVERIFIED)`. Memory and conversation are trimmed to fit about 6000 characters in

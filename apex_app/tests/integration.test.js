@@ -798,6 +798,53 @@ describe('D. actions and tasks', () => {
     assert.match(res.display, /executed a proposed action but could not be independently verified/);
   });
 
+  test('a verified model-proposed action result is carried into the next turn', async () => {
+    const s = await stub('PROPOSE_ACTION {"action":"app.status","input":{}}');
+    const app = appOn({ model: s });
+
+    const first = await app.controller.handle('Please check the application status.');
+    assert.equal(first.decision, Decision.PROPOSE_ACTION);
+    assert.equal(first.operation.steps[0].outcome, Outcome.SUCCESS_VERIFIED);
+
+    s.behavior.reply = 'It reported the current status.';
+    const second = await app.controller.handle('What did the status check report?');
+
+    assert.equal(second.status, Outcome.VERIFICATION_UNAVAILABLE);
+    const prompt = promptOf(s);
+    assert.match(prompt, /APEX \(action result\): APEX .*memory record\(s\)/,
+      'the verified summary is replayed, not only the user request');
+    assert.equal(second.operation.prompt.turnIds.length, 2, 'the user turn and the action result are replayed');
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    const actionTurn = turns.find((t) => t.origin === 'apex_action');
+    assert.ok(actionTurn, 'the action result is stored as a turn');
+    assert.equal(actionTurn.verified, true);
+    assert.equal(turns.filter((t) => t.origin === 'model').length, 1, 'only the second (text) reply is stored as a model answer');
+  });
+
+  test('a denied model proposal is recorded in history so its claim is not the only record', async () => {
+    const s = await stub(
+      'Done - I saved that to memory.\nPROPOSE_ACTION {"action":"memory.add","input":{"content":"model-authored fact"}}',
+    );
+    const app = appOn({ model: s });
+
+    const first = await app.controller.handle('Please store this for me.');
+    assert.equal(first.decision, Decision.REFUSE_OR_BLOCK);
+
+    s.behavior.reply = 'It was not stored.';
+    const second = await app.controller.handle('Did you save it?');
+
+    const prompt = promptOf(s);
+    assert.match(prompt, /APEX \(model, UNVERIFIED\): Done - I saved that to memory\./);
+    assert.match(prompt, /APEX \(action result\): denied \(ORIGIN_NOT_PERMITTED\)/,
+      'the denial is replayed alongside the claim');
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    const actionTurn = turns.find((t) => t.origin === 'apex_action');
+    assert.ok(actionTurn, 'the denial is stored as a turn');
+    assert.equal(actionTurn.verified, false);
+    assert.equal(fs.existsSync(path.join(app.dataDir, 'memory.jsonl')), false, 'the denial did not write anything');
+    assert.equal(second.operation.prompt.turnIds.length, 3, 'user, model claim, and denial are all replayed');
+  });
+
   test('an interrupted running task is reported, and resume records uncertainty without replaying it', async () => {
     const dir = tempDir();
     writeJsonl(path.join(dir, 'tasks.jsonl'), [

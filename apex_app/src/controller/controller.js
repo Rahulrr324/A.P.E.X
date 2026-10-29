@@ -354,6 +354,19 @@ export class CognitiveController {
         } else {
           turnRows.push({ origin: TURN_ORIGINS.NOTICE, text: m.answer, verified: false });
         }
+        // A model-proposed action is an executed operation or a refusal, and the
+        // next turn must be able to see which. Deterministic actions already record
+        // their summary as a turn; proposals did not, so a later follow-up saw only
+        // the model's own claim (or a placeholder) and lost the verified result or
+        // the denial. The summary never includes retrieved memory or file content.
+        for (const step of op.steps) {
+          if (step.origin !== 'model' || typeof step.action !== 'string') continue;
+          turnRows.push({
+            origin: TURN_ORIGINS.ACTION,
+            text: step.summary,
+            verified: step.outcome === Outcome.SUCCESS_VERIFIED,
+          });
+        }
         await this.#recordTurns(op, sid, op.request, turnRows);
 
         if (saveAnswer && m.status === Outcome.VERIFICATION_UNAVAILABLE && m.hasText) {
