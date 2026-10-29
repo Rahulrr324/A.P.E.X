@@ -425,7 +425,8 @@ holds identity, memory, control, or persistence.
   register a write action for `model`.
 - A model proposal (`PROPOSE_ACTION {"action": ..., "input": {...}}`) is only a
   request. It goes through the same policy as a user request. Model output is
-  never executed as code.
+  never executed as code. At most three proposal lines are considered per reply;
+  the prompt states this limit, and the user is told when extra lines were ignored.
 - Unknown actions and unknown origins are denied.
 
 ### Actions
@@ -552,7 +553,9 @@ explicit entity relationships, built alongside personal memory:
   discarded or overwritten.
 - **Bounded retrieval into model context:** When answering requests, the controller
   retrieves up to 3 relevant knowledge records via keyword search over the triple
-  and evidence. Injected records explicitly state their provenance (`user-supplied fact`
+  and evidence. Question words and other low-signal words are ignored, so a question
+  does not retrieve a record merely because both contain "what" or "is". Injected
+  records explicitly state their provenance (`user-supplied fact`
   or `unconfirmed claim`) and conflict status (`[CONFLICTING: another record disagrees]`).
 - **Auditability:** Every write operation is recorded in `operations.jsonl` and
   independently verified against the store log.
@@ -561,8 +564,10 @@ explicit entity relationships, built alongside personal memory:
   `memory correct` command to select one conflicting record. Corrections are limited to
   one selected record per operation and to the detector's narrow clause patterns;
   previous records remain append-only and continue to be inspectable.
-- **Corrupt memory logs fail closed for search and list.** `status` still reports the
-  corrupt-line count, and records are not deleted or rewritten. Repair is not automatic.
+- **Corrupt memory logs fail closed for search, list, and writes.** `status` still
+  reports the corrupt-line count, and records are not deleted or rewritten. A new
+  record is refused while corrupt lines exist, so damage cannot be buried under a
+  fresh write that would otherwise be reported as stored. Repair is not automatic.
 - **Answer quality depends entirely on the model you run.** APEX checks the protocol,
   not the truth of what a model says. Model answers are shown as unverified.
 - **Routing is a fixed pattern table.** Requests outside the table go to the model
@@ -580,7 +585,9 @@ explicit entity relationships, built alongside personal memory:
   requests. The audit records memory ids and prompt sizes, not the memory text sent to
   the model. A model's own answer is recorded as output, and it could repeat memory.
 - **Conversation history** is replayed as summaries and text, limited to
-  `APEX_CONTEXT_TURNS` turns. There is no summarisation of older history.
+  `APEX_CONTEXT_TURNS` turns. There is no summarisation of older history. If a turn
+  cannot be saved, the answer is still shown with a notice that the exchange was not
+  fully saved and a later turn may not see it.
 - **Context size:** a request that exceeds the model's context window is reported as
   `CONTEXT_TOO_LARGE`; APEX does not know a model's window in advance.
 - **Filesystem inspection is read-only and single-root.** One directory, no recursion,

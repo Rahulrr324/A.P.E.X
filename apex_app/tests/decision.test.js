@@ -411,6 +411,22 @@ describe('decision: refuse or block', () => {
     assert.equal(s.requests.length, 0, 'the model is not asked to answer without checked context');
   });
 
+  test('a corrupt memory store refuses a new memory write instead of reporting it stored', async () => {
+    const dir = tempDir();
+    const file = path.join(dir, 'memory.jsonl');
+    fs.writeFileSync(file, '{not json}\n', 'utf8');
+    const before = fs.readFileSync(file, 'utf8');
+    const app = appWith({ dataDir: dir });
+
+    const res = await app.controller.handle('remember that the sky is blue');
+
+    assert.equal(res.status, Outcome.EXECUTION_FAILED);
+    assert.equal(res.operation.steps[0].outcome, Outcome.EXECUTION_FAILED);
+    assert.match(res.display, /refusing incomplete write/);
+    assert.doesNotMatch(res.display, /Stored \(/);
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'nothing was appended to the damaged store');
+  });
+
   test('a corrupt knowledge store does not silently become empty context', async () => {
     const s = await stub('Paris is the capital of France.');
     const dir = tempDir();

@@ -402,6 +402,54 @@ describe('A. conversation and context', () => {
     assert.equal(fs.readFileSync(path.join(app.dataDir, 'session.json'), 'utf8'), '{bad', 'the damaged session is preserved');
   });
 
+  test('one reply with denial, malformed proposal, and overflow stays consistent across display, audit, and history', async () => {
+    const s = await stub(
+      'Done - everything was saved.\n'
+      + 'PROPOSE_ACTION {"action":"memory.add","input":{"content":"model-authored fact"}}\n'
+      + 'PROPOSE_ACTION this is not json\n'
+      + 'PROPOSE_ACTION {"action":"calc.evaluate","input":{"expression":"1+1"}}\n'
+      + 'PROPOSE_ACTION {"action":"calc.evaluate","input":{"expression":"2+2"}}\n'
+      + 'PROPOSE_ACTION {"action":"calc.evaluate","input":{"expression":"3+3"}}',
+    );
+    const app = appOn({ model: s });
+
+    const first = await app.controller.handle('Please do all of it.');
+    assert.equal(first.decision, Decision.REFUSE_OR_BLOCK);
+    assert.match(first.display, /denied \(ORIGIN_NOT_PERMITTED\)/);
+    assert.match(first.display, /malformed proposal rejected/);
+    assert.match(first.display, /considered only the first 3 proposed actions; 1 more was ignored/);
+    assert.equal(first.operation.steps.filter((step) => step.action === 'calc.evaluate').length, 2,
+      'the fourth proposal was not executed');
+    assert.ok(first.operation.errors.some((e) => e.stage === 'proposals' && e.code === 'TOO_MANY'));
+    assert.equal(fs.existsSync(path.join(app.dataDir, 'memory.jsonl')), false, 'the denied write did not happen');
+
+    s.behavior.reply = 'Here is what happened.';
+    await app.controller.handle('What actually happened?');
+    const prompt = promptOf(s);
+    assert.match(prompt, /APEX \(model, UNVERIFIED\): Done - everything was saved\./);
+    assert.match(prompt, /APEX \(action result\): denied \(ORIGIN_NOT_PERMITTED\)/);
+    assert.match(prompt, /APEX \(action result\): malformed proposal rejected/);
+    assert.equal(prompt.includes('3+3'), false, 'the ignored proposal is not replayed as an action result');
+  });
+
+  test('a conversation-history write failure is shown to the user, not silently hidden', async () => {
+    const s = await stub('A model answer.');
+    const app = appOn({ model: s });
+    app.conversation.append = async () => {
+      const err = new Error('disk full');
+      err.code = 'EIO';
+      throw err;
+    };
+
+    const res = await app.controller.handle('What is the capital of France?');
+
+    assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE);
+    assert.ok(res.operation.errors.some((e) => e.stage === 'conversation' && e.code === 'EIO'));
+    assert.match(res.display, /A model answer\./, 'the answer is still shown');
+    assert.match(res.display, /could not be fully saved to conversation history \(EIO\); a later turn may not see it/);
+    assert.equal(String(res.output ?? '').includes('could not be fully saved'), false, 'the notice is display-only');
+  });
+
   test('a failure notice is kept for history but never replayed as assistant context', async () => {
     const s = await stub('Recovered answer.');
     const app = appOn({ model: s });
@@ -749,6 +797,29 @@ describe('D. actions and tasks', () => {
     assert.equal(fs.existsSync(path.join(app.dataDir, 'memory.jsonl')), false);
   });
 
+  test('a malformed model proposal is recorded in history, not only its text claim', async () => {
+    const s = await stub('Done - I did what you asked.\nPROPOSE_ACTION this is not json');
+    const app = appOn({ model: s });
+
+    const first = await app.controller.handle('Please do the thing.');
+    const malformed = first.operation.steps.find((step) => step.action === null);
+    assert.equal(malformed.outcome, Outcome.INPUT_REJECTED);
+    assert.match(malformed.summary, /malformed proposal rejected/);
+
+    s.behavior.reply = 'I could not run it.';
+    const second = await app.controller.handle('What happened?');
+
+    const prompt = promptOf(s);
+    assert.match(prompt, /APEX \(model, UNVERIFIED\): Done - I did what you asked\./);
+    assert.match(prompt, /APEX \(action result\): malformed proposal rejected/,
+      'the rejection is replayed alongside the claim');
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    const actionTurn = turns.find((t) => t.origin === 'apex_action');
+    assert.ok(actionTurn, 'the rejection is stored as a turn');
+    assert.equal(actionTurn.verified, false);
+    assert.equal(second.operation.prompt.turnIds.length, 3);
+  });
+
   test('an execution failure is reported as a failure, never as success', async () => {
     const s = await stub('Trying that.\nPROPOSE_ACTION {"action":"broken.read","input":{}}');
     const app = appOn({
@@ -819,6 +890,27 @@ describe('D. actions and tasks', () => {
     assert.ok(actionTurn, 'the action result is stored as a turn');
     assert.equal(actionTurn.verified, true);
     assert.equal(turns.filter((t) => t.origin === 'model').length, 1, 'only the second (text) reply is stored as a model answer');
+  });
+
+  test('extra model proposals are ignored with a visible notice, and the prompt states the cap', async () => {
+    const s = await stub(
+      'Four results follow.\n'
+      + 'PROPOSE_ACTION {"action":"calc.evaluate","input":{"expression":"1+1"}}\n'
+      + 'PROPOSE_ACTION {"action":"calc.evaluate","input":{"expression":"2+2"}}\n'
+      + 'PROPOSE_ACTION {"action":"calc.evaluate","input":{"expression":"3+3"}}\n'
+      + 'PROPOSE_ACTION {"action":"calc.evaluate","input":{"expression":"4+4"}}',
+    );
+    const app = appOn({ model: s });
+
+    const res = await app.controller.handle('Please run these four calculations.');
+
+    assert.equal(res.operation.steps.filter((step) => step.action === 'calc.evaluate').length, 3);
+    assert.ok(res.operation.steps.every((step) => step.outcome === Outcome.SUCCESS_VERIFIED));
+    assert.ok(res.operation.errors.some((e) => e.stage === 'proposals' && e.code === 'TOO_MANY'));
+    assert.match(res.display, /APEX considered only the first 3 proposed actions; 1 more was ignored/);
+    assert.match(s.requests[0].messages[0].content, /At most 3 such lines are considered/);
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.equal(turns.filter((t) => t.origin === 'apex_action').length, 3);
   });
 
   test('a denied model proposal is recorded in history so its claim is not the only record', async () => {

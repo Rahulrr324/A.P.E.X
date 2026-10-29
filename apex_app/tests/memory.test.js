@@ -434,20 +434,20 @@ describe('memory store', () => {
     await assert.rejects(fs.access(file));
   });
 
-  test('a damaged line is reported and skipped, never deleted, and new records do not merge into it', async () => {
+  test('a damaged store refuses new records, preserves existing bytes, and reports the corruption', async () => {
     const dir = tempDir();
     const file = path.join(dir, 'memory.jsonl');
     const store = new MemoryStore(file);
     const good = await store.add({ content: 'Good record before damage' });
     await fs.appendFile(file, '{"schema":1,"id":"partial');   // crash mid-write, no newline
-    const after = await store.add({ content: 'Good record after damage' });
+    const before = await fs.readFile(file, 'utf8');
+    await assert.rejects(() => store.add({ content: 'Good record after damage' }), /refusing incomplete write/);
+    assert.equal(await fs.readFile(file, 'utf8'), before, 'a refused write must not change the store');
     const status = await store.status();
-    assert.equal(status.records, 2);
+    assert.equal(status.records, 1);
     assert.equal(status.corrupt, 1);
     assert.equal((await store.get(good.id)).content, 'Good record before damage');
-    assert.equal((await store.get(after.id)).content, 'Good record after damage');
-    const raw = await fs.readFile(file, 'utf8');
-    assert.ok(raw.includes('{"schema":1,"id":"partial'), 'damaged bytes must be preserved, not rewritten');
+    assert.ok(before.includes('{"schema":1,"id":"partial'), 'damaged bytes must be preserved, not rewritten');
   });
 
   test('a record whose content was altered is detected as corrupt', async () => {

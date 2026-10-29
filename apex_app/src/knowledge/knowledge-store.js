@@ -12,7 +12,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS, shortId } from '../util.js';
+import { CONTROL_CHARS, STOPWORDS, shortId } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 
 export const KNOWLEDGE_SCHEMA = 1;
@@ -340,13 +340,8 @@ function annotate(record, allRecords, supersededByMap) {
   };
 }
 
-// Minimal tokenizer: lowercase words, drop short stopwords.
-const STOPWORDS = new Set([
-  'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'of', 'to', 'in', 'on', 'at',
-  'for', 'from', 'by', 'with', 'and', 'or', 'it', 'its', 'this', 'that',
-  'has', 'have', 'had', 'do', 'does', 'did', 'not', 'as', 'if', 'so',
-]);
-
+// Lowercase words, drop short words and words that carry no retrieval signal
+// (question words, pronouns, fillers). Mirrors the memory tokenizer's policy.
 export function tokenize(text) {
   const words = String(text).toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
   return words.filter((w) => w.length >= 2 && !STOPWORDS.has(w));

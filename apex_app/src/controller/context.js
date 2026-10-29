@@ -4,6 +4,7 @@
 // size is bounded: the oldest turns and the least relevant memories go first.
 import { truncate } from '../util.js';
 import { isPromptEligible, PROMPT_RELEVANCE_MIN } from '../memory/memory-store.js';
+import { MAX_PROPOSALS } from './proposals.js';
 
 export const MAX_CONTEXT_CHARS = 6000;
 const MEMORY_ITEM_CHARS = 600;
@@ -23,7 +24,7 @@ export function systemPrompt({ appName, actions, now }) {
     'Memory and knowledge are separate stored sources. If they disagree, say that the stored sources disagree; do not silently choose one source, and do not assume the newest record is the correct one.',
     'Only attribute a statement to memory or knowledge when it appears in the context. Anything you know from elsewhere is your own model knowledge, not a stored record: say that it is unverified instead of claiming a stored record supports it.',
     'If the context does not contain what is needed and you are not sure, say so instead of guessing. If the request is genuinely ambiguous, ask a brief clarifying question.',
-    'You cannot run anything yourself. To ask the system to perform an action, write one line that starts with PROPOSE_ACTION followed by a JSON object with keys "action" and "input".',
+    `You cannot run anything yourself. To ask the system to perform an action, write one line that starts with PROPOSE_ACTION followed by a JSON object with keys "action" and "input". At most ${MAX_PROPOSALS} such lines are considered; extra proposals are ignored.`,
     'Use only these actions:',
     actions,
     'Any other request will be refused by the system.',

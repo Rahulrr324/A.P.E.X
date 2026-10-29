@@ -5,7 +5,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from './jsonl-store.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS } from '../util.js';
+import { CONTROL_CHARS, STOPWORDS } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 
 export const MEMORY_SCHEMA = 1;
@@ -22,16 +22,6 @@ const BACKEND_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const MEMORY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const FUZZY_MIN_SIMILARITY = 0.6;
 const FUZZY_MIN_LENGTH = 4;
-
-// Words that carry no retrieval signal.
-const STOPWORDS = new Set([
-  'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'of', 'to', 'in', 'on', 'at',
-  'for', 'from', 'by', 'with', 'and', 'or', 'it', 'its', 'this', 'that', 'these', 'those',
-  'my', 'me', 'i', 'you', 'your', 'we', 'our', 'they', 'their', 'he', 'she', 'his', 'her',
-  'what', 'which', 'who', 'whom', 'when', 'where', 'why', 'how', 'do', 'does', 'did', 'about',
-  'as', 'if', 'so', 'not', 'no', 'yes', 'can', 'could', 'would', 'should', 'will', 'have', 'has',
-  'had', 'please', 'tell', 'say', 'said', 'know', 'just', 'any', 'some', 'there', 'here',
-]);
 
 export function sha256Hex(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex');
@@ -229,7 +219,10 @@ export class MemoryStore {
     const text = validateContent(content);
     validateKindSource(kind, source);
     if (!SENSITIVITIES.has(sensitivity)) throw new ValidationError(`unknown sensitivity: ${String(sensitivity)}`);
-    const { records } = await this.log.load();
+    // A damaged store must not accept new records: appending would bury the
+    // corrupt lines, and the write would be reported as verified while earlier
+    // memory is unreadable.
+    const records = await this.#loadComplete('write');
     const normalizedProvenance = finalizeProvenance({ source, provenance });
     const id = randomUUID();
     if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
@@ -293,10 +286,10 @@ export class MemoryStore {
     return records.find((r) => r.id === id) ?? null;
   }
 
-  async #loadComplete() {
+  async #loadComplete(operation = 'retrieval') {
     const { records, corrupt } = await this.log.load();
     if (corrupt.length > 0) {
-      throw new StoreError(`memory store contains ${corrupt.length} corrupt line(s); refusing incomplete retrieval`);
+      throw new StoreError(`memory store contains ${corrupt.length} corrupt line(s); refusing incomplete ${operation}`);
     }
     return records;
   }

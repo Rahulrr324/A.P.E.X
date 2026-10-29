@@ -192,6 +192,19 @@ test('knowledge store - search and retrieval bounding', async (t) => {
   assert.equal(hits[0].record.subject, 'NodeJS');
 });
 
+test('knowledge store - question words alone do not retrieve unrelated records', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const store = new KnowledgeStore(path.join(dir, 'knowledge.jsonl'));
+
+  await store.add({ subject: 'Weekly sync', relationship: 'notes', object: 'Bring what you need to the meeting', origin: 'user' });
+  await store.add({ subject: 'France', relationship: 'capital', object: 'Paris', origin: 'user' });
+
+  const hits = await store.search('What is the capital of France?');
+  assert.deepEqual(hits.map((h) => h.record.subject), ['France']);
+  assert.deepEqual(await store.search('what is it?'), [], 'a question made only of stopwords matches nothing');
+});
+
 test('knowledge store - corrupt storage handling', async (t) => {
   const dir = makeTempDataDir();
   t.after(() => cleanup(dir));
@@ -843,6 +856,23 @@ test('knowledge - a coexistence of memory and knowledge that disagree is preserv
   // The stores are untouched: this is a display/context decision, not a resolution.
   assert.equal((await app.memory.search('database engine')).length, 1);
   assert.equal((await app.knowledge.search('database engine')).length, 1);
+});
+
+test('knowledge - question words do not pull unrelated knowledge into the prompt', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const { gateway, captured } = scriptedGateway('Paris is the capital of France.');
+  const app = createApp({ dataDir: dir, gateway, contextTurns: 0 });
+
+  await app.controller.knowledgeAdd({ subject: 'Weekly sync', relationship: 'notes', object: 'Bring what you need to the meeting' });
+  await app.controller.knowledgeAdd({ subject: 'France', relationship: 'capital', object: 'Paris' });
+
+  const res = await app.controller.handle('What is the capital of France?');
+  const prompt = captured.request.prompt;
+
+  assert.ok(prompt.includes('France --[capital]--> Paris'));
+  assert.equal(prompt.includes('Weekly sync'), false, 'a record matching only "what"/"is" is not context');
+  assert.equal(res.operation.prompt.knowledgeIds.length, 1);
 });
 
 test('knowledge - conflicting records in both stores stay visibly unresolved', async (t) => {

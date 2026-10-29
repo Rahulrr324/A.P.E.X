@@ -3,6 +3,18 @@
 // Control characters other than tab and newline.
 export const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 
+// Words that carry no retrieval signal. Shared by every store's tokenizer so a
+// question such as "what is the capital of France?" cannot match a record merely
+// because the record also contains "what" or "is".
+export const STOPWORDS = new Set([
+  'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'of', 'to', 'in', 'on', 'at',
+  'for', 'from', 'by', 'with', 'and', 'or', 'it', 'its', 'this', 'that', 'these', 'those',
+  'my', 'me', 'i', 'you', 'your', 'we', 'our', 'they', 'their', 'he', 'she', 'his', 'her',
+  'what', 'which', 'who', 'whom', 'when', 'where', 'why', 'how', 'do', 'does', 'did', 'about',
+  'as', 'if', 'so', 'not', 'no', 'yes', 'can', 'could', 'would', 'should', 'will', 'have', 'has',
+  'had', 'please', 'tell', 'say', 'said', 'know', 'just', 'any', 'some', 'there', 'here',
+]);
+
 export function truncate(text, max) {
   const s = String(text);
   return s.length > max ? `${s.slice(0, Math.max(0, max - 3))}...` : s;

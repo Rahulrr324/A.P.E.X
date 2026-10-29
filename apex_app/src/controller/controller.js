@@ -345,7 +345,12 @@ export class CognitiveController {
         const shownSteps = op.steps
           .filter((s) => s.origin === 'model' && s.outcome === Outcome.SUCCESS_VERIFIED && s.display)
           .map((s) => s.display);
-        displayText = [m.display ?? m.answer, ...shownSteps, m.annotation, actionNotice].filter(Boolean).join('\n\n');
+        // A proposal the system declined to consider must be stated, not just
+        // counted in the audit. This is display-only, like the other notices.
+        const overflowNotice = m.proposalOverflow
+          ? `[APEX considered only the first ${MAX_PROPOSALS} proposed actions; ${m.proposalOverflow} more ${m.proposalOverflow === 1 ? 'was' : 'were'} ignored.]`
+          : '';
+        displayText = [m.display ?? m.answer, ...shownSteps, m.annotation, actionNotice, overflowNotice].filter(Boolean).join('\n\n');
         op.backend = m.backend;
         if (m.error) op.errors.push(m.error);
         const turnRows = [];
@@ -358,9 +363,12 @@ export class CognitiveController {
         // next turn must be able to see which. Deterministic actions already record
         // their summary as a turn; proposals did not, so a later follow-up saw only
         // the model's own claim (or a placeholder) and lost the verified result or
-        // the denial. The summary never includes retrieved memory or file content.
+        // the denial. A malformed proposal is rejected before it has an action name,
+        // and that rejection must be replayable for the same reason. The summary
+        // never includes retrieved memory or file content.
         for (const step of op.steps) {
-          if (step.origin !== 'model' || typeof step.action !== 'string') continue;
+          if (step.origin !== 'model') continue;
+          if (typeof step.summary !== 'string' || step.summary.length === 0) continue;
           turnRows.push({
             origin: TURN_ORIGINS.ACTION,
             text: step.summary,
@@ -384,6 +392,15 @@ export class CognitiveController {
       }
       }
       }
+    }
+
+    // A turn that could not be saved to conversation history must not vanish
+    // silently: the answer itself is still valid, but a later turn may not see it.
+    // This is display-only and never becomes part of the model's turn text.
+    const conversationError = op.errors.find((e) => e.stage === 'conversation');
+    if (conversationError) {
+      const notice = `[This exchange could not be fully saved to conversation history (${conversationError.code || 'STORE_ERROR'}); a later turn may not see it.]`;
+      displayText = displayText ? `${displayText}\n\n${notice}` : notice;
     }
 
     op.status = status;
@@ -1120,8 +1137,9 @@ export class CognitiveController {
         result: null,
       });
     }
-    if (parsed.proposals.length > MAX_PROPOSALS) {
-      op.errors.push({ stage: 'proposals', code: 'TOO_MANY', message: `only the first ${MAX_PROPOSALS} proposals were considered` });
+    const overflow = Math.max(0, parsed.proposals.length - MAX_PROPOSALS);
+    if (overflow > 0) {
+      op.errors.push({ stage: 'proposals', code: 'TOO_MANY', message: `only the first ${MAX_PROPOSALS} of ${parsed.proposals.length} proposals were considered` });
     }
     for (const p of parsed.proposals.slice(0, MAX_PROPOSALS)) {
       op.steps.push(await this.runAction(p.action, p.input, 'model', op.id));
@@ -1143,6 +1161,7 @@ export class CognitiveController {
       backend: res.backend,
       error: null,
       annotation,
+      proposalOverflow: overflow,
     };
   }
 }
