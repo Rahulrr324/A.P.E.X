@@ -233,7 +233,7 @@ describe('task lifecycle integrity', () => {
     assert.equal(finished.steps[1].operationId, after.find((r) => r.task.stepId === 's2').id);
   });
 
-  test('a step executed and audited but not persisted as complete becomes uncertain and is not silently re-run', async () => {
+  test('a step executed and audited but not persisted as complete is recovered from its audit record and not re-run', async () => {
     const dataDir = tempDir();
     const app = appOn(dataDir);
     await app.controller.planTask('calc 1+1');
@@ -263,13 +263,12 @@ describe('task lifecycle integrity', () => {
 
     const restarted = appOn(dataDir);
     const resume = await restarted.controller.runTask(task.id, 'resume');
-    assert.equal(resume.status, Outcome.INPUT_REJECTED);
-    assert.match(resume.display, /not run again/);
+    assert.equal(resume.status, Outcome.SUCCESS_VERIFIED, 'the recorded verification is the evidence APEX has');
+    assert.match(resume.display, /recovered from its audit record/);
     const recovered = await restarted.taskStore.get(task.id);
-    assert.equal(recovered.status, TaskStatus.PAUSED);
-    assert.equal(recovered.steps[0].status, StepStatus.UNCERTAIN);
-    assert.equal(recovered.steps[0].outcome, null, 'the task log never confirmed the outcome');
-    assert.match(recovered.steps[0].summary, /interrupted/);
+    assert.equal(recovered.status, TaskStatus.COMPLETED);
+    assert.equal(recovered.steps[0].status, StepStatus.COMPLETED);
+    assert.equal(recovered.steps[0].outcome, Outcome.SUCCESS_VERIFIED);
     assert.equal(recovered.steps[0].operationId, operationId, 'the attempt stays linked to its audit record');
     assert.equal((await stepOps(restarted)).filter((r) => r.id === operationId).length, 1, 'no duplicate execution');
   });

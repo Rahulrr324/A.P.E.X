@@ -751,6 +751,35 @@ describe('C. knowledge and memory', () => {
     assert.equal(turns.some((t) => t.origin === 'model'), false, 'no model turn is invented');
   });
 
+  test('a deterministic action is not audited as though it had consulted memory', async () => {
+    const s = await stub('This must not be called.');
+    const app = appOn({ model: s });
+    const file = path.join(app.dataDir, 'memory.jsonl');
+    const damaged = '{"schema":1}\n{broken\n';
+    fs.writeFileSync(file, damaged);
+
+    // The action reads nothing from memory, so a lookup made on its behalf could
+    // only ever misreport: the verified result carried a store failure it never
+    // depended on, and an empty retrieval was audited as though context had been
+    // considered and found irrelevant.
+    const res = await app.controller.handle('calc 2+2');
+
+    assert.equal(res.status, Outcome.SUCCESS_VERIFIED);
+    assert.match(res.display, /4/);
+    assert.equal(res.operation.capability, 'calc.evaluate');
+    assert.equal(res.operation.retrieval.length, 0, 'an action that reads nothing retrieves nothing');
+    assert.equal(res.operation.errors.length, 0, 'a memory failure the action never used is not its defect');
+    assert.equal(s.requests.length ?? 0, 0, 'no model call');
+
+    const cli = await runCli(['ask', 'calc 2+2'], envFor(app.dataDir));
+    assert.equal(cli.code, 0, cli.stdout + cli.stderr);
+    assert.match(cli.stdout, /Context:   0 memory record\(s\) retrieved/);
+
+    const audit = readJsonl(path.join(app.dataDir, 'operations.jsonl'));
+    assert.equal(audit.at(-1).errors.length, 0, 'the audit record stays clean');
+    assert.equal(fs.readFileSync(file, 'utf8'), damaged, 'the damaged store is preserved, not repaired or emptied');
+  });
+
   test('secret-like memory and knowledge values are refused and never stored', async () => {
     const app = appOn();
     const secret = 'sk-abcdefghijklmnopqrstuvwx1234';
@@ -977,7 +1006,7 @@ describe('D. actions and tasks', () => {
     assert.equal(second.operation.prompt.turnIds.length, 3, 'user, model claim, and denial are all replayed');
   });
 
-  test('an interrupted running task is reported, and resume records uncertainty without replaying it', async () => {
+  test('an interrupted step is resolved from its own audit record and never executed again', async () => {
     const dir = tempDir();
     writeJsonl(path.join(dir, 'tasks.jsonl'), [
       createdEvent(),
@@ -998,19 +1027,80 @@ describe('D. actions and tasks', () => {
     assert.equal(fs.existsSync(path.join(dir, 'tasks.jsonl.lock')), false, 'diagnostics created no lock');
 
     const resumed = await runCli(['task', 'resume', TASK_ID], env);
-    assert.equal(resumed.code, 1, resumed.stdout + resumed.stderr);
-    assert.match(resumed.stdout, /uncertain and was not run again/);
+    assert.equal(resumed.code, 0, resumed.stdout + resumed.stderr);
+    assert.match(resumed.stdout, /recovered from its audit record/);
+    assert.doesNotMatch(resumed.stdout, /uncertain/, 'the audit record resolves the outcome');
 
     const events = readJsonl(path.join(dir, 'tasks.jsonl'));
-    assert.ok(events.some((e) => (e.steps ?? []).some((s) => s.id === 's1' && s.to === StepStatus.UNCERTAIN)));
-    assert.equal(events.some((e) => (e.steps ?? []).some((s) => s.to === StepStatus.COMPLETED)), false, 'the step was not executed again');
+    assert.ok(events.some((e) => (e.steps ?? []).some((s) => s.id === 's1' && s.to === StepStatus.COMPLETED)),
+      'the step is completed as its audit record states');
+    assert.equal(events.some((e) => (e.steps ?? []).some((s) => s.to === StepStatus.UNCERTAIN)), false);
     const ops = readJsonl(path.join(dir, 'operations.jsonl'));
     assert.equal(ops.filter((op) => op.capability === 'task.step').length, 1, 'no new step execution was audited');
 
     const app = createApp({ dataDir: dir });
     const task = await app.taskStore.get(TASK_ID);
-    assert.equal(task.status, TaskStatus.PAUSED);
-    assert.equal(task.steps.find((s) => s.id === 's1').status, StepStatus.UNCERTAIN);
+    assert.equal(task.status, TaskStatus.COMPLETED);
+    const step = task.steps.find((s) => s.id === 's1');
+    assert.equal(step.status, StepStatus.COMPLETED);
+    assert.equal(step.outcome, Outcome.SUCCESS_VERIFIED);
+    assert.equal(step.operationId, OP_ID, 'the step stays linked to the record it was recovered from');
+  });
+
+  test('an interrupted step without an audit record stays uncertain, and one from another step is rejected', async () => {
+    const noRecord = tempDir();
+    writeJsonl(path.join(noRecord, 'tasks.jsonl'), [
+      createdEvent(),
+      transitionEvent(TASK_ID, 'start', {
+        task: { from: 'pending', to: 'running' },
+        steps: [{ id: 's1', from: 'pending', to: 'running', operationId: OP_ID }],
+      }),
+    ]);
+    const noRecordApp = createApp({ dataDir: noRecord });
+    const lost = await noRecordApp.controller.runTask(TASK_ID, 'resume');
+    assert.equal(lost.status, Outcome.INPUT_REJECTED);
+    assert.match(lost.display, /not run again/);
+    const lostTask = await noRecordApp.taskStore.get(TASK_ID);
+    assert.equal(lostTask.steps[0].status, StepStatus.UNCERTAIN);
+    assert.equal(lostTask.steps[0].outcome, null, 'no evidence means no claimed outcome');
+    assert.match(lostTask.steps[0].summary, /interrupted before its outcome was recorded/);
+
+    // The audit record names a different step, so it is not evidence about this one.
+    const otherStep = tempDir();
+    writeJsonl(path.join(otherStep, 'tasks.jsonl'), [
+      createdEvent(),
+      transitionEvent(TASK_ID, 'start', {
+        task: { from: 'pending', to: 'running' },
+        steps: [{ id: 's1', from: 'pending', to: 'running', operationId: OP_ID }],
+      }),
+    ]);
+    writeJsonl(path.join(otherStep, 'operations.jsonl'), [auditRecord({ stepId: 's2' })]);
+    const otherApp = createApp({ dataDir: otherStep });
+    const mismatch = await otherApp.controller.runTask(TASK_ID, 'resume');
+    assert.equal(mismatch.status, Outcome.INPUT_REJECTED);
+    const mismatchTask = await otherApp.taskStore.get(TASK_ID);
+    assert.equal(mismatchTask.steps[0].status, StepStatus.UNCERTAIN);
+    assert.equal(mismatchTask.steps[0].outcome, null, 'a record for another step proves nothing here');
+
+    // A record that says the step failed is reported as failed, not as uncertain and
+    // never as success. It is still not run again.
+    const failedRecord = tempDir();
+    writeJsonl(path.join(failedRecord, 'tasks.jsonl'), [
+      createdEvent(),
+      transitionEvent(TASK_ID, 'start', {
+        task: { from: 'pending', to: 'running' },
+        steps: [{ id: 's1', from: 'pending', to: 'running', operationId: OP_ID }],
+      }),
+    ]);
+    writeJsonl(path.join(failedRecord, 'operations.jsonl'), [auditRecord({ status: Outcome.EXECUTION_FAILED })]);
+    const failedApp = createApp({ dataDir: failedRecord });
+    const recovered = await failedApp.controller.runTask(TASK_ID, 'resume');
+    const failedTask = await failedApp.taskStore.get(TASK_ID);
+    assert.equal(failedTask.steps[0].status, StepStatus.FAILED);
+    assert.equal(failedTask.steps[0].outcome, Outcome.EXECUTION_FAILED);
+    assert.notEqual(recovered.status, Outcome.SUCCESS_VERIFIED);
+    assert.equal((await failedApp.operations.inspect()).records
+      .filter((op) => op.capability === 'task.step').length, 1, 'the failed step was not executed again');
   });
 
   test('an incomplete audit link is a suspicion and a disagreeing record is a confirmed defect', async () => {
@@ -1169,5 +1259,94 @@ describe('F. acceptance: a multi-step request stays consistent end to end', () =
     assert.match(prompt, /APEX \(model, UNVERIFIED\): The sum is four\./);
     assert.doesNotMatch(prompt, /cut off at the model output limit/,
       'a notice is never replayed as if it were model speech');
+  });
+
+  test('a stored fact, a clarification, a proposal, and an interrupted task stay consistent through recovery', async () => {
+    const s = await stub('This must not be called yet.');
+    const app = appOn({ model: s });
+
+    // 1. In a fresh session an ambiguous request asks before anything is guessed.
+    const asked = await app.controller.handle('what is it?');
+    assert.equal(asked.status, Outcome.CLARIFICATION_REQUIRED);
+    assert.equal(s.requests.length, 0, 'an unresolved referent never reaches the model');
+
+    // 2. Two user-origin records, stored without any model involvement.
+    const stored = await app.controller.handle('remember that the meeting room is B-204');
+    assert.equal(stored.status, Outcome.SUCCESS_VERIFIED);
+    assert.equal(s.requests.length, 0, 'a deterministic write does not consult the model');
+    await app.controller.knowledgeAdd({ subject: 'meeting room', relationship: 'booked_for', object: 'design review' });
+
+    // 3. The reply to that question is answered from both stores, while the model's
+    // own conclusion and its separately verified read stay distinguishable.
+    s.behavior.reply = [
+      'The room is B-204, booked for the design review.',
+      'PROPOSE_ACTION {"action":"memory.search","input":{"query":"meeting room"}}',
+    ].join('\n');
+    const answered = await app.controller.handle('which meeting room did I store, and what is it booked for?');
+    assert.equal(answered.status, Outcome.VERIFICATION_UNAVAILABLE, 'a model conclusion is never reported as verified');
+    assert.equal(answered.decision, Decision.PROPOSE_ACTION, 'a request whose proposal executed is classified as an action, not an answer');
+    const prompt = promptOf(s);
+    assert.match(prompt, /APEX \(asked the user\): What are you referring to\?/, 'the question this reply answers is in the context');
+    assert.match(prompt, /B-204/);
+    assert.match(prompt, /meeting room --\[booked_for\]--> design review \[user-supplied fact\]/);
+    assert.equal(answered.operation.prompt.knowledgeIds.length, 1);
+    assert.deepEqual(answered.operation.steps.map((step) => `${step.action}:${step.outcome}`), ['memory.search:success_verified']);
+
+    // 4. A two-step task loses its process after the first step has been audited.
+    const planned = await app.controller.planTask('calc 1+1; calc 2+2');
+    assert.equal(planned.status, Outcome.PLAN_CREATED);
+    const task = (await app.taskStore.list()).at(-1);
+
+    const original = app.taskStore.transition.bind(app.taskStore);
+    let injected = false;
+    app.taskStore.transition = async (taskId, event) => {
+      if (!injected && event.steps?.some((step) => step.to === 'completed')) {
+        injected = true;
+        throw new Error('simulated process loss after the first step was audited');
+      }
+      return original(taskId, event);
+    };
+    await assert.rejects(app.controller.runTask(task.id, 'run'), /simulated process loss/);
+    app.taskStore.transition = original;
+
+    const stuck = await app.taskStore.get(task.id);
+    assert.equal(stuck.status, TaskStatus.RUNNING, 'the task log still claims a running task');
+    assert.equal(readJsonl(path.join(app.dataDir, 'operations.jsonl')).filter((r) => r.capability === 'task.step').length, 1);
+
+    // 5. Recovery resolves the interrupted step from its own audit record, runs only
+    // the step that never ran, and never repeats a side effect.
+    const resumed = await app.controller.runTask(task.id, 'resume');
+    assert.equal(resumed.status, Outcome.SUCCESS_VERIFIED);
+    const done = await app.taskStore.get(task.id);
+    assert.equal(done.status, TaskStatus.COMPLETED);
+    assert.deepEqual(done.steps.map((step) => `${step.status}:${step.outcome}`),
+      ['completed:success_verified', 'completed:success_verified']);
+    assert.ok(done.steps[0].summary.includes('recovered from its audit record'), 'the recovery is stated, not hidden');
+    const stepAudit = readJsonl(path.join(app.dataDir, 'operations.jsonl')).filter((r) => r.capability === 'task.step');
+    assert.equal(stepAudit.length, 2, 'each step was executed and audited exactly once');
+    assert.equal(new Set(stepAudit.map((r) => r.task.stepId)).size, 2);
+
+    // 6. History and audit carry the session, each part labelled as what it is.
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.ok(turns.some((t) => t.origin === 'apex_question' && /What are you referring to/.test(t.text)));
+    assert.equal(turns.some((t) => t.origin === 'model' && /PROPOSE_ACTION/.test(t.text)), false,
+      'proposal lines are not stored as model speech');
+    assert.ok(turns.some((t) => t.origin === 'apex_action' && t.verified && /matching memory record\(s\) \(verified\)/.test(t.text)),
+      'the verified model-proposed read is replayable history, without copying stored content');
+    // Pinned known limitation: `task run` and `task resume` write no conversation
+    // turn, so a task's step results live only in the task log and the audit. A
+    // follow-up question after a task run therefore cannot see what it produced.
+    assert.equal(turns.some((t) => /2\+2 = 4/.test(t.text)), false, 'task steps are not replayed as conversation');
+    const ops = readJsonl(path.join(app.dataDir, 'operations.jsonl'));
+    assert.ok(ops.length >= 7, `${ops.length} operation(s) audited for the session`);
+    assert.equal(ops.some((r) => r.status === Outcome.AUDIT_INTEGRITY_FAILED), false);
+    assert.equal(ops.at(-1).task.status, TaskStatus.COMPLETED, 'the recovered task result is in the audit');
+
+    // 7. Diagnostics agree with the recovered state and find no defect.
+    const diag = await runCli(['diagnose'], envFor(app.dataDir));
+    assert.equal(diag.code, 0, diag.stdout + diag.stderr);
+    assert.match(diag.stdout, /Memory: ok \(1 record/);
+    assert.doesNotMatch(diag.stdout, /no live process holds the task lock/);
+    assert.doesNotMatch(diag.stdout, /CONFIRMED DEFECT/);
   });
 });

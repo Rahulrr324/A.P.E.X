@@ -107,6 +107,50 @@ describe('conversation continuity', () => {
     assert.match(prompt, /APEX \(action result\): 2\+2 = 4 \(verified\)/);
   });
 
+  test('a clarifying question is replayed so the next reply has something to answer', async () => {
+    const s = await stub('This must not be called.');
+    const app = appOn({ model: s });
+    const asked = await app.controller.handle('what is it?');
+    assert.equal(asked.status, Outcome.CLARIFICATION_REQUIRED);
+    assert.equal(s.requests.length, 0);
+
+    s.behavior.reply = 'The subject was the meeting room.';
+    const answered = await app.controller.handle('the meeting room');
+
+    // Without the question in the replayed history the second turn looks like a
+    // random phrase: the earlier request was a clarification, so nothing in the
+    // prompt says what "the meeting room" is the answer to.
+    assert.equal(answered.status, Outcome.VERIFICATION_UNAVAILABLE);
+    const prompt = promptOf(s);
+    assert.match(prompt, /User: what is it\?/);
+    assert.match(prompt, /APEX \(asked the user\): What are you referring to\? Please include the subject\./);
+    assert.match(prompt, /USER REQUEST \(data\):\nthe meeting room/);
+    assert.equal(answered.operation.prompt.turnIds.length, 2, 'the earlier request and the question it prompted are both replayed');
+    assert.doesNotMatch(prompt, /APEX \(model, UNVERIFIED\): What are you referring to/, 'a question is not attributed to a model');
+
+    const turns = fs.readFileSync(path.join(app.dataDir, 'conversation.jsonl'), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line));
+    const question = turns.find((t) => t.origin === 'apex_question');
+    assert.ok(question, 'the question is kept in the user\'s history');
+    assert.equal(question.verified, false);
+    assert.equal(turns.some((t) => t.origin === 'model' && /What are you referring to/.test(t.text)), false);
+  });
+
+  test('a replayed clarifying question does not count as context that resolves an ambiguity', async () => {
+    const s = await stub('This must not be called.');
+    const app = appOn({ model: s });
+    await app.controller.handle('what is it?');
+
+    const again = await app.controller.handle('what about that?');
+
+    // The question is replayed so a reply can be understood, but it names no
+    // referent: it cannot resolve the very ambiguity it was asking about.
+    assert.equal(again.status, Outcome.CLARIFICATION_REQUIRED);
+    assert.equal(again.decision, Decision.CLARIFY);
+    assert.equal(s.requests.length, 0, 'an unresolvable follow-up must not reach the model');
+    assert.equal(again.operation.prompt, null);
+  });
+
   test('a new session does not replay history but persistent memory remains available', async () => {
     const s = await stub('Understood.');
     const app = appOn({ model: s });

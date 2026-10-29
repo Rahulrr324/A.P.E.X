@@ -13,13 +13,16 @@ const MAX_TURN_CHARS = 2000;
 const ROLES = new Set(['user', 'assistant']);
 // Who produced the text. Only these origins are replayed as context. Notices
 // (for example "model unavailable") are kept for the user's history, not replayed.
+// A question APEX itself asked is replayed: without it the user's next message
+// arrives with no record of what it was answering, and APEX asks again.
 export const TURN_ORIGINS = Object.freeze({
   USER: 'user',
   ACTION: 'apex_action',
   MODEL: 'model',
   NOTICE: 'apex_notice',
+  QUESTION: 'apex_question',
 });
-const REPLAYED = new Set([TURN_ORIGINS.USER, TURN_ORIGINS.ACTION, TURN_ORIGINS.MODEL]);
+const REPLAYED = new Set([TURN_ORIGINS.USER, TURN_ORIGINS.ACTION, TURN_ORIGINS.MODEL, TURN_ORIGINS.QUESTION]);
 const ORIGINS = new Set(Object.values(TURN_ORIGINS));
 
 function validateTurn(t) {

@@ -23,6 +23,7 @@ export function systemPrompt({ appName, actions, now }) {
     'Knowledge entries marked "user-supplied fact" were recorded by the user. Entries marked "unconfirmed claim" have unconfirmed provenance: do not present them as established facts.',
     'Memory and knowledge are separate stored sources. If they disagree, say that the stored sources disagree; do not silently choose one source, and do not assume the newest record is the correct one.',
     'Only attribute a statement to memory or knowledge when it appears in the context. Anything you know from elsewhere is your own model knowledge, not a stored record: say that it is unverified instead of claiming a stored record supports it.',
+    'A conversation turn labelled "APEX (asked the user)" is a question APEX itself asked earlier, not an answer and not a fact. The user request may be the reply to that question; if it is, answer the original question.',
     'If the context does not contain what is needed and you are not sure, say so instead of guessing. If the request is genuinely ambiguous, ask a brief clarifying question.',
     `You cannot run anything yourself. To ask the system to perform an action, write one line that starts with PROPOSE_ACTION followed by a JSON object with keys "action" and "input". At most ${MAX_PROPOSALS} such lines are considered; extra proposals are ignored.`,
     'Use only these actions:',
@@ -51,6 +52,20 @@ export function selectPromptMemory(hits) {
     ...h,
     conflict: (h.conflict ?? []).filter((id) => eligibleIds.has(id)),
   }));
+}
+
+// Knowledge scores are IDF-weighted like memory scores, so a distinctive name match
+// outranks an incidental common-word match. Before that weighting, one shared filler
+// word ("budget" inside a field name, a coworker's first name) was enough to put an
+// unrelated triple in front of the model labelled "user-supplied fact" — and because
+// knowledge is the section dropped last, that noise displaced the user's own facts and
+// the turns being followed up. The threshold mirrors memory's: below it the record
+// shares nothing but incidental words with the request. Explicit `knowledge search`
+// keeps its broad matching; the user asked what matches.
+export const KNOWLEDGE_PROMPT_RELEVANCE_MIN = 0.2;
+
+export function selectPromptKnowledge(hits) {
+  return hits.filter((h) => h.score >= KNOWLEDGE_PROMPT_RELEVANCE_MIN).map((h) => h.record);
 }
 
 export function buildPrompt({
@@ -163,6 +178,9 @@ export function knowledgeLine(record) {
 }
 
 function turnLine(turn) {
-  const who = turn.role === 'user' ? 'User' : turn.origin === 'model' ? 'APEX (model, UNVERIFIED)' : 'APEX (action result)';
-  return `${who}: ${truncate(turn.text, TURN_CHARS)}`;
+  if (turn.role === 'user') return `User: ${truncate(turn.text, TURN_CHARS)}`;
+  if (turn.origin === 'model') return `APEX (model, UNVERIFIED): ${truncate(turn.text, TURN_CHARS)}`;
+  // A question APEX asked is APEX's own words, not a model claim and not a result.
+  if (turn.origin === 'apex_question') return `APEX (asked the user): ${truncate(turn.text, TURN_CHARS)}`;
+  return `APEX (action result): ${truncate(turn.text, TURN_CHARS)}`;
 }

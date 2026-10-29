@@ -205,6 +205,26 @@ test('knowledge store - question words alone do not retrieve unrelated records',
   assert.deepEqual(await store.search('what is it?'), [], 'a question made only of stopwords matches nothing');
 });
 
+test('knowledge store - a rare term match outranks an incidental common-word match', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const store = new KnowledgeStore(path.join(dir, 'knowledge.jsonl'));
+
+  await store.add({ subject: 'martinez account', relationship: 'owned_by', object: 'finance team', origin: 'user' });
+  await store.add({ subject: 'office printer', relationship: 'budget_code', object: 'sigma 9', origin: 'user' });
+  await store.add({ subject: 'break room fridge', relationship: 'cleaned_by', object: 'vendor sigma 9 team', origin: 'user' });
+
+  // Counting matched words alone gives the triple that shares "team" and the triple
+  // that names the queried account the same standing, because every word of the
+  // request is weighted equally. Rarity is what separates them.
+  const hits = await store.search('which team owns the martinez account budget review', { limit: 10 });
+  const bySubject = new Map(hits.map((h) => [h.record.subject, h.score]));
+  assert.equal(hits[0].record.subject, 'martinez account');
+  assert.ok(bySubject.get('office printer') < bySubject.get('martinez account'));
+  assert.ok(bySubject.get('break room fridge') < bySubject.get('martinez account'));
+  assert.ok(hits.every((h) => h.score > 0 && h.score <= 1), 'scores stay in [0, 1]');
+});
+
 test('knowledge store - corrupt storage handling', async (t) => {
   const dir = makeTempDataDir();
   t.after(() => cleanup(dir));
@@ -685,6 +705,52 @@ test('knowledge - model context includes relevant claims with trusted labels', a
   assert.equal(res.operation.prompt.knowledgeIds.length, 3);
   assert.equal(res.operation.prompt.chars, prompt.length);
   assert.ok(prompt.length <= 6000);
+});
+
+test('knowledge - an incidental match does not displace the user\'s own facts in the prompt', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const { gateway, captured } = scriptedGateway('Finance owns the account.');
+  const app = createApp({ dataDir: dir, gateway, contextTurns: 0 });
+  app.controller.maxContextChars = 660;
+
+  await app.memory.add({
+    content: 'The martinez account was moved to the finance team last quarter and needs a named owner.',
+    kind: 'user_fact',
+    source: 'user',
+    provenance: { origin: 'user_request' },
+  });
+  await app.controller.knowledgeAdd({ subject: 'martinez account', relationship: 'owned_by', object: 'finance team' });
+  await app.controller.knowledgeAdd({ subject: 'office printer', relationship: 'budget_code', object: 'sigma 9' });
+  await app.controller.knowledgeAdd({ subject: 'break room fridge', relationship: 'cleaned_by', object: 'vendor sigma 9 team' });
+
+  // Knowledge is the section dropped last, so two triples that shared only one
+  // incidental word with the request used to survive the budget while the user's own
+  // fact was dropped, and the model was shown them labelled "user-supplied fact".
+  const res = await app.controller.handle('which team owns the martinez account budget review');
+  assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE);
+  const prompt = captured.request.prompt;
+  assert.ok(prompt.length <= 660, `prompt length ${prompt.length} exceeded the configured bound`);
+  assert.equal(res.operation.prompt.knowledgeIds.length, 1, 'only the distinctive match is offered');
+  assert.ok(prompt.includes('martinez account --[owned_by]--> finance team'));
+  assert.ok(!prompt.includes('office printer'), 'an incidental word match is not stored evidence');
+  assert.ok(!prompt.includes('break room fridge'));
+  assert.equal(res.operation.prompt.memoryIds.length, 1, 'the user fact fits the budget once the noise is gone');
+  assert.ok(prompt.includes('needs a named owner'));
+});
+
+test('knowledge - without a model, an incidental match is not shown as relevant knowledge', async (t) => {
+  const dir = makeTempDataDir();
+  t.after(() => cleanup(dir));
+  const app = appOn(dir);
+
+  await app.controller.knowledgeAdd({ subject: 'martinez account', relationship: 'owned_by', object: 'finance team' });
+  await app.controller.knowledgeAdd({ subject: 'office printer', relationship: 'budget_code', object: 'sigma 9' });
+
+  const res = await app.controller.handle('which team owns the martinez account budget review');
+  assert.equal(res.status, Outcome.MODEL_UNAVAILABLE);
+  assert.ok(res.display.includes('martinez account --[owned_by]--> finance team'));
+  assert.ok(!res.display.includes('office printer'), 'the direct display uses the same relevance rule');
 });
 
 test('knowledge - model context respects the prompt budget and the retrieval limit', async (t) => {

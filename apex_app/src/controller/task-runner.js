@@ -7,7 +7,8 @@
 //
 // Stop rules: a failed or uncertain step stops the task, and steps that depend on it
 // are marked skipped. A write step proposed by a model waits for the user's explicit
-// approval. Nothing is retried automatically.
+// approval. Nothing is retried automatically. An interrupted step is resolved from its
+// own audit record when that record exists; otherwise its outcome stays unknown.
 import { Outcome, OPERATION_SCHEMA } from '../outcomes.js';
 import { ValidationError } from '../errors.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
@@ -28,10 +29,11 @@ function stripDisplay(step) {
 }
 
 export class TaskRunner {
-  constructor({ store, execute, recordOperation, idFactory }) {
+  constructor({ store, execute, recordOperation, readOperations = null, idFactory }) {
     this.store = store;
     this.execute = execute; // (actionName, input, origin, operationId) => step (the controller's action path)
     this.recordOperation = recordOperation; // (operationRecord) => Promise<void>, throws on failure
+    this.readOperations = readOperations; // () => Promise<operationRecord[]>, read-only, for recovery evidence
     this.idFactory = idFactory;
   }
 
@@ -71,8 +73,9 @@ export class TaskRunner {
     let task = await this.#task(taskId);
 
     if (task.status === TaskStatus.RUNNING) {
-      // No live process holds the lock, so an earlier run was interrupted. The step
-      // that was running has an unknown outcome, and it is never executed again.
+      // No live process holds the lock, so an earlier run was interrupted. Each step
+      // recorded as running is resolved from its own audit record, or left uncertain,
+      // and it is never executed again.
       await this.#recover(task);
       task = await this.#task(taskId);
     }
@@ -167,9 +170,73 @@ export class TaskRunner {
 
   async #recover(task) {
     const running = task.steps.filter((s) => s.status === StepStatus.RUNNING);
-    await this.#transition(task.id, 'interrupted: the running step has an unknown outcome and was not run again', {
+    // The step's own operation record is independent evidence about what happened
+    // before the interruption. A step is only left uncertain when that evidence is
+    // missing or cannot be matched to it; the audit is never given permission to run
+    // anything, and no recovered step is executed again either way.
+    let records = null;
+    try {
+      records = this.readOperations ? await this.readOperations() : [];
+    } catch {
+      records = null; // an unreadable audit log proves nothing: outcomes stay unknown
+    }
+    const byId = new Map((records ?? []).map((op) => [op.id, op]));
+    const changes = [];
+    let resolvedFromAudit = 0;
+    for (const step of running) {
+      const op = typeof step.operationId === 'string' ? byId.get(step.operationId) : null;
+      const isThisStep = op !== null && op !== undefined
+        && op.capability === 'task.step'
+        && op.task?.id === task.id
+        && op.task?.stepId === step.id;
+      if (!isThisStep) {
+        changes.push({
+          id: step.id,
+          from: StepStatus.RUNNING,
+          to: StepStatus.UNCERTAIN,
+          outcome: null,
+          summary: records === null
+            ? 'interrupted, and the audit log could not be read to check it; outcome unknown, not run again'
+            : 'interrupted before its outcome was recorded in the task log; not run again',
+        });
+        continue;
+      }
+      resolvedFromAudit += 1;
+      if (op.status === Outcome.SUCCESS_VERIFIED) {
+        changes.push({
+          id: step.id,
+          from: StepStatus.RUNNING,
+          to: StepStatus.COMPLETED,
+          outcome: op.status,
+          summary: `${truncate(op.output ?? op.steps?.[0]?.summary ?? 'completed', 200)} (recovered from its audit record ${shortId(op.id)})`,
+        });
+        continue;
+      }
+      if (op.status === Outcome.VERIFICATION_UNAVAILABLE) {
+        changes.push({
+          id: step.id,
+          from: StepStatus.RUNNING,
+          to: StepStatus.UNCERTAIN,
+          outcome: op.status,
+          summary: `executed but never independently verified (audit record ${shortId(op.id)}); not run again`,
+        });
+        continue;
+      }
+      changes.push({
+        id: step.id,
+        from: StepStatus.RUNNING,
+        to: StepStatus.FAILED,
+        outcome: op.status,
+        summary: `${op.status} according to its audit record ${shortId(op.id)}; not run again`,
+      });
+    }
+    await this.#transition(task.id, changes.length === 0
+      ? 'interrupted before any step was recorded as running'
+      : resolvedFromAudit === changes.length
+      ? 'interrupted: every running step was resolved from its own audit record'
+      : 'interrupted: a running step whose audit record is missing has an unknown outcome and was not run again', {
       task: { from: TaskStatus.RUNNING, to: TaskStatus.PAUSED },
-      steps: running.map((s) => ({ id: s.id, from: StepStatus.RUNNING, to: StepStatus.UNCERTAIN, outcome: null, summary: 'interrupted before its outcome was recorded in the task log; not run again' })),
+      steps: changes,
     });
   }
 
@@ -271,8 +338,9 @@ export class TaskRunner {
     if (task.status === TaskStatus.COMPLETED || task.status === TaskStatus.CANCELLED) throw new ValidationError(`this task is already ${task.status}`);
     if (task.status === TaskStatus.RUNNING) {
       // The caller holds the store lock, so no live process is running this task; it
-      // was interrupted. The step that was running keeps an unknown outcome, so it is
-      // made uncertain (never run again) before the rest of the task is cancelled.
+      // was interrupted. Each running step is resolved from its own audit record, or
+      // left uncertain if that record is missing, before the rest of the task is
+      // cancelled. Nothing that was already running is executed again.
       await this.#recover(task);
       task = await this.#task(taskId);
     }

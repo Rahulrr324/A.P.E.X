@@ -82,7 +82,13 @@ const CLARIFY_PRONOUN_ABOUT = new RegExp(`^what\\s+about\\s+${PRONOUN}\\s*[?.!]*
 // clarification) provides none, so asking the same follow-up again must ask
 // again rather than treat the earlier attempt as context.
 export function turnsResolveContext(turns) {
-  return (turns ?? []).some((turn) => !(turn && turn.role === 'user' && clarificationFor(turn.text) !== null));
+  return (turns ?? []).some((turn) => {
+    if (!turn) return false;
+    // A question APEX asked is replayed so that the user's reply can be understood,
+    // but it names no referent: it cannot resolve the ambiguity it was asking about.
+    if (turn.origin === 'apex_question') return false;
+    return !(turn.role === 'user' && clarificationFor(turn.text) !== null);
+  });
 }
 
 export function clarificationFor(request, { hasContext = false, checkContinuation = true } = {}) {

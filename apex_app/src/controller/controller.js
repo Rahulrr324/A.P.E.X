@@ -12,7 +12,7 @@ import { MAX_PROPOSALS, parseModelOutput } from './proposals.js';
 import { executeAction } from '../actions/executor.js';
 import { CONTROL_CHARS, redact, round3, shortId, truncate } from '../util.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
-import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptMemory, systemPrompt, MAX_CONTEXT_CHARS } from './context.js';
+import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, selectPromptMemory, systemPrompt, MAX_CONTEXT_CHARS } from './context.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret } from '../security/secrets.js';
@@ -147,6 +147,7 @@ export class CognitiveController {
           store: taskStore,
           execute: (name, input, origin, operationId) => this.runAction(name, input, origin, operationId),
           recordOperation: (record) => this.operations.append(record),
+          readOperations: async () => (await this.operations.inspect()).records,
           idFactory: this.idFactory,
         })
       : null;
@@ -256,23 +257,9 @@ export class CognitiveController {
         output = clarification;
         displayText = clarification;
         await this.#recordTurns(op, sid, op.request, [
-          { origin: TURN_ORIGINS.NOTICE, text: clarification, verified: false },
+          { origin: TURN_ORIGINS.QUESTION, text: clarification, verified: false },
         ]);
       } else {
-      // 1. Retrieve persistent context for this request (ids go to the audit).
-      let context = [];
-      try {
-        context = await this.memory.search(request, { limit: this.retrievalLimit });
-        op.retrieval = context.map((h) => ({
-          id: h.record.id,
-          kind: h.record.kind,
-          source: h.record.source,
-          score: round3(h.score),
-        }));
-      } catch (err) {
-        op.errors.push({ stage: 'retrieval', code: err.code || 'STORE_ERROR', message: err.message });
-      }
-
       // 2. Determine the capability.
       op.capability = routed.capability;
 
@@ -301,9 +288,26 @@ export class CognitiveController {
           output = followUpClarification;
           displayText = followUpClarification;
           await this.#recordTurns(op, sid, op.request, [
-            { origin: TURN_ORIGINS.NOTICE, text: followUpClarification, verified: false },
+            { origin: TURN_ORIGINS.QUESTION, text: followUpClarification, verified: false },
           ]);
         } else {
+        // 1. Retrieve the stored context this answer is built from (ids go to the
+        // audit). Retrieval belongs here and not to every request: a deterministic
+        // action reads exactly what it needs, and an unused lookup was audited as
+        // though it had supplied context, and could report a store failure on an
+        // unrelated successful operation.
+        let context = [];
+        try {
+          context = await this.memory.search(request, { limit: this.retrievalLimit });
+          op.retrieval = context.map((h) => ({
+            id: h.record.id,
+            kind: h.record.kind,
+            source: h.record.source,
+            score: round3(h.score),
+          }));
+        } catch (err) {
+          op.errors.push({ stage: 'retrieval', code: err.code || 'STORE_ERROR', message: err.message });
+        }
         const m = await this.answerWithModel(request, {
           relevant: selectPromptMemory(context),
           turns,
@@ -1027,7 +1031,7 @@ export class CognitiveController {
       if (this.knowledge) {
         try {
           const khits = await this.knowledge.search(request, { limit: KNOWLEDGE_PROMPT_LIMIT });
-          const records = dedupeKnowledge(khits.map((h) => h.record));
+          const records = dedupeKnowledge(selectPromptKnowledge(khits));
           if (records.length > 0) {
             sections.push(`Relevant knowledge found (shown directly, not summarised by a model):\n${records.map(knowledgeLine).join('\n')}`);
           }
@@ -1071,7 +1075,7 @@ export class CognitiveController {
     if (this.knowledge) {
       try {
         const khits = await this.knowledge.search(request, { limit: KNOWLEDGE_PROMPT_LIMIT });
-        knowledge = dedupeKnowledge(khits.map((h) => h.record));
+        knowledge = dedupeKnowledge(selectPromptKnowledge(khits));
       } catch (err) {
         // Knowledge is supplementary, so it does not block the answer. The failure
         // must still be auditable and visible; it must not look like an empty store.

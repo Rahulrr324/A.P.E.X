@@ -207,39 +207,48 @@ export class KnowledgeStore {
     return records.slice(-Math.max(1, limit)).reverse().map((r) => annotate(r, records, supersededByMap));
   }
 
-  // Keyword search over subject+relationship+object+evidence.
-  // Returns up to `limit` records, scored by term overlap. Superseded records
-  // are excluded from results. Results are bounded (never the full store).
+  // Keyword search over subject+relationship+object+evidence. Returns up to `limit`
+  // records. Each query term is weighted by its rarity in the store (IDF), the same
+  // policy the memory store uses, so a distinctive name match outranks an incidental
+  // common-word match; raw term overlap made the two indistinguishable. Superseded
+  // records are excluded. Results are bounded (never the full store).
   async search(query, { limit = 5 } = {}) {
     const records = await this.#loadComplete();
     if (!query || typeof query !== 'string' || query.trim().length === 0) return [];
 
-    const terms = tokenize(query);
+    const terms = [...new Set(tokenize(query))];
     if (terms.length === 0) return [];
 
     const supersededByMap = buildSupersededByMap(records);
 
-    const scored = records
-      .filter((r) => {
-        const ann = annotate(r, records, supersededByMap);
-        return ann.status !== 'superseded';
-      })
-      .map((r) => {
-        const corpus = tokenize(`${r.subject} ${r.relationship} ${r.object} ${r.evidence ?? ''}`);
-        const corpusSet = new Set(corpus);
-        let matched = 0;
-        for (const t of terms) {
-          if (corpusSet.has(t)) matched += 1;
-        }
-        return { record: r, score: matched / terms.length };
-      })
-      .filter((s) => s.score > 0)
-      .sort((a, b) => {
-        const delta = b.score - a.score;
-        if (delta !== 0) return delta;
-        return Date.parse(b.record.createdAt) - Date.parse(a.record.createdAt);
-      })
-      .slice(0, Math.max(1, limit));
+    const pool = records.filter((r) => {
+      const ann = annotate(r, records, supersededByMap);
+      return ann.status !== 'superseded';
+    });
+    const docs = pool.map((r) => new Set(tokenize(`${r.subject} ${r.relationship} ${r.object} ${r.evidence ?? ''}`)));
+
+    const df = new Map(terms.map((t) => [t, docs.filter((d) => d.has(t)).length]));
+    const n = pool.length;
+    // Floored at 1 for the same reason as the memory store: in a small personal
+    // store an unseen word would otherwise outweigh a matched one.
+    const idf = new Map(terms.map((t) => [t, Math.max(1, Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5)))]));
+    const totalWeight = terms.reduce((sum, t) => sum + idf.get(t), 0) || 1;
+
+    const scored = pool.map((record, index) => {
+      const words = docs[index];
+      let matched = 0;
+      for (const t of terms) {
+        if (words.has(t)) matched += idf.get(t);
+      }
+      if (matched > 0) return { record, score: matched / totalWeight, index };
+      return null;
+    }).filter(Boolean).sort((a, b) => {
+      const delta = b.score - a.score;
+      if (delta !== 0) return delta;
+      const timeDelta = Date.parse(b.record.createdAt) - Date.parse(a.record.createdAt);
+      if (timeDelta !== 0) return timeDelta;
+      return b.index - a.index;
+    }).slice(0, Math.max(1, limit));
 
     return scored.map(({ record, score }) => ({
       record: annotate(record, records, supersededByMap),

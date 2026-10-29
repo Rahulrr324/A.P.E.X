@@ -4,8 +4,9 @@ APEX (Adaptive Personal Executive eXocortex) is the whole personal cognitive sys
 **Local Alpha** is the first runnable vertical slice of it. It is a small, honest
 implementation of one workflow:
 
-    request -> retrieve persistent memory -> choose an allowed action (or a model)
-            -> authorize -> execute -> verify independently -> record -> restart -> still there
+    request -> an allowed deterministic action, or: retrieve memory and knowledge
+            -> a model -> authorize -> execute -> verify independently
+            -> record -> restart -> still there
 
 It is not the whole of APEX. It has no world model, planner, voice or UI, and its
 model path depends entirely on a backend you configure yourself.
@@ -272,21 +273,29 @@ How the boundary is enforced:
 1. The request is validated (length, control characters, credential-like text).
 2. Deterministic requests (`remember`, `recall`, `calc`, `status`, `list memory`) are
    routed to actions. They are authorized, executed, and independently verified, with
-   or without a model. A model never executes them.
+   or without a model. A model never executes them. Such a request reads exactly what
+   the action names; nothing else is searched, so an unrelated store problem cannot
+   appear inside an operation that succeeded.
 3. Any other request goes to the model path:
-   - **Retrieval**: the personal memory is searched for the request (words, word
-     forms, and close misspellings; see Architecture). Only records that score above
-     a threshold, are not private, and do not look like credentials are placed in the
-     prompt.
+   - **Retrieval**: the personal memory and the knowledge triples are searched for the
+     request (words, word forms, and close misspellings for memory; see Architecture).
+     Memory records that score above a relevance threshold, are not private, and do not
+     look like credentials are placed in the prompt, and knowledge records that score
+     above the same threshold are placed alongside them. A record that shares only
+     incidental words with the request stays out.
    - **Conversation**: the last `APEX_CONTEXT_TURNS` turns of the current session are
      included. Earlier model answers are labelled `UNVERIFIED`. An action result is
      stored as a turn too (summary only, never retrieved memory or file content), so a
      follow-up can see that a model-proposed action was verified, denied, or failed.
-     Failure notices are kept for the user's history but are not replayed.
+     A clarifying question APEX itself asked is stored and replayed, labelled as a
+     question rather than an answer, so the user's reply is understood instead of
+     prompting the same question again. Failure notices are kept for the user's history
+     but are not replayed.
    - **Prompt**: memory and conversation are labelled as data, not instructions. Each
      memory item shows its provenance: `user-provided fact` or `model conclusion
      (UNVERIFIED)`. Memory and conversation are trimmed to fit about 6000 characters in
-     total: the oldest turns and the least relevant memories go first, one at a time.
+     total: the oldest turns and the least relevant memories go first, one at a time,
+     and knowledge records go only once those two sections already fit.
      Conflict warnings only refer to other eligible memories retained in that prompt.
    - **Generation** through the Model Gateway. The reply is shown with its status and
      source, and recorded.
@@ -337,10 +346,14 @@ depend on it are skipped. A write step proposed by a model stops the task at
 and the approval applies to that step's exact input only. Nothing is retried
 automatically.
 
-**Interruptions.** If the process stops while a step is running, the next start finds
-that step's outcome unknown. It is marked `uncertain`, never `completed`, and it is
-not run again. A read-only uncertain step can be retried on request. A write step
-cannot be; cancel the task instead.
+**Interruptions.** If the process stops while a step is running, the next start
+resolves that step from its own `task.step` audit record. A record of `success_verified`
+makes the step `completed` and names the audit record it came from; a record of a
+failure makes it `failed` with that status; a step that executed but was never
+independently verified stays `uncertain`. If the audit record is missing, belongs to a
+different step, or the log cannot be read, the outcome stays unknown. In every case the
+step is not run again. A read-only uncertain step can be retried on request. A write
+step cannot be; cancel the task instead.
 
 **Audit and memory.** Every step writes its own operation record (capability
 `task.step`), with the task id and step id. Planning, approval, retry, and cancel also
@@ -553,12 +566,16 @@ explicit entity relationships, built alongside personal memory:
   subject and relationship, different object), the conflict is detected and both
   records are preserved and marked `conflicting`. Contradictions are never silently
   discarded or overwritten.
-- **Bounded retrieval into model context:** When answering requests, the controller
-  retrieves up to 3 relevant knowledge records via keyword search over the triple
+- **Bounded retrieval into model context:** When answering a request on the model path,
+  the controller retrieves up to 3 relevant knowledge records by searching the triple
   and evidence. Question words and other low-signal words are ignored, so a question
-  does not retrieve a record merely because both contain "what" or "is". Injected
+  does not retrieve a record merely because both contain "what" or "is", and terms are
+  weighted by how rare they are in the store, so a distinctive name outranks an
+  incidental common word. Records below the relevance threshold stay out of the prompt.
+  Injected
   records explicitly state their provenance (`user-supplied fact`
   or `unconfirmed claim`) and conflict status (`[CONFLICTING: another record disagrees]`).
+  `knowledge search` keeps its broad matching, because there you asked what matches.
 - **Auditability:** Every write operation is recorded in `operations.jsonl` and
   independently verified against the store log.
 - **Corrections are never inferred from `remember`.** Repeating `remember` records
