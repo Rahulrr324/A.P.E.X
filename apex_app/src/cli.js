@@ -228,7 +228,9 @@ export async function main(argv, {
         : 'Filesystem root: none configured. Filesystem inspection is unavailable.');
       if (diag.needsAttention) {
         out('Integrity: attention required; run "node bin/apex.js diagnose" for read-only details and recovery guidance.');
-        const unavailable = Object.values(diag.subsystems).find((s) => s.state === State.UNAVAILABLE);
+        // A model probe failure is not a storage failure; diagnostics already
+        // excludes it, and the model line above reports it accurately.
+        const unavailable = Object.values(diag.subsystems).find((s) => s.key !== 'model' && s.state === State.UNAVAILABLE);
         if (unavailable) err(`data store unavailable: ${safeText(unavailable.detail)}. Check APEX_DATA_DIR and its permissions.`);
       }
       return diag.needsAttention ? 1 : 0;

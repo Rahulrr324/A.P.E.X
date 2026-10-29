@@ -4,7 +4,7 @@ import { test, describe, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel } from './helpers.js';
+import { makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel, closedPortUrl } from './helpers.js';
 import { createApp } from '../src/app.js';
 import { ModelGateway, NoBackend } from '../src/model/gateway.js';
 import { main } from '../src/cli.js';
@@ -67,6 +67,21 @@ describe('command line', () => {
     assert.equal(r.code, 0, r.stderr);
     assert.match(r.stdout, /^APEX Local Alpha 0\.1\.0/);
     assert.match(r.stdout, /Model backend: none configured/);
+    assert.match(r.stdout, /Memory records: 0/);
+  });
+
+  test('status --model reports an unreachable model without blaming the data store', async () => {
+    const dataDir = tempDir();
+    const url = await closedPortUrl();
+    const r = await runCli(['status', '--model'], envFor(dataDir, {
+      APEX_MODEL_URL: url,
+      APEX_MODEL_PROVIDER: 'ollama',
+      APEX_MODEL_NAME: 'missing-model',
+      APEX_MODEL_TIMEOUT_MS: '1000',
+    }));
+    assert.equal(r.code, 1, r.stderr);
+    assert.match(r.stdout, /Model backend: .* - unavailable:/);
+    assert.doesNotMatch(r.stderr, /data store unavailable/);
     assert.match(r.stdout, /Memory records: 0/);
   });
 
