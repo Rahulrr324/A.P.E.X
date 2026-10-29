@@ -92,6 +92,8 @@ describe('diagnostics: subsystem states', () => {
     assert.match(diag.stdout, /Audit: missing \(valid: no operations yet\)/);
     assert.match(diag.stdout, /Session: missing/);
     assert.match(diag.stdout, /Model: not configured/);
+    assert.match(diag.stdout, /Overall: local subsystems healthy; no model configured/);
+    assert.match(diag.stdout, /Configuration: ok \(no model backend; context 6 turn\(s\)\)/);
     assert.match(diag.stdout, /No recovery action needed/);
     assert.deepEqual(snapshot(dir), before, 'diagnostics must not create a session or any store');
   });
@@ -293,6 +295,45 @@ describe('diagnostics: model independence', () => {
     assert.equal(status.code, 0);
     assert.match(status.stdout, /connectivity not checked/);
     assert.equal(stub.requests.length, 0);
+  });
+
+  test('diagnostics show the effective configuration and still do not probe the model', async () => {
+    const dir = tempDir();
+    const stub = await startStubModel();
+    stubs.push(stub);
+    const env = envFor(dir, {
+      APEX_MODEL_URL: stub.url,
+      APEX_MODEL_NAME: 'stub-model',
+      APEX_MODEL_TIMEOUT_MS: '45000',
+      APEX_MODEL_MAX_TOKENS: '256',
+      APEX_MODEL_RETRIES: '2',
+      APEX_CONTEXT_TURNS: '3',
+    });
+
+    const diag = await runCli(['diagnose'], env);
+    assert.equal(diag.code, 0, diag.stderr);
+    assert.match(
+      diag.stdout,
+      /Configuration: ok \(provider openai; model "stub-model"; timeout 45000 ms; max 256 tokens; retries 2; context 3 turn\(s\)\)/,
+    );
+    assert.match(diag.stdout, /Overall: local subsystems healthy; model not checked/);
+    assert.equal(stub.requests.length, 0, 'preflight without --model must not probe or infer');
+    assert.deepEqual(snapshot(dir), {}, 'preflight must not create any state');
+  });
+
+  test('status --model reports a model outage without claiming an integrity defect', async () => {
+    const dir = tempDir();
+    const url = await closedPortUrl();
+    const env = envFor(dir, { APEX_MODEL_URL: url, APEX_MODEL_NAME: 'stub', APEX_MODEL_TIMEOUT_MS: '1000' });
+
+    const status = await runCli(['status', '--model'], env);
+    assert.equal(status.code, 1);
+    assert.match(status.stdout, /Model backend: .* - unavailable:/);
+    assert.match(status.stdout, /Local integrity: no defects found; the model backend is unavailable/);
+    assert.doesNotMatch(status.stdout, /Integrity: attention required/);
+    assert.doesNotMatch(status.stderr, /data store unavailable/);
+    assert.doesNotMatch(status.stdout, /Storage: /);
+    assert.deepEqual(snapshot(dir), {});
   });
 
   test('a local model endpoint that is unavailable does not hide local diagnostics', async () => {

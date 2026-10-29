@@ -117,4 +117,19 @@ describe('endpoint validation and configuration', () => {
     assert.throws(() => loadConfig({ APEX_MODEL_MAX_TOKENS: '0' }), ValidationError);
     assert.throws(() => loadConfig({ APEX_MODEL_MAX_TOKENS: '8193' }), ValidationError);
   });
+
+  test('Ollama requires an explicit model name once an endpoint is configured', () => {
+    const named = loadConfig({
+      APEX_MODEL_PROVIDER: 'ollama',
+      APEX_MODEL_URL: 'http://127.0.0.1:11434',
+      APEX_MODEL_NAME: 'llama3.2',
+    });
+    assert.equal(named.model.name, 'llama3.2');
+    assert.throws(
+      () => loadConfig({ APEX_MODEL_PROVIDER: 'ollama', APEX_MODEL_URL: 'http://127.0.0.1:11434' }),
+      /APEX_MODEL_NAME is required/,
+    );
+    // With no endpoint there is no model backend, so the name is not used.
+    assert.equal(loadConfig({ APEX_MODEL_PROVIDER: 'ollama' }).model.name, 'local');
+  });
 });

@@ -113,11 +113,31 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   const recovery = [];
   const subsystems = {};
 
+  // The configuration was parsed and validated before the app was built. Show the
+  // effective values that will actually be used, so "ok" is evidence rather than an
+  // assertion: a user can confirm that an environment override took effect. Only
+  // known settings are listed; the environment is never dumped.
+  const cfg = app.config ?? null;
+  let configurationSummary = 'Configuration: ok (validated at startup)';
+  if (cfg) {
+    const parts = cfg.model.url
+      ? [
+          `provider ${safeText(cfg.model.provider, 32)}`,
+          `model "${safeText(cfg.model.name, 80)}"`,
+          `timeout ${cfg.model.timeoutMs} ms`,
+          `max ${cfg.model.maxTokens} tokens`,
+          `retries ${cfg.model.retries}`,
+        ]
+      : ['no model backend'];
+    parts.push(`context ${cfg.contextTurns} turn(s)`);
+    if (cfg.model.allowRemote) parts.push('remote model endpoints allowed');
+    configurationSummary = `Configuration: ok (${parts.join('; ')})`;
+  }
   subsystems.configuration = {
     key: 'configuration',
     label: 'Configuration',
     state: State.OK,
-    summary: 'Configuration: ok (validated at startup)',
+    summary: configurationSummary,
     count: null,
     corruptLines: 0,
     problems: [],
@@ -545,7 +565,15 @@ export function renderDiagnostics(diag) {
   const lines = [];
   lines.push(`${diag.app.name} ${diag.app.stage} ${diag.app.version} (${diag.app.expansion}) - diagnostics`);
   lines.push(`Data directory: ${safeText(diag.dataDir)}`);
-  lines.push(`Overall: ${diag.needsAttention ? 'attention required' : 'local subsystems healthy'}`);
+  const modelState = diag.subsystems.model.state;
+  const overall = diag.needsAttention
+    ? 'attention required'
+    : modelState === State.NOT_CHECKED
+      ? 'local subsystems healthy; model not checked'
+      : modelState === State.NOT_CONFIGURED
+        ? 'local subsystems healthy; no model configured'
+        : 'local subsystems healthy';
+  lines.push(`Overall: ${overall}`);
   lines.push('Subsystems:');
   for (const key of ['configuration', 'session', 'conversation', 'memory', 'knowledge', 'tasks', 'audit', 'model', 'filesystem']) {
     lines.push(`  ${diag.subsystems[key].summary}`);

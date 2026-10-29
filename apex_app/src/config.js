@@ -18,7 +18,7 @@ export function defaultDataDir() {
 function intEnv(env, name, fallback, min, max) {
   const raw = (env[name] || '').trim();
   if (!raw) return fallback;
-  if (!/^\d+$/.test(raw)) throw new ValidationError(`${name} must be a whole number`, 'INVALID_CONFIG');
+  if (!/^\d+$/.test(raw)) throw new ValidationError(`${name} must be a whole number between ${min} and ${max}`, 'INVALID_CONFIG');
   const n = Number(raw);
   if (n < min || n > max) throw new ValidationError(`${name} must be between ${min} and ${max}`, 'INVALID_CONFIG');
   return n;
@@ -36,6 +36,18 @@ export function loadConfig(env = process.env) {
   }
 
   const timeoutMs = intEnv(env, 'APEX_MODEL_TIMEOUT_MS', DEFAULT_MODEL_TIMEOUT_MS, 100, 600000);
+
+  const modelUrl = (env.APEX_MODEL_URL || '').trim() || null;
+  const modelName = (env.APEX_MODEL_NAME || '').trim();
+  // Ollama needs a real model name; the OpenAI-compatible default "local" is not a
+  // valid Ollama model and would otherwise produce a misleading "ollama pull local"
+  // suggestion only after a request was attempted.
+  if (provider === 'ollama' && modelUrl && !modelName) {
+    throw new ValidationError(
+      'APEX_MODEL_NAME is required when APEX_MODEL_PROVIDER=ollama; set it to an installed model (run: ollama list)',
+      'INVALID_CONFIG',
+    );
+  }
 
   // Read-only filesystem inspection. The authorized root must be set explicitly; there is
   // no default, so the capability is absent unless the operator opts in. The root is resolved
@@ -57,9 +69,9 @@ export function loadConfig(env = process.env) {
   return {
     dataDir,
     model: {
-      url: (env.APEX_MODEL_URL || '').trim() || null,
+      url: modelUrl,
       provider,
-      name: (env.APEX_MODEL_NAME || '').trim() || 'local',
+      name: modelName || 'local',
       timeoutMs,
       retries: intEnv(env, 'APEX_MODEL_RETRIES', 1, 0, 3),
       maxTokens: intEnv(env, 'APEX_MODEL_MAX_TOKENS', 512, 1, 8192),

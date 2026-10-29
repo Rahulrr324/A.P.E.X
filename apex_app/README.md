@@ -56,11 +56,39 @@ APEX_DATA_DIR=/path/to/dir node bin/apex.js status
 Both are plain JSON Lines files you can read and back up. The application never
 deletes or rewrites them.
 
+### Configuration and preflight
+
+Configuration comes only from environment variables; there is no config file.
+Invalid or out-of-range values are rejected before any store is opened: the command
+exits 2, names the setting, and reports that no data was read or changed.
+
+| Variable | Accepted values | Default |
+|---|---|---|
+| `APEX_DATA_DIR` | any directory path | `~/.apex/local-alpha` |
+| `APEX_MODEL_URL` | loopback `http(s)` URL; remote only with `APEX_ALLOW_REMOTE_MODEL=1` | none (no model) |
+| `APEX_MODEL_PROVIDER` | `openai`, `ollama` | `openai` |
+| `APEX_MODEL_NAME` | model name; Ollama requires it when a URL is set | `local` (OpenAI-compatible only) |
+| `APEX_MODEL_TIMEOUT_MS` | 100-600000 | 30000 |
+| `APEX_MODEL_MAX_TOKENS` | 1-8192 | 512 |
+| `APEX_MODEL_RETRIES` | 0-3 | 1 |
+| `APEX_CONTEXT_TURNS` | 0-50 | 6 |
+| `APEX_FILESYSTEM_ROOT` | absolute directory; filesystem inspection is off when unset | none |
+| `APEX_FILESYSTEM_MAX_READ_BYTES` | 4096-10485760 | 1048576 |
+
+`node bin/apex.js diagnose` is the read-only preflight. It prints the effective
+settings above (with credential-like text redacted), the state of every store,
+confirmed defects and suspicions, and recovery guidance. It does not create a
+session, write or repair a store, run a task, or contact the model.
+`diagnose --model` (or `status --model`) adds a connectivity check against
+`/api/tags` or `/v1/models`; it never runs inference. Without `--model`, model
+availability is reported as "not checked", not as healthy.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `status` | Application identity, memory and operation counts, model status. Makes no model call. |
+| `status [--model]` | Application identity, memory and operation counts, model status. `--model` probes the endpoint but never runs inference. |
+| `diagnose [--model]` | Read-only preflight: effective configuration, store state, integrity findings, and recovery guidance. `--model` adds a connectivity probe only. |
 | `chat` | Interactive conversation. Reads one message per line from the terminal (or stdin); `/new` starts a new session, `/exit` ends. Memory and history persist across runs. |
 | `ask <request>` | Runs the full Cognitive Controller workflow for a request and records it. |
 | `ask --save-answer <request>` | As `ask`, and also stores a model answer as a `model_conclusion`. Only with this explicit flag. |
@@ -128,8 +156,8 @@ APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
 
 - Only loopback hosts (`127.0.0.1`, `localhost`, `::1`) are accepted by default. A
   remote host needs `APEX_ALLOW_REMOTE_MODEL=1`. URLs with credentials are refused.
-- `APEX_MODEL_NAME` is sent with each request. For Ollama it must be a model that is
-  already installed; otherwise APEX reports `MODEL_NOT_FOUND` and the command to run.
+- `APEX_MODEL_NAME` is sent with each request. For Ollama it is required; if the named
+  model is not installed, APEX reports `MODEL_NOT_FOUND` and the command to run.
 - Temperature is 0. Answers are capped by `APEX_MODEL_MAX_TOKENS` (default 512); a cut-off answer
   is shown with a notice that it was truncated. On a slow machine a long answer can
   exceed `APEX_MODEL_TIMEOUT_MS` (default 30000) and is reported as `TIMEOUT`. Lower

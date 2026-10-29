@@ -208,6 +208,17 @@ describe('command line', () => {
     assert.match(r.stderr, /not loopback/);
     const t = await runCli(['status'], envFor(dataDir, { APEX_MODEL_TIMEOUT_MS: 'soon' }));
     assert.equal(t.code, 2);
+    assert.match(t.stderr, /APEX_MODEL_TIMEOUT_MS must be a whole number between/);
+    assert.match(t.stderr, /No data was read or changed/);
+
+    const missingName = await runCli(['status'], envFor(dataDir, {
+      APEX_MODEL_PROVIDER: 'ollama',
+      APEX_MODEL_URL: 'http://127.0.0.1:11434',
+    }));
+    assert.equal(missingName.code, 2);
+    assert.match(missingName.stderr, /APEX_MODEL_NAME is required/);
+    assert.match(missingName.stderr, /No data was read or changed/);
+    assert.deepEqual(await fs.readdir(dataDir), [], 'invalid configuration must not create any store');
   });
 
   test('an unavailable data store fails safely: status exits 1, and a write is not reported as recorded', async () => {

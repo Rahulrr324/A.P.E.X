@@ -17,8 +17,8 @@ Usage:
   node bin/apex.js chat                  interactive conversation (same session across restarts)
   node bin/apex.js ask [--save-answer] <request words...>
   node bin/apex.js new                   start a new conversation session
-  node bin/apex.js status [--model]      subsystem counts (--model also probes the model backend)
-  node bin/apex.js diagnose [--model]    read-only integrity checks and recovery guidance
+  node bin/apex.js status [--model]      subsystem counts (--model probes the endpoint; no inference)
+  node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js history [--limit N]
   node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>]
@@ -66,10 +66,10 @@ Environment:
   APEX_MODEL_URL           local model server, e.g. http://127.0.0.1:11434 (Ollama) or http://127.0.0.1:8080 (llama.cpp)
   APEX_MODEL_PROVIDER      openai (default: llama.cpp / OpenAI-compatible) or ollama
   APEX_MODEL_NAME          model name to request (default: local; required for Ollama)
-  APEX_MODEL_TIMEOUT_MS    model call timeout in ms (default: 30000)
-  APEX_MODEL_MAX_TOKENS    maximum answer length in tokens (default: 512)
-  APEX_MODEL_RETRIES       retries for unreachable or interrupted calls (default: 1)
-  APEX_CONTEXT_TURNS       recent conversation turns sent to the model (default: 6)
+  APEX_MODEL_TIMEOUT_MS    model call timeout in ms, 100-600000 (default: 30000)
+  APEX_MODEL_MAX_TOKENS    maximum answer length in tokens, 1-8192 (default: 512)
+  APEX_MODEL_RETRIES       retries for unreachable or interrupted calls, 0-3 (default: 1)
+  APEX_CONTEXT_TURNS       recent conversation turns sent to the model, 0-50 (default: 6)
   APEX_ALLOW_REMOTE_MODEL  set to 1 to allow a non-loopback endpoint (not recommended)
 `;
 
@@ -207,7 +207,10 @@ export async function main(argv, {
   try {
     app = appFactory(env);
   } catch (e) {
+    // Configuration is validated before any store is opened, so this failure
+    // cannot have read or changed persistent data.
     err(`configuration error: ${e.message}`);
+    err('No data was read or changed. Check the APEX_* settings in "node bin/apex.js help".');
     return 2;
   }
 
@@ -227,9 +230,17 @@ export async function main(argv, {
         ? `Filesystem root: ${safeText(filesystem.root)} (root validated at startup, read-only)`
         : 'Filesystem root: none configured. Filesystem inspection is unavailable.');
       if (diag.needsAttention) {
-        out('Integrity: attention required; run "node bin/apex.js diagnose" for read-only details and recovery guidance.');
-        // A model probe failure is not a storage failure; diagnostics already
-        // excludes it, and the model line above reports it accurately.
+        // A model probe failure is not a storage or audit failure. Only say
+        // "integrity" when a local check actually found something.
+        const localAttention = diag.localDefects
+          || diag.integrity.suspicions.length > 0
+          || diag.taskState.uncertainSteps.length > 0
+          || diag.taskState.runningTasks.some((task) => task.live !== true);
+        if (localAttention) {
+          out('Integrity: attention required; run "node bin/apex.js diagnose" for read-only details and recovery guidance.');
+        } else {
+          out('Local integrity: no defects found; the model backend is unavailable (see above).');
+        }
         const unavailable = Object.values(diag.subsystems).find((s) => s.key !== 'model' && s.state === State.UNAVAILABLE);
         if (unavailable) err(`data store unavailable: ${safeText(unavailable.detail)}. Check APEX_DATA_DIR and its permissions.`);
       }
