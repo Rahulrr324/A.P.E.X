@@ -248,6 +248,11 @@ export class OpenAICompatibleBackend extends HttpBackend {
     if (r.error) return this.httpFailure(r);
     const parsed = this.parseJson(r.text, r.latencyMs);
     if (parsed.failure) return parsed.failure;
+    // Some servers answer HTTP 200 with an error envelope instead of choices.
+    // That is a provider failure, not a successful-but-malformed answer.
+    if (parsed.value?.error) {
+      return failure(this.name, this.provider, 'MODEL_ERROR', `endpoint reported an error: ${serverMessage(JSON.stringify({ error: parsed.value.error }))}`, r.latencyMs);
+    }
     const choice = parsed.value?.choices?.[0];
     return this.finishAnswer({
       content: choice?.message?.content,

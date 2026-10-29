@@ -1,5 +1,6 @@
 // Command-line interface. Exit codes:
-//   0  request verified (or a model answer was produced and recorded as unverified)
+//   0  request verified (or a model answer was produced and recorded as unverified,
+//      with no proposed action blocked)
 //   1  request not completed (denied, rejected, failed, not verified, or no model)
 //   2  usage or configuration error
 //   3  the outcome could not be written to the audit log
@@ -7,6 +8,7 @@ import readline from 'node:readline';
 import { createAppFromEnv } from './app.js';
 import { APP_EXPANSION, APP_NAME, APP_STAGE, APP_VERSION } from './identity.js';
 import { Outcome } from './outcomes.js';
+import { Decision } from './controller/decision.js';
 import { ValidationError, StoreError } from './errors.js';
 import { shortId } from './util.js';
 import { State, collectDiagnostics, renderDiagnostics, safeText } from './diagnostics.js';
@@ -152,7 +154,12 @@ function exitCodeFor(res) {
   if (res.status === Outcome.SUCCESS_VERIFIED) return 0;
   // A plan that was checked and stored is a success of planning. Nothing has run yet.
   if (res.status === Outcome.PLAN_CREATED || res.status === Outcome.PLAN_PROPOSED) return 0;
-  if (res.status === Outcome.VERIFICATION_UNAVAILABLE && res.operation.capability === 'model.answer') return 0;
+  if (res.status === Outcome.VERIFICATION_UNAVAILABLE && res.operation.capability === 'model.answer') {
+    // Answer text alone is usable, but when a proposal was denied, failed, or could
+    // not be verified the request only partly succeeded; the operation's own
+    // decision already says refuse_or_block, so the exit code must not say success.
+    return res.decision === Decision.REFUSE_OR_BLOCK ? 1 : 0;
+  }
   return 1;
 }
 
@@ -171,7 +178,11 @@ function modelLine(model) {
 
 function sessionLine(session) {
   if (session.state === State.OK) return `Session: ${shortId(session.sessionId)}`;
-  if (session.state === State.MISSING) return 'Session: none yet (a new session starts on the first request)';
+  if (session.state === State.MISSING) {
+    return session.orphanTurns > 0
+      ? `Session: missing (${session.orphanTurns} stored conversation turn(s) will not be replayed; a new session starts on the first request)`
+      : 'Session: none yet (a new session starts on the first request)';
+  }
   if (session.state === State.CORRUPT) return 'Session: corrupt (the current session cannot be loaded)';
   return 'Session: unavailable';
 }

@@ -193,6 +193,16 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     impact: 'conversation replay is blocked; new turns are still appended',
   });
 
+  // A missing session is valid on a fresh install, but not when turns are already
+  // stored: the pointer was lost, and a new session will never replay them. That
+  // is a suspicion about continuity, not a confirmed data defect.
+  if (session.status === 'missing' && subsystems.conversation.state === State.OK && subsystems.conversation.count > 0) {
+    const turns = subsystems.conversation.count;
+    subsystems.session.orphanTurns = turns;
+    subsystems.session.summary = `Session: missing (${turns} stored conversation turn(s) cannot be replayed without a session pointer; a new session starts on the first request)`;
+    suspicions.push(`session.json is missing while conversation.jsonl holds ${turns} turn(s). A new session starts on the first request, so those stored turns will not be replayed. This does not establish that they are damaged.`);
+  }
+
   // --- memory ----------------------------------------------------------------
   subsystems.memory = await inspectJsonlStore({
     key: 'memory',
@@ -519,6 +529,8 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   }
   if (byKey('session').state === State.CORRUPT) {
     recovery.push('Session: "apex new" starts a new session and replaces session.json. Earlier conversation remains stored but is no longer replayed. Do this only if you accept losing the current session pointer.');
+  } else if (byKey('session').state === State.MISSING && byKey('session').orphanTurns > 0) {
+    recovery.push(`Session: no session pointer exists, but conversation.jsonl holds ${byKey('session').orphanTurns} turn(s). A new session starts on the first request and those turns are not replayed. Preserve conversation.jsonl; there is no command to reattach the lost session pointer.`);
   }
   const unavailable = Object.values(subsystems).filter((s) => s.key !== 'model' && s.state === State.UNAVAILABLE);
   if (unavailable.length > 0) {

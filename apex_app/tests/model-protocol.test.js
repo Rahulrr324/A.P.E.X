@@ -274,6 +274,19 @@ describe('OpenAI-compatible servers (llama.cpp protocol)', () => {
     assert.match(res.error.message, /\[redacted-secret\]/);
   });
 
+  test('a 200 response carrying a provider error envelope is MODEL_ERROR, not malformed content', async () => {
+    const secret = 'sk-abcdefghijklmnopqrstuvwx';
+    const url = await rawServer((req, body, res) => json(res, 200, { error: { message: `model overloaded ${secret}`, type: 'server_error' } }));
+    const gw = createGateway({ url, name: 'x', timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'MODEL_ERROR');
+    assert.match(res.error.message, /endpoint reported an error/);
+    assert.equal(res.error.message.includes(secret), false, 'the token is not echoed');
+    assert.match(res.error.message, /\[redacted-secret\]/);
+    assert.equal(res.text, undefined);
+  });
+
   test('a length-limited answer is kept and flagged as truncated', async () => {
     const url = await rawServer((req, body, res) => json(res, 200, { model: 'm', choices: [{ message: { content: 'The first part' }, finish_reason: 'length' }] }));
     const gw = createGateway({ url, name: 'x', timeoutMs: 5000, retries: 0, allowRemote: false });

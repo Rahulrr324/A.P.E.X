@@ -194,8 +194,48 @@ describe('A. conversation and context', () => {
     assert.equal(res.operation.model.finishReason, 'length');
     assert.equal(res.operation.errors.some((e) => e.code === 'TRUNCATED'), true);
     const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
-    assert.equal(turns.some((t) => t.origin === 'model' && t.text.includes('</think>')), true,
-      'the stored turn is the same unmodified model text');
+    const modelTurn = turns.find((t) => t.origin === 'model');
+    assert.equal(modelTurn.text, content, 'the stored turn is the unmodified model text');
+    assert.doesNotMatch(modelTurn.text, /cut off at the model output limit/,
+      'an APEX notice is never stored as if the model had said it');
+  });
+
+  test('a saved conclusion and the stored turn exclude APEX notices', async () => {
+    const s = await startStubModel();
+    stubs.push(s);
+    s.behavior.raw = JSON.stringify({
+      model: 'stub',
+      choices: [{ message: { role: 'assistant', content: 'The answer begins and then' }, finish_reason: 'length' }],
+    });
+    const app = appOn({ model: s });
+
+    const res = await app.controller.handle('Explain a long process.', { saveAnswer: true });
+
+    assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE);
+    assert.match(res.display, /cut off at the model output limit/, 'the user is still told the answer was cut');
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.equal(turns.find((t) => t.origin === 'model').text, 'The answer begins and then');
+    const saved = readJsonl(path.join(app.dataDir, 'memory.jsonl')).find((r) => r.kind === 'model_conclusion');
+    assert.ok(saved, 'the user-approved conclusion is stored');
+    assert.equal(saved.content, 'The answer begins and then', 'the notice is not part of the saved conclusion');
+
+    const later = await app.controller.handle('What process was that?');
+    assert.equal(later.operation.prompt.turnIds.length > 0, true);
+    assert.doesNotMatch(JSON.stringify(s.requests.at(-1).messages), /cut off at the model output limit/,
+      'the notice is not replayed to the model as earlier conversation');
+  });
+
+  test('a knowledge-unavailable notice is not stored as model text', async () => {
+    const dir = tempDir();
+    fs.writeFileSync(path.join(dir, 'knowledge.jsonl'), 'CORRUPT\n');
+    const s = await stub('Paris is the capital of France.');
+    const app = appOn({ dataDir: dir, model: s });
+
+    const res = await app.controller.handle('What is the capital of France?');
+
+    assert.match(res.output, /Knowledge context was unavailable \(STORE_UNAVAILABLE\)/);
+    const turns = readJsonl(path.join(dir, 'conversation.jsonl'));
+    assert.equal(turns.find((t) => t.origin === 'model').text, 'Paris is the capital of France.');
   });
 
   test('separate reasoning is not shown or stored; only the final answer reaches the user', async () => {
@@ -1075,5 +1115,59 @@ describe('E. diagnostics', () => {
     assert.doesNotMatch(text, /may have executed/);
     assert.doesNotMatch(text, /recorded as running but/);
     assert.deepEqual(snapshot(dir), before, 'diagnostics did not touch the lock or the stores');
+  });
+});
+
+describe('F. acceptance: a multi-step request stays consistent end to end', () => {
+  test('a truncated answer with a verified and a denied proposal is reported and persisted honestly', async () => {
+    const s = await startStubModel();
+    stubs.push(s);
+    const content = [
+      'The sum is four.',
+      'PROPOSE_ACTION {"action":"calc.evaluate","input":{"expression":"2+2"}}',
+      'PROPOSE_ACTION {"action":"memory.add","input":{"content":"the sum is four"}}',
+    ].join('\n');
+    s.behavior.raw = JSON.stringify({
+      model: 'stub',
+      choices: [{ message: { role: 'assistant', content }, finish_reason: 'length' }],
+    });
+    const app = appOn({ model: s });
+
+    const res = await app.controller.handle('Explain why two plus two is useful, and save the result.', { saveAnswer: true });
+
+    assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE);
+    assert.equal(res.decision, Decision.REFUSE_OR_BLOCK, 'a denied proposal blocks the request even though answer text exists');
+    assert.match(res.display, /cut off at the model output limit/);
+    assert.match(res.display, /did not execute a proposed action: denied \(ORIGIN_NOT_PERMITTED\)/);
+
+    assert.deepEqual(
+      res.operation.steps.map((step) => `${step.action}:${step.outcome}`),
+      ['calc.evaluate:success_verified', 'memory.add:action_denied', 'memory.save_conclusion:success_verified'],
+    );
+    assert.equal(res.operation.errors.some((e) => e.code === 'TRUNCATED'), true);
+
+    const turns = readJsonl(path.join(app.dataDir, 'conversation.jsonl'));
+    assert.equal(turns.find((t) => t.origin === 'model').text, 'The sum is four.',
+      'proposal lines and APEX notices are not part of the model turn');
+    const actionTurns = turns.filter((t) => t.origin === 'apex_action');
+    assert.equal(actionTurns.length, 2);
+    assert.equal(actionTurns[0].verified, true);
+    assert.equal(actionTurns[1].verified, false);
+
+    const saved = readJsonl(path.join(app.dataDir, 'memory.jsonl')).find((r) => r.kind === 'model_conclusion');
+    assert.equal(saved.content, 'The sum is four.', 'the saved conclusion is the model text, not APEX notices');
+
+    const audit = readJsonl(path.join(app.dataDir, 'operations.jsonl')).at(-1);
+    assert.equal(audit.status, Outcome.VERIFICATION_UNAVAILABLE);
+    assert.equal(audit.decision, Decision.REFUSE_OR_BLOCK);
+    assert.deepEqual(audit.steps.map((step) => step.outcome), ['success_verified', 'action_denied', 'success_verified']);
+
+    s.behavior.raw = undefined;
+    s.behavior.reply = 'Arithmetic helps with everyday estimates.';
+    await app.controller.handle('Tell me more about arithmetic.');
+    const prompt = promptOf(s, -1);
+    assert.match(prompt, /APEX \(model, UNVERIFIED\): The sum is four\./);
+    assert.doesNotMatch(prompt, /cut off at the model output limit/,
+      'a notice is never replayed as if it were model speech');
   });
 });

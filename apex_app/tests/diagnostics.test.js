@@ -117,6 +117,28 @@ describe('diagnostics: subsystem states', () => {
     assert.match(diag.stdout, /No recovery action needed/);
   });
 
+  test('a lost session pointer with stored turns is flagged, not called healthy', async () => {
+    const dir = tempDir();
+    const env = envFor(dir);
+    assert.equal((await runCli(['ask', 'remember that the project codename is Lighthouse'], env)).code, 0);
+    fs.unlinkSync(path.join(dir, 'session.json'));
+    const before = snapshot(dir);
+
+    const diag = await runCli(['diagnose'], env);
+    assert.equal(diag.code, 1);
+    assert.match(diag.stdout, /Session: missing \([1-9]\d* stored conversation turn\(s\) cannot be replayed/);
+    assert.doesNotMatch(diag.stdout, /local subsystems healthy/, 'orphaned turns are not a healthy continuity state');
+    assert.match(diag.stdout, /session\.json is missing while conversation\.jsonl holds \d+ turn\(s\)/);
+    assert.match(diag.stdout, /Preserve conversation\.jsonl/);
+    assert.doesNotMatch(diag.stdout, /Lighthouse/, 'diagnostics never print stored content');
+    assert.deepEqual(snapshot(dir), before, 'diagnostics must not create a new session');
+
+    const status = await runCli(['status'], env);
+    assert.equal(status.code, 1);
+    assert.match(status.stdout, /will not be replayed/);
+    assert.match(status.stdout, /Integrity: attention required/);
+  });
+
   test('corrupt memory is reported with reasons, blocked operations, and preservation guidance', async () => {
     const dir = tempDir();
     const file = path.join(dir, 'memory.jsonl');

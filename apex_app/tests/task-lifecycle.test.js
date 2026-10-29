@@ -352,6 +352,31 @@ describe('task log integrity: a step status and its outcome must agree', () => {
     assert.equal((await store.get(taskId)).status, TaskStatus.COMPLETED);
   });
 
+  test('a rejected transition leaves the replayed task and its steps unchanged', async () => {
+    const dataDir = tempDir();
+    const taskId = randomUUID();
+    const at = new Date().toISOString();
+    const base = { schema: 1, taskId, at };
+    const events = [
+      { ...base, eventId: randomUUID(), type: 'task_created', ...singleStepTask(taskId) },
+      { ...base, eventId: randomUUID(), type: 'transition', reason: 'start', task: { from: 'pending', to: 'running' }, steps: [{ id: 's1', from: 'pending', to: 'running' }] },
+      // Shape-valid and legal per the transition table, but impossible: the task
+      // cannot be completed while its only step is uncertain.
+      { ...base, eventId: randomUUID(), type: 'transition', reason: 'premature completion', task: { from: 'running', to: 'completed' }, steps: [{ id: 's1', from: 'running', to: 'uncertain' }] },
+    ];
+    const file = path.join(dataDir, 'tasks.jsonl');
+    fs.writeFileSync(file, `${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
+
+    const store = new TaskStore(file);
+    const inspected = await store.inspect();
+    assert.equal(inspected.problems.length, 1);
+    const task = inspected.tasks[0];
+    assert.equal(task.status, TaskStatus.RUNNING, 'a rejected event must not change the task status');
+    assert.equal(task.steps[0].status, StepStatus.RUNNING, 'a rejected event must not change step state');
+    assert.notEqual(task.lastReason, 'premature completion');
+    await assert.rejects(store.load(), StoreError, 'the log is still refused for execution');
+  });
+
   test('a log already containing a contradictory outcome fails closed and is never extended', async () => {
     const dataDir = tempDir();
     const taskId = randomUUID();

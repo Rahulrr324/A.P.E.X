@@ -285,8 +285,20 @@ export function applyEvent(tasks, e) {
     if (inputHash(step.input) !== e.approval.inputSha256) return 'approval does not match the step input';
   }
 
-  // Apply.
+  // Invariants: the task status must agree with its steps. Check the prospective
+  // state before mutating anything; an event that fails these checks must leave
+  // the replayed task exactly as it was.
   const nextStatus = e.task ? e.task.to : task.status;
+  const nextByStep = new Map(e.steps.map((c) => [c.id, c.to]));
+  const statuses = task.steps.map((s) => nextByStep.get(s.id) ?? s.status);
+  if (nextStatus === TaskStatus.COMPLETED && statuses.some((s) => s !== StepStatus.COMPLETED)) {
+    return 'task marked completed while a step is not completed';
+  }
+  if (nextStatus === TaskStatus.CANCELLED && statuses.some((s) => s === StepStatus.PENDING || s === StepStatus.RUNNING || s === StepStatus.AWAITING_APPROVAL)) {
+    return 'task marked cancelled while a step is still open';
+  }
+
+  // Apply.
   for (const c of e.steps) {
     const step = byId.get(c.id);
     step.status = c.to;
@@ -301,15 +313,6 @@ export function applyEvent(tasks, e) {
   }
   task.lastReason = e.reason;
   task.updatedAt = e.at;
-
-  // Invariants: the task status must agree with its steps.
-  const statuses = task.steps.map((s) => s.status);
-  if (nextStatus === TaskStatus.COMPLETED && statuses.some((s) => s !== StepStatus.COMPLETED)) {
-    return 'task marked completed while a step is not completed';
-  }
-  if (nextStatus === TaskStatus.CANCELLED && statuses.some((s) => s === StepStatus.PENDING || s === StepStatus.RUNNING || s === StepStatus.AWAITING_APPROVAL)) {
-    return 'task marked cancelled while a step is still open';
-  }
   return null;
 }
 

@@ -81,7 +81,9 @@ confirmed defects and suspicions, and recovery guidance. It does not create a
 session, write or repair a store, run a task, or contact the model.
 `diagnose --model` (or `status --model`) adds a connectivity check against
 `/api/tags` or `/v1/models`; it never runs inference. Without `--model`, model
-availability is reported as "not checked", not as healthy.
+availability is reported as "not checked", not as healthy. A missing session
+pointer is valid on a fresh install; if conversation turns are already stored,
+diagnostics reports it as a suspicion, because a new session will not replay them.
 
 ## Commands
 
@@ -130,8 +132,8 @@ shows any relevant memory it found (without summarising it), and **generates not
 
 | Code | Meaning |
 |---|---|
-| 0 | Verified success, or a model answer was produced (reported as unverified). |
-| 1 | Not completed: denied, rejected, failed, not verified, no model, or the store is unavailable. |
+| 0 | Verified success, or a model answer was produced (reported as unverified) with no proposed action blocked. |
+| 1 | Not completed: denied, rejected, failed, not verified, no model, the store is unavailable, or a model answer whose proposed action was denied/failed. |
 | 2 | Usage or configuration error. |
 | 3 | The operation ran, but its audit record could not be written. The output says so. |
 

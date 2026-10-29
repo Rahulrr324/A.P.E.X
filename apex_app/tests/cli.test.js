@@ -189,6 +189,37 @@ describe('command line', () => {
     assert.match(status.stdout, /Model backend: http:\/\/127\.0\.0\.1:\d+/);
   });
 
+  test('a model answer whose proposed action is denied is not reported as success', async () => {
+    const dataDir = tempDir();
+    const s = await startStubModel();
+    stubs.push(s);
+    const env = envFor(dataDir, { APEX_MODEL_URL: s.url, APEX_MODEL_NAME: 'stub' });
+
+    // The model claims it saved something, but memory writes from a model origin
+    // are denied by the registry. The request was only partly completed.
+    s.behavior.reply = 'I saved that for you.\nPROPOSE_ACTION {"action":"memory.add","input":{"content":"the launch code is Zephyr"}}';
+    const denied = await runCli(['ask', 'what is the launch code?'], env);
+    assert.equal(denied.code, 1, denied.stdout + denied.stderr);
+    assert.match(denied.stdout, /Status:\s+verification_unavailable/);
+    assert.match(denied.stdout, /did not execute a proposed action: denied \(ORIGIN_NOT_PERMITTED\)/);
+
+    // A proposal that executes and verifies is still a successful request.
+    s.behavior.reply = 'It is 4.\nPROPOSE_ACTION {"action":"calc.evaluate","input":{"expression":"2+2"}}';
+    const verified = await runCli(['ask', 'explain why two plus two makes four'], env);
+    assert.equal(verified.code, 0, verified.stdout + verified.stderr);
+    assert.match(verified.stdout, /verification success_verified/);
+  });
+
+  test('a model answer with no proposal still exits 0', async () => {
+    const dataDir = tempDir();
+    const s = await startStubModel();
+    stubs.push(s);
+    s.behavior.reply = 'Paris is the capital of France.';
+    const r = await runCli(['ask', 'what is the capital of France?'], envFor(dataDir, { APEX_MODEL_URL: s.url, APEX_MODEL_NAME: 'stub' }));
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /Status:\s+verification_unavailable/);
+  });
+
   test('usage errors exit 2 with a clear message', async () => {
     const dataDir = tempDir();
     const env = envFor(dataDir);

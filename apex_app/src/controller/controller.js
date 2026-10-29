@@ -355,7 +355,7 @@ export class CognitiveController {
         if (m.error) op.errors.push(m.error);
         const turnRows = [];
         if (m.status === Outcome.VERIFICATION_UNAVAILABLE && m.hasText) {
-          turnRows.push({ origin: TURN_ORIGINS.MODEL, text: m.answer, verified: false });
+          turnRows.push({ origin: TURN_ORIGINS.MODEL, text: m.modelText, verified: false });
         } else {
           turnRows.push({ origin: TURN_ORIGINS.NOTICE, text: m.answer, verified: false });
         }
@@ -381,7 +381,7 @@ export class CognitiveController {
           // Storing a model answer is a user-approved write, never automatic.
           const step = await this.runAction(
             'memory.save_conclusion',
-            { content: m.answer, operationId: op.id, backend: m.backend },
+            { content: m.modelText, operationId: op.id, backend: m.backend },
             'user',
             op.id,
           );
@@ -1156,6 +1156,10 @@ export class CognitiveController {
     return {
       status: Outcome.VERIFICATION_UNAVAILABLE,
       answer: answerText,
+      // The text the model actually produced, without APEX notices. Conversation
+      // turns and a user-approved saved conclusion use this, so a notice can never
+      // be replayed later as if the model had said it.
+      modelText: parsed.text,
       display: historyNotice ? `${answerText}\n\n${historyNotice}` : undefined,
       hasText: parsed.text.length > 0,
       backend: res.backend,
