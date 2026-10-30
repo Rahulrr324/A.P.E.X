@@ -42,6 +42,13 @@ export function parseEndpoint(rawUrl, { allowRemote = false } = {}) {
   if (url.username || url.password) {
     throw new ValidationError('APEX_MODEL_URL must not contain credentials', 'INVALID_CONFIG');
   }
+  // A base URL with a path prefix is supported, but a chat endpoint is not a base: using
+  // one appends the API path twice and turns a configuration mistake into a misleading
+  // HTTP 404 at request time.
+  const endpointPath = url.pathname.replace(/\/+$/, '');
+  if (/(?:^|\/)chat\/completions$/.test(endpointPath) || /(?:^|\/)api\/(?:chat|generate|tags)$/.test(endpointPath)) {
+    throw new ValidationError('APEX_MODEL_URL must be the server base URL, not a chat endpoint (for example http://127.0.0.1:11434)', 'INVALID_CONFIG');
+  }
   if (!allowRemote && !LOOPBACK_HOSTS.has(url.hostname)) {
     throw new ValidationError(
       `APEX_MODEL_URL host "${url.hostname}" is not loopback; set APEX_ALLOW_REMOTE_MODEL=1 to permit it`,
@@ -217,6 +224,13 @@ class HttpBackend {
     const e = r.error;
     if (e.code === 'HTTP_ERROR' && [400, 413, 422].includes(e.status) && /context|too (long|large)|exceed/i.test(e.detail ?? '')) {
       return failure(this.name, this.provider, 'CONTEXT_TOO_LARGE', 'the prompt is larger than the model context window; shorten the request or use a model with a larger context', r.latencyMs);
+    }
+    // The endpoint answered, so this is not an outage or a bad base URL. If it says the
+    // configured model does not exist, the model identifier is the problem.
+    if (e.code === 'HTTP_ERROR' && e.status === 404
+      && /model/i.test(e.detail ?? '')
+      && /not (?:found|installed|available)|does not exist|unknown/i.test(e.detail ?? '')) {
+      return failure(this.name, this.provider, 'MODEL_NOT_FOUND', `model "${safeModelName(this.model)}" was not found by the endpoint; check APEX_MODEL_NAME`, r.latencyMs);
     }
     return failure(this.name, this.provider, e.code, e.message, r.latencyMs);
   }

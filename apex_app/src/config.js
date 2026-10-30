@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ValidationError } from './errors.js';
 import { resolveRoot } from './filesystem/path.js';
+import { CONTROL_CHARS } from './util.js';
 
 export const DEFAULT_MODEL_TIMEOUT_MS = 30000;
 export const MODEL_PROVIDERS = Object.freeze(['openai', 'ollama']);
@@ -39,6 +40,11 @@ export function loadConfig(env = process.env) {
 
   const modelUrl = (env.APEX_MODEL_URL || '').trim() || null;
   const modelName = (env.APEX_MODEL_NAME || '').trim();
+  // The name is sent to the server verbatim, so it is validated as configuration rather
+  // than carried into a request and rejected there.
+  if (modelName.length > 200 || CONTROL_CHARS.test(modelName) || /[\r\n]/.test(modelName)) {
+    throw new ValidationError('APEX_MODEL_NAME must be at most 200 characters without control characters or line breaks', 'INVALID_CONFIG');
+  }
   // Ollama needs a real model name; the OpenAI-compatible default "local" is not a
   // valid Ollama model and would otherwise produce a misleading "ollama pull local"
   // suggestion only after a request was attempted.

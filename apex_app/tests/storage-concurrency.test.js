@@ -271,7 +271,7 @@ describe('077: concurrent summary-queue updates preserve every intent', () => {
     const queue = new SummaryQueue(path.join(dir, 'task-summary-queue.json'));
     await assert.rejects(
       queue.add({ sessionId: 's1', taskId: 'task-w', signature, text: 'summary for task-w', verified: true }),
-      /cannot update task-summary-queue\.json: 16 takeover attempts are recorded as abandoned; nothing was changed/,
+      /cannot update task-summary-queue\.json: 16 takeover attempts are recorded as abandoned; run "apex repair locks"/,
     );
     assert.equal(fs.existsSync(path.join(dir, 'task-summary-queue.json')), false, 'a refused update changed nothing');
     assert.equal(fs.readFileSync(lockFor(dir), 'utf8'), raw, 'the stale claim was left for an operator');

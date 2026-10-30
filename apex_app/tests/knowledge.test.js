@@ -1114,7 +1114,7 @@ test('cli - knowledge errors, ambiguity, and audit failures', async (t) => {
 
     const show = await runCli(['knowledge', 'show', 'aaaaaaaa'], corruptEnv);
     assert.equal(show.code, 1);
-    assert.match(show.stderr, /data store unavailable/);
+    assert.match(show.stderr, /data store corrupt/);
   });
 
   await t.test('an audit write failure exits 3 for add and list', async () => {

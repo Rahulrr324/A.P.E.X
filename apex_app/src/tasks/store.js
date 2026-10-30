@@ -10,10 +10,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { StoreError, ValidationError } from '../errors.js';
 import { TASK_SCHEMA, reduceEvents, validateEventShape } from './model.js';
+import { inspectLock, recoverLock, TAKEOVER_EPOCHS } from './lock-recovery.js';
 
-// Bounded so a directory littered with abandoned takeover tokens is reported instead of
-// retried forever. Each epoch requires a process that exited during a takeover.
-const TAKEOVER_EPOCHS = 16;
 
 function processAlive(pid) {
   try {
@@ -125,7 +123,11 @@ export class TaskStore {
   // another process created. Both the takeover and the release act on the lock only when
   // it still holds the exact claim this process validated.
   async withLock(fn) {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    try {
+      await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    } catch (err) {
+      throw new StoreError(`cannot prepare the task data directory: ${err?.code || err?.message}`);
+    }
     const body = JSON.stringify({ pid: process.pid, nonce: this.idFactory(), at: this.now().toISOString() });
     // Stage the complete lock body under a private name, then publish it with a hard
     // link. Creating the lock name with `writeFile({flag:'wx'})` made the name visible
@@ -183,7 +185,7 @@ export class TaskStore {
           if (raw !== null && Number.isInteger(pid) && pid > 0 && !processAlive(pid)) {
             const election = await this.#electTakeover(raw);
             if (!election.won) {
-              throw new StoreError(`tasks are in use by process ${election.pid ?? 'unknown'}; try again when it finishes`);
+              throw new StoreError(`tasks are in use by process ${election.pid ?? 'unknown'}; try again when it finishes`, 'LOCKED');
             }
             try {
               const stillThere = await fs.readFile(this.lockPath, 'utf8').catch(() => null);
@@ -193,13 +195,13 @@ export class TaskStore {
             }
             continue;
           }
-          throw new StoreError(`tasks are in use by process ${holder?.pid ?? 'unknown'}; try again when it finishes`);
+          throw new StoreError(`tasks are in use by process ${holder?.pid ?? 'unknown'}; try again when it finishes`, 'LOCKED');
         }
       }
     } finally {
       await fs.rm(staged, { force: true }).catch(() => {});
     }
-    if (!acquired) throw new StoreError('could not acquire the task lock');
+    if (!acquired) throw new StoreError('could not acquire the task lock', 'LOCKED');
     try {
       return await fn();
     } finally {
@@ -262,7 +264,7 @@ export class TaskStore {
     } finally {
       await fs.rm(staged, { force: true }).catch(() => {});
     }
-    throw new StoreError(`cannot take over the task lock: ${TAKEOVER_EPOCHS} takeover attempts are recorded as abandoned; inspect the lock and remove it if no task run is active`);
+    throw new StoreError(`cannot take over the task lock: ${TAKEOVER_EPOCHS} takeover attempts are recorded as abandoned; run "apex repair locks" after confirming no task run is active`, 'LOCKED');
   }
 
   #takeoverWon(tokenPath, body) {
@@ -296,6 +298,17 @@ export class TaskStore {
     const pid = Number(holder?.pid);
     if (!Number.isInteger(pid) || pid <= 0) return { present: true, pid: null, alive: null };
     return { present: true, pid, alive: processAlive(pid) };
+  }
+
+  // Read-only view of the lock plus its takeover tokens and recovery guard.
+  async lockReport() {
+    return inspectLock(this.lockPath);
+  }
+
+  // Explicit recovery for a claim whose holder has exited. It never takes the lock,
+  // and it refuses if the holder or any takeover token names a live process.
+  async recover() {
+    return recoverLock(this.lockPath, 'task');
   }
 
   // Validates by replay, then appends. Refused events are never written, and a

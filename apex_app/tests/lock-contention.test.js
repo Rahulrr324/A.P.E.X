@@ -293,7 +293,7 @@ describe('061: the task lock is exclusive across processes', () => {
     const store = new TaskStore(path.join(dataDir, 'tasks.jsonl'));
     await assert.rejects(
       () => store.withLock(async () => 'never'),
-      /16 takeover attempts are recorded as abandoned; inspect the lock and remove it if no task run is active/,
+      /16 takeover attempts are recorded as abandoned; run "apex repair locks"/,
       'exhaustion is a bounded, reported refusal',
     );
     assert.equal(fs.readFileSync(LOCK(dataDir), 'utf8'), raw, 'the claim was not removed');

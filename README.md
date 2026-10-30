@@ -12,10 +12,19 @@ preserved for provenance.
 - Read-only `record_inspector` for bounded structural inspection of those files.
 - Dependency-free developer validation tooling with isolated test state, full
   command/exit logs and explicit CMake versus direct-compiler results.
+- The runnable **APEX Local Alpha** application in [`apex_app/`](apex_app/README.md):
+  a Node.js CLI with a Cognitive Controller, personal memory, an explicit knowledge
+  store, independent verification, audit records, crash recovery, and a bounded task
+  planner. It answers deterministic requests with no model and sends everything else to
+  a local model backend **you** configure; without one it reports `model_unavailable`
+  and generates nothing. Its model-path tests use local stand-in servers, and the only
+  real-model observations are the dated ones recorded in its README.
 
-**There is no personal APEX assistant application yet.** No conversational model,
-personal-memory service, Cognitive Controller, World Model, Planner, UI or neural–
-cognitive bridge is represented as implemented by these developer tools.
+**APEX Local Alpha is a vertical slice, not the whole system.** There is still no World
+Model, no general-purpose planner, no persistent learning, no voice, no UI, and no
+implemented neural–cognitive bridge. `stark/` remains separate experimental research;
+`apex_app/` does not import it. Do not read a passing test suite or a milestone number
+as evidence that the broader APEX vision is complete.
 
 The recorded states remain **G7 FAIL / M0 FAIL (NOT ACCEPTED) / M1 LOCKED**.
 `stark/reports/M0_FINAL_REPORT_v2.4.md` §Q7 explicitly forbids starting M1 before

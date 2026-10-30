@@ -18,6 +18,49 @@ The application is in `apex_app/`, separate from the experimental C++ neural
 research under `stark/`. Nothing here depends on that research. Historical STARK
 identifiers are preserved there and are not used by this application.
 
+## Capability status
+
+This section states what is implemented, by which evidence, and what is not. It is
+deliberately narrower than the APEX vision. Every claim below is supported by the
+source in `apex_app/` and the tests named in [Tests](#tests); nothing here is inferred
+from a milestone number or a passing build.
+
+| Category | Status | Evidence |
+|---|---|---|
+| Runnable application | Implemented: the CLI in `bin/apex.js` / `src/cli.js`, the controller pipeline, memory, knowledge, audit, tasks, diagnostics. | `npm test` and the walkthrough in the [Commands](#commands) table. |
+| Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `calc`, `status`, `knowledge add/list/search/show`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `tasks.test.js`, `cli-workflow.test.js`. A model is never consulted for these. |
+| Filesystem inspection | Implemented only when `APEX_FILESYSTEM_ROOT` is set: bounded, read-only, single-root listing and reading. | `filesystem.test.js`, `tasks-filesystem.test.js`. |
+| Model gateway protocol handling | Implemented and **stub-tested**: request/response shapes, failure classification, retries, timeouts, and model-name mismatch against local stand-in servers that copy the documented OpenAI-compatible and Ollama shapes. | `gateway.test.js`, `model-workflow.test.js`. Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model. |
+| Real-model behaviour | **Observed once, outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on 2026-10-29, on one Windows machine. The measurements and what they showed are in [Optional: a local model](#optional-a-local-model). The changes in this batch were **not** re-validated against a real model. | Manual, dated observations only; no automated regression test. |
+| `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
+| Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
+| World model, general planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit; operation logs are not learning. | The scope paragraphs in this README and [Future learning interface](#future-learning-interface-not-implemented). |
+
+The model path depends entirely on a backend you configure yourself. Without one,
+APEX answers deterministic requests and reports `model_unavailable` for everything
+else; it never fabricates an answer.
+
+### Controlled real-model smoke test (prerequisites only)
+
+This is what a future controlled check would require. It is **not run here** and no
+result is claimed. Complete it only where the constraints allow it:
+
+1. A local model server is installed and running by the operator (Ollama or an
+   OpenAI-compatible `llama-server`). APEX neither downloads a model nor starts a
+   server.
+2. A model is already installed and named (for Ollama, `ollama pull <model>` is done by
+   the operator; APEX reports `MODEL_NOT_FOUND` if it is missing).
+3. `APEX_MODEL_PROVIDER`, `APEX_MODEL_URL`, and `APEX_MODEL_NAME` point at that server
+   on loopback; raise `APEX_MODEL_TIMEOUT_MS` above the default 30 s if a cold start
+   must succeed, and keep `APEX_MODEL_MAX_TOKENS` small for a bounded run.
+4. `node bin/apex.js diagnose --model` first. It lists models only and runs no
+   inference; an HTTP 200 with an error body, non-JSON body, or empty model list is
+   reported as unavailable, not healthy.
+5. One or two bounded `ask` requests, then `history`, to confirm the answer is shown as
+   unverified, the configured model is the one recorded, and an operation record was
+   written. A complete answer proves the path end to end; it does not prove answer
+   quality.
+
 ## Requirements
 
 - **Node.js 22 or later.** Verified on Node 22.22.3 (Linux). Node is the only runtime.
@@ -131,6 +174,8 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `task resume <id>` | Continues a paused task. A completed step is never run again. |
 | `task retry <id> <stepId>` | Retries one failed or uncertain step, only if it is read-only. |
 | `task cancel <id>` | Cancels a task that has not finished. Steps that have not run are cancelled. |
+| `queue` | Read-only view of the task-summary retry queue: what is owed, its state, and whether the queue file or its lock needs attention. |
+| `repair locks` | Inspects the task and queue locks and removes only abandoned takeover tokens whose process is provably gone. It never takes a lock, never deletes a lock claim, and refuses while any holder or takeover process is live. A dead claim is taken over by the next normal run. |
 | `knowledge add --subject <s> --relationship <r> --object <o> [--evidence <e>]` | Stores an explicit relationship triple. User origin only. |
 | `knowledge list [--limit N]` | Lists recent knowledge records with provenance and status. |
 | `knowledge search <query>` | Searches knowledge triples by keyword. |
@@ -526,10 +571,17 @@ record, so the display is derived from the same facts the audit holds.
   history cannot be written"); the task is never run again to make up for it. The queue is
   bounded: 32 intents in total, 4 offered per write, and an intent that would exceed the cap
   is refused and disclosed rather than displacing an older one. Intents for a session that
-  `apex new` replaced are never delivered, and two processes writing the queue in the same
-  moment can lose one intent - either shows up as the same disclosure as any other failed
-  history write. There is no repair command for a damaged queue: a queue that cannot be read
-  reports the damage and reissues nothing.
+  `apex new` replaced are never delivered. Each queue update holds
+  `task-summary-queue.json.lock` and waits a bounded time (2 s) for another update to
+  finish; if it still cannot read or take ownership of the lock it is refused as "in
+  use" with nothing changed, so a concurrent update can defer an intent but cannot
+  silently lose or overwrite one. The whole file is written as a staged write plus an
+  atomic rename, and the queue is a work list, not evidence: dropping an intent never rewrites
+  task or audit history. `queue` shows what is owed and whether the queue or its lock
+  needs attention. There is no repair command for a damaged queue: a queue file that
+  cannot be parsed is reported by `queue` and `diagnose`, fails closed, and reissues
+  nothing until an operator resolves it. `repair locks` addresses only lock files, not
+  queue contents.
 - Model planning has been tested only with test doubles and stub servers. No real model
   was used to plan a task. See the Mission 003 report for what was and was not run.
 
@@ -707,6 +759,17 @@ suite; it is not an automated regression test and is reported separately.
 | 23. A clean install, and a bad setting or a broken store | `readiness-batch-e.test.js` (initialization in an isolated directory leaves an existing `~/.apex` byte-identical; a deterministic action runs with no model; an unreachable endpoint is a failure, not an answer; a denied model proposal runs nothing; a killed process is never reported as success; history and audit agree; diagnostics report damage without writing); `config-failures.test.js` (eleven invalid settings refused before any store is opened; a storage failure reported as storage, a model failure as a model failure, each with its own exit code) |
 | 24. A request that lost its session is disclosed | `session-degradation.test.js` (`ask`, `chat` and `task run` print the notice while the outcome and exit code stay truthful; the audit record names `stage: session`; nothing is stored without a session; a conversation failure is not described as a session failure) |
 | 25. Two processes cannot both hold the task lock | `lock-contention.test.js` (six real processes racing a stale lock: exactly one enters; a live holder is never displaced; a holder removes only its own claim; repeated recovery; an unreadable lock is refused and preserved; a release between the failed link and the read is a free lock; an abandoned takeover token is superseded; a live takeover refuses a second taker; a read takes no lock; three concurrent runs of one task record each step once) |
+| 26. A real process that exits inside a lock takeover is recovered explicitly | `lock-recovery.test.js` (a takeover token whose holder is gone is removed by `repair locks` while the claim and every live holder are left untouched; recovery is bounded and refuses when it cannot prove the holder is dead) |
+| 27. Deferred task summaries are visible and bounded | `queue-observability.test.js` (the `queue` view reports owed intents, corruption, a full queue, and lock state; a corrupt queue fails closed and reissues nothing) |
+| 28. Credential-like text is minimized at the persistence boundary | `audit-minimization.test.js` (a model answer's key or password is replaced in the audit output and the record marked `outputMinimized`; a credential-like request is not copied; history keeps no part of it) |
+| 29. Recovery and diagnostic messages say what is known and what is safe | `diagnostics-usability.test.js` (damage, missing evidence, locks, queues, uncertain results, and model failures each get specific guidance; no failed command suggests repeating a possible side effect) |
+| 30. Model configuration is a validated contract | `model-config-contract.test.js` (invalid providers, names, ranges, remote endpoints, and Ollama without a name are refused before any store opens; health reads listings only) |
+| 31. The documented CLI workflow works without a model | `cli-workflow.test.js` (help maps every command and exit code; the walkthrough from remember to task explain to knowledge search to diagnose runs in an isolated directory; a denied model proposal and an unusable data directory are reported truthfully) |
+| 32. A failure never claims more than the pipeline established | `failure-semantics.test.js` (rejected input versus denied action; verification failed versus unavailable; a write that failed after it started; an audit failure after a side effect; an unusable data path) |
+| 33. Persistent stores recover without inventing evidence | `store-recovery-acceptance.test.js` (a real interrupted child; a damaged step audit line preserved and disclosed; a corrupt summary queue failing closed; `repair locks` leaving queue bytes unchanged; a partial task-log write reconciled without re-execution) |
+| 34. Retrieval stays exact, bounded, and provenance-preserving at scale | `retrieval-contract.test.js` (4,000 records searched in under 5 s; ambiguous ids refused; conflicting triples kept with both ids and provenance; malformed writes refused; damage in one store does not block an unrelated deterministic request) |
+| 35. Capability statements match the evidence | `capability-truthfulness.test.js` (README categories for implemented, deterministic, stub-tested, real-model-tested, `stark/`, and proposed work; root README corrected; help and diagnostics never call a listing probe inference, and an unprobed model is "not checked") |
+| 36. Batch I as one story | `acceptance-batch-i.test.js` (14 scenarios: deterministic workflow, missing model in listing, denied proposal, corrupt storage, audit failure, interrupted task, explicit lock recovery, concurrent queue updates, credential minimization, uncertain outcome, read-only diagnostics, knowledge conflict and provenance in model context, CLI usage errors, listing-only model reporting) |
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
@@ -777,7 +840,12 @@ questions that must change nothing).
   available; a recycled pid is treated as live, so the lock fails closed and the
   operator resolves it. Node still has no conditional-delete primitive without a native
   dependency, so the removal itself is a plain unlink - but it is performed by one
-  elected process at a time.
+  elected process at a time. `repair locks` is the explicit inspection step: it reports
+  the holder, every takeover token, and any recovery guard, then removes only abandoned
+  takeover tokens for the current claim. It never takes a lock, never removes a lock
+  claim, and refuses while any holder or takeover process is live, so it cannot displace
+  work in progress. A dead claim is still taken over by the next normal task or queue
+  update.
 - **A data directory path is validated when it is used, not when it is typed.**
   `status` and `diagnose` report a nonexistent directory the same way as a fresh
   install, because creating it to find out would make a read-only check write. An
@@ -856,10 +924,13 @@ explicit entity relationships, built alongside personal memory:
   `tasks.jsonl.lock`; concurrent task runs are refused rather than queued.
 - **Single-user, local only.** No authentication, encryption, or sync. Anyone with
   read access to the data directory can read the memory.
-- **Audit content:** the `request` and model `output` fields contain your text. The
-  audit log is not redacted except for memory-write payloads and credential-like
-  requests. The audit records memory ids and prompt sizes, not the memory text sent to
-  the model. A model's own answer is recorded as output, and it could repeat memory.
+- **Audit content:** the `request` and model `output` fields contain your text. Memory-write
+  payloads and credential-like requests are not stored, and a credential-like substring in a
+  model answer is replaced with `[redacted-secret]` before the record is written; that record
+  is marked `outputMinimized: true` so the stored text is not mistaken for verbatim evidence.
+  Detection is heuristic, so a differently formatted secret can still be stored. The audit
+  records memory ids and prompt sizes, not the memory text sent to the model. A model's own
+  answer is recorded as output, and it could repeat memory.
 - **Conversation history** is replayed as summaries and text, limited to
   `APEX_CONTEXT_TURNS` turns. There is no summarisation of older history. If a turn
   cannot be saved, the answer is still shown with a notice that the exchange was not
@@ -874,7 +945,7 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this batch was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 681 tests, 679 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 754 tests, 752 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file

@@ -33,7 +33,8 @@ export const NO_MODEL_MESSAGE =
   'No inference backend is configured, so APEX cannot write a free-form answer. ' +
   'Nothing has been generated. Non-model functions still work: "status", "calc 2+2", ' +
   '"remember that ...", "remember privately that ...", "recall ...", "list memory". ' +
-  'To enable a model, set APEX_MODEL_URL to a local server (see README).';
+  'To enable a model, set APEX_MODEL_URL to a local server (see README). ' +
+  'Retrying this request will not produce an answer until a model is configured.';
 
 export function validateRequest(text) {
   if (typeof text !== 'string') throw new ValidationError('request must be text');
@@ -47,6 +48,24 @@ export function validateRequest(text) {
 function stripDisplay(step) {
   const { display, ...rest } = step;
   return rest;
+}
+
+// The advice after a failed model call depends on why it failed. A reachable endpoint
+// that does not serve the configured model is not an outage, and telling the operator to
+// wait for the backend would point at the wrong fix.
+function modelFailureAdvice(code) {
+  switch (code) {
+    case 'MODEL_NOT_FOUND':
+      return 'The endpoint is reachable but does not serve this model name; no action was proposed or run. Correct APEX_MODEL_NAME before retrying.';
+    case 'CONTEXT_TOO_LARGE':
+      return 'No action was proposed or run; shorten the request rather than retrying it unchanged.';
+    case 'TIMEOUT':
+    case 'INTERRUPTED':
+    case 'UNREACHABLE':
+      return 'No action was proposed or run, so retrying this request after the backend is available is safe.';
+    default:
+      return 'No action was proposed or run; retrying is safe, and if the same failure repeats check the model server.';
+  }
 }
 
 function renderShown(hits) {
@@ -987,10 +1006,26 @@ export class CognitiveController {
     return { status, decision: op.decision, display, output: op.output, operation: op, recorded, recordError, task, ...extra };
   }
 
+  // A task-store refusal that happened before any step ran is not a failed task. The
+  // message says so, because "try again when it finishes" is wrong for a lock whose
+  // holder cannot be identified, and a corrupt log needs inspection rather than a retry.
+  #taskStoreFailure(err) {
+    if (err.code === 'LOCKED') {
+      const unreadableHolder = /process unknown/i.test(err.message);
+      return unreadableHolder
+        ? `task run refused: ${err.message}. No task step was run and nothing was changed. The lock holder cannot be identified, so a retry may be refused again; run "node bin/apex.js diagnose" and, if no task run or recovery is active, "node bin/apex.js repair locks".`
+        : `task run refused: ${err.message}. No task step was run and nothing was changed. If no other task run is active, run "node bin/apex.js repair locks" to inspect abandoned takeover tokens; retrying after the active run finishes is safe.`;
+    }
+    const damaged = /corrupt/i.test(err.message) || /cannot be applied/i.test(err.message);
+    return `task store unavailable: ${err.message}. No task step was run and nothing was changed.${damaged
+      ? ' Run "node bin/apex.js diagnose" for what is readable and what is uncertain; do not append to or replace the task log.'
+      : ' Check APEX_DATA_DIR, its permissions, and free space; run "node bin/apex.js diagnose" for a read-only report.'}`;
+  }
+
   // A refusal is a result, not a crash: the reason is shown and nothing changes.
   async #refused(op, err, status = Outcome.INPUT_REJECTED, notice = '') {
     if (err instanceof ValidationError) return this.#finishTaskOp(op, status, `${err.message}${notice}`);
-    if (err instanceof StoreError) return this.#finishTaskOp(op, Outcome.EXECUTION_FAILED, `task store unavailable: ${err.message}${notice}`);
+    if (err instanceof StoreError) return this.#finishTaskOp(op, Outcome.EXECUTION_FAILED, `${this.#taskStoreFailure(err)}${notice}`);
     throw err;
   }
 
@@ -1412,7 +1447,7 @@ export class CognitiveController {
         op.errors.push({ stage: 'task', code: 'TASK_LOG_WRITE_FAILED', message: err.message, steps: err.executedSteps.map((s) => s.id) });
         return { status: Outcome.AUDIT_INTEGRITY_FAILED, output: message, display: message };
       }
-      if (err instanceof StoreError) return { status: Outcome.EXECUTION_FAILED, output: `task store unavailable: ${err.message}`, display: `task store unavailable: ${err.message}` };
+      if (err instanceof StoreError) return { status: Outcome.EXECUTION_FAILED, output: this.#taskStoreFailure(err), display: this.#taskStoreFailure(err) };
       throw err;
     }
   }
@@ -1533,7 +1568,7 @@ export class CognitiveController {
       op.model = { provider: res.provider ?? null, latencyMs: res.latencyMs };
       return {
         status: Outcome.EXECUTION_FAILED,
-        answer: `The model backend did not produce an answer (${res.error.code}: ${res.error.message}). No answer has been generated.`,
+        answer: `The model backend did not produce an answer (${res.error.code}: ${res.error.message}). No answer has been generated. ${modelFailureAdvice(res.error.code)}`,
         hasText: false,
         backend: res.backend,
         error: { stage: 'model', code: res.error.code, message: res.error.message },

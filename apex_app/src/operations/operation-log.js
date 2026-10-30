@@ -5,6 +5,7 @@ import readline from 'node:readline';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { StoreError } from '../errors.js';
 import { OPERATION_SCHEMA, OUTCOME_VALUES } from '../outcomes.js';
+import { containsSecret, redactSecrets } from '../security/secrets.js';
 
 function validateOperation(op) {
   if (!op || typeof op !== 'object' || Array.isArray(op)) return 'not an object';
@@ -14,6 +15,17 @@ function validateOperation(op) {
   return null;
 }
 
+// The audit record is evidence, and its output field can quote untrusted model text. A
+// credential-like substring is removed at the write boundary and the record says so, so a
+// later reader can tell the stored text is minimized rather than verbatim. Everything that
+// identifies the event - status, capability, ids, retrieval, errors, timing - is unchanged.
+// Detection is heuristic; see security/secrets.js for the patterns and their limits.
+function minimizeOutput(op) {
+  if (typeof op.output !== 'string' || op.output.length === 0) return op;
+  if (!containsSecret(op.output)) return op;
+  return { ...op, output: redactSecrets(op.output), outputMinimized: true };
+}
+
 export class OperationLog {
   constructor(filePath) {
     this.filePath = filePath;
@@ -21,7 +33,7 @@ export class OperationLog {
   }
 
   async append(operation) {
-    await this.store.append(operation);
+    await this.store.append(minimizeOutput(operation));
   }
 
   async list({ limit = 10 } = {}) {

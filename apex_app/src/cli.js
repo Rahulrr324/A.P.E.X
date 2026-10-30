@@ -12,6 +12,8 @@ import { Decision } from './controller/decision.js';
 import { ValidationError, StoreError } from './errors.js';
 import { shortId } from './util.js';
 import { TaskStatus } from './tasks/model.js';
+import { MAX_QUEUED_SUMMARIES } from './tasks/summary-queue.js';
+import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
 import { State, collectDiagnostics, renderDiagnostics, safeText } from './diagnostics.js';
 
 export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION})
@@ -38,9 +40,21 @@ Usage:
   node bin/apex.js task resume <id>      continue a paused task (never re-runs a completed step)
   node bin/apex.js task retry <id> <stepId>   retry a failed read-only step
   node bin/apex.js task cancel <id>
+  node bin/apex.js queue                 deferred task summaries and their state (read-only)
+  node bin/apex.js repair locks          inspect task/queue locks; remove only abandoned takeover tokens
   node bin/apex.js help
 
-Request examples (no model needed):
+Exit codes:
+  0  completed (a verified result, a created plan, or a model answer recorded as unverified)
+  1  not completed (denied, rejected, failed, unverified, or no model configured)
+  2  usage or configuration error; nothing was run
+  3  the outcome could not be written to the audit log
+
+Lock recovery never takes a lock, never removes a lock claim, and refuses while any
+holder or takeover process is live. A dead claim is taken over by the next normal task
+or queue update through the same election that already handles a crashed process.
+
+Request examples (no model needed; use them with ask, or type the same words in chat):
   remember that the project codename is Lighthouse
   remember privately that my pin is kept at the bank   (never sent to a model)
   recall codename
@@ -50,6 +64,9 @@ Request examples (no model needed):
   status
   list src/             list one directory inside the authorized root (no model needed)
   read README.md        read a bounded text file inside the authorized root
+  task plan "calc 1+1; calc 2+2"   plan a checked task; nothing runs yet
+                                     task run <task-id> runs it, task show <task-id> shows the record
+  diagnose              read-only preflight, including recovery guidance
 
 Knowledge examples (explicit relationships; user-origin write only):
   knowledge add --subject APEX --relationship has_subsystem --object "Cognitive Controller"
@@ -60,6 +77,8 @@ Knowledge examples (explicit relationships; user-origin write only):
 
 With a configured local model, any other request is answered from the model,
 using relevant memory and the recent conversation. Without one, APEX says so.
+A model answer is unverified, and a proposed action is checked by APEX itself: a
+denied proposal is reported and does not run. Model output is never authorization.
 
 Filesystem inspection is available only when APEX_FILESYSTEM_ROOT is set to an
 absolute directory. Paths are relative to it; it cannot be changed by a request.
@@ -155,11 +174,35 @@ export function formatResult(res) {
   if (res.status === Outcome.VERIFICATION_UNAVAILABLE && res.operation.capability === 'model.answer') {
     lines.push('Note:      model answer; APEX cannot independently verify a model conclusion.');
   }
+  // A corrupt store refuses before the action runs. Say that plainly: nothing was
+  // changed, and a retry is only meaningful after repair, not while the damage remains.
+  if (res.operation.steps.some((s) => s.execution?.status === 'failed' && /corrupt/i.test(s.execution?.error?.message ?? ''))) {
+    lines.push('Note:      a stored data file is damaged, so this step was refused before it ran. Nothing in that store was changed. Run "node bin/apex.js diagnose" for what is readable and what is uncertain; retrying is safe only after the store is repaired.');
+  }
+  // A write whose executor reported a failure may already have changed data: the body was
+  // invoked, so the outcome after the error is unknown. A rejected input never reached the
+  // body and is reported above as rejected; this note is only for failures that started.
+  const writeActions = new Set(['memory.add', 'memory.save_conclusion', 'knowledge.add']);
+  if (res.operation.steps.some((s) => s.execution?.status === 'failed'
+    && writeActions.has(s.action)
+    && !/corrupt/i.test(s.execution?.error?.message ?? ''))) {
+    lines.push('Note:      a write reported a failure after it started. APEX cannot establish whether it changed stored data, so do not repeat it unless you can confirm it did not take effect; run "node bin/apex.js diagnose" for a read-only report.');
+  }
+  // An unusable data directory is an environment failure, not a rejected request. A retry
+  // cannot help until the path is usable, so say what to check instead of implying that the
+  // request itself was wrong.
+  if (res.operation.steps.some((s) => s.execution?.status === 'failed'
+    && /^cannot (?:read|write|prepare)\b.*\b(?:memory|knowledge|conversation|operations|session|tasks?|queue)\b/i.test(s.execution?.error?.message ?? ''))) {
+    lines.push('Note:      a data file could not be read or written, so this request was not completed and nothing was confirmed. Check APEX_DATA_DIR, its permissions, and free space; run "node bin/apex.js diagnose" for a read-only report.');
+  }
   lines.push('Output:');
   lines.push(res.display ?? res.output ?? '(none)');
   lines.push(res.recorded
     ? `Audit:     recorded in operations.jsonl (${res.operation.id})`
-    : `Audit:     NOT RECORDED (${res.recordError})`);
+    : `Audit:     NOT RECORDED (${res.recordError ?? 'no audit record was written'})`);
+  if (res.recorded === false) {
+    lines.push('Note:      the result above is what this run observed, but the audit trail will not contain it. Do not repeat the request just to obtain a record; if it ran an action, that action may already have happened.');
+  }
   return lines.join('\n');
 }
 
@@ -230,6 +273,110 @@ function sessionLine(session) {
   return 'Session: unavailable';
 }
 
+function holderText(report) {
+  if (report.error) return `unreadable (${safeText(report.error)})`;
+  if (report.alive === null) return 'holder not identifiable';
+  return `holder process ${report.pid} is ${report.alive ? 'live' : 'not running'}`;
+}
+
+// Read-only view of the deferred task summaries. The queue is a delivery work list, not
+// evidence: printing it never writes and never reissues a turn. Entry text is not printed;
+// the task and audit logs remain the records of what happened.
+async function showQueue({ app, limit, out, err }) {
+  const max = MAX_QUEUED_SUMMARIES;
+  let entries;
+  try {
+    entries = await app.summaryQueue.entries();
+  } catch (e) {
+    err(`Queue: unavailable (${errorText(e)})`);
+    err('No entry was read or changed. Preserve task-summary-queue.json; there is no supported repair command. A corrupt queue blocks only the reissue of unsaved task summaries.');
+    return 1;
+  }
+  if (entries.length === 0) {
+    out('Queue: empty (no task summary is waiting to be reissued)');
+  } else {
+    const shown = entries.slice(0, Math.max(1, limit));
+    out(`Queue: ${entries.length} deferred task summar${entries.length === 1 ? 'y' : 'ies'}${entries.length > shown.length ? ` (showing ${shown.length})` : ''}`);
+    for (const entry of shown) {
+      out(`  task ${shortId(entry.taskId)} session ${shortId(entry.sessionId)} queued ${safeText(entry.queuedAt, 40)}${entry.verified ? '' : ' (result not verified)'} text ${entry.text.length} char(s)`);
+    }
+    if (entries.length >= max) {
+      out(`Queue: full (${entries.length}/${max}); a further task summary will be refused and disclosed, not queued. Entries are reissued at the next successful task write.`);
+    }
+  }
+  let lock;
+  try {
+    lock = await app.summaryQueue.lockReport();
+  } catch (e) {
+    err(`Queue lock: inspection failed (${errorText(e)})`);
+    return 1;
+  }
+  if (!lock.present) {
+    out('Queue lock: no lock file (no queue update is in progress)');
+  } else {
+    out(`Queue lock: ${holderText(lock)}; takeover tokens ${lock.tokens.total} recorded (${lock.tokens.dead} dead for this claim)`);
+    // Say what is known and what a retry would mean. This view never waits for or takes
+    // the lock, so a held update is not a failure of the read.
+    if (lock.alive === true) {
+      out('A queue update is refused while that process holds the lock. This view is read-only; retrying the update after it finishes is safe.');
+    } else if (lock.error || lock.alive === null) {
+      out('The lock holder cannot be identified, so a queue update may be refused as "in use by unknown". This view is read-only; run "node bin/apex.js diagnose" and, if no update is active, "node bin/apex.js repair locks".');
+    } else if (lock.tokens.current >= TAKEOVER_EPOCHS && lock.tokens.live === 0) {
+      out('The holder is not running, but every takeover slot is abandoned, so the next update will be refused. Run "node bin/apex.js repair locks" after confirming no update is active.');
+    } else {
+      out('The holder is not running; the next queue update takes the claim over through its normal election. This view is read-only.');
+    }
+  }
+  return 0;
+}
+
+// Removes abandoned takeover tokens only. It never removes a claim: the ordinary election
+// is the only path that removes a lock, so recovery cannot displace a process that takes
+// the dead claim over while recovery is running.
+async function repairLocks({ app, out, err }) {
+  const targets = [
+    { label: 'Task lock', store: app.taskStore },
+    { label: 'Summary queue lock', store: app.summaryQueue },
+  ];
+  let failed = 0;
+  for (const target of targets) {
+    let report;
+    try {
+      report = await target.store.lockReport();
+    } catch (e) {
+      err(`${target.label}: inspection failed: ${errorText(e)}`);
+      failed += 1;
+      continue;
+    }
+    if (!report.present) {
+      out(`${target.label}: no lock file; nothing to recover`);
+      continue;
+    }
+    const tokens = report.tokens;
+    out(`${target.label}: present; ${holderText(report)}; takeover tokens ${tokens.total} recorded (${tokens.current} for this claim: ${tokens.dead} dead, ${tokens.live} live, ${tokens.unknown} unidentified)`);
+    if (report.guard.present) {
+      out(`${target.label}: recovery claim present (process ${report.guard.pid ?? 'unknown'}, ${report.guard.alive === true ? 'live' : report.guard.alive === false ? 'not running' : 'unreadable'})`);
+    }
+    try {
+      const result = await target.store.recover();
+      if (result.reason === 'no-lock') {
+        out(`${target.label}: no claim now; nothing was removed`);
+      } else if (result.removedTokens > 0) {
+        out(`${target.label}: removed ${result.removedTokens} abandoned takeover token(s); the claim was left for the next normal run to take over`);
+      } else {
+        out(`${target.label}: no abandoned takeover tokens for this claim; the claim was left for the next normal run to take over`);
+      }
+    } catch (e) {
+      err(`${target.label}: not recovered: ${errorText(e)}`);
+      failed += 1;
+    }
+  }
+  if (failed > 0) {
+    err('Recovery did not complete. No live holder or takeover was displaced, and no lock claim was deleted. Retrying is safe once the reported condition no longer applies.');
+  }
+  return failed > 0 ? 1 : 0;
+}
+
 export async function main(argv, {
   env = process.env,
   stdout = process.stdout,
@@ -242,8 +389,14 @@ export async function main(argv, {
   const err = (s) => stderr.write(`${s}\n`);
   const emit = (res) => {
     out(res.display ?? res.output ?? '(none)');
-    if (res.recorded === false) err(`Audit: NOT RECORDED (${res.recordError})`);
-    else if (res.operation) out(`Audit: recorded in operations.jsonl (${res.operation.id})`);
+    if (res.recorded === false) {
+      err(`Audit: NOT RECORDED (${res.recordError ?? 'no audit record was written'})`);
+      // The result is what this run observed; the evidence trail is incomplete. Repeating
+      // the request cannot restore a record, and an action that already ran would run again.
+      err('The result above is what this run observed, but the audit trail will not contain it. Do not repeat the request just to obtain a record; if it ran an action, that action may already have happened.');
+    } else if (res.operation) {
+      out(`Audit: recorded in operations.jsonl (${res.operation.id})`);
+    }
     if (res.auditGaps) err(`Audit: ${res.auditGaps} step record(s) could not be written to the operation log`);
     const session = sessionNotice(res);
     if (session) err(session);
@@ -275,7 +428,7 @@ export async function main(argv, {
       const { flags, rest } = parseFlags(args, ['model']);
       rejectUnexpected(rest, 'status [--model]');
       const diag = await collectDiagnostics(app, { checkModel: Boolean(flags.model) });
-      const { session, conversation, memory, audit, model, filesystem } = diag.subsystems;
+      const { session, conversation, memory, audit, queue, model, filesystem } = diag.subsystems;
       out(`${APP_NAME} ${APP_STAGE} ${APP_VERSION} (${APP_EXPANSION})`);
       out(`Data directory: ${safeText(diag.dataDir)}`);
       out(sessionLine(session));
@@ -285,7 +438,14 @@ export async function main(argv, {
       out(`Memory records: ${memory.state === State.UNAVAILABLE ? 'unavailable' : memory.count} (corrupt lines skipped: ${memory.corruptLines})`);
       out(`Conversation turns: ${conversation.state === State.UNAVAILABLE ? 'unavailable' : conversation.count}${skipped(conversation)}`);
       out(`Operation records: ${audit.state === State.UNAVAILABLE ? 'unavailable' : audit.count}${skipped(audit)}`);
+      out(`Deferred task summaries: ${queue.count === null ? queue.state : `${queue.count}/${queue.max}${queue.full ? ' (full)' : ''}`}`);
+      if (diag.locks?.task?.state === State.CORRUPT || diag.locks?.queue?.state === State.CORRUPT) {
+        out('Locks: abandoned takeover tokens require recovery; run "node bin/apex.js repair locks".');
+      }
       out(modelLine(model));
+      if (model.state === State.UNAVAILABLE) {
+        out('Model: no inference was tested. Starting the configured local server and re-running "status --model" is safe; that probe only reads the model list.');
+      }
       out(filesystem.state === State.OK
         ? `Filesystem root: ${safeText(filesystem.root)} (root validated at startup, read-only)`
         : 'Filesystem root: none configured. Filesystem inspection is unavailable.');
@@ -381,6 +541,22 @@ export async function main(argv, {
       return 2;
     }
 
+    if (command === 'queue') {
+      const { flags, rest } = parseFlags(args, ['limit']);
+      rejectUnexpected(rest, 'queue [--limit N]');
+      return await showQueue({ app, limit: flags.limit ?? 20, out, err });
+    }
+
+    if (command === 'repair') {
+      const [sub, ...rest] = args;
+      if (sub !== 'locks') {
+        err('usage: repair locks');
+        return 2;
+      }
+      rejectUnexpected(parseFlags(rest, []).rest, 'repair locks');
+      return await repairLocks({ app, out, err });
+    }
+
     if (command === 'ask') {
       const { flags, rest } = parseFlags(args, ['save-answer']);
       const text = rest.join(' ');
@@ -403,12 +579,24 @@ export async function main(argv, {
     if (command === 'history') {
       const { flags, rest } = parseFlags(args, ['limit']);
       rejectUnexpected(rest, 'history [--limit N]');
-      const { records, corrupt } = await app.operations.list({ limit: flags.limit ?? 10 });
+      let listed;
+      try {
+        listed = await app.operations.list({ limit: flags.limit ?? 10 });
+      } catch (e) {
+        if (!(e instanceof StoreError)) throw e;
+        err(`Audit: unavailable (${errorText(e)})`);
+        err('No operation records could be read. This does not establish that any operation did not run. Run "node bin/apex.js diagnose" for a read-only view of what is readable; do not repeat an action merely because its record cannot be listed.');
+        return 1;
+      }
+      const { records, corrupt } = listed;
       if (records.length === 0) out('No operations recorded yet.');
       for (const op of records) {
         out(`${op.requestedAt}  ${op.id}  ${op.status}  ${op.capability}  ${op.request ?? ''}`);
       }
-      if (corrupt) out(`(${corrupt} corrupt audit line(s) skipped)`);
+      if (corrupt) {
+        out(`(${corrupt} corrupt audit line(s) skipped)`);
+        out(`Audit: ${corrupt} record(s) cannot be read, so this list is incomplete. A missing record does not prove an action did not execute; run "node bin/apex.js diagnose" before repeating anything.`);
+      }
       return 0;
     }
 
@@ -486,7 +674,18 @@ export async function main(argv, {
       return 2;
     }
     if (e instanceof StoreError) {
-      err(`data store unavailable: ${errorText(e)}. Check APEX_DATA_DIR and its permissions.`);
+      if (e.code === 'LOCKED') {
+        err(`lock contention: ${errorText(e)}`);
+        err('No data was changed: the command was refused before it could run. This is not a data-directory permission problem. If no task run or recovery is active, run "node bin/apex.js repair locks" to inspect abandoned takeover tokens; a dead lock claim is taken over by the next normal run. Retrying after the active run finishes is safe.');
+        return 1;
+      }
+      if (/corrupt/i.test(e.message)) {
+        // A damaged store is not a permissions problem, and the repair is not a retry.
+        err(`data store corrupt: ${errorText(e)}`);
+        err('No file was changed. Run "node bin/apex.js diagnose" for what is readable, what is uncertain, and recovery guidance; there is no supported automatic repair for this store.');
+        return 1;
+      }
+      err(`data store unavailable: ${errorText(e)}. No file was changed. Check APEX_DATA_DIR, its permissions, and free space; run "node bin/apex.js diagnose" for details.`);
       return 1;
     }
     err(`unexpected error: ${errorText(e)}`);

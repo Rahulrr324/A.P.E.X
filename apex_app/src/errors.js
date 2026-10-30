@@ -16,8 +16,8 @@ export class ValidationError extends ApexError {
 }
 
 export class StoreError extends ApexError {
-  constructor(message) {
-    super('STORE_UNAVAILABLE', message);
+  constructor(message, code = 'STORE_UNAVAILABLE') {
+    super(code, message);
     this.name = 'StoreError';
   }
 }

@@ -22,6 +22,7 @@ import path from 'node:path';
 import { StoreError } from '../errors.js';
 import { TASK_SIGNATURE_RE, prepareTurnText } from '../memory/conversation-store.js';
 import { MAX_TASK_SUMMARY_CHARS } from './summary.js';
+import { inspectLock, recoverLock, TAKEOVER_EPOCHS } from './lock-recovery.js';
 
 export const SUMMARY_QUEUE_SCHEMA = 1;
 // How long an update waits for another process's in-progress update. The critical
@@ -29,9 +30,6 @@ export const SUMMARY_QUEUE_SCHEMA = 1;
 // is stuck or gone; refusing then is honest, and the caller discloses the missed reissue.
 const LOCK_WAIT_MS = 2000;
 const LOCK_RETRY_MS = 10;
-// Bounded like the task lock's epochs: only a process that exited during a takeover
-// leaves one behind, so exhausting them is reported instead of retried forever.
-const TAKEOVER_EPOCHS = 16;
 // Past this size history has refused summaries across many task states. A new intent is
 // then refused and disclosed rather than displacing an older one.
 export const MAX_QUEUED_SUMMARIES = 32;
@@ -125,7 +123,11 @@ export class SummaryQueue {
   // Filesystems without hard links fall back to an exclusive create, which still admits one
   // holder.
   async #withLock(fn) {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    try {
+      await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    } catch (err) {
+      throw new StoreError(`cannot prepare the task summary queue directory: ${err?.code || err?.message}`);
+    }
     const lockPath = `${this.filePath}.lock`;
     const body = JSON.stringify({ pid: process.pid, nonce: randomUUID(), at: this.now().toISOString() });
     const staged = `${lockPath}.${process.pid}.${randomUUID()}.tmp`;
@@ -186,13 +188,13 @@ export class SummaryQueue {
           }
           if (tookOver) continue;
           if (Date.now() >= deadline) {
-            throw new StoreError(`cannot update ${this.label}: it is in use by process ${election.pid ?? holder?.pid ?? 'unknown'}; nothing was changed`);
+            throw new StoreError(`cannot update ${this.label}: it is in use by process ${election.pid ?? holder?.pid ?? 'unknown'}; nothing was changed`, 'LOCKED');
           }
           await sleep(LOCK_RETRY_MS);
           continue;
         }
         if (Date.now() >= deadline) {
-          throw new StoreError(`cannot update ${this.label}: it is in use by process ${holder?.pid ?? 'unknown'}; nothing was changed`);
+          throw new StoreError(`cannot update ${this.label}: it is in use by process ${holder?.pid ?? 'unknown'}; nothing was changed`, 'LOCKED');
         }
         await sleep(LOCK_RETRY_MS);
       }
@@ -258,7 +260,7 @@ export class SummaryQueue {
     } finally {
       await fs.rm(staged, { force: true }).catch(() => {});
     }
-    throw new StoreError(`cannot update ${this.label}: ${TAKEOVER_EPOCHS} takeover attempts are recorded as abandoned; nothing was changed`);
+    throw new StoreError(`cannot update ${this.label}: ${TAKEOVER_EPOCHS} takeover attempts are recorded as abandoned; run "apex repair locks" after confirming no task run is active`, 'LOCKED');
   }
 
   #takeoverWon(tokenPath, body) {
@@ -270,6 +272,16 @@ export class SummaryQueue {
         if (mine === body) await fs.rm(tokenPath, { force: true }).catch(() => {});
       },
     };
+  }
+
+  // Read-only view of the queue lock, its takeover tokens, and a recovery guard.
+  async lockReport() {
+    return inspectLock(`${this.filePath}.lock`);
+  }
+
+  // Explicit recovery for a queue-lock claim whose holder has exited.
+  async recover() {
+    return recoverLock(`${this.filePath}.lock`, 'task summary queue');
   }
 
   async #write(entries) {

@@ -8,6 +8,8 @@ import { APP_EXPANSION, APP_NAME, APP_STAGE, APP_VERSION } from './identity.js';
 import { Outcome } from './outcomes.js';
 import { StoreError } from './errors.js';
 import { StepStatus, TaskStatus } from './tasks/model.js';
+import { MAX_QUEUED_SUMMARIES } from './tasks/summary-queue.js';
+import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
 import { CONTROL_CHARS, shortId, truncate } from './util.js';
 import { redactSecrets } from './security/secrets.js';
 
@@ -359,7 +361,109 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     };
   }
 
-  // --- task/audit cross-checks ----------------------------------------------
+  // --- deferred task summaries ----------------------------------------------
+  // A delivery work list, not evidence. Showing it separates "history refused a summary"
+  // from "the summary is still owed", and a corrupt file is stated as damage rather than
+  // read as an empty queue.
+  let queueEntries = null;
+  let queueError = null;
+  try {
+    queueEntries = await app.summaryQueue.entries();
+  } catch (err) {
+    queueError = err;
+  }
+  if (queueError) {
+    const corrupt = queueError instanceof StoreError && /corrupt/i.test(queueError.message);
+    subsystems.queue = {
+      key: 'queue',
+      label: 'Queue',
+      state: corrupt ? State.CORRUPT : State.UNAVAILABLE,
+      summary: corrupt
+        ? `Queue: corrupt (${safeText(queueError.message)}; deferred task summaries cannot be read or queued)`
+        : `Queue: unavailable (${safeText(queueError.message)}; deferred task summaries cannot be read or queued)`,
+      count: null,
+      max: MAX_QUEUED_SUMMARIES,
+      full: false,
+      oldest: null,
+      corruptLines: 0,
+      problems: [],
+    };
+    if (corrupt) confirmed.push(`task-summary-queue.json: ${safeText(queueError.message)}`);
+  } else {
+    const count = queueEntries.length;
+    const full = count >= MAX_QUEUED_SUMMARIES;
+    subsystems.queue = {
+      key: 'queue',
+      label: 'Queue',
+      state: State.OK,
+      summary: count === 0
+        ? 'Queue: ok (no deferred task summaries)'
+        : `Queue: ${full ? 'full' : 'ok'} (${count}/${MAX_QUEUED_SUMMARIES} deferred task summar${count === 1 ? 'y' : 'ies'}; reissued at the next successful task write${full ? '; a new summary is refused and disclosed rather than displacing one' : ''})`,
+      count,
+      max: MAX_QUEUED_SUMMARIES,
+      full,
+      oldest: queueEntries.length > 0 ? queueEntries[0].queuedAt : null,
+      corruptLines: 0,
+      problems: [],
+    };
+  }
+
+  // --- locks -----------------------------------------------------------------
+  // Read-only. A live holder is normal. A dead claim is normal too: the next task run
+  // takes it over through the same election that handles a crash. What is not normal is
+  // an election with every epoch occupied by an abandoned token, because that refuses
+  // every later takeover until the tokens are removed.
+  const locks = {};
+  for (const [key, store, label] of [
+    ['task', app.taskStore, 'Task lock'],
+    ['queue', app.summaryQueue, 'Summary queue lock'],
+  ]) {
+    let report;
+    try {
+      report = await store.lockReport();
+    } catch (err) {
+      locks[key] = { key, label, state: State.UNAVAILABLE, detail: errorDetail(err), summary: `${label}: unreadable (${safeText(errorDetail(err))})`, present: null };
+      suspicions.push(`${label}: the lock could not be inspected (${safeText(errorDetail(err))}); a write may be refused until it is readable`);
+      continue;
+    }
+    let state = State.OK;
+    let summary;
+    if (!report.present) {
+      summary = `${label}: no claim`;
+    } else if (report.error) {
+      state = State.UNAVAILABLE;
+      summary = `${label}: present but unreadable (${safeText(report.error)}); a write may be refused as "in use by unknown"`;
+      suspicions.push(`${label}: present but unreadable (${safeText(report.error)}). Nothing was changed.`);
+    } else {
+      const holder = report.alive === null
+        ? 'holder not identifiable'
+        : report.alive
+          ? `holder process ${report.pid} is live`
+          : `holder process ${report.pid} has exited (the next normal run takes the claim over)`;
+      const t = report.tokens;
+      const stuck = t.current >= TAKEOVER_EPOCHS && t.live === 0;
+      if (stuck) {
+        state = State.CORRUPT;
+        summary = `${label}: recovery required - ${t.current} takeover token(s) for this claim (${t.dead} dead, ${t.unknown} unidentified); the next takeover is refused until they are removed`;
+        confirmed.push(`${label}: ${t.current} abandoned takeover token(s) block the next takeover (${holder})`);
+      } else {
+        summary = `${label}: ${holder}; ${t.total} takeover token(s) recorded (${t.current} for this claim)`;
+      }
+      if (report.guard.present) {
+        const guard = report.guard.alive === true
+          ? `a recovery by process ${report.guard.pid} is in progress`
+          : report.guard.alive === false
+            ? `an unfinished recovery claim from process ${report.guard.pid} remains`
+            : 'an unreadable recovery claim remains';
+        summary = `${summary}; ${guard}`;
+      }
+    }
+    locks[key] = { key, label, ...report, state, summary };
+  }
+  subsystems.queue.lock = locks.queue;
+  subsystems.tasks.lock = locks.task;
+
+
   const uncertainSteps = [];
   const awaitingApproval = [];
   const pausedTasks = [];
@@ -572,6 +676,23 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   if (unavailable.length > 0) {
     recovery.push(`Storage: ${unavailable.map((s) => s.label).join(', ')} unavailable. Check APEX_DATA_DIR, file permissions, and disk space. APEX does not recreate or truncate data automatically.`);
   }
+  if (locks.task?.state === State.CORRUPT || locks.queue?.state === State.CORRUPT) {
+    recovery.push('Locks: abandoned takeover tokens block the next takeover. Run "apex repair locks" after confirming no task run, queue update, or recovery is active. It removes only dead takeover tokens; it never removes a lock claim or displaces a live holder.');
+  }
+  for (const lock of [locks.task, locks.queue]) {
+    if (lock?.guard?.present) {
+      recovery.push(`${lock.label}: ${lock.guard.alive === true
+        ? `a recovery is in progress by process ${lock.guard.pid}`
+        : 'an unfinished recovery claim remains'}. Do not delete it while a recovery or task run may be active; "apex repair locks" will name the file if it is what blocks recovery.`);
+    }
+  }
+  if (subsystems.queue.state === State.CORRUPT) {
+    recovery.push('Queue: preserve task-summary-queue.json; there is no supported repair command. A corrupt queue blocks only the reissue of unsaved task summaries. The task and audit logs remain the records of what happened.');
+  } else if (subsystems.queue.state === State.UNAVAILABLE) {
+    recovery.push('Queue: the deferred-summary work list cannot be read. It is not evidence; the task and audit logs remain usable. Check APEX_DATA_DIR and file permissions.');
+  } else if (subsystems.queue.full) {
+    recovery.push(`Queue: ${subsystems.queue.count}/${MAX_QUEUED_SUMMARIES} deferred task summaries. A new one is refused and disclosed rather than displacing an older one; entries are reissued at the next successful task write. Run "apex queue" to inspect them.`);
+  }
   if (uncertainSteps.length > 0) {
     const sample = uncertainSteps[0];
     recovery.push(`Task ${safeId(sample.taskId)} step ${safeText(sample.stepId, 32)} is uncertain: it may have executed. Review it with "apex task show ${safeId(sample.taskId)}" before deciding. Do not repeat the action blindly; resume, retry, or cancel only as an explicit user decision.`);
@@ -587,7 +708,9 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     recovery.push('Audit links: do not repeat an action merely because its audit record is missing or inconsistent; it may have executed. Compare the task and audit records before deciding.');
   }
   if (modelState === State.UNAVAILABLE) {
-    recovery.push('Model: start the configured local model server, then re-run "apex diagnose --model". Local storage checks above do not depend on the model.');
+    recovery.push('Model: start the configured local model server, then re-run "apex diagnose --model"; retrying that read-only check is safe. The listing probe did not answer, so no inference was tested. Local storage checks above do not depend on the model.');
+  } else if (modelState === State.UNCONFIRMED) {
+    recovery.push(`Model: the endpoint is reachable but did not list "${safeText(describe.model, 80)}". A request may still work if the server accepts the configured name; this is unconfirmed, not a failure, and no inference was run. Retrying "apex diagnose --model" is safe.`);
   }
   if (recovery.length === 0) recovery.push('No recovery action needed.');
 
@@ -599,6 +722,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     subsystems,
     integrity: { confirmed, suspicions, unchecked },
     taskState: { uncertainSteps, awaitingApproval, pausedTasks, runningTasks },
+    locks,
     recovery,
     localDefects,
     needsAttention: localDefects
@@ -628,8 +752,13 @@ export function renderDiagnostics(diag) {
           : 'local subsystems healthy';
   lines.push(`Overall: ${overall}`);
   lines.push('Subsystems:');
-  for (const key of ['configuration', 'session', 'conversation', 'memory', 'knowledge', 'tasks', 'audit', 'model', 'filesystem']) {
+  for (const key of ['configuration', 'session', 'conversation', 'memory', 'knowledge', 'tasks', 'audit', 'queue', 'model', 'filesystem']) {
     lines.push(`  ${diag.subsystems[key].summary}`);
+  }
+
+  lines.push('Locks (read-only):');
+  for (const lock of [diag.locks?.task, diag.locks?.queue]) {
+    if (lock) lines.push(`  ${lock.summary}`);
   }
 
   lines.push(`Confirmed integrity defects: ${diag.integrity.confirmed.length === 0 ? 'none' : ''}`.trimEnd());
