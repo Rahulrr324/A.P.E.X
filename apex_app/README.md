@@ -8,8 +8,11 @@ implementation of one workflow:
             -> a model -> authorize -> execute -> verify independently
             -> record -> restart -> still there
 
-It is not the whole of APEX. It has no world model, planner, voice or UI, and its
-model path depends entirely on a backend you configure yourself.
+It is not the whole of APEX. It has no world model, no general-purpose planner (only
+the bounded task planner described below), no persistent learning, no voice and no UI,
+and its model path depends entirely on a backend you configure yourself. The C++
+spiking-neuron research under `stark/` is a separate experiment, not a runtime this
+application uses.
 
 The application is in `apex_app/`, separate from the experimental C++ neural
 research under `stark/`. Nothing here depends on that research. Historical STARK
@@ -53,9 +56,19 @@ APEX_DATA_DIR=/path/to/dir node bin/apex.js status
 - `memory.jsonl`: personal memory records (append-only).
 - `knowledge.jsonl`: explicit entity relationships and evidence (append-only).
 - `operations.jsonl`: one audit record per operation (append-only).
+- `conversation.jsonl`: conversation turns with origin (append-only).
+- `tasks.jsonl`: task events, replayed to get task state (append-only). `tasks.jsonl.lock`
+  exists only while a process is changing a task.
+- `task-summary-queue.json`: task summaries waiting to be reissued (replaced atomically).
+- `session.json`: the current session id (replaced atomically). If it cannot be read,
+  a request still runs and is verified, but the command prints a `Session:` notice on
+  stderr saying the request ran without conversation continuity, and no turn is stored
+  for it.
 
-Both are plain JSON Lines files you can read and back up. The application never
-deletes or rewrites them.
+There is no `init` command: the data directory and its files are created on first use,
+by the command that needs them. A mistyped command creates nothing. These are plain
+JSON Lines files you can read and back up. The application never deletes or rewrites
+the append-only ones.
 
 ### Configuration and preflight
 
@@ -75,6 +88,10 @@ exits 2, names the setting, and reports that no data was read or changed.
 | `APEX_CONTEXT_TURNS` | 0-50 | 6 |
 | `APEX_FILESYSTEM_ROOT` | absolute directory; filesystem inspection is off when unset | none |
 | `APEX_FILESYSTEM_MAX_READ_BYTES` | 4096-10485760 | 1048576 |
+
+Both filesystem settings are validated on every run, whether or not
+`APEX_FILESYSTEM_ROOT` is set, so a mistyped limit is named at startup instead of
+lying dormant until the capability is switched on.
 
 `node bin/apex.js diagnose` is the read-only preflight. It prints the effective
 settings above (with credential-like text redacted), the state of every store,
@@ -488,6 +505,7 @@ src/config.js         environment-variable configuration
 src/errors.js         error types with stable codes
 src/identity.js       application identity and version
 src/outcomes.js       the outcome status values (see Outcomes below)
+src/diagnostics.js    read-only state of every subsystem, for status and diagnose
 src/util.js           shared helpers: truncation, redaction of content fields, rounding
 src/controller/
   controller.js       Cognitive Controller: the workflow and the final status rule
@@ -515,6 +533,11 @@ src/memory/
   jsonl-store.js      append-only JSON Lines with fsync and damage tolerance
   memory-store.js     personal memory: validation, provenance, content hash, retrieval
   conversation-store.js  conversation turns with origin; credential-like text is never stored
+src/knowledge/
+  knowledge-store.js  entity relationship triples: validation, hashing, conflict detection
+src/filesystem/
+  path.js             absolute path validation: no traversal, no drive root, no UNC
+  actions.js          bounded, read-only listing and reading
 src/session.js        conversation session id (persists until `new`)
 src/security/
   secrets.js          credential-like text detection and redaction (no dependencies)
@@ -637,6 +660,9 @@ suite; it is not an automated regression test and is reported separately.
 | 20. A real process lost mid-step, recovered by a second one | `process-recovery.test.js` (terminate at the `running` event, stale task lock replaced, no step re-run, uncertain write never retried, recovery summary, follow-up answered from the records, recovery idempotent) |
 | 21. The full model workflow, reply to record, with every APEX component real | `model-workflow.test.js` (proposal executed and audited, user-only proposal denied, malformed proposal refused and replayed, plan → approve → run → verify → explain → follow-up, model claim of undone work stays unverified, endpoint unreachable/invalid/empty/slow; the model itself is a stub, so no real-model behaviour or latency is claimed) |
 | 22. Batch D as one story across the four stores | `acceptance-batch-d.test.js` (model plan with a held write step told identically by task log, audit log and history; a refused summary disclosed, owed once, reissued without re-executing; follow-up referent resolved or clarified; a real child process killed mid-write recovered, with repeated recovery changing nothing; missing and unreadable evidence never reported as verification; registry, plan and proposal write limits for the model origin) |
+| 23. A clean install, and a bad setting or a broken store | `readiness-batch-e.test.js` (initialization in an isolated directory leaves an existing `~/.apex` byte-identical; a deterministic action runs with no model; an unreachable endpoint is a failure, not an answer; a denied model proposal runs nothing; a killed process is never reported as success; history and audit agree; diagnostics report damage without writing); `config-failures.test.js` (eleven invalid settings refused before any store is opened; a storage failure reported as storage, a model failure as a model failure, each with its own exit code) |
+| 24. A request that lost its session is disclosed | `session-degradation.test.js` (`ask`, `chat` and `task run` print the notice while the outcome and exit code stay truthful; the audit record names `stage: session`; nothing is stored without a session; a conversation failure is not described as a session failure) |
+| 25. Two processes cannot both hold the task lock | `lock-contention.test.js` (six real processes racing a stale lock: exactly one enters; a live holder is never displaced; a holder removes only its own claim; repeated recovery; an unreadable lock is refused and preserved; a read takes no lock; three concurrent runs of one task record each step once) |
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
@@ -662,6 +688,19 @@ questions that must change nothing).
   selected old record, which remains visible as `superseded` when no other conflict
   remains. Conflicts with any other claims stay unresolved; superseded history is not
   sent as an active fact in model context.
+- **The task lock serializes task changes, not every command.** `task plan`, `run`,
+  `resume`, `approve`, `retry` and `cancel` take `tasks.jsonl.lock`; reads (`status`,
+  `diagnose`, `task list/show/explain`, `history`) take no lock, and the other stores
+  are append-only without a lock of their own, so concurrent appends from different
+  processes are not coordinated and a reader can miss the line being appended. A stale
+  lock is taken over only when its pid is provably dead, and the takeover removes only
+  the exact claim it validated. Node has no conditional-delete primitive without a
+  native dependency, so a window remains between checking a stale lock and removing it;
+  a fresh process can then refuse the task as "in use", and the user can retry.
+- **A data directory path is validated when it is used, not when it is typed.**
+  `status` and `diagnose` report a nonexistent directory the same way as a fresh
+  install, because creating it to find out would make a read-only check write. An
+  unusable path surfaces on the first write as a storage error naming the OS code.
 
 ## Knowledge System
 
@@ -728,9 +767,11 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this milestone was run on Windows 11 with Node
-  26.4.0 (164 pass, 0 fail, 1 skipped: POSIX permission bits). The permission-denied
-  path is therefore untested here, and earlier milestones were validated on Linux. The
-  test script uses an explicit file list so it does not depend on shell globbing.
+  26.4.0, in an isolated temporary directory: 550 tests, 548 passed, 0 failed, 2
+  skipped (POSIX permission bits are not enforced here; this filesystem rejects control
+  characters in file names). The permission-denied path is therefore untested here, and
+  earlier milestones were validated on Linux. The test script uses an explicit file
+  list so it does not depend on shell globbing.
 - Node 22 is the documented runtime; Node 26.4.0 was used for the runs above.
 
 ## Future learning interface (not implemented)

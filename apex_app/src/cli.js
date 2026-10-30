@@ -166,6 +166,18 @@ export function formatChatReply(res) {
   return `${res.display ?? res.output ?? '(none)'}\n${tag}`;
 }
 
+// An operation can succeed while carrying a recorded failure that changes what the user
+// actually got: when the session pointer cannot be read the action still runs, but the
+// request has no conversation continuity, so the audit record says "session" while the
+// outcome says "success_verified". The record is authoritative and must be disclosed.
+// The notice goes to stderr and never changes the outcome or the exit code: the requested
+// action did run and was verified.
+function sessionNotice(res) {
+  const failure = (res?.operation?.errors ?? []).find((e) => e?.stage === 'session');
+  if (!failure) return null;
+  return `Session: this request ran without conversation continuity (${safeText(failure.message, 200)})`;
+}
+
 function exitCodeFor(res) {
   if (!res.recorded) return 3;
   if (res.status === Outcome.SUCCESS_VERIFIED) return 0;
@@ -219,6 +231,8 @@ export async function main(argv, {
     if (res.recorded === false) err(`Audit: NOT RECORDED (${res.recordError})`);
     else if (res.operation) out(`Audit: recorded in operations.jsonl (${res.operation.id})`);
     if (res.auditGaps) err(`Audit: ${res.auditGaps} step record(s) could not be written to the operation log`);
+    const session = sessionNotice(res);
+    if (session) err(session);
     return exitCodeFor(res);
   };
 
@@ -354,12 +368,14 @@ export async function main(argv, {
       }
       const res = await app.controller.handle(text, { origin: 'user', saveAnswer: Boolean(flags['save-answer']) });
       out(formatResult(res));
+      const session = sessionNotice(res);
+      if (session) err(session);
       return exitCodeFor(res);
     }
 
     if (command === 'chat') {
       parseFlags(args, []);
-      return await runChat({ app, stdin, stdout, out });
+      return await runChat({ app, stdin, stdout, stderr, out });
     }
 
     if (command === 'history') {
@@ -450,7 +466,7 @@ export async function main(argv, {
 
 // Interactive loop. Reads lines until end of input or /exit. Each line is one
 // request through the controller, in the current session.
-async function runChat({ app, stdin, stdout, out }) {
+async function runChat({ app, stdin, stdout, stderr, out }) {
   const interactive = Boolean(stdin.isTTY);
   out('APEX chat. Type a message. /new starts a new session, /exit ends. Memory and history persist.');
   const rl = readline.createInterface({ input: stdin, output: interactive ? stdout : undefined, terminal: false });
@@ -469,6 +485,8 @@ async function runChat({ app, stdin, stdout, out }) {
       try {
         const res = await app.controller.handle(line, { origin: 'user' });
         out(formatChatReply(res));
+        const session = sessionNotice(res);
+        if (session) stderr.write(`${session}\n`);
       } catch (e) {
         out(`error: ${e?.message ?? e}`);
       }

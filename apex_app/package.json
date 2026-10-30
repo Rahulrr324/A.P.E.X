@@ -14,7 +14,7 @@
   "scripts": {
     "start": "node bin/apex.js",
     "status": "node bin/apex.js status",
-    "test": "node --test tests/memory.test.js tests/actions.test.js tests/gateway.test.js tests/controller.test.js tests/decision.test.js tests/cli.test.js tests/model-protocol.test.js tests/intelligence.test.js tests/chat.test.js tests/tasks.test.js tests/task-lifecycle.test.js tests/filesystem.test.js tests/tasks-filesystem.test.js tests/knowledge.test.js tests/continuity.test.js tests/diagnostics.test.js tests/integration.test.js tests/task-history.test.js tests/task-resolution.test.js tests/process-recovery.test.js tests/model-workflow.test.js tests/acceptance-batch-d.test.js"
+    "test": "node --test tests/memory.test.js tests/actions.test.js tests/gateway.test.js tests/controller.test.js tests/decision.test.js tests/cli.test.js tests/model-protocol.test.js tests/intelligence.test.js tests/chat.test.js tests/tasks.test.js tests/task-lifecycle.test.js tests/filesystem.test.js tests/tasks-filesystem.test.js tests/knowledge.test.js tests/continuity.test.js tests/diagnostics.test.js tests/integration.test.js tests/task-history.test.js tests/task-resolution.test.js tests/process-recovery.test.js tests/model-workflow.test.js tests/acceptance-batch-d.test.js tests/config-failures.test.js tests/session-degradation.test.js tests/lock-contention.test.js tests/readiness-batch-e.test.js"
   },
   "dependencies": {},
   "devDependencies": {}

@@ -84,35 +84,54 @@ export class TaskStore {
 
   // Runs `fn` while holding the store lock. A lock left by a process that has
   // exited is removed. A lock held by a live process is refused, not waited for.
+  //
+  // Both the takeover and the release act on the lock only when the file still holds the
+  // exact claim this process validated. Without that, a process that found a dead holder's
+  // lock could delete the fresh lock another process had just taken, and two task runs would
+  // execute at once on one data directory - double step execution, interleaved transitions,
+  // and an audit trail that describes work no single process did. A residual window remains
+  // (no conditional delete exists without a native dependency): between the check and the
+  // removal the file can still change. It is one await rather than the three the takeover
+  // used to span, and the case is reported by diagnostics as a lock that could not be read.
   async withLock(fn) {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    const body = JSON.stringify({ pid: process.pid, at: this.now().toISOString() });
+    const body = JSON.stringify({ pid: process.pid, nonce: this.idFactory(), at: this.now().toISOString() });
     let acquired = false;
     for (let attempt = 0; attempt < 2 && !acquired; attempt += 1) {
+      let stale = null;
       try {
         await fs.writeFile(this.lockPath, body, { flag: 'wx' });
         acquired = true;
       } catch (err) {
         if (err?.code !== 'EEXIST') throw new StoreError(`cannot create task lock: ${err?.code || err?.message}`);
+        let raw = null;
+        try {
+          raw = await fs.readFile(this.lockPath, 'utf8');
+        } catch {
+          raw = null; // unreadable or still being written: treat as in use
+        }
         let holder = null;
         try {
-          holder = JSON.parse(await fs.readFile(this.lockPath, 'utf8'));
+          holder = JSON.parse(raw);
         } catch {
-          holder = null; // unreadable or still being written: treat as in use
+          holder = null;
         }
         const pid = Number(holder?.pid);
-        if (Number.isInteger(pid) && pid > 0 && !processAlive(pid)) {
-          await fs.rm(this.lockPath, { force: true });
+        if (raw !== null && Number.isInteger(pid) && pid > 0 && !processAlive(pid)) {
+          stale = raw;
         } else {
           throw new StoreError(`tasks are in use by process ${holder?.pid ?? 'unknown'}; try again when it finishes`);
         }
+        const stillThere = await fs.readFile(this.lockPath, 'utf8').catch(() => null);
+        if (stillThere === stale) await fs.rm(this.lockPath, { force: true });
       }
     }
     if (!acquired) throw new StoreError('could not acquire the task lock');
     try {
       return await fn();
     } finally {
-      await fs.rm(this.lockPath, { force: true }).catch(() => {});
+      const mine = await fs.readFile(this.lockPath, 'utf8').catch(() => null);
+      if (mine === body) await fs.rm(this.lockPath, { force: true }).catch(() => {});
     }
   }
 

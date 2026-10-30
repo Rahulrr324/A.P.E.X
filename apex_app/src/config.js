@@ -53,18 +53,18 @@ export function loadConfig(env = process.env) {
   // no default, so the capability is absent unless the operator opts in. The root is resolved
   // once here, so it is fixed before any action runs, and it cannot be expanded by model output.
   let filesystemRoot = null;
-  let filesystemMaxReadBytes = DEFAULT_FILESYSTEM_MAX_READ_BYTES;
+  // Both filesystem settings are validated on every run, not only when a root is set:
+  // a mistyped limit must be named at startup like every other setting, rather than
+  // lying dormant until the capability is switched on.
+  const filesystemMaxReadBytes = intEnv(
+    env,
+    'APEX_FILESYSTEM_MAX_READ_BYTES',
+    DEFAULT_FILESYSTEM_MAX_READ_BYTES,
+    4096,
+    FILESYSTEM_MAX_READ_BYTES_MAX,
+  );
   const rawRoot = (env.APEX_FILESYSTEM_ROOT || '').trim();
-  if (rawRoot) {
-    filesystemRoot = resolveRoot(rawRoot);
-    filesystemMaxReadBytes = intEnv(
-      env,
-      'APEX_FILESYSTEM_MAX_READ_BYTES',
-      DEFAULT_FILESYSTEM_MAX_READ_BYTES,
-      4096,
-      FILESYSTEM_MAX_READ_BYTES_MAX,
-    );
-  }
+  if (rawRoot) filesystemRoot = resolveRoot(rawRoot);
 
   return {
     dataDir,
