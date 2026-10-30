@@ -3,6 +3,13 @@
 // Control characters other than tab and newline.
 export const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 
+// Everything that cannot appear inside one APEX line: all C0 controls (tab and the
+// line breaks included), DEL, and C1. JSON string escapes are decoded after the model
+// gateway removes control characters from the reply text, so a value such as
+// "\u001b[2K" or "a\nb" can still reach APEX and must be normalized where it is used.
+export const SINGLE_LINE_FORBIDDEN = /[\u0000-\u001f\u007f-\u009f]/;
+const SINGLE_LINE_FORBIDDEN_ALL = new RegExp(SINGLE_LINE_FORBIDDEN.source, 'g');
+
 // Words that carry no retrieval signal. Shared by every store's tokenizer so a
 // question such as "what is the capital of France?" cannot match a record merely
 // because the record also contains "what" or "is".
@@ -18,6 +25,16 @@ export const STOPWORDS = new Set([
 export function truncate(text, max) {
   const s = String(text);
   return s.length > max ? `${s.slice(0, Math.max(0, max - 3))}...` : s;
+}
+
+// Renders an untrusted name or key so it can be embedded in APEX's own one-line
+// sentence without becoming a line of its own. Used for action names, step ids,
+// input field names, and anything else an APEX message quotes back.
+export function singleLine(value, max = 80) {
+  return truncate(
+    String(value ?? '').replace(SINGLE_LINE_FORBIDDEN_ALL, ' ').replace(/\s+/g, ' ').trim(),
+    max,
+  );
 }
 
 export function round3(n) {

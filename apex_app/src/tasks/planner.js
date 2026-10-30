@@ -6,7 +6,7 @@
 //      the controller stores it as a proposal that needs user approval.
 // Nothing here runs an action.
 import { route } from '../controller/router.js';
-import { CONTROL_CHARS, truncate } from '../util.js';
+import { SINGLE_LINE_FORBIDDEN, singleLine, truncate } from '../util.js';
 import { MAX_DESCRIPTION_CHARS, dependencyProblems, MAX_STEPS } from './model.js';
 
 const SEPARATOR = /\s*;\s*|\s+and\s+then\s+|\s+then\s+|\n+/i;
@@ -87,17 +87,20 @@ export function checkSteps(steps, registry, origin) {
   const problems = [...dependencyProblems(steps)];
   const normalised = [];
   for (const s of steps) {
-    const label = `step ${String(s.id)}`;
-    if (typeof s.description !== 'string' || s.description.trim() === '' || s.description.length > MAX_DESCRIPTION_CHARS || CONTROL_CHARS.test(s.description)) {
+    const label = `step ${singleLine(s.id)}`;
+    // A description is rendered on a line of its own in task views, so a line break
+    // (or any other control character) would let model text imitate a task record.
+    if (typeof s.description !== 'string' || s.description.trim() === '' || s.description.length > MAX_DESCRIPTION_CHARS
+      || SINGLE_LINE_FORBIDDEN.test(s.description)) {
       problems.push(`${label}: description must be 1 to ${MAX_DESCRIPTION_CHARS} plain characters`);
     }
     const def = typeof s.action === 'string' ? registry.get(s.action) : null;
     if (!def) {
-      problems.push(`${label}: unknown action "${String(s.action)}"`);
+      problems.push(`${label}: unknown action "${singleLine(s.action)}"`);
       continue;
     }
     if (def.plannable === false) {
-      problems.push(`${label}: action ${s.action} cannot be part of a plan`);
+      problems.push(`${label}: action ${singleLine(s.action)} cannot be part of a plan`);
       continue;
     }
     // A model may propose a read. A model-proposed write is allowed into the plan
@@ -106,7 +109,7 @@ export function checkSteps(steps, registry, origin) {
       ? registry.authorize(s.action, 'user')
       : registry.authorize(s.action, 'model');
     if (auth.decision !== 'allow') {
-      problems.push(`${label}: action ${s.action} is not permitted in this plan (${auth.reason})`);
+      problems.push(`${label}: action ${singleLine(s.action)} is not permitted in this plan (${auth.reason})`);
       continue;
     }
     if (origin === 'model' && s.action === 'memory.add') {
@@ -151,7 +154,7 @@ export function parseModelPlan(text) {
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { ok: false, problems: ['the plan must be a JSON object'], steps: [] };
   for (const k of Object.keys(obj)) {
-    if (k !== 'steps') return { ok: false, problems: [`unexpected field "${truncate(k, 40)}"`], steps: [] };
+    if (k !== 'steps') return { ok: false, problems: [`unexpected field "${singleLine(k, 40)}"`], steps: [] };
   }
   if (!Array.isArray(obj.steps)) return { ok: false, problems: ['"steps" must be a list'], steps: [] };
   if (obj.steps.length > MAX_STEPS) return { ok: false, problems: [`a plan may have at most ${MAX_STEPS} steps`], steps: [] };
@@ -164,7 +167,7 @@ export function parseModelPlan(text) {
       return;
     }
     for (const k of Object.keys(raw)) {
-      if (!PLAN_FIELDS.includes(k)) problems.push(`${label}: unexpected field "${truncate(k, 40)}"`);
+      if (!PLAN_FIELDS.includes(k)) problems.push(`${label}: unexpected field "${singleLine(k, 40)}"`);
     }
     steps.push({
       id: raw.id,

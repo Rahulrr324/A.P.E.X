@@ -38,6 +38,27 @@ describe('model gateway', () => {
     assert.equal(s.requests.at(-1).temperature, 0);
   });
 
+  test('a 200 response without a usable model list is unavailable, not available', async () => {
+    const s = await stub();
+    const gw = createGateway({ url: s.url, name: 'stub-model', timeoutMs: 5000, allowRemote: false });
+    const cases = [
+      [JSON.stringify({ error: { message: 'model is not loaded' } }), /reported an error: model is not loaded/],
+      ['<html>proxy error</html>', /did not return a model list/],
+      [JSON.stringify({}), /did not return a model list/],
+      [JSON.stringify({ data: [] }), /lists no model/],
+    ];
+    for (const [modelsRaw, detail] of cases) {
+      s.behavior.modelsRaw = modelsRaw;
+      const avail = await gw.checkAvailability({ timeoutMs: 1000 });
+      assert.equal(avail.available, false, `reported available for ${modelsRaw}`);
+      assert.match(avail.detail, detail);
+    }
+    // A server that does list a model is still available: this check must not
+    // refuse every endpoint just because the body was validated.
+    s.behavior.modelsRaw = undefined;
+    assert.equal((await gw.checkAvailability({ timeoutMs: 1000 })).available, true);
+  });
+
   test('an HTTP error from the endpoint is returned as a structured failure', async () => {
     const s = await stub();
     s.behavior.status = 500;

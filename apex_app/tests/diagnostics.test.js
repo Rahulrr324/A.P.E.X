@@ -358,6 +358,25 @@ describe('diagnostics: model independence', () => {
     assert.deepEqual(snapshot(dir), {});
   });
 
+  test('a model endpoint that answers 200 with an error body is unavailable, not available', async () => {
+    const dir = tempDir();
+    const stub = await startStubModel();
+    stubs.push(stub);
+    stub.behavior.modelsRaw = JSON.stringify({ error: { message: 'model is not loaded' } });
+    const env = envFor(dir, { APEX_MODEL_URL: stub.url, APEX_MODEL_NAME: 'stub' });
+
+    const status = await runCli(['status', '--model'], env);
+    assert.equal(status.code, 1, status.stderr);
+    assert.match(status.stdout, /Model backend: .* - unavailable: endpoint reported an error: model is not loaded/);
+    assert.doesNotMatch(status.stdout, / - available/);
+    assert.deepEqual(snapshot(dir), {}, 'a probe must not create state');
+
+    const diag = await runCli(['diagnose', '--model'], env);
+    assert.equal(diag.code, 1);
+    assert.match(diag.stdout, /Model: unavailable \(endpoint reported an error: model is not loaded\)/);
+    assert.doesNotMatch(diag.stdout, /Model: ok/);
+  });
+
   test('a local model endpoint that is unavailable does not hide local diagnostics', async () => {
     const dir = tempDir();
     const url = await closedPortUrl();

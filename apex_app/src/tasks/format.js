@@ -1,6 +1,6 @@
 // Plain-text rendering of tasks, shared by the controller's replies and the CLI.
-import { shortId, truncate } from '../util.js';
-import { progressOf, TaskStatus, StepStatus } from './model.js';
+import { shortId, singleLine, truncate } from '../util.js';
+import { progressOf, TaskStatus, StepStatus, MAX_DESCRIPTION_CHARS } from './model.js';
 
 const CLI = 'node bin/apex.js';
 
@@ -37,7 +37,10 @@ export function renderTask(task) {
     'Steps:',
   ];
   task.steps.forEach((s, i) => {
-    lines.push(`  ${i + 1}. [${s.status}] ${s.id}  ${s.description}`);
+    // Descriptions are validated on the way in, but a task stored by an older build can
+    // still hold a line break; it is rendered as one line here so it cannot imitate a
+    // task record such as a verified step line.
+    lines.push(`  ${i + 1}. [${s.status}] ${s.id}  ${singleLine(s.description, MAX_DESCRIPTION_CHARS)}`);
     const detail = [s.action, s.summary].filter(Boolean).join(' - ');
     if (detail) lines.push(`       ${detail}`);
   });

@@ -54,13 +54,7 @@ export class SessionState {
     const tmp = `${this.filePath}.${process.pid}.tmp`;
     try {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-      const handle = await fs.open(tmp, 'w');
-      try {
-        await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`, 'utf8');
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+      await writeSynced(tmp, stateText(state));
       await fs.rename(tmp, this.filePath);
     } catch (err) {
       await fs.rm(tmp, { force: true }).catch(() => {});
@@ -72,7 +66,47 @@ export class SessionState {
   async current() {
     const existing = await this.#read();
     if (existing) return existing;
-    return this.rotate();
+    return this.#create();
+  }
+
+  // Creates the first session without replacing one another process created in the
+  // meantime. A rename always replaces, so concurrent first requests could each publish
+  // their own session id and the last write would orphan the other processes' turns: the
+  // history exists but the pointer no longer reaches it. A hard link publishes the already
+  // complete state atomically and fails if the name exists, so the loser adopts the winner.
+  // On a filesystem without hard links, an exclusive create is used instead; it is still
+  // create-once, though a reader could briefly see the file before its JSON is complete
+  // (reported as corrupt, never as a fresh session).
+  async #create() {
+    const state = { sessionId: this.idFactory(), startedAt: this.now().toISOString() };
+    const json = stateText(state);
+    const tmp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    let created = false;
+    try {
+      await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+      await writeSynced(tmp, json);
+      try {
+        await fs.link(tmp, this.filePath);
+        created = true;
+      } catch (linkErr) {
+        if (linkErr?.code !== 'EEXIST') {
+          try {
+            await writeExclusive(this.filePath, json);
+            created = true;
+          } catch (createErr) {
+            if (createErr?.code !== 'EEXIST') throw createErr;
+          }
+        }
+      }
+    } catch (err) {
+      throw new StoreError(`cannot write session state: ${err?.code || err?.message}`);
+    } finally {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+    }
+    if (created) return state;
+    const winner = await this.#read();
+    if (!winner) throw new StoreError('session state is missing after another process created it');
+    return winner;
   }
 
   // Starts a new session. Old turns stay in history but are no longer replayed.
@@ -80,5 +114,29 @@ export class SessionState {
     const state = { sessionId: this.idFactory(), startedAt: this.now().toISOString() };
     await this.#write(state);
     return state;
+  }
+}
+
+function stateText(state) {
+  return `${JSON.stringify(state, null, 2)}\n`;
+}
+
+async function writeSynced(file, text) {
+  const handle = await fs.open(file, 'w');
+  try {
+    await handle.writeFile(text, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function writeExclusive(file, text) {
+  const handle = await fs.open(file, 'wx');
+  try {
+    await handle.writeFile(text, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }

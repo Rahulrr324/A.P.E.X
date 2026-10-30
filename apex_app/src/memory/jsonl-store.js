@@ -59,6 +59,8 @@ export class JsonlStore {
   async append(record) {
     const line = `${JSON.stringify(record)}\n`;
     let handle;
+    let written = 0;
+    let total = 0;
     try {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true });
       handle = await fs.open(this.filePath, 'a+');
@@ -71,10 +73,30 @@ export class JsonlStore {
         await handle.read(last, 0, 1, size - 1);
         if (last[0] !== 0x0a) prefix = '\n';
       }
-      await handle.write(prefix + line);
+      // A single write can complete partially. The remainder is appended in follow-up
+      // writes until the whole record is on disk; reporting success after a partial
+      // write would lose the record while its caller believed it was recorded. A write
+      // that accepts no bytes is a failure, not a completed append.
+      const data = Buffer.from(prefix + line, 'utf8');
+      total = data.length;
+      while (written < total) {
+        const { bytesWritten } = await handle.write(data, written, total - written);
+        if (!Number.isInteger(bytesWritten) || bytesWritten <= 0) {
+          throw new Error(`write accepted ${written} of ${total} bytes`);
+        }
+        written += bytesWritten;
+      }
       await handle.sync();
     } catch (err) {
-      throw new StoreError(`cannot write ${this.label}: ${err?.code || err?.message}`);
+      // A failure is not proof that nothing was written. The bytes are visible to readers
+      // as soon as the write returns; only durability is unknown until the fsync returns.
+      // Say which state the caller is in instead of implying the store is unchanged.
+      const note = written === 0
+        ? ''
+        : written < total
+          ? `; ${written} byte(s) may remain as a partial line`
+          : '; the record was written but its durability could not be confirmed, so it may be present';
+      throw new StoreError(`cannot write ${this.label}: ${err?.code || err?.message}${note}`);
     } finally {
       if (handle) await handle.close().catch(() => {});
     }

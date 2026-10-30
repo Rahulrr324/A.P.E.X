@@ -186,6 +186,23 @@ function extractConflictClause(text) {
   return null;
 }
 
+const DATE_WORDS = new Set(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december', 'today', 'tomorrow', 'yesterday']);
+
+// Two claims already reduced to subject and value. Claims with different subjects
+// cannot contradict each other, which is what lets search compare within subject
+// groups instead of every pair.
+function claimsConflict(left, right) {
+  if (left.subject !== right.subject) return false;
+  if (left.value === right.value) return false;
+  // A longer value that merely qualifies an existing value is not enough
+  // evidence to call the claims contradictory.
+  if (left.value.startsWith(`${right.value} `) || right.value.startsWith(`${left.value} `)) return false;
+  if (left.value.split(' ').some((word) => DATE_WORDS.has(word)) || right.value.split(' ').some((word) => DATE_WORDS.has(word))) {
+    return false;
+  }
+  return true;
+}
+
 function isPotentialConflict(a, b) {
   if (!a || !b || a.id === b.id) return false;
   const aText = String(a.content).trim();
@@ -195,17 +212,7 @@ function isPotentialConflict(a, b) {
   const left = extractConflictClause(aText);
   const right = extractConflictClause(bText);
   if (!left || !right) return false;
-  if (left.subject !== right.subject) return false;
-  if (left.value === right.value) return false;
-  // A longer value that merely qualifies an existing value is not enough
-  // evidence to call the claims contradictory.
-  if (left.value.startsWith(`${right.value} `) || right.value.startsWith(`${left.value} `)) return false;
-
-  const dateWords = new Set(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december', 'today', 'tomorrow', 'yesterday']);
-  if (left.value.split(' ').some((word) => dateWords.has(word)) || right.value.split(' ').some((word) => dateWords.has(word))) {
-    return false;
-  }
-  return true;
+  return claimsConflict(left, right);
 }
 
 export class MemoryStore {
@@ -384,18 +391,37 @@ export class MemoryStore {
         replacedByIds.set(targetId, replacements);
       }
     }
-    for (let i = 0; i < unique.length; i += 1) {
-      for (let j = i + 1; j < unique.length; j += 1) {
-        const left = unique[i].record;
-        const right = unique[j].record;
-        if (replacesRecord(left, right)) continue;
-        if (!isPotentialConflict(left, right)) continue;
-        const leftIds = conflictIds.get(left.id) ?? [];
-        leftIds.push(right.id);
-        conflictIds.set(left.id, leftIds);
-        const rightIds = conflictIds.get(right.id) ?? [];
-        rightIds.push(left.id);
-        conflictIds.set(right.id, rightIds);
+    // A claim is reduced to its subject and value once, then compared only with claims
+    // that share its subject. Most records state no subject/value claim at all, so the
+    // old all-pairs form re-parsed every record for every other record: a broad query
+    // over 3,000 records took about 27 seconds, almost all of it in pairs whose subjects
+    // could never match. Grouping does one parse per record and visits only the pairs
+    // that can conflict; group members keep the ranked order, so the recorded conflict
+    // ids and their order are unchanged.
+    const groups = new Map();
+    for (const item of unique) {
+      const text = String(item.record.content).trim();
+      const clause = extractConflictClause(text);
+      if (!clause) continue;
+      const group = groups.get(clause.subject) ?? [];
+      group.push({ record: item.record, text, clause });
+      groups.set(clause.subject, group);
+    }
+    for (const group of groups.values()) {
+      for (let i = 0; i < group.length; i += 1) {
+        for (let j = i + 1; j < group.length; j += 1) {
+          const left = group[i];
+          const right = group[j];
+          if (left.text === right.text) continue;
+          if (replacesRecord(left.record, right.record)) continue;
+          if (!claimsConflict(left.clause, right.clause)) continue;
+          const leftIds = conflictIds.get(left.record.id) ?? [];
+          leftIds.push(right.record.id);
+          conflictIds.set(left.record.id, leftIds);
+          const rightIds = conflictIds.get(right.record.id) ?? [];
+          rightIds.push(left.record.id);
+          conflictIds.set(right.record.id, rightIds);
+        }
       }
     }
     return unique.slice(0, Math.max(1, limit)).map(({ record, score }) => ({

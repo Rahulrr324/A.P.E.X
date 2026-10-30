@@ -98,7 +98,9 @@ settings above (with credential-like text redacted), the state of every store,
 confirmed defects and suspicions, and recovery guidance. It does not create a
 session, write or repair a store, run a task, or contact the model.
 `diagnose --model` (or `status --model`) adds a connectivity check against
-`/api/tags` or `/v1/models`; it never runs inference. Without `--model`, model
+`/api/tags` or `/v1/models`; it never runs inference. An HTTP 200 alone is not
+enough: a 200 error body, a non-JSON body, or a model list with no model is reported
+as unavailable, the same way the completion path refuses it. Without `--model`, model
 availability is reported as "not checked", not as healthy. A missing session
 pointer is valid on a fresh install; if conversation turns are already stored,
 diagnostics reports it as a suspicion, because a new session will not replay them.
@@ -200,6 +202,14 @@ APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
   retried), `INTERRUPTED` (connection dropped mid-answer), `MODEL_NOT_FOUND`,
   `CONTEXT_TOO_LARGE`, `EMPTY_RESPONSE`, `MALFORMED_RESPONSE`, `HTTP_ERROR`. Only
   unreachable and interrupted calls are retried, up to `APEX_MODEL_RETRIES` times.
+  A retry resends the same prompt and only the final reply is used: one model request,
+  however often it is retried, can authorize at most the proposals in that one reply, and
+  every proposal still passes the registry's authorization. `INTERRUPTED` means no reply
+  was read, so nothing from the dropped attempt is acted on.
+- The response size limit (1,000,000 characters) is enforced while the body is read, not
+  after it is buffered: an oversized reply is rejected when it crosses the limit, the read
+  is cancelled, and the connection is closed. An oversized error body is still reported as
+  `HTTP_ERROR` for its status, with the body omitted rather than read.
 - Control characters in model output (including terminal escape codes) are removed
   before the text is shown, stored, or logged.
 
@@ -462,6 +472,13 @@ has moved on from is dropped rather than written, so history holds what the task
 now. Where the task log or the history cannot be read, nothing is written and the intent
 stays owed.
 
+**One failure, one record.** A reissue attempt can fail in the same turn that writes a new
+task's own summary. The two outcomes are disclosed separately: a notice about an earlier
+queued result never says this turn's result was lost, and a current summary that could not
+be queued is not described as queued because an older intent is still owed. The reissue
+failure and this turn's own failure are recorded under different subjects on the operation
+record, so the display is derived from the same facts the audit holds.
+
 **Limits.**
 - Free-text planning recognises only the request forms above and the `;` and `then`
   separators. Anything else needs a model to propose a plan.
@@ -565,7 +582,12 @@ holds identity, memory, control, or persistence.
   takes no parameters, never a bare string or number. A proposal that violates this is
   rejected before it is authorized: the audit step records `input_rejected`, names the
   field that was wrong and its JSON type (never the value it carried), and reports
-  `not_run` for both execution and verification.
+  `not_run` for both execution and verification. `action` must also match the registered
+  action-name grammar (lowercase letters and digits, separated by `.` or `_`); anything
+  else is malformed before it is quoted. Names and keys that APEX quotes back in a
+  refusal, and step ids and descriptions in a rejected plan, are rendered on one line
+  without control characters, so model text cannot add a line that imitates an APEX
+  record such as a verified step result.
 - A proposal is only a request. It goes through the same policy as a user request.
   Model output is never executed as code. At most three proposal lines are considered
   per reply; the prompt states this limit, and the user is told when extra lines were
@@ -683,7 +705,13 @@ questions that must change nothing).
   different values may still be compatible in context. A longer value that merely
   elaborates the shorter one is not flagged. Warnings preserve claims; they do not
   determine which claim is true. Exact duplicate retrieval hits collapse to the newest
-  matching record, while distinct contents remain separate.
+  matching record, while distinct contents remain separate. Conflict comparison is
+  bounded by subject: each retrieved record's clause is parsed once and compared only
+  with retrieved records that share its normalized subject, not with every other record.
+  A broad query over a 3,000-record store fell from about 27 seconds to about 0.06
+  seconds on the development machine (`growth-limits.test.js` guards against a return to
+  all-pairs parsing). Retrieval still reads and scores the entire store, so its remaining
+  cost grows linearly with the number of records.
 - **Correction resolves only its explicitly selected pair.** The new record links to the
   selected old record, which remains visible as `superseded` when no other conflict
   remains. Conflicts with any other claims stay unresolved; superseded history is not
@@ -691,8 +719,18 @@ questions that must change nothing).
 - **The task lock serializes task changes, not every command.** `task plan`, `run`,
   `resume`, `approve`, `retry` and `cancel` take `tasks.jsonl.lock`; reads (`status`,
   `diagnose`, `task list/show/explain`, `history`) take no lock, and the other stores
-  are append-only without a lock of their own, so concurrent appends from different
-  processes are not coordinated and a reader can miss the line being appended. A stale
+  are append-only without a lock of their own. On the tested platform (Windows 11,
+  NTFS), real concurrent processes appending to the same store kept every line intact,
+  in per-writer order, and a reader polling during the writes never saw a partial line
+  (`storage-concurrency.test.js`). An append now repeats a short write until the record
+  is complete and fails rather than reporting a write that accepted no bytes. This is
+  still not a multi-file transaction: an operation that spans stores (a step, its audit
+  record, its conversation turn) can be partly recorded if the process dies between
+  writes, and each record states only what it is. The session pointer is created
+  exclusively, so concurrent first requests share one session instead of orphaning each
+  other's turns; `apex new` still replaces it deliberately. The summary retry queue is
+  a whole-file replace, so two processes updating it at the same moment can lose one
+  intent; that intent only exists after a history write already failed. A stale task
   lock is taken over only when its pid is provably dead, and the takeover removes only
   the exact claim it validated. Node has no conditional-delete primitive without a
   native dependency, so a window remains between checking a stale lock and removing it;
@@ -733,10 +771,25 @@ explicit entity relationships, built alongside personal memory:
   `memory correct` command to select one conflicting record. Corrections are limited to
   one selected record per operation and to the detector's narrow clause patterns;
   previous records remain append-only and continue to be inspectable.
-- **Corrupt memory logs fail closed for search, list, and writes.** `status` still
-  reports the corrupt-line count, and records are not deleted or rewritten. A new
-  record is refused while corrupt lines exist, so damage cannot be buried under a
-  fresh write that would otherwise be reported as stored. Repair is not automatic.
+- **Corrupt JSONL logs fail closed and are never rewritten.** `status` and `diagnose`
+  report the corrupt-line count and line numbers, and records are not deleted,
+  skipped silently, or truncated to make a file parse. Memory, knowledge, and task
+  reads and writes are refused while corrupt lines exist, so damage cannot be buried
+  under a fresh write that would otherwise be reported as stored. Conversation replay
+  is blocked and task state is refused; the audit log still lists its readable records
+  and names the skipped lines. Repair is not automatic: no supported command deletes
+  or rewrites a damaged line. A partial final line left by a crash is preserved as a
+  damaged line, and the next append starts on a new line instead of merging into it.
+- **A failed write is not proof that nothing was written.** If the bytes reached the
+  file but the fsync did not complete, the record may already be readable; APEX says so
+  in the error instead of implying the store is unchanged and never removes data to
+  make the failure look clean. Callers should inspect the store before retrying.
+- **A task step that ran is never reported as an execution that failed.** If the task
+  log refuses the write that records a step result, the run reports which step had
+  already returned which outcome and whether its own audit record was written, instead
+  of calling it a failed execution. The step is not run again: the next `task run`
+  resolves it from that audit record (or leaves it uncertain when no record matches),
+  and nothing is repeated.
 - **Answer quality depends entirely on the model you run.** APEX checks the protocol,
   not the truth of what a model says. Model answers are shown as unverified.
 - **Routing is a fixed pattern table.** Requests outside the table go to the model
@@ -745,8 +798,12 @@ explicit entity relationships, built alongside personal memory:
   the same code, so it catches inconsistency and tampering, not a shared bug in that
   store logic.
 - **A model conclusion is never verified.** It is reported as `verification_unavailable`.
-- **Concurrency:** writes are append-only with fsync, but two processes writing at the
-  same instant are not coordinated. Run one `ask` at a time.
+- **Concurrency:** append-only JSON Lines stores were exercised with real concurrent
+  processes and kept every record intact (see Known limitations above and
+  `storage-concurrency.test.js`). They are still not multi-file transactions: an
+  operation spanning stores can be partly recorded if the process dies between
+  writes, and a failed write may have landed. Task state changes are serialized by
+  `tasks.jsonl.lock`; concurrent task runs are refused rather than queued.
 - **Single-user, local only.** No authentication, encryption, or sync. Anyone with
   read access to the data directory can read the memory.
 - **Audit content:** the `request` and model `output` fields contain your text. The
@@ -767,7 +824,7 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this milestone was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 550 tests, 548 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 617 tests, 615 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file

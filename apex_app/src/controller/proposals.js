@@ -4,6 +4,8 @@
 // "input" is always an object of named parameters, and {} when the action takes
 // none. Each proposal is only a request. It is authorized and validated like any
 // other request. Nothing is evaluated.
+import { ACTION_NAME_RE } from '../actions/registry.js';
+
 export const PROPOSAL_PREFIX = 'PROPOSE_ACTION';
 export const MAX_PROPOSALS = 3;
 
@@ -22,6 +24,9 @@ function shapeViolation(obj) {
   if (type !== 'object') return `proposal must be a JSON object, got ${type}`;
   if (obj.action === undefined) return 'proposal has no "action"';
   if (typeof obj.action !== 'string') return `proposal "action" must be a string, got ${jsonType(obj.action)}`;
+  // The name is quoted back in step lines and history. A name the registry grammar
+  // cannot produce is refused here, before it is copied anywhere.
+  if (!ACTION_NAME_RE.test(obj.action)) return 'proposal "action" is not a valid action name';
   if (obj.input === undefined) return 'proposal has no "input"';
   if (jsonType(obj.input) !== 'object') {
     return `proposal "input" must be an object of the action's parameters, got ${jsonType(obj.input)}`;

@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { ValidationError, ExecutionError } from '../errors.js';
 import { resolveInside, hasControlChars } from './path.js';
+import { singleLine } from '../util.js';
 import { ORIGIN_USER } from '../actions/origins.js';
 
 export const DEFAULT_LIST_LIMIT = 200;
@@ -36,7 +37,7 @@ function expectObject(input, allowedKeys) {
     throw new ValidationError('input must be an object');
   }
   for (const key of Object.keys(input)) {
-    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${singleLine(key, 40)}"`);
   }
   return input;
 }

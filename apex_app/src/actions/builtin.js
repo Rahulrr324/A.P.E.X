@@ -4,7 +4,7 @@
 // `verify` returns { ok, detail }, or null when no independent check is possible.
 import { ValidationError } from '../errors.js';
 import { sha256Hex, validateContent } from '../memory/memory-store.js';
-import { CONTROL_CHARS, round3, shortId } from '../util.js';
+import { CONTROL_CHARS, round3, shortId, singleLine } from '../util.js';
 import { evaluateExpression, evaluateRpn, validateExpression } from './calc.js';
 import { APP_NAME, APP_STAGE, APP_VERSION } from '../identity.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
@@ -18,7 +18,7 @@ function expectObject(input, allowedKeys) {
     throw new ValidationError('input must be an object');
   }
   for (const key of Object.keys(input)) {
-    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${singleLine(key, 40)}"`);
   }
   return input;
 }

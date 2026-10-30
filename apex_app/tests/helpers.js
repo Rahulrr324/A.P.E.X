@@ -54,7 +54,9 @@ export function runCli(args, env) {
 // Local stub of an OpenAI-compatible endpoint. Behaviour is changed per test
 // through `behavior`. Every chat request body is recorded in `requests`.
 export async function startStubModel() {
-  const behavior = { reply: 'stub answer', status: 200, delayMs: 0, raw: undefined };
+  const behavior = {
+    reply: 'stub answer', status: 200, delayMs: 0, raw: undefined, modelsRaw: undefined,
+  };
   const requests = [];
   const server = http.createServer((req, res) => {
     let body = '';
@@ -62,7 +64,7 @@ export async function startStubModel() {
     req.on('end', async () => {
       if (req.method === 'GET' && req.url === '/v1/models') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ data: [{ id: 'stub' }] }));
+        res.end(behavior.modelsRaw ?? JSON.stringify({ data: [{ id: 'stub' }] }));
         return;
       }
       if (req.method === 'POST' && req.url === '/v1/chat/completions') {

@@ -1509,6 +1509,110 @@ describe('052: a refused task summary is reissued at the next task write', () =>
   });
 });
 
+// 068: a persistence failure is disclosed against the record it belongs to. The delivery
+// queue lets an earlier task's summary be written by a later task's turn; when that
+// reissue fails, the failure is about the earlier result, not the one this turn just
+// produced. The notice used to match any 'task result' conversation error, so a new task
+// whose own summary was written still displayed "This task result could not be fully
+// saved", and an older still-queued intent made a current summary that could not be
+// queued look queued. Both are reproduced below against the real queue and stores.
+describe('068: a reissue failure is disclosed against the record it belongs to', () => {
+  const eio = () => Object.assign(new Error('disk full'), { code: 'EIO' });
+
+  test('a new task whose own summary was written does not report its result as lost', async () => {
+    const app = appOn({});
+    const realAppend = app.conversation.append.bind(app.conversation);
+
+    // The first task's summary is refused, so one intent is owed.
+    app.conversation.append = async () => { throw eio(); };
+    const first = await app.controller.handle('calc 1+1; calc 2+2');
+    assert.equal(first.status, Outcome.SUCCESS_VERIFIED);
+    assert.equal(taskTurns(app).length, 0);
+    const firstId = first.operation.task.id;
+    assert.deepEqual((await app.summaryQueue.entries()).map((e) => e.taskId), [firstId]);
+
+    // History is writable again, but the reissue write fails once. The new task's own
+    // summary is then written successfully.
+    let failures = 0;
+    app.conversation.append = async (turn) => {
+      if (failures === 0) { failures += 1; throw eio(); }
+      return realAppend(turn);
+    };
+    const second = await app.controller.handle('calc 3+3; calc 4+4');
+    assert.equal(second.status, Outcome.SUCCESS_VERIFIED);
+    const secondId = second.operation.task.id;
+
+    // The new result is in history, so it must not be reported as lost...
+    const turns = taskTurns(app);
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].taskId, secondId);
+    assert.equal(turns[0].verified, true);
+    assert.equal(/This task result could not be fully saved/.test(second.display), false,
+      'the summary this turn wrote is not described as lost');
+    // ...while the earlier result that is still owed is disclosed as such.
+    assert.match(second.display, /An earlier task result is still not in history \(EIO\)\. APEX has queued it for reissue at the next task write\./);
+    assert.deepEqual((await app.summaryQueue.entries()).map((e) => e.taskId), [firstId], 'only the earlier intent is owed');
+    assert.equal(second.operation.errors.some((e) => e.subject === 'task result'), false,
+      'the reissue failure is not recorded as this task result');
+    assert.equal(second.operation.errors.some((e) => e.subject === 'earlier task result' && e.code === 'EIO'), true);
+    assert.equal(stepOps(app).length, 4, 'each task ran its two steps once');
+
+    // The next task write offers the earlier summary again, writes it once, and drops the
+    // intent. Nothing is executed to reconstruct it.
+    delete app.conversation.append;
+    const asked = await app.controller.handle(`did task ${firstId.slice(0, 8)} finish?`);
+    assert.equal(asked.status, Outcome.SUCCESS_VERIFIED);
+    assert.match(asked.display, /Yes, it finished: all 2 step\(s\) ran and each one was verified/);
+    assert.match(asked.display, /1 earlier task result that could not be saved has now been written to history/);
+    assert.equal(taskTurns(app).length, 2, 'the earlier summary is now written');
+    assert.equal((await app.summaryQueue.entries()).length, 0);
+    assert.equal(stepOps(app).length, 4, 'the reissue ran nothing');
+  });
+
+  test('a current summary that could not be queued is not called queued because an older intent is', async () => {
+    const app = appOn({});
+    app.conversation.append = async () => { throw eio(); };
+    const first = await app.controller.handle('calc 1+1; calc 2+2');
+    const firstId = first.operation.task.id;
+    assert.deepEqual((await app.summaryQueue.entries()).map((e) => e.taskId), [firstId]);
+
+    // History still refuses writes, and this turn's own summary cannot be queued either.
+    app.summaryQueue.add = async () => { throw eio(); };
+    const second = await app.controller.handle('calc 3+3; calc 4+4');
+
+    // Two independent verdicts, each about its own record.
+    assert.match(second.display, /This task result could not be fully saved to conversation history \(EIO\);[^\]]*It could not be queued, so it will not be reissued automatically\./,
+      'the current result is disclosed as lost, not as queued');
+    assert.match(second.display, /An earlier task result is still not in history \(EIO\)\. APEX has queued it for reissue at the next task write\./,
+      'the older intent is separately disclosed as still owed');
+    assert.deepEqual((await app.summaryQueue.entries()).map((e) => e.taskId), [firstId],
+      'nothing was queued for the current result');
+    assert.equal(taskTurns(app).length, 0);
+  });
+
+  test('more than one owed result is counted only from the reissues that failed', async () => {
+    const app = appOn({});
+    const realAppend = app.conversation.append.bind(app.conversation);
+    app.conversation.append = async () => { throw eio(); };
+    await app.controller.handle('calc 1+1; calc 2+2');
+    await app.controller.handle('calc 3+3; calc 4+4');
+    assert.equal((await app.summaryQueue.entries()).length, 2, 'two intents are owed');
+
+    // The two reissue attempts fail; the third task's own summary write succeeds.
+    let failures = 0;
+    app.conversation.append = async (turn) => {
+      if (failures < 2) { failures += 1; throw eio(); }
+      return realAppend(turn);
+    };
+    const third = await app.controller.handle('calc 5+5; calc 6+6');
+    assert.match(third.display, /2 earlier task results are still not in history \(EIO\)\. APEX has queued them for reissue at the next task write\./);
+    assert.equal(/This task result could not be fully saved/.test(third.display), false);
+    assert.equal(taskTurns(app).length, 1);
+    assert.equal(taskTurns(app)[0].taskId, third.operation.task.id);
+    assert.equal((await app.summaryQueue.entries()).length, 2);
+  });
+});
+
 // 052 also bounds the audit read the evidence check depends on. The answer about a
 // task's verified steps needs records, not a guess, so the scan may stop early only when
 // it has found everything it needs; proving that a record is absent still reads to the

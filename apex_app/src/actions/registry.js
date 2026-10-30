@@ -8,7 +8,9 @@
 import { ORIGINS_LIST } from './origins.js';
 
 export const PERMISSIONS = Object.freeze(['read', 'write']);
-const NAME_RE = /^[a-z][a-z0-9]*(?:[._][a-z0-9]+)+$/;
+// One grammar for action names, shared with the proposal parser so that text which
+// cannot name a registered action is refused as malformed before it is quoted anywhere.
+export const ACTION_NAME_RE = /^[a-z][a-z0-9]*(?:[._][a-z0-9]+)+$/;
 
 function deny(reason) {
   return { decision: 'deny', reason };
@@ -16,7 +18,7 @@ function deny(reason) {
 
 export function validateDefinition(def) {
   if (!def || typeof def !== 'object') throw new TypeError('action definition must be an object');
-  if (typeof def.name !== 'string' || !NAME_RE.test(def.name)) throw new TypeError(`invalid action name: ${String(def.name)}`);
+  if (typeof def.name !== 'string' || !ACTION_NAME_RE.test(def.name)) throw new TypeError(`invalid action name: ${String(def.name)}`);
   if (typeof def.description !== 'string' || def.description.length === 0) throw new TypeError(`${def.name}: description required`);
   if (!PERMISSIONS.includes(def.permission)) throw new TypeError(`${def.name}: permission must be read or write`);
   if (!Array.isArray(def.origins) || def.origins.length === 0 || def.origins.some((o) => !ORIGINS_LIST.includes(o))) {

@@ -665,18 +665,33 @@ export class CognitiveController {
 
   // A turn that could not be saved to history must not vanish silently: the result
   // itself stands, but a later turn may not see it. Display-only: it never becomes part
-  // of a stored turn or of the audited output. Whether a lost task summary will be
-  // offered again is stated only from what this operation actually did with the queue.
+  // of a stored turn or of the audited output. Both the failure and the queue outcome
+  // are read only from errors about this same subject, so a failure that belongs to an
+  // earlier result is never reported as this one.
   #historyGapNotice(op, subject) {
-    const error = op.errors.find((e) => e.stage === 'conversation' && (e.subject ?? 'exchange') === subject);
+    const own = op.errors.filter((e) => e.stage === 'conversation' && (e.subject ?? 'exchange') === subject);
+    const error = own.find((e) => e.code !== 'SUMMARY_QUEUED' && e.code !== 'SUMMARY_NOT_QUEUED');
     if (!error) return '';
     let reissue = '';
-    if (op.errors.some((e) => e.code === 'SUMMARY_QUEUED')) {
+    if (own.some((e) => e.code === 'SUMMARY_QUEUED')) {
       reissue = ' APEX has queued it for reissue at the next task write.';
-    } else if (op.errors.some((e) => e.code === 'SUMMARY_NOT_QUEUED')) {
+    } else if (own.some((e) => e.code === 'SUMMARY_NOT_QUEUED')) {
       reissue = ' It could not be queued, so it will not be reissued automatically.';
     }
     return `[This ${subject} could not be fully saved to conversation history (${error.code || 'STORE_ERROR'}); a later turn may not see it.${reissue}]`;
+  }
+
+  // Shown when a summary an earlier turn could not save is still owed after this turn
+  // tried to reissue it. It is kept apart from the notice above so that a failed reissue
+  // of an older result is never presented as this turn's own result being lost.
+  #owedReissueNotice(op) {
+    const own = op.errors.filter((e) => e.stage === 'conversation' && e.subject === 'earlier task result');
+    if (own.length === 0) return '';
+    const error = own.find((e) => e.code !== 'SUMMARY_QUEUED');
+    const count = Math.max(1, own.filter((e) => e.code === 'SUMMARY_QUEUED').length);
+    const what = count === 1 ? 'An earlier task result is' : `${count} earlier task results are`;
+    const object = count === 1 ? 'it' : 'them';
+    return ` [${what} still not in history (${error?.code || 'STORE_ERROR'}). APEX has queued ${object} for reissue at the next task write.]`;
   }
 
   // Shown when this turn wrote a task summary an earlier turn could not save. Claimed
@@ -794,14 +809,15 @@ export class CognitiveController {
         verified: entry.verified,
         taskId: entry.taskId,
         signature: entry.signature,
-        subject: 'task result',
+        subject: 'earlier task result',
       });
       if (!wrote) {
         // Still owed. Stated as queued because that is what just happened: the intent is
-        // in the queue, and the next task write will try again.
+        // in the queue, and the next task write will try again. The subject is distinct
+        // from this turn's own task result, so the disclosure is never misattributed.
         op.errors.push({
           stage: 'conversation',
-          subject: 'task result',
+          subject: 'earlier task result',
           code: 'SUMMARY_QUEUED',
           message: `the queued task summary for task ${shortId(entry.taskId)} is still owed to history`,
         });
@@ -978,6 +994,25 @@ export class CognitiveController {
     throw err;
   }
 
+  // A task-log write failed after a step had already run. The report states what the run
+  // established (the step, its outcome, and whether its own audit record exists) and what
+  // it did not (the task log's recorded state). An executed step is never reported as an
+  // execution that failed, and a missing record is never presented as proof that nothing
+  // happened.
+  #unrecordedTaskState(err) {
+    const one = err.executedSteps.length === 1;
+    const steps = err.executedSteps.map((s) => {
+      const name = `step ${s.id}${s.action ? ` (${s.action})` : ''}`;
+      const audit = s.auditRecorded
+        ? `its own audit record ${shortId(s.operationId)} was written`
+        : 'no audit record for it could be written';
+      return `${name} had already returned ${s.outcome} and ${audit}`;
+    });
+    return `the task log could not record this run: ${err.message}. ${steps.join('; ')}.`
+      + ` The task log may still show ${one ? 'that step' : 'those steps'} as running; APEX will not run ${one ? 'it' : 'them'} again.`
+      + ` To reconcile the recorded state from the audit: node bin/apex.js task run ${shortId(err.taskId)}`;
+  }
+
   async #createTask({ goal, origin, planner, steps }) {
     return this.taskStore.withLock(async () => {
       const taskId = this.idFactory();
@@ -1081,7 +1116,7 @@ export class CognitiveController {
       return this.#finishTaskOp(
         op,
         result.status,
-        `${renderTask(result.task)}${warning}${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}`,
+        `${renderTask(result.task)}${warning}${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}`,
         result.task,
         {
           auditGaps: gaps,
@@ -1091,6 +1126,14 @@ export class CognitiveController {
         },
       );
     } catch (err) {
+      // A task-log write that refused after a step ran is not an execution failure. The
+      // runner attached what it executed; report that instead of "the task did not run".
+      if (err instanceof StoreError && err.executedSteps?.length) {
+        const message = this.#unrecordedTaskState(err);
+        op.errors.push({ stage: 'task', code: 'TASK_LOG_WRITE_FAILED', message: err.message, steps: err.executedSteps.map((s) => s.id) });
+        const current = err.taskId ? await this.taskStore.get(err.taskId).catch(() => null) : null;
+        return this.#finishTaskOp(op, Outcome.AUDIT_INTEGRITY_FAILED, `${message}${this.#historyGapNotice(op, 'task result')}`, current);
+      }
       // A recovery that established evidence before the run was refused is still a fact
       // about this task, so it is recorded once. Nothing here re-runs a step: the refusal
       // stands, the task state is only read back, and the same state never gets a second
@@ -1099,7 +1142,7 @@ export class CognitiveController {
         const current = await this.taskStore.get(err.taskId).catch(() => null);
         await this.#recordTaskSummary(op, current, { recovery: err.recovery });
       }
-      return this.#refused(op, err, Outcome.INPUT_REJECTED, `${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}`);
+      return this.#refused(op, err, Outcome.INPUT_REJECTED, `${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}`);
     }
   }
 
@@ -1115,7 +1158,7 @@ export class CognitiveController {
       // is recorded like a run. An approval or a retry changes intent, not evidence, so
       // it produces no task-result turn.
       if (taskSummary) await this.#recordTaskSummary(op, updated);
-      const notice = taskSummary ? `${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}` : '';
+      const notice = taskSummary ? `${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}` : '';
       return this.#finishTaskOp(op, Outcome.SUCCESS_VERIFIED, `${label}.\n${renderTask(updated)}${notice}`, updated);
     } catch (err) {
       return this.#refused(op, err);
@@ -1257,14 +1300,14 @@ export class CognitiveController {
       return {
         status: Outcome.CLARIFICATION_REQUIRED,
         output: clarify,
-        display: `${clarify}${this.#historyGapNotice(op, 'task result')}${reissued}`,
+        display: `${clarify}${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${reissued}`,
       };
     }
     if (failure) {
       return {
         status: failure.status,
         output: failure.text,
-        display: `${failure.text}${this.#historyGapNotice(op, 'answer')}${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}`,
+        display: `${failure.text}${this.#historyGapNotice(op, 'answer')}${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}`,
       };
     }
 
@@ -1276,7 +1319,7 @@ export class CognitiveController {
     return {
       status: Outcome.SUCCESS_VERIFIED,
       output: text,
-      display: `${text}${this.#historyGapNotice(op, 'answer')}${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}`,
+      display: `${text}${this.#historyGapNotice(op, 'answer')}${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}`,
     };
   }
 
@@ -1346,7 +1389,7 @@ export class CognitiveController {
       const display = `${renderTask(fresh)}${warning}`;
       // Disclosure of what history refused, and of what this turn wrote that an earlier
       // turn could not. Shown, never part of the audited output.
-      const notices = `${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}`;
+      const notices = `${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}`;
       return {
         status: result.status,
         output: display,
@@ -1357,6 +1400,13 @@ export class CognitiveController {
       };
     } catch (err) {
       if (err instanceof ValidationError) return { status: Outcome.INPUT_REJECTED, output: err.message, display: err.message };
+      // The step ran before the task-log write was refused: say so, and do not report it
+      // as an execution that failed.
+      if (err instanceof StoreError && err.executedSteps?.length) {
+        const message = this.#unrecordedTaskState(err);
+        op.errors.push({ stage: 'task', code: 'TASK_LOG_WRITE_FAILED', message: err.message, steps: err.executedSteps.map((s) => s.id) });
+        return { status: Outcome.AUDIT_INTEGRITY_FAILED, output: message, display: message };
+      }
       if (err instanceof StoreError) return { status: Outcome.EXECUTION_FAILED, output: `task store unavailable: ${err.message}`, display: `task store unavailable: ${err.message}` };
       throw err;
     }

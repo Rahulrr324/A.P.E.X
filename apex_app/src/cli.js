@@ -264,9 +264,12 @@ export async function main(argv, {
       out(`${APP_NAME} ${APP_STAGE} ${APP_VERSION} (${APP_EXPANSION})`);
       out(`Data directory: ${safeText(diag.dataDir)}`);
       out(sessionLine(session));
+      const skipped = (s) => (s.state !== State.UNAVAILABLE && s.corruptLines > 0
+        ? ` (corrupt lines skipped: ${s.corruptLines})`
+        : '');
       out(`Memory records: ${memory.state === State.UNAVAILABLE ? 'unavailable' : memory.count} (corrupt lines skipped: ${memory.corruptLines})`);
-      out(`Conversation turns: ${conversation.state === State.UNAVAILABLE ? 'unavailable' : conversation.count}`);
-      out(`Operation records: ${audit.state === State.UNAVAILABLE ? 'unavailable' : audit.count}`);
+      out(`Conversation turns: ${conversation.state === State.UNAVAILABLE ? 'unavailable' : conversation.count}${skipped(conversation)}`);
+      out(`Operation records: ${audit.state === State.UNAVAILABLE ? 'unavailable' : audit.count}${skipped(audit)}`);
       out(modelLine(model));
       out(filesystem.state === State.OK
         ? `Filesystem root: ${safeText(filesystem.root)} (root validated at startup, read-only)`

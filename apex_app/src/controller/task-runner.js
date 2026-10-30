@@ -10,7 +10,7 @@
 // approval. Nothing is retried automatically. An interrupted step is resolved from its
 // own audit record when that record exists; otherwise its outcome stays unknown.
 import { Outcome, OPERATION_SCHEMA } from '../outcomes.js';
-import { ValidationError } from '../errors.js';
+import { StoreError, ValidationError } from '../errors.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
 import { truncate, shortId, redact } from '../util.js';
 import { StepStatus, TaskStatus, topologicalOrder, dependentsOf, progressOf, inputHash } from '../tasks/model.js';
@@ -114,66 +114,81 @@ export class TaskRunner {
       task: { from: task.status, to: TaskStatus.RUNNING },
     });
 
-    for (;;) {
-      task = await this.#task(taskId);
-      const { step: next } = this.nextStep(task);
-      if (!next) break;
+    // The steps this run executed, in order, with what their audit record shows. If the
+    // task log then fails a write, the error carries this evidence: a step that already
+    // ran and was verified must not be reported as an execution that failed. The process
+    // is still alive here, so this is a record that refused a write, not a lost process.
+    const executedSteps = [];
+    try {
+      for (;;) {
+        task = await this.#task(taskId);
+        const { step: next } = this.nextStep(task);
+        if (!next) break;
 
-      const origin = this.stepOrigin(task, next);
-      if (next.permission === 'write' && origin === 'model') {
-        // A model proposed this write. Stop before it and wait for an explicit approval.
-        await this.#transition(task.id, `${next.id} waits for your approval`, {
-          task: { from: TaskStatus.RUNNING, to: TaskStatus.PAUSED },
-          steps: [{ id: next.id, from: StepStatus.PENDING, to: StepStatus.AWAITING_APPROVAL }],
+        const origin = this.stepOrigin(task, next);
+        if (next.permission === 'write' && origin === 'model') {
+          // A model proposed this write. Stop before it and wait for an explicit approval.
+          await this.#transition(task.id, `${next.id} waits for your approval`, {
+            task: { from: TaskStatus.RUNNING, to: TaskStatus.PAUSED },
+            steps: [{ id: next.id, from: StepStatus.PENDING, to: StepStatus.AWAITING_APPROVAL }],
+          });
+          break;
+        }
+
+        const byId = new Map(task.steps.map((s) => [s.id, s]));
+        const unmet = next.dependsOn.filter((d) => byId.get(d).status !== StepStatus.COMPLETED);
+        if (unmet.length) {
+          await this.#transition(task.id, `stopped: ${next.id} depends on steps that did not complete (${unmet.join(', ')})`, {
+            task: { from: TaskStatus.RUNNING, to: TaskStatus.FAILED },
+          });
+          break;
+        }
+
+        // Recorded as running before it executes. If the process dies after this point,
+        // the next run finds an unknown outcome and does not repeat the step.
+        const operationId = this.idFactory();
+        await this.#transition(task.id, `running ${next.id}`, {
+          steps: [{ id: next.id, from: StepStatus.PENDING, to: StepStatus.RUNNING, operationId }],
+        });
+
+        const step = await this.execute(next.action, next.input, origin, operationId);
+        const audited = await this.#audit(task, next, step, operationId, origin);
+        if (!audited) auditGaps.push(next.id);
+        executedSteps.push({ id: next.id, action: next.action, outcome: step.outcome, operationId, auditRecorded: audited });
+
+        const result = stepResultFor(step.outcome);
+        if (result.step === StepStatus.COMPLETED) {
+          await this.#transition(task.id, `${next.id} completed`, {
+            steps: [{ id: next.id, from: StepStatus.RUNNING, to: StepStatus.COMPLETED, outcome: step.outcome, summary: truncate(step.summary, 300), operationId }],
+          });
+          continue;
+        }
+
+        const skip = dependentsOf(task.steps, next.id).filter((id) => byId.get(id).status === StepStatus.PENDING);
+        await this.#transition(task.id, `${next.id} ${result.step}: ${truncate(step.summary, 200)}`, {
+          task: { from: TaskStatus.RUNNING, to: result.task },
+          steps: [
+            { id: next.id, from: StepStatus.RUNNING, to: result.step, outcome: step.outcome, summary: truncate(step.summary, 300), operationId },
+            ...skip.map((id) => ({ id, from: StepStatus.PENDING, to: StepStatus.SKIPPED, summary: `not run: depends on ${next.id}` })),
+          ],
         });
         break;
       }
 
-      const byId = new Map(task.steps.map((s) => [s.id, s]));
-      const unmet = next.dependsOn.filter((d) => byId.get(d).status !== StepStatus.COMPLETED);
-      if (unmet.length) {
-        await this.#transition(task.id, `stopped: ${next.id} depends on steps that did not complete (${unmet.join(', ')})`, {
-          task: { from: TaskStatus.RUNNING, to: TaskStatus.FAILED },
-        });
-        break;
-      }
-
-      // Recorded as running before it executes. If the process dies after this point,
-      // the next run finds an unknown outcome and does not repeat the step.
-      const operationId = this.idFactory();
-      await this.#transition(task.id, `running ${next.id}`, {
-        steps: [{ id: next.id, from: StepStatus.PENDING, to: StepStatus.RUNNING, operationId }],
-      });
-
-      const step = await this.execute(next.action, next.input, origin, operationId);
-      if (!(await this.#audit(task, next, step, operationId, origin))) auditGaps.push(next.id);
-
-      const result = stepResultFor(step.outcome);
-      if (result.step === StepStatus.COMPLETED) {
-        await this.#transition(task.id, `${next.id} completed`, {
-          steps: [{ id: next.id, from: StepStatus.RUNNING, to: StepStatus.COMPLETED, outcome: step.outcome, summary: truncate(step.summary, 300), operationId }],
-        });
-        continue;
-      }
-
-      const skip = dependentsOf(task.steps, next.id).filter((id) => byId.get(id).status === StepStatus.PENDING);
-      await this.#transition(task.id, `${next.id} ${result.step}: ${truncate(step.summary, 200)}`, {
-        task: { from: TaskStatus.RUNNING, to: result.task },
-        steps: [
-          { id: next.id, from: StepStatus.RUNNING, to: result.step, outcome: step.outcome, summary: truncate(step.summary, 300), operationId },
-          ...skip.map((id) => ({ id, from: StepStatus.PENDING, to: StepStatus.SKIPPED, summary: `not run: depends on ${next.id}` })),
-        ],
-      });
-      break;
-    }
-
-    task = await this.#task(taskId);
-    if (task.status === TaskStatus.RUNNING) {
-      const { completed, total } = progressOf(task);
-      await this.#transition(task.id, completed === total ? 'all steps completed' : 'stopped with steps unfinished', {
-        task: { from: TaskStatus.RUNNING, to: completed === total ? TaskStatus.COMPLETED : TaskStatus.FAILED },
-      });
       task = await this.#task(taskId);
+      if (task.status === TaskStatus.RUNNING) {
+        const { completed, total } = progressOf(task);
+        await this.#transition(task.id, completed === total ? 'all steps completed' : 'stopped with steps unfinished', {
+          task: { from: TaskStatus.RUNNING, to: completed === total ? TaskStatus.COMPLETED : TaskStatus.FAILED },
+        });
+        task = await this.#task(taskId);
+      }
+    } catch (err) {
+      if (err instanceof StoreError && executedSteps.length > 0) {
+        err.executedSteps = executedSteps;
+        err.taskId = taskId;
+      }
+      throw err;
     }
     const outcome = this.#outcomeFor(task);
     const status = auditGaps.length > 0 && outcome.status === Outcome.SUCCESS_VERIFIED
@@ -248,7 +263,9 @@ export class TaskRunner {
       });
     }
     await this.#transition(task.id, changes.length === 0
-      ? 'interrupted before any step was recorded as running'
+      ? task.steps.some((s) => s.status === StepStatus.COMPLETED)
+        ? 'interrupted after a recorded step; no step was left running'
+        : 'interrupted before any step was recorded as running'
       : resolvedFromAudit === changes.length
       ? 'interrupted: every running step was resolved from its own audit record'
       : 'interrupted: a running step whose audit record is missing has an unknown outcome and was not run again', {

@@ -8,6 +8,7 @@
 // history (for example a step completed twice).
 import { createHash } from 'node:crypto';
 import { Outcome } from '../outcomes.js';
+import { singleLine } from '../util.js';
 
 export const TASK_SCHEMA = 1;
 export const MAX_STEPS = 8;
@@ -94,7 +95,7 @@ export function dependencyProblems(steps) {
   const ids = new Set();
   for (const s of steps) {
     if (typeof s.id !== 'string' || !STEP_ID_RE.test(s.id)) {
-      problems.push(`invalid step id: ${String(s.id)}`);
+      problems.push(`invalid step id: ${singleLine(s.id)}`);
       continue;
     }
     if (ids.has(s.id)) problems.push(`duplicate step id: ${s.id}`);
@@ -102,14 +103,14 @@ export function dependencyProblems(steps) {
   }
   for (const s of steps) {
     if (!Array.isArray(s.dependsOn)) {
-      problems.push(`step ${String(s.id)}: depends_on must be a list`);
+      problems.push(`step ${singleLine(s.id)}: depends_on must be a list`);
       continue;
     }
     const seen = new Set();
     for (const d of s.dependsOn) {
-      if (d === s.id) problems.push(`step ${s.id} depends on itself`);
-      else if (!ids.has(d)) problems.push(`step ${s.id} depends on unknown step ${String(d)}`);
-      else if (seen.has(d)) problems.push(`step ${s.id} lists dependency ${d} twice`);
+      if (d === s.id) problems.push(`step ${singleLine(s.id)} depends on itself`);
+      else if (!ids.has(d)) problems.push(`step ${singleLine(s.id)} depends on unknown step ${singleLine(d)}`);
+      else if (seen.has(d)) problems.push(`step ${singleLine(s.id)} lists dependency ${singleLine(d)} twice`);
       seen.add(d);
     }
   }

@@ -3,7 +3,7 @@
 // Write actions (knowledge.add) are user-origin only; the registry enforces this.
 // Read actions (knowledge.search, knowledge.list) may be offered to the model.
 import { ValidationError } from '../errors.js';
-import { CONTROL_CHARS, shortId } from '../util.js';
+import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 
@@ -37,7 +37,7 @@ function expectObject(input, allowedKeys) {
     throw new ValidationError('input must be an object');
   }
   for (const key of Object.keys(input)) {
-    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${singleLine(key, 40)}"`);
   }
   return input;
 }

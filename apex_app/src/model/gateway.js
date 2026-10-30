@@ -111,6 +111,32 @@ class HttpBackend {
     return { name: this.name, provider: this.provider, configured: true, endpoint: this.origin + this.basePath, model: this.model };
   }
 
+  // Reads the body with the size limit applied as data arrives. Reading the whole body
+  // first would make the limit meaningless: the memory is already spent, and a stalled
+  // oversized body would only end at the timeout. The limit is counted in decoded
+  // characters, the same measure the rest of the gateway uses.
+  async #readBody(res) {
+    if (!res.body || typeof res.body.getReader !== 'function') return { text: await res.text() };
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+        if (text.length > MAX_RESPONSE_CHARS) {
+          await reader.cancel().catch(() => {});
+          return { tooLarge: true };
+        }
+      }
+      text += decoder.decode();
+      return { text };
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   async #attempt(method, pathname, body, timeoutMs) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -130,14 +156,27 @@ class HttpBackend {
         const cause = err?.cause?.code || err?.code || 'NETWORK_ERROR';
         return { error: { code: 'UNREACHABLE', message: `could not reach the endpoint (${cause})` }, latencyMs: elapsed() };
       }
-      let text;
+      let read;
       try {
-        text = await res.text();
+        read = await this.#readBody(res);
       } catch (err) {
         // The connection dropped after the response began, so the answer is incomplete.
         if (err?.name === 'AbortError') return { error: { code: 'TIMEOUT', message: `no complete response within ${timeoutMs} ms` }, latencyMs: elapsed() };
         return { error: { code: 'INTERRUPTED', message: 'the connection was interrupted while reading the response' }, latencyMs: elapsed() };
       }
+      if (read.tooLarge) {
+        // The status still decides the class: an oversized error body is an HTTP failure,
+        // not a malformed success. Its detail is omitted rather than buffered.
+        if (!res.ok) {
+          const detail = '[response body omitted: exceeds the size limit]';
+          return {
+            error: { code: 'HTTP_ERROR', message: `endpoint returned HTTP ${res.status}: ${detail}`, status: res.status, detail },
+            latencyMs: elapsed(),
+          };
+        }
+        return { error: { code: 'RESPONSE_TOO_LARGE', message: 'endpoint response exceeds the size limit' }, latencyMs: elapsed() };
+      }
+      const text = read.text;
       if (!res.ok) {
         const detail = serverMessage(text);
         return {
@@ -145,7 +184,6 @@ class HttpBackend {
           latencyMs: elapsed(),
         };
       }
-      if (text.length > MAX_RESPONSE_CHARS) return { error: { code: 'RESPONSE_TOO_LARGE', message: 'endpoint response exceeds the size limit' }, latencyMs: elapsed() };
       return { text, latencyMs: elapsed() };
     } finally {
       clearTimeout(timer);
@@ -230,6 +268,25 @@ export class OpenAICompatibleBackend extends HttpBackend {
   async health(timeoutMs = 2000) {
     const r = await this.request('GET', '/v1/models', null, timeoutMs);
     if (r.error) return { available: false, detail: r.error.message };
+    // A 200 status says the socket answered, not that the endpoint can serve a model.
+    // The completion path already refuses a 200 error envelope and a malformed body;
+    // the health check must agree, or `status --model` reports "available" for a server
+    // that will fail every request. The configured model's presence is not required:
+    // some servers accept any model name, so the check validates the shape and that at
+    // least one model is listed.
+    const parsed = this.parseJson(r.text, r.latencyMs);
+    if (parsed.failure) {
+      return { available: false, detail: `endpoint did not return a model list (${parsed.failure.error.message})` };
+    }
+    if (parsed.value?.error) {
+      return { available: false, detail: `endpoint reported an error: ${serverMessage(JSON.stringify({ error: parsed.value.error }))}` };
+    }
+    if (!Array.isArray(parsed.value?.data)) {
+      return { available: false, detail: 'endpoint did not return a model list' };
+    }
+    if (parsed.value.data.length === 0) {
+      return { available: false, detail: 'endpoint lists no model' };
+    }
     return { available: true, detail: `reachable at ${this.origin}${this.basePath}` };
   }
 

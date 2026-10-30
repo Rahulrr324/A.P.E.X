@@ -9,6 +9,7 @@ import { createApp } from '../src/app.js';
 import { ModelGateway, NoBackend } from '../src/model/gateway.js';
 import { main } from '../src/cli.js';
 import { Outcome } from '../src/outcomes.js';
+import { StoreError } from '../src/errors.js';
 
 const dirs = [];
 const stubs = [];
@@ -59,6 +60,40 @@ describe('command line', () => {
     assert.match(stderr.text, /could not be written/);
     assert.equal((await app.taskStore.get(task.id)).status, 'completed');
     assert.equal((await app.operations.list({ limit: 20 })).records.some((r) => r.status === Outcome.AUDIT_INTEGRITY_FAILED), true);
+  });
+
+  test('task run reports a step that already ran when the task log refuses the result', async () => {
+    const dataDir = tempDir();
+    const app = createApp({ dataDir, gateway: new ModelGateway({ backend: new NoBackend() }) });
+    await app.controller.planTask('calc 1+1');
+    const task = (await app.taskStore.list())[0];
+    const original = app.taskStore.transition.bind(app.taskStore);
+    let injected = false;
+    app.taskStore.transition = async (id, event) => {
+      if (!injected && event.steps?.some((s) => s.to === 'completed')) {
+        injected = true;
+        throw new StoreError('injected: task log write failed');
+      }
+      return original(id, event);
+    };
+    const stdout = capture();
+    const stderr = capture();
+
+    const code = await main(['task', 'run', task.id], {
+      env: envFor(dataDir),
+      stdout,
+      stderr,
+      stdin: { isTTY: false },
+      appFactory: () => app,
+    });
+
+    assert.equal(code, 1);
+    assert.match(stdout.text, /had already returned success_verified/);
+    assert.match(stdout.text, /its own audit record/);
+    assert.match(stdout.text, /APEX will not run it again/);
+    assert.match(stdout.text, /Audit: recorded in operations\.jsonl/);
+    assert.doesNotMatch(`${stdout.text}${stderr.text}`, /execution failed/i);
+    assert.equal((await app.taskStore.get(task.id)).status, 'running');
   });
 
   test('the application starts and reports status with no model configured', async () => {
