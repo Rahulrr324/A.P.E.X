@@ -90,7 +90,7 @@ function openNote(s) {
   }
 }
 
-export function explainTask(task, intent, { missingAudit = [] } = {}) {
+export function explainTask(task, intent, { missingAudit = [], unreadableAudit = false, damagedAudit = 0 } = {}) {
   const { completed, total } = progressOf(task);
   const id = shortId(task.id);
   const by = (status) => task.steps.filter((s) => s.status === status);
@@ -101,8 +101,16 @@ export function explainTask(task, intent, { missingAudit = [] } = {}) {
   // A step is recorded as verified by the runner, but the record that shows what it was
   // verified against is its own operation entry. When the audit refused that entry the
   // answer has to say so instead of repeating the claim.
+  // A record that is known to be absent, a log that could not be read, and a log with
+  // damaged lines are three different states. Only the first supports "no record"; the
+  // other two say the absence could not be established, because a damaged line could be
+  // the record being looked for.
   const gap = missingAudit.length > 0
-    ? `no operation record is available for ${missingAudit.join(', ')}, so APEX cannot show the evidence those step results were verified against`
+    ? unreadableAudit
+      ? `the operation log could not be read, so APEX cannot show the evidence for: ${missingAudit.join(', ')}`
+      : damagedAudit > 0
+        ? `the operation log has ${damagedAudit} damaged line(s), so APEX cannot establish whether records exist for: ${missingAudit.join(', ')}`
+        : `no operation record is available for ${missingAudit.join(', ')}, so APEX cannot show the evidence those step results were verified against`
     : null;
   let gapStated = false;
 

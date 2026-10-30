@@ -36,6 +36,7 @@ after(async () => {
 function tempDir() { const d = makeTempDataDir(); dirs.push(d); return d; }
 const CHILD = path.join(APP_ROOT, 'tests', 'fixtures', 'lock-race-child.mjs');
 const VANISH_CHILD = path.join(APP_ROOT, 'tests', 'fixtures', 'lock-vanish-child.mjs');
+const TAKEOVER_EXIT_CHILD = path.join(APP_ROOT, 'tests', 'fixtures', 'takeover-exit-child.mjs');
 const LOCK = (dataDir) => path.join(dataDir, 'tasks.jsonl.lock');
 
 function envFor(dataDir, extra = {}) {
@@ -249,6 +250,59 @@ describe('061: the task lock is exclusive across processes', () => {
     await assert.rejects(() => store.withLock(async () => 'never'), new RegExp(`tasks are in use by process ${process.pid}`));
     assert.equal(fs.readFileSync(LOCK(dataDir), 'utf8'), raw, 'the stale claim was left for the elected taker');
     assert.equal(fs.existsSync(`${LOCK(dataDir)}.takeover.${key}.0`), true, 'and the live token was not touched');
+  });
+
+  test('a process that exits inside the takeover leaves the claim and one token; the next taker supersedes it', async () => {
+    const dataDir = tempDir();
+    const raw = JSON.stringify({ pid: exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    fs.writeFileSync(LOCK(dataDir), raw);
+    const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
+
+    const child = spawn(process.execPath, [TAKEOVER_EXIT_CHILD, dataDir], {
+      env: envFor(dataDir),
+      cwd: APP_ROOT,
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    const exit = await new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+    assert.equal(exit.code, 9, 'the child exited abruptly inside the election');
+
+    assert.equal(fs.readFileSync(LOCK(dataDir), 'utf8'), raw, 'the dead claim is still there');
+    const abandoned = `${LOCK(dataDir)}.takeover.${key}.0`;
+    assert.equal(fs.existsSync(abandoned), true, 'the token published before the exit is still there');
+    assert.equal(JSON.parse(fs.readFileSync(abandoned, 'utf8')).pid, child.pid, 'and it names the process that is gone');
+
+    const { TaskStore } = await import('../src/tasks/store.js');
+    const store = new TaskStore(path.join(dataDir, 'tasks.jsonl'));
+    assert.equal(await store.withLock(async () => 'acquired'), 'acquired', 'the next taker uses the next epoch');
+    assert.equal(fs.existsSync(LOCK(dataDir)), false, 'the dead claim was taken over and released');
+    assert.equal(fs.existsSync(abandoned), true, 'the abandoned token is inert bookkeeping, not deleted by a stranger');
+    assert.equal(fs.existsSync(`${LOCK(dataDir)}.takeover.${key}.1`), false, 'the winner removed its own token');
+  });
+
+  test('sixteen abandoned takeover tokens are reported, and work resumes after they are removed', async () => {
+    const dataDir = tempDir();
+    const raw = JSON.stringify({ pid: exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    fs.writeFileSync(LOCK(dataDir), raw);
+    const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
+    const dead = exitedPid();
+    const tokens = Array.from({ length: 16 }, (_, epoch) => `${LOCK(dataDir)}.takeover.${key}.${epoch}`);
+    for (const token of tokens) fs.writeFileSync(token, JSON.stringify({ pid: dead, at: new Date().toISOString() }));
+
+    const { TaskStore } = await import('../src/tasks/store.js');
+    const store = new TaskStore(path.join(dataDir, 'tasks.jsonl'));
+    await assert.rejects(
+      () => store.withLock(async () => 'never'),
+      /16 takeover attempts are recorded as abandoned; inspect the lock and remove it if no task run is active/,
+      'exhaustion is a bounded, reported refusal',
+    );
+    assert.equal(fs.readFileSync(LOCK(dataDir), 'utf8'), raw, 'the claim was not removed');
+    for (const token of tokens) assert.equal(fs.existsSync(token), true, 'no abandoned token was deleted by a stranger');
+
+    for (const token of tokens) fs.rmSync(token, { force: true });
+    fs.rmSync(LOCK(dataDir), { force: true });
+    assert.equal(await store.withLock(async () => 'acquired'), 'acquired', 'the lock works once the operator clears it');
+    assert.equal(fs.existsSync(LOCK(dataDir)), false);
   });
 
   test('what the lock does NOT protect: reads run while a live holder is in the lock', async () => {

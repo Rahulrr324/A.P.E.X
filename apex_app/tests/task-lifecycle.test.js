@@ -503,3 +503,143 @@ describe('078: no impossible lifecycle event can be applied', () => {
     assert.equal(contradictory.get('t').steps[0].status, StepStatus.RUNNING);
   });
 });
+
+// 094: recovery and failure paths must not repeat a side effect or upgrade an uncertain
+// result to success. The denial, timeout, and verifier below are TEST DOUBLES; the task
+// log, audit record, and conversation turn they produce are real.
+describe('094: denied, timed-out, and unverified steps stay failed and are not repeated', () => {
+  const readEvents = (dataDir) => fs.readFileSync(path.join(dataDir, 'tasks.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const taskTurns = (dataDir) => (fs.existsSync(path.join(dataDir, 'conversation.jsonl'))
+    ? fs.readFileSync(path.join(dataDir, 'conversation.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    : []).filter((t) => t.origin === 'apex_task');
+
+  test('a step denied by authorization at run time fails the task, runs nothing, and repeated resume changes nothing', async () => {
+    const dataDir = tempDir();
+    const app = createApp({ dataDir });
+    const planned = await app.controller.planTask('calc 2+2; calc 3+3');
+    assert.equal(planned.status, Outcome.PLAN_CREATED);
+    const task = await onlyTask(app);
+
+    const realAuthorize = app.registry.authorize.bind(app.registry);
+    app.registry.authorize = () => ({ decision: 'deny', reason: 'INJECTED_DENIAL' });
+    const denied = await app.controller.runTask(task.id, 'run');
+    assert.equal(denied.status, Outcome.ACTION_DENIED);
+
+    const after = await app.taskStore.get(task.id);
+    assert.equal(after.status, TaskStatus.FAILED);
+    assert.equal(after.steps[0].outcome, Outcome.ACTION_DENIED);
+    assert.equal(after.steps[0].status, StepStatus.FAILED);
+    assert.equal(after.steps[1].status, StepStatus.SKIPPED, 'the dependent step never started');
+    const ops = await stepOps(app);
+    assert.equal(ops.length, 1, 'only the denied step has an operation record');
+    assert.equal(ops[0].status, Outcome.ACTION_DENIED);
+    assert.equal(ops[0].steps[0].execution.status, 'not_run', 'denial is not execution');
+    const turn = taskTurns(dataDir).at(-1);
+    assert.match(turn.text, /failed/);
+    assert.match(turn.text, /0 of 2 step\(s\) verified complete/);
+    assert.equal(/verified success|Yes, it finished/.test(turn.text), false);
+
+    const eventsBefore = readEvents(dataDir).length;
+    const again = await app.controller.runTask(task.id, 'resume');
+    assert.equal(again.status, Outcome.INPUT_REJECTED, 'a failed task is not resumed by accident');
+    assert.equal(readEvents(dataDir).length, eventsBefore, 'the refused resume wrote no task events');
+    assert.deepEqual((await app.taskStore.get(task.id)).steps.map((s) => s.status), [StepStatus.FAILED, StepStatus.SKIPPED]);
+
+    // The explicit way forward: retry the read-only step, then resume. It now runs once.
+    app.registry.authorize = realAuthorize;
+    assert.equal((await app.controller.retryTask(task.id, 's1')).status, Outcome.SUCCESS_VERIFIED);
+    const done = await app.controller.runTask(task.id, 'resume');
+    assert.equal(done.status, Outcome.SUCCESS_VERIFIED);
+    assert.equal((await app.taskStore.get(task.id)).status, TaskStatus.COMPLETED);
+  });
+
+  test('an execution timeout fails the step and is never retried automatically', async () => {
+    const dataDir = tempDir();
+    let attempts = 0;
+    // TEST DOUBLE: a read whose execution times out.
+    const timeout = {
+      name: 'test.timeout',
+      description: 'test-only read that times out',
+      permission: 'read',
+      origins: ['user', 'model'],
+      inputHint: '{}',
+      validate: (input) => input,
+      async execute() {
+        attempts += 1;
+        const err = new Error('the sensor did not answer within 50 ms');
+        err.code = 'ETIMEDOUT';
+        throw err;
+      },
+      verify: null,
+    };
+    const app = createApp({ dataDir, extraActions: [timeout] });
+    const taskId = randomUUID();
+    const step = (id, dependsOn) => ({ id, description: `timed read ${id}`, action: 'test.timeout', permission: 'read', input: {}, dependsOn });
+    await app.taskStore.createTask({
+      taskId, goal: 'a read that times out', origin: 'user', planner: 'deterministic',
+      steps: [step('s1', []), step('s2', ['s1'])],
+    });
+
+    const res = await app.controller.runTask(taskId, 'run');
+    assert.equal(res.status, Outcome.EXECUTION_FAILED);
+    assert.equal(attempts, 1, 'the timed-out read was attempted once');
+    const after = await app.taskStore.get(taskId);
+    assert.equal(after.status, TaskStatus.FAILED);
+    assert.equal(after.steps[0].outcome, Outcome.EXECUTION_FAILED);
+    assert.equal(after.steps[0].summary.includes('did not answer within 50 ms'), true);
+    assert.equal(after.steps[1].status, StepStatus.SKIPPED);
+    assert.equal((await stepOps(app)).length, 1);
+
+    const eventsBefore = readEvents(dataDir).length;
+    assert.equal((await app.controller.runTask(taskId, 'resume')).status, Outcome.INPUT_REJECTED);
+    assert.equal(attempts, 1, 'a refused resume did not repeat the timeout');
+    assert.equal(readEvents(dataDir).length, eventsBefore);
+  });
+
+  test('a verifier that rejects the result stops the task and is not converted into success', async () => {
+    const dataDir = tempDir();
+    let executions = 0;
+    // TEST DOUBLE: execution succeeds, but the independent check says it did not.
+    const unconfirmed = {
+      name: 'test.unconfirmed',
+      description: 'test-only read whose verifier rejects the result',
+      permission: 'read',
+      origins: ['user', 'model'],
+      inputHint: '{}',
+      validate: (input) => input,
+      async execute() {
+        executions += 1;
+        return { summary: 'the read returned a value', data: { value: 1 } };
+      },
+      async verify() {
+        return { ok: false, detail: 'the postcondition does not hold' };
+      },
+    };
+    const app = createApp({ dataDir, extraActions: [unconfirmed] });
+    const taskId = randomUUID();
+    await app.taskStore.createTask({
+      taskId, goal: 'a read that fails verification', origin: 'user', planner: 'deterministic',
+      steps: [{ id: 's1', description: 'unconfirmed read', action: 'test.unconfirmed', permission: 'read', input: {}, dependsOn: [] }],
+    });
+
+    const res = await app.controller.runTask(taskId, 'run');
+    assert.equal(res.status, Outcome.VERIFICATION_FAILED);
+    assert.equal(executions, 1);
+    const after = await app.taskStore.get(taskId);
+    assert.equal(after.steps[0].status, StepStatus.FAILED);
+    assert.equal(after.steps[0].outcome, Outcome.VERIFICATION_FAILED);
+    assert.match(after.steps[0].summary, /result NOT confirmed: the postcondition does not hold/);
+    const ops = await stepOps(app);
+    assert.equal(ops.length, 1);
+    assert.equal(ops[0].status, Outcome.VERIFICATION_FAILED);
+    const turn = taskTurns(dataDir).at(-1);
+    assert.match(turn.text, /failed/);
+    assert.equal(/verified success/.test(turn.text), false);
+
+    const eventsBefore = readEvents(dataDir).length;
+    assert.equal((await app.controller.runTask(taskId, 'resume')).status, Outcome.INPUT_REJECTED);
+    assert.equal(executions, 1, 'the unverified read was not executed again by resume');
+    assert.equal(readEvents(dataDir).length, eventsBefore);
+  });
+});

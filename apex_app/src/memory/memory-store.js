@@ -132,11 +132,70 @@ function trigrams(word) {
 // near-misses such as typos or related word forms.
 export function similarity(a, b) {
   if (a === b) return 1;
-  const ta = trigrams(a);
-  const tb = trigrams(b);
+  return similarityOfTrigrams(a, trigrams(a), b, trigrams(b));
+}
+
+function similarityOfTrigrams(a, ta, b, tb) {
+  if (a === b) return 1;
   let shared = 0;
   for (const t of ta) if (tb.has(t)) shared += 1;
   return (2 * shared) / (ta.size + tb.size);
+}
+
+// Near-miss lookup for one search. Comparing every query term with every word of
+// every record is quadratic in a way a long request can reach: a 4,000-character
+// request is within the controller's limit and made a 1,000-record search take about
+// 32 seconds. A word that shares no trigram with the term has similarity 0, so only
+// words reached from the term's own trigrams are candidates. Each word's trigrams are
+// built once, so both the candidate lookup and the direct comparison reuse them.
+function buildFuzzyIndex(docs) {
+  const words = new Map();
+  docs.forEach((wordSet, index) => {
+    for (const word of wordSet) {
+      if (word.length < FUZZY_MIN_LENGTH) continue;
+      let entry = words.get(word);
+      if (!entry) {
+        entry = { trigrams: trigrams(word), docs: [] };
+        words.set(word, entry);
+      }
+      entry.docs.push(index);
+    }
+  });
+  const byTrigram = new Map();
+  for (const [word, entry] of words) {
+    for (const trigram of entry.trigrams) {
+      const list = byTrigram.get(trigram) ?? [];
+      list.push(word);
+      byTrigram.set(trigram, list);
+    }
+  }
+  return { words, byTrigram };
+}
+
+// For each term, the best fuzzy score per record. Terms shorter than the minimum are
+// never compared, exactly as before.
+function fuzzyScores(terms, docs) {
+  const index = buildFuzzyIndex(docs);
+  const scores = new Map();
+  for (const term of terms) {
+    if (term.length < FUZZY_MIN_LENGTH) continue;
+    const termTrigrams = trigrams(term);
+    const candidates = new Set();
+    for (const trigram of termTrigrams) {
+      for (const word of index.byTrigram.get(trigram) ?? []) candidates.add(word);
+    }
+    const perDoc = new Map();
+    for (const word of candidates) {
+      const entry = index.words.get(word);
+      const score = similarityOfTrigrams(term, termTrigrams, word, entry.trigrams);
+      if (score < FUZZY_MIN_SIMILARITY) continue;
+      for (const docIndex of entry.docs) {
+        if (score > (perDoc.get(docIndex) ?? 0)) perDoc.set(docIndex, score);
+      }
+    }
+    if (perDoc.size > 0) scores.set(term, perDoc);
+  }
+  return scores;
 }
 
 export function isPromptEligible(record) {
@@ -333,8 +392,15 @@ export class MemoryStore {
     const pool = records.filter((r) => includePrivate || r.sensitivity !== 'private');
     const docs = pool.map((record) => new Set(tokenize(record.content)));
 
+    const fuzzy = fuzzyScores(terms, docs);
     const df = new Map();
-    for (const t of terms) df.set(t, docs.filter((d) => d.has(t) || [...d].some((w) => w.length >= FUZZY_MIN_LENGTH && t.length >= FUZZY_MIN_LENGTH && similarity(t, w) >= FUZZY_MIN_SIMILARITY)).length);
+    for (const t of terms) {
+      let count = docs.filter((d) => d.has(t)).length;
+      for (const [index, best] of fuzzy.get(t) ?? []) {
+        if (best > 0 && !docs[index].has(t)) count += 1;
+      }
+      df.set(t, count);
+    }
     const n = pool.length;
     // IDF is floored at 1. With a small personal store, an absent word would otherwise
     // outweigh a matched one and a clearly relevant record would score below threshold.
@@ -346,15 +412,7 @@ export class MemoryStore {
       const words = docs[index];
       let matched = 0;
       for (const t of terms) {
-        let best = 0;
-        if (words.has(t)) best = 1;
-        else if (t.length >= FUZZY_MIN_LENGTH) {
-          for (const w of words) {
-            if (w.length < FUZZY_MIN_LENGTH) continue;
-            const s = similarity(t, w);
-            if (s >= FUZZY_MIN_SIMILARITY && s > best) best = s;
-          }
-        }
+        const best = words.has(t) ? 1 : (fuzzy.get(t)?.get(index) ?? 0);
         matched += idf.get(t) * best;
       }
       if (matched > 0) scored.push({ record, score: matched / totalWeight, index });

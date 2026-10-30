@@ -227,6 +227,32 @@ describe('066: recovery after a process exits with a partial record', () => {
   });
 });
 
+describe('089: trailing residue is distinguishable from interior damage', () => {
+  test('a real interrupted append is flagged as the unterminated final line, not as interior damage', async () => {
+    const dir = tempDir();
+    const file = path.join(dir, 'conversation.jsonl');
+    fs.writeFileSync(file, `{"broken":\n${JSON.stringify(turn('s1'))}\n`);
+    crashWithPartialLine(file, '{"schema":1,"sessionId":"s1"');
+    const before = fs.readFileSync(file);
+
+    const loaded = await new JsonlStore(file, { validateRecord: () => null }).load();
+    assert.deepEqual(
+      loaded.corrupt.map((c) => [c.line, Boolean(c.truncatedTail)]),
+      [[1, false], [3, true]],
+      'only the unterminated final line is trailing residue',
+    );
+
+    const r = await runCli(['diagnose'], envFor(dir));
+    assert.equal(r.code, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /conversation\.jsonl: line 1: invalid JSON(?! \()/, 'interior damage gets no tail hint');
+    assert.match(
+      r.stdout,
+      /conversation\.jsonl: line 3: invalid JSON \(final line without a newline: consistent with an interrupted append/,
+    );
+    assert.deepEqual(fs.readFileSync(file), before, 'the diagnosis preserved every byte');
+  });
+});
+
 describe('066: read and write failures are unavailable, not empty or successful', () => {
   test('a store path that is a directory cannot be read as an empty store', async () => {
     const dir = tempDir();
@@ -331,5 +357,30 @@ describe('076: an interrupted atomic replace leaves residue, never state', () =>
     assert.equal(result.queued, true);
     assert.equal((await queue.entries()).length, 1, 'the intact file is the only input to the next change');
     assert.equal(fs.existsSync(`${file}.12345.dead-nonce.tmp`), true, 'another process\'s residue is not deleted');
+  });
+});
+
+// 091: a corrupt store is not an empty store. Each file fails closed until an operator
+// repairs it; no command deletes, truncates, or rewrites the damaged bytes to recover.
+describe('091: a corrupt work-list store fails closed and recovers only by repair', () => {
+  test('a corrupt summary queue refuses reads and updates, preserves its bytes, and works after repair', async () => {
+    const dir = tempDir();
+    const file = path.join(dir, 'task-summary-queue.json');
+    const damaged = '{"schema":1,"entries":[';
+    fs.writeFileSync(file, damaged);
+    const queue = new SummaryQueue(file);
+
+    await assert.rejects(queue.entries(), /task-summary-queue\.json is corrupt \(invalid JSON\)/);
+    await assert.rejects(
+      queue.add({ sessionId: 's1', taskId: 'task-q', signature: 'a'.repeat(64), text: 'summary for task-q', verified: true }),
+      /task-summary-queue\.json is corrupt \(invalid JSON\)/,
+    );
+    assert.equal(fs.readFileSync(file, 'utf8'), damaged, 'the damaged bytes were preserved');
+    assert.equal(fs.existsSync(`${file}.lock`), false, 'the refused update released its lock');
+
+    fs.writeFileSync(file, `${JSON.stringify({ schema: 1, entries: [] })}\n`);
+    assert.deepEqual(await queue.entries(), [], 'the repaired queue is read again');
+    const result = await queue.add({ sessionId: 's1', taskId: 'task-q', signature: 'a'.repeat(64), text: 'summary for task-q', verified: true });
+    assert.equal(result.queued, true);
   });
 });

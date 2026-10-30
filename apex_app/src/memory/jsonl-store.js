@@ -37,13 +37,23 @@ export class JsonlStore {
     const records = [];
     const corrupt = [];
     const lines = text.split('\n');
+    // A file ending with a newline has an empty final element. The last line that
+    // carries content is what an interrupted append leaves unterminated.
+    const endsWithNewline = text.endsWith('\n');
+    let lastContent = lines.length - 1;
+    while (lastContent >= 0 && lines[lastContent] === '') lastContent -= 1;
     lines.forEach((line, index) => {
       if (line.trim() === '') return;
       let obj;
       try {
         obj = JSON.parse(line);
       } catch {
-        corrupt.push({ line: index + 1, reason: 'invalid JSON' });
+        // Invalid JSON on an unterminated final line is what a crash during an
+        // append leaves. It is still damage and still blocks the stores that
+        // require a complete log; the flag only lets diagnostics tell that
+        // recoverable residue apart from damage in the middle of the file.
+        const truncatedTail = index === lastContent && !endsWithNewline;
+        corrupt.push({ line: index + 1, reason: 'invalid JSON', ...(truncatedTail ? { truncatedTail: true } : {}) });
         return;
       }
       const problem = this.validateRecord(obj);

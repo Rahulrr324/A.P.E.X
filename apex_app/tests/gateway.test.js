@@ -171,3 +171,73 @@ describe('endpoint validation and configuration', () => {
     assert.equal(loadConfig({ APEX_MODEL_PROVIDER: 'ollama' }).model.name, 'local');
   });
 });
+
+// 092: the gateway's failure semantics under a stub server. These stand-ins reproduce
+// protocol shapes; they are not evidence about a real model or real inference.
+describe('092: gateway failure semantics', () => {
+  test('an unexpected content type is judged by the body, and non-JSON is never an answer', async () => {
+    const s = await stub();
+    s.behavior.raw = '<html><body>proxy error</body></html>';
+    s.behavior.contentType = 'text/html';
+    const gw = createGateway({ url: s.url, name: 'stub-model', timeoutMs: 5000, retries: 0, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'MALFORMED_RESPONSE');
+    assert.match(res.error.message, /not JSON/);
+
+    // A label is not trusted over the bytes: a provider that sends JSON under a plain
+    // type is still understood, which is why the parser does not gate on content-type.
+    s.behavior.contentType = 'text/plain';
+    s.behavior.raw = JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'plain header answer' } }] });
+    const accepted = await gw.complete({ prompt: 'hi' });
+    assert.equal(accepted.ok, true);
+    assert.equal(accepted.text, 'plain header answer');
+  });
+
+  test('an answer from an unexpected model is reported as the model that answered, not the configured one', async () => {
+    const s = await stub();
+    s.behavior.modelsRaw = JSON.stringify({ data: [{ id: 'stub-model' }] });
+    const gw = createGateway({ url: s.url, name: 'stub-model', timeoutMs: 5000, retries: 0, allowRemote: false });
+    assert.equal((await gw.checkAvailability()).modelListed, true);
+
+    s.behavior.raw = JSON.stringify({
+      model: 'another-model-v2',
+      choices: [{ message: { role: 'assistant', content: 'answer from another model' }, finish_reason: 'stop' }],
+    });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, true);
+    assert.equal(res.model, 'another-model-v2', 'the record names the model that actually answered');
+    assert.notEqual(res.model, gw.describe().model, 'the configured model is not claimed as the source');
+
+    // Readiness stays about the listing: a reachable endpoint listing only another model
+    // is available but unconfirmed, never a claim that the configured model will answer.
+    s.behavior.modelsRaw = JSON.stringify({ data: [{ id: 'another-model-v2' }] });
+    const avail = await gw.checkAvailability();
+    assert.equal(avail.available, true);
+    assert.equal(avail.modelListed, false);
+    assert.match(avail.detail, /does not include configured model "stub-model", so a request may be rejected/);
+  });
+
+  test('an ambiguous 200 body is not retried; only a failure that produced no answer is', async () => {
+    const s = await stub();
+    s.behavior.raw = '{"choices": [';
+    const gw = createGateway({ url: s.url, name: 'stub-model', timeoutMs: 5000, retries: 1, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi' });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'MALFORMED_RESPONSE');
+    assert.equal(s.requests.length, 1, 'an ambiguous body is not requested again');
+  });
+
+  test('a connection that never answers is one timeout, not a retried request', async () => {
+    const s = await stub();
+    s.behavior.delayMs = 500;
+    const gw = createGateway({ url: s.url, name: 'stub-model', timeoutMs: 50, retries: 2, allowRemote: false });
+    const started = Date.now();
+    const res = await gw.complete({ prompt: 'hi' });
+    const elapsed = Date.now() - started;
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'TIMEOUT');
+    assert.equal(s.requests.length, 1, 'the request reached the server once');
+    assert.ok(elapsed < 450, `the timed-out attempt was not repeated (waited ${elapsed} ms)`);
+  });
+});

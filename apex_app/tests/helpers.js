@@ -55,7 +55,7 @@ export function runCli(args, env) {
 // through `behavior`. Every chat request body is recorded in `requests`.
 export async function startStubModel() {
   const behavior = {
-    reply: 'stub answer', status: 200, delayMs: 0, raw: undefined, modelsRaw: undefined,
+    reply: 'stub answer', status: 200, delayMs: 0, raw: undefined, modelsRaw: undefined, contentType: 'application/json',
   };
   const requests = [];
   const server = http.createServer((req, res) => {
@@ -77,7 +77,7 @@ export async function startStubModel() {
           return;
         }
         if (behavior.raw !== undefined) {
-          res.writeHead(200);
+          res.writeHead(200, { 'content-type': behavior.contentType });
           res.end(behavior.raw);
           return;
         }

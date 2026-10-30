@@ -184,6 +184,13 @@ function sessionNotice(res) {
   return `Session: this request ran without conversation continuity (${safeText(failure.message, 200)})`;
 }
 
+// An error line is presentation, not evidence: the audit record keeps the original
+// message. The text can still quote a user-supplied command, option, or store path,
+// so it is bounded, stripped, and redacted like every other terminal line.
+function errorText(e) {
+  return safeText(e?.message ?? e, 400);
+}
+
 function exitCodeFor(res) {
   if (!res.recorded) return 3;
   if (res.status === Outcome.SUCCESS_VERIFIED) return 0;
@@ -207,8 +214,8 @@ function modelLine(model) {
   if (model.state === State.NOT_CHECKED) {
     return `Model backend: ${who} - connectivity not checked (run "status --model")`;
   }
-  if (model.state === State.OK) return `Model backend: ${who} - available`;
-  if (model.state === State.UNCONFIRMED) return `Model backend: ${who} - reachable, model not confirmed: ${safeText(model.detail)}`;
+  if (model.state === State.OK) return `Model backend: ${who} - available (model list checked; no inference was run)`;
+  if (model.state === State.UNCONFIRMED) return `Model backend: ${who} - reachable, model not confirmed: ${safeText(model.detail)} (model list only; no inference was run)`;
   return `Model backend: ${who} - unavailable: ${safeText(model.detail)}`;
 }
 
@@ -258,7 +265,7 @@ export async function main(argv, {
   } catch (e) {
     // Configuration is validated before any store is opened, so this failure
     // cannot have read or changed persistent data.
-    err(`configuration error: ${e.message}`);
+    err(`configuration error: ${errorText(e)}`);
     err('No data was read or changed. Check the APEX_* settings in "node bin/apex.js help".');
     return 2;
   }
@@ -470,19 +477,19 @@ export async function main(argv, {
       return 2;
     }
 
-    err(`unknown command: ${command}`);
+    err(`unknown command: ${safeText(command, 200)}`);
     err('run "node bin/apex.js help" for usage');
     return 2;
   } catch (e) {
     if (e instanceof ValidationError) {
-      err(`usage error: ${e.message}`);
+      err(`usage error: ${errorText(e)}`);
       return 2;
     }
     if (e instanceof StoreError) {
-      err(`data store unavailable: ${e.message}. Check APEX_DATA_DIR and its permissions.`);
+      err(`data store unavailable: ${errorText(e)}. Check APEX_DATA_DIR and its permissions.`);
       return 1;
     }
-    err(`unexpected error: ${e?.message ?? e}`);
+    err(`unexpected error: ${errorText(e)}`);
     return 1;
   }
 }
@@ -511,7 +518,7 @@ async function runChat({ app, stdin, stdout, stderr, out }) {
         const session = sessionNotice(res);
         if (session) stderr.write(`${session}\n`);
       } catch (e) {
-        out(`error: ${e?.message ?? e}`);
+        out(`error: ${errorText(e)}`);
       }
     }
     if (interactive) stdout.write('you> ');

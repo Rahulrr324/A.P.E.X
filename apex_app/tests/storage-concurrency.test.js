@@ -256,6 +256,34 @@ describe('077: concurrent summary-queue updates preserve every intent', () => {
     assert.equal(fs.existsSync(abandoned), true, 'the abandoned token is inert bookkeeping, not deleted by a stranger');
   });
 
+  test('sixteen abandoned takeover tokens refuse the update without touching the queue, then work resumes', async () => {
+    const dir = tempDir();
+    const raw = JSON.stringify({ pid: await exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    fs.writeFileSync(lockFor(dir), raw);
+    const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
+    const tokens = [];
+    for (let epoch = 0; epoch < 16; epoch += 1) {
+      const token = `${lockFor(dir)}.takeover.${key}.${epoch}`;
+      fs.writeFileSync(token, JSON.stringify({ pid: await exitedPid(), at: new Date().toISOString() }));
+      tokens.push(token);
+    }
+
+    const queue = new SummaryQueue(path.join(dir, 'task-summary-queue.json'));
+    await assert.rejects(
+      queue.add({ sessionId: 's1', taskId: 'task-w', signature, text: 'summary for task-w', verified: true }),
+      /cannot update task-summary-queue\.json: 16 takeover attempts are recorded as abandoned; nothing was changed/,
+    );
+    assert.equal(fs.existsSync(path.join(dir, 'task-summary-queue.json')), false, 'a refused update changed nothing');
+    assert.equal(fs.readFileSync(lockFor(dir), 'utf8'), raw, 'the stale claim was left for an operator');
+    for (const token of tokens) assert.equal(fs.existsSync(token), true, 'no token was deleted');
+
+    fs.rmSync(lockFor(dir), { force: true });
+    for (const token of tokens) fs.rmSync(token, { force: true });
+    const result = await queue.add({ sessionId: 's1', taskId: 'task-w', signature, text: 'summary for task-w', verified: true });
+    assert.equal(result.queued, true, 'updates work again once the tokens are gone');
+    assert.equal((await queue.entries()).length, 1);
+  });
+
   test('a lock held by a live process refuses the update instead of reporting it queued', async () => {
     const dir = tempDir();
     fs.writeFileSync(lockFor(dir), JSON.stringify({ pid: process.pid, nonce: 'held', at: new Date().toISOString() }));

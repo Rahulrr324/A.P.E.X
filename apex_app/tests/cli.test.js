@@ -4,6 +4,7 @@ import { test, describe, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel, closedPortUrl } from './helpers.js';
 import { createApp } from '../src/app.js';
 import { ModelGateway, NoBackend } from '../src/model/gateway.js';
@@ -265,6 +266,55 @@ describe('command line', () => {
     assert.equal(unknown.code, 2);
     const badFlag = await runCli(['history', '--bogus'], env);
     assert.equal(badFlag.code, 2);
+  });
+
+  test('an error line never repeats a credential the user typed', async () => {
+    const dataDir = tempDir();
+    const env = envFor(dataDir);
+    const secret = `sk-${'A'.repeat(24)}`;
+
+    const unknown = await runCli([secret], env);
+    assert.equal(unknown.code, 2);
+    assert.equal(unknown.stderr.includes(secret), false, 'the unknown command is not echoed');
+    assert.match(unknown.stderr, /\[redacted-secret\]/);
+
+    const badView = await runCli(['task', 'explain', '00000000', secret], env);
+    assert.equal(badView.code, 2);
+    assert.equal(badView.stderr.includes(secret), false, 'the rejected view is not echoed');
+    assert.match(badView.stderr, /unknown view/);
+
+    const badOption = await runCli(['status', `--${secret}`], env);
+    assert.equal(badOption.code, 2);
+    assert.equal(badOption.stderr.includes(secret), false, 'the unknown option name is not echoed');
+
+    const badUrl = await runCli(['status'], envFor(dataDir, {
+      APEX_MODEL_URL: `http://${secret.toLowerCase()}.example`,
+    }));
+    assert.equal(badUrl.code, 2);
+    assert.equal(badUrl.stderr.includes(secret.toLowerCase()), false, 'the configured host is not echoed');
+    assert.match(badUrl.stderr, /configuration error/);
+  });
+
+  test('a chat error is redacted before it is shown', async () => {
+    const secret = `sk-${'B'.repeat(24)}`;
+    const app = {
+      session: { rotate: async () => ({ sessionId: 'test-session' }) },
+      controller: {
+        handle: async () => { throw new Error(`failed while handling ${secret}`); },
+      },
+    };
+    const stdout = capture();
+    const stderr = capture();
+    const code = await main(['chat'], {
+      env: envFor(tempDir()),
+      stdout,
+      stderr,
+      stdin: Readable.from(['hello\n']),
+      appFactory: () => app,
+    });
+    assert.equal(code, 0);
+    assert.equal(stdout.text.includes(secret), false, 'the chat error is not echoed');
+    assert.match(stdout.text, /error: failed while handling \[redacted-secret\]/);
   });
 
   test('an unexpected positional argument is refused instead of silently ignored', async () => {

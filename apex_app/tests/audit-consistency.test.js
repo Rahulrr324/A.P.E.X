@@ -37,6 +37,62 @@ function failNextCompletion(app) {
   return () => { app.taskStore.transition = original; };
 }
 
+// Milestone 088: the ordinary request path has its own persistence boundaries. A
+// failed conversation write is display-only and covered elsewhere; these cases hold
+// the audit boundary itself and the step record's outcome vocabulary.
+describe('audit consistency - the operation record boundary', () => {
+  test('an audit failure after a user write is disclosed and the write is not repeated', async () => {
+    const app = createApp({ dataDir: tempDir() });
+    app.operations.append = async () => { throw new StoreError('injected: audit write failed'); };
+
+    const res = await app.controller.handle('remember that the audit boundary is tested', { origin: 'user' });
+
+    assert.equal(res.status, Outcome.SUCCESS_VERIFIED, 'the execution and its verification did happen');
+    assert.equal(res.recorded, false, 'but the operation record did not');
+    assert.ok(res.recordError);
+    assert.match(res.display, /Stored/);
+    assert.equal((await app.memory.list()).length, 1, 'the write happened exactly once');
+    assert.equal((await app.operations.inspect()).records.length, 0, 'no audit record was invented');
+  });
+
+  test('an audit failure on a denied request records nothing and claims nothing ran', async () => {
+    const app = createApp({ dataDir: tempDir() });
+    app.operations.append = async () => { throw new StoreError('injected: audit write failed'); };
+
+    const res = await app.controller.handle('rm -rf /', { origin: 'user' });
+
+    assert.equal(res.status, Outcome.ACTION_DENIED);
+    assert.equal(res.recorded, false);
+    assert.match(res.display, /nothing was executed/i);
+    assert.equal((await app.operations.inspect()).records.length, 0);
+  });
+
+  test('a step record keeps unavailable verification distinct from failed verification', async () => {
+    const unavailable = createApp({ dataDir: tempDir() });
+    unavailable.controller.verifier.check = async () => ({
+      outcome: Outcome.VERIFICATION_UNAVAILABLE,
+      detail: 'injected: evidence could not be read',
+    });
+    const gap = await unavailable.controller.handle('calc 2+2', { origin: 'user' });
+    assert.equal(gap.status, Outcome.VERIFICATION_UNAVAILABLE);
+    const gapRecord = (await unavailable.operations.inspect()).records.at(-1);
+    assert.equal(gapRecord.steps[0].execution.status, 'ok', 'the execution is recorded as having run');
+    assert.equal(gapRecord.steps[0].verification.outcome, Outcome.VERIFICATION_UNAVAILABLE);
+    assert.equal(gapRecord.status, Outcome.VERIFICATION_UNAVAILABLE);
+
+    const failed = createApp({ dataDir: tempDir() });
+    failed.controller.verifier.check = async () => ({
+      outcome: Outcome.VERIFICATION_FAILED,
+      detail: 'injected: the postcondition does not hold',
+    });
+    const mismatch = await failed.controller.handle('calc 2+2', { origin: 'user' });
+    assert.equal(mismatch.status, Outcome.VERIFICATION_FAILED);
+    const failedRecord = (await failed.operations.inspect()).records.at(-1);
+    assert.equal(failedRecord.steps[0].verification.outcome, Outcome.VERIFICATION_FAILED);
+    assert.equal(failedRecord.status, Outcome.VERIFICATION_FAILED);
+  });
+});
+
 describe('audit consistency - a task-log write failure after a step ran', () => {
   test('an executed, verified, audited write step is not reported as an execution failure', async () => {
     const dir = tempDir();

@@ -79,7 +79,14 @@ async function loadLog(log) {
 }
 
 function corruptLineProblems(fileName, corrupt) {
-  return corrupt.map((c) => `${fileName}: line ${c.line}: ${safeText(c.reason, 160)}`);
+  return corrupt.map((c) => {
+    // The store keeps the bytes either way. The distinction only tells an operator
+    // whether this is what an interrupted append leaves or damage inside the log.
+    const tail = c.truncatedTail
+      ? ' (final line without a newline: consistent with an interrupted append; the bytes are preserved and new records start on a new line)'
+      : '';
+    return `${fileName}: line ${c.line}: ${safeText(c.reason, 160)}${tail}`;
+  });
 }
 
 async function inspectJsonlStore({ key, label, noun, filePath, log, impact }) {
@@ -261,11 +268,24 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     let state = State.OK;
     if (corrupt.length > 0 || replayProblems.length > 0) state = State.CORRUPT;
     else if (taskFileExists === false) state = State.MISSING;
+    // Execution states are counted separately: a task that was planned, one that ran
+    // and was verified, and a step whose outcome is uncertain are different operational
+    // facts, and a plain task count does not distinguish them.
+    const completedTasks = taskInspect.tasks.filter((t) => t.status === TaskStatus.COMPLETED).length;
+    const verifiedSteps = taskInspect.tasks.reduce(
+      (n, t) => n + t.steps.filter((s) => s.status === StepStatus.COMPLETED && s.outcome === Outcome.SUCCESS_VERIFIED).length,
+      0,
+    );
+    const uncertainStepCount = taskInspect.tasks.reduce(
+      (n, t) => n + t.steps.filter((s) => s.status === StepStatus.UNCERTAIN).length,
+      0,
+    );
+    const taskSummary = `${taskInspect.tasks.length} task(s), ${taskInspect.events} event(s); ${completedTasks} completed, ${verifiedSteps} verified step(s), ${uncertainStepCount} uncertain step(s)`;
     const summary = state === State.MISSING
       ? missingValid('Tasks', 'tasks')
       : state === State.CORRUPT
         ? `Tasks: corrupt (${taskInspect.events} readable event(s), ${taskInspect.tasks.length} recoverable task(s), ${corrupt.length} corrupt line(s), ${replayProblems.length} event(s) that cannot be applied)`
-        : `Tasks: ok (${taskInspect.tasks.length} task(s), ${taskInspect.events} event(s))`;
+        : `Tasks: ok (${taskSummary})`;
     subsystems.tasks = {
       key: 'tasks',
       label: 'Tasks',
@@ -492,9 +512,9 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     : modelState === State.NOT_CHECKED
       ? `Model: not checked (configured at ${modelWho}; run "apex diagnose --model" to probe it)`
       : modelState === State.OK
-        ? `Model: ok (${safeText(modelDetail)})`
+        ? `Model: ok (${safeText(modelDetail)}; model list only - no inference was run)`
         : modelState === State.UNCONFIRMED
-          ? `Model: reachable but not confirmed (${safeText(modelDetail)})`
+          ? `Model: reachable but not confirmed (${safeText(modelDetail)}; model list only - no inference was run)`
           : `Model: unavailable (${safeText(modelDetail)})`;
   subsystems.model = {
     key: 'model',
@@ -503,6 +523,9 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     summary: modelSummary,
     describe,
     detail: modelDetail,
+    // Readiness probes the model listing, never completion. False says exactly that,
+    // so a caller cannot read "available" as "inference was tested".
+    inferenceTested: false,
     count: null,
     corruptLines: 0,
     problems: [],
@@ -590,6 +613,9 @@ export function renderDiagnostics(diag) {
   const lines = [];
   lines.push(`${diag.app.name} ${diag.app.stage} ${diag.app.version} (${diag.app.expansion}) - diagnostics`);
   lines.push(`Data directory: ${safeText(diag.dataDir)}`);
+  // Not a defect and not a claim: APEX neither inspects nor changes a Git remote, so the
+  // report must not be read as evidence about synchronization.
+  lines.push('Remote synchronization: not checked (APEX does not inspect or modify a Git remote; this report covers the local data directory only)');
   const modelState = diag.subsystems.model.state;
   const overall = diag.needsAttention
     ? 'attention required'

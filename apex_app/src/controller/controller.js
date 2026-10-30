@@ -1236,12 +1236,15 @@ export class CognitiveController {
   // for, because a truncated scan cannot prove that a record is absent.
   async #missingStepEvidence(task) {
     const done = task.steps.filter((s) => s.status === StepStatus.COMPLETED);
-    if (done.length === 0) return { missing: [], unreadable: false };
+    if (done.length === 0) return { missing: [], unreadable: false, corrupt: 0 };
     try {
-      const { missing } = await this.operations.missingTaskStepRecords(task.id, done);
-      return { missing, unreadable: false };
+      // A damaged line could be the record being looked for, so the skipped-line count
+      // travels with the answer: without it, "no record" would turn a damaged log into
+      // proof of absence.
+      const { missing, corrupt } = await this.operations.missingTaskStepRecords(task.id, done);
+      return { missing, unreadable: false, corrupt };
     } catch {
-      return { missing: done.map((s) => s.id), unreadable: true };
+      return { missing: done.map((s) => s.id), unreadable: true, corrupt: 0 };
     }
   }
 
@@ -1311,8 +1314,8 @@ export class CognitiveController {
       };
     }
 
-    const { missing } = await this.#missingStepEvidence(task);
-    const text = explainTask(task, intent, { missingAudit: missing });
+    const { missing, unreadable, corrupt } = await this.#missingStepEvidence(task);
+    const text = explainTask(task, intent, { missingAudit: missing, unreadableAudit: unreadable, damagedAudit: corrupt });
     await this.#recordTurns(op, sid, op.request, [
       { origin: TURN_ORIGINS.ACTION, text, verified: true, taskId: task.id },
     ], { subject: 'answer' });
@@ -1343,7 +1346,7 @@ export class CognitiveController {
   async describeTask(ref, intent = 'status') {
     this.#requireTasks();
     const task = await this.taskStore.resolve(ref);
-    const { missing, unreadable } = await this.#missingStepEvidence(task);
+    const { missing, unreadable, corrupt } = await this.#missingStepEvidence(task);
     const verified = task.steps.filter((s) => s.status === StepStatus.COMPLETED).length;
     const evidence = missing.length === 0
       ? verified === 0
@@ -1351,9 +1354,11 @@ export class CognitiveController {
         : `Evidence: all ${verified} step result(s) the task log records as verified have an operation record of their own.`
       : unreadable
         ? `Evidence: the operation log could not be read, so none of the ${verified} recorded step result(s) is independently supported.`
-        : `Evidence: ${verified - missing.length} of ${verified} recorded step result(s) have an operation record; ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} none, so ${missing.length === 1 ? 'it is' : 'they are'} not independently supported.`;
-    const display = `${explainTask(task, intent, { missingAudit: missing })}\n${evidence}`;
-    return { task, intent, evidenceState: unreadable ? 'unreadable' : missing.length ? 'gaps' : 'complete', gaps: missing, display };
+        : corrupt > 0
+          ? `Evidence: the operation log holds ${corrupt} damaged line(s), so it cannot establish that ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} no operation record; ${missing.length === 1 ? 'it is' : 'they are'} not independently supported.`
+          : `Evidence: ${verified - missing.length} of ${verified} recorded step result(s) have an operation record; ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} none, so ${missing.length === 1 ? 'it is' : 'they are'} not independently supported.`;
+    const display = `${explainTask(task, intent, { missingAudit: missing, unreadableAudit: unreadable, damagedAudit: corrupt })}\n${evidence}`;
+    return { task, intent, evidenceState: unreadable ? 'unreadable' : corrupt > 0 && missing.length ? 'damaged' : missing.length ? 'gaps' : 'complete', gaps: missing, display };
   }
 
   async listTasks() {

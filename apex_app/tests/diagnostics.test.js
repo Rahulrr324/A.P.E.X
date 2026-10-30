@@ -494,3 +494,60 @@ describe('diagnostics: read-only behavior', () => {
     assert.deepEqual(snapshot(dir), before, 'an uncertain task must not be resumed, retried, or cancelled');
   });
 });
+
+// 093: a readiness probe answers a narrower question than "the model works". The report
+// says what was checked (the model listing), that no inference was run, and what it did
+// not check (a Git remote), and read-only diagnostics leave every persistent byte alone.
+describe('093: diagnostics state what was and was not verified', () => {
+  test('a model probe is reported as a listing check, with inference explicitly untested', async () => {
+    const dir = tempDir();
+    const stub = await startStubModel();
+    stubs.push(stub);
+    const env = envFor(dir, { APEX_MODEL_URL: stub.url, APEX_MODEL_NAME: 'stub' });
+
+    const status = await runCli(['status', '--model'], env);
+    assert.equal(status.code, 0, status.stderr);
+    assert.match(status.stdout, / - available \(model list checked; no inference was run\)/);
+    assert.equal(stub.requests.length, 0, 'no completion request was made');
+
+    const diag = await runCli(['diagnose', '--model'], env);
+    assert.equal(diag.code, 0, diag.stderr);
+    assert.match(diag.stdout, /Model: ok \(.*model list only - no inference was run\)/);
+    assert.equal(diag.stdout.includes('Remote synchronization: not checked'), true,
+      'silence about a remote is not evidence that it is synchronized');
+    assert.deepEqual(snapshot(dir), {}, 'the probe created no state');
+  });
+
+  test('status and diagnose leave a populated data directory byte-for-byte unchanged', async () => {
+    const dir = tempDir();
+    const env = envFor(dir);
+    assert.equal((await runCli(['ask', 'remember that diagnostics are read-only'], env)).code, 0);
+    assert.equal((await runCli(['task', 'plan', 'calc 1+1; calc 2+2'], env)).code, 0);
+
+    const names = fs.readdirSync(dir).sort();
+    const bytes = snapshot(dir);
+    const mtimes = Object.fromEntries(names.map((name) => [name, fs.statSync(path.join(dir, name)).mtimeMs]));
+
+    assert.equal((await runCli(['status', '--model'], env)).code, 0);
+    const diag = await runCli(['diagnose', '--model'], env);
+    assert.equal(diag.code, 0, diag.stderr);
+
+    assert.deepEqual(fs.readdirSync(dir).sort(), names, 'no file was created or removed');
+    assert.deepEqual(snapshot(dir), bytes, 'no persistent file was rewritten');
+    for (const name of names) {
+      assert.equal(fs.statSync(path.join(dir, name)).mtimeMs, mtimes[name], `${name} was not touched`);
+    }
+    assert.equal(fs.existsSync(path.join(dir, 'tasks.jsonl.lock')), false);
+  });
+
+  test('the task summary separates completed, verified, and uncertain execution', async () => {
+    const dir = tempDir();
+    const app = createApp({ dataDir: dir });
+    const ran = await app.controller.handle('calc 2+2; calc 3+3');
+    assert.equal(ran.status, 'success_verified', ran.display);
+
+    const diag = await runCli(['diagnose'], envFor(dir));
+    assert.equal(diag.code, 0, diag.stdout + diag.stderr);
+    assert.match(diag.stdout, /Tasks: ok \(1 task\(s\), \d+ event\(s\); 1 completed, 2 verified step\(s\), 0 uncertain step\(s\)\)/);
+  });
+});

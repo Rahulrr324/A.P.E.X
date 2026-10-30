@@ -1685,3 +1685,32 @@ describe('052: the audit evidence read is bounded without truncating evidence', 
   });
 });
 
+
+// 091: a damaged audit log is not proof that a record never existed. The step record may
+// be the damaged line, so "has none" would report an assumption as a finding. The evidence
+// view and the follow-up answer distinguish a proven gap, an unreadable log, and a log
+// with damaged lines.
+describe('091: audit damage is not reported as established absence', () => {
+  test('task explain and a follow-up say the damaged log cannot establish absence', async () => {
+    const app = appOn({});
+    const ran = await app.controller.handle('calc 2+2; calc 3+3');
+    assert.equal(ran.status, Outcome.SUCCESS_VERIFIED);
+    const task = (await app.taskStore.list())[0];
+
+    // The step's own audit record is replaced by a damaged line: it may be exactly the
+    // record being looked for, so absence cannot be established from what remains.
+    fs.writeFileSync(path.join(app.dataDir, 'operations.jsonl'), 'not json\n');
+
+    const explained = await app.controller.describeTask(task.id);
+    assert.deepEqual(explained.gaps, ['s1', 's2']);
+    assert.equal(explained.evidenceState, 'damaged');
+    assert.match(explained.display, /the operation log holds 1 damaged line\(s\), so it cannot establish that s1, s2 have no operation record; they are not independently supported/);
+    assert.equal(/s1, s2 have none/.test(explained.display), false, 'the damaged log is not turned into proven absence');
+
+    const asked = await app.controller.handle('what happened to that task?');
+    assert.equal(asked.status, Outcome.SUCCESS_VERIFIED);
+    assert.match(asked.display, /the operation log has 1 damaged line\(s\), so APEX cannot establish whether records exist for: s1, s2/);
+    assert.equal(/no operation record is available/.test(asked.display), false,
+      'the follow-up does not claim a record was proven absent');
+  });
+});

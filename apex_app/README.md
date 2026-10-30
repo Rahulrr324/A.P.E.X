@@ -101,9 +101,15 @@ session, write or repair a store, run a task, or contact the model.
 `/api/tags` or `/v1/models`; it never runs inference. An HTTP 200 alone is not
 enough: a 200 error body, a non-JSON body, or a model list with no model is reported
 as unavailable, the same way the completion path refuses it. Without `--model`, model
-availability is reported as "not checked", not as healthy. A missing session
+availability is reported as "not checked", not as healthy. A probe result says
+"model list only - no inference was run", so "available" is never read as proof that
+a completion works. The task line counts completed tasks, verified steps, and
+uncertain steps separately. The report also states that remote (Git) synchronization
+was not checked, because APEX neither inspects nor modifies a remote. A missing session
 pointer is valid on a fresh install; if conversation turns are already stored,
 diagnostics reports it as a suspicion, because a new session will not replay them.
+Tests assert that `status` and `diagnose` leave every file in the data directory
+byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 
 ## Commands
 
@@ -158,6 +164,10 @@ shows any relevant memory it found (without summarising it), and **generates not
 | 2 | Usage or configuration error. |
 | 3 | The operation ran, but its audit record could not be written. The output says so. |
 
+Error lines are presentation, not evidence: each is bounded to one line and
+credential-like text in it is redacted. An operation's audit record keeps the
+original error message.
+
 ## Optional: a local model
 
 No model is bundled, downloaded, or required. APEX talks to a model server you run
@@ -205,7 +215,14 @@ APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
   A retry resends the same prompt and only the final reply is used: one model request,
   however often it is retried, can authorize at most the proposals in that one reply, and
   every proposal still passes the registry's authorization. `INTERRUPTED` means no reply
-  was read, so nothing from the dropped attempt is acted on.
+  was read, so nothing from the dropped attempt is acted on. An ambiguous 200 body
+  (malformed JSON or an unusable shape) is not retried: the server did answer, so a
+  repeat could duplicate work and still prove nothing. There is no caller-supplied
+  cancellation signal; the only bound on a call is the timeout, which aborts the HTTP
+  request. A body is parsed regardless of its content-type header, because some servers
+  mislabel JSON, while a non-JSON body is `MALFORMED_RESPONSE` whatever its label. If the
+  response names a model other than the configured one, the result records the model that
+  actually answered; it does not substitute the configured name.
 - The response size limit (1,000,000 characters) is enforced while the body is read, not
   after it is buffered: an oversized reply is rejected when it crosses the limit, the read
   is cancelled, and the connection is closed. An oversized error body is still reported as
@@ -372,7 +389,12 @@ A failed step, or one whose result cannot be verified, stops the task. The steps
 depend on it are skipped. A write step proposed by a model stops the task at
 `awaiting_approval`. You approve that one step with `task approve <id> --step <stepId>`,
 and the approval applies to that step's exact input only. Nothing is retried
-automatically.
+automatically. An authorization denial, an execution error (including a timeout
+reported by the action), and a verifier rejection all stop the task as a failure:
+none is reported as an execution that succeeded, and a refused resume records no new
+task events. There is no controller-imposed per-step deadline for the built-in
+deterministic actions, so a genuinely hung action would keep the run and its lock
+alive until the process ends; a lost process is then recovered as an interruption.
 
 **Interruptions.** If the process stops while a step is running, the next start
 resolves that step from its own `task.step` audit record. A record of `success_verified`
@@ -699,6 +721,12 @@ questions that must change nothing).
   simple word forms, and close misspellings (character-trigram similarity), all local.
   It does not understand meaning: a true paraphrase that shares no word forms with the
   stored record will be missed. Retrieval quality is not measured beyond these tests.
+  Misspelling tolerance is bounded, not exhaustive: a query term is compared with a
+  stored word only when the two share at least one trigram, because comparing every
+  term with every stored word let a request at the controller's own 4,000-character
+  limit take about 32 seconds against 1,000 memories. That request now completes in
+  tens of milliseconds and a term that shares no trigram could not have reached the
+  similarity threshold anyway, so results are unchanged (`growth-limits.test.js`).
 - **Contradiction detection is deliberately narrow and heuristic.** It compares simple
   “subject is value” / “subject called value” clauses with the same normalized subject.
   It can miss paraphrases, negation, or complex temporal/contextual relationships, and
@@ -711,7 +739,12 @@ questions that must change nothing).
   A broad query over a 3,000-record store fell from about 27 seconds to about 0.06
   seconds on the development machine (`growth-limits.test.js` guards against a return to
   all-pairs parsing). Retrieval still reads and scores the entire store, so its remaining
-  cost grows linearly with the number of records.
+  cost grows linearly with the number of records. A claim supplied by the user and a
+  model conclusion that disagree are both kept and both reported unresolved; provenance
+  is preserved but never used to decide which claim is true. A record that fails its own
+  integrity check (a bad content or triple hash, an unknown status, forged provenance)
+  is counted as damage, not skipped: every read and write that needs the whole store
+  fails closed, while a record addressed directly by id remains readable.
 - **Correction resolves only its explicitly selected pair.** The new record links to the
   selected old record, which remains visible as `superseded` when no other conflict
   remains. Conflicts with any other claims stay unresolved; superseded history is not
@@ -735,9 +768,16 @@ questions that must change nothing).
   elected taker re-reads and removes the exact claim it validated, so a fresh lock
   another process created is never removed. A taker that loses the election is refused
   as "in use" and can retry. A process killed during a takeover leaves its token behind;
-  the next epoch supersedes it instead of wedging the directory. Node still has no
-  conditional-delete primitive without a native dependency, so the removal itself is a
-  plain unlink - but it is performed by one elected process at a time.
+  the next epoch supersedes it instead of wedging the directory. Election is bounded at
+  16 epochs per claim: if sixteen takeovers are recorded as abandoned in a row, the
+  update is refused and the claim and tokens are left untouched for inspection
+  (`lock-contention.test.js`, `storage-concurrency.test.js`). That bound is a deliberate
+  refusal, not automatic cleanup, because deleting another process's token on an
+  out-of-date observation could remove a live taker. PID liveness is the only signal
+  available; a recycled pid is treated as live, so the lock fails closed and the
+  operator resolves it. Node still has no conditional-delete primitive without a native
+  dependency, so the removal itself is a plain unlink - but it is performed by one
+  elected process at a time.
 - **A data directory path is validated when it is used, not when it is typed.**
   `status` and `diagnose` report a nonexistent directory the same way as a fresh
   install, because creating it to find out would make a read-only check write. An
@@ -780,9 +820,16 @@ explicit entity relationships, built alongside personal memory:
   reads and writes are refused while corrupt lines exist, so damage cannot be buried
   under a fresh write that would otherwise be reported as stored. Conversation replay
   is blocked and task state is refused; the audit log still lists its readable records
-  and names the skipped lines. Repair is not automatic: no supported command deletes
+  and names the skipped lines. Audit damage is not proof of absence: when a step's
+  operation record cannot be found and the log also holds damaged lines, `task explain`
+  and task follow-ups say the absence could not be established instead of reporting that
+  the step has no record. Repair is not automatic: no supported command deletes
   or rewrites a damaged line. A partial final line left by a crash is preserved as a
   damaged line, and the next append starts on a new line instead of merging into it.
+  `diagnose` marks that last case explicitly - "final line without a newline: consistent
+  with an interrupted append" - so trailing crash residue is distinguishable from
+  damage in the middle of a file. The distinction is reporting only: the bytes are
+  still preserved, and the store still fails closed until an operator resolves it.
 - **A failed write is not proof that nothing was written.** If the bytes reached the
   file but the fsync did not complete, the record may already be readable; APEX says so
   in the error instead of implying the store is unchanged and never removes data to
@@ -827,7 +874,7 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this batch was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 641 tests, 639 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 681 tests, 679 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file
@@ -842,7 +889,143 @@ the outcome data a later learning component would consume. **This milestone does
 not learn.** Storing logs is not learning, and nothing here adjusts behaviour from
 past outcomes.
 
-## Governance
+## Neural integration boundary (proposal, not implemented)
+
+`stark/` is a C++17/CMake research tree of simulation binaries and tests. It has no
+long-running service, no stable wire format, and its demos write human-readable text to
+stdout. Nothing in `apex_app` imports it, and this proposal does not add a sidecar, a
+process, or a dependency. It defines the smallest interface APEX would implement if a
+standalone neural runtime existed, so that the runtime can propose without ever gaining
+authority. No part of it is built or tested against a trained model.
+
+**Review basis.** APEX already has the boundary it needs on the model side
+(`src/model/gateway.js`): a backend returns text or a classified failure, the controller
+wraps the result in its own provenance, and proposals are checked by the planner and
+registry before anything runs. The neural interface below is the same shape with one
+difference: it accepts only structured proposals, never free-form actions, and it is
+expected to be absent.
+
+### 1. Request and response schema
+
+Transport is one JSON object per line. APEX sends:
+
+```
+{"schema":"apex.neural.request/1","requestId":"<uuid>","kind":"propose",
+ "input":{"text":"<user text or bounded task goal>"},
+ "limits":{"maxProposals":8,"maxPlanSteps":8,"maxOutputChars":8000},
+ "deadlineMs":5000}
+```
+
+The runtime replies once:
+
+```
+{"schema":"apex.neural.response/1","requestId":"<same uuid>",
+ "status":"ok"|"unavailable"|"error",
+ "proposals":[{"kind":"knowledge_claim"|"memory_claim"|"plan",
+   "confidence":0.0,"payload":{...}}],
+ "runtime":{"name":"stark-...", "version":"x.y.z", "modelId":"..."},
+ "error":{"code":"...","message":"..."}}
+```
+
+`knowledge_claim.payload` is `{subject, relationship, object, evidence?}`.
+`memory_claim.payload` is `{content}` (never `private`). `plan.payload` is
+`{steps:[{id,description,action,input,depends_on}]}`, exactly the shape
+`parseModelPlan()` already validates. Unknown top-level fields are rejected; unknown
+proposal kinds are ignored and counted, never guessed into an action. `confidence` is
+advisory data and has no authorization meaning.
+
+### 2. Protocol and process boundary
+
+Either a spawned child process speaking newline-delimited JSON on stdin/stdout, or a
+loopback HTTP endpoint with the same bodies. APEX owns the lifecycle: one request at a
+time, no inherited stdin, a clean environment with no secrets, and no access to the
+APEX data directory by contract. A child is killed on deadline or cancellation; an HTTP
+connection is aborted. The runtime cannot call back into APEX, open stores, or invoke
+actions; its only output is the response line. stderr is captured as bounded,
+secret-redacted diagnostic text.
+
+### 3. Version compatibility
+
+APEX sends `apex.neural.request/1`. A runtime that answers with another
+`schema` value is refused as `UNSUPPORTED_VERSION`; it is never parsed leniently.
+Additive optional fields are allowed within the same major version. A response missing a
+required field, carrying a different `requestId`, or containing more proposals than the
+request limit is `MALFORMED_RESPONSE`. The runtime version is recorded with each
+proposal so later changes can be attributed.
+
+### 4. Message size limits
+
+The request body is capped at 64 KiB and response at 1 MiB, matching the gateway's
+existing `MAX_RESPONSE_CHARS` bound. At most 8 proposals and 8 plan steps are accepted
+(the planner's `MAX_STEPS`), proposal text is bounded, and a larger response is
+`RESPONSE_TOO_LARGE`, not truncated into something that might parse differently.
+Reading stops at the cap, so an unbounded stream cannot exhaust memory.
+
+### 5. Timeouts and cancellation
+
+Each request carries a deadline (default 5,000 ms, hard maximum 30,000 ms). Exceeding it
+is `TIMEOUT`; killing the child is not proof that it produced no side effect outside
+APEX, so a request is never replayed automatically. Cancellation closes the input and
+terminates the process (or aborts the HTTP request); an interrupted request is
+`INTERRUPTED`, and only a request that produced no completed response may be retried by
+the caller. APEX never retries an ambiguous response, matching the gateway's rule that
+only failures with no answer are retryable.
+
+### 6. Resource limits
+
+One in-flight request, bounded input and output, and a deadline cover the interface
+itself. On platforms that support it the child is placed in a job object or rlimit with
+a memory and CPU cap; without one, the deadline and output cap are the enforced limits
+and diagnostics say so. APEX does not trust runtime-reported usage figures for policy;
+they are recorded as claims, not measurements.
+
+### 7. Error and unavailable-runtime behavior
+
+`unavailable` and transport failures map to the existing gateway outcomes
+(`UNREACHABLE`, `TIMEOUT`, `INTERRUPTED`, `MALFORMED_RESPONSE`, `EMPTY_RESPONSE`,
+`RESPONSE_TOO_LARGE`, `UNSUPPORTED_VERSION`). A failure is reported as a failure, never
+as an empty successful answer, and never as a reason to execute anything. With no
+runtime configured, the path behaves exactly as it does today: the model is unavailable
+and the request is answered honestly or refused.
+
+### 8. Provenance and trust classification
+
+A neural result is `model_proposed` at most. APEX derives the provenance itself
+(`origin: "model_output"`, `backend: "neural-runtime"`, runtime name and version), and a
+runtime cannot supply `user_supplied` or `user_confirmed`; such a field is ignored or
+rejects the response. Model-proposed knowledge and memory writes remain refused, as they
+are today; a proposal only becomes stored information after an explicit user-origin
+command. Plan proposals enter `checkSteps()` with the `model` origin, so write steps wait
+for approval and user-only actions are refused.
+
+### 9. Logging and diagnostic behavior
+
+The operation record stores the request id, kind, sizes, latency, runtime version,
+outcome code, and proposal counts - not the raw prompt or response. Stderr is bounded and
+redacted with the same secret rules as other diagnostic text. `status` and `diagnose`
+report the runtime as not configured, unavailable, listed/version-visible, or
+inference-tested; a process that merely responds is reported as reachable, never as
+healthy, and no diagnostic check starts or mutates the runtime.
+
+### 10. Proposing without authorizing
+
+There are exactly three accepted proposal kinds, and each lands on an existing,
+unchanged gate: `knowledge_claim` and `memory_claim` are shown to the user and can only
+be stored by a user-origin command; `plan` is stored as an unapproved proposal and runs
+only through the existing approve-then-execute path. The runtime cannot approve, retry,
+cancel, write a store, change policy, or select an unlisted action. Its output is data in
+the same trust class as model text today.
+
+### 11. Testing without a trained neural model
+
+A protocol conformance stub (a small executable or Node script that speaks the frames
+above) exercises the interface: valid proposal, version mismatch, missing and extra
+fields, oversized request and response, wrong `requestId`, malformed JSON, empty body,
+timeout, cancellation, duplicate response, `unavailable`, and a proposal that the
+registry or planner must refuse. End-to-end tests then prove the gates: a proposed
+knowledge write is denied, a proposed plan needs approval, and a failed runtime changes
+nothing. This requires no training and does not run any `stark/` binary.
+
 
 This is a bounded implementation under the Local Alpha mission. It does not declare
 M0 accepted, change G7, M0, or M1 gate states, or claim M1 is unlocked. It is not
