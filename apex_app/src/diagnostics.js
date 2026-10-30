@@ -18,6 +18,10 @@ export const State = Object.freeze({
   CORRUPT: 'corrupt',
   NOT_CONFIGURED: 'not configured',
   NOT_CHECKED: 'not checked',
+  // The endpoint answered with a valid model list, but the configured model is not in
+  // it. The server may still accept any name, so this is not a failure - but it is not
+  // evidence that a request will work either, and must not be shown as plain "available".
+  UNCONFIRMED: 'unconfirmed',
 });
 
 const CONTROL_CHARS_GLOBAL = new RegExp(CONTROL_CHARS.source, 'g');
@@ -468,8 +472,13 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   } else {
     try {
       const result = await app.gateway.checkAvailability({ timeoutMs: modelTimeoutMs });
-      modelState = result.available ? State.OK : State.UNAVAILABLE;
-      modelDetail = result.detail;
+      if (result.available && result.modelListed === false) {
+        modelState = State.UNCONFIRMED;
+        modelDetail = result.detail;
+      } else {
+        modelState = result.available ? State.OK : State.UNAVAILABLE;
+        modelDetail = result.detail;
+      }
     } catch (err) {
       modelState = State.UNAVAILABLE;
       modelDetail = errorDetail(err);
@@ -484,7 +493,9 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
       ? `Model: not checked (configured at ${modelWho}; run "apex diagnose --model" to probe it)`
       : modelState === State.OK
         ? `Model: ok (${safeText(modelDetail)})`
-        : `Model: unavailable (${safeText(modelDetail)})`;
+        : modelState === State.UNCONFIRMED
+          ? `Model: reachable but not confirmed (${safeText(modelDetail)})`
+          : `Model: unavailable (${safeText(modelDetail)})`;
   subsystems.model = {
     key: 'model',
     label: 'Model',
@@ -586,7 +597,9 @@ export function renderDiagnostics(diag) {
       ? 'local subsystems healthy; model not checked'
       : modelState === State.NOT_CONFIGURED
         ? 'local subsystems healthy; no model configured'
-        : 'local subsystems healthy';
+        : modelState === State.UNCONFIRMED
+          ? 'local subsystems healthy; model reachable but not confirmed'
+          : 'local subsystems healthy';
   lines.push(`Overall: ${overall}`);
   lines.push('Subsystems:');
   for (const key of ['configuration', 'session', 'conversation', 'memory', 'knowledge', 'tasks', 'audit', 'model', 'filesystem']) {

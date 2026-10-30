@@ -21,22 +21,39 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { makeTempDataDir, cleanup, cleanEnv, runCli, APP_ROOT } from './helpers.js';
 import { SessionState } from '../src/session.js';
 import { JsonlStore } from '../src/memory/jsonl-store.js';
 import { MemoryStore } from '../src/memory/memory-store.js';
 import { OperationLog } from '../src/operations/operation-log.js';
+import { SummaryQueue } from '../src/tasks/summary-queue.js';
 
 const dirs = [];
 afterEach(() => { while (dirs.length) cleanup(dirs.pop()); });
 function tempDir() { const d = makeTempDataDir(); dirs.push(d); return d; }
 const CHILD = path.join(APP_ROOT, 'tests', 'fixtures', 'storage-writer-child.mjs');
+const QUEUE_CHILD = path.join(APP_ROOT, 'tests', 'fixtures', 'queue-race-child.mjs');
 
 function spawnWriter(args, { racers, cwd }) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CHILD, ...args], {
       env: cleanEnv({ APEX_RACERS: String(racers) }),
       cwd,
+      windowsHide: true,
+    });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.stderr.on('data', (d) => { out += d.toString(); });
+    child.on('exit', (code, signal) => resolve({ code, signal, out }));
+  });
+}
+
+function spawnQueueRacer(dataDir, taskId, racers) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [QUEUE_CHILD, dataDir, taskId], {
+      env: cleanEnv({ APEX_RACERS: String(racers) }),
+      cwd: APP_ROOT,
       windowsHide: true,
     });
     let out = '';
@@ -178,6 +195,78 @@ describe('065: concurrent JSONL appends keep every record intact', () => {
     const recent = await log.list({ limit: 5 });
     assert.equal(recent.records.length, 5);
     assert.equal(recent.corrupt, 0);
+  });
+});
+
+async function exitedPid() {
+  const child = spawn(process.execPath, ['-e', ''], { windowsHide: true });
+  const pid = child.pid;
+  await new Promise((resolve) => child.on('exit', resolve));
+  return pid;
+}
+
+describe('077: concurrent summary-queue updates preserve every intent', () => {
+  const signature = 'a'.repeat(64);
+  const lockFor = (dir) => path.join(dir, 'task-summary-queue.json.lock');
+
+  test('six real processes adding at the same moment: every intent is queued and kept', async () => {
+    const dir = tempDir();
+    const ids = ['task-a', 'task-b', 'task-c', 'task-d', 'task-e', 'task-f'];
+    const racers = await Promise.all(ids.map((taskId) => spawnQueueRacer(dir, taskId, ids.length)));
+    for (const racer of racers) {
+      assert.equal(racer.code, 0, racer.out);
+      const result = JSON.parse(racer.out.trim().split('\n').at(-1));
+      assert.equal(result.queued, true, `a racer reported ${JSON.stringify(result)}`);
+    }
+
+    const queue = new SummaryQueue(path.join(dir, 'task-summary-queue.json'));
+    const entries = await queue.entries();
+    assert.deepEqual(entries.map((e) => e.taskId).sort(), [...ids].sort(), 'every reported intent is still in the queue');
+    const leftover = fs.readdirSync(dir).filter((f) => f.endsWith('.tmp') || f.endsWith('.lock'));
+    assert.deepEqual(leftover, [], 'neither a staging file nor the lock was left behind');
+  });
+
+  test('a lock left by an exited process is removed and the intent is queued', async () => {
+    const dir = tempDir();
+    const exited = spawn(process.execPath, ['-e', ''], { windowsHide: true });
+    const deadPid = exited.pid;
+    await new Promise((resolve) => exited.on('exit', resolve));
+    fs.writeFileSync(lockFor(dir), JSON.stringify({ pid: deadPid, nonce: 'gone', at: new Date().toISOString() }));
+
+    const queue = new SummaryQueue(path.join(dir, 'task-summary-queue.json'));
+    const result = await queue.add({ sessionId: 's1', taskId: 'task-x', signature, text: 'summary for task-x', verified: true });
+    assert.equal(result.queued, true);
+    assert.equal((await queue.entries()).length, 1);
+    assert.equal(fs.existsSync(lockFor(dir)), false, 'the dead holder was cleared');
+  });
+
+  test('an abandoned takeover token is superseded instead of wedging queue updates', async () => {
+    const dir = tempDir();
+    const raw = JSON.stringify({ pid: await exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    fs.writeFileSync(lockFor(dir), raw);
+    const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
+    const abandoned = `${lockFor(dir)}.takeover.${key}.0`;
+    fs.writeFileSync(abandoned, JSON.stringify({ pid: await exitedPid(), at: new Date().toISOString() }));
+
+    const queue = new SummaryQueue(path.join(dir, 'task-summary-queue.json'));
+    const result = await queue.add({ sessionId: 's1', taskId: 'task-z', signature, text: 'summary for task-z', verified: true });
+    assert.equal(result.queued, true);
+    assert.equal((await queue.entries()).length, 1);
+    assert.equal(fs.existsSync(lockFor(dir)), false, 'the stale claim was taken over and released');
+    assert.equal(fs.existsSync(abandoned), true, 'the abandoned token is inert bookkeeping, not deleted by a stranger');
+  });
+
+  test('a lock held by a live process refuses the update instead of reporting it queued', async () => {
+    const dir = tempDir();
+    fs.writeFileSync(lockFor(dir), JSON.stringify({ pid: process.pid, nonce: 'held', at: new Date().toISOString() }));
+
+    const queue = new SummaryQueue(path.join(dir, 'task-summary-queue.json'));
+    await assert.rejects(
+      queue.add({ sessionId: 's1', taskId: 'task-y', signature, text: 'summary for task-y', verified: true }),
+      /cannot update task-summary-queue\.json: it is in use by process \d+; nothing was changed/,
+    );
+    assert.equal(fs.existsSync(path.join(dir, 'task-summary-queue.json')), false, 'a refused update changed nothing');
+    fs.rmSync(lockFor(dir), { force: true });
   });
 });
 

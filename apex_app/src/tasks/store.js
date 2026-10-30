@@ -6,10 +6,14 @@
 // file (tasks.jsonl.lock) stops two processes from running the same task at once.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { StoreError, ValidationError } from '../errors.js';
 import { TASK_SCHEMA, reduceEvents, validateEventShape } from './model.js';
+
+// Bounded so a directory littered with abandoned takeover tokens is reported instead of
+// retried forever. Each epoch requires a process that exited during a takeover.
+const TAKEOVER_EPOCHS = 16;
 
 function processAlive(pid) {
   try {
@@ -17,6 +21,30 @@ function processAlive(pid) {
     return true;
   } catch (err) {
     return err?.code === 'EPERM'; // exists, but belongs to another user
+  }
+}
+
+// A sync-then-close helper for the lock's staging file. The completed body is
+// published under the lock name only after every byte is on disk, so a competing
+// process can never observe an empty or half-written lock and misreport the holder
+// as "process unknown".
+async function writeSynced(file, text) {
+  const handle = await fs.open(file, 'w');
+  try {
+    await handle.writeFile(text, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function writeExclusive(file, text) {
+  const handle = await fs.open(file, 'wx');
+  try {
+    await handle.writeFile(text, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 
@@ -83,48 +111,93 @@ export class TaskStore {
   }
 
   // Runs `fn` while holding the store lock. A lock left by a process that has
-  // exited is removed. A lock held by a live process is refused, not waited for.
+  // exited is taken over by exactly one process. A lock held by a live process is
+  // refused, not waited for.
   //
-  // Both the takeover and the release act on the lock only when the file still holds the
-  // exact claim this process validated. Without that, a process that found a dead holder's
-  // lock could delete the fresh lock another process had just taken, and two task runs would
-  // execute at once on one data directory - double step execution, interleaved transitions,
-  // and an audit trail that describes work no single process did. A residual window remains
-  // (no conditional delete exists without a native dependency): between the check and the
-  // removal the file can still change. It is one await rather than the three the takeover
-  // used to span, and the case is reported by diagnostics as a lock that could not be read.
+  // Deletion cannot be made conditional without a native dependency, and a plain
+  // "read the dead claim, remove it, create ours" took over the same claim twice under
+  // concurrency: both takers validated the dead body, one created a fresh lock, the other
+  // then removed that fresh lock and created its own, and two task runs executed at once
+  // on one data directory. So the right to remove is elected first, with create-once hard
+  // links: one token per (claim, epoch). A taker that finds a live token holder is refused;
+  // a token whose holder has exited is dead bookkeeping and the next epoch supersedes it.
+  // Only the elected taker re-reads and removes the claim, so no taker can remove a lock
+  // another process created. Both the takeover and the release act on the lock only when
+  // it still holds the exact claim this process validated.
   async withLock(fn) {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     const body = JSON.stringify({ pid: process.pid, nonce: this.idFactory(), at: this.now().toISOString() });
+    // Stage the complete lock body under a private name, then publish it with a hard
+    // link. Creating the lock name with `writeFile({flag:'wx'})` made the name visible
+    // before its bytes were, so a racer could read an empty file, call the holder
+    // unknown, and lose the pid the user needs. The link only succeeds if the name is
+    // still free, so create-once is preserved.
+    const staged = `${this.lockPath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeSynced(staged, body);
+    } catch (err) {
+      await fs.rm(staged, { force: true }).catch(() => {});
+      throw new StoreError(`cannot create task lock: ${err?.code || err?.message}`);
+    }
     let acquired = false;
-    for (let attempt = 0; attempt < 2 && !acquired; attempt += 1) {
-      let stale = null;
-      try {
-        await fs.writeFile(this.lockPath, body, { flag: 'wx' });
-        acquired = true;
-      } catch (err) {
-        if (err?.code !== 'EEXIST') throw new StoreError(`cannot create task lock: ${err?.code || err?.message}`);
-        let raw = null;
+    try {
+      for (let attempt = 0; attempt < 3 && !acquired; attempt += 1) {
         try {
-          raw = await fs.readFile(this.lockPath, 'utf8');
-        } catch {
-          raw = null; // unreadable or still being written: treat as in use
-        }
-        let holder = null;
-        try {
-          holder = JSON.parse(raw);
-        } catch {
-          holder = null;
-        }
-        const pid = Number(holder?.pid);
-        if (raw !== null && Number.isInteger(pid) && pid > 0 && !processAlive(pid)) {
-          stale = raw;
-        } else {
+          await fs.link(staged, this.lockPath);
+          acquired = true;
+          break;
+        } catch (err) {
+          if (err?.code !== 'EEXIST') {
+            // Some filesystems do not support hard links. Fall back to an exclusive
+            // create; it is still create-once, though a reader could briefly see the
+            // name before its body is complete (reported as unknown, never as free).
+            try {
+              await writeExclusive(this.lockPath, body);
+              acquired = true;
+              break;
+            } catch (createErr) {
+              if (createErr?.code !== 'EEXIST') {
+                throw new StoreError(`cannot create task lock: ${createErr?.code || createErr?.message}`);
+              }
+            }
+          }
+          let raw = null;
+          let released = false;
+          try {
+            raw = await fs.readFile(this.lockPath, 'utf8');
+          } catch (err) {
+            // The holder released between the failed link and this read. The name is free
+            // now, so retry the link instead of claiming an unknown holder; any other read
+            // failure is still treated as "in use", because it proves nothing about the holder.
+            if (err?.code === 'ENOENT') released = true;
+            else raw = null;
+          }
+          if (released) continue;
+          let holder = null;
+          try {
+            holder = JSON.parse(raw);
+          } catch {
+            holder = null;
+          }
+          const pid = Number(holder?.pid);
+          if (raw !== null && Number.isInteger(pid) && pid > 0 && !processAlive(pid)) {
+            const election = await this.#electTakeover(raw);
+            if (!election.won) {
+              throw new StoreError(`tasks are in use by process ${election.pid ?? 'unknown'}; try again when it finishes`);
+            }
+            try {
+              const stillThere = await fs.readFile(this.lockPath, 'utf8').catch(() => null);
+              if (stillThere === raw) await fs.rm(this.lockPath, { force: true });
+            } finally {
+              await election.release();
+            }
+            continue;
+          }
           throw new StoreError(`tasks are in use by process ${holder?.pid ?? 'unknown'}; try again when it finishes`);
         }
-        const stillThere = await fs.readFile(this.lockPath, 'utf8').catch(() => null);
-        if (stillThere === stale) await fs.rm(this.lockPath, { force: true });
       }
+    } finally {
+      await fs.rm(staged, { force: true }).catch(() => {});
     }
     if (!acquired) throw new StoreError('could not acquire the task lock');
     try {
@@ -133,6 +206,74 @@ export class TaskStore {
       const mine = await fs.readFile(this.lockPath, 'utf8').catch(() => null);
       if (mine === body) await fs.rm(this.lockPath, { force: true }).catch(() => {});
     }
+  }
+
+  // Elects one taker for one dead claim. Tokens are hard links published under a name
+  // derived from the claim and an epoch, so the link either succeeds (we are the taker)
+  // or proves another taker got there first. A live token holder means the claim is being
+  // taken over now, and we are refused. A token whose holder has exited cannot act, so the
+  // next epoch supersedes it; this is what keeps a process killed during a takeover from
+  // blocking the data directory forever. Tokens are small, created once, and removed by
+  // their own holder; an abandoned one is inert bookkeeping.
+  async #electTakeover(raw) {
+    const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
+    const body = JSON.stringify({ pid: process.pid, nonce: this.idFactory(), at: this.now().toISOString() });
+    const staged = `${this.lockPath}.takeover.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeSynced(staged, body);
+    } catch (err) {
+      throw new StoreError(`cannot create task lock: ${err?.code || err?.message}`);
+    }
+    try {
+      for (let epoch = 0; epoch < TAKEOVER_EPOCHS; epoch += 1) {
+        const tokenPath = `${this.lockPath}.takeover.${key}.${epoch}`;
+        try {
+          await fs.link(staged, tokenPath);
+          return this.#takeoverWon(tokenPath, body);
+        } catch (err) {
+          if (err?.code !== 'EEXIST') {
+            // Same fallback as the lock itself: exclusive create is still create-once,
+            // though a loser could briefly read an incomplete token and be refused.
+            try {
+              await writeExclusive(tokenPath, body);
+              return this.#takeoverWon(tokenPath, body);
+            } catch (createErr) {
+              if (createErr?.code !== 'EEXIST') {
+                throw new StoreError(`cannot create task lock: ${createErr?.code || createErr?.message}`);
+              }
+            }
+          }
+        }
+        const held = await fs.readFile(tokenPath, 'utf8').catch(() => null);
+        if (held === null) continue; // released between our link and read: that taker is done
+        let tokenPid = null;
+        try {
+          const h = JSON.parse(held);
+          const p = Number(h?.pid);
+          if (Number.isInteger(p) && p > 0) tokenPid = p;
+        } catch {
+          tokenPid = null;
+        }
+        // A token with no readable holder proves nothing about the taker, so it is
+        // reported as in use rather than assumed abandoned.
+        if (tokenPid === null) return { won: false, pid: null, release: async () => {} };
+        if (processAlive(tokenPid)) return { won: false, pid: tokenPid, release: async () => {} };
+      }
+    } finally {
+      await fs.rm(staged, { force: true }).catch(() => {});
+    }
+    throw new StoreError(`cannot take over the task lock: ${TAKEOVER_EPOCHS} takeover attempts are recorded as abandoned; inspect the lock and remove it if no task run is active`);
+  }
+
+  #takeoverWon(tokenPath, body) {
+    return {
+      won: true,
+      pid: process.pid,
+      async release() {
+        const mine = await fs.readFile(tokenPath, 'utf8').catch(() => null);
+        if (mine === body) await fs.rm(tokenPath, { force: true }).catch(() => {});
+      },
+    };
   }
 
   // Read-only view of the lock. It never creates, removes, or waits for the lock.

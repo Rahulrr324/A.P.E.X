@@ -148,12 +148,9 @@ export class KnowledgeStore {
     const tHash = tripleHash(sub, rel, obj);
     const reqKey = normalizedTriple(sub, rel, obj);
     const supersededByMap = buildSupersededByMap(records);
-    const conflictingIds = records
-      .filter((r) => {
-        if (isSuperseded(r, supersededByMap)) return false;
-        if (normalizedTriple(r.subject, r.relationship, r.object) === reqKey) return false;
-        return sameSubjectRelationship(r, sub, rel);
-      })
+    const conflictIndex = buildConflictIndex(records, supersededByMap);
+    const conflictingIds = (conflictIndex.get(conflictIndexKey(sub, rel)) ?? [])
+      .filter((r) => normalizedTriple(r.subject, r.relationship, r.object) !== reqKey)
       .map((r) => r.id);
 
     const status = conflictingIds.length > 0 ? 'conflicting' : 'supported';
@@ -196,15 +193,17 @@ export class KnowledgeStore {
     if (p.length === 0) return [];
     const records = await this.#loadComplete();
     const supersededByMap = buildSupersededByMap(records);
+    const conflictIndex = buildConflictIndex(records, supersededByMap);
     return records
       .filter((r) => r.id === p || r.id.startsWith(p) || shortId(r.id) === p)
-      .map((r) => annotate(r, records, supersededByMap));
+      .map((r) => annotate(r, supersededByMap, conflictIndex));
   }
 
   async list({ limit = 20 } = {}) {
     const records = await this.#loadComplete();
     const supersededByMap = buildSupersededByMap(records);
-    return records.slice(-Math.max(1, limit)).reverse().map((r) => annotate(r, records, supersededByMap));
+    const conflictIndex = buildConflictIndex(records, supersededByMap);
+    return records.slice(-Math.max(1, limit)).reverse().map((r) => annotate(r, supersededByMap, conflictIndex));
   }
 
   // Keyword search over subject+relationship+object+evidence. Returns up to `limit`
@@ -220,11 +219,9 @@ export class KnowledgeStore {
     if (terms.length === 0) return [];
 
     const supersededByMap = buildSupersededByMap(records);
+    const conflictIndex = buildConflictIndex(records, supersededByMap);
 
-    const pool = records.filter((r) => {
-      const ann = annotate(r, records, supersededByMap);
-      return ann.status !== 'superseded';
-    });
+    const pool = records.filter((r) => !isSuperseded(r, supersededByMap));
     const docs = pool.map((r) => new Set(tokenize(`${r.subject} ${r.relationship} ${r.object} ${r.evidence ?? ''}`)));
 
     const df = new Map(terms.map((t) => [t, docs.filter((d) => d.has(t)).length]));
@@ -251,7 +248,7 @@ export class KnowledgeStore {
     }).slice(0, Math.max(1, limit));
 
     return scored.map(({ record, score }) => ({
-      record: annotate(record, records, supersededByMap),
+      record: annotate(record, supersededByMap, conflictIndex),
       score,
     }));
   }
@@ -307,28 +304,38 @@ function normalizedTriple(subject, relationship, object) {
     .join('\x00');
 }
 
-function sameSubjectRelationship(record, subject, relationship) {
-  return record.subject.trim().toLowerCase() === subject.trim().toLowerCase()
-    && record.relationship.trim().toLowerCase() === relationship.trim().toLowerCase();
+// Live (non-superseded) records grouped by subject+relationship. Two records can only
+// conflict when those fields match, so an index turns conflict lookup into a scan of one
+// group instead of the whole store. Groups keep store order, so reported ids are unchanged.
+function conflictIndexKey(subject, relationship) {
+  return `${String(subject).trim().toLowerCase()}\x00${String(relationship).trim().toLowerCase()}`;
+}
+
+function buildConflictIndex(records, supersededByMap) {
+  const index = new Map();
+  for (const record of records) {
+    if (isSuperseded(record, supersededByMap)) continue;
+    const key = conflictIndexKey(record.subject, record.relationship);
+    const group = index.get(key) ?? [];
+    group.push(record);
+    index.set(key, group);
+  }
+  return index;
 }
 
 function isSuperseded(record, supersededByMap) {
   return record.status === 'superseded' || (supersededByMap.get(record.id)?.length ?? 0) > 0;
 }
 
-function annotate(record, allRecords, supersededByMap) {
+function annotate(record, supersededByMap, conflictIndex) {
   const sby = supersededByMap.get(record.id) ?? [];
   const selfSuperseded = isSuperseded(record, supersededByMap);
   // Detect live conflicts: other non-superseded records with the same subject+relationship
   // but a different object. A superseded record is historical and has no live conflicts.
   const recordKey = normalizedTriple(record.subject, record.relationship, record.object);
-  const conflictIds = selfSuperseded ? [] : allRecords
-    .filter((r) => {
-      if (r.id === record.id) return false;
-      if (isSuperseded(r, supersededByMap)) return false;
-      if (normalizedTriple(r.subject, r.relationship, r.object) === recordKey) return false;
-      return sameSubjectRelationship(r, record.subject, record.relationship);
-    })
+  const group = conflictIndex.get(conflictIndexKey(record.subject, record.relationship)) ?? [];
+  const conflictIds = selfSuperseded ? [] : group
+    .filter((r) => r.id !== record.id && normalizedTriple(r.subject, r.relationship, r.object) !== recordKey)
     .map((r) => r.id);
 
   // The stored status is a snapshot from write time. A conflict that has since been

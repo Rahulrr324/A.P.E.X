@@ -125,6 +125,12 @@ function parseFlags(args, allowed) {
   return { flags, rest };
 }
 
+// A command that takes no positional arguments must not ignore one: silently accepting
+// "status extra" says the request was understood when it was not.
+function rejectUnexpected(rest, usage) {
+  if (rest.length > 0) throw new ValidationError(`usage: ${usage}`, 'USAGE');
+}
+
 function describeStepLine(step) {
   const auth = step.authorization ? `authorization ${step.authorization.decision} (${step.authorization.reason})` : 'authorization n/a';
   const exec = `execution ${step.execution?.status ?? 'not_run'}`;
@@ -202,6 +208,7 @@ function modelLine(model) {
     return `Model backend: ${who} - connectivity not checked (run "status --model")`;
   }
   if (model.state === State.OK) return `Model backend: ${who} - available`;
+  if (model.state === State.UNCONFIRMED) return `Model backend: ${who} - reachable, model not confirmed: ${safeText(model.detail)}`;
   return `Model backend: ${who} - unavailable: ${safeText(model.detail)}`;
 }
 
@@ -258,7 +265,8 @@ export async function main(argv, {
 
   try {
     if (command === 'status') {
-      const { flags } = parseFlags(args, ['model']);
+      const { flags, rest } = parseFlags(args, ['model']);
+      rejectUnexpected(rest, 'status [--model]');
       const diag = await collectDiagnostics(app, { checkModel: Boolean(flags.model) });
       const { session, conversation, memory, audit, model, filesystem } = diag.subsystems;
       out(`${APP_NAME} ${APP_STAGE} ${APP_VERSION} (${APP_EXPANSION})`);
@@ -293,13 +301,15 @@ export async function main(argv, {
     }
 
     if (command === 'diagnose') {
-      const { flags } = parseFlags(args, ['model']);
+      const { flags, rest } = parseFlags(args, ['model']);
+      rejectUnexpected(rest, 'diagnose [--model]');
       const diag = await collectDiagnostics(app, { checkModel: Boolean(flags.model) });
       out(renderDiagnostics(diag));
       return diag.needsAttention ? 1 : 0;
     }
 
     if (command === 'new') {
+      rejectUnexpected(parseFlags(args, []).rest, 'new');
       const state = await app.session.rotate();
       out(`Started a new session: ${state.sessionId}`);
       out('Earlier conversation stays in history but is not sent to the model.');
@@ -322,7 +332,8 @@ export async function main(argv, {
     if (command === 'knowledge') {
       const [sub, ...rest] = args;
       if (sub === 'add') {
-        const { flags } = parseFlags(rest, ['subject', 'relationship', 'object', 'evidence']);
+        const { flags, rest: extra } = parseFlags(rest, ['subject', 'relationship', 'object', 'evidence']);
+        rejectUnexpected(extra, 'knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>]');
         if (!flags.subject || !flags.relationship || !flags.object) {
           err('usage: knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>]');
           return 2;
@@ -335,7 +346,8 @@ export async function main(argv, {
         }));
       }
       if (sub === 'list') {
-        const { flags } = parseFlags(rest, ['limit']);
+        const { flags, rest: extra } = parseFlags(rest, ['limit']);
+        rejectUnexpected(extra, 'knowledge list [--limit N]');
         return emit(await app.controller.knowledgeList({ limit: flags.limit }));
       }
       if (sub === 'search') {
@@ -377,12 +389,13 @@ export async function main(argv, {
     }
 
     if (command === 'chat') {
-      parseFlags(args, []);
+      rejectUnexpected(parseFlags(args, []).rest, 'chat');
       return await runChat({ app, stdin, stdout, stderr, out });
     }
 
     if (command === 'history') {
-      const { flags } = parseFlags(args, ['limit']);
+      const { flags, rest } = parseFlags(args, ['limit']);
+      rejectUnexpected(rest, 'history [--limit N]');
       const { records, corrupt } = await app.operations.list({ limit: flags.limit ?? 10 });
       if (records.length === 0) out('No operations recorded yet.');
       for (const op of records) {
@@ -396,10 +409,17 @@ export async function main(argv, {
       const [sub, ...rest] = args;
       if (sub === 'plan') {
         const { rest: words } = parseFlags(rest, []);
+        if (words.join(' ').trim() === '') {
+          // An empty goal is a usage error, like an empty `ask`: nothing is planned,
+          // so there is no operation to record in the audit log.
+          err('usage: task plan <goal...>');
+          return 2;
+        }
         const res = await app.controller.planTask(words.join(' '));
         return emit(res);
       }
       if (sub === 'list') {
+        rejectUnexpected(parseFlags(rest, []).rest, 'task list');
         out(await app.controller.listTasks());
         return 0;
       }

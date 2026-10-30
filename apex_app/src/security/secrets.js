@@ -1,7 +1,14 @@
-// Credential-looking text. APEX never stores such text in memory, never sends it
-// to a model, and never writes it to the audit log or conversation history.
-// These patterns are a heuristic safety net, not a guarantee; they catch the
-// common formats (private keys, cloud and API keys, bearer tokens, "password: x").
+// Credential-looking text. APEX refuses to store such text in memory or knowledge,
+// replaces a conversation turn's text that contains one, and omits it from the audit
+// `request` field. These patterns are a heuristic safety net, not a guarantee; they
+// catch the common formats (private keys, cloud and API keys, bearer tokens,
+// "password: x").
+//
+// Two boundaries are deliberately wider than "never anywhere": a request is still
+// answered, so its text (including a credential the user typed) is sent to the
+// configured model, and the model's own answer is recorded unredacted as the audit
+// `output` - the README states both. Detection here protects the stores, not the
+// model call.
 
 const SECRET_PATTERNS = [
   { name: 'private-key', re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/ },

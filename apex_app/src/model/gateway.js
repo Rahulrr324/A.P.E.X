@@ -65,6 +65,14 @@ function serverMessage(text) {
   return msg.length > MAX_ERROR_DETAIL_CHARS ? `${msg.slice(0, MAX_ERROR_DETAIL_CHARS - 3)}...` : msg;
 }
 
+// A model id comes from the server, so it is bounded and stripped like any other
+// untrusted text before it is quoted in a readiness message.
+function safeModelName(value) {
+  const text = String(value ?? '').replace(CONTROL_CHARS_GLOBAL, ' ').replace(/\s+/g, ' ').trim();
+  const redacted = redactSecrets(text);
+  return redacted.length > 60 ? `${redacted.slice(0, 57)}...` : redacted;
+}
+
 export class NoBackend {
   constructor() {
     this.name = 'none';
@@ -287,7 +295,36 @@ export class OpenAICompatibleBackend extends HttpBackend {
     if (parsed.value.data.length === 0) {
       return { available: false, detail: 'endpoint lists no model' };
     }
-    return { available: true, detail: `reachable at ${this.origin}${this.basePath}` };
+    // The list is valid, but a reachable socket that lists some other model says
+    // nothing about the configured one. Report that as unconfirmed rather than
+    // available: some servers accept any model name, so this is not an outage, but
+    // calling it confirmed would repeat the claim that a request will work.
+    const ids = parsed.value.data
+      .map((m) => (typeof m?.id === 'string' ? m.id : (typeof m?.name === 'string' ? m.name : null)))
+      .filter((id) => typeof id === 'string' && id.length > 0);
+    const modelListed = ids.some((id) => id === this.model);
+    const where = `${this.origin}${this.basePath}`;
+    if (ids.length === 0) {
+      return {
+        available: true,
+        modelListed: false,
+        detail: `reachable at ${where}; the model list has ${parsed.value.data.length} entr${parsed.value.data.length === 1 ? 'y' : 'ies'} but no model id, so configured model "${safeModelName(this.model)}" cannot be confirmed`,
+      };
+    }
+    if (!modelListed) {
+      const shown = ids.slice(0, 5).map((id) => `"${safeModelName(id)}"`).join(', ');
+      const more = ids.length > 5 ? ` and ${ids.length - 5} more` : '';
+      return {
+        available: true,
+        modelListed: false,
+        detail: `reachable at ${where}; the model list (${shown}${more}) does not include configured model "${safeModelName(this.model)}", so a request may be rejected`,
+      };
+    }
+    return {
+      available: true,
+      modelListed: true,
+      detail: `reachable at ${where}; model "${safeModelName(this.model)}" is listed`,
+    };
   }
 
   async complete({ system, prompt, timeoutMs }) {
@@ -345,7 +382,7 @@ export class OllamaBackend extends HttpBackend {
     if (!listed.names.some((n) => n === this.model || n === wanted)) {
       return { available: false, detail: `model "${this.model}" is not installed on this Ollama server (run: ollama pull ${this.model})` };
     }
-    return { available: true, detail: `model "${this.model}" installed at ${this.origin}` };
+    return { available: true, modelListed: true, detail: `model "${this.model}" installed at ${this.origin}` };
   }
 
   async complete({ system, prompt, timeoutMs }) {
@@ -408,7 +445,14 @@ export class ModelGateway {
       return { configured: false, available: false, backend: this.backend.name, provider: this.backend.provider, detail: 'not configured' };
     }
     const h = await this.backend.health(timeoutMs);
-    return { configured: true, available: h.available, backend: this.backend.name, provider: this.backend.provider, detail: h.detail };
+    return {
+      configured: true,
+      available: h.available,
+      modelListed: h.modelListed ?? null,
+      backend: this.backend.name,
+      provider: this.backend.provider,
+      detail: h.detail,
+    };
   }
 
   async complete({ system = '', prompt, timeoutMs } = {}) {

@@ -59,6 +59,23 @@ describe('model gateway', () => {
     assert.equal((await gw.checkAvailability({ timeoutMs: 1000 })).available, true);
   });
 
+  test('a valid model list that omits the configured model is available but unconfirmed', async () => {
+    const s = await stub();
+    const gw = createGateway({ url: s.url, name: 'wanted', timeoutMs: 5000, allowRemote: false });
+    s.behavior.modelsRaw = JSON.stringify({ data: [{ id: 'other' }, { id: 'evil\u0000name' }] });
+    const avail = await gw.checkAvailability({ timeoutMs: 1000 });
+    assert.equal(avail.available, true, 'a reachable listing endpoint is not an outage');
+    assert.equal(avail.modelListed, false);
+    assert.match(avail.detail, /does not include configured model "wanted"/);
+    assert.doesNotMatch(avail.detail, /[\u0000-\u001f]/, 'a server-supplied model id cannot inject control characters');
+
+    s.behavior.modelsRaw = JSON.stringify({ data: [{ id: 'wanted' }] });
+    const confirmed = await gw.checkAvailability({ timeoutMs: 1000 });
+    assert.equal(confirmed.available, true);
+    assert.equal(confirmed.modelListed, true);
+    assert.match(confirmed.detail, /model "wanted" is listed/);
+  });
+
   test('an HTTP error from the endpoint is returned as a structured failure', async () => {
     const s = await stub();
     s.behavior.status = 500;

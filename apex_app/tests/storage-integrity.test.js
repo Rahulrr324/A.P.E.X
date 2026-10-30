@@ -21,6 +21,7 @@ import { KnowledgeStore } from '../src/knowledge/knowledge-store.js';
 import { ConversationStore, TURN_ORIGINS } from '../src/memory/conversation-store.js';
 import { OperationLog } from '../src/operations/operation-log.js';
 import { TaskStore } from '../src/tasks/store.js';
+import { SummaryQueue } from '../src/tasks/summary-queue.js';
 import { StoreError } from '../src/errors.js';
 
 const dirs = [];
@@ -309,5 +310,26 @@ describe('066: the CLI reports skipped lines wherever it counts records', () => 
     assert.equal(res.code, 1, res.stdout + res.stderr);
     assert.match(res.stdout, /memory store contains 1 corrupt line\(s\); refusing incomplete write/, res.stdout);
     assert.deepEqual(fs.readFileSync(file), before, 'the refused write preserved the damaged bytes');
+  });
+});
+
+describe('076: an interrupted atomic replace leaves residue, never state', () => {
+  test('a staging file from a killed replacement is ignored, and the queue keeps working', async () => {
+    const dir = tempDir();
+    const file = path.join(dir, 'task-summary-queue.json');
+    const signature = 'a'.repeat(64);
+    fs.writeFileSync(file, `${JSON.stringify({ schema: 1, entries: [] })}\n`);
+    // What a process killed between opening its temporary file and renaming it leaves:
+    // a complete or partial copy under a private name. It is not the queue's state.
+    fs.writeFileSync(`${file}.12345.dead-nonce.tmp`, '{"schema":1,"entries":[{"half":');
+    fs.writeFileSync(`${file}.12345.other-nonce.tmp`, JSON.stringify({ schema: 1, entries: [] }));
+
+    const queue = new SummaryQueue(file);
+    assert.deepEqual(await queue.entries(), [], 'residue is not read as an entry');
+
+    const result = await queue.add({ sessionId: 's1', taskId: 'task-r', signature, text: 'summary for task-r', verified: true });
+    assert.equal(result.queued, true);
+    assert.equal((await queue.entries()).length, 1, 'the intact file is the only input to the next change');
+    assert.equal(fs.existsSync(`${file}.12345.dead-nonce.tmp`), true, 'another process\'s residue is not deleted');
   });
 });

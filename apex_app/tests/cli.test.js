@@ -267,6 +267,36 @@ describe('command line', () => {
     assert.equal(badFlag.code, 2);
   });
 
+  test('an unexpected positional argument is refused instead of silently ignored', async () => {
+    const dataDir = tempDir();
+    const env = envFor(dataDir);
+    for (const argv of [
+      ['status', 'extra'],
+      ['diagnose', 'extra'],
+      ['new', 'extra'],
+      ['task', 'list', 'extra'],
+      ['history', 'extra'],
+      ['chat', 'extra'],
+      ['knowledge', 'list', 'extra'],
+      ['knowledge', 'add', '--subject', 'a', '--relationship', 'b', '--object', 'c', 'extra'],
+    ]) {
+      const r = await runCli(argv, env);
+      assert.equal(r.code, 2, `${argv.join(' ')} must exit 2`);
+      assert.match(r.stderr, /usage/, `${argv.join(' ')} must explain its usage`);
+    }
+    // No command in that list may create or change state on the way to refusing the input.
+    assert.deepEqual(await fs.readdir(dataDir), [], 'a refused argument must not create a store');
+  });
+
+  test('task plan with an empty goal is a usage error, not an audited empty request', async () => {
+    const dataDir = tempDir();
+    const r = await runCli(['task', 'plan', '   '], envFor(dataDir));
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /usage: task plan/);
+    assert.equal(r.stdout, '');
+    assert.deepEqual(await fs.readdir(dataDir), [], 'nothing may be audited for a request that was never planned');
+  });
+
   test('invalid configuration is refused with exit 2 (remote endpoint without the explicit opt-in)', async () => {
     const dataDir = tempDir();
     const r = await runCli(['status'], envFor(dataDir, { APEX_MODEL_URL: 'https://api.example.com' }));

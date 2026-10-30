@@ -15,7 +15,9 @@ import { ModelGateway } from '../src/model/gateway.js';
 import { Outcome } from '../src/outcomes.js';
 import { ValidationError, StoreError } from '../src/errors.js';
 import { TaskStore } from '../src/tasks/store.js';
-import { TaskStatus, StepStatus } from '../src/tasks/model.js';
+import {
+  TaskStatus, StepStatus, TASK_TRANSITIONS, STEP_TRANSITIONS, applyEvent, canTransition,
+} from '../src/tasks/model.js';
 import { randomUUID } from 'node:crypto';
 import { makeTempDataDir, cleanup } from './helpers.js';
 
@@ -400,5 +402,104 @@ describe('task log integrity: a step status and its outcome must agree', () => {
     assert.equal(res.status, Outcome.EXECUTION_FAILED, 'a damaged log is not treated as an empty task list');
     assert.match(res.display, /task store unavailable/);
     assert.equal(fs.readFileSync(file, 'utf8'), before, 'a refused read never rewrites the log');
+  });
+});
+
+describe('078: no impossible lifecycle event can be applied', () => {
+  const at = '2026-01-01T00:00:00.000Z';
+  const taskStatuses = Object.values(TaskStatus);
+  const stepStatuses = Object.values(StepStatus);
+
+  function taskIn(status, stepStatus) {
+    return {
+      id: 't',
+      goal: 'goal',
+      origin: 'user',
+      planner: 'deterministic',
+      createdAt: at,
+      updatedAt: at,
+      status,
+      approvedAt: null,
+      lastReason: null,
+      steps: [{
+        id: 's1',
+        description: 'one step',
+        action: 'calc.evaluate',
+        permission: 'read',
+        input: { expression: '1+1' },
+        dependsOn: [],
+        status: stepStatus,
+        operationId: null,
+        outcome: null,
+        summary: null,
+        approval: null,
+      }],
+    };
+  }
+
+  function event({ task = null, steps = [] } = {}) {
+    return { schema: 1, eventId: randomUUID(), type: 'transition', taskId: 't', at, reason: 'test', task, steps };
+  }
+
+  test('every task transition outside the table is refused, whatever the step state', () => {
+    for (const from of taskStatuses) {
+      for (const to of taskStatuses) {
+        if (canTransition(TASK_TRANSITIONS, from, to)) continue;
+        for (const stepStatus of stepStatuses) {
+          const tasks = new Map([['t', taskIn(from, stepStatus)]]);
+          const problem = applyEvent(tasks, event({ task: { from, to } }));
+          assert.match(String(problem), /illegal task transition/, `${from} -> ${to} was not refused (step ${stepStatus})`);
+          assert.equal(tasks.get('t').status, from, `${from} -> ${to} changed the task despite being refused`);
+        }
+      }
+    }
+  });
+
+  test('every step transition outside the table is refused in a running task', () => {
+    for (const from of stepStatuses) {
+      for (const to of stepStatuses) {
+        if (canTransition(STEP_TRANSITIONS, from, to)) continue;
+        const tasks = new Map([['t', taskIn(TaskStatus.RUNNING, from)]]);
+        const problem = applyEvent(tasks, event({ steps: [{ id: 's1', from, to }] }));
+        assert.match(String(problem), /illegal step transition/, `${from} -> ${to} was not refused`);
+        assert.equal(tasks.get('t').steps[0].status, from, `step ${from} -> ${to} changed despite being refused`);
+      }
+    }
+  });
+
+  test('every step transition inside the table still applies', () => {
+    for (const from of stepStatuses) {
+      for (const to of STEP_TRANSITIONS[from] ?? []) {
+        const tasks = new Map([['t', taskIn(TaskStatus.RUNNING, from)]]);
+        const outcome = to === StepStatus.COMPLETED ? Outcome.SUCCESS_VERIFIED : undefined;
+        const problem = applyEvent(tasks, event({ steps: [{ id: 's1', from, to, outcome }] }));
+        assert.equal(problem, null, `${from} -> ${to} was refused: ${problem}`);
+        assert.equal(tasks.get('t').steps[0].status, to);
+      }
+    }
+  });
+
+  test('a task cannot be cancelled while a step is still open, even though the task pair is legal', () => {
+    for (const stepStatus of [StepStatus.PENDING, StepStatus.RUNNING, StepStatus.AWAITING_APPROVAL]) {
+      const tasks = new Map([['t', taskIn(TaskStatus.PENDING, stepStatus)]]);
+      const problem = applyEvent(tasks, event({ task: { from: TaskStatus.PENDING, to: TaskStatus.CANCELLED } }));
+      assert.match(String(problem), /cancelled while a step is still open/, `cancellation was accepted with a ${stepStatus} step`);
+      assert.equal(tasks.get('t').status, TaskStatus.PENDING);
+      assert.equal(tasks.get('t').steps[0].status, stepStatus);
+    }
+  });
+
+  test('a completed transition needs every step completed, and a completed step needs a verified outcome', () => {
+    const tasks = new Map([['t', taskIn(TaskStatus.RUNNING, StepStatus.PENDING)]]);
+    const problem = applyEvent(tasks, event({ task: { from: TaskStatus.RUNNING, to: TaskStatus.COMPLETED } }));
+    assert.match(String(problem), /completed while a step is not completed/);
+    assert.equal(tasks.get('t').status, TaskStatus.RUNNING);
+
+    const contradictory = new Map([['t', taskIn(TaskStatus.RUNNING, StepStatus.RUNNING)]]);
+    const bad = applyEvent(contradictory, event({
+      steps: [{ id: 's1', from: StepStatus.RUNNING, to: StepStatus.COMPLETED, outcome: Outcome.EXECUTION_FAILED }],
+    }));
+    assert.match(String(bad), /a completed step needs a verified outcome/);
+    assert.equal(contradictory.get('t').steps[0].status, StepStatus.RUNNING);
   });
 });

@@ -11,9 +11,12 @@
 // have stated - including that a step is uncertain or has no audit record.
 //
 // The file is replaced atomically (write a temp file, then rename) the way session.json
-// is written. Two processes writing at the same moment can lose one intent; that loss is
-// reported by the same disclosure as any other failed history write.
-import { randomUUID } from 'node:crypto';
+// is written. Replacing it whole means two read-modify-write calls interleaved across
+// processes would keep only the later file, so each change runs under a lock file
+// (task-summary-queue.json.lock): the lock is excluded for the duration of the read and
+// the write, and a waiting caller is refused with an error rather than told its intent
+// was queued when it was not.
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { StoreError } from '../errors.js';
@@ -21,6 +24,14 @@ import { TASK_SIGNATURE_RE, prepareTurnText } from '../memory/conversation-store
 import { MAX_TASK_SUMMARY_CHARS } from './summary.js';
 
 export const SUMMARY_QUEUE_SCHEMA = 1;
+// How long an update waits for another process's in-progress update. The critical
+// section is one small read and one small rename, so a wait this long means the holder
+// is stuck or gone; refusing then is honest, and the caller discloses the missed reissue.
+const LOCK_WAIT_MS = 2000;
+const LOCK_RETRY_MS = 10;
+// Bounded like the task lock's epochs: only a process that exited during a takeover
+// leaves one behind, so exhausting them is reported instead of retried forever.
+const TAKEOVER_EPOCHS = 16;
 // Past this size history has refused summaries across many task states. A new intent is
 // then refused and disclosed rather than displacing an older one.
 export const MAX_QUEUED_SUMMARIES = 32;
@@ -38,6 +49,37 @@ function validateEntry(entry) {
   if (typeof entry.queuedAt !== 'string' || Number.isNaN(Date.parse(entry.queuedAt))) return 'bad queuedAt';
   return null;
 }
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM'; // exists, but belongs to another user
+  }
+}
+
+async function writeSynced(file, text) {
+  const handle = await fs.open(file, 'w');
+  try {
+    await handle.writeFile(text, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function writeExclusive(file, text) {
+  const handle = await fs.open(file, 'wx');
+  try {
+    await handle.writeFile(text, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class SummaryQueue {
   constructor(filePath, { now = () => new Date(), idFactory = randomUUID } = {}) {
@@ -74,8 +116,164 @@ export class SummaryQueue {
     return obj.entries;
   }
 
+  // Serialises one read-modify-write of the queue against other processes. The lock body
+  // is staged complete and published with a hard link, so a competing process never reads
+  // a half-written lock and mistakes a live holder for a dead one. A lock left by an exited
+  // process is taken over by exactly one process: deletion cannot be conditional without a
+  // native dependency, so the right to remove is elected with create-once tokens first (the
+  // same reasoning as the task lock in ./store.js), and only the elected taker removes it.
+  // Filesystems without hard links fall back to an exclusive create, which still admits one
+  // holder.
+  async #withLock(fn) {
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    const lockPath = `${this.filePath}.lock`;
+    const body = JSON.stringify({ pid: process.pid, nonce: randomUUID(), at: this.now().toISOString() });
+    const staged = `${lockPath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeSynced(staged, body);
+    } catch (err) {
+      await fs.rm(staged, { force: true }).catch(() => {});
+      throw new StoreError(`cannot update ${this.label}: ${err?.code || err?.message}`);
+    }
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    try {
+      for (;;) {
+        let acquired = false;
+        try {
+          await fs.link(staged, lockPath);
+          acquired = true;
+        } catch (err) {
+          if (err?.code !== 'EEXIST') {
+            // No hard-link support here: exclusive create is still create-once.
+            try {
+              await writeExclusive(lockPath, body);
+              acquired = true;
+            } catch (createErr) {
+              if (createErr?.code !== 'EEXIST') {
+                throw new StoreError(`cannot update ${this.label}: ${createErr?.code || createErr?.message}`);
+              }
+            }
+          }
+        }
+        if (acquired) break;
+
+        let raw = null;
+        try {
+          raw = await fs.readFile(lockPath, 'utf8');
+        } catch {
+          raw = null; // unreadable or still being written: treat as in use
+        }
+        let holder = null;
+        try {
+          holder = JSON.parse(raw);
+        } catch {
+          holder = null;
+        }
+        const pid = Number(holder?.pid);
+        if (raw !== null && Number.isInteger(pid) && pid > 0 && !processAlive(pid)) {
+          const election = await this.#electTakeover(raw);
+          let tookOver = false;
+          try {
+            if (election.won) {
+              const stillThere = await fs.readFile(lockPath, 'utf8').catch(() => null);
+              if (stillThere === raw) {
+                await fs.rm(lockPath, { force: true });
+                tookOver = true;
+              }
+            }
+          } finally {
+            await election.release();
+          }
+          if (tookOver) continue;
+          if (Date.now() >= deadline) {
+            throw new StoreError(`cannot update ${this.label}: it is in use by process ${election.pid ?? holder?.pid ?? 'unknown'}; nothing was changed`);
+          }
+          await sleep(LOCK_RETRY_MS);
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new StoreError(`cannot update ${this.label}: it is in use by process ${holder?.pid ?? 'unknown'}; nothing was changed`);
+        }
+        await sleep(LOCK_RETRY_MS);
+      }
+      try {
+        return await fn();
+      } finally {
+        const mine = await fs.readFile(lockPath, 'utf8').catch(() => null);
+        if (mine === body) await fs.rm(lockPath, { force: true });
+      }
+    } finally {
+      await fs.rm(staged, { force: true }).catch(() => {});
+    }
+  }
+
+  // Elects one taker for one dead lock claim, exactly as the task lock does: a token name
+  // derived from the claim and an epoch is published with a create-once hard link, so at
+  // most one process removes the claim. A live token holder means the takeover is in
+  // progress; a token whose holder exited is superseded by the next epoch, so a process
+  // killed during a takeover cannot block queue updates forever.
+  async #electTakeover(raw) {
+    const lockPath = `${this.filePath}.lock`;
+    const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
+    const body = JSON.stringify({ pid: process.pid, nonce: randomUUID(), at: this.now().toISOString() });
+    const staged = `${lockPath}.takeover.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeSynced(staged, body);
+    } catch (err) {
+      throw new StoreError(`cannot update ${this.label}: ${err?.code || err?.message}`);
+    }
+    try {
+      for (let epoch = 0; epoch < TAKEOVER_EPOCHS; epoch += 1) {
+        const tokenPath = `${lockPath}.takeover.${key}.${epoch}`;
+        try {
+          await fs.link(staged, tokenPath);
+          return this.#takeoverWon(tokenPath, body);
+        } catch (err) {
+          if (err?.code !== 'EEXIST') {
+            // Same fallback as the queue lock itself: exclusive create is create-once.
+            try {
+              await writeExclusive(tokenPath, body);
+              return this.#takeoverWon(tokenPath, body);
+            } catch (createErr) {
+              if (createErr?.code !== 'EEXIST') {
+                throw new StoreError(`cannot update ${this.label}: ${createErr?.code || createErr?.message}`);
+              }
+            }
+          }
+        }
+        const held = await fs.readFile(tokenPath, 'utf8').catch(() => null);
+        if (held === null) continue; // released between our link and read: that taker is done
+        let tokenPid = null;
+        try {
+          const h = JSON.parse(held);
+          const p = Number(h?.pid);
+          if (Number.isInteger(p) && p > 0) tokenPid = p;
+        } catch {
+          tokenPid = null;
+        }
+        // An unreadable token proves nothing about the taker, so it is reported as in use.
+        if (tokenPid === null) return { won: false, pid: null, release: async () => {} };
+        if (processAlive(tokenPid)) return { won: false, pid: tokenPid, release: async () => {} };
+      }
+    } finally {
+      await fs.rm(staged, { force: true }).catch(() => {});
+    }
+    throw new StoreError(`cannot update ${this.label}: ${TAKEOVER_EPOCHS} takeover attempts are recorded as abandoned; nothing was changed`);
+  }
+
+  #takeoverWon(tokenPath, body) {
+    return {
+      won: true,
+      pid: process.pid,
+      async release() {
+        const mine = await fs.readFile(tokenPath, 'utf8').catch(() => null);
+        if (mine === body) await fs.rm(tokenPath, { force: true }).catch(() => {});
+      },
+    };
+  }
+
   async #write(entries) {
-    const tmp = `${this.filePath}.${process.pid}.tmp`;
+    const tmp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true });
       const handle = await fs.open(tmp, 'w');
@@ -104,35 +302,39 @@ export class SummaryQueue {
   // The same task state owed to the same session is never queued twice, so repeated
   // failures of one summary cannot grow the file.
   async add({ sessionId, taskId, signature, text, verified }) {
-    const all = await this.entries();
-    const existing = all.find((entry) => entry.sessionId === sessionId
-      && entry.taskId === taskId
-      && entry.signature === signature);
-    if (existing) return { queued: true, reason: 'already-queued', entry: existing };
-    if (all.length >= MAX_QUEUED_SUMMARIES) return { queued: false, reason: 'queue-full' };
-    const entry = {
-      id: this.idFactory(),
-      sessionId,
-      taskId,
-      signature,
-      text: prepareTurnText(text),
-      verified: verified === true,
-      queuedAt: this.now().toISOString(),
-    };
-    const problem = validateEntry(entry);
-    if (problem) return { queued: false, reason: `invalid entry (${problem})` };
-    await this.#write([...all, entry]);
-    return { queued: true, reason: 'queued', entry };
+    return this.#withLock(async () => {
+      const all = await this.entries();
+      const existing = all.find((entry) => entry.sessionId === sessionId
+        && entry.taskId === taskId
+        && entry.signature === signature);
+      if (existing) return { queued: true, reason: 'already-queued', entry: existing };
+      if (all.length >= MAX_QUEUED_SUMMARIES) return { queued: false, reason: 'queue-full' };
+      const entry = {
+        id: this.idFactory(),
+        sessionId,
+        taskId,
+        signature,
+        text: prepareTurnText(text),
+        verified: verified === true,
+        queuedAt: this.now().toISOString(),
+      };
+      const problem = validateEntry(entry);
+      if (problem) return { queued: false, reason: `invalid entry (${problem})` };
+      await this.#write([...all, entry]);
+      return { queued: true, reason: 'queued', entry };
+    });
   }
 
   // Drops an intent: its turn is written, or the state it described is no longer what
   // the task log records. Nothing is rewritten in place, and an entry that cannot be
   // removed is harmless - its state is recognised as already summarised next time.
   async settle(id) {
-    const all = await this.entries();
-    const kept = all.filter((entry) => entry.id !== id);
-    if (kept.length === all.length) return false;
-    await this.#write(kept);
-    return true;
+    return this.#withLock(async () => {
+      const all = await this.entries();
+      const kept = all.filter((entry) => entry.id !== id);
+      if (kept.length === all.length) return false;
+      await this.#write(kept);
+      return true;
+    });
   }
 }

@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { makeTempDataDir, cleanup, runCli, cleanEnv, APP_ROOT } from './helpers.js';
 
 const dirs = [];
@@ -34,6 +35,7 @@ after(async () => {
 });
 function tempDir() { const d = makeTempDataDir(); dirs.push(d); return d; }
 const CHILD = path.join(APP_ROOT, 'tests', 'fixtures', 'lock-race-child.mjs');
+const VANISH_CHILD = path.join(APP_ROOT, 'tests', 'fixtures', 'lock-vanish-child.mjs');
 const LOCK = (dataDir) => path.join(dataDir, 'tasks.jsonl.lock');
 
 function envFor(dataDir, extra = {}) {
@@ -180,6 +182,73 @@ describe('061: the task lock is exclusive across processes', () => {
     assert.equal(res.code, 1, res.stdout + res.stderr);
     assert.match(`${res.stdout}${res.stderr}`, /tasks are in use by process unknown/, `${res.stdout}${res.stderr}`);
     assert.equal(fs.readFileSync(LOCK(dataDir), 'utf8'), '{ half-written', 'the damaged lock was preserved for inspection');
+  });
+
+  test('a holder releasing between the failed link and the read is a free lock, not an unknown holder', async () => {
+    // The race that made the stale-lock suite intermittently report "process unknown": the
+    // holder deletes its lock after our link failed with EEXIST but before we read the lock.
+    // The read then fails with ENOENT, which means nobody holds the lock - it must be retried.
+    // The fixture removes the lock exactly on that read, so this case is deterministic rather
+    // than a timing coincidence in the racer suite above.
+    const dataDir = tempDir();
+    const child = spawn(process.execPath, [VANISH_CHILD, dataDir], {
+      env: envFor(dataDir),
+      cwd: APP_ROOT,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    let err = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { out += chunk; });
+    child.stderr.on('data', (chunk) => { err += chunk; });
+    const exited = new Promise((resolve) => { child.once('exit', (code, signal) => resolve({ code, signal })); });
+    children.push({ child, exited });
+    const exit = await exited;
+
+    assert.equal(exit.code, 0, `the waiter acquired the released lock. stdout: ${out} stderr: ${err}`);
+    assert.match(out, /RESULT acquired/, `stdout: ${out} stderr: ${err}`);
+    assert.equal(/ERROR/.test(out), false, 'the released lock was never reported as held');
+    assert.equal(fs.existsSync(LOCK(dataDir)), false, 'the acquired lock was released again');
+  });
+
+  test('an abandoned takeover token is superseded instead of wedging the lock', async () => {
+    // A process killed while it was taking over a stale lock leaves its token behind. The
+    // token is keyed to that exact claim and epoch, so a later taker must move to the next
+    // epoch rather than be refused forever. This is deterministic: the abandoned token names
+    // a pid that has already exited.
+    const dataDir = tempDir();
+    const raw = JSON.stringify({ pid: exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    fs.writeFileSync(LOCK(dataDir), raw);
+    const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
+    const abandoned = `${LOCK(dataDir)}.takeover.${key}.0`;
+    fs.writeFileSync(abandoned, JSON.stringify({ pid: exitedPid(), at: new Date().toISOString() }));
+
+    const { TaskStore } = await import('../src/tasks/store.js');
+    const store = new TaskStore(path.join(dataDir, 'tasks.jsonl'));
+    const value = await store.withLock(async () => 'acquired');
+    assert.equal(value, 'acquired', 'the next epoch elected a live taker');
+    assert.equal(fs.existsSync(LOCK(dataDir)), false, 'the stale claim was taken over and released');
+    const epochOne = `${LOCK(dataDir)}.takeover.${key}.1`;
+    assert.equal(fs.existsSync(epochOne), false, 'the winner removed its own token');
+    assert.equal(fs.existsSync(abandoned), true, 'the abandoned token is inert bookkeeping, not deleted by a stranger');
+  });
+
+  test('a takeover in progress refuses a second taker with the live holder pid', async () => {
+    // The election's whole point: while one process is taking over, another must be refused
+    // and must not delete anything. The token names this live test process.
+    const dataDir = tempDir();
+    const raw = JSON.stringify({ pid: exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    fs.writeFileSync(LOCK(dataDir), raw);
+    const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
+    fs.writeFileSync(`${LOCK(dataDir)}.takeover.${key}.0`, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+
+    const { TaskStore } = await import('../src/tasks/store.js');
+    const store = new TaskStore(path.join(dataDir, 'tasks.jsonl'));
+    await assert.rejects(() => store.withLock(async () => 'never'), new RegExp(`tasks are in use by process ${process.pid}`));
+    assert.equal(fs.readFileSync(LOCK(dataDir), 'utf8'), raw, 'the stale claim was left for the elected taker');
+    assert.equal(fs.existsSync(`${LOCK(dataDir)}.takeover.${key}.0`), true, 'and the live token was not touched');
   });
 
   test('what the lock does NOT protect: reads run while a live holder is in the lock', async () => {

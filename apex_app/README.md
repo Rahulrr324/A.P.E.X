@@ -488,7 +488,7 @@ record, so the display is derived from the same facts the audit holds.
   limit on a step.
 - A lock file (`tasks.jsonl.lock`) stops two processes from running tasks at once. A
   second process is refused, not queued. A lock left by a process that is no longer
-  running is removed.
+  running is removed by exactly one elected taker.
 - Every task read replays the whole task log. That is fine at this scale; it is not a
   design for many tasks. A task follow-up also checks the operation log for every step the
   task log records as verified: that scan stops as soon as each step's own record has been
@@ -684,7 +684,7 @@ suite; it is not an automated regression test and is reported separately.
 | 22. Batch D as one story across the four stores | `acceptance-batch-d.test.js` (model plan with a held write step told identically by task log, audit log and history; a refused summary disclosed, owed once, reissued without re-executing; follow-up referent resolved or clarified; a real child process killed mid-write recovered, with repeated recovery changing nothing; missing and unreadable evidence never reported as verification; registry, plan and proposal write limits for the model origin) |
 | 23. A clean install, and a bad setting or a broken store | `readiness-batch-e.test.js` (initialization in an isolated directory leaves an existing `~/.apex` byte-identical; a deterministic action runs with no model; an unreachable endpoint is a failure, not an answer; a denied model proposal runs nothing; a killed process is never reported as success; history and audit agree; diagnostics report damage without writing); `config-failures.test.js` (eleven invalid settings refused before any store is opened; a storage failure reported as storage, a model failure as a model failure, each with its own exit code) |
 | 24. A request that lost its session is disclosed | `session-degradation.test.js` (`ask`, `chat` and `task run` print the notice while the outcome and exit code stay truthful; the audit record names `stage: session`; nothing is stored without a session; a conversation failure is not described as a session failure) |
-| 25. Two processes cannot both hold the task lock | `lock-contention.test.js` (six real processes racing a stale lock: exactly one enters; a live holder is never displaced; a holder removes only its own claim; repeated recovery; an unreadable lock is refused and preserved; a read takes no lock; three concurrent runs of one task record each step once) |
+| 25. Two processes cannot both hold the task lock | `lock-contention.test.js` (six real processes racing a stale lock: exactly one enters; a live holder is never displaced; a holder removes only its own claim; repeated recovery; an unreadable lock is refused and preserved; a release between the failed link and the read is a free lock; an abandoned takeover token is superseded; a live takeover refuses a second taker; a read takes no lock; three concurrent runs of one task record each step once) |
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
@@ -728,13 +728,16 @@ questions that must change nothing).
   record, its conversation turn) can be partly recorded if the process dies between
   writes, and each record states only what it is. The session pointer is created
   exclusively, so concurrent first requests share one session instead of orphaning each
-  other's turns; `apex new` still replaces it deliberately. The summary retry queue is
-  a whole-file replace, so two processes updating it at the same moment can lose one
-  intent; that intent only exists after a history write already failed. A stale task
-  lock is taken over only when its pid is provably dead, and the takeover removes only
-  the exact claim it validated. Node has no conditional-delete primitive without a
-  native dependency, so a window remains between checking a stale lock and removing it;
-  a fresh process can then refuse the task as "in use", and the user can retry.
+  other's turns; `apex new` still replaces it deliberately. The summary retry queue
+  runs each update under its own lock file, so concurrent updates no longer lose an
+  intent. A stale lock (task or queue) is taken over only when its pid is provably dead,
+  and the right to remove it is elected first with create-once token files: only the
+  elected taker re-reads and removes the exact claim it validated, so a fresh lock
+  another process created is never removed. A taker that loses the election is refused
+  as "in use" and can retry. A process killed during a takeover leaves its token behind;
+  the next epoch supersedes it instead of wedging the directory. Node still has no
+  conditional-delete primitive without a native dependency, so the removal itself is a
+  plain unlink - but it is performed by one elected process at a time.
 - **A data directory path is validated when it is used, not when it is typed.**
   `status` and `diagnose` report a nonexistent directory the same way as a fresh
   install, because creating it to find out would make a read-only check write. An
@@ -823,8 +826,8 @@ explicit entity relationships, built alongside personal memory:
   changed file, a changed directory, a fabricated result, and a path that has escaped
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
-- **Windows:** the full suite for this milestone was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 617 tests, 615 passed, 0 failed, 2
+- **Windows:** the full suite for this batch was run on Windows 11 with Node
+  26.4.0, in an isolated temporary directory: 641 tests, 639 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file

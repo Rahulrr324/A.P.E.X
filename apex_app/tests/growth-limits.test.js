@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { makeTempDataDir, cleanup } from './helpers.js';
 import { MemoryStore, sha256Hex } from '../src/memory/memory-store.js';
+import { KnowledgeStore, sha256Hex as knowledgeSha256 } from '../src/knowledge/knowledge-store.js';
 
 const dirs = [];
 afterEach(() => { while (dirs.length) cleanup(dirs.pop()); });
@@ -125,5 +126,97 @@ describe('071: conflict detection under growth', () => {
       assert.equal(hit.conflict.length, 1);
       assert.equal(hit.status, 'unresolved_conflict');
     }
+  });
+});
+
+// Batch G / 081: the same defect was measured in the knowledge store. Search and list
+// annotated every candidate by scanning the whole store, so a 3,000-record store took
+// about 7.5 seconds even for a narrow query. Conflicts now come from an index built once
+// per call. These tests hold the behaviour that must survive: the reported conflict ids
+// and their order are unchanged, and both queries stay far away from the old cost.
+function knowledgeRecord(subject, relationship, object, evidence, at) {
+  return {
+    schema: 1,
+    id: randomUUID(),
+    subject,
+    relationship,
+    object,
+    evidence,
+    tripleHash: knowledgeSha256(`${subject}\x00${relationship}\x00${object}`),
+    status: 'supported',
+    createdAt: new Date(Date.UTC(2026, 0, 1) + at * 1000).toISOString(),
+    provenance: { origin: 'user_supplied', updateMode: 'user_confirmed' },
+  };
+}
+
+function writeKnowledgeStore(dir, records) {
+  const file = path.join(dir, 'knowledge.jsonl');
+  fs.writeFileSync(file, `${records.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  return new KnowledgeStore(file);
+}
+
+describe('081: knowledge retrieval under growth', () => {
+  test('search over 1,000 and 3,000 records is bounded and conflict ids stay exact', async () => {
+    for (const size of [1000, 3000]) {
+      const records = [];
+      for (let i = 1; i <= size; i += 1) {
+        records.push(knowledgeRecord(
+          `module ${i}`,
+          'owned by',
+          `team ${i}`,
+          `the release checklist covers module ${i} and budget item ${i}`,
+          i,
+        ));
+      }
+      const zephyr = knowledgeRecord('the launch code name', 'is', 'Zephyr', 'planning notes', size + 1);
+      const falcon = knowledgeRecord('the launch code name', 'is', 'Falcon', 'later planning notes', size + 2);
+      records.push(zephyr, falcon);
+      const store = writeKnowledgeStore(tempDir(), records);
+
+      const started = performance.now();
+      const broad = await store.search('release checklist budget module', { limit: 5 });
+      const broadElapsed = performance.now() - started;
+      assert.equal(broad.length, 5);
+      assert.ok(broadElapsed < 5000, `broad knowledge search at ${size} took ${Math.round(broadElapsed)} ms; whole-store annotation may be back`);
+
+      const narrowStarted = performance.now();
+      const named = await store.search('launch code name', { limit: 10 });
+      const narrowElapsed = performance.now() - narrowStarted;
+      assert.ok(narrowElapsed < 5000, `narrow knowledge search at ${size} took ${Math.round(narrowElapsed)} ms`);
+      assert.deepEqual(named.map((h) => h.record.id).sort(), [falcon.id, zephyr.id].sort());
+      const byId = new Map(named.map((h) => [h.record.id, h.record]));
+      assert.deepEqual(byId.get(zephyr.id).conflictsWith, [falcon.id]);
+      assert.deepEqual(byId.get(falcon.id).conflictsWith, [zephyr.id]);
+      for (const hit of named) assert.equal(hit.record.status, 'conflicting');
+    }
+  });
+
+  test('adding a contradictory triple at 3,000 records reports the same conflicts as before', async () => {
+    const records = [];
+    for (let i = 1; i <= 3000; i += 1) {
+      records.push(knowledgeRecord(`module ${i}`, 'owned by', `team ${i}`, null, i));
+    }
+    const first = knowledgeRecord('the launch code name', 'is', 'Zephyr', null, 3001);
+    records.push(first);
+    const store = writeKnowledgeStore(tempDir(), records);
+
+    const { record, conflictingIds } = await store.add({
+      subject: 'the launch code name',
+      relationship: 'is',
+      object: 'Falcon',
+      origin: 'user',
+    });
+    assert.equal(record.status, 'conflicting');
+    assert.deepEqual(conflictingIds, [first.id]);
+    // Repeating an existing triple is not a conflict with itself, but it still
+    // conflicts with the other live object under the same subject and relationship.
+    const duplicate = await store.add({
+      subject: 'the launch code name',
+      relationship: 'is',
+      object: 'Zephyr',
+      origin: 'user',
+    });
+    assert.equal(duplicate.record.status, 'conflicting');
+    assert.deepEqual(duplicate.conflictingIds, [record.id]);
   });
 });

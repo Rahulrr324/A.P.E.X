@@ -402,6 +402,36 @@ describe('diagnostics: model independence', () => {
     assert.equal(stub.requests.length, 0, 'health must not run inference');
   });
 
+  test('a reachable endpoint that does not list the configured model is not called available', async () => {
+    const dir = tempDir();
+    const stub = await startStubModel();
+    stubs.push(stub);
+    // The endpoint answers the model list, but with a different model, and rejects
+    // every completion. Reporting "available" would claim a readiness the request
+    // path immediately disproves.
+    stub.behavior.modelsRaw = JSON.stringify({ data: [{ id: 'some-other-model' }] });
+    stub.behavior.status = 404;
+    const env = envFor(dir, { APEX_MODEL_URL: stub.url, APEX_MODEL_NAME: 'wanted-model' });
+
+    const status = await runCli(['status', '--model'], env);
+    assert.equal(status.code, 0, status.stderr);
+    assert.match(status.stdout, /Model backend: .* - reachable, model not confirmed:/);
+    assert.doesNotMatch(status.stdout, / - available/, 'an unlisted configured model is not confirmed');
+    assert.match(status.stdout, /does not include configured model "wanted-model"/);
+
+    const diag = await runCli(['diagnose', '--model'], env);
+    assert.equal(diag.code, 0, diag.stderr);
+    assert.match(diag.stdout, /Model: reachable but not confirmed/);
+    assert.match(diag.stdout, /Overall: local subsystems healthy; model reachable but not confirmed/);
+    assert.doesNotMatch(diag.stdout, /Model: ok/);
+    assert.deepEqual(snapshot(dir), {}, 'a readiness probe must not create state');
+
+    const ask = await runCli(['ask', 'hello there'], env);
+    assert.equal(ask.code, 1, ask.stdout + ask.stderr);
+    assert.match(ask.stdout, /execution_failed/);
+    assert.match(ask.stdout, /HTTP_ERROR/);
+  });
+
   test('a secret-like model name is redacted from diagnostics', async () => {
     const dir = tempDir();
     const url = await closedPortUrl();
