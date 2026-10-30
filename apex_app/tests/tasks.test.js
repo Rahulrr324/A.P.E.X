@@ -20,7 +20,7 @@ import { builtinActions } from '../src/actions/builtin.js';
 import { randomUUID } from 'node:crypto';
 import { TaskStore } from '../src/tasks/store.js';
 import { TaskRunner } from '../src/controller/task-runner.js';
-import { makeTempDataDir, cleanup, startStubModel, closedPortUrl, runCli, cleanEnv } from './helpers.js';
+import { makeTempDataDir, cleanup, startStubModel, closedPortUrl, runCli, cleanEnv, makeFakeTaskActions, makePlanGateway, taskStep } from './helpers.js';
 
 const dirs = [];
 const stubs = [];
@@ -756,5 +756,190 @@ describe('command line', () => {
     const show = await runCli(['task', 'show', short], env);
     assert.match(show.stdout, /status: cancelled/);
     assert.match(readRaw(dataDir, 'operations.jsonl'), /task\.cancel/);
+  });
+
+  // 054: `task explain` answers from the records. The cases below are the ones the command
+  // exists for: work that is complete and evidenced, work that is incomplete, evidence that
+  // is missing, an evidence store that cannot be read, a task that is not there, and
+  // malformed arguments. Each one runs through the shipped entry point, so the exit codes
+  // asserted here are the ones a caller gets.
+  test('task explain prints what the records say about one task, in every view, and changes nothing', async () => {
+    const dataDir = tempDir();
+    const env = cleanEnv({ APEX_DATA_DIR: dataDir, HOME: dataDir, USERPROFILE: dataDir });
+    const plan = await runCli(['task', 'plan', 'calc 2+3; calc 10/2'], env);
+    const short = /Task ([0-9a-f]{8})/.exec(plan.stdout)[1];
+
+    const notRun = await runCli(['task', 'explain', short], env);
+    assert.equal(notRun.code, 1, 'a task whose steps never ran is not reported as a success');
+    assert.match(notRun.stdout, /status: pending/);
+    assert.match(notRun.stdout, /To run it: node bin\/apex\.js task run /);
+    assert.match(notRun.stdout, /Evidence: no step is recorded as verified, so there is nothing to check the audit against\./);
+    assert.equal(/Yes, it finished|Verified complete: s1/.test(notRun.stdout), false, 'a step that never ran is never described as progress');
+
+    const run = await runCli(['task', 'run', short], env);
+    assert.equal(run.code, 0, run.stdout + run.stderr);
+    const stores = ['tasks.jsonl', 'operations.jsonl', 'conversation.jsonl', 'memory.jsonl'];
+    const before = stores.map((f) => readRaw(dataDir, f));
+
+    const status = await runCli(['task', 'explain', short], env);
+    assert.equal(status.code, 0, status.stdout + status.stderr);
+    assert.match(status.stdout, /status: completed; 2 of 2 step\(s\) verified complete/);
+    assert.match(status.stdout, /Evidence: all 2 step result\(s\) the task log records as verified have an operation record of their own\./);
+
+    const views = {
+      finished: /Yes, it finished: all 2 step\(s\) ran and each one was verified\./,
+      steps: /Verified complete: s1 \(calc\.evaluate\), s2 \(calc\.evaluate\)\./,
+      pending: /Still to run: nothing - every step is accounted for\./,
+      why: /It did not stop: every step ran and was verified\./,
+      approval: /No step is waiting for your approval/,
+      recovery: /Nothing needs recovering: every step ran and was verified\./,
+    };
+    for (const [view, expected] of Object.entries(views)) {
+      const res = await runCli(['task', 'explain', short, view], env);
+      assert.equal(res.code, 0, `${view}: ${res.stdout}${res.stderr}`);
+      assert.match(res.stdout, expected);
+    }
+
+    assert.deepEqual(stores.map((f) => readRaw(dataDir, f)), before, 'explaining runs, resumes, retries, approves, or records nothing');
+    assert.equal(/No inference backend/.test(`${status.stdout}${status.stderr}${notRun.stdout}`), false, 'explaining a task never asks a model');
+  });
+
+  test('a task that is not finished is explained as unfinished: a cancelled task names its remaining steps', async () => {
+    const dataDir = tempDir();
+    const env = cleanEnv({ APEX_DATA_DIR: dataDir, HOME: dataDir, USERPROFILE: dataDir });
+    const plan = await runCli(['task', 'plan', 'calc 1+1; calc 2+2'], env);
+    const short = /Task ([0-9a-f]{8})/.exec(plan.stdout)[1];
+    assert.equal((await runCli(['task', 'cancel', short], env)).code, 0);
+
+    const res = await runCli(['task', 'explain', short], env);
+    assert.equal(res.code, 1);
+    assert.match(res.stdout, /status: cancelled; 0 of 2 step\(s\) verified complete/);
+    assert.match(res.stdout, /Next: Cancelled\. Nothing further will run\./);
+    assert.match(res.stdout, /Evidence: no step is recorded as verified/);
+    assert.equal(/Yes, it finished|each one was verified/.test(res.stdout), false);
+
+    const why = await runCli(['task', 'explain', short, 'why'], env);
+    assert.equal(why.code, 1);
+    assert.match(why.stdout, /It was cancelled, so the steps that had not run were stopped\./);
+
+    const recovery = await runCli(['task', 'explain', short, 'recovery'], env);
+    assert.equal(recovery.code, 1);
+    assert.match(recovery.stdout, /It was cancelled, so nothing further will run/);
+    assert.equal(/To retry:|To continue:|task resume/.test(recovery.stdout), false, 'a cancelled task is not offered as recoverable');
+  });
+
+  test('recorded status and supported verification are printed apart: step records that are missing are named', async () => {
+    const dataDir = tempDir();
+    const env = cleanEnv({ APEX_DATA_DIR: dataDir, HOME: dataDir, USERPROFILE: dataDir });
+    const plan = await runCli(['task', 'plan', 'calc 2+3; calc 10/2'], env);
+    const short = /Task ([0-9a-f]{8})/.exec(plan.stdout)[1];
+    assert.equal((await runCli(['task', 'run', short], env)).code, 0);
+
+    // TEST FIXTURE: the audit is rewritten without the step records, which is what an audit
+    // write that failed mid-run leaves behind. The task log still claims both steps verified.
+    const file = path.join(dataDir, 'operations.jsonl');
+    const kept = fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.trim() !== '' && !l.includes('"task.step"'));
+    fs.writeFileSync(file, `${kept.join('\n')}\n`, 'utf8');
+
+    const res = await runCli(['task', 'explain', short], env);
+    assert.equal(res.code, 1, 'a recorded completion with no evidence of its own is not a success');
+    assert.match(res.stdout, /status: completed/, 'the recorded status is still printed');
+    assert.match(res.stdout, /no operation record is available for s1, s2/);
+    assert.match(res.stdout, /Evidence: 0 of 2 recorded step result\(s\) have an operation record; s1, s2 have none, so they are not independently supported\./);
+    assert.equal(/Yes, it finished|all 2 step result/.test(res.stdout), false, 'missing evidence never becomes a claim of verification');
+    assert.equal(res.stdout.includes('task.step'), false, 'the command names steps, it does not print audit lines');
+
+    const finished = await runCli(['task', 'explain', short, 'finished'], env);
+    assert.equal(finished.code, 1);
+    assert.match(finished.stdout, /It is recorded as completed, but no operation record is available for s1, s2/);
+    assert.equal(/each one was verified/.test(finished.stdout), false);
+  });
+
+  test('an operation log that cannot be read is reported as unreadable, not as evidence of anything', async () => {
+    const dataDir = tempDir();
+    const env = cleanEnv({ APEX_DATA_DIR: dataDir, HOME: dataDir, USERPROFILE: dataDir });
+    const plan = await runCli(['task', 'plan', 'calc 2+3; calc 10/2'], env);
+    const short = /Task ([0-9a-f]{8})/.exec(plan.stdout)[1];
+    assert.equal((await runCli(['task', 'run', short], env)).code, 0);
+
+    // TEST FIXTURE: a directory where the log is expected makes every read of it fail, on
+    // Windows and POSIX alike. Absence would be a real answer; a failed read is not.
+    const file = path.join(dataDir, 'operations.jsonl');
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+
+    const res = await runCli(['task', 'explain', short, 'recovery'], env);
+    assert.equal(res.code, 1);
+    assert.match(res.stdout, /status: completed/);
+    assert.match(res.stdout, /Evidence: the operation log could not be read, so none of the 2 recorded step result\(s\) is independently supported\./);
+    assert.equal(/Nothing needs recovering: every step ran|all 2 step result/.test(res.stdout), false, 'an unreadable log supports no claim');
+    fs.rmdirSync(file);
+  });
+
+  test('task explain rejects a task that is not there and arguments that are malformed, with exit code 2', async () => {
+    const dataDir = tempDir();
+    const env = cleanEnv({ APEX_DATA_DIR: dataDir, HOME: dataDir, USERPROFILE: dataDir });
+
+    const missing = await runCli(['task', 'explain', 'ffffffff'], env);
+    assert.equal(missing.code, 2);
+    assert.match(missing.stderr, /no task matches "ffffffff"/);
+
+    const noId = await runCli(['task', 'explain'], env);
+    assert.equal(noId.code, 2);
+    assert.match(noId.stderr, /usage: task explain <id>/);
+
+    const badView = await runCli(['task', 'explain', 'abcdef01', 'diagram'], env);
+    assert.equal(badView.code, 2);
+    assert.match(badView.stderr, /unknown view "diagram"; use status, finished, steps, pending, why, approval, recovery/);
+
+    const tooMany = await runCli(['task', 'explain', 'abcdef01', 'status', 'steps'], env);
+    assert.equal(tooMany.code, 2);
+
+    const badFlag = await runCli(['task', 'explain', 'abcdef01', '--verbose'], env);
+    assert.equal(badFlag.code, 2);
+    assert.match(badFlag.stderr, /unknown option --verbose/);
+
+    const noSub = await runCli(['task'], env);
+    assert.equal(noSub.code, 2);
+    assert.match(noSub.stderr, /task plan\|list\|show\|explain\|approve\|run\|resume\|retry\|cancel/);
+
+    const help = await runCli(['help'], env);
+    assert.equal(help.code, 0);
+    assert.match(help.stdout, /task explain <id> \[view\]/);
+  });
+});
+
+// 054: the unaudited read behind `task explain`, driven through the controller so a step can
+// be held at approval - a state the deterministic CLI planner cannot produce without a model.
+// What has to hold here is the command's own contract: the view it prints grants no approval
+// and starts no run, and a completed step whose audit record exists is evidenced even while
+// the task as a whole is not finished.
+describe('task explain as the CLI reads it', () => {
+  test('explaining a held model step names it, keeps it held, and reports the evidence it can see', async () => {
+    const dataDir = tempDir();
+    const sink = [];
+    const app = appOn(dataDir, makePlanGateway([taskStep('s1', 'test.ok'), taskStep('s2', 'test.write', ['s1'])]), makeFakeTaskActions(sink));
+    const planned = await app.controller.planTask('run the checks and tell me what happened');
+    assert.equal(planned.status, Outcome.PLAN_PROPOSED, 'a model plan starts as a proposal');
+    const task = (await app.taskStore.list()).at(-1);
+    const approved = await app.controller.approveTask(task.id);
+    assert.equal(approved.status, Outcome.SUCCESS_VERIFIED, 'the user approved the plan');
+    assert.equal((await app.controller.runTask(task.id, 'run')).status, Outcome.TASK_PAUSED, 'the write is held for its own approval');
+    assert.deepEqual(sink, ['s1'], 'only the read step has run');
+
+    const before = readRaw(dataDir, 'tasks.jsonl');
+    const res = await app.controller.describeTask(task.id, 'approval');
+    assert.equal(res.task.status, TaskStatus.PAUSED);
+    assert.match(res.display, /s2 \(test\.write\) needs your approval - it has not run\./);
+    assert.match(res.display, /It changes data and was proposed by a model, so it never runs on the model's own authority/);
+    assert.equal(res.evidenceState, 'complete', 'the step that ran does have its own record');
+    assert.match(res.display, /Evidence: all 1 step result\(s\) the task log records as verified have an operation record of their own\./);
+
+    assert.equal(readRaw(dataDir, 'tasks.jsonl'), before, 'the explanation approved and resumed nothing');
+    assert.deepEqual(sink, ['s1'], 'and ran nothing');
+
+    const held = (await app.taskStore.get(task.id)).steps.find((s) => s.id === 's2');
+    assert.equal(held.status, StepStatus.AWAITING_APPROVAL);
+    assert.equal(held.approval, null, 'asking about an approval is not an approval');
   });
 });

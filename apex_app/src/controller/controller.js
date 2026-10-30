@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { Outcome, OPERATION_SCHEMA } from '../outcomes.js';
 import { ValidationError } from '../errors.js';
 import { route } from './router.js';
+import { discussedTaskIds, selectTaskReferent } from './task-context.js';
 import { MAX_PROPOSALS, parseModelOutput } from './proposals.js';
 import { executeAction } from '../actions/executor.js';
 import { CONTROL_CHARS, redact, round3, shortId, truncate } from '../util.js';
@@ -19,7 +20,7 @@ import { containsSecret } from '../security/secrets.js';
 import { planFromText, redactGoal, splitGoal, checkSteps, parseModelPlan, planningPrompt } from '../tasks/planner.js';
 import { TaskRunner } from './task-runner.js';
 import { TaskStatus, StepStatus } from '../tasks/model.js';
-import { buildTaskSummary } from '../tasks/summary.js';
+import { buildTaskSummary, taskStateSignature } from '../tasks/summary.js';
 import { renderTask, renderTaskList, explainTask } from '../tasks/format.js';
 import { StoreError } from '../errors.js';
 import { KNOWLEDGE_PROMPT_LIMIT } from '../actions/knowledge-actions.js';
@@ -124,6 +125,7 @@ export class CognitiveController {
     contextTurns = 6,
     maxContextChars = MAX_CONTEXT_CHARS,
     taskStore = null,
+    summaryQueue = null,
     rootForContext = null,
     knowledge = null,
   }) {
@@ -141,6 +143,7 @@ export class CognitiveController {
     this.contextTurns = contextTurns;
     this.maxContextChars = maxContextChars;
     this.taskStore = taskStore;
+    this.summaryQueue = summaryQueue;
     this.rootForContext = rootForContext;
     this.knowledge = knowledge;
     this.tasks = taskStore
@@ -625,21 +628,22 @@ export class CognitiveController {
 
   // Writes the user's turn and the reply turn(s). The user text is the audit-safe
   // request (memory payloads and credentials are never replayed to a model). A
-  // failure is reported in the operation's errors; it never hides the answer.
-  async #recordTurns(op, sid, userText, replies) {
+  // failure is reported in the operation's errors; it never hides the answer. `subject`
+  // names what the failed write was, so the disclosure can only ever be about that.
+  async #recordTurns(op, sid, userText, replies, { subject = 'exchange' } = {}) {
     if (!this.conversation || !sid) return;
     try {
       await this.conversation.append({ sessionId: sid, role: 'user', origin: TURN_ORIGINS.USER, text: userText, operationId: op.id });
     } catch (err) {
-      op.errors.push({ stage: 'conversation', code: err.code || 'STORE_ERROR', message: err.message });
+      op.errors.push({ stage: 'conversation', subject, code: err.code || 'STORE_ERROR', message: err.message });
       return;
     }
-    for (const r of replies) await this.#recordAssistantTurn(op, sid, r);
+    for (const r of replies) await this.#recordAssistantTurn(op, sid, { ...r, subject });
   }
 
   // One assistant turn, with no user turn of its own. A task run has no conversational
   // request to record, only its result.
-  async #recordAssistantTurn(op, sid, { origin, text, verified, taskId = null, signature = null }) {
+  async #recordAssistantTurn(op, sid, { origin, text, verified, taskId = null, signature = null, subject = 'exchange' }) {
     if (!this.conversation || !sid) return false;
     try {
       await this.conversation.append({
@@ -654,18 +658,160 @@ export class CognitiveController {
       });
       return true;
     } catch (err) {
-      op.errors.push({ stage: 'conversation', code: err.code || 'STORE_ERROR', message: err.message });
+      op.errors.push({ stage: 'conversation', subject, code: err.code || 'STORE_ERROR', message: err.message });
       return false;
     }
   }
 
   // A turn that could not be saved to history must not vanish silently: the result
   // itself stands, but a later turn may not see it. Display-only: it never becomes part
-  // of a stored turn or of the audited output.
+  // of a stored turn or of the audited output. Whether a lost task summary will be
+  // offered again is stated only from what this operation actually did with the queue.
   #historyGapNotice(op, subject) {
-    const error = op.errors.find((e) => e.stage === 'conversation');
+    const error = op.errors.find((e) => e.stage === 'conversation' && (e.subject ?? 'exchange') === subject);
     if (!error) return '';
-    return `[This ${subject} could not be fully saved to conversation history (${error.code || 'STORE_ERROR'}); a later turn may not see it.]`;
+    let reissue = '';
+    if (op.errors.some((e) => e.code === 'SUMMARY_QUEUED')) {
+      reissue = ' APEX has queued it for reissue at the next task write.';
+    } else if (op.errors.some((e) => e.code === 'SUMMARY_NOT_QUEUED')) {
+      reissue = ' It could not be queued, so it will not be reissued automatically.';
+    }
+    return `[This ${subject} could not be fully saved to conversation history (${error.code || 'STORE_ERROR'}); a later turn may not see it.${reissue}]`;
+  }
+
+  // Shown when this turn wrote a task summary an earlier turn could not save. Claimed
+  // only after the write has returned, so a reissue is never reported before it happened.
+  #reissueNotice(op) {
+    const count = op.errors.filter((e) => e.stage === 'queue' && e.code === 'SUMMARY_REISSUED').length;
+    if (count === 0) return '';
+    const verb = count === 1 ? 'has' : 'have';
+    const plural = count === 1 ? '' : 's';
+    return `\n\n[${count} earlier task result${plural} that could not be saved ${verb} now been written to history.]`;
+  }
+
+  // The summary turn history refused is kept as a delivery intent, so a later task write
+  // can offer it again. Nothing here re-runs a step or changes task state: the queued
+  // text is the summary of the state the task log already records.
+  async #queueSummaryIntent(op, sid, summary) {
+    if (!this.summaryQueue || !sid) {
+      op.errors.push({
+        stage: 'conversation',
+        subject: 'task result',
+        code: 'SUMMARY_NOT_QUEUED',
+        message: `the task summary for ${shortId(summary.taskId)} cannot be queued in this configuration; it will not be reissued automatically`,
+      });
+      return false;
+    }
+    try {
+      const result = await this.summaryQueue.add({
+        sessionId: sid,
+        taskId: summary.taskId,
+        signature: summary.signature,
+        text: summary.text,
+        verified: summary.verified,
+      });
+      op.errors.push({
+        stage: 'conversation',
+        subject: 'task result',
+        code: result.queued ? 'SUMMARY_QUEUED' : 'SUMMARY_NOT_QUEUED',
+        message: result.queued
+          ? `the task summary for ${shortId(summary.taskId)} (${result.reason}) is queued for reissue at the next task write`
+          : `the task summary for ${shortId(summary.taskId)} could not be queued (${result.reason}); it will not be reissued automatically`,
+      });
+      return result.queued;
+    } catch (err) {
+      op.errors.push({
+        stage: 'conversation',
+        subject: 'task result',
+        code: 'SUMMARY_NOT_QUEUED',
+        message: `the task summary for ${shortId(summary.taskId)} could not be queued (${err.code || err.name}): it will not be reissued automatically`,
+      });
+      return false;
+    }
+  }
+
+  async #settleSummaryIntent(op, entryId, reason) {
+    if (!this.summaryQueue) return;
+    try {
+      await this.summaryQueue.settle(entryId);
+    } catch (err) {
+      // The intent outlives the failed cleanup, and the next pass recognises the state as
+      // already summarised. This is queue housekeeping, not a lost turn, so it is recorded
+      // apart from the history-gap notice rather than reported as one.
+      op.errors.push({ stage: 'queue', code: 'SUMMARY_INTENT_KEPT', message: `a task summary intent (${reason}) could not be removed from the queue: ${err.code || err.name}` });
+    }
+  }
+
+  // The reissue path for task summaries an earlier turn could not write. It reads the
+  // task log to check that the state the intent describes is still the recorded state,
+  // writes history, and stops there: no step runs, no task changes, and an intent is
+  // dropped only once its turn is confirmed written or its state has moved on. A check
+  // that cannot be made (a task log or history that cannot be read) leaves the intent in
+  // place instead of guessing.
+  async #deliverPendingSummaries(op, sid) {
+    if (!this.conversation || !this.summaryQueue || !sid || !this.taskStore) return 0;
+    let entries;
+    try {
+      entries = await this.summaryQueue.pending({ sessionId: sid });
+    } catch (err) {
+      op.errors.push({ stage: 'queue', code: err.code || 'STORE_ERROR', message: `queued task summaries could not be read (${err.message}); nothing was reissued` });
+      return 0;
+    }
+    let delivered = 0;
+    for (const entry of entries) {
+      let current = null;
+      try {
+        current = await this.taskStore.get(entry.taskId);
+      } catch (err) {
+        op.errors.push({ stage: 'queue', code: err.code || 'STORE_ERROR', message: `the task log could not be read (${err.message}); a queued task summary was not reissued` });
+        break;
+      }
+      // The state the intent describes is no longer the recorded state, or there is no
+      // task to describe. Its summary would be stale, so it is dropped rather than
+      // written; the state the task log holds now is summarised by the turn that produced
+      // it, or queued by that turn's own failure.
+      if (!current || taskStateSignature(current) !== entry.signature) {
+        await this.#settleSummaryIntent(op, entry.id, current ? 'superseded' : 'task no longer in the log');
+        continue;
+      }
+      // A duplicate is the worse failure: the write may have succeeded while the queue
+      // cleanup did not. So the history is checked first, and a history that cannot be
+      // checked stops the pass instead of writing over it.
+      let already = null;
+      try {
+        already = await this.conversation.summarisedTaskStates(sid, entry.taskId);
+      } catch (err) {
+        op.errors.push({ stage: 'queue', code: err.code || 'STORE_ERROR', message: `an existing task summary could not be checked (${err.message}); nothing further was reissued` });
+        break;
+      }
+      if (already.has(entry.signature)) {
+        await this.#settleSummaryIntent(op, entry.id, 'already in history');
+        continue;
+      }
+      const wrote = await this.#recordAssistantTurn(op, sid, {
+        origin: TURN_ORIGINS.TASK,
+        text: entry.text,
+        verified: entry.verified,
+        taskId: entry.taskId,
+        signature: entry.signature,
+        subject: 'task result',
+      });
+      if (!wrote) {
+        // Still owed. Stated as queued because that is what just happened: the intent is
+        // in the queue, and the next task write will try again.
+        op.errors.push({
+          stage: 'conversation',
+          subject: 'task result',
+          code: 'SUMMARY_QUEUED',
+          message: `the queued task summary for task ${shortId(entry.taskId)} is still owed to history`,
+        });
+        continue;
+      }
+      delivered += 1;
+      op.errors.push({ stage: 'queue', code: 'SUMMARY_REISSUED', message: `reissued the task summary for task ${shortId(entry.taskId)} (state ${entry.signature.slice(0, 8)}) that an earlier turn could not save` });
+      await this.#settleSummaryIntent(op, entry.id, 'delivered');
+    }
+    return delivered;
   }
 
   // The history record of what a task run established. It is built from the task's own
@@ -674,7 +820,7 @@ export class CognitiveController {
   // in this session gets no second turn, so repeated recovery attempts cannot stack up
   // summaries of the same facts. If the turn cannot be written, the task log and the
   // audit record are already complete and are left exactly as they are: only the
-  // operation's errors note the gap.
+  // operation's errors note the gap, and the turn is queued for a later write opportunity.
   async #recordTaskSummary(op, task, { recovery = null, auditGaps = [] } = {}) {
     if (!this.conversation || !task) return;
     const summary = buildTaskSummary(task, {
@@ -687,24 +833,28 @@ export class CognitiveController {
     if (!summary) return;
     const sid = await this.#resolveSession(null, op);
     if (!sid) return;
+    await this.#deliverPendingSummaries(op, sid);
     let alreadySummarised = null;
     try {
       alreadySummarised = await this.conversation.summarisedTaskStates(sid, summary.taskId);
     } catch (err) {
       op.errors.push({
         stage: 'conversation',
+        subject: 'task result',
         code: err.code || 'STORE_ERROR',
         message: `${err.message}; this task summary was written without checking for an earlier one`,
       });
     }
     if (alreadySummarised?.has(summary.signature)) return;
-    await this.#recordAssistantTurn(op, sid, {
+    const wrote = await this.#recordAssistantTurn(op, sid, {
       origin: TURN_ORIGINS.TASK,
       text: summary.text,
       verified: summary.verified,
       taskId: summary.taskId,
       signature: summary.signature,
+      subject: 'task result',
     });
+    if (!wrote) await this.#queueSummaryIntent(op, sid, summary);
   }
 
   async runAction(name, rawInput, origin, operationId) {
@@ -931,7 +1081,7 @@ export class CognitiveController {
       return this.#finishTaskOp(
         op,
         result.status,
-        `${renderTask(result.task)}${warning}${this.#historyGapNotice(op, 'task result')}`,
+        `${renderTask(result.task)}${warning}${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}`,
         result.task,
         {
           auditGaps: gaps,
@@ -949,7 +1099,7 @@ export class CognitiveController {
         const current = await this.taskStore.get(err.taskId).catch(() => null);
         await this.#recordTaskSummary(op, current, { recovery: err.recovery });
       }
-      return this.#refused(op, err, Outcome.INPUT_REJECTED, this.#historyGapNotice(op, 'task result'));
+      return this.#refused(op, err, Outcome.INPUT_REJECTED, `${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}`);
     }
   }
 
@@ -965,7 +1115,7 @@ export class CognitiveController {
       // is recorded like a run. An approval or a retry changes intent, not evidence, so
       // it produces no task-result turn.
       if (taskSummary) await this.#recordTaskSummary(op, updated);
-      const notice = taskSummary ? this.#historyGapNotice(op, 'task result') : '';
+      const notice = taskSummary ? `${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}` : '';
       return this.#finishTaskOp(op, Outcome.SUCCESS_VERIFIED, `${label}.\n${renderTask(updated)}${notice}`, updated);
     } catch (err) {
       return this.#refused(op, err);
@@ -1038,55 +1188,58 @@ export class CognitiveController {
   // show for them. The audit can refuse a write while the task log still records the
   // outcome, and an audit log that cannot be read establishes nothing: either way the
   // answer says so rather than repeating the claim. Read-only - it changes no state and
-  // grants no permission.
+  // grants no permission. The log is scanned once and the scan stops as soon as every
+  // step's record has been found; it is never cut short while a step is still unaccounted
+  // for, because a truncated scan cannot prove that a record is absent.
   async #missingStepEvidence(task) {
     const done = task.steps.filter((s) => s.status === StepStatus.COMPLETED);
-    if (done.length === 0) return [];
-    let records;
+    if (done.length === 0) return { missing: [], unreadable: false };
     try {
-      records = (await this.operations.inspect()).records;
+      const { missing } = await this.operations.missingTaskStepRecords(task.id, done);
+      return { missing, unreadable: false };
     } catch {
-      return done.map((s) => s.id);
+      return { missing: done.map((s) => s.id), unreadable: true };
     }
-    const byId = new Map(records.filter((r) => r.capability === 'task.step').map((r) => [r.id, r]));
-    return done
-      .filter((s) => {
-        const record = typeof s.operationId === 'string' ? byId.get(s.operationId) : null;
-        return !(record && record.task?.id === task.id && record.task?.stepId === s.id);
-      })
-      .map((s) => s.id);
   }
 
-  // Inside handle(): a follow-up about a task, answered from the task log. The referent
-  // is the task id in the request, or the one task this session has recorded a result
-  // for. Two different tasks in the history is a real ambiguity, so the user is asked
-  // rather than a guess being made, and an unreadable log is reported as unreadable
-  // instead of answered from what a model remembers of it. This path only reads: it runs
-  // no step, changes no task state, and writes no task-result summary of its own.
-  async #explainTaskRequest(op, sid, { intent, taskId }) {
+  // Inside handle(): a follow-up about a task, answered from the task log. The referent is
+  // resolved from records, in one order: an id the user named is looked up in the task log
+  // (an id that matches nothing is refused, not guessed at), and otherwise it is the task
+  // this conversation holds a record of. More than one candidate is a real ambiguity, so the
+  // user is asked rather than a guess being made - unless they asked for the most recently
+  // discussed task by name, which is their choice, not ours. An unreadable history is
+  // reported as unreadable instead of answered from what a model remembers of it, and an
+  // unreadable task log is reported as unreadable rather than as an empty one. Nothing here
+  // runs a step or changes task state. It is also a write opportunity for history, so a task
+  // summary an earlier turn could not save is offered again first: that is what restores the
+  // reference this answer is looking for. A reissued turn is only claimed once the write has
+  // returned, and the answer itself still comes from the task log.
+  async #explainTaskRequest(op, sid, { intent, taskIds = [], recency = false }) {
     const contextUnavailable = () => op.errors.some((e) => e.stage === 'context' || e.stage === 'session');
+    await this.#deliverPendingSummaries(op, sid);
     let task = null;
     let failure = null;
     let clarify = null;
     try {
-      if (taskId) {
-        task = await this.taskStore.resolve(taskId);
-      } else {
-        const turns = await this.#recentTurns(sid, op);
-        const ids = [];
-        for (const t of turns) {
-          if (typeof t.taskId === 'string' && t.taskId.length > 0 && !ids.includes(t.taskId)) ids.push(t.taskId);
-        }
-        if (ids.length === 1) {
-          task = await this.taskStore.get(ids[0]);
-          if (!task) clarify = `The task this conversation recorded (${shortId(ids[0])}) is no longer in the task log, so APEX cannot tell you what it did. Nothing was run.`;
-        } else if (ids.length > 1) {
-          clarify = `Which task do you mean? This conversation has ${ids.length} of them recorded (${ids.map((id) => shortId(id)).join(', ')}). Name one, for example: what happened to task ${shortId(ids[ids.length - 1])}?`;
-        } else if (contextUnavailable()) {
+      let discussed = [];
+      if (taskIds.length === 0) discussed = discussedTaskIds(await this.#recentTurns(sid, op));
+      const referent = selectTaskReferent({ ids: taskIds, recency, discussed });
+      const named = (ids) => ids.map((id) => shortId(id)).join(', ');
+      if (referent.kind === 'ambiguous-id') {
+        clarify = `Which task do you mean? You named ${referent.ids.length} of them (${named(referent.ids)}). Ask about one at a time, for example: what happened to task ${shortId(referent.ids[0])}?`;
+      } else if (referent.kind === 'ambiguous') {
+        clarify = `Which task do you mean? This conversation has ${referent.ids.length} of them recorded (${named(referent.ids)}). Name one, for example: what happened to task ${shortId(referent.ids[0])}?`;
+      } else if (referent.kind === 'none') {
+        if (contextUnavailable()) {
           failure = { status: Outcome.EXECUTION_FAILED, text: 'The conversation history could not be read, so APEX could not tell which task you mean. Nothing was run, and no task state changed.' };
         } else {
           clarify = 'Which task do you mean? This conversation has no task result recorded yet. To list the tasks APEX has records of: node bin/apex.js task list';
         }
+      } else if (referent.kind === 'named-id') {
+        task = await this.taskStore.resolve(referent.id);
+      } else {
+        task = await this.taskStore.get(referent.id);
+        if (!task) clarify = `The task this conversation recorded (${shortId(referent.id)}) is no longer in the task log, so APEX cannot tell you what it did. Nothing was run.`;
       }
     } catch (err) {
       if (err instanceof ValidationError) {
@@ -1099,16 +1252,32 @@ export class CognitiveController {
     if (clarify) {
       await this.#recordTurns(op, sid, op.request, [
         { origin: TURN_ORIGINS.QUESTION, text: clarify, verified: false },
-      ]);
-      return { status: Outcome.CLARIFICATION_REQUIRED, output: clarify, display: clarify };
+      ], { subject: 'answer' });
+      const reissued = this.#reissueNotice(op);
+      return {
+        status: Outcome.CLARIFICATION_REQUIRED,
+        output: clarify,
+        display: `${clarify}${this.#historyGapNotice(op, 'task result')}${reissued}`,
+      };
     }
-    if (failure) return { status: failure.status, output: failure.text, display: `${failure.text}${this.#historyGapNotice(op, 'answer')}` };
+    if (failure) {
+      return {
+        status: failure.status,
+        output: failure.text,
+        display: `${failure.text}${this.#historyGapNotice(op, 'answer')}${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}`,
+      };
+    }
 
-    const text = explainTask(task, intent, { missingAudit: await this.#missingStepEvidence(task) });
+    const { missing } = await this.#missingStepEvidence(task);
+    const text = explainTask(task, intent, { missingAudit: missing });
     await this.#recordTurns(op, sid, op.request, [
       { origin: TURN_ORIGINS.ACTION, text, verified: true, taskId: task.id },
-    ]);
-    return { status: Outcome.SUCCESS_VERIFIED, output: text, display: `${text}${this.#historyGapNotice(op, 'answer')}` };
+    ], { subject: 'answer' });
+    return {
+      status: Outcome.SUCCESS_VERIFIED,
+      output: text,
+      display: `${text}${this.#historyGapNotice(op, 'answer')}${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}`,
+    };
   }
 
   // Read-only: no operation record. Unknown ids are usage errors for the caller.
@@ -1116,6 +1285,32 @@ export class CognitiveController {
     this.#requireTasks();
     const task = await this.taskStore.resolve(ref);
     return { task, display: renderTask(task) };
+  }
+
+  // `task explain`: what the records say about one task, in the same view the conversation
+  // uses. Read-only and unaudited like `task show` - no model is consulted, nothing is run,
+  // resumed, retried, or approved, and no state changes. The task log gives the recorded
+  // status and step outcomes; the operation audit is then checked for each step the log
+  // records as verified, and the evidence line states what it found. A record that is absent
+  // and a log that cannot be read are both reported as no independent support, never as
+  // success. `gaps` names steps by id only: no audit line, step output, or memory content is
+  // copied into the display. The text stays bounded because the view is capped in format.js
+  // and a task holds at most MAX_STEPS steps, so the evidence line can name at most that
+  // many ids.
+  async describeTask(ref, intent = 'status') {
+    this.#requireTasks();
+    const task = await this.taskStore.resolve(ref);
+    const { missing, unreadable } = await this.#missingStepEvidence(task);
+    const verified = task.steps.filter((s) => s.status === StepStatus.COMPLETED).length;
+    const evidence = missing.length === 0
+      ? verified === 0
+        ? 'Evidence: no step is recorded as verified, so there is nothing to check the audit against.'
+        : `Evidence: all ${verified} step result(s) the task log records as verified have an operation record of their own.`
+      : unreadable
+        ? `Evidence: the operation log could not be read, so none of the ${verified} recorded step result(s) is independently supported.`
+        : `Evidence: ${verified - missing.length} of ${verified} recorded step result(s) have an operation record; ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} none, so ${missing.length === 1 ? 'it is' : 'they are'} not independently supported.`;
+    const display = `${explainTask(task, intent, { missingAudit: missing })}\n${evidence}`;
+    return { task, intent, evidenceState: unreadable ? 'unreadable' : missing.length ? 'gaps' : 'complete', gaps: missing, display };
   }
 
   async listTasks() {
@@ -1149,10 +1344,13 @@ export class CognitiveController {
         ? `\nAudit integrity failure: ${result.auditGaps.length} required task-step operation record(s) could not be written (${result.auditGaps.join(', ')}). Underlying task result: ${result.underlyingStatus}.`
         : '';
       const display = `${renderTask(fresh)}${warning}`;
+      // Disclosure of what history refused, and of what this turn wrote that an earlier
+      // turn could not. Shown, never part of the audited output.
+      const notices = `${this.#historyGapNotice(op, 'task result')}${this.#reissueNotice(op)}`;
       return {
         status: result.status,
         output: display,
-        display,
+        display: `${display}${notices}`,
         auditGaps: result.auditGaps.length,
         auditGapSteps: result.auditGaps,
         underlyingStatus: result.underlyingStatus,

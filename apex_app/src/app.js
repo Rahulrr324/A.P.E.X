@@ -22,6 +22,7 @@ import {
 import { resolveRoot, validateRoot } from './filesystem/path.js';
 import { listAction, readAction } from './filesystem/actions.js';
 import { TaskStore } from './tasks/store.js';
+import { SummaryQueue } from './tasks/summary-queue.js';
 import { KnowledgeStore } from './knowledge/knowledge-store.js';
 
 export function createApp({
@@ -43,6 +44,9 @@ export function createApp({
   const operations = new OperationLog(path.join(dataDir, 'operations.jsonl'));
   const session = new SessionState(path.join(dataDir, 'session.json'), { now: clock });
   const taskStore = new TaskStore(path.join(dataDir, 'tasks.jsonl'), { now: clock, idFactory });
+  // The task summaries that conversation history refused. It holds only unsaved turns,
+  // never task state or audit evidence, so the two authoritative logs are unaffected by it.
+  const summaryQueue = new SummaryQueue(path.join(dataDir, 'task-summary-queue.json'), { now: clock, idFactory });
   const knowledge = new KnowledgeStore(path.join(dataDir, 'knowledge.jsonl'), { now: clock });
   const registry = new ActionRegistry();
 
@@ -102,6 +106,7 @@ export function createApp({
     now: clock,
     idFactory,
     taskStore,
+    summaryQueue,
     rootForContext,
     knowledge,
   });
@@ -116,6 +121,7 @@ export function createApp({
     getStatus,
     dataDir,
     taskStore,
+    summaryQueue,
     filesystemRoot: rootForContext,
     knowledge,
   };

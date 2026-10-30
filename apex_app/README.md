@@ -100,6 +100,7 @@ diagnostics reports it as a suspicion, because a new session will not replay the
 | `history [--limit N]` | Lists recent operation records. |
 | `task plan <goal>` | Plans a multi-step task and stores it. Runs nothing. See [Tasks](#tasks). |
 | `task list`, `task show <id>` | Lists tasks, or shows one with its steps, status, and progress. An id may be shortened to 4 or more characters. |
+| `task explain <id> [view]` | What the records say about one task: `status` (default), `finished`, `steps`, `pending`, `why`, `approval`, `recovery`. Prints the recorded status and, separately, whether each recorded step result has an operation record of its own. Read-only: no model is asked and nothing runs. See [Tasks](#tasks). |
 | `task run <id>` | Runs a pending task step by step. Stops at the first failed or uncertain step, and pauses before a write that needs approval. |
 | `task approve <id>` | Approves a model-proposed plan. `task approve <id> --step <stepId>` approves one write step that is waiting for it. |
 | `task resume <id>` | Continues a paused task. A completed step is never run again. |
@@ -353,7 +354,11 @@ failure makes it `failed` with that status; a step that executed but was never
 independently verified stays `uncertain`. If the audit record is missing, belongs to a
 different step, or the log cannot be read, the outcome stays unknown. In every case the
 step is not run again. A read-only uncertain step can be retried on request. A write
-step cannot be; cancel the task instead.
+step cannot be; cancel the task instead. A real lost process, not a fixture, is what
+`tests/process-recovery.test.js` checks: it terminates a running child between the `running`
+event and the step's result, then starts a separate process on the same data directory and
+shows the recovered state, the audit records, the summary turn, and the follow-up answer, with
+no step that had already run executing a second time.
 
 **Audit and memory.** Every step writes its own operation record (capability
 `task.step`), with the task id and step id. Planning, approval, retry, and cancel also
@@ -378,14 +383,67 @@ attempts write no stack of summaries. Only the system can create such a turn: it
 the task id and the state signature, and a model that writes the same opening line is
 stored as model text and replayed as `APEX (model, UNVERIFIED)`.
 
-**Asking about a task afterwards.** Five follow-up forms are answered from the task log
-without a model call: "What happened to that task?", "Which steps succeeded?", "What is
-still pending?", "Did it actually finish?", and "Can you explain why it stopped?". A task
-id in the question selects it (`did task 1f3a finish?`); with more than one task in the
-conversation and nothing to identify one, APEX asks which one instead of guessing. The
-answer never claims more than the records establish: an uncertain step is named as
-unresolved, a held step as awaiting your approval rather than as stopped, and a step
-whose `task.step` record could not be written is named as evidence APEX cannot show.
+**Asking about a task afterwards.** A follow-up is answered from the task log, never from a
+model. What makes a request such a question is decided by question *classes*, not by a list of
+sentences APEX recognises: status, which steps succeeded, what is still pending, whether it
+finished, why it stopped, whether anything needs your approval, and whether it can be resumed
+(`src/controller/task-context.js`). A request becomes a task question only when it carries one
+of those classes *and* something that points at a task: a whole task id, a short id after the
+word "task" (`did task 1f3a finish?`), a task or step word, or a short bare follow-up
+("did it finish yet?", "what do I need to approve?") that names no other thing it could refer
+to. An instruction ("resume that task", "mark it complete") and a goal ("explain the task of
+organizing my downloads") are never answered as questions about a record, so a passing mention
+of the word "task" does not turn a request into one.
+Which task is meant is then decided by the records: an id you named is looked up in the task
+log, and an id that matches nothing is refused rather than guessed at; otherwise it is the task
+this conversation holds a result for. More than one candidate means APEX asks which one, unless
+you asked for the latest task by name - and the answer states the id it chose. A task the
+conversation recorded but the log no longer holds, a log that cannot be read, and a history that
+cannot be checked are each reported as what they are, and nothing is run either way. The answer
+never claims more than the records establish: an uncertain step is named as unresolved, a held
+step as awaiting your approval rather than as stopped, a step whose `task.step` record could not
+be written as evidence APEX cannot show, and an approval or recovery question only describes the
+state - it approves nothing and resumes nothing.
+
+**Explaining a task without a conversation.** `node bin/apex.js task explain <id> [view]` prints
+those same views for one task named by id, straight from the records: the task log gives the
+recorded status and step outcomes, and a final `Evidence:` line states whether every step the log
+records as verified has an operation record of its own. Recorded status and independently
+supported verification are printed apart, so a completion the audit cannot show is never presented
+as a checked one. The command asks no model, writes no audit record, and runs, resumes, retries,
+and approves nothing - a held write step is described as held. A missing `task.step` record and an
+operation log that cannot be read are both reported as no independent support rather than as
+success, and steps are named by id only: no audit line, step output, or memory content is copied
+into the display. Exit 0 means the task is recorded as complete *and* each verified step has its
+own record; a task that is incomplete, held, failed, cancelled, or unsupported by its own evidence
+exits 1; an unknown id or a malformed view exits 2.
+
+**The model workflow, tested with a controlled endpoint.** `tests/model-workflow.test.js` drives
+the whole path - reply, proposal parsing, authorization, approval, execution, verification, audit,
+conversation, plan follow-up, and recovery - with the *model* supplied by a deterministic fixture
+(an OpenAI-compatible stub server on a loopback port, or a fixed plan JSON gateway) and every other
+component being the real implementation, the real CLI included. It covers a proposal that runs and
+is audited as the action that ran, a proposal for a user-only action being denied before execution,
+a malformed proposal line being refused and replayed as a refusal, a model plan taken through
+approve → run → verify → explain → follow-up, a model claim of work it never did staying unverified
+model text with nothing stored, and the endpoint being unreachable, unparseable, empty, or slow.
+Two classifications decide what each case must report: a reply that is not a plan is a *rejected
+plan*, while a reply that never arrived or arrived empty is a *backend failure* - there was no plan
+to check; and `task retry` records the decision to try again, it does not execute the step. These
+tests say nothing about what a real model replies, how long it takes, or how often it obeys a
+format, and they claim no inference latency. Genuine inference against a configured local backend
+is reported separately, in the Batch D report.
+
+**When history cannot be written.** A task-result turn the conversation store refuses is
+disclosed on the spot, and its text is kept in `task-summary-queue.json` as an intent to
+offer it again. The next task write - a later run, a cancel, or a follow-up question about
+a task - delivers what that queue holds for the current session: the task log is read to
+check that the state the intent describes is still the recorded state, history is checked
+so the same state is never written twice, and the intent is dropped only once the turn is
+confirmed written. A reissue never runs a step and never audits a new one. A state the task
+has moved on from is dropped rather than written, so history holds what the task log records
+now. Where the task log or the history cannot be read, nothing is written and the intent
+stays owed.
 
 **Limits.**
 - Free-text planning recognises only the request forms above and the `;` and `then`
@@ -398,12 +456,24 @@ whose `task.step` record could not be written is named as evidence APEX cannot s
   second process is refused, not queued. A lock left by a process that is no longer
   running is removed.
 - Every task read replays the whole task log. That is fine at this scale; it is not a
-  design for many tasks. A task follow-up also reads the operation log once, to check
-  that each recorded step result has its own record.
-- If a task-result turn cannot be saved, the answer and the operation record both say so,
-  and the turn is not re-issued later: the task is not run again to make up for a missing
-  history line. A follow-up then has nothing in the conversation to refer back to and
-  asks for the task id instead of guessing.
+  design for many tasks. A task follow-up also checks the operation log for every step the
+  task log records as verified: that scan stops as soon as each step's own record has been
+  found, and reads to the end when one is missing, because a truncated scan cannot
+  establish that a record is absent. The read is bounded in work, not in evidence.
+- A task follow-up resolves its referent from this session's conversation and the task log.
+  A run that was interrupted before it wrote any summary therefore leaves nothing the session
+  holds, so a follow-up asks which task and points at `task list` rather than choosing the
+  task the log still shows as running; `task explain <id>` still answers about it, because it
+  takes the id. A bare follow-up is treated as one only while it stays
+  short and names nothing else; a long paraphrase goes to the model path instead.
+- A task-result turn that cannot be saved is disclosed and queued for reissue (see "When
+  history cannot be written"); the task is never run again to make up for it. The queue is
+  bounded: 32 intents in total, 4 offered per write, and an intent that would exceed the cap
+  is refused and disclosed rather than displacing an older one. Intents for a session that
+  `apex new` replaced are never delivered, and two processes writing the queue in the same
+  moment can lose one intent - either shows up as the same disclosure as any other failed
+  history write. There is no repair command for a damaged queue: a queue that cannot be read
+  reports the damage and reissues nothing.
 - Model planning has been tested only with test doubles and stub servers. No real model
   was used to plan a task. See the Mission 003 report for what was and was not run.
 
@@ -423,6 +493,7 @@ src/controller/
   controller.js       Cognitive Controller: the workflow and the final status rule
   context.js          prompt construction: labelled memory, turns, size budget, system prompt
   router.js           deterministic capability table (action pattern -> action)
+  task-context.js     which question class a follow-up is, and which recorded task it points at
   proposals.js        parser for model output; proposals are untrusted requests
   task-runner.js      runs a task's steps through the controller's action path; owns task transitions
 src/tasks/
@@ -430,6 +501,8 @@ src/tasks/
   store.js            tasks.jsonl: validated appends, replay, and the single-process lock
   planner.js          deterministic plans and strict model-plan checks; nothing here runs an action
   format.js           plain-text rendering of tasks, shared by replies and the CLI
+  summary.js          the bounded task-result turn and the state signature that dedupes it
+  summary-queue.js    task-summary-queue.json: summaries history refused, waiting to be reissued
 src/actions/
   registry.js         action registry and the authorization policy
   origins.js          request origins: user | model
@@ -560,11 +633,17 @@ suite; it is not an automated regression test and is reported separately.
 | 16. Cancel and safe resume | `tasks.test.js` "cancel"; "interrupted running step" |
 | 17. Bounded read-only filesystem inspection | `filesystem.test.js` (listing, reading, bounds, traversal, absolute and UNC paths, links, model origin, audit failure) |
 | 18. Filesystem steps in controlled tasks | `tasks-filesystem.test.js` (plan, run, verify, model-plan rejection, traversal step, changed file, audit gaps, restart and retry, CLI exit codes) |
+| 19. A task explained from the records, with no model and no run | `tasks.test.js` "command line" (every view, incomplete work, missing `task.step` records, an unreadable operation log, malformed arguments) and "task explain as the CLI reads it" (a held write step stays held) |
+| 20. A real process lost mid-step, recovered by a second one | `process-recovery.test.js` (terminate at the `running` event, stale task lock replaced, no step re-run, uncertain write never retried, recovery summary, follow-up answered from the records, recovery idempotent) |
+| 21. The full model workflow, reply to record, with every APEX component real | `model-workflow.test.js` (proposal executed and audited, user-only proposal denied, malformed proposal refused and replayed, plan → approve → run → verify → explain → follow-up, model claim of undone work stays unverified, endpoint unreachable/invalid/empty/slow; the model itself is a stub, so no real-model behaviour or latency is claimed) |
+| 22. Batch D as one story across the four stores | `acceptance-batch-d.test.js` (model plan with a held write step told identically by task log, audit log and history; a refused summary disclosed, owed once, reissued without re-executing; follow-up referent resolved or clarified; a real child process killed mid-write recovered, with repeated recovery changing nothing; missing and unreadable evidence never reported as verification; registry, plan and proposal write limits for the model origin) |
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
-validation (`gateway.test.js`), and the verifier-independence check
-(`actions.test.js`).
+validation (`gateway.test.js`), the verifier-independence check (`actions.test.js`), and
+the adversarial phrasings a task follow-up is resolved from (`task-resolution.test.js`:
+explicit and indirect references, ambiguous and false ones, approval and recovery
+questions that must change nothing).
 
 ## Known limitations
 

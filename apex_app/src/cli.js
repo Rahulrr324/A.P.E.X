@@ -11,6 +11,7 @@ import { Outcome } from './outcomes.js';
 import { Decision } from './controller/decision.js';
 import { ValidationError, StoreError } from './errors.js';
 import { shortId } from './util.js';
+import { TaskStatus } from './tasks/model.js';
 import { State, collectDiagnostics, renderDiagnostics, safeText } from './diagnostics.js';
 
 export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION})
@@ -30,6 +31,8 @@ Usage:
   node bin/apex.js task plan <goal...>   plan a multi-step task (checked; nothing runs yet)
   node bin/apex.js task list
   node bin/apex.js task show <id>
+  node bin/apex.js task explain <id> [view]   what the records say about one task
+                                             view: status (default) | finished | steps | pending | why | approval | recovery
   node bin/apex.js task approve <id> [--step <stepId>]   approve a proposed plan, or one write step
   node bin/apex.js task run <id>         run a pending task, stopping at the first failure
   node bin/apex.js task resume <id>      continue a paused task (never re-runs a completed step)
@@ -74,6 +77,20 @@ Environment:
   APEX_CONTEXT_TURNS       recent conversation turns sent to the model, 0-50 (default: 6)
   APEX_ALLOW_REMOTE_MODEL  set to 1 to allow a non-loopback endpoint (not recommended)
 `;
+
+// The views `task explain` prints. Each one is the same view the conversation uses when it
+// answers that class of question about a task, so the CLI states nothing the follow-up path
+// does not. Choosing a view is a display decision only: it never resolves an ambiguous
+// reference, and it grants no approval and starts no run.
+const TASK_EXPLAIN_VIEWS = {
+  status: 'status',
+  finished: 'finished',
+  steps: 'steps_succeeded',
+  pending: 'pending',
+  why: 'why_stopped',
+  approval: 'approval',
+  recovery: 'recovery',
+};
 
 function parseFlags(args, allowed) {
   const flags = {};
@@ -373,6 +390,23 @@ export async function main(argv, {
         out((await app.controller.showTask(ids[0])).display);
         return 0;
       }
+      if (sub === 'explain') {
+        const { rest: words } = parseFlags(rest, []);
+        if (words.length < 1 || words.length > 2) {
+          throw new ValidationError('usage: task explain <id> [status|finished|steps|pending|why|approval|recovery]', 'USAGE');
+        }
+        const view = words[1] ?? 'status';
+        if (!TASK_EXPLAIN_VIEWS[view]) {
+          throw new ValidationError(`unknown view "${view}"; use ${Object.keys(TASK_EXPLAIN_VIEWS).join(', ')}`, 'USAGE');
+        }
+        // A read with no operation record, like `task show`: the exit code reports what the
+        // records establish, not whether the read was audited. 0 means the task log records
+        // the work as complete and the audit holds a record for every verified step; anything
+        // incomplete, held, failed, or unsupported by its own record is 1.
+        const res = await app.controller.describeTask(words[0], TASK_EXPLAIN_VIEWS[view]);
+        out(res.display);
+        return res.task.status === TaskStatus.COMPLETED && res.evidenceState === 'complete' ? 0 : 1;
+      }
       if (sub === 'run' || sub === 'resume') {
         const { rest: ids } = parseFlags(rest, []);
         if (ids.length !== 1) throw new ValidationError(`usage: task ${sub} <id>`, 'USAGE');
@@ -393,7 +427,7 @@ export async function main(argv, {
         if (ids.length !== 1) throw new ValidationError('usage: task cancel <id>', 'USAGE');
         return emit(await app.controller.cancelTask(ids[0]));
       }
-      err('usage: task plan|list|show|approve|run|resume|retry|cancel');
+      err('usage: task plan|list|show|explain|approve|run|resume|retry|cancel');
       return 2;
     }
 

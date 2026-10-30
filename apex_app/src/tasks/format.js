@@ -59,8 +59,11 @@ export function renderTaskList(tasks) {
 // read-only check that each recorded step result has its own operation record. The
 // wording never exceeds what those records establish: a task is called finished only when
 // its status is completed, an interrupted or uncertain step is named as unresolved, and
-// a step that never ran is never described as progress. Nothing here reads a model's
-// earlier claim about the task, and nothing here changes the task's state.
+// a step that never ran is never described as progress. The approval and recovery views
+// state only what the step states and the permissions on record say - an approval
+// question never grants approval and a recovery question never runs anything. Nothing
+// here reads a model's earlier claim about the task, and nothing here changes the task's
+// state.
 const EXPLAIN_LIMIT = 2000;
 
 function stepNames(steps, withAction = true) {
@@ -149,6 +152,45 @@ export function explainTask(task, intent, { missingAudit = [] } = {}) {
       }
       const reason = blocked.summary ? `: ${truncate(blocked.summary, 200)}` : '';
       text = `${head} It stopped at ${blocked.id}${blocked.action ? ` (${blocked.action})` : ''} - ${openNote(blocked)}${reason}. Steps that depend on it were not run.`;
+      break;
+    }
+    case 'approval': {
+      const waiting = by(StepStatus.AWAITING_APPROVAL);
+      const approved = task.steps.filter((s) => s.approval);
+      if (task.status === TaskStatus.PROPOSED) {
+        text = `${head} Yes, the plan itself waits for you: APEX does not run a model proposal until you approve it. To approve: ${CLI} task approve ${id}`;
+      } else if (waiting.length > 0) {
+        const proposed = task.origin === 'model'
+          ? ' It changes data and was proposed by a model, so it never runs on the model\'s own authority.'
+          : '';
+        text = `${head} Yes: ${stepNames(waiting)} ${waiting.length === 1 ? 'needs' : 'need'} your approval - ${waiting.length === 1 ? 'it has' : 'they have'} not run.${proposed} To approve: ${CLI} task approve ${id} --step ${waiting[0].id}, then ${CLI} task resume ${id}`;
+      } else if (task.status === TaskStatus.CANCELLED) {
+        text = `${head} Nothing is waiting for approval: the task was cancelled, so no step will run.`;
+      } else {
+        text = `${head} No step is waiting for your approval${approved.length ? `, and ${approved.length} step(s) on record were approved by you and ran` : ''}.`;
+      }
+      break;
+    }
+    case 'recovery': {
+      if (task.status === TaskStatus.COMPLETED) {
+        text = gap
+          ? `${head} There is nothing to recover, but ${gap}.`
+          : `${head} Nothing needs recovering: every step ran and was verified.`;
+        gapStated = gap !== null;
+      } else if (task.status === TaskStatus.PROPOSED || task.status === TaskStatus.PENDING) {
+        text = `${head} Nothing was interrupted: the task has not started yet. ${nextHint(task)}`;
+      } else if (task.status === TaskStatus.CANCELLED) {
+        text = `${head} It was cancelled, so nothing further will run. APEX does not restart a cancelled task; a new one would have to be planned.`;
+      } else if (blocked && blocked.permission !== 'read') {
+        text = `${head} It cannot continue on its own: ${openNote(blocked)}${blocked.status === StepStatus.UNCERTAIN && blocked.permission === 'write' ? ', and APEX will not run a write again when its outcome was never established' : ''}. To stop it: ${CLI} task cancel ${id}`;
+      } else if (blocked) {
+        text = `${head} It can continue: ${openNote(blocked)}, and ${blocked.id} is read-only, so retrying it repeats nothing that changed data. To retry: ${CLI} task retry ${id} ${blocked.id}, then ${CLI} task resume ${id}. Steps that depend on it have not run.`;
+      } else if (by(StepStatus.AWAITING_APPROVAL).length > 0) {
+        const waiting = by(StepStatus.AWAITING_APPROVAL);
+        text = `${head} It is not broken, it is held: ${stepNames(waiting)} ${waiting.length === 1 ? 'waits' : 'wait'} for your approval. Once you approve, ${CLI} task resume ${id} continues from where it stopped.`;
+      } else {
+        text = `${head} ${nextHint(task)}`;
+      }
       break;
     }
     default:

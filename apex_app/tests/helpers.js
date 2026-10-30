@@ -7,6 +7,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { ModelGateway } from '../src/model/gateway.js';
 
 export const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP_ROOT = fs.realpathSync(os.tmpdir());
@@ -107,4 +108,90 @@ export async function closedPortUrl() {
   const { port } = server.address();
   await new Promise((resolve) => server.close(resolve));
   return `http://127.0.0.1:${port}`;
+}
+
+// ---- task test doubles -------------------------------------------------------
+// Shared by the suites that drive tasks (task-history, task-resolution), so a step can
+// be put into each state a summary or an explanation has to describe without inventing
+// any state. TEST DOUBLES: they report what they did, and are not evidence about a real
+// action, a real model, or real inference.
+
+// Three read actions and one write. Every execution is pushed into `sink`, which is how a
+// test shows that a step ran once, twice, or not at all.
+export function makeFakeTaskActions(sink) {
+  const ok = {
+    name: 'test.ok',
+    description: 'test-only read that always verifies',
+    inputHint: '{"tag":"text"}',
+    permission: 'read',
+    origins: ['user', 'model'],
+    validate: (input) => ({ tag: String(input?.tag ?? 'x') }),
+    async execute(_ctx, input) {
+      sink.push(input.tag);
+      return { summary: `read ${input.tag}`, data: { tag: input.tag }, display: `read ${input.tag} (a value that must never reach history)` };
+    },
+    async verify() { return { ok: true, detail: 'the sink holds the read' }; },
+  };
+  const failing = {
+    name: 'test.fail',
+    description: 'test-only read that always fails to execute',
+    inputHint: '{}',
+    permission: 'read',
+    origins: ['user', 'model'],
+    validate: (input) => input ?? {},
+    async execute() { throw new Error('the sensor did not answer'); },
+    verify: null,
+  };
+  const unverified = {
+    name: 'test.unverified',
+    description: 'test-only read whose result cannot be independently checked',
+    inputHint: '{"tag":"text"}',
+    permission: 'read',
+    origins: ['user', 'model'],
+    validate: (input) => ({ tag: String(input?.tag ?? 'u') }),
+    async execute(_ctx, input) {
+      sink.push(input.tag);
+      return { summary: `uncheckable read ${input.tag}`, data: { tag: input.tag } };
+    },
+    // No independent check is possible, so the verifier reports it as unavailable.
+    async verify() { return null; },
+  };
+  // A write a model can propose but never run on its own authority: the runner holds it at
+  // awaiting_approval, which is the state an approval question has to describe.
+  const writing = {
+    name: 'test.write',
+    description: 'test-only write action that waits for approval',
+    inputHint: '{"tag":"text"}',
+    permission: 'write',
+    origins: ['user'],
+    validate: (input) => ({ tag: String(input?.tag ?? 'w') }),
+    async execute(_ctx, input) {
+      sink.push(`write:${input.tag}`);
+      return { summary: `wrote ${input.tag}`, data: { tag: input.tag } };
+    },
+    async verify() { return { ok: true, detail: 'the sink holds the write' }; },
+  };
+  return [ok, failing, unverified, writing];
+}
+
+// TEST DOUBLE: a plan gateway that returns fixed JSON. It shows how a reply is handled,
+// not what a model says.
+export function makePlanGateway(steps) {
+  const text = JSON.stringify({ steps });
+  const backend = {
+    name: 'test-double',
+    provider: 'test-double',
+    configured: true,
+    describe: () => ({ configured: true, provider: 'test-double', endpoint: 'test-double', model: 'test-double' }),
+    health: async () => ({ available: true, detail: 'test double' }),
+    complete: async () => ({
+      ok: true, backend: 'test-double', provider: 'test-double', model: 'test-double',
+      text, finishReason: 'stop', truncated: false, latencyMs: 0,
+    }),
+  };
+  return new ModelGateway({ backend });
+}
+
+export function taskStep(id, action, dependsOn = [], input = { tag: id }) {
+  return { id, description: `step ${id}`, action, input, depends_on: dependsOn };
 }

@@ -1,12 +1,13 @@
-// Implementations 046-051: what a task did has to be readable afterwards.
+// Implementations 046-052: what a task did has to be readable afterwards.
 //
 // A task run writes step results into the task log and the operation log, so history
 // needs one bounded statement of what those records establish - and nothing more. These
 // tests cover the summary turn (046), its provenance and failure handling (047),
 // follow-up questions answered from the task log instead of from a model (048), and the
 // recovery guarantees that must hold once summaries are being written (049), one
-// demonstrated defect in the ordinary workflow (050), and the acceptance lifecycle that
-// has to hold for all of them together (051).
+// demonstrated defect in the ordinary workflow (050), the acceptance lifecycle that has
+// to hold for all of them together (051), and the delivery of a summary that history
+// refused (052) plus the bounded audit read that evidence check depends on (052).
 //
 // TEST DOUBLES are labelled: the stub model speaks the real HTTP protocol but is not
 // evidence about a real model; the crashes and refusals below are injected into the
@@ -18,11 +19,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createApp } from '../src/app.js';
 import { createGateway, ModelGateway, NoBackend } from '../src/model/gateway.js';
-import { Outcome } from '../src/outcomes.js';
+import { Outcome, OPERATION_SCHEMA } from '../src/outcomes.js';
 import { shortId } from '../src/util.js';
 import { Decision } from '../src/controller/decision.js';
 import { TaskStatus, StepStatus } from '../src/tasks/model.js';
 import { buildTaskSummary, taskStateSignature, MAX_TASK_SUMMARY_CHARS } from '../src/tasks/summary.js';
+import { SummaryQueue, MAX_QUEUED_SUMMARIES, SUMMARIES_PER_DELIVERY } from '../src/tasks/summary-queue.js';
+import { OperationLog } from '../src/operations/operation-log.js';
 import { makeTempDataDir, cleanup, startStubModel } from './helpers.js';
 
 const dirs = [];
@@ -876,7 +879,9 @@ describe('050: the ordinary workflow keeps its promises under failure', () => {
     };
     const res = await app.controller.handle('calc 2+2; calc 3+3');
     assert.equal(res.status, Outcome.SUCCESS_VERIFIED, 'the task result stands on its own records');
-    assert.match(res.display, /This exchange could not be fully saved to conversation history \(EIO\); a later turn may not see it/);
+    // What this path writes to history is the task's own result turn, so the disclosure
+    // names it rather than the exchange, and says what APEX did about it.
+    assert.match(res.display, /This task result could not be fully saved to conversation history \(EIO\); a later turn may not see it\. APEX has queued it for reissue at the next task write\./);
     assert.ok(res.operation.errors.some((e) => e.stage === 'conversation' && e.code === 'EIO'));
     assert.equal(conversationOf(app).length, 0, 'a refused append wrote nothing to history');
     assert.equal((await app.taskStore.get(res.operation.task.id)).status, TaskStatus.COMPLETED);
@@ -1219,23 +1224,30 @@ describe('051: acceptance - the task lifecycle and its records hold together', (
     assert.equal(again.status, Outcome.INPUT_REJECTED);
     assert.equal(stepOps(app).length, 2, 'a missing summary never causes a re-execution');
 
-    // History becomes writable again: the summary that failed to save is not silently
-    // re-issued, and the disclosed gap is real - with no saved task result the
-    // unqualified follow-up has nothing to refer to, so it asks. Naming the task gets
-    // the answer straight from the records that were never in doubt.
+    // History becomes writable again. A refused resume re-runs nothing and writes nothing,
+    // so the queued summary waits; the next task write - here the follow-up itself -
+    // offers it again, and that is what restores the reference the unqualified question
+    // needs. Naming the task keeps working, and the state is still summarised only once.
     delete app.conversation.append;
     const restated = await app.controller.runTask(task.id, 'resume');
     assert.equal(restated.status, Outcome.INPUT_REJECTED);
-    assert.equal(taskTurns(app).length, 0, 'a lost summary is not re-issued, and nothing re-runs to make up for it');
+    assert.equal(stepOps(app).length, 2, 'a missing summary never causes a re-execution');
+    assert.equal(taskTurns(app).length, 0, 'a refused resume writes no summary of its own');
     const q = await app.controller.handle('did that task finish?');
-    assert.equal(q.status, Outcome.CLARIFICATION_REQUIRED, 'the missing turn leaves nothing to refer back to');
-    assert.match(q.display, /no task result recorded yet/);
+    assert.equal(q.status, Outcome.SUCCESS_VERIFIED, 'the reissued turn gives the question something to refer to');
+    assert.match(q.display, /Yes, it finished: all 2 step\(s\) ran and each one was verified/);
+    assert.match(q.display, /1 earlier task result that could not be saved has now been written to history/);
+    assert.equal(taskTurns(app).length, 1, 'the queued summary is written once');
+    const turn = taskTurns(app)[0];
+    assert.equal(turn.taskId, task.id);
+    assert.equal(turn.verified, true);
+    assert.equal((await app.summaryQueue.entries()).length, 0, 'the delivered intent is dropped from the queue');
     const named = await app.controller.handle(`did task ${task.id.slice(0, 8)} finish?`);
     assert.equal(named.status, Outcome.SUCCESS_VERIFIED);
     assert.match(named.display, /Yes, it finished: all 2 step\(s\) ran and each one was verified/);
     assert.equal(conversationOf(app).some((t) => t.origin === 'apex_action'), true,
       'the answer is recorded as an action result, not as a task result');
-    assert.equal(taskTurns(app).length, 0, 'answering about a task creates no task result');
+    assert.equal(taskTurns(app).length, 1, 'answering again creates no second task result');
   });
 
   test('no model statement can manufacture a verified completion', async () => {
@@ -1307,6 +1319,265 @@ describe('051: acceptance - the task lifecycle and its records hold together', (
     assert.match(turn.text, /completed - 2 of 2 step\(s\) verified complete/);
     const q = await app.controller.handle('which steps succeeded?');
     assert.match(q.display, /Verified complete: s1 \(test\.ok\), s2 \(test\.write\)/);
+  });
+});
+
+// 052: a task summary that history refused is disclosed, and then it is offered again.
+// The disclosure alone left the reference to an otherwise completed task missing from
+// every later turn; the reissue has to recover it without ever re-running the task,
+// without writing the same state twice, and without upgrading a claim the records do not
+// support. The queue is a delivery work list - the task log and the audit log stay the
+// authoritative records - so every test below checks both the history that resulted and
+// the number of step executions that produced it.
+describe('052: a refused task summary is reissued at the next task write', () => {
+  const eio = () => Object.assign(new Error('disk full'), { code: 'EIO' });
+  const refuseHistory = (app) => { app.conversation.append = async () => { throw eio(); }; };
+
+  test('a failed summary is reissued when history can be written again, and the task is not run again', async () => {
+    const { app, task } = await proposedApp([step('s1', 'test.ok'), step('s2', 'test.ok')]);
+    refuseHistory(app);
+    const ran = await app.controller.runTask(task.id, 'run');
+    assert.equal(ran.status, Outcome.SUCCESS_VERIFIED, 'the task result stands on its own records');
+    assert.equal(taskTurns(app).length, 0, 'history refused the turn');
+    assert.match(ran.display, /APEX has queued it for reissue at the next task write/);
+
+    const current = await app.taskStore.get(task.id);
+    const queued = await app.summaryQueue.entries();
+    assert.equal(queued.length, 1, 'one intent is owed');
+    assert.equal(queued[0].taskId, task.id);
+    assert.equal(queued[0].signature, taskStateSignature(current), 'the intent names the recorded state');
+    assert.equal(queued[0].text, buildTaskSummary(current).text, 'and the text the records support');
+    assert.deepEqual(counted, ['s1', 's2']);
+
+    delete app.conversation.append;
+    const asked = await app.controller.handle('did that task finish?');
+    assert.equal(asked.status, Outcome.SUCCESS_VERIFIED, 'the reissued turn is what the question can refer to');
+    assert.match(asked.display, /Yes, it finished: all 2 step\(s\) ran and each one was verified/);
+    assert.match(asked.display, /1 earlier task result that could not be saved has now been written to history/);
+    const turns = taskTurns(app);
+    assert.equal(turns.length, 1, 'written once');
+    assert.equal(turns[0].verified, true);
+    assert.equal(turns[0].taskId, task.id);
+    assert.equal((await app.summaryQueue.entries()).length, 0, 'the delivered intent is dropped');
+    assert.deepEqual(counted, ['s1', 's2'], 'a reissue never re-runs a step');
+    assert.equal(stepOps(app).length, 2, 'and it audits no new step');
+  });
+
+  test('every attempt while history is unwritable still owes exactly one summary', async () => {
+    const { app, task } = await proposedApp([step('s1', 'test.ok'), step('s2', 'test.ok')]);
+    refuseHistory(app);
+    await app.controller.runTask(task.id, 'run');
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const resume = await app.controller.runTask(task.id, 'resume');
+      assert.equal(resume.status, Outcome.INPUT_REJECTED, `attempt ${attempt}: the finished task is not run again`);
+      const asked = await app.controller.handle('did that task finish?');
+      assert.equal(asked.status, Outcome.CLARIFICATION_REQUIRED, `attempt ${attempt}: nothing saved means nothing to refer to`);
+      assert.match(asked.display, /no task result recorded yet/);
+      assert.match(asked.display, /APEX has queued it for reissue at the next task write/, 'and the failed reissue says it is still owed');
+      assert.equal(taskTurns(app).length, 0, `attempt ${attempt}: no partial delivery`);
+      assert.equal((await app.summaryQueue.entries()).length, 1, `attempt ${attempt}: one intent, not ${attempt}`);
+    }
+
+    delete app.conversation.append;
+    const after = await app.controller.handle('did that task finish?');
+    assert.equal(after.status, Outcome.SUCCESS_VERIFIED);
+    assert.equal(taskTurns(app).length, 1, 'and it is written exactly once');
+    assert.equal((await app.summaryQueue.entries()).length, 0);
+    assert.deepEqual(counted, ['s1', 's2'], 'four turns cost no extra execution');
+  });
+
+  test('a summary of a state the task has moved on from is dropped rather than written', async () => {
+    const { app, task } = await proposedApp([step('s1', 'test.ok'), step('s2', 'test.fail')]);
+    refuseHistory(app);
+    const ran = await app.controller.runTask(task.id, 'run');
+    assert.equal(ran.status, Outcome.EXECUTION_FAILED);
+    const failedState = await app.taskStore.get(task.id);
+    assert.equal(failedState.status, TaskStatus.FAILED);
+    const [intent] = await app.summaryQueue.entries();
+    assert.equal(intent.signature, taskStateSignature(failedState));
+
+    delete app.conversation.append;
+    const cancelled = await app.controller.cancelTask(task.id);
+    assert.equal(cancelled.status, Outcome.SUCCESS_VERIFIED);
+    const turns = taskTurns(app);
+    assert.equal(turns.length, 1, 'one summary: the state the task log holds now');
+    assert.match(turns[0].text, /cancelled - 1 of 2 step\(s\) verified complete/);
+    assert.equal(turns[0].text.includes('partially completed, then failed'), false, 'the superseded state is not restated');
+    assert.equal((await app.summaryQueue.entries()).length, 0, 'the stale intent is settled');
+    assert.deepEqual(counted, ['s1'], 'cancelling re-ran nothing');
+  });
+
+  test('a reissued summary keeps the audit gap it was built with', async () => {
+    const { app, task } = await proposedApp([step('s1', 'test.ok'), step('s2', 'test.ok')]);
+    app.controller.tasks.recordOperation = async () => { throw new Error('the audit log is full'); };
+    refuseHistory(app);
+    const ran = await app.controller.runTask(task.id, 'run');
+    assert.equal(ran.status, Outcome.AUDIT_INTEGRITY_FAILED);
+    assert.equal(ran.auditGaps, 2);
+    const [intent] = await app.summaryQueue.entries();
+    assert.match(intent.text, /2 without an audit record/, 'the queued text already names what is not established');
+    assert.equal(intent.verified, false, 'an unaudited completion is never queued as verified');
+
+    delete app.conversation.append;
+    const asked = await app.controller.handle('did that task finish?');
+    assert.equal(asked.status, Outcome.SUCCESS_VERIFIED, 'the question is answered from the records that exist');
+    const [turn] = taskTurns(app);
+    assert.equal(turn.verified, false, 'and the reissued turn keeps the gap');
+    assert.match(turn.text, /without an audit record/);
+    assert.match(turn.text, /this is not presented as independently verified/);
+    assert.match(asked.display, /no operation record is available for s1, s2/);
+    assert.equal(/Yes, it finished/.test(asked.display), false, 'a reissue never upgrades the claim it carries');
+    assert.deepEqual(counted, ['s1', 's2'], 'nothing ran again to make up for the missing audit');
+  });
+
+  test('a conversation history that cannot be checked blocks the reissue', async () => {
+    const { app, task } = await proposedApp([step('s1', 'test.ok')]);
+    refuseHistory(app);
+    await app.controller.runTask(task.id, 'run');
+    assert.equal((await app.summaryQueue.entries()).length, 1);
+    delete app.conversation.append;
+    fs.appendFileSync(conversationFile(app), 'this line is not a turn\n');
+
+    const asked = await app.controller.handle('did that task finish?');
+    const historyLines = rawConversation(app).trim().split('\n').filter(Boolean);
+    assert.equal(historyLines.length, 1, 'history holds only the damaged line: the reissue wrote nothing');
+    assert.equal(historyLines[0], 'this line is not a turn', 'and no turn was appended to a log that cannot be read');
+    assert.equal((await app.summaryQueue.entries()).length, 1, 'the intent stays owed');
+    assert.equal(asked.operation.errors.some((e) => e.stage === 'queue' && /nothing further was reissued/.test(e.message)), true,
+      'the blocked reissue is on the operation record');
+    assert.equal(asked.status, Outcome.EXECUTION_FAILED, 'and the question is answered as unreadable history, not as no history');
+    assert.match(asked.display, /conversation history could not be read/);
+  });
+
+  test('a summary that cannot be queued is disclosed as lost, not as pending', async () => {
+    const { app, task } = await proposedApp([step('s1', 'test.ok')]);
+    refuseHistory(app);
+    app.summaryQueue.add = async () => { throw eio(); };
+    const ran = await app.controller.runTask(task.id, 'run');
+    assert.equal(ran.status, Outcome.SUCCESS_VERIFIED);
+    assert.match(ran.display, /could not be queued, so it will not be reissued automatically/);
+    assert.ok(ran.operation.errors.some((e) => e.code === 'SUMMARY_NOT_QUEUED'));
+    assert.equal((await app.summaryQueue.entries()).length, 0, 'nothing was claimed that did not happen');
+    assert.equal(/has now been written to history/.test(ran.display), false);
+  });
+
+  test('a delivered summary whose queue cleanup failed is not written twice', async () => {
+    const { app, task } = await proposedApp([step('s1', 'test.ok')]);
+    refuseHistory(app);
+    await app.controller.runTask(task.id, 'run');
+    delete app.conversation.append;
+    app.summaryQueue.settle = async () => { throw eio(); };
+
+    const first = await app.controller.handle('did that task finish?');
+    assert.equal(taskTurns(app).length, 1, 'the summary reached history');
+    assert.match(first.display, /has now been written to history/);
+    assert.equal((await app.summaryQueue.entries()).length, 1, 'the intent outlives the failed cleanup');
+
+    const second = await app.controller.handle('did that task finish?');
+    assert.equal(second.status, Outcome.SUCCESS_VERIFIED);
+    assert.equal(taskTurns(app).length, 1, 'history is checked before any reissue, so nothing is duplicated');
+    assert.equal(/has now been written to history/.test(second.display), false, 'and no reissue is claimed when none happened');
+  });
+
+  test('the queue holds one intent per task state, is bounded, and reports damage as damage', async () => {
+    const dir = tempDir();
+    const queue = new SummaryQueue(path.join(dir, 'task-summary-queue.json'));
+    const base = { sessionId: 'session-1', taskId: 'task-1', signature: 'a'.repeat(64), text: 'TASK RESULT: task task-1 completed - 1 of 1 step(s) verified complete.', verified: true };
+    assert.equal((await queue.add(base)).queued, true);
+    assert.equal((await queue.add(base)).reason, 'already-queued', 'the same task state is never queued twice');
+    assert.equal((await queue.entries()).length, 1);
+    const second = await queue.add({ ...base, signature: 'b'.repeat(64) });
+    assert.equal(second.queued, true);
+    assert.equal((await queue.pending({ sessionId: 'session-2' })).length, 0, 'another session owes nothing');
+    const owed = await queue.pending({ sessionId: 'session-1' });
+    assert.deepEqual(owed.map((e) => e.signature), ['a'.repeat(64), 'b'.repeat(64)], 'oldest first');
+    assert.equal(await queue.settle(second.entry.id), true);
+    assert.equal(await queue.settle(second.entry.id), false, 'settling an absent intent changes nothing');
+
+    for (let i = 0; i < MAX_QUEUED_SUMMARIES - 1; i += 1) {
+      const added = await queue.add({ ...base, taskId: `task-${i}`, signature: String(i).padStart(64, '0') });
+      assert.equal(added.queued, true, `entry ${i}`);
+    }
+    const overflow = await queue.add({ ...base, taskId: 'task-overflow', signature: 'f'.repeat(64) });
+    assert.equal(overflow.queued, false, 'the queue is bounded');
+    assert.equal(overflow.reason, 'queue-full');
+    assert.equal((await queue.pending({ sessionId: 'session-1' })).length, SUMMARIES_PER_DELIVERY, 'one turn offers a bounded number');
+
+    fs.writeFileSync(path.join(dir, 'task-summary-queue.json'), '{ "schema": 1, "entries": [ { "id": 5 } ] }');
+    await assert.rejects(queue.entries(), /corrupt/, 'a damaged queue is not answered as an empty one');
+  });
+});
+
+// 052 also bounds the audit read the evidence check depends on. The answer about a
+// task's verified steps needs records, not a guess, so the scan may stop early only when
+// it has found everything it needs; proving that a record is absent still reads to the
+// end, and an unreadable log is an error rather than a missing record.
+describe('052: the audit evidence read is bounded without truncating evidence', () => {
+  const auditLines = (app) => fs.readFileSync(path.join(app.dataDir, 'operations.jsonl'), 'utf8').trim().split('\n').filter(Boolean).length;
+
+  test('a task with its step records intact is matched before the end of the log', async () => {
+    const { app, task } = await proposedApp([step('s1', 'test.ok'), step('s2', 'test.ok')]);
+    await app.controller.runTask(task.id, 'run');
+    const done = (await app.taskStore.get(task.id)).steps.filter((s) => s.status === StepStatus.COMPLETED);
+    const total = auditLines(app);
+    const scanned = await app.operations.missingTaskStepRecords(task.id, done);
+    assert.deepEqual(scanned.missing, [], 'both steps have their own record');
+    assert.equal(scanned.stoppedEarly, true);
+    assert.equal(scanned.inspected < total, true, `the scan read ${scanned.inspected} of ${total} lines`);
+    assert.equal(scanned.corrupt, 0);
+  });
+
+  test('a step whose record was never written is named, and the scan read the whole log to say so', async () => {
+    const { app, task } = await proposedApp([step('s1', 'test.ok'), step('s2', 'test.ok')]);
+    app.controller.tasks.recordOperation = async (record) => {
+      if (record.task?.stepId === 's2') throw new Error('the audit log is full');
+      return app.operations.append(record);
+    };
+    const ran = await app.controller.runTask(task.id, 'run');
+    assert.equal(ran.auditGaps, 1);
+    const done = (await app.taskStore.get(task.id)).steps.filter((s) => s.status === StepStatus.COMPLETED);
+    const scanned = await app.operations.missingTaskStepRecords(task.id, done);
+    assert.deepEqual(scanned.missing, ['s2']);
+    assert.equal(scanned.stoppedEarly, false, 'absence cannot be established from a truncated read');
+    assert.equal(scanned.inspected, auditLines(app), 'the whole log was read');
+  });
+
+  test('a record belonging to another task or step is not accepted as evidence', async () => {
+    const dir = tempDir();
+    const file = path.join(dir, 'operations.jsonl');
+    const record = (id, taskId, stepId) => JSON.stringify({
+      schema: OPERATION_SCHEMA, id, capability: 'task.step', status: 'success_verified', task: { id: taskId, stepId },
+    });
+    fs.writeFileSync(file, `${record('op-1', 'other-task', 's1')}\n${record('op-2', 'task-1', 'other-step')}\n${record('op-3', 'task-1', 's3')}\n`);
+    const log = new OperationLog(file);
+    const scanned = await log.missingTaskStepRecords('task-1', [
+      { id: 's1', operationId: 'op-1' },
+      { id: 's2', operationId: 'op-2' },
+      { id: 's3', operationId: 'op-3' },
+    ]);
+    assert.deepEqual(scanned.missing, ['s1', 's2'], 'only the record naming this task and this step counts');
+    assert.equal(scanned.stoppedEarly, false, 's3 was matched, but the two that were not needed the whole log');
+    assert.equal(scanned.inspected, 3);
+  });
+
+  test('a log that does not exist, is damaged, or cannot be read gives three different answers', async () => {
+    const dir = tempDir();
+    const absent = new OperationLog(path.join(dir, 'operations.jsonl'));
+    const noneYet = await absent.missingTaskStepRecords('task-1', [{ id: 's1', operationId: 'op-1' }]);
+    assert.deepEqual(noneYet.missing, ['s1'], 'a log that holds nothing holds no record');
+    assert.equal(noneYet.inspected, 0);
+    assert.deepEqual((await absent.missingTaskStepRecords('task-1', [{ id: 's9' }])).missing, ['s9'],
+      'a step with no operation id has nothing to look for');
+
+    const damagedFile = path.join(dir, 'damaged.jsonl');
+    fs.writeFileSync(damagedFile, 'not json\n');
+    const damaged = await new OperationLog(damagedFile).missingTaskStepRecords('task-1', [{ id: 's1', operationId: 'op-1' }]);
+    assert.equal(damaged.corrupt, 1, 'a damaged line is counted, never used as evidence');
+    assert.deepEqual(damaged.missing, ['s1']);
+
+    await assert.rejects(new OperationLog(dir).missingTaskStepRecords('task-1', [{ id: 's1', operationId: 'op-1' }]),
+      /cannot read/, 'a path that cannot be read is unavailable, not empty');
   });
 });
 
