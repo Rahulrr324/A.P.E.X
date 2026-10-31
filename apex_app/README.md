@@ -28,7 +28,7 @@ from a milestone number or a passing build.
 | Category | Status | Evidence |
 |---|---|---|
 | Runnable application | Implemented: the CLI in `bin/apex.js` / `src/cli.js`, the controller pipeline, memory, knowledge, audit, tasks, diagnostics. | `npm test` and the walkthrough in the [Commands](#commands) table. |
-| Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `calc`, `status`, `knowledge add/retract/history/health/list/search/show`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `knowledge-lifecycle.test.js`, `knowledge-health.test.js`, `tasks.test.js`, `cli-workflow.test.js`. A model is never consulted for these. |
+| Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `memory health`, `calc`, `status`, `knowledge add/retract/resolve/history/health/list/search/show`, `audit health`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `knowledge-lifecycle.test.js`, `knowledge-health.test.js`, `knowledge-resolution.test.js`, `store-health.test.js`, `tasks.test.js`, `cli-workflow.test.js`. A model is never consulted for these. |
 | Filesystem inspection | Implemented only when `APEX_FILESYSTEM_ROOT` is set: bounded, read-only, single-root listing and reading. | `filesystem.test.js`, `tasks-filesystem.test.js`. |
 | Model gateway protocol handling | Implemented and **stub-tested**: request/response shapes, failure classification, retries, timeouts, and model-name mismatch against local stand-in servers that copy the documented OpenAI-compatible and Ollama shapes. | `gateway.test.js`, `model-workflow.test.js`. Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model. |
 | Real-model behaviour | **Observed outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on one Windows machine. One bounded request on 2026-10-31 completed through APEX in about 105 s; a bounded four-request benchmark the same day recorded 37.7-53.1 s per request, with 3.0-3.8 backend-reported tokens/s. Every answer was reported as unverified. Measurements and limits are in [Optional: a local model](#optional-a-local-model). | Manual, dated observations only; no automated regression test. |
@@ -166,6 +166,7 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `ask <request>` | Runs the full Cognitive Controller workflow for a request and records it. |
 | `ask --save-answer <request>` | As `ask`, and also stores a model answer as a `model_conclusion`. Only with this explicit flag. |
 | `memory correct --resolve <full-record-id> <replacement claim...>` | Explicitly corrects one selected claim. Appends a user-confirmed record and preserves the original. |
+| `memory health` | Read-only record, provenance, correction, and corruption summary for persistent memory. Exact counts, bounded samples, and a note when inspection is incomplete. Content and secrets are not printed. Never calls a model, writes no audit record, and repairs nothing. Exit 0 only when the store was fully inspected and nothing requires attention. |
 | `new` | Starts a new conversation session. Memory is kept; earlier turns are no longer sent to the model. |
 | `history [--limit N]` | Lists recent operation records. |
 | `task plan <goal>` | Plans a multi-step task and stores it. Runs nothing. See [Tasks](#tasks). |
@@ -180,8 +181,10 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `repair locks` | Inspects the task and queue locks and removes only abandoned takeover tokens whose number no live process owns. It never takes a lock, never deletes a lock claim, and refuses while any holder or takeover number is live. A dead claim is taken over by the next normal run. A claim whose number has been recycled by an unrelated process looks live and is refused; resolving that needs the manual check described under Known limitations. |
 | `knowledge add --subject <s> --relationship <r> --object <o> [--evidence <e>] [--supersedes <id[,id...]>]` | Stores an explicit relationship triple. User origin only. Optional `--supersedes` retires named conflicting records as historical, without deleting them. |
 | `knowledge retract <id> [--reason <text>]` | Marks an existing active claim as retracted without supplying a replacement. The original claim, evidence, and provenance are preserved. User origin only. |
-| `knowledge history <id>` | Read-only lifecycle view: state, retraction event and reason, direct and chained supersession links, and an explicit note when the evidence is incomplete or ambiguous. Never calls a model. |
-| `knowledge health` | Read-only store-wide summary: claim counts by lifecycle state, unresolved conflict groups, lifecycle-event count, corrupt lines, bounded chain components, and detected anomalies. Never calls a model, writes no audit record, and repairs nothing. Exit 0 only when the store was fully inspected with no anomaly, ambiguity, or unresolved conflict. |
+| `knowledge resolve <target-id> --choose <claim-id> [--reason <text>]` | Records an explicit user decision among a live conflict group. Every named claim must be active and conflicting; the choice must be one of them. The event names the whole group, the chosen claim, and an optional reason. No claim is deleted, merged, or rewritten, and the status stays `conflicting`. A repeated identical decision is refused; a changed decision is a new event that supersedes the earlier decision for that same group. User origin only; a model proposal cannot appear in a plan. |
+| `knowledge history <id>` | Read-only lifecycle view: state, retraction and resolution events, direct and chained supersession links, and an explicit note when the evidence is incomplete or ambiguous. Never calls a model. |
+| `knowledge health` | Read-only store-wide summary: claim counts by lifecycle state, live and resolved conflict groups, lifecycle-event counts (retractions and resolutions), corrupt lines, bounded chain components, and detected anomalies. Never calls a model, writes no audit record, and repairs nothing. Exit 0 only when the store was fully inspected with no anomaly, ambiguity, or unresolved conflict. |
+| `audit health` | Read-only operation-log summary: readable record count, outcome counts, corrupt lines, and structural anomalies. Integrity is explicitly parse-only: there is no hash chain, signature, or external anchor, so a clean parse does not prove authenticity. It prints no request or output body, never calls a model, writes no audit record, and repairs nothing. Exit 0 only when the log was fully inspected and nothing requires attention. |
 | `knowledge list [--limit N]` | Lists recent knowledge records with provenance and status, including historical (superseded and retracted) records. |
 | `knowledge search <query>` | Searches knowledge triples by keyword. |
 | `knowledge show <id>` | Shows a knowledge record in full with provenance and conflict details. |
@@ -209,10 +212,15 @@ shows any relevant memory it found (without summarising it), and **generates not
 
 | Code | Meaning |
 |---|---|
-| 0 | Verified success, or a model answer was produced (reported as unverified) with no proposed action blocked. |
-| 1 | Not completed: denied, rejected, failed, not verified, no model, the store is unavailable, or a model answer whose proposed action was denied/failed. |
+| 0 | Verified success, or a model answer was produced (reported as unverified) with no proposed action blocked. For the read-only health commands (`memory health`, `knowledge health`, `audit health`), 0 means the store was fully inspected and nothing requires attention. |
+| 1 | Not completed: denied, rejected, failed, not verified, no model, the store is unavailable, or a model answer whose proposed action was denied/failed. For a health command, 1 means damage, an unreadable store, an incomplete inspection, a detected anomaly, or (for knowledge) an unresolved conflict. A health check that exits 1 still changed nothing. |
 | 2 | Usage or configuration error. |
 | 3 | The operation ran, but its audit record could not be written. The output says so. |
+
+Health exit codes are a report, not a success claim. `0` says only that the readable
+records were consistent and complete for this inspection; it does not assert that any
+stored content is true, and it does not detect deliberate editing that leaves valid
+JSON behind.
 
 Error lines are presentation, not evidence: each is bounded to one line and
 credential-like text in it is redacted. An operation's audit record keeps the
@@ -684,7 +692,7 @@ src/memory/
   memory-store.js     personal memory: validation, provenance, content hash, retrieval
   conversation-store.js  conversation turns with origin; credential-like text is never stored
 src/knowledge/
-  knowledge-store.js  triples, validation, conflict detection, lifecycle events, store-wide health
+  knowledge-store.js  triples, validation, conflict detection, lifecycle events (retraction, resolution), store-wide health
 src/filesystem/
   path.js             absolute path validation: no traversal, no drive root, no UNC
   actions.js          bounded, read-only listing and reading
@@ -873,6 +881,21 @@ questions that must change nothing).
   selected old record, which remains visible as `superseded` when no other conflict
   remains. Conflicts with any other claims stay unresolved; superseded history is not
   sent as an active fact in model context.
+- **A recorded resolution is a decision, not a finding.** `knowledge resolve` records
+  which claim a user chose to treat as the answer; it does not make that claim true and
+  does not delete or rewrite the alternatives. It governs only the exact live conflict
+  group it names, and it stops governing if that group's membership changes (a claim is
+  added, retracted, or superseded) or a later decision for the same claims is recorded.
+  There is no automatic conflict resolution, and nothing derived from model output can
+  choose. An absent or ambiguous group is refused rather than guessed.
+- **Health reports structural integrity, not truth, and not tamper evidence.** The
+  three health commands parse stored records and report what that parse establishes.
+  `memory health` cannot show a record is factually true; `knowledge health` cannot
+  show a claim is true and treats a resolution as a decision; `audit health` is
+  parse-only, because the append-only JSONL log has no hash chain, signature, or
+  external anchor, so a clean parse does not prove the log is authentic or unedited.
+  A store that is unavailable or partly corrupt yields an explicitly incomplete
+  inspection. None of the three repairs anything or writes an audit record.
 - **The task lock serializes task changes, not every command.** `task plan`, `run`,
   `resume`, `approve`, `retry` and `cancel` take `tasks.jsonl.lock`; reads (`status`,
   `diagnose`, `task list/show/explain`, `history`) take no lock, and the other stores
@@ -931,10 +954,11 @@ explicit entity relationships, built alongside personal memory:
 - **Entity relationship triples:** Each record stores an explicit triple:
   `subject --[relationship]--> object`, together with optional `evidence`,
   canonical hash (`tripleHash`), timestamp, and explicit provenance.
-- **Write authority:** Knowledge writes (`knowledge add` / `knowledge.add` and
-  `knowledge retract` / `knowledge.retract`) require explicit user origin. Model
-  proposals cannot write or retract knowledge, and neither action can appear in a
-  model-generated plan.
+- **Write authority:** Knowledge writes (`knowledge add` / `knowledge.add`,
+  `knowledge retract` / `knowledge.retract`, and `knowledge resolve` /
+  `knowledge.resolve`) require explicit user origin. Model
+  proposals cannot write, retract, or resolve knowledge, and none of these actions can
+  appear in a model-generated plan.
 - **Conflict handling:** When a new relationship contradicts an existing one (same
   subject and relationship, different object), the conflict is detected and both
   records are preserved and marked `conflicting`. Contradictions are never silently
@@ -957,10 +981,30 @@ explicit entity relationships, built alongside personal memory:
   assertion of the same triple is a new record; it does not revive the old one.
   Retraction is user-origin only and cannot be planned or authorized from model
   output.
+- **Explicit resolution of conflicting claims:** `knowledge resolve <target-id>
+  --choose <claim-id> [--reason <text>]` records a user decision without claiming the
+  chosen claim is true. The event names every claim in the live conflict group, the
+  chosen claim, the optional reason, timestamp, and user-origin provenance; no claim
+  is edited, merged, or deleted. It applies only when every named claim exists and is
+  active, all share the same normalized subject and relationship with at least two
+  distinct objects, and the live group is exactly the named set. The chosen claim must
+  belong to that group. A missing, retracted, superseded, unrelated, or ambiguous
+  target is refused, as is a choice outside the group. Resolution does not change a
+  claim's status away from `conflicting`; instead, a `resolution` lifecycle event
+  records that the conflict now has a user decision. All alternatives stay inspectable
+  and `knowledge list`, `show`, `history`, and the model context label the decision as a
+  decision, not verified truth. Resolving an already-resolved group with the identical
+  decision is refused (nothing changes), while a different choice is a new event; the
+  latest applicable decision for the same claim set governs, and earlier events remain
+  in history. If the live group changes afterwards (a claim is added, retracted, or
+  superseded), the earlier decision no longer governs and `knowledge health` counts the
+  group as an unresolved conflict again until a new decision is recorded. Model output
+  cannot resolve a conflict, and `knowledge.resolve` is never plannable.
 - **Lifecycle history:** `knowledge history <id>` is a read-only view of what the
   stored records establish: the original claim and provenance, active/superseded/
-  retracted/ambiguous state, the retraction event and reason, the records it replaced
-  and the records that replaced it, and the bounded connected chain. It reports
+  retracted/ambiguous state, the retraction event and reason, resolution events naming
+  this claim, the records it replaced and the records that replaced it, and the bounded
+  connected chain. It reports
   missing links, multiple successors, multiple retraction events, records that are
   both retracted and superseded, cycles, and truncation as explicit limitations; it
   never infers a missing link or claims the chain is complete when it is not. It
@@ -976,6 +1020,12 @@ explicit entity relationships, built alongside personal memory:
   - a conflict group contains only active claims with the same normalized subject and
     relationship and at least two distinct objects; superseded and retracted records
     are not live conflicts;
+  - a conflict group with a currently governing user resolution is reported separately
+    as a resolved group: it is still counted among conflict groups and still holds
+    claims in `conflicting` status, but it is not counted as attention. If the group's
+    membership later changes, it returns to being an unresolved conflict;
+  - lifecycle events (retractions and resolutions) are counted, never inflated into
+    claim counts;
   - corrupt lines are counted separately and are never treated as valid historical
     records;
   - a supersession chain longer than the 20-record history view bound is reported as a
@@ -983,18 +1033,49 @@ explicit entity relationships, built alongside personal memory:
   The command also reports detected anomalies: missing link targets, multiple
   successors, cycles, multiple retraction events, contradictory terminal states,
   stored `superseded` status without a successor, links across different subjects or
-  relationships, links that state the same triple, and retraction events whose target
-  is absent. If the log is corrupt or unreadable, every count covers readable records
+  relationships, links that state the same triple, retraction events whose target is
+  absent, and resolution events that name a missing claim, name claims that do not
+  form one live conflict group, or repeat a claim id or chosen object. A resolution
+  that merely cannot govern the current store because a newer decision overruled it or
+  because the group changed afterwards is ordinary history, not damage: it is reported
+  as overruled or historical and the lifecycle view stays complete. If the log is
+  corrupt or unreadable, every count covers readable records
   only and the summary says that completeness cannot be established. Health reporting
-  is read-only: it never repairs, deletes, supersedes, or retracts anything, writes no
-  audit record, and calls no model. It describes the integrity and lifecycle state of
-  stored claims; it does not establish that any claim is true, and an incomplete
-  inspection cannot guarantee that the rest of the store is healthy.
+  is read-only: it never repairs, deletes, supersedes, retracts, or resolves anything,
+  writes no audit record, and calls no model. It describes the integrity and lifecycle
+  state of stored claims; it does not establish that any claim is true, and an
+  incomplete inspection cannot guarantee that the rest of the store is healthy.
+- **Memory health:** `memory health` reports the record count, kinds (user facts and
+  model conclusions), private records, corrections and the claims they replaced,
+  provenance/update-mode counts, corrupt-line count with bounded samples, and detected
+  anomalies (duplicate ids, a record that replaces itself, a replacement target that
+  does not exist, a claim replaced more than once). It never prints memory content or
+  secret-like values, never calls a model, writes no audit record, and repairs
+  nothing. A record proves only that it parsed and its stored content hash matches; it
+  does not prove the content is true. It is a separate inspection from `knowledge
+  health` and `audit health`: one damaged store does not change another's counts.
+- **Audit health:** `audit health` reports the readable operation-record count, outcome
+  counts, corrupt-line count with bounded samples, and structural anomalies (duplicate
+  ids, missing or invalid `requestedAt`, invalid `finishedAt`). Its integrity statement
+  is explicitly **parse-only**: `operations.jsonl` is append-only JSONL with no hash
+  chain, signature, or external anchor, so a clean parse proves structure, not
+  authenticity, and deliberate editing that leaves valid JSON is not detected. It
+  prints no `request` or `output` body; it never calls a model, writes no audit record,
+  and repairs nothing.
+- **Healthy, empty, unavailable, and incomplete are different answers.** An empty
+  store is healthy and reported as empty. An unreadable store (permissions, a
+  directory where a file is expected, an I/O error) is reported as unavailable, never
+  as empty. A store with corrupt lines is reported as damaged and its inspection as
+  incomplete: counts cover readable records only, so an incomplete inspection cannot
+  guarantee that the rest of the store is healthy. All three health commands exit 1
+  for any of the latter conditions and change nothing.
 - **Three different answers:** Supersession says "this claim was replaced by a newer
   conflicting claim"; retraction says "this claim is no longer active and no
-  replacement is asserted"; independent verification says "the write APEX reports is
-  the write the store actually holds". Verification is not a claim that the content is
-  true, and neither supersession nor retraction changes the preserved original.
+  replacement is asserted"; explicit resolution says "the user decided to treat one
+  claim as chosen, while every alternative is preserved"; independent verification says
+  "the write APEX reports is the write the store actually holds". Verification and
+  resolution are not claims that the content is true, and none of these changes the
+  preserved original.
 - **Bounded retrieval into model context:** When answering a request on the model path,
   the controller retrieves up to 3 relevant knowledge records by searching the triple
   and evidence. Question words and other low-signal words are ignored, so a question
@@ -1003,8 +1084,15 @@ explicit entity relationships, built alongside personal memory:
   incidental common word. Records below the relevance threshold stay out of the prompt.
   Injected
   records explicitly state their provenance (`user-supplied fact`
-  or `unconfirmed claim`) and conflict status (`[CONFLICTING: another record disagrees]`).
-  `knowledge search` keeps its broad matching, because there you asked what matches.
+  or `unconfirmed claim`) and conflict status. An unresolved conflict says
+  `[CONFLICTING: another record disagrees; treat as unresolved]`. A conflict with a user
+  decision is labelled as such instead: the chosen claim says
+  `[CONFLICT: user decision selected this claim; a recorded decision, not verified truth; other claims are preserved]`
+  and each alternative says
+  `[CONFLICT: user decision selected another claim; this claim remains stored as an alternative]`.
+  The model still sees every alternative, and no label presents a decision as verified
+  truth. `knowledge search` keeps its broad matching, because there you asked what
+  matches.
 - **Auditability:** Every write operation is recorded in `operations.jsonl` and
   independently verified against the store log.
 - **Corrections are never inferred from `remember`.** Repeating `remember` records
@@ -1077,7 +1165,7 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this batch was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 833 tests, 831 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 862 tests, 860 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file

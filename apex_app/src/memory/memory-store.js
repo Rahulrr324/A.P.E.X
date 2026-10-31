@@ -5,7 +5,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from './jsonl-store.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS, STOPWORDS } from '../util.js';
+import { CONTROL_CHARS, STOPWORDS, shortId } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 
 export const MEMORY_SCHEMA = 1;
@@ -22,6 +22,8 @@ const BACKEND_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const MEMORY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const FUZZY_MIN_SIMILARITY = 0.6;
 const FUZZY_MIN_LENGTH = 4;
+// Health output is a summary, not a dump: exact counts, bounded examples.
+const MAX_HEALTH_SAMPLES = 20;
 
 export function sha256Hex(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex');
@@ -496,4 +498,124 @@ export class MemoryStore {
     const { records, corrupt } = await this.log.load();
     return { path: this.filePath, records: records.length, corrupt: corrupt.length };
   }
+
+  // Read-only integrity summary. The raw log is loaded rather than the complete-only
+  // path so damage and the readable part are reported together. Nothing is written,
+  // repaired, or sent to a model. A record's presence proves only that it parsed and
+  // that its content hash matches; it says nothing about whether the content is true.
+  async health() {
+    let loaded;
+    try {
+      loaded = await this.log.load();
+    } catch (err) {
+      return summarizeMemoryHealth(null, [], {
+        path: this.filePath,
+        detail: err?.message ?? String(err),
+      });
+    }
+    return summarizeMemoryHealth(loaded.records, loaded.corrupt, { path: this.filePath });
+  }
+}
+
+export function summarizeMemoryHealth(records, corrupt = [], { path = null, detail = null } = {}) {
+  if (!Array.isArray(records)) {
+    return {
+      path,
+      state: 'unavailable',
+      inspected: false,
+      complete: false,
+      detail,
+      records: null,
+      corruptLines: null,
+      corrupt: [],
+      kinds: null,
+      sources: null,
+      sensitivities: null,
+      updateModes: null,
+      corrections: null,
+      replacedClaims: null,
+      privateRecords: null,
+      anomalies: { count: null, samples: [], truncated: false },
+      attention: true,
+    };
+  }
+
+  const kinds = { user_fact: 0, model_conclusion: 0 };
+  const sources = { user: 0, model: 0 };
+  const sensitivities = { normal: 0, private: 0 };
+  const updateModes = { user_confirmed: 0, model_proposed: 0, unresolved_conflict: 0 };
+  const ids = new Set();
+  const duplicateIds = new Set();
+  const replacedBy = new Map();
+  const replacementTargets = new Set();
+  let corrections = 0;
+
+  for (const record of records) {
+    kinds[record.kind] = (kinds[record.kind] ?? 0) + 1;
+    sources[record.source] = (sources[record.source] ?? 0) + 1;
+    const sensitivity = record.sensitivity ?? 'normal';
+    sensitivities[sensitivity] = (sensitivities[sensitivity] ?? 0) + 1;
+    const updateMode = record.provenance?.updateMode
+      ?? (record.source === 'model' ? 'model_proposed' : 'user_confirmed');
+    updateModes[updateMode] = (updateModes[updateMode] ?? 0) + 1;
+    if (ids.has(record.id)) duplicateIds.add(record.id);
+    ids.add(record.id);
+    const replaces = record.provenance?.replaces ?? [];
+    if (replaces.length > 0) {
+      corrections += 1;
+      for (const targetId of replaces) {
+        replacementTargets.add(targetId);
+        const list = replacedBy.get(targetId) ?? [];
+        list.push(record.id);
+        replacedBy.set(targetId, list);
+      }
+    }
+  }
+
+  const samples = [];
+  let anomalyCount = 0;
+  const anomaly = (message) => {
+    anomalyCount += 1;
+    if (samples.length < MAX_HEALTH_SAMPLES) samples.push(message);
+  };
+
+  for (const id of duplicateIds) anomaly(`[${shortId(id)}] appears more than once in the store`);
+  for (const record of records) {
+    for (const targetId of new Set(record.provenance?.replaces ?? [])) {
+      if (targetId === record.id) {
+        anomaly(`[${shortId(record.id)}] names itself as the claim it replaces`);
+      } else if (!ids.has(targetId)) {
+        anomaly(`[${shortId(record.id)}] replaces [${shortId(targetId)}], which is not in the store`);
+      }
+    }
+  }
+  for (const [targetId, successors] of replacedBy) {
+    if (successors.length > 1) {
+      anomaly(`[${shortId(targetId)}] is replaced by ${successors.length} records`);
+    }
+  }
+
+  return {
+    path,
+    state: corrupt.length > 0 ? 'damaged' : 'ok',
+    inspected: true,
+    complete: corrupt.length === 0,
+    detail: null,
+    records: records.length,
+    corruptLines: corrupt.length,
+    corrupt: corrupt.map((entry) => ({
+      line: entry.line,
+      reason: entry.reason,
+      truncatedTail: Boolean(entry.truncatedTail),
+    })),
+    kinds,
+    sources,
+    sensitivities,
+    updateModes,
+    corrections,
+    replacedClaims: replacementTargets.size,
+    privateRecords: sensitivities.private,
+    anomalies: { count: anomalyCount, samples, truncated: anomalyCount > samples.length },
+    attention: corrupt.length > 0 || anomalyCount > 0,
+  };
 }

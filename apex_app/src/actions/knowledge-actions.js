@@ -79,7 +79,12 @@ function renderStatus(r) {
   if (r.lifecycleState === 'retracted') return 'retracted';
   if (r.supersededBy && r.supersededBy.length > 0) return 'superseded';
   if (r.status === 'conflicting' || (r.conflictsWith && r.conflictsWith.length > 0)) {
-    return `conflicting (conflicts with: ${(r.conflictsWith ?? []).map(shortId).join(', ')})`;
+    const base = `conflicting (conflicts with: ${(r.conflictsWith ?? []).map(shortId).join(', ')})`;
+    // A recorded decision changes what is chosen, not whether the claims agree. Say both,
+    // so a list reader does not mistake a decision for a resolution of the facts.
+    return r.conflictState === 'resolved' && r.resolution
+      ? `${base}; user decision chose ${shortId(r.resolution.chosenId)} (a recorded decision, not verified truth)`
+      : base;
   }
   return r.status ?? 'supported';
 }
@@ -276,6 +281,114 @@ export function knowledgeActions(knowledge) {
           return { ok: false, detail: 'the original timestamp was altered by the retraction' };
         }
         return { ok: true, detail: 'retraction event confirmed; original claim and evidence preserved' };
+      },
+    },
+
+    {
+      name: 'knowledge.resolve',
+      description: 'Record an explicit user decision choosing one claim from a live conflict group. Other claims are preserved; the choice is not verified truth. Write: user origin only.',
+      inputHint: '{"target":"record id in the conflict group","choose":"claim id to select","reason":"optional text"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      // A resolution is a user decision about what to treat as chosen. A model proposal
+      // could otherwise author the decision and have it recorded as user-originated.
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target', 'choose', 'reason']);
+        return {
+          target: recordRef(o.target, 'target'),
+          choose: recordRef(o.choose, 'choose'),
+          reason: optionalReason(o.reason),
+        };
+      },
+      async execute(ctx, { target, choose, reason }) {
+        const { event, chosen, targetIds, claims } = await knowledge.resolve({
+          target,
+          choose,
+          reason,
+          provenance: { operationId: ctx.operationId },
+          origin: ctx.origin,
+        });
+        const alternatives = targetIds.length - 1;
+        return {
+          summary: `recorded resolution ${shortId(event.id)} choosing ${shortId(chosen.id)} among ${targetIds.length} claim(s); ${alternatives} alternative(s) preserved`,
+          data: {
+            resolutionId: event.id,
+            targetId: chosen.id,
+            chosenId: chosen.id,
+            targetIds,
+            reason: event.reason ?? null,
+            resolvedAt: event.createdAt,
+            provenance: {
+              origin: event.provenance.origin,
+              updateMode: event.provenance.updateMode,
+            },
+            chosenClaim: {
+              id: chosen.id,
+              subject: chosen.subject,
+              relationship: chosen.relationship,
+              object: chosen.object,
+              evidence: chosen.evidence ?? null,
+              createdAt: chosen.createdAt,
+            },
+            claims: claims.map((claim) => ({
+              id: claim.id,
+              subject: claim.subject,
+              relationship: claim.relationship,
+              object: claim.object,
+              evidence: claim.evidence ?? null,
+              createdAt: claim.createdAt,
+            })),
+          },
+          display: [
+            `Recorded user resolution ${shortId(event.id)} for ${targetIds.length} conflicting claim(s):`,
+            `  chosen: [${shortId(chosen.id)}] ${chosen.subject} --[${chosen.relationship}]--> ${chosen.object}`,
+            `  alternatives preserved: ${alternatives}`,
+            'This records a user decision. It does not prove the chosen claim is true, and the other claims remain stored.',
+          ].join('\n'),
+        };
+      },
+      async verify(_ctx, _input, result) {
+        const event = await knowledge.getEvent(result.data.resolutionId);
+        if (!event || event.kind !== 'resolution') {
+          return { ok: false, detail: 'resolution event not found in store after write' };
+        }
+        if (event.chosenId !== result.data.chosenId) {
+          return { ok: false, detail: 'stored chosen claim differs from the write result' };
+        }
+        const stored = [...event.targetIds].sort();
+        const claimed = [...result.data.targetIds].sort();
+        if (stored.length !== claimed.length || stored.some((id, i) => id !== claimed[i])) {
+          return { ok: false, detail: 'stored target claims differ from the write result' };
+        }
+        if ((event.reason ?? null) !== (result.data.reason ?? null)) {
+          return { ok: false, detail: 'stored resolution reason differs from the write result' };
+        }
+        if (event.provenance?.updateMode !== 'user_confirmed'
+          || (event.provenance?.origin !== 'user_supplied' && event.provenance?.origin !== 'user_approved')) {
+          return { ok: false, detail: 'resolution provenance is not user confirmed' };
+        }
+        // Append-only: every claim named by the decision must still be exactly the claim
+        // that was read when the decision was recorded.
+        for (const snapshot of result.data.claims) {
+          const fresh = await knowledge.get(snapshot.id);
+          if (!fresh) return { ok: false, detail: `claim ${shortId(snapshot.id)} was removed by the resolution` };
+          if (fresh.subject !== snapshot.subject
+            || fresh.relationship !== snapshot.relationship
+            || fresh.object !== snapshot.object
+            || (fresh.evidence ?? null) !== (snapshot.evidence ?? null)
+            || fresh.createdAt !== snapshot.createdAt) {
+            return { ok: false, detail: `claim ${shortId(snapshot.id)} was altered by the resolution` };
+          }
+        }
+        const view = await knowledge.history(result.data.chosenId);
+        if (!view || !(view.resolutions ?? []).some((entry) => entry.id === event.id)) {
+          return { ok: false, detail: 'resolution is not discoverable in the chosen claim history' };
+        }
+        return {
+          ok: true,
+          detail: `resolution event confirmed; ${result.data.claims.length} claim(s) preserved; the choice is a recorded decision, not verified fact`,
+        };
       },
     },
 

@@ -25,9 +25,11 @@ Usage:
   node bin/apex.js status [--model]      subsystem counts (--model probes the endpoint; no inference)
   node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
+  node bin/apex.js memory health         store-wide record, provenance, and corruption counts (read-only)
   node bin/apex.js history [--limit N]
   node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]
   node bin/apex.js knowledge retract <id> [--reason <text>]
+  node bin/apex.js knowledge resolve <target-id> --choose <claim-id> [--reason <text>]
   node bin/apex.js knowledge history <id>
   node bin/apex.js knowledge health          store-wide counts, conflicts, and lifecycle anomalies (read-only)
   node bin/apex.js knowledge list [--limit N]
@@ -44,6 +46,7 @@ Usage:
   node bin/apex.js task retry <id> <stepId>   retry a failed read-only step
   node bin/apex.js task cancel <id>
   node bin/apex.js queue                 deferred task summaries and their state (read-only)
+  node bin/apex.js audit health          operation-log integrity and outcome counts (read-only)
   node bin/apex.js repair locks          inspect task/queue locks; remove only abandoned takeover tokens
   node bin/apex.js help
 
@@ -76,6 +79,7 @@ Knowledge examples (explicit relationships; user-origin write only):
   knowledge add --subject APEX --relationship has_subsystem --object "Memory Store" --evidence "README section 3"
   knowledge add --subject Engine --relationship fuel --object Electric --supersedes a1b2c3d4
   knowledge retract a1b2c3d4 --reason "superseded by a later service record"
+  knowledge resolve a1b2c3d4 --choose 9f8e7d6c --reason "confirmed by the service record"
   knowledge history a1b2c3d4
   knowledge health
   knowledge list
@@ -136,7 +140,7 @@ function parseFlags(args, allowed) {
         if (v === undefined || v.startsWith('--')) throw new ValidationError('--step needs a step id', 'USAGE');
         flags.step = v;
         i += 1;
-      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'reason'].includes(name)) {
+      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -189,7 +193,9 @@ export function formatResult(res) {
   // A write whose executor reported a failure may already have changed data: the body was
   // invoked, so the outcome after the error is unknown. A rejected input never reached the
   // body and is reported above as rejected; this note is only for failures that started.
-  const writeActions = new Set(['memory.add', 'memory.save_conclusion', 'knowledge.add', 'knowledge.retract']);
+  const writeActions = new Set([
+    'memory.add', 'memory.save_conclusion', 'knowledge.add', 'knowledge.retract', 'knowledge.resolve',
+  ]);
   if (res.operation.steps.some((s) => s.execution?.status === 'failed'
     && writeActions.has(s.action)
     && !/corrupt/i.test(s.execution?.error?.message ?? ''))) {
@@ -508,8 +514,16 @@ export async function main(argv, {
 
     if (command === 'memory') {
       const [sub, ...rest] = args;
+      if (sub === 'health') {
+        rejectUnexpected(parseFlags(rest, []).rest, 'memory health');
+        // A direct, unaudited read. Exit 0 only when the store was fully inspected and
+        // nothing requires attention; damage or an unreadable store exits 1.
+        const res = await app.controller.memoryHealth();
+        out(res.display ?? res.output ?? '(none)');
+        return res.health?.attention ? 1 : 0;
+      }
       if (sub !== 'correct') {
-        err('usage: memory correct --resolve <full-record-id> <replacement claim...>');
+        err('usage: memory correct --resolve <full-record-id> <replacement claim...> | memory health');
         return 2;
       }
       const { flags, rest: values } = parseFlags(rest, ['resolve']);
@@ -547,6 +561,18 @@ export async function main(argv, {
         }
         return emit(await app.controller.knowledgeRetract({
           target: ids[0],
+          reason: flags.reason ?? null,
+        }));
+      }
+      if (sub === 'resolve') {
+        const { flags, rest: ids } = parseFlags(rest, ['choose', 'reason']);
+        if (ids.length !== 1 || typeof flags.choose !== 'string' || flags.choose.trim().length === 0) {
+          err('usage: knowledge resolve <target-id> --choose <claim-id> [--reason <text>]');
+          return 2;
+        }
+        return emit(await app.controller.knowledgeResolve({
+          target: ids[0],
+          choose: flags.choose,
           reason: flags.reason ?? null,
         }));
       }
@@ -596,8 +622,22 @@ export async function main(argv, {
         out(res.display ?? res.output ?? '(none)');
         return res.status === Outcome.SUCCESS_VERIFIED ? 0 : 1;
       }
-      err('usage: knowledge add|retract|history|health|list|search|show');
+      err('usage: knowledge add|retract|resolve|history|health|list|search|show');
       return 2;
+    }
+
+    if (command === 'audit') {
+      const [sub, ...rest] = args;
+      if (sub !== 'health') {
+        err('usage: audit health');
+        return 2;
+      }
+      rejectUnexpected(parseFlags(rest, []).rest, 'audit health');
+      // A direct, unaudited read. Exit 0 only when the log was fully inspected and
+      // nothing requires attention; damage or an unreadable log exits 1.
+      const res = await app.controller.auditHealth();
+      out(res.display ?? res.output ?? '(none)');
+      return res.health?.attention ? 1 : 0;
     }
 
     if (command === 'queue') {

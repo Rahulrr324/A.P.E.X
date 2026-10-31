@@ -23,6 +23,10 @@ const MAX_EVIDENCE_CHARS = 1000;
 const MAX_CONTEXT_CHARS = 200;
 export const MAX_SUPERSEDES = 10;
 export const MAX_RETRACTION_REASON_CHARS = 500;
+// A resolution names one live conflict group. The bound keeps a single decision from
+// silently covering an unbounded set of claims; a larger group must be split explicitly.
+export const MAX_RESOLUTION_TARGETS = 20;
+export const MAX_RESOLUTION_REASON_CHARS = 500;
 // A history chain is bounded so one damaged or enormous store cannot produce
 // unbounded output. The view says when it stopped rather than implying completeness.
 export const MAX_HISTORY_CHAIN = 20;
@@ -36,6 +40,11 @@ const MAX_CONFLICT_SAMPLES = 5;
 // from the events that target it. Keeping one append-only source of truth means a
 // reader that sees the claim also sees the evidence that retired it.
 const RETRACTION_KIND = 'retraction';
+// A resolution records an explicit user decision about one exact conflict group. It is
+// appended next to the claims and events and never edits them: the chosen claim is not
+// rewritten and every other claim stays readable. A recorded decision is not a verified
+// fact, so readers keep the conflict and its alternatives visible.
+const RESOLUTION_KIND = 'resolution';
 
 const VALID_STATUSES = new Set(['supported', 'uncertain', 'conflicting', 'superseded']);
 const VALID_PROVENANCE_ORIGINS = new Set(['user_supplied', 'user_approved']);
@@ -81,6 +90,7 @@ export function validateKnowledgeRecord(r) {
   if (!r || typeof r !== 'object' || Array.isArray(r)) return 'not an object';
   if (r.schema !== KNOWLEDGE_SCHEMA) return 'unsupported schema';
   if (r.kind === RETRACTION_KIND) return validateRetractionEvent(r);
+  if (r.kind === RESOLUTION_KIND) return validateResolutionEvent(r);
   if (r.kind !== undefined) return 'unknown record kind';
   if (typeof r.id !== 'string' || !ID_RE.test(r.id)) return 'missing or invalid id';
   if (typeof r.subject !== 'string' || r.subject.length === 0) return 'missing subject';
@@ -133,6 +143,47 @@ function validateRetractionEvent(r) {
   if (r.provenance.updateMode !== 'user_confirmed') return 'retraction event provenance must be user_confirmed';
   for (const field of ['subject', 'relationship', 'object', 'evidence', 'tripleHash', 'status', 'supersededBy']) {
     if (r[field] !== undefined) return `retraction event must not carry ${field}`;
+  }
+  return null;
+}
+
+// A resolution event names the exact claims it decides between and the one the user
+// selected. The chosen claim must be one of the named claims, the group must contain at
+// least two claims, and the event may only carry user provenance. It cannot carry claim
+// fields: a decision is not itself knowledge, and a damaged or hand-edited event must
+// never be readable as a claim.
+function validateResolutionEvent(r) {
+  if (typeof r.id !== 'string' || !ID_RE.test(r.id)) return 'resolution event has missing or invalid id';
+  if (!Array.isArray(r.targetIds)) return 'resolution event has no target claim list';
+  if (r.targetIds.length < 2) return 'resolution event must name at least two claims';
+  if (r.targetIds.length > MAX_RESOLUTION_TARGETS) {
+    return `resolution event names more than ${MAX_RESOLUTION_TARGETS} claims`;
+  }
+  const seen = new Set();
+  for (const id of r.targetIds) {
+    if (typeof id !== 'string' || !ID_RE.test(id)) return 'resolution event has an invalid target claim id';
+    if (seen.has(id)) return 'resolution event names the same claim more than once';
+    seen.add(id);
+  }
+  if (typeof r.chosenId !== 'string' || !ID_RE.test(r.chosenId)) {
+    return 'resolution event has missing or invalid chosenId';
+  }
+  if (!seen.has(r.chosenId)) return 'resolution chosen id is not one of its targeted claims';
+  if (r.reason !== undefined && r.reason !== null) {
+    if (typeof r.reason !== 'string') return 'resolution reason must be text';
+    if (r.reason.trim().length === 0) return 'resolution reason is empty';
+    if (r.reason.length > MAX_RESOLUTION_REASON_CHARS) return 'resolution reason is too long';
+    if (CONTROL_CHARS.test(r.reason)) return 'resolution reason contains control characters';
+    if (containsSecret(r.reason)) return 'resolution reason looks like a password, key, or token';
+  }
+  if (typeof r.createdAt !== 'string' || Number.isNaN(Date.parse(r.createdAt))) return 'bad timestamp';
+  if (!r.provenance || typeof r.provenance !== 'object') return 'missing provenance';
+  if (!VALID_PROVENANCE_ORIGINS.has(r.provenance.origin)) return 'resolution event requires user provenance';
+  if (r.provenance.updateMode !== 'user_confirmed') return 'resolution event provenance must be user_confirmed';
+  for (const field of [
+    'subject', 'relationship', 'object', 'evidence', 'tripleHash', 'status', 'supersededBy', 'targetId',
+  ]) {
+    if (r[field] !== undefined) return `resolution event must not carry ${field}`;
   }
   return null;
 }
@@ -281,10 +332,99 @@ export class KnowledgeStore {
     return { event, record };
   }
 
+  // Explicit conflict resolution: an authorized user selects one claim from an exact
+  // live conflict group. The decision is appended as its own event; no claim is edited,
+  // retracted, or superseded, so a different choice later is a new event and every
+  // alternative stays readable. The chosen claim is recorded, never asserted as true.
+  async resolve({ target, choose, reason = null, provenance = {}, origin } = {}) {
+    if (origin !== 'user') {
+      throw new ValidationError(
+        'resolving a knowledge conflict requires an authorized user-origin operation; model output cannot decide which claim is correct',
+        'WRITE_REQUIRES_USER_ORIGIN',
+      );
+    }
+    const targetRef = validateResolutionRef(target, 'resolution target');
+    const chooseRef = validateResolutionRef(choose, 'chosen claim');
+    const why = validateRetractionReason(reason);
+    const sanitized = sanitizeProvenance(provenance, origin);
+
+    const records = await this.#loadComplete();
+    const { claims, resolutionEvents, retractionsByTarget } = splitLifecycle(records);
+    const supersededByMap = buildSupersededByMap(claims);
+    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+
+    const matches = matchClaimRefs(claims, targetRef);
+    if (matches.length === 0) throw new ValidationError('resolution target not found');
+    if (matches.length > 1) {
+      throw new ValidationError('resolution target is ambiguous; use a longer id prefix');
+    }
+    const record = matches[0];
+    if (!isActive(record, supersededByMap, retractionsByTarget)) {
+      throw new ValidationError(
+        `resolution target ${shortId(record.id)} is not active; only a live conflicting claim can be resolved`,
+      );
+    }
+
+    const group = conflictIndex.get(conflictIndexKey(record.subject, record.relationship)) ?? [];
+    const distinctObjects = new Set(group.map((r) => normalizedTriple(r.subject, r.relationship, r.object)));
+    if (distinctObjects.size < 2) {
+      throw new ValidationError(`resolution target ${shortId(record.id)} has no live conflicting claim`);
+    }
+    if (group.length > MAX_RESOLUTION_TARGETS) {
+      throw new ValidationError(
+        `the live conflict group has ${group.length} claims; at most ${MAX_RESOLUTION_TARGETS} may be resolved at once`,
+      );
+    }
+
+    const targetIds = group.map((r) => r.id);
+    const chosenMatches = matchClaimRefs(group, chooseRef);
+    if (chosenMatches.length === 0) {
+      throw new ValidationError(`chosen claim is not part of the conflict group that contains ${shortId(record.id)}`);
+    }
+    if (chosenMatches.length > 1) {
+      throw new ValidationError('chosen claim is ambiguous within the conflict group; use a longer id prefix');
+    }
+    const chosen = chosenMatches[0];
+
+    // A repeated identical decision would add no information, so it is refused before
+    // anything is written. A different choice over the same group is allowed and becomes
+    // a separately recorded event; store order then makes the latest decision govern.
+    const setKey = claimSetKey(targetIds);
+    const previous = resolutionEvents.filter((event) => claimSetKey(event.targetIds) === setKey).at(-1) ?? null;
+    if (previous && previous.chosenId === chosen.id) {
+      throw new ValidationError('this resolution has already been recorded for the same claims');
+    }
+
+    const eventId = randomUUID();
+    if (records.some((r) => r.id === eventId)) {
+      throw new StoreError('identifier collision; nothing written');
+    }
+    const event = {
+      schema: KNOWLEDGE_SCHEMA,
+      kind: RESOLUTION_KIND,
+      id: eventId,
+      targetIds,
+      chosenId: chosen.id,
+      ...(why ? { reason: why } : {}),
+      createdAt: this.now().toISOString(),
+      provenance: sanitized,
+    };
+    await this.log.append(event);
+    return { event, record, chosen, targetIds, claims: group };
+  }
+
   async get(id) {
     if (typeof id !== 'string' || id.length === 0) return null;
     const records = await this.#loadComplete();
-    return records.find((r) => r.kind !== RETRACTION_KIND && r.id === id) ?? null;
+    return records.find((r) => r.kind === undefined && r.id === id) ?? null;
+  }
+
+  // Reads one lifecycle event (retraction or resolution) by full id. Events are not
+  // claims, so this exists separately from get() and never returns a claim.
+  async getEvent(id) {
+    if (typeof id !== 'string' || id.length === 0) return null;
+    const records = await this.#loadComplete();
+    return records.find((r) => r.kind !== undefined && r.id === id) ?? null;
   }
 
   // Loads all valid records; throws on any corrupt lines.
@@ -302,21 +442,23 @@ export class KnowledgeStore {
     const p = typeof prefix === 'string' ? prefix.trim() : '';
     if (p.length === 0) return [];
     const records = await this.#loadComplete();
-    const { claims, retractionsByTarget } = splitLifecycle(records);
+    const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
     const supersededByMap = buildSupersededByMap(claims);
     const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+    const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
     return claims
       .filter((r) => r.id === p || r.id.startsWith(p) || shortId(r.id) === p)
-      .map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget));
+      .map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex));
   }
 
   async list({ limit = 20 } = {}) {
     const records = await this.#loadComplete();
-    const { claims, retractionsByTarget } = splitLifecycle(records);
+    const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
     const supersededByMap = buildSupersededByMap(claims);
     const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+    const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
     return claims.slice(-Math.max(1, limit)).reverse()
-      .map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget));
+      .map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex));
   }
 
   // Read-only lifecycle view: the stored claim, its direct supersession links in both
@@ -326,13 +468,16 @@ export class KnowledgeStore {
   async history(recordId) {
     if (typeof recordId !== 'string' || recordId.length === 0) return null;
     const records = await this.#loadComplete();
-    const { claims, retractionsByTarget } = splitLifecycle(records);
+    const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
     const byId = new Map(claims.map((r) => [r.id, r]));
     const record = byId.get(recordId);
     if (!record) return null;
     const supersededByMap = buildSupersededByMap(claims);
     const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
-    return buildKnowledgeHistory(record, claims, byId, supersededByMap, conflictIndex, retractionsByTarget);
+    const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
+    return buildKnowledgeHistory(
+      record, claims, byId, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex,
+    );
   }
 
   // Keyword search over subject+relationship+object+evidence. Returns up to `limit`
@@ -347,9 +492,10 @@ export class KnowledgeStore {
     const terms = [...new Set(tokenize(query))];
     if (terms.length === 0) return [];
 
-    const { claims, retractionsByTarget } = splitLifecycle(records);
+    const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
     const supersededByMap = buildSupersededByMap(claims);
     const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+    const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
 
     const pool = claims.filter((r) => isActive(r, supersededByMap, retractionsByTarget));
     const docs = pool.map((r) => new Set(tokenize(`${r.subject} ${r.relationship} ${r.object} ${r.evidence ?? ''}`)));
@@ -378,18 +524,19 @@ export class KnowledgeStore {
     }).slice(0, Math.max(1, limit));
 
     return scored.map(({ record, score }) => ({
-      record: annotate(record, supersededByMap, conflictIndex, retractionsByTarget),
+      record: annotate(record, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex),
       score,
     }));
   }
 
   async status() {
     const { records, corrupt } = await this.log.load();
-    const { claims, events } = splitLifecycle(records);
+    const { claims, retractionEvents, resolutionEvents } = splitLifecycle(records);
     return {
       path: this.filePath,
       records: claims.length,
-      retractions: events.length,
+      retractions: retractionEvents.length,
+      resolutions: resolutionEvents.length,
       corrupt: corrupt.length,
     };
   }
@@ -557,7 +704,7 @@ function summarizeRetraction(event) {
   };
 }
 
-function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = new Map()) {
+function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = new Map(), resolutionIndex = null) {
   const sby = supersededByMap.get(record.id) ?? [];
   const selfSuperseded = isSuperseded(record, supersededByMap);
   const events = retractionsByTarget.get(record.id) ?? [];
@@ -596,6 +743,21 @@ function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = 
         ? 'supported'
         : record.status);
 
+  // A recorded resolution is a user decision about this exact live group, not evidence
+  // that the chosen claim is true. The conflict itself is kept: status stays
+  // "conflicting" and every alternative remains in conflictsWith.
+  let resolution = null;
+  let conflictState = null;
+  if (active && conflictIds.length > 0) {
+    const applicable = resolutionIndex?.applicableGroups?.get(claimSetKey(group.map((r) => r.id))) ?? null;
+    if (applicable) {
+      resolution = { ...applicable, chosen: applicable.chosenId === record.id };
+      conflictState = 'resolved';
+    } else {
+      conflictState = 'unresolved';
+    }
+  }
+
   return {
     ...record,
     status: effectiveStatus,
@@ -603,6 +765,8 @@ function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = 
     lifecycleNote,
     active,
     conflictsWith: conflictIds,
+    conflictState,
+    resolution,
     supersededBy: sby,
     replaces: [...(record.supersededBy ?? [])],
     retractedBy: events.length === 1 ? events[0].id : null,
@@ -615,18 +779,113 @@ function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = 
 
 function splitLifecycle(records) {
   const claims = [];
-  const events = [];
+  const retractionEvents = [];
+  const resolutionEvents = [];
   for (const record of records) {
-    if (record.kind === RETRACTION_KIND) events.push(record);
+    if (record.kind === RETRACTION_KIND) retractionEvents.push(record);
+    else if (record.kind === RESOLUTION_KIND) resolutionEvents.push(record);
     else claims.push(record);
   }
   const retractionsByTarget = new Map();
-  for (const event of events) {
+  for (const event of retractionEvents) {
     const list = retractionsByTarget.get(event.targetId) ?? [];
     list.push(event);
     retractionsByTarget.set(event.targetId, list);
   }
-  return { claims, events, retractionsByTarget };
+  return { claims, retractionEvents, resolutionEvents, retractionsByTarget };
+}
+
+// A resolution applies only to the exact conflict group it names: every named claim must
+// still exist and be active, all must share subject and relationship with at least two
+// different objects, and the live group must contain no other active claim. If the group
+// grows or loses a member, the earlier decision is still stored and shown in history but
+// no longer governs the current group, so the new state stays visible as unresolved.
+// Events are read in store order, so the last applicable event for the same group wins.
+// A verdict carrying one of these notes is ordinary history rather than damage: a newer
+// decision overruled an earlier one, or the group changed after the decision was made.
+// Both stay readable and neither makes the lifecycle view incomplete.
+const ORDINARY_RESOLUTION_NOTES = new Set([
+  'the live conflict group has a different set of claims',
+  'a later resolution for the same claims governs',
+]);
+
+function buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents) {
+  const byId = new Map(claims.map((r) => [r.id, r]));
+  const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+  const byClaim = new Map();
+  const applicableGroups = new Map();
+  const statusById = new Map();
+
+  // Each event is first judged against the current store; then, among applicable events
+  // for the same claim set, only the last one governs. An earlier decision over a group
+  // that is still intact is not damage - the user changed their mind - so it stays in
+  // history as a recorded decision that no longer governs.
+  const judged = [];
+  const lastApplicableBySet = new Map();
+  for (const event of resolutionEvents) {
+    for (const id of event.targetIds) {
+      const list = byClaim.get(id) ?? [];
+      list.push(event);
+      byClaim.set(id, list);
+    }
+    const verdict = resolutionApplicability(event, byId, conflictIndex, supersededByMap, retractionsByTarget);
+    judged.push({ event, verdict });
+    if (verdict.applicable) lastApplicableBySet.set(claimSetKey(event.targetIds), event.id);
+  }
+  for (const { event, verdict } of judged) {
+    const setKey = claimSetKey(event.targetIds);
+    let effective = verdict;
+    if (verdict.applicable) {
+      if (lastApplicableBySet.get(setKey) !== event.id) {
+        effective = { applicable: false, note: 'a later resolution for the same claims governs' };
+      } else {
+        applicableGroups.set(setKey, summarizeResolution(event));
+      }
+    }
+    statusById.set(event.id, effective);
+  }
+  return { byClaim, applicableGroups, statusById };
+}
+
+function resolutionApplicability(event, byId, conflictIndex, supersededByMap, retractionsByTarget) {
+  const targets = event.targetIds.map((id) => byId.get(id));
+  if (targets.some((target) => !target)) {
+    return { applicable: false, note: 'a targeted claim is not in the store' };
+  }
+  if (targets.some((target) => !isActive(target, supersededByMap, retractionsByTarget))) {
+    return { applicable: false, note: 'a targeted claim is no longer active' };
+  }
+  const groupKeys = new Set(targets.map((target) => conflictIndexKey(target.subject, target.relationship)));
+  if (groupKeys.size !== 1) {
+    return { applicable: false, note: 'the targeted claims do not share a subject and relationship' };
+  }
+  const objects = new Set(targets.map((target) => normalizedTriple(target.subject, target.relationship, target.object)));
+  if (objects.size < 2) {
+    return { applicable: false, note: 'the targeted claims do not state at least two different objects' };
+  }
+  const group = conflictIndex.get([...groupKeys][0]) ?? [];
+  const groupIds = new Set(group.map((r) => r.id));
+  if (group.length !== event.targetIds.length || event.targetIds.some((id) => !groupIds.has(id))) {
+    return { applicable: false, note: 'the live conflict group has a different set of claims' };
+  }
+  return { applicable: true, note: null };
+}
+
+function claimSetKey(ids) {
+  return [...ids].sort().join('\x00');
+}
+
+function summarizeResolution(event) {
+  return {
+    id: event.id,
+    targetIds: [...event.targetIds],
+    chosenId: event.chosenId,
+    reason: event.reason ?? null,
+    createdAt: event.createdAt,
+    operationId: event.provenance?.operationId ?? null,
+    origin: event.provenance?.origin ?? null,
+    updateMode: event.provenance?.updateMode ?? null,
+  };
 }
 
 // ---- store-wide health ------------------------------------------------------
@@ -651,11 +910,15 @@ export function summarizeKnowledgeHealth(records, corrupt = [], { path = null, d
       detail,
       claims: null,
       lifecycleEvents: null,
+      retractions: null,
+      resolutions: null,
       active: null,
       superseded: null,
       retracted: null,
       ambiguous: null,
-      conflicts: { groups: null, claims: null, samples: [] },
+      conflicts: {
+        groups: null, claims: null, samples: [], resolvedGroups: null, resolvedClaims: null, totalGroups: null,
+      },
       corruptLines: null,
       corrupt: [],
       chains: { components: null, largest: null, truncated: null },
@@ -664,10 +927,11 @@ export function summarizeKnowledgeHealth(records, corrupt = [], { path = null, d
     };
   }
 
-  const { claims, events, retractionsByTarget } = splitLifecycle(records);
+  const { claims, retractionEvents, resolutionEvents, retractionsByTarget } = splitLifecycle(records);
   const byId = new Map(claims.map((r) => [r.id, r]));
   const supersededByMap = buildSupersededByMap(claims);
   const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+  const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
 
   const samples = [];
   let anomalyCount = 0;
@@ -716,7 +980,7 @@ export function summarizeKnowledgeHealth(records, corrupt = [], { path = null, d
     }
   }
 
-  for (const event of events) {
+  for (const event of retractionEvents) {
     if (!byId.has(event.targetId)) {
       anomaly(`retraction event [${shortId(event.id)}] targets [${shortId(event.targetId)}], which is not in the store`);
     }
@@ -734,7 +998,28 @@ export function summarizeKnowledgeHealth(records, corrupt = [], { path = null, d
     anomaly(`supersession links contain a cycle (${cycleNodes} claim(s) cannot be ordered by them)`);
   }
 
-  const conflicts = summarizeConflicts(conflictIndex);
+  // Resolution history is checked against the readable store. A missing target or an
+  // incompatible group is damage, not a decision; a group that changed after the fact is
+  // ordinary history and simply no longer governs. Every event remains in the log.
+  for (const event of resolutionEvents) {
+    const targets = event.targetIds.map((id) => byId.get(id));
+    const missing = event.targetIds.filter((id) => !byId.has(id));
+    if (missing.length > 0) {
+      anomaly(`resolution event [${shortId(event.id)}] targets ${missing.length} claim(s) not in the store`);
+      continue;
+    }
+    const groupKeys = new Set(targets.map((target) => conflictIndexKey(target.subject, target.relationship)));
+    if (groupKeys.size !== 1) {
+      anomaly(`resolution event [${shortId(event.id)}] names claims with different subjects or relationships`);
+    } else if (new Set(targets.map((target) => normalizedTriple(target.subject, target.relationship, target.object))).size < 2) {
+      anomaly(`resolution event [${shortId(event.id)}] names fewer than two different objects`);
+    }
+    if (!event.targetIds.includes(event.chosenId)) {
+      anomaly(`resolution event [${shortId(event.id)}] chooses a claim it does not name`);
+    }
+  }
+
+  const conflicts = summarizeConflicts(conflictIndex, resolutionIndex);
   const chains = summarizeChains(claims, byId);
 
   return {
@@ -744,7 +1029,9 @@ export function summarizeKnowledgeHealth(records, corrupt = [], { path = null, d
     complete: corrupt.length === 0,
     detail: null,
     claims: claims.length,
-    lifecycleEvents: events.length,
+    lifecycleEvents: retractionEvents.length + resolutionEvents.length,
+    retractions: retractionEvents.length,
+    resolutions: resolutionEvents.length,
     active,
     superseded,
     retracted,
@@ -765,20 +1052,34 @@ export function summarizeKnowledgeHealth(records, corrupt = [], { path = null, d
   };
 }
 
-function summarizeConflicts(conflictIndex) {
+// A live conflict group counts as resolved only when an applicable resolution names
+// exactly its current claims. `groups` and `claims` count what still requires a user
+// decision; resolved groups are reported separately so a recorded decision is visible
+// without making an unresolved conflict disappear.
+function summarizeConflicts(conflictIndex, resolutionIndex) {
   const samples = [];
   let groups = 0;
   let claims = 0;
+  let resolvedGroups = 0;
+  let resolvedClaims = 0;
+  let totalGroups = 0;
   for (const group of conflictIndex.values()) {
     const distinct = new Set(group.map((r) => normalizedTriple(r.subject, r.relationship, r.object)));
     if (distinct.size < 2) continue;
+    totalGroups += 1;
+    const resolved = resolutionIndex?.applicableGroups?.has(claimSetKey(group.map((r) => r.id))) ?? false;
+    if (resolved) {
+      resolvedGroups += 1;
+      resolvedClaims += group.length;
+      continue;
+    }
     groups += 1;
     claims += group.length;
     if (samples.length < MAX_CONFLICT_SAMPLES) {
       samples.push(group.slice(0, MAX_CONFLICT_SAMPLES).map((r) => shortId(r.id)).join(', '));
     }
   }
-  return { groups, claims, samples };
+  return { groups, claims, samples, resolvedGroups, resolvedClaims, totalGroups };
 }
 
 // Connected components of valid supersession links. A component larger than the
@@ -862,6 +1163,27 @@ function validateRetractionRef(target) {
   return ref;
 }
 
+// Same refusal rules as a retraction target. The value is never quoted back because the
+// message can reach the audit record through the execution error.
+function validateResolutionRef(value, label) {
+  if (typeof value !== 'string') throw new ValidationError(`${label} must be text`);
+  const ref = value.trim();
+  if (ref.length === 0) throw new ValidationError(`${label} is empty`);
+  if (ref.length > 64) throw new ValidationError(`${label} is longer than 64 characters`);
+  if (CONTROL_CHARS.test(ref)) throw new ValidationError(`${label} contains control characters`);
+  if (containsSecret(ref)) {
+    throw new ValidationError(
+      `the ${label} looks like a password, key, or token; it was not used`,
+      'SECRET_REFUSED',
+    );
+  }
+  return ref;
+}
+
+function matchClaimRefs(records, ref) {
+  return records.filter((r) => r.id === ref || r.id.startsWith(ref) || shortId(r.id) === ref);
+}
+
 function validateRetractionReason(reason) {
   if (reason === undefined || reason === null) return null;
   if (typeof reason !== 'string') throw new ValidationError('reason must be text');
@@ -877,8 +1199,8 @@ function validateRetractionReason(reason) {
   return text;
 }
 
-function buildKnowledgeHistory(record, claims, byId, supersededByMap, conflictIndex, retractionsByTarget) {
-  const annotated = annotate(record, supersededByMap, conflictIndex, retractionsByTarget);
+function buildKnowledgeHistory(record, claims, byId, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex = null) {
+  const annotated = annotate(record, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex);
   const events = retractionsByTarget.get(record.id) ?? [];
   const problems = new Set();
 
@@ -896,7 +1218,25 @@ function buildKnowledgeHistory(record, claims, byId, supersededByMap, conflictIn
     problems.add('record is both retracted and superseded');
   }
 
-  const chain = buildLifecycleChain(record.id, claims, byId, supersededByMap, retractionsByTarget, conflictIndex);
+  // Every resolution that named this record is shown, including one that no longer
+  // governs the live group. The decision is historical evidence; its applicability is
+  // reported separately instead of being hidden or silently treated as current.
+  const allResolutions = resolutionIndex?.byClaim?.get(record.id) ?? [];
+  const shownResolutions = allResolutions.slice(-MAX_HISTORY_CHAIN);
+  const resolutions = shownResolutions.map((event) => {
+    const verdict = resolutionIndex?.statusById?.get(event.id) ?? { applicable: false, note: 'applicability could not be established' };
+    if (!verdict.applicable && !ORDINARY_RESOLUTION_NOTES.has(verdict.note)) {
+      problems.add(`resolution event ${shortId(event.id)} cannot govern the current store: ${verdict.note}`);
+    }
+    return {
+      ...summarizeResolution(event),
+      chosen: event.chosenId === record.id,
+      applicable: Boolean(verdict.applicable),
+      note: verdict.note,
+    };
+  });
+
+  const chain = buildLifecycleChain(record.id, claims, byId, supersededByMap, retractionsByTarget, conflictIndex, resolutionIndex);
   for (const problem of chain.problems) problems.add(problem);
 
   return {
@@ -906,6 +1246,9 @@ function buildKnowledgeHistory(record, claims, byId, supersededByMap, conflictIn
     retraction: events.length === 1 ? summarizeRetraction(events[0]) : null,
     retractions: events.map(summarizeRetraction),
     retractionAmbiguous: events.length > 1,
+    resolution: annotated.resolution,
+    resolutions,
+    resolutionsTruncated: allResolutions.length > shownResolutions.length,
     replaces,
     replacedBy,
     chain: chain.entries,
@@ -938,7 +1281,7 @@ function describeLinks(ids, byId, problems) {
 // Bounded traversal of the supersession component around one record. It follows only
 // explicit stored links; a missing target is reported, never inferred, and the view
 // never claims the chain is complete when it stopped early or a link is unresolved.
-function buildLifecycleChain(startId, claims, byId, supersededByMap, retractionsByTarget, conflictIndex) {
+function buildLifecycleChain(startId, claims, byId, supersededByMap, retractionsByTarget, conflictIndex, resolutionIndex = null) {
   const problems = new Set();
   const component = new Set([startId]);
   const queue = [startId];
@@ -977,7 +1320,7 @@ function buildLifecycleChain(startId, claims, byId, supersededByMap, retractions
       return claims.indexOf(a) - claims.indexOf(b);
     });
   const entries = ordered.map((item) => {
-    const view = annotate(item, supersededByMap, conflictIndex, retractionsByTarget);
+    const view = annotate(item, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex);
     return {
       id: item.id,
       shortId: shortId(item.id),

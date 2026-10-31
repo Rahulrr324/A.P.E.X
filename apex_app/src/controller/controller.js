@@ -105,6 +105,15 @@ function knowledgeRetractRequest(target, reason) {
   return `knowledge retract [${ref}]${reasonNote}`;
 }
 
+function knowledgeResolveRequest(target, choose, reason) {
+  const ref = (value) => {
+    if (typeof value !== 'string' || value.trim().length === 0) return '[invalid input]';
+    return containsSecret(value) ? '[id omitted: contained a password, key, or token]' : value.trim();
+  };
+  const reasonNote = typeof reason === 'string' && reason.trim().length > 0 ? ' (reason recorded)' : '';
+  return `knowledge resolve [target ${ref(target)}; choose ${ref(choose)}]${reasonNote}`;
+}
+
 const KNOWLEDGE_AUDIT_FIELDS = Object.freeze({
   'knowledge.add': Object.freeze({
     allowed: ['subject', 'relationship', 'object', 'evidence', 'supersedes'],
@@ -119,6 +128,11 @@ const KNOWLEDGE_AUDIT_FIELDS = Object.freeze({
   'knowledge.retract': Object.freeze({
     allowed: ['target', 'reason'],
     text: ['target', 'reason'],
+    arrays: [],
+  }),
+  'knowledge.resolve': Object.freeze({
+    allowed: ['target', 'choose', 'reason'],
+    text: ['target', 'choose', 'reason'],
     arrays: [],
   }),
 });
@@ -553,6 +567,115 @@ export class CognitiveController {
     };
   }
 
+  // Read-only memory integrity summary. Like `knowledge health` it is a direct,
+  // unaudited read that never calls the model and writes nothing. Counts cover
+  // readable records only when the log is damaged; an unreadable store is never
+  // reported as empty.
+  async memoryHealth() {
+    const health = await this.memory.health();
+    const lines = ['Memory health (read-only; derived from stored records; nothing is repaired)'];
+    if (!health.inspected) {
+      lines.push(`  Store:          unavailable (${truncate(health.detail ?? 'the store could not be read', 200)})`);
+      lines.push('  Records:        unavailable');
+      lines.push('  Inspection:     incomplete: no record, provenance, correction, or integrity count can be established');
+      lines.push('  Note:           an unreadable store is not an empty store; check APEX_DATA_DIR, permissions, and free space.');
+    } else {
+      const empty = health.records === 0;
+      lines.push(`  Store:          ${health.corruptLines > 0
+        ? `damaged - ${health.corruptLines} corrupt line(s); inspection incomplete`
+        : empty
+          ? 'ok - empty store (no memory records)'
+          : 'ok - fully inspected'}`);
+      lines.push(`  Records:        ${health.records} readable`);
+      lines.push(`    user facts:   ${health.kinds.user_fact}`);
+      lines.push(`    model conclusions: ${health.kinds.model_conclusion}`);
+      lines.push(`    private:      ${health.privateRecords} (never sent to a model)`);
+      lines.push(`    corrections:  ${health.corrections} (replacing ${health.replacedClaims} claim(s))`);
+      lines.push(`  Provenance:     user_confirmed ${health.updateModes.user_confirmed}, model_proposed ${health.updateModes.model_proposed}, unresolved_conflict ${health.updateModes.unresolved_conflict}`);
+      lines.push(`  Corrupt lines:  ${health.corruptLines}`);
+      for (const entry of health.corrupt.slice(0, MAX_HEALTH_SAMPLES)) {
+        lines.push(`    - line ${entry.line}: ${truncate(entry.reason, 160)}${entry.truncatedTail ? ' (final line without a newline)' : ''}`);
+      }
+      if (health.corrupt.length > MAX_HEALTH_SAMPLES) {
+        lines.push(`    - ${health.corrupt.length - MAX_HEALTH_SAMPLES} more corrupt line(s) not shown`);
+      }
+      lines.push(`  Anomalies:      ${health.anomalies.count === 0
+        ? 'none detected among readable records'
+        : `${health.anomalies.count}${health.anomalies.truncated ? ` (first ${health.anomalies.samples.length} shown)` : ''}`}`);
+      for (const sample of health.anomalies.samples) lines.push(`    - ${sample}`);
+      if (health.corruptLines > 0) {
+        lines.push('  Inspection:     incomplete: counts cover readable records only; corrupt lines could change every count.');
+      }
+    }
+    lines.push('  Note:           a record proves only that it parsed and its content hash matches; it does not prove the content is true. No integrity count proves the log is authentic or free of deliberate editing.');
+    const display = lines.join('\n');
+    const status = health.inspected ? Outcome.SUCCESS_VERIFIED : Outcome.EXECUTION_FAILED;
+    return {
+      operation: null,
+      status,
+      decision: classifyDecision({ status }),
+      output: display,
+      display,
+      recorded: false,
+      recordError: null,
+      health,
+    };
+  }
+
+  // Read-only audit integrity summary. It never appends an operation record, never
+  // reads a request or output body, and does not claim tamper evidence the format does
+  // not provide: the log is append-only JSONL with no hash chain, signature, or anchor.
+  async auditHealth() {
+    const health = await this.operations.health();
+    const lines = ['Audit health (read-only; derived from stored operation records; nothing is repaired)'];
+    if (!health.inspected) {
+      lines.push(`  Store:          unavailable (${truncate(health.detail ?? 'the log could not be read', 200)})`);
+      lines.push('  Records:        unavailable');
+      lines.push('  Inspection:     incomplete: no operation, outcome, or integrity count can be established');
+      lines.push('  Note:           an unreadable log is not an empty log; check APEX_DATA_DIR, permissions, and free space.');
+    } else {
+      const empty = health.records === 0;
+      lines.push(`  Store:          ${health.corruptLines > 0
+        ? `damaged - ${health.corruptLines} corrupt line(s); inspection incomplete`
+        : empty
+          ? 'ok - empty log (no operation records)'
+          : 'ok - fully inspected'}`);
+      lines.push(`  Records:        ${health.records} readable operation record(s)`);
+      const outcomes = Object.entries(health.outcomes).filter(([, count]) => count > 0);
+      lines.push(`  Outcomes:       ${outcomes.length > 0
+        ? outcomes.map(([name, count]) => `${name} ${count}`).join(', ')
+        : 'none'}`);
+      lines.push(`  Corrupt lines:  ${health.corruptLines}`);
+      for (const entry of health.corrupt.slice(0, MAX_HEALTH_SAMPLES)) {
+        lines.push(`    - line ${entry.line}: ${truncate(entry.reason, 160)}${entry.truncatedTail ? ' (final line without a newline)' : ''}`);
+      }
+      if (health.corrupt.length > MAX_HEALTH_SAMPLES) {
+        lines.push(`    - ${health.corrupt.length - MAX_HEALTH_SAMPLES} more corrupt line(s) not shown`);
+      }
+      lines.push(`  Anomalies:      ${health.anomalies.count === 0
+        ? 'none detected among readable records'
+        : `${health.anomalies.count}${health.anomalies.truncated ? ` (first ${health.anomalies.samples.length} shown)` : ''}`}`);
+      for (const sample of health.anomalies.samples) lines.push(`    - ${sample}`);
+      if (health.corruptLines > 0) {
+        lines.push('  Inspection:     incomplete: counts cover readable records only; corrupt lines could change every count.');
+      }
+    }
+    lines.push('  Integrity:      parse-only: records are checked structurally. There is no hash chain, signature, or external anchor, so a clean parse does not prove authenticity and deliberate editing cannot be detected.');
+    lines.push('  Note:           this check writes no audit record and displays no request or output body.');
+    const display = lines.join('\n');
+    const status = health.inspected ? Outcome.SUCCESS_VERIFIED : Outcome.EXECUTION_FAILED;
+    return {
+      operation: null,
+      status,
+      decision: classifyDecision({ status }),
+      output: display,
+      display,
+      recorded: false,
+      recordError: null,
+      health,
+    };
+  }
+
   // ---- knowledge operations --------------------------------------------------
   // All knowledge writes require user origin and go through runAction so that
   // authorization, execution, and verification follow the same path as memory.
@@ -626,6 +749,17 @@ export class CognitiveController {
     return this.#finishKnowledgeOp(op, step, 'The knowledge record may have been retracted, but its audit record could not be written.');
   }
 
+  async knowledgeResolve({ target, choose, reason = null } = {}) {
+    const op = this.#knowledgeOp('knowledge.resolve');
+    op.request = knowledgeResolveRequest(target, choose, reason);
+    const step = await this.runAction('knowledge.resolve', { target, choose, reason }, 'user', op.id);
+    return this.#finishKnowledgeOp(
+      op,
+      step,
+      'The resolution decision may have been recorded, but its audit record could not be written; it is not reported as verified success.',
+    );
+  }
+
   async knowledgeList({ limit } = {}) {
     const op = this.#knowledgeOp('knowledge.list');
     const step = await this.runAction('knowledge.list', { limit: limit ?? 20 }, 'user', op.id);
@@ -657,6 +791,13 @@ export class CognitiveController {
     const conflictLine = match.conflictsWith?.length
       ? `  CONFLICTS WITH: ${match.conflictsWith.map(shortId).join(', ')}`
       : '';
+    const resolutionLine = match.resolution
+      ? `  RESOLUTION:    ${match.resolution.chosen
+        ? 'this claim was chosen'
+        : `another claim ${shortId(match.resolution.chosenId)} was chosen`} by explicit user decision (event ${shortId(match.resolution.id)}); this records a decision, not verified truth`
+      : match.conflictState === 'unresolved'
+        ? '  RESOLUTION:    none recorded; the conflict is unresolved'
+        : '';
     const replacesLine = match.replaces?.length
       ? `  REPLACES:      ${match.replaces.map(shortId).join(', ')}`
       : '';
@@ -679,6 +820,7 @@ export class CognitiveController {
       `  Status:        ${match.status}`,
       lifecycleLine,
       conflictLine,
+      resolutionLine,
       replacesLine,
       supersededLine,
       retractedLine,
@@ -725,6 +867,14 @@ export class CognitiveController {
       : view.retractionAmbiguous
         ? '  Retraction:    ambiguous — more than one retraction event targets this record'
         : '';
+    const resolutionLines = (view.resolutions ?? []).map((entry) => {
+      const choice = entry.chosen ? 'chose this claim' : `chose ${shortId(entry.chosenId)}`;
+      const standing = entry.applicable
+        ? 'governs the current conflict group'
+        : `does not govern the current conflicts${entry.note ? `: ${entry.note}` : ''}`;
+      return `  Resolution:    ${entry.createdAt}${entry.reason ? ` — ${entry.reason}` : ' (no reason given)'} — ${choice} (event ${shortId(entry.id)}); a user decision, not verified truth; ${standing}`;
+    });
+    if (view.resolutionsTruncated) resolutionLines.unshift('  Resolution:    earlier events are not shown (bounded view)');
     const replacesLine = view.replaces.length
       ? `  Supersedes:    ${view.replaces.map((r) => `${r.shortId} (recorded ${String(r.createdAt).slice(0, 10)})`).join(', ')}`
       : '  Supersedes:    (none)';
@@ -752,6 +902,7 @@ export class CognitiveController {
       replacesLine,
       replacedByLine,
       retractionLine,
+      ...resolutionLines,
       ...chainLines,
       chainNote,
     ].filter(Boolean).join('\n');
@@ -795,10 +946,15 @@ export class CognitiveController {
       const conflictNote = health.conflicts.groups > 0
         ? ` (${health.conflicts.samples.join('; ')})`
         : '';
+      const resolvedNote = health.conflicts.resolvedGroups > 0
+        ? `; ${health.conflicts.resolvedGroups} group(s) with a recorded user decision (a decision, not verified truth)`
+        : '';
       lines.push(`  Conflicts:      ${health.conflicts.groups > 0
         ? `${health.conflicts.groups} unresolved group(s), ${health.conflicts.claims} active claim(s)${conflictNote}`
-        : 'none among active claims'}`);
-      lines.push(`  Lifecycle:      ${health.lifecycleEvents} event(s) (retraction events; not claims)`);
+        : 'none unresolved among active claims'}${resolvedNote}`);
+      lines.push(`  Lifecycle:      ${health.lifecycleEvents > 0 && health.resolutions > 0
+        ? `${health.lifecycleEvents} event(s) (${health.retractions} retraction + ${health.resolutions} resolution; not claims)`
+        : `${health.lifecycleEvents} event(s) (retraction events; not claims)`}`);
       const chainNote = health.chains.truncated > 0
         ? `; ${health.chains.truncated} exceed the ${MAX_HISTORY_CHAIN}-record history view bound (history shows a truncated chain, not damage)`
         : '';
@@ -818,7 +974,7 @@ export class CognitiveController {
         lines.push('  Inspection:     incomplete: counts cover readable records only; corrupt lines could change every count, and lifecycle completeness cannot be established.');
       }
     }
-    lines.push('  Note:           supersession and retraction record history, not truth; unresolved conflicts require explicit handling.');
+    lines.push('  Note:           supersession, retraction, and resolution record history or decisions, not truth; unresolved conflicts require explicit handling.');
     const display = lines.join('\n');
     const status = health.inspected ? Outcome.SUCCESS_VERIFIED : Outcome.EXECUTION_FAILED;
     return {

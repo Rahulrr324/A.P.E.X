@@ -91,7 +91,7 @@ function corruptLineProblems(fileName, corrupt) {
   });
 }
 
-async function inspectJsonlStore({ key, label, noun, filePath, log, impact }) {
+async function inspectJsonlStore({ key, label, noun, filePath, log, impact, summarize = null }) {
   const loaded = await loadLog(log);
   if (!loaded.ok) {
     return {
@@ -107,6 +107,7 @@ async function inspectJsonlStore({ key, label, noun, filePath, log, impact }) {
   }
   const exists = await fileExists(filePath);
   const state = jsonlState({ label, noun, records: loaded.records, corrupt: loaded.corrupt, exists, impact });
+  const extras = summarize ? summarize(loaded.records) : null;
   return {
     key,
     label,
@@ -114,7 +115,8 @@ async function inspectJsonlStore({ key, label, noun, filePath, log, impact }) {
     count: loaded.records.length,
     corruptLines: loaded.corrupt.length,
     detail: null,
-    summary: state.summary,
+    summary: `${state.summary}${extras?.suffix ?? ''}`,
+    ...(extras?.fields ?? {}),
     problems: corruptLineProblems(path.basename(filePath), loaded.corrupt),
   };
 }
@@ -224,6 +226,21 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     filePath: app.memory.filePath,
     log: app.memory.log,
     impact: 'memory reads, search, and corrections are blocked',
+    // Structural counts only; no content is read into the report.
+    summarize(records) {
+      let userFacts = 0;
+      let modelConclusions = 0;
+      let privateRecords = 0;
+      for (const record of records) {
+        if (record.kind === 'model_conclusion') modelConclusions += 1;
+        else userFacts += 1;
+        if (record.sensitivity === 'private') privateRecords += 1;
+      }
+      return {
+        fields: { kinds: { user_fact: userFacts, model_conclusion: modelConclusions }, privateRecords },
+        suffix: records.length === 0 ? '' : `; ${userFacts} user fact(s), ${modelConclusions} model conclusion(s), ${privateRecords} private`,
+      };
+    },
   });
 
   // --- knowledge -------------------------------------------------------------
@@ -288,6 +305,9 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
       count: knowledgeHealth.claims,
       claims: knowledgeHealth.claims,
       lifecycleEvents: knowledgeHealth.lifecycleEvents,
+      retractions: knowledgeHealth.retractions,
+      resolutions: knowledgeHealth.resolutions,
+      resolvedConflictGroups: knowledgeHealth.conflicts.resolvedGroups,
       corruptLines: knowledgeHealth.corruptLines,
       conflicts: { groups: knowledgeHealth.conflicts.groups, claims: knowledgeHealth.conflicts.claims },
       lifecycle: {
@@ -400,6 +420,11 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     if (hasCorrupt || hasInvalid) auditState = State.CORRUPT;
     else if (auditFileExists === false) auditState = State.MISSING;
     else auditState = State.OK;
+    const outcomeCounts = {};
+    for (const op of auditInspect.records) {
+      outcomeCounts[op.status] = (outcomeCounts[op.status] ?? 0) + 1;
+    }
+    const outcomeText = Object.entries(outcomeCounts).map(([name, count]) => `${name} ${count}`).join(', ');
     subsystems.audit = {
       key: 'audit',
       label: 'Audit',
@@ -408,9 +433,11 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
         ? missingValid('Audit', 'operations')
         : auditState === State.CORRUPT
           ? `Audit: corrupt (${auditInspect.records.length} readable operation(s), ${auditInspect.corrupt.length} corrupt line(s), ${auditProblems.length - auditInspect.corrupt.length} inconsistent record(s))`
-          : `Audit: ok (${auditInspect.records.length} operation(s))`,
+          : `Audit: ok (${auditInspect.records.length} operation(s)${outcomeText ? `; ${outcomeText}` : ''}; parse-only, no hash chain or signature)`,
       count: auditInspect.records.length,
       corruptLines: auditInspect.corrupt.length,
+      outcomes: outcomeCounts,
+      integrity: { mode: 'parse-only', hashChain: false, signature: false, externalAnchor: false },
       problems: auditProblems,
     };
     confirmed.push(...auditProblems);

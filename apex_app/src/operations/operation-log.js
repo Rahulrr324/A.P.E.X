@@ -6,6 +6,9 @@ import { JsonlStore } from '../memory/jsonl-store.js';
 import { StoreError } from '../errors.js';
 import { OPERATION_SCHEMA, OUTCOME_VALUES } from '../outcomes.js';
 import { containsSecret, redactSecrets } from '../security/secrets.js';
+import { shortId } from '../util.js';
+
+const MAX_HEALTH_SAMPLES = 20;
 
 function validateOperation(op) {
   if (!op || typeof op !== 'object' || Array.isArray(op)) return 'not an object';
@@ -50,6 +53,24 @@ export class OperationLog {
   async status() {
     const { records, corrupt } = await this.store.load();
     return { records: records.length, corrupt: corrupt.length };
+  }
+
+  // Read-only audit integrity summary. It loads the log, counts what parsed, and reports
+  // damage alongside it. It writes no audit record and never reads a request or output
+  // body; only structural facts are counted. Parse success is not proof of authenticity:
+  // the log has no hash chain, signature, or external anchor, and this summary says so
+  // instead of implying tamper evidence it cannot provide.
+  async health() {
+    let loaded;
+    try {
+      loaded = await this.store.load();
+    } catch (err) {
+      return summarizeAuditHealth(null, [], {
+        path: this.filePath,
+        detail: err?.message ?? String(err),
+      });
+    }
+    return summarizeAuditHealth(loaded.records, loaded.corrupt, { path: this.filePath });
   }
 
   // Which of these task steps have an operation record of their own. The log is read
@@ -121,4 +142,71 @@ export class OperationLog {
     result.missing.push(...wanted.values());
     return result;
   }
+}
+
+export function summarizeAuditHealth(records, corrupt = [], { path = null, detail = null } = {}) {
+  if (!Array.isArray(records)) {
+    return {
+      path,
+      state: 'unavailable',
+      inspected: false,
+      complete: false,
+      detail,
+      records: null,
+      corruptLines: null,
+      corrupt: [],
+      outcomes: null,
+      anomalies: { count: null, samples: [], truncated: false },
+      integrity: { mode: 'parse-only', hashChain: false, signature: false, externalAnchor: false },
+      attention: true,
+    };
+  }
+
+  const outcomes = {};
+  for (const status of OUTCOME_VALUES) outcomes[status] = 0;
+  const ids = new Set();
+  const duplicateIds = new Set();
+  for (const record of records) {
+    outcomes[record.status] = (outcomes[record.status] ?? 0) + 1;
+    if (ids.has(record.id)) duplicateIds.add(record.id);
+    ids.add(record.id);
+  }
+
+  const samples = [];
+  let anomalyCount = 0;
+  const anomaly = (message) => {
+    anomalyCount += 1;
+    if (samples.length < MAX_HEALTH_SAMPLES) samples.push(message);
+  };
+
+  for (const id of duplicateIds) anomaly(`operation [${shortId(id)}] appears more than once in the log`);
+  for (const record of records) {
+    if (typeof record.requestedAt !== 'string' || Number.isNaN(Date.parse(record.requestedAt))) {
+      anomaly(`operation [${shortId(record.id)}] has no valid requestedAt timestamp`);
+    }
+    if (record.finishedAt !== undefined
+      && (typeof record.finishedAt !== 'string' || Number.isNaN(Date.parse(record.finishedAt)))) {
+      anomaly(`operation [${shortId(record.id)}] has an invalid finishedAt timestamp`);
+    }
+  }
+
+  return {
+    path,
+    state: corrupt.length > 0 ? 'damaged' : 'ok',
+    inspected: true,
+    complete: corrupt.length === 0,
+    detail: null,
+    records: records.length,
+    corruptLines: corrupt.length,
+    corrupt: corrupt.map((entry) => ({
+      line: entry.line,
+      reason: entry.reason,
+      truncatedTail: Boolean(entry.truncatedTail),
+    })),
+    outcomes,
+    anomalies: { count: anomalyCount, samples, truncated: anomalyCount > samples.length },
+    // Stated explicitly so a reader cannot mistake a clean parse for tamper evidence.
+    integrity: { mode: 'parse-only', hashChain: false, signature: false, externalAnchor: false },
+    attention: corrupt.length > 0 || anomalyCount > 0,
+  };
 }
