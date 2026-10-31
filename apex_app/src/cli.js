@@ -49,7 +49,7 @@ Usage:
   node bin/apex.js task cancel <id>
   node bin/apex.js queue                 deferred task summaries and their state (read-only)
   node bin/apex.js audit health          operation-log integrity and outcome counts (read-only)
-  node bin/apex.js repair locks          inspect task/queue locks; remove only abandoned takeover tokens
+  node bin/apex.js repair locks          inspect task, queue, memory and knowledge write locks; remove only abandoned takeover tokens
   node bin/apex.js help
 
 Exit codes:
@@ -196,13 +196,25 @@ export function formatResult(res) {
   // A write whose executor reported a failure may already have changed data: the body was
   // invoked, so the outcome after the error is unknown. A rejected input never reached the
   // body and is reported above as rejected; this note is only for failures that started.
+  // A coordination refusal is the exception that proves the rule the other way: the lock is
+  // taken before any byte of the record is written, so `LOCKED` and the store's own
+  // "nothing was written" refusals are known not to have changed anything, and telling the
+  // user otherwise would invite them to treat a safe retry as dangerous.
   const writeActions = new Set([
-    'memory.add', 'memory.save_conclusion', 'knowledge.add', 'knowledge.retract', 'knowledge.resolve',
+    'memory.add', 'memory.correct', 'memory.save_conclusion', 'knowledge.add', 'knowledge.retract', 'knowledge.resolve',
   ]);
+  const refusedBeforeWriting = (s) => s.execution?.error?.code === 'LOCKED'
+    || /nothing was written/i.test(s.execution?.error?.message ?? '');
   if (res.operation.steps.some((s) => s.execution?.status === 'failed'
     && writeActions.has(s.action)
-    && !/corrupt/i.test(s.execution?.error?.message ?? ''))) {
+    && !/corrupt/i.test(s.execution?.error?.message ?? '')
+    && !refusedBeforeWriting(s))) {
     lines.push('Note:      a write reported a failure after it started. APEX cannot establish whether it changed stored data, so do not repeat it unless you can confirm it did not take effect; run "node bin/apex.js diagnose" for a read-only report.');
+  }
+  if (res.operation.steps.some((s) => s.execution?.status === 'failed'
+    && writeActions.has(s.action)
+    && refusedBeforeWriting(s))) {
+    lines.push('Note:      this write was refused before it began, so nothing was written. The reason above names what was in the way; retrying after that no longer applies is safe. Run "node bin/apex.js diagnose" for a read-only report of the lock.');
   }
   // An unusable data directory is an environment failure, not a rejected request. A retry
   // cannot help until the path is usable, so say what to check instead of implying that the
@@ -364,9 +376,14 @@ async function showQueue({ app, limit, out, err }) {
 // is the only path that removes a lock, so recovery cannot displace a process that takes
 // the dead claim over while recovery is running.
 async function repairLocks({ app, out, err }) {
+  // One fixed order for every lock, so a run always reports and recovers the same set of
+  // stores. Recovery touches only abandoned takeover tokens, so the order cannot decide
+  // which store wins - but the output is comparable across runs only if it is stable.
   const targets = [
     { label: 'Task lock', store: app.taskStore },
     { label: 'Summary queue lock', store: app.summaryQueue },
+    { label: 'Memory lock', store: app.memory },
+    { label: 'Knowledge lock', store: app.knowledge },
   ];
   let failed = 0;
   for (const target of targets) {

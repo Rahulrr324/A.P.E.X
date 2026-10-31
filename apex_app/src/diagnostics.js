@@ -502,14 +502,16 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   }
 
   // --- locks -----------------------------------------------------------------
-  // Read-only. A live holder is normal. A dead claim is normal too: the next task run
-  // takes it over through the same election that handles a crash. What is not normal is
+  // Read-only. A live holder is normal. A dead claim is normal too: the next write to that
+  // store takes it over through the same election that handles a crash. What is not normal is
   // an election with every epoch occupied by an abandoned token, because that refuses
   // every later takeover until the tokens are removed.
   const locks = {};
   for (const [key, store, label] of [
     ['task', app.taskStore, 'Task lock'],
     ['queue', app.summaryQueue, 'Summary queue lock'],
+    ['memory', app.memory, 'Memory lock'],
+    ['knowledge', app.knowledge, 'Knowledge lock'],
   ]) {
     let report;
     try {
@@ -555,6 +557,8 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   }
   subsystems.queue.lock = locks.queue;
   subsystems.tasks.lock = locks.task;
+  subsystems.memory.lock = locks.memory;
+  subsystems.knowledge.lock = locks.knowledge;
 
 
   const uncertainSteps = [];
@@ -777,10 +781,10 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   if (unavailable.length > 0) {
     recovery.push(`Storage: ${unavailable.map((s) => s.label).join(', ')} unavailable. Check APEX_DATA_DIR, file permissions, and disk space. APEX does not recreate or truncate data automatically.`);
   }
-  if (locks.task?.state === State.CORRUPT || locks.queue?.state === State.CORRUPT) {
-    recovery.push('Locks: abandoned takeover tokens block the next takeover. Run "apex repair locks" after confirming no task run, queue update, or recovery is active. It removes only dead takeover tokens; it never removes a lock claim or displaces a live holder.');
+  if ([locks.task, locks.queue, locks.memory, locks.knowledge].some((lock) => lock?.state === State.CORRUPT)) {
+    recovery.push('Locks: abandoned takeover tokens block the next takeover. Run "apex repair locks" after confirming that no task run, queue update, memory write, knowledge write, or recovery is active. It removes only dead takeover tokens; it never removes a lock claim or displaces a live holder.');
   }
-  for (const lock of [locks.task, locks.queue]) {
+  for (const lock of [locks.task, locks.queue, locks.memory, locks.knowledge]) {
     if (lock?.guard?.present) {
       recovery.push(`${lock.label}: ${lock.guard.alive === true
         ? `a recovery is in progress by process ${lock.guard.pid}`
@@ -862,7 +866,7 @@ export function renderDiagnostics(diag) {
   }
 
   lines.push('Locks (read-only):');
-  for (const lock of [diag.locks?.task, diag.locks?.queue]) {
+  for (const lock of [diag.locks?.task, diag.locks?.queue, diag.locks?.memory, diag.locks?.knowledge]) {
     if (lock) lines.push(`  ${lock.summary}`);
   }
 

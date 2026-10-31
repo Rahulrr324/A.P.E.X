@@ -244,15 +244,21 @@ function appendLine(file, value) {
 
 // Splits the first append into two writes and holds the second until the caller
 // releases it, so a reader deterministically observes the half-written line.
-async function duringSplitAppend(run) {
+//
+// The fault is installed for one file only - the store being written - because the write
+// sequence of a store-level `add()` also touches the writer lock's own files. What this test is
+// about is a half-written *record line*, and only the store's handle is split here; every other
+// open behaves normally. The assertions below are unchanged by that narrowing.
+async function duringSplitAppend(targetFile, run) {
   const realOpen = fsp.open;
   let reachedResolve;
   const reached = new Promise((resolve) => { reachedResolve = resolve; });
   let releaseResolve;
   const gate = new Promise((resolve) => { releaseResolve = resolve; });
   let split = false;
-  fsp.open = async (...args) => {
-    const handle = await realOpen(...args);
+  fsp.open = async (file, ...rest) => {
+    const handle = await realOpen(file, ...rest);
+    if (path.resolve(String(file)) !== path.resolve(targetFile)) return handle;
     const realWrite = handle.write.bind(handle);
     handle.write = async (data, offset = 0, length = data.length - offset) => {
       if (split) return realWrite(data, offset, length);
@@ -430,9 +436,10 @@ describe('095: memory and knowledge integrity under growth', () => {
 
   test('a search during an interrupted append fails closed, then sees the whole record', async () => {
     const dir = tempDir();
-    const memory = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const memoryFile = path.join(dir, 'memory.jsonl');
+    const memory = new MemoryStore(memoryFile);
     await memory.add({ content: 'the launch code name is Zephyr' });
-    await duringSplitAppend(async ({ reached, release }) => {
+    await duringSplitAppend(memoryFile, async ({ reached, release }) => {
       const adding = memory.add({ content: 'the launch code name is Falcon' });
       await reached;
       await assert.rejects(() => memory.search('launch code name'), /refusing incomplete retrieval/);
@@ -446,9 +453,10 @@ describe('095: memory and knowledge integrity under growth', () => {
     ]);
     for (const hit of hits) assert.equal(hit.status, 'unresolved_conflict');
 
-    const knowledge = new KnowledgeStore(path.join(dir, 'knowledge.jsonl'));
+    const knowledgeFile = path.join(dir, 'knowledge.jsonl');
+    const knowledge = new KnowledgeStore(knowledgeFile);
     await knowledge.add({ subject: 'the launch code name', relationship: 'is', object: 'Zephyr', origin: 'user' });
-    await duringSplitAppend(async ({ reached, release }) => {
+    await duringSplitAppend(knowledgeFile, async ({ reached, release }) => {
       const adding = knowledge.add({ subject: 'the launch code name', relationship: 'is', object: 'Falcon', origin: 'user' });
       await reached;
       await assert.rejects(() => knowledge.search('launch code name'), (err) => err.code === 'STORE_UNAVAILABLE');

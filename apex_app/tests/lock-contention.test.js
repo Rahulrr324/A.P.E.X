@@ -16,6 +16,11 @@
 // taker that had read the same stale body could delete the lock the first taker created in
 // the meantime, and both then held the task lock. Under the fix the takeover deletes only the
 // exact claim it validated as dead, and a holder releases only its own claim.
+//
+// What is not a defect here: a racer that reaches the lock after its holder has released it takes
+// the lock and completes. Exclusivity is "never two inside", not "one process per test run" - under
+// a loaded machine, where these files run in parallel with the store-write stress suites, a late
+// process is normal and must not be reported as a breach.
 import { test, describe, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -90,7 +95,7 @@ function spawnRacers(dataDir, { racers, traceFile, holdMs = 120 }) {
 }
 
 describe('061: the task lock is exclusive across processes', () => {
-  test('real processes racing a stale lock: never two inside, exactly one completes', async () => {
+  test('real processes racing a stale lock: never two inside, one taker per claim', async () => {
     for (const round of [1, 2, 3]) {
       const dataDir = tempDir();
       const traceFile = path.join(dataDir, 'trace.txt');
@@ -102,12 +107,22 @@ describe('061: the task lock is exclusive across processes', () => {
       const trace = readTrace(traceFile);
       const { maxDepth, acquired, refused } = analyse(trace);
 
-      assert.equal(trace.length, 8, `every racer reported one outcome: ${JSON.stringify(trace)}`);
+      // The safety property is that the stale claim is taken over by one process and that no two
+      // processes are ever inside the lock together. How many get a hold in total is a timing
+      // outcome, not a breach: a racer that reaches the lock only after the winner has released it
+      // finds a free lock and takes it, which is exactly what a released lock is for. Under a
+      // loaded machine (the whole suite runs these files in parallel, and the store-write stress
+      // suites spawn ten writers at once) that late arrival is common, so the assertions here hold
+      // the first hold window to one process and require every racer to have reported an outcome.
       assert.equal(maxDepth, 1, `round ${round}: two processes held the task lock at once: ${JSON.stringify(trace)}`);
-      assert.equal(acquired, 1, `round ${round}: exactly one run should complete, trace ${JSON.stringify(trace)}`);
-      assert.equal(refused.length, 5, 'the others are refused rather than queued');
+      const firstHold = trace.findIndex((l) => l.startsWith('LEAVE'));
+      assert.ok(firstHold > 0, `round ${round}: a process entered and left the lock: ${JSON.stringify(trace)}`);
+      assert.equal(trace.slice(0, firstHold).filter((l) => l.startsWith('ENTER')).length, 1, `round ${round}: exactly one process may take over a stale claim: ${JSON.stringify(trace)}`);
+      assert.ok(acquired >= 1, `round ${round}: the takeover let a writer through: ${JSON.stringify(trace)}`);
+      assert.equal(acquired + refused.length, 6, `every racer reported exactly one outcome: ${JSON.stringify(trace)}`);
+      assert.equal(trace.length, acquired * 3 + refused.length, `the trace holds one report per racer and nothing else: ${JSON.stringify(trace)}`);
       for (const line of refused) assert.match(line, /tasks are in use by process \d+; try again when it finishes/, line);
-      assert.equal(fs.existsSync(LOCK(dataDir)), false, 'the winner released the lock');
+      assert.equal(fs.existsSync(LOCK(dataDir)), false, 'every holder released the lock');
     }
   });
 

@@ -14,6 +14,7 @@
 //
 //   node benchmarks/run-world-state-benchmark.mjs [--memory N] [--claims N] [--repeats R] [--keep]
 //   node benchmarks/run-world-state-benchmark.mjs --writes [--repeats R] [--full] [--keep]
+//   node benchmarks/run-world-state-benchmark.mjs --lock [--repeats R] [--full] [--keep]
 //
 // Bounds: memory fixtures are written directly as valid records; in read mode claims are
 // appended through KnowledgeStore.add (which re-reads the store per append), so seeding cost is
@@ -38,16 +39,27 @@
 // constructor option, which is what makes the before/after a measurement instead of a recollection.
 // That decomposition is what justified (and now bounds) the incremental write design, so it is
 // reported as components, not just totals.
+//
+// `--lock` measures the write coordination Batch W added: the critical section on its own against
+// the write that now wraps it, races of 1, 2 and 4 separate processes appending to one store from a
+// shared start barrier, a real holder and a real waiting writer, the refusal a bounded wait produces
+// and the bytes it leaves untouched, the corrupt store a write refuses from inside the section, and
+// the incremental validated state of a held instance after other processes append underneath it.
+// The contended numbers come from child processes because the claim file is the mechanism; an
+// in-process promise race would measure the event loop instead of the lock.
 // This is not part of `npm test` and no test depends on it.
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { sha256Hex, MemoryStore, validateMemoryRecord, MEMORY_PARSE_CACHE_BYTES } from '../src/memory/memory-store.js';
 import { KnowledgeStore, validateKnowledgeRecord, KNOWLEDGE_PARSE_CACHE_BYTES } from '../src/knowledge/knowledge-store.js';
 import { JsonlStore } from '../src/memory/jsonl-store.js';
+import { WRITE_LOCK_WAIT_MS, WRITE_LOCK_RETRY_MIN_MS, WRITE_LOCK_RETRY_MAX_MS } from '../src/memory/writer-lock.js';
 import { buildWorldState, renderWorldState } from '../src/world/world-state.js';
 import { worldActions } from '../src/actions/world-actions.js';
 
@@ -78,7 +90,7 @@ const WRITE_WORKLOADS_FULL = [
 ];
 
 function parseArgs(argv) {
-  const opts = { memory: 2000, claims: 2000, repeats: 7, keep: false, writes: false, full: false, help: false };
+  const opts = { memory: 2000, claims: 2000, repeats: 7, keep: false, writes: false, lock: false, full: false, help: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') {
@@ -87,6 +99,8 @@ function parseArgs(argv) {
       opts.keep = true;
     } else if (arg === '--writes') {
       opts.writes = true;
+    } else if (arg === '--lock') {
+      opts.lock = true;
     } else if (arg === '--full') {
       opts.full = true;
     } else if (arg === '--memory') {
@@ -102,6 +116,7 @@ function parseArgs(argv) {
       throw new Error(`unknown option ${arg}`);
     }
   }
+  if (opts.writes && opts.lock) throw new Error('--writes and --lock measure different paths; run them separately so neither shares a process with the other');
   return opts;
 }
 
@@ -125,6 +140,18 @@ function timed(fn) {
   const result = fn();
   const ms = Number(process.hrtime.bigint() - start) / 1e6;
   return { ms, result };
+}
+
+// A refusal is a measurement too, so it needs the same timing as a success: `timedAsync` cannot
+// report the duration of a call that threw.
+async function timedAttempt(fn) {
+  const start = process.hrtime.bigint();
+  try {
+    const result = await fn();
+    return { ms: Number(process.hrtime.bigint() - start) / 1e6, result, err: null };
+  } catch (err) {
+    return { ms: Number(process.hrtime.bigint() - start) / 1e6, result: null, err };
+  }
 }
 
 function stats(samples) {
@@ -840,6 +867,380 @@ async function writePhases(dir, { repeats, full }) {
   console.log('limits: one machine, one process, a temporary local directory, no concurrent writer and no model. Every measurement here re-reads the whole store, so the numbers are per-append costs at a given size, not an amortised cost; a store the size of these fixtures is far larger than a personal APEX install, which is why the absolute medians move with system load while the composition does not.');
 }
 
+// ---- coordination path (--lock) ---------------------------------------------------
+//
+// Batch W put a per-store writer lock around every mutation. A read benchmark cannot see what
+// that costs, so this mode measures it: the critical section by itself, the writes it now wraps,
+// the contention between real processes, the refusal a bounded wait produces, and the derived
+// state of an instance another process wrote underneath.
+//
+// Contended numbers come from child processes rather than from racing promises inside this
+// process: the claim file IS the mechanism, and an in-process race never asks the operating
+// system to publish, read, or remove one. The child is the same fixture the Batch W tests drive
+// (tests/fixtures/store-writer-child.mjs), so the benchmark times the path the tests assert on.
+//
+//   section          writeLock.run() around a call that does nothing: staged claim write,
+//                    hard-link claim, the caller's (empty) work, release, removal
+//   write            the public write on that same warm instance, so the section is reported as
+//                    a share of a real write instead of of an unrelated total
+//   race             1, 2 and 4 separate processes appending to one store from a shared start
+//                    barrier: completion, records actually persisted, per-attempt distribution,
+//                    writes per second, and the wait attributed to contention by subtracting the
+//                    single-writer median
+//   hold and wait    a contender that waits for a holder which lets go, and two contenders whose
+//                    budget expires first - lock hold time and lock wait time, measured
+//   damaged store    the write a corrupt store refuses from inside the section, whether the
+//                    claim was still released, and whether the authoritative read really ran
+//                    under it
+//   external writes  a held instance's incremental validated state across concurrent external
+//                    appends: what its next write read, and whether its derived records still
+//                    equal a fresh replay of the log
+const LOCK_MEMORY_SIZES = [200, 2000];
+const LOCK_CLAIM_SIZES = [200, 2000];
+const LOCK_WRITERS = [1, 2, 4];
+// Appends per writer inside a race. Each writer's attempts are sequential, so the count sets how
+// many samples the per-attempt distribution has: four is the smallest number that makes a
+// single-writer median more than one NTFS noise spike, and the attributed-wait line depends on it.
+const LOCK_ATTEMPTS = { memory: 4, knowledge: 4 };
+const CHILD_WRITER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'tests', 'fixtures', 'store-writer-child.mjs');
+
+function resultsOf(out) {
+  return out.split('\n').filter((row) => row.startsWith('RESULT ')).map((row) => JSON.parse(row.slice('RESULT '.length)));
+}
+
+// One child writer. `held` resolves when that child announces it owns the lock, so a
+// holder/contender pair is ordered by observation and not by a sleep that might be too short.
+function startChild(args, { racers = 1, waitMs = null } = {}) {
+  const env = { ...process.env };
+  if (racers > 1) env.APEX_RACERS = String(racers);
+  if (waitMs) env.APEX_WAIT_MS = String(waitMs);
+  const child = spawn(process.execPath, [CHILD_WRITER, ...args], { env, windowsHide: true });
+  let out = '';
+  let announce = null;
+  const held = new Promise((resolve) => { announce = resolve; });
+  const onData = (chunk) => {
+    out += chunk.toString();
+    if (announce !== null && out.includes('HELD ')) {
+      const resolve = announce;
+      announce = null;
+      resolve();
+    }
+  };
+  child.stdout.on('data', onData);
+  child.stderr.on('data', onData);
+  const done = new Promise((resolve) => child.once('exit', (code) => resolve({ code, out })));
+  return { child, held, done, get out() { return out; } };
+}
+
+async function awaitHeld(handle, ms) {
+  let timer;
+  const timeout = new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error(`child holder never announced the lock within ${ms} ms`)), ms); });
+  try {
+    await Promise.race([handle.held, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runChild(args, opts) {
+  const handle = startChild(args, opts);
+  const exit = await handle.done;
+  return { ...exit, results: resultsOf(handle.out) };
+}
+
+// A cell is its own data directory, because the child fixture is given a data directory and the
+// residue check below has to look at a directory that holds nothing but what a write leaves.
+function makeCell(dir, name) {
+  const cell = path.join(dir, name);
+  fs.rmSync(cell, { recursive: true, force: true });
+  fs.mkdirSync(cell, { recursive: true });
+  return cell;
+}
+
+// The authoritative state of a cell: read straight from its bytes by a store that derives
+// nothing, so a race is judged by what is on disk rather than by what a process reports.
+async function authoritative(cell, spec) {
+  const loaded = await new JsonlStore(path.join(cell, spec.file), { validateRecord: spec.validateRecord }).load({ maintainSnapshot: false });
+  return {
+    records: loaded.records.length,
+    corrupt: loaded.corrupt.length,
+    unique: new Set(loaded.records.map((record) => record.id)).size,
+    bytes: fs.statSync(path.join(cell, spec.file)).size,
+  };
+}
+
+const lockResidue = (cell) => fs.readdirSync(cell)
+  .filter((name) => name.endsWith('.lock') || name.includes('.takeover.') || name.endsWith('.tmp') || name.includes('.recover'));
+
+async function uncontendedSection(dir, specs, { repeats }) {
+  const line = (name, value) => console.log(`  ${name.padEnd(52)} ${value}`);
+  const times = Math.min(repeats, 9);
+  console.log(`uncontended coordination (${times} timed sample(s) each, one warm store instance per measurement, no other writer anywhere):`);
+  console.log('  "section" is writeLock.run() around a call that returns immediately - acquire plus release and');
+  console.log('  nothing else. "write" is the store\'s public write on that same instance, so it already contains');
+  console.log('  exactly one such section. --writes mode gives the read/append composition inside it.');
+  for (const spec of specs) {
+    for (const count of spec.sizes) {
+      const cell = makeCell(dir, `lock-open-${spec.kind}-${count}`);
+      await spec.make(cell, count);
+      const store = spec.open(path.join(cell, spec.file));
+      // Untimed, so the instance holds the incremental validated state a session's next write sees.
+      await spec.write(store, 'warm-up');
+      const empty = [];
+      for (let i = 0; i < times; i += 1) empty.push((await timedAsync(() => store.writeLock.run(async () => {}))).ms);
+      const writes = [];
+      for (let i = 0; i < times; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        writes.push((await timedAsync(() => spec.write(store, `uncontended-${i}`))).ms);
+      }
+      const e = stats(empty);
+      const w = stats(writes);
+      line(`${spec.kind} at ${count} record(s): empty section`, `${e.median.toFixed(2)} ms (min ${e.min.toFixed(2)}, max ${e.max.toFixed(2)})`);
+      line(`${spec.kind} at ${count} record(s): write under it`, `${w.median.toFixed(2)} ms (min ${w.min.toFixed(2)}, max ${w.max.toFixed(2)})`);
+      line('  section as a share of that write', `${(e.median / w.median * 100).toFixed(1)} %`);
+      line('  residue the section left', lockResidue(cell).length === 0 ? 'none (the claim was created and removed)' : lockResidue(cell).join(', '));
+    }
+  }
+}
+
+async function contentionRaces(dir, specs) {
+  const line = (name, value) => console.log(`  ${name.padEnd(52)} ${value}`);
+  const row = (cells) => cells.map((v, i) => (i === 0 ? v.padStart(24) : v.padStart(13))).join('');
+  console.log('contended writes (separate operating-system processes, released from one start barrier, each configuration on a fresh copy of its fixture):');
+  for (const spec of specs) {
+    for (const count of spec.sizes) {
+      const attempts = LOCK_ATTEMPTS[spec.kind];
+      console.log(`  ${spec.kind} store seeded with ${count} record(s), ${attempts} append(s) per writer, every attempt reported by the writer itself`);
+      console.log(`  ${row(['writers', 'wall (ms)', 'ok / sent', 'appended', 'unique total', 'median', 'min', 'max', 'writes/s'])}`);
+      let single = null;
+      for (const writers of LOCK_WRITERS) {
+        const cell = makeCell(dir, `lock-race-${spec.kind}-${count}-${writers}`);
+        await spec.make(cell, count);
+        fs.rmSync(path.join(cell, 'barrier'), { recursive: true, force: true });
+        const handles = [];
+        const started = process.hrtime.bigint();
+        for (let w = 0; w < writers; w += 1) {
+          handles.push(startChild([spec.mode, cell, `${count}x${writers}w${w}`, String(attempts)], { racers: writers }));
+        }
+        const exits = await Promise.all(handles.map((handle) => handle.done));
+        const wallMs = Number(process.hrtime.bigint() - started) / 1e6;
+        const results = handles.flatMap((handle) => resultsOf(handle.out));
+        const ok = results.filter((r) => r.ok === true);
+        const failed = results.filter((r) => r.ok !== true);
+        const state = await authoritative(cell, spec);
+        const ms = stats(ok.map((r) => r.ms));
+        const sent = writers * attempts;
+        console.log(`  ${row([
+          String(writers),
+          wallMs.toFixed(0),
+          `${ok.length} / ${sent}`,
+          `${state.records - count}`,
+          String(state.unique),
+          `${ms.median.toFixed(1)} ms`,
+          `${ms.min.toFixed(1)} ms`,
+          `${ms.max.toFixed(1)} ms`,
+          (ok.length / (wallMs / 1000)).toFixed(1),
+        ])}`);
+        for (const bad of failed.slice(0, 3)) line(`  refused attempt ${bad.label}`, `${bad.code}: ${bad.message}`);
+        if (failed.length > 3) line('  further refusals', `${failed.length - 3} more, not printed`);
+        if (writers === 1) single = ms.median;
+        else line(`  wait attributed to ${writers} writers`, `${(ms.median - single).toFixed(1)} ms over the 1-writer median of ${single.toFixed(1)} ms`);
+        line('  exit codes / corrupt lines / residue', `${exits.map((e) => e.code).join(',')} / ${state.corrupt} / ${lockResidue(cell).length === 0 ? 'none' : lockResidue(cell).join(', ')}`);
+        fs.rmSync(path.join(cell, 'barrier'), { recursive: true, force: true });
+      }
+      const cell = makeCell(dir, `lock-proc-${spec.kind}-${count}`);
+      await spec.make(cell, count);
+      const soloRun = await timedAsync(() => runChild([spec.mode, cell, 'solo', '1']));
+      const soloResult = soloRun.result.results[0];
+      line(`  one command per process (${spec.kind}, ${count})`, `${soloRun.ms.toFixed(0)} ms wall for one append, of which the writer measured ${soloResult?.ms ?? 'n/a'} ms`);
+    }
+  }
+  console.log('  a race cannot be timed without starting processes, so "wall" includes Node start-up for every writer; the attempt columns are the writers\' own measurement of the write alone and exclude it');
+  console.log('  an attributed wait is a difference of two medians from this run. Every write here costs several NTFS metadata operations that vary by tens of milliseconds, so a negative attributed wait is that noise, not a saving from contention');
+}
+
+async function heldAndWaiting(dir, specs, { full }) {
+  const line = (name, value) => console.log(`  ${name.padEnd(52)} ${value}`);
+  const memory = specs.find((spec) => spec.kind === 'memory');
+  console.log('lock hold and lock wait (a real holder process, then a contender process):');
+  line('configured default wait', `${WRITE_LOCK_WAIT_MS} ms, retried from ${WRITE_LOCK_RETRY_MIN_MS} ms up to ${WRITE_LOCK_RETRY_MAX_MS} ms between polls, then a bounded takeover election`);
+
+  // A contender that outlasts its own budget: the refusal must arrive at the budget, say what was
+  // in the way, and change nothing.
+  const budgets = full ? [250, 1000, WRITE_LOCK_WAIT_MS] : [250, 1000];
+  for (const waitMs of budgets) {
+    const cell = makeCell(dir, `lock-timeout-${waitMs}`);
+    await memory.make(cell, 200);
+    const file = path.join(cell, memory.file);
+    const before = fs.readFileSync(file, 'utf8');
+    const holder = startChild(['hold-lock', cell, 'memory', String(waitMs + 4000)]);
+    // eslint-disable-next-line no-await-in-loop
+    await awaitHeld(holder, 20000);
+    // eslint-disable-next-line no-await-in-loop
+    const contender = await runChild([memory.mode, cell, 'refused', '1'], { waitMs });
+    const report = resultsOf(contender.out)[0];
+    const after = fs.readFileSync(file, 'utf8');
+    const claimDuring = fs.existsSync(`${file}.lock`);
+    // eslint-disable-next-line no-await-in-loop
+    await holder.done;
+    line(`${waitMs} ms budget: outcome`, report?.ok === false ? `refused with ${report.code}` : `ACCEPTED - this run expected a refusal, got ${JSON.stringify(report)}`);
+    line('  its own measured wait', `${report?.ms ?? 0} ms against a ${waitMs} ms budget (the budget is a floor, not a promise: the last poll can run past it by one retry interval)`);
+    line('  reported reason', report?.message ?? 'not reported');
+    line('  store bytes after the refusal', after === before ? `unchanged (${before.length} bytes)` : 'CHANGED - a refused write altered the store');
+    line('  claim still held when the contender gave up', claimDuring);
+    line('  residue after the holder exited', lockResidue(cell).length === 0 ? 'none' : lockResidue(cell).join(', '));
+  }
+
+  // A contender whose budget outlasts the hold: this is the wait a real second writer pays. The
+  // holds are long enough to outlast the contender's own process start-up (a few hundred ms on
+  // this machine), which is why they are seconds and not tens of milliseconds - at a 200 ms hold
+  // the contender arrives after the holder has already gone and measures no wait at all.
+  for (const holdMs of [3000, 6000]) {
+    const cell = makeCell(dir, `lock-wait-${holdMs}`);
+    await memory.make(cell, 200);
+    const holder = startChild(['hold-lock', cell, 'memory', String(holdMs)]);
+    // eslint-disable-next-line no-await-in-loop
+    await awaitHeld(holder, 20000);
+    // eslint-disable-next-line no-await-in-loop
+    const contender = await runChild([memory.mode, cell, 'waited', '1'], { waitMs: WRITE_LOCK_WAIT_MS });
+    const report = resultsOf(contender.out)[0];
+    // eslint-disable-next-line no-await-in-loop
+    await holder.done;
+    const state = await authoritative(cell, memory);
+    line(`hold ${holdMs} ms: contender wait`, `${report?.ms ?? 0} ms, outcome ${report?.ok === true ? 'written' : `refused (${report?.code})`}`);
+    line('  records on disk afterwards', `${state.records} of 201 expected (the holder wrote nothing: it only owns the section; 200 seeded + this contender's append)`);
+    line('  wait short of the hold by', `${(holdMs - (report?.ms ?? 0)).toFixed(0)} ms - the contender starts its own timer after Node start-up, and the last poll adds up to ${WRITE_LOCK_RETRY_MAX_MS} ms`);
+  }
+  console.log('  the holder keeps the section for a declared sleep and does no store work in it, so the wait reported here is coordination alone: it is the worst a well-behaved writer can impose on another, and a real hold is one store read plus one fsynced append');
+}
+
+async function damagedUnderLock(dir, specs) {
+  const line = (name, value) => console.log(`  ${name.padEnd(52)} ${value}`);
+  console.log('a damaged store under coordination (the refusal happens inside the section, so the claim must still go away):');
+  for (const spec of specs) {
+    const count = spec.kind === 'memory' ? 2000 : 200;
+    const cell = makeCell(dir, `lock-damage-${spec.kind}`);
+    await spec.make(cell, count);
+    const file = path.join(cell, spec.file);
+    fs.appendFileSync(file, '{"schema":1', 'utf8');
+    const before = fs.readFileSync(file, 'utf8');
+    const store = spec.open(file);
+    // Proof that the authoritative read is taken under the lock rather than before it: observe the
+    // claim's existence at the moment the store reads, from inside the same call.
+    let heldDuringRead = null;
+    const realLoad = store.log.loadForAppend.bind(store.log);
+    store.log.loadForAppend = async () => {
+      const loaded = await realLoad();
+      heldDuringRead = fs.existsSync(store.writeLock.lockPath);
+      return loaded;
+    };
+    // eslint-disable-next-line no-await-in-loop
+    const run = await timedAttempt(() => spec.write(store, 'damaged'));
+    const after = fs.readFileSync(file, 'utf8');
+    line(`${spec.kind} write onto an unterminated store (${count} record(s))`, run.err === null ? `ACCEPTED in ${run.ms.toFixed(2)} ms - this run expected a refusal` : `refused in ${run.ms.toFixed(2)} ms`);
+    line('  reported reason', run.err?.message ?? 'not refused');
+    line('  error code', run.err?.code ?? '-');
+    line('  authoritative read ran under the claim', heldDuringRead);
+    line('  store bytes after the refusal', after === before ? `unchanged (${before.length} bytes)` : 'CHANGED - a refused write altered the store');
+    line('  claim left behind', fs.existsSync(store.writeLock.lockPath) ? 'STILL PRESENT' : 'none (released on the refusal path)');
+  }
+}
+
+async function stateAfterExternalWrites(dir, specs) {
+  const line = (name, value) => console.log(`  ${name.padEnd(52)} ${value}`);
+  const memory = specs.find((spec) => spec.kind === 'memory');
+  console.log('incremental state after another process wrote underneath (one held instance, external writers, then its own write):');
+  const cell = makeCell(dir, 'lock-external');
+  await memory.make(cell, 200);
+  const file = path.join(cell, memory.file);
+  const store = memory.open(file);
+  await store.add({ content: 'Held instance warm-up', source: 'user', provenance: { origin: 'user_request' } });
+  const beforeStats = store.log.appendStateStats;
+  const handles = [
+    startChild([memory.mode, cell, 'ext-0', '2'], { racers: 2 }),
+    startChild([memory.mode, cell, 'ext-1', '2'], { racers: 2 }),
+  ];
+  await Promise.all(handles.map((handle) => handle.done));
+  const external = handles.flatMap((handle) => resultsOf(handle.out)).filter((r) => r.ok === true);
+  const onDisk = (await authoritative(cell, memory)).records;
+  // What the instance reads on its next write: observed inside the call that produced it, so a
+  // stale read cannot be reported as a fresh one. Only the first read counts - the verification
+  // replay below reads the same store again, after the append, and that is not the write's read.
+  let readUnderLock = null;
+  let heldDuringRead = null;
+  const realLoad = store.log.loadForAppend.bind(store.log);
+  store.log.loadForAppend = async () => {
+    const loaded = await realLoad();
+    if (readUnderLock === null) {
+      readUnderLock = loaded.records.length;
+      heldDuringRead = fs.existsSync(store.writeLock.lockPath);
+    }
+    return loaded;
+  };
+  const writeMs = (await timedAsync(() => store.add({ content: 'Held instance after external writes', source: 'user', provenance: { origin: 'user_request' } }))).ms;
+  const afterStats = store.log.appendStateStats;
+  const derived = await store.log.loadForAppend();
+  const replay = await new JsonlStore(file, { validateRecord: memory.validateRecord }).load({ maintainSnapshot: false });
+  const same = JSON.stringify(derived.records) === JSON.stringify(replay.records);
+  line('external writes that completed', `${external.length} of 4 (two real processes, barrier-released together)`);
+  line('records on disk after them', `${onDisk} = 200 seeded + 1 by this instance + ${external.length} external`);
+  line('what this instance\'s next write read', `${readUnderLock} record(s), claim present during that read: ${heldDuringRead}`);
+  line('  saw everything the other processes wrote', readUnderLock === onDisk);
+  line('that write', `${writeMs.toFixed(2)} ms`);
+  line('derived state before / after', `${JSON.stringify(beforeStats)} -> ${JSON.stringify(afterStats)}`);
+  line('re-derivation after the external change', afterStats.rebuilds > beforeStats.rebuilds ? `yes (${afterStats.rebuilds - beforeStats.rebuilds} re-derivation(s)) - the cached bytes no longer hashed to the file` : 'NO - it reused state it could not have proved current');
+  line('derived records equal a fresh replay', same);
+  line('final record count', `${(await authoritative(cell, memory)).records} (one more than the count above, from this instance's own write)`);
+  line('residue', lockResidue(cell).length === 0 ? 'none' : lockResidue(cell).join(', '));
+}
+
+async function lockPhases(dir, { repeats, full }) {
+  const claimFixtures = new Map();
+  for (const count of LOCK_CLAIM_SIZES) {
+    const seeded = await timedAsync(() => buildClaimRecords(count));
+    claimFixtures.set(count, seeded.result);
+    console.log(`claim fixture ${count} record(s) prepared in ${seeded.ms.toFixed(0)} ms (through the store's own write path, cached for every cell that needs it)`);
+  }
+  const specs = [
+    {
+      kind: 'memory',
+      file: 'memory.jsonl',
+      mode: 'add-memory',
+      sizes: LOCK_MEMORY_SIZES,
+      validateRecord: validateMemoryRecord,
+      make: (cell, count) => Promise.resolve(writeMemoryFixture(cell, count, 'memory.jsonl')),
+      open: (file) => new MemoryStore(file),
+      write: (store, index) => store.add({ content: `Coordination probe ${index}`, source: 'user', provenance: { origin: 'user_request' } }),
+    },
+    {
+      kind: 'knowledge',
+      file: 'knowledge.jsonl',
+      mode: 'add-knowledge',
+      sizes: LOCK_CLAIM_SIZES,
+      validateRecord: validateKnowledgeRecord,
+      make: (cell, count) => {
+        const records = claimFixtures.get(count);
+        fs.writeFileSync(path.join(cell, 'knowledge.jsonl'), `${records.map((r) => JSON.stringify(r)).join('\n')}\n`, 'utf8');
+        return Promise.resolve(records);
+      },
+      open: (file) => new KnowledgeStore(file),
+      write: (store, index) => store.add({ subject: `Coordination ${index}`, relationship: 'row', object: `probe ${index}`, origin: 'user' }),
+    },
+  ];
+
+  await uncontendedSection(dir, specs, { repeats });
+  await contentionRaces(dir, specs);
+  await heldAndWaiting(dir, specs, { full });
+  await damagedUnderLock(dir, specs);
+  await stateAfterExternalWrites(dir, specs);
+
+  const end = footprint();
+  console.log('process footprint:');
+  console.log(`  ${'rss / heap used at the end'.padEnd(52)} ${fmt(end.rss)} / ${fmt(end.heap)}`);
+  console.log(`coordination settings in force for every number above: default wait ${WRITE_LOCK_WAIT_MS} ms, retry ${WRITE_LOCK_RETRY_MIN_MS}-${WRITE_LOCK_RETRY_MAX_MS} ms, one lock per store file, reads never take the lock`);
+  console.log('limits: the contended figures are one race per configuration on one machine, and a race cannot be timed without starting processes, so a wall time includes Node start-up; attempt times come from inside each writer and exclude it. Absolute milliseconds move with system load, so compare the 1-writer median with the 2- and 4-writer medians from the SAME run and never across runs. Nothing here makes writes constant-time: every coordinated write still reads and hashes the whole store, which --writes measures at four sizes. The pre-Batch-W comparison is a separate run of --writes against a copy of the tree before coordination, because the store has no lock-free mode to switch to and a benchmark-only bypass would not be the code that ships.');
+}
+
 async function main() {
   const opts = (() => {
     try {
@@ -859,11 +1260,27 @@ async function main() {
     console.log('  derived-state operations on the same fixtures, cumulative append workloads, and the cost of');
     console.log('  the refusal a damaged store forces. Sizes are a fixed matrix (memory 200/2,000/20,000/40,000,');
     console.log('  knowledge 200/2,000) so two runs are comparable. The default run takes a few minutes.');
-    console.log('  --full adds the 2,000-append cumulative workloads on top of that, which take several more.');
+    console.log('  --lock measures the Batch W write coordination instead: the empty critical section and the');
+    console.log('  write around it, races of 1/2/4 real processes on one store, a live holder and a waiting');
+    console.log('  writer, the refusal a bounded wait produces, a damaged store refused under the lock, and the');
+    console.log('  incremental state of an instance another process wrote underneath. Takes a few minutes.');
+    console.log('  --full adds the 2,000-append cumulative workloads on top of that, which take several more,');
+    console.log('  and for --lock the refusal measured against the production default wait (10 s of waiting).');
     return;
   }
 
   const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'apex-world-bench-'));
+  if (opts.lock) {
+    console.log(`coordination benchmark, fixture sizes: memory ${LOCK_MEMORY_SIZES.join(', ')} record(s), knowledge ${LOCK_CLAIM_SIZES.join(', ')} record(s), ${LOCK_WRITERS.join('/')} concurrent writer(s)`);
+    console.log(`data dir: ${dir} (temporary, removed unless --keep)`);
+    const started = process.hrtime.bigint();
+    await lockPhases(dir, { repeats: opts.repeats, full: opts.full });
+    console.log(`runtime: node ${process.version}, ${os.platform()} ${os.arch()}, ${os.cpus().length} logical cpus, ${Math.round(os.totalmem() / 1024 / 1024 / 1024)} GiB reported memory`);
+    console.log(`elapsed: ${(Number(process.hrtime.bigint() - started) / 1e9).toFixed(1)} s`);
+    if (!opts.keep) fs.rmSync(dir, { recursive: true, force: true });
+    else console.log(`kept: ${dir}`);
+    return;
+  }
   if (opts.writes) {
     console.log(`write-path benchmark, fixture sizes: memory ${WRITE_MEMORY_SIZES.join(', ')} record(s), knowledge ${WRITE_CLAIM_SIZES.join(', ')} claim(s)`);
     console.log(`data dir: ${dir} (temporary, removed unless --keep)`);

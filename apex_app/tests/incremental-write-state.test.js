@@ -21,8 +21,10 @@
 //   6. concurrency. Two real processes appending while a third instance holds a warm store, two
 //      instances writing the same target, and a foreign retraction between two of this instance's
 //      writes all show that no new claim, retraction, correction or piece of damage is hidden from
-//      a subsequent write read. Memory and knowledge have no lock and no in-process mutex - a
-//      pre-existing Batch F boundary - so the last two tests also record what that can still do.
+//      a subsequent write read. Batch W coordinates the public write paths through
+//      `src/memory/writer-lock.js`, which is what `tests/store-write-concurrency.test.js` proves;
+//      the tests here that need two instances to read before either writes drive the log primitives
+//      directly, and pin that derived state neither causes that interleaving nor hides its result.
 //
 // Fixtures are temporary directories and controlled records. No real user data is read, damaged,
 // or modified, and no model inference is involved.
@@ -398,9 +400,15 @@ test('failure - an append that writes nothing leaves a state that is still true 
 
   // A write that accepts no bytes at all: the append fails, nothing reaches the file, and the
   // retained state still describes every byte the file holds.
+  //
+  // The fault is installed for the store file alone. A store-level `add()` also writes the writer
+  // lock's own claim, and a lock body that cannot be written is refused before the store is
+  // touched - which would test a different path than the one named in this test's title. The
+  // assertions below are the Batch V ones, unchanged.
   const realOpen = fsp.open;
-  fsp.open = async (...args) => {
-    const handle = await realOpen(...args);
+  fsp.open = async (path, ...rest) => {
+    const handle = await realOpen(path, ...rest);
+    if (path !== file) return handle;
     handle.write = async () => ({ bytesWritten: 0, buffer: Buffer.alloc(0) });
     return handle;
   };
@@ -432,10 +440,13 @@ test('failure - an append that leaves unaccounted bytes cannot advance derived s
   await store.add({ content: 'The build runs on Node 26', source: 'user', provenance: { origin: 'user_request' } });
 
   // Half a record reaches the disk and then the write faults. JsonlStore normally completes short
-  // writes; this fault stops the loop, so the residue is exactly what a crash would leave.
+  // writes; this fault stops the loop, so the residue is exactly what a crash would leave. The
+  // fault is scoped to the store file for the reason given in the test above: the lock's own
+  // writes are not what this test is about, and are left working normally.
   const realOpen = fsp.open;
-  fsp.open = async (...args) => {
-    const handle = await realOpen(...args);
+  fsp.open = async (path, ...rest) => {
+    const handle = await realOpen(path, ...rest);
+    if (path !== file) return handle;
     const realWrite = handle.write.bind(handle);
     let firstWrite = true;
     handle.write = async (data, offset = 0, length = data.length - offset) => {
@@ -683,9 +694,11 @@ test('concurrency - two instances that read before either writes can duplicate a
   const target = await first.add({ content: 'My favourite colour is blue', source: 'user', provenance: { origin: 'user_request' } });
   const second = new MemoryStore(file, { now: FIXED_NOW });
 
-  // The read a write performs, issued by both instances before either appends. Memory and knowledge
-  // have no lock and no in-process mutex - the pre-existing Batch F boundary - so both are answered
-  // from the store as it stood, and each instance's guard sees no earlier correction.
+  // The read a write performs, issued by both instances before either appends. This drives the log
+  // primitives directly, in the order two uncoordinated writes would have used them: Batch W's
+  // public paths take a per-store claim around exactly this sequence, and `correct()` is the test
+  // that proves two coordinated corrections cannot interleave. Here the point is Batch V's: both
+  // reads are answered from the store as it stood, and neither instance's guard sees the other.
   const [byFirst, bySecond] = await Promise.all([first.log.loadForAppend(), second.log.loadForAppend()]);
   assert.equal(byFirst.records.length, 1);
   assert.equal(bySecond.records.length, 1, 'neither instance was handed a view with a record missing');
@@ -701,7 +714,7 @@ test('concurrency - two instances that read before either writes can duplicate a
   assert.equal(
     authoritative.records.filter((r) => r.provenance?.replaces?.includes(target.id)).length,
     2,
-    'both corrections landed: without a lock one write can duplicate a lifecycle event',
+    'both corrections landed: two writes that share no claim can duplicate a lifecycle event',
   );
 
   // What Batch V guarantees about that log is the thing under test: neither instance keeps a state

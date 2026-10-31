@@ -137,7 +137,10 @@ describe('104: the response never claims more than the pipeline established', ()
 
     const res = await runThroughCli(app, blocker, ['ask', 'remember that nothing can be stored']);
     assert.equal(res.code, 3, res.stdout + res.stderr);
-    assert.match(res.stdout, /execution failed: cannot read memory\.jsonl/);
+    // Batch W coordinates a write before it reads the store, so an unusable path can surface on
+    // either side of that order. Both wordings name the same file, say nothing was written, and
+    // report an environment failure; what must not happen is a success or a rejected request.
+    assert.match(res.stdout, /execution failed: cannot (read|write) memory\.jsonl/);
     assert.match(res.stdout, /Check APEX_DATA_DIR, its permissions, and free space/);
     assert.doesNotMatch(res.stdout, /Status:\s+success_verified/);
     assert.equal(fs.readFileSync(blocker, 'utf8'), 'x');

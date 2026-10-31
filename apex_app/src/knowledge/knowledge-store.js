@@ -11,6 +11,7 @@
 //  - sensitive-looking field values are refused.
 import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
+import { WriterLock } from '../memory/writer-lock.js';
 import { StoreError, ValidationError } from '../errors.js';
 import { CONTROL_CHARS, STOPWORDS, shortId } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
@@ -206,10 +207,21 @@ function knowledgeWindow(records, limit) {
 }
 
 export class KnowledgeStore {
-  constructor(filePath, { now = () => new Date(), parseCacheBytes = KNOWLEDGE_PARSE_CACHE_BYTES } = {}) {
+  constructor(filePath, {
+    now = () => new Date(),
+    parseCacheBytes = KNOWLEDGE_PARSE_CACHE_BYTES,
+    lockWaitMs,
+    lockRetryMs,
+    lockRetryMaxMs,
+  } = {}) {
     this.filePath = filePath;
     this.now = now;
     this.log = new JsonlStore(filePath, { validateRecord: validateKnowledgeRecord, parseCacheBytes });
+    // Every write here derives its decision from the whole authoritative log - which claims are
+    // live, which conflict, what has already been superseded, retracted or resolved - and then
+    // appends one record. The lock covers that read-derive-append sequence for one store, so two
+    // processes cannot each decide from a state the other has not written yet.
+    this.writeLock = new WriterLock(filePath, { waitMs: lockWaitMs, retryMs: lockRetryMs, retryMaxMs: lockRetryMaxMs });
   }
 
   // --- write (user origin only) ---
@@ -247,6 +259,15 @@ export class KnowledgeStore {
     const sanitized = sanitizeProvenance(provenance, origin);
     const refs = validateSupersedeRefs(supersedes);
 
+    // An unauthorized or malformed request is refused above, before coordination is sought: asking
+    // for a lock is not something model output can make this store do. Everything below derives a
+    // decision from the store's current records, so it runs while this process holds the write
+    // lock, and the conflict set, the supersession targets and the resulting status are read from
+    // the state observed after coordination - never from a state captured before it.
+    return this.writeLock.run(() => this.#addFromAuthority({ sub, rel, obj, evi, sanitized, refs }));
+  }
+
+  async #addFromAuthority({ sub, rel, obj, evi, sanitized, refs }) {
     // Conflict detection reads the whole store, so it must refuse a damaged store
     // rather than silently compare against an incomplete record set.
     const records = await this.#loadComplete({ beforeAppend: true });
@@ -312,6 +333,12 @@ export class KnowledgeStore {
     const why = validateRetractionReason(reason);
     const sanitized = sanitizeProvenance(provenance, origin);
 
+    // Whether the target is live, already superseded or already retracted is a fact about the
+    // store's current records, so it is answered from the state read under the write lock.
+    return this.writeLock.run(() => this.#retractFromAuthority({ ref, why, sanitized }));
+  }
+
+  async #retractFromAuthority({ ref, why, sanitized }) {
     const records = await this.#loadComplete({ beforeAppend: true });
     const { claims, retractionsByTarget } = splitLifecycle(records);
     const supersededByMap = buildSupersededByMap(claims);
@@ -363,6 +390,13 @@ export class KnowledgeStore {
     const why = validateRetractionReason(reason);
     const sanitized = sanitizeProvenance(provenance, origin);
 
+    // The conflict group, its membership and any earlier decision over the same claims all come
+    // from the store's current records, so they are read and acted on under the write lock: two
+    // processes cannot record two decisions for one group by deciding from the same stale state.
+    return this.writeLock.run(() => this.#resolveFromAuthority({ targetRef, chooseRef, why, sanitized }));
+  }
+
+  async #resolveFromAuthority({ targetRef, chooseRef, why, sanitized }) {
     const records = await this.#loadComplete({ beforeAppend: true });
     const { claims, resolutionEvents, retractionsByTarget } = splitLifecycle(records);
     const supersededByMap = buildSupersededByMap(claims);
@@ -426,6 +460,19 @@ export class KnowledgeStore {
     };
     await this.log.append(event);
     return { event, record, chosen, targetIds, claims: group };
+  }
+
+  // Read-only view of the writer lock: the claim, its takeover tokens and the recovery guard. It
+  // never creates, removes or waits for the lock, so a report on a held write cannot disturb it.
+  async lockReport() {
+    return this.writeLock.state();
+  }
+
+  // Explicit recovery for the abandoned takeover tokens of a dead writer, with the task lock's
+  // limits: a live holder, a live takeover or an unidentified holder refuses, and the claim
+  // itself is left for the ordinary election. See ../tasks/lock-recovery.js.
+  async recover() {
+    return this.writeLock.recover();
   }
 
   async get(id) {

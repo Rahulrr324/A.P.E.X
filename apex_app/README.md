@@ -101,8 +101,10 @@ Windows). To use another location:
 APEX_DATA_DIR=/path/to/dir node bin/apex.js status
 ```
 
-- `memory.jsonl`: personal memory records (append-only).
+- `memory.jsonl`: personal memory records (append-only). `memory.jsonl.lock` exists only
+  while a process is writing a memory.
 - `knowledge.jsonl`: explicit entity relationships and evidence (append-only).
+  `knowledge.jsonl.lock` exists only while a process is writing a claim.
 - `operations.jsonl`: one audit record per operation (append-only).
 - `conversation.jsonl`: conversation turns with origin (append-only).
 - `tasks.jsonl`: task events, replayed to get task state (append-only). `tasks.jsonl.lock`
@@ -182,7 +184,7 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `task retry <id> <stepId>` | Retries one failed or uncertain step, only if it is read-only. |
 | `task cancel <id>` | Cancels a task that has not finished. Steps that have not run are cancelled. |
 | `queue` | Read-only view of the task-summary retry queue: what is owed, its state, and whether the queue file or its lock needs attention. |
-| `repair locks` | Inspects the task and queue locks and removes only abandoned takeover tokens whose number no live process owns. It never takes a lock, never deletes a lock claim, and refuses while any holder or takeover number is live. A dead claim is taken over by the next normal run. A claim whose number has been recycled by an unrelated process looks live and is refused; resolving that needs the manual check described under Known limitations. |
+| `repair locks` | Inspects the task, queue, memory and knowledge write locks and removes only abandoned takeover tokens whose number no live process owns. It never takes a lock, never deletes a lock claim, and refuses while any holder or takeover number is live. A dead claim is taken over by the next normal run. A claim whose number has been recycled by an unrelated process looks live and is refused; resolving that needs the manual check described under Known limitations. |
 | `knowledge add --subject <s> --relationship <r> --object <o> [--evidence <e>] [--supersedes <id[,id...]>]` | Stores an explicit relationship triple. User origin only. Optional `--supersedes` retires named conflicting records as historical, without deleting them. |
 | `knowledge retract <id> [--reason <text>]` | Marks an existing active claim as retracted without supplying a replacement. The original claim, evidence, and provenance are preserved. User origin only. |
 | `knowledge resolve <target-id> --choose <claim-id> [--reason <text>]` | Records an explicit user decision among a live conflict group. Every named claim must be active and conflicting; the choice must be one of them. The event names the whole group, the chosen claim, and an optional reason. No claim is deleted, merged, or rewritten, and the status stays `conflicting`. A repeated identical decision is refused; a changed decision is a new event that supersedes the earlier decision for that same group. User origin only; a model proposal cannot appear in a plan. |
@@ -858,6 +860,8 @@ and measures the projection's read cost against synthetic fixtures, or the write
 | 38. The read optimization does not weaken the projection | `world-state-performance.test.js` (a cold read and a warm read return the same records, the same damage and the same projection; a same-length external rewrite, a replaced file, and a deleted file are all detected, so invalidation is not a size or mtime guess; corrupt lines and an unreadable store are re-reported instead of masked by an earlier healthy read; the verifying read is a real re-read, and a write landing between the executed read and the verifying read fails verification; a caller mutating the records it was handed cannot poison the snapshot or reclassify a belief; neither read adjacent to this instance's own append consults or rewrites the snapshot, and a write still sees a record another process wrote; a store over the cap is never snapshotted; stores that never opt in report the snapshot disabled; projection reads never write a byte) |
 | 39. The incremental write state never outranks the log | `incremental-write-state.test.js` (a write loop and a full lifecycle sequence - conflict, supersession, retraction, resolution - produce exactly the records, conflicts and projections a fresh replay of the authoritative bytes produces; a reuse is proven by one read of the file and by the file's own hash, so an external append, a same-length rewrite, a truncation and a replaced file each force a fresh validated read; a write that accepted no bytes, a partial write, an invalid record and a damaged store leave the state behind the file rather than ahead of it; a store over the cap and a store that never opts in track nothing; two real child processes appending to one store keep every line and every decision visible; two instances of one store interleaving corrections both land their replacements and each instance's next write read equals the replay) |
 
+| 40. Two processes cannot each decide one store's next state | `store-write-concurrency.test.js` (18 scenarios, all with real child processes and assertions on the authoritative records and lifecycle states rather than exit codes: distinct memory and knowledge adds, one conflict group, corrections, supersessions, retractions and resolutions raced two at a time so exactly one decision is recorded and the loser returns a truthful refusal; a live holder is waited for within its budget, an expired budget refuses with the store byte-identical, and the default budget is disclosed so a stuck holder cannot hang a command; a process killed while holding the claim is taken over by the next write, an unreadable claim is reported as in use by an unknown process and never removed, and recovery of sixteen abandoned tokens removes tokens only; an append that writes nothing and a claim that cannot be removed are both refused with the store left parseable; a corrupt store is discovered under the claim and refused; a warm instance cannot decide from state another process has already changed; five writers per store together, three repeated stress rounds, and read-only commands that take no lock and never disturb a live holder; plus `diagnose` and `repair locks` for both new lock files, and the authorization review - an unauthorized request is refused before any coordination, a model-proposed plan cannot reach the write lock, private content stays out of the audit on a coordinated write, and post-append ownership loss (`LOCK_LOST`, the record exists) stays distinguishable from a pre-write refusal (`LOCKED`, nothing was written)) |
+
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
 validation (`gateway.test.js`), the verifier-independence check (`actions.test.js`), and
@@ -950,18 +954,26 @@ questions that must change nothing).
   the regression for the cold case, are in
   [Batch V: incremental write state](#batch-v-incremental-write-state-as-implemented). A batched write
   API is still not the fix and is not planned just to make a benchmark look better.
-- **Consecutive writes from separate processes can still lose one of their decisions.** The memory and
-  knowledge write paths have no lock and no in-process mutex (the task and queue stores do). Two
-  processes that each read, then decide, then append can both record a correction of the same target;
-  the history stays intact and every later read sees both records, but neither process saw the other's
-  write before deciding. This predates Batch V and Batch V deliberately added no locking and no
-  persistent index; derived state is invalidated by any foreign byte change, so it never hides the
-  other process's write from the *next* read. Making read-modify-write atomic needs a lock or a
-  compare-and-set contract on the store, which is a separate change with its own tests.
+- **Coordinated writes are per store file, and a bounded wait ends in a refusal, not a queue.** The
+  memory and knowledge write paths now take `memory.jsonl.lock` and `knowledge.jsonl.lock` around the
+  whole read-decide-append section, so two processes can no longer each record a correction of the same
+  target: one writes and the other is refused with `LOCKED` and reports that nothing was written. What
+  that does not provide: a refused writer is not queued, so the caller decides whether to retry - a
+  `LOCKED` refusal is always safe to retry because no bytes were written, while a `LOCK_LOST` result is
+  **not**, because the record is already on disk; the two locks are independent, so a command that
+  writes both stores does not hold them as one unit; and an operation spanning stores plus the audit
+  record plus the conversation turn is still not a transaction. Whether a dead holder's claim can be
+  taken over is judged from the recorded process number alone, exactly as for the task lock, so a
+  recycled number makes the claim look live and both the write and `repair locks` refuse until an
+  operator resolves it by hand. A coordinated write is still not constant time - it re-reads and hashes
+  the whole store inside the section. The semantics, the timeout budget, the recovery limits and the
+  measured overhead are in
+  [Batch W: cross-process write coordination](#batch-w-cross-process-write-coordination-as-implemented).
 - **The task lock serializes task changes, not every command.** `task plan`, `run`,
   `resume`, `approve`, `retry` and `cancel` take `tasks.jsonl.lock`; reads (`status`,
-  `diagnose`, `task list/show/explain`, `history`) take no lock, and the other stores
-  are append-only without a lock of their own. On the tested platform (Windows 11,
+  `diagnose`, `task list/show/explain`, `history`) take no lock. Since Batch W the memory and
+  knowledge write paths take a lock of their own and the audit and conversation logs stay
+  single-line appends with no lock of their own. On the tested platform (Windows 11,
   NTFS), real concurrent processes appending to the same store kept every line intact,
   in per-writer order, and a reader polling during the writes never saw a partial line
   (`storage-concurrency.test.js`). An append now repeats a short write until the record
@@ -989,10 +1001,11 @@ questions that must change nothing).
   holder's claim can look live after its number is reused. APEX treats such a claim as
   held and refuses both normal work and `repair locks`; it never deletes a claim because a
   pid "looks suspicious". That is the safe direction, but it leaves the directory blocked
-  until an operator resolves it by hand: confirm that no APEX task run or queue update is
-  in progress and that the number belongs to an unrelated process (`Get-Process -Id <pid>`
-  on Windows, `ps -p <pid>` on POSIX), then remove `tasks.jsonl.lock` or
-  `task-summary-queue.json.lock`. Verify first: running the check is what distinguishes
+  until an operator resolves it by hand: confirm that no APEX task run, queue update, memory
+  write or knowledge write is in progress and that the number belongs to an unrelated process
+  (`Get-Process -Id <pid>` on Windows, `ps -p <pid>` on POSIX), then remove
+  `tasks.jsonl.lock`, `task-summary-queue.json.lock`, `memory.jsonl.lock` or
+  `knowledge.jsonl.lock`. Verify first: running the check is what distinguishes
   this from deleting a real holder's lock. No portable start-time or identity comparison
   exists without a native dependency, so APEX cannot make that judgement itself. Node still
   has no conditional-delete primitive without a native dependency, so the removal itself
@@ -1502,15 +1515,15 @@ them.
    file is the only input that may reuse it. An append by another process, a truncation, a
    same-length rewrite, or a replaced file all fail that test and are parsed and validated again
    by the same rules - so an external change can never be answered from stale derived state.
-5. **Concurrent writers.** There is no lock around the memory or knowledge write path (the task
-   and queue stores have their own locking; these two do not). Concurrent appends from several
-   processes are line-safe - `JsonlStore` writes one complete line, fsyncs it, and repairs an
-   unterminated tail - but a read-then-append sequence in two processes can still lose one of
-   their decisions, and that is a pre-existing limitation of this storage design, not something
-   a derived structure introduces or fixes. Derived state must not be the reason the loss becomes
-   invisible: because it is invalidated by any byte change, a concurrent writer's append forces a
-   fresh validated read here. Making concurrent read-modify-write safe needs a lock or a
-   compare-and-set contract on the store, which is a separate change with its own tests.
+5. **Concurrent writers.** Batch W put a per-store claim around the whole read-derive-append
+   section (`src/memory/writer-lock.js`), so the memory and knowledge public write paths are
+   coordinated across processes the way the task and queue stores already were; concurrent appends
+   stay line-safe on their own too - `JsonlStore` writes one complete line, fsyncs it, and repairs an
+   unterminated tail. A writer that cannot prove a claim is its own is refused instead of deciding
+   from a view it cannot verify. Derived state is still not what makes this safe: it is invalidated
+   by any byte change, so a write that finds foreign bytes under its own claim re-derives the whole
+   store before it decides. What remains true is that coordination is per store file, reads take no
+   lock, and an operation that spans two stores is not a transaction.
 6. **Corruption and incomplete history.** A derived structure built from a store that contains
    corrupt lines, an unterminated tail, an unresolvable supersession reference, or a lifecycle
    event pointing at a missing claim must not report a complete or healthy state. Damage found on
@@ -1607,9 +1620,12 @@ and the test and benchmark loops. That is the honest scope of Batch V - it is no
 `apex remember`.
 
 **What did not change.** A write still reads and hashes the whole store, so writes are **not** constant
-time and their cost still grows with total records. The memory and knowledge write path still has no
-lock and no in-process mutex (a pre-existing boundary); Batch V adds none, and derived state is
-invalidated by a foreign byte change rather than hiding it. Damaged-store refusal is unchanged and still
+time and their cost still grows with total records. The memory and knowledge write path had no
+lock and no in-process mutex (a pre-existing boundary); Batch V added none, and derived state is
+invalidated by a foreign byte change rather than hiding it. Batch W later put a per-store claim around
+that section, which is described in [Batch W](#batch-w-cross-process-write-coordination-as-implemented)
+and measured in `benchmarks --lock`; the sentence below is what was true at the end of Batch V.
+Damaged-store refusal is unchanged and still
 timed: 23.61 ms, rejected 5 of 5 samples (memory) and 7.83 ms, rejected 5 of 5 (knowledge), each leaving
 the store byte-identical. Two suites pin the contract: `tests/incremental-write-state.test.js` (18
 tests: reuse proof, foreign writes, partial and failed appends, corrupt stores, the cap, real concurrent
@@ -1663,6 +1679,238 @@ a read re-validates only the segments whose bytes changed, or **serving `load()`
 state**, which is cheaper still but hands callers frozen shared records instead of copies and therefore
 changes a published read contract. Both are storage-behaviour changes with their own tests; neither is a
 reason to persist derived state today.
+
+## Batch W: cross-process write coordination (as implemented)
+
+Batch W removed the lost-decision defect: two processes writing the same store could each read the
+whole log, each derive a decision from what they saw, and each append, so both "succeeded" while one
+logical outcome was wrong - two replacements of the same claim, two retractions of one target, a
+resolution recorded twice, or a claim stored as `supported` beside the claim that contradicts it.
+Locking only the append would not have fixed it, because the decision was taken *before* the append,
+from a view that was already stale by the time it was written. The section that has to be exclusive is
+the whole sequence: read the authoritative bytes, derive, append, confirm the append.
+
+**What was built.** `src/memory/writer-lock.js` is a per-store mutual-exclusion claim, one lock file
+next to each store it protects - `memory.jsonl.lock` and `knowledge.jsonl.lock` - and both stores hold
+it across that entire sequence:
+
+- The claim is **created once and never rewritten**. The body (`pid`, a per-acquisition nonce, a
+  timestamp) is written to a private staged name, checked byte for byte, and published with a hard
+  link, which succeeds only if the lock name is still free. A competing process therefore cannot
+  observe the lock name without its bytes and misreport the holder as unknown. Filesystems without
+  hard links fall back to an exclusive create: still create-once, and a racer that briefly finds the
+  name before its body is complete treats that as *in use*, never as free. The staged write is not
+  fsynced on purpose - the protocol relies on mutual exclusion at publication, not on lock durability,
+  and a holder that dies leaves a claim the next writer takes over.
+- The store's read happens **inside** the section. `MemoryStore.add`/`correct`
+  (`src/memory/memory-store.js:362`, `:391`) and `KnowledgeStore.add`/`retract`/`resolve`
+  (`src/knowledge/knowledge-store.js:267`, `:338`, `:396`) call `loadForAppend()` from within
+  `writeLock.run()`, so no derived decision can come from a view taken before coordination was
+  obtained. The five public mutation paths are all of them; there is no sixth writer.
+- **The wait is bounded and its expiry is a refusal.** Default `10000` ms
+  (`WRITE_LOCK_WAIT_MS`), polled from 10 ms and doubling to a 250 ms ceiling. The budget is derived
+  from the measured cost of one whole-store write rather than chosen to feel short, and it is a store
+  option (`lockWaitMs`), not an environment variable or a CLI flag. A writer that expires reports
+  `LOCKED`, names the holding process, says `nothing was written`, and exits 1; the CLI note for that
+  result says a retry after the holder finishes is safe. The budget is a floor, not a promise: the
+  last poll can run past it by one retry interval, and an expiry is not proof that a holder is stuck -
+  with ten writers running on one machine while the whole test suite ran in parallel, one ordinary
+  write waited 10,553 ms and was refused while its nine peers were all still writing. Failures of the
+  filesystem itself (the store's directory, the staged claim body, a takeover token) are reported as
+  `STORE_UNAVAILABLE`, the same code a failed store read uses, because that is an environment problem
+  to fix and not contention to wait out; calling it `LOCKED` would tell the operator to look for a
+  lock that does not exist.
+- **Release proves ownership first.** The claim is removed only while its bytes are still exactly the
+  body this process wrote. Absent, replaced or unreadable at release means another process may have
+  been inside the same section, and that is raised as `LOCK_LOST` - which, because release runs after
+  the append, always describes a failure *after* an authoritative side effect, and its message says
+  the record was written and must not be repeated. `LOCKED` and `LOCK_LOST` are therefore never
+  conflated: the audit record and the CLI notes distinguish a refusal that changed nothing from a
+  result whose data is already stored.
+- **A claim this process proved as its own but could not delete is not a lost write.** Windows can
+  refuse an unlink while another process's poll still holds the file open, so removal is retried a
+  bounded three times; a claim that survives is remembered as this instance's own orphan, stays
+  visible through `state()`, and is reclaimed byte-exactly by this instance's next acquisition instead
+  of locking the process out of its own store forever.
+- **A claim left by an exited process is taken over by exactly one process,** through the election the
+  task lock already uses (`src/tasks/lock-recovery.js`): create-once tokens named after the claim's
+  digest and an epoch, compare-before-remove, at most `TAKEOVER_EPOCHS = 16` epochs. A taker that loses
+  the election is refused. A process killed mid-takeover leaves tokens that the next epoch supersedes;
+  after the sixteenth abandoned attempt a write is refused and says to run `apex repair locks`, which
+  removes tokens and never a claim.
+- **Uncertainty fails closed.** A claim whose holder cannot be identified is reported as in use by
+  process `unknown` and is never removed, live-or-not. Liveness is a check of the recorded process
+  number, not of process identity: Windows returns a freed pid to the allocator immediately, so a
+  recycled number makes a dead holder's claim look live. That direction is deliberate - it refuses the
+  write rather than risking two owners - and it means such a claim blocks both writes and
+  `repair locks` until an operator checks the process by hand, exactly as the task lock does.
+- **Reads stay lock-free** (`world state`, `memory list/search/health`, `knowledge health/history`,
+  `diagnose`, `queue`) and take no claim, so coordination cannot slow or block a reader. The two
+  stores coordinate independently: a command that writes both acquires and releases each claim in turn,
+  which is not a multi-file transaction and is not described as one.
+
+**What did not change.** Authorization is still checked *before* any lock is sought, so a lock is never
+a source of permission: an unauthorized request is refused with no claim created, and a model-proposed
+plan or action cannot reach the write lock at all (`store-write-concurrency.test.js`, W-07 group). A
+coordinated write still reads, hashes and fsyncs the whole store, so writes are **not** constant time
+and their cost still grows with total records; coordination adds work to that path rather than
+removing any of it (measured below). The Batch V incremental state is still a disposable optimization:
+it is advanced only after a confirmed append and re-derives when the bytes under it change, including
+when another process wrote while this instance held a warm store. No persistent index was added - the
+Batch V read-path assessment (V-07) still stands - and nothing about record content, conflict
+definition, retraction, supersession, resolution semantics, redaction or the audit trail changed. The
+task and queue locks are unchanged; they simply have two neighbours now, and `diagnose` and
+`repair locks` report all four.
+
+**What it costs, measured against the same tree without coordination.** Batch W adds no lock-free mode
+to the store, so the "before" column is a separate `--writes` run against a copy of `HEAD` taken before
+coordination, followed immediately by the same run against the current tree - one machine, one process
+at a time, no overlap, 7 samples per measurement, every sample on a fresh copy of the same fixture. The
+phase that attributes cost honestly is the one that times the write read and the append *inside* the same
+public write, because the remainder is then one number from one sample rather than medians subtracted
+across distributions:
+
+| One public write, timed whole inside one call | before Batch W | Batch W | store-layer remainder (read + append excluded) |
+|---|---|---|---|
+| memory at 40,000 records | 187.54 ms | 237.32 ms | 4.19 ms → 58.58 ms |
+| knowledge at 2,000 claims | 35.27 ms | 86.25 ms | 11.97 ms → 59.58 ms |
+
+That is the coordination cost as the write itself experiences it: **+49.78 ms and +50.98 ms** per write,
+which is what the claim's six NTFS metadata operations cost on this platform. The same overhead appears
+as the warm-write column of the size matrix (median of 7, ms):
+
+| Warm public write | before | Batch W | | Warm public write | before | Batch W |
+|---|---|---|---|---|---|---|
+| memory 200 | 13.31 | 18.67 | | memory 20,000 | 99.94 | 125.03 |
+| memory 2,000 | 14.03 | 19.50 | | memory 40,000 | 247.49 | 323.32 |
+| knowledge 200 | 30.45 | 69.00 | | knowledge 2,000 | 80.89 | 136.88 |
+
+and it accumulates exactly that way in the workloads that write repeatedly through one instance: 1,000
+memory appends onto a 2,000-record store went from 48,231 ms to 87,095 ms (36.70 → 71.08 ms per append),
+1,000 knowledge appends onto 200 claims from 49,263 ms to 99,722 ms (40.50 → 82.74 ms per append), and
+seeding 200 claims through the store's own write path from 9,786 ms to 18,730 ms. A damaged store is
+still refused on every sample and still leaves the store byte-identical, but the refusal now also pays
+for the claim: 51.80 → 72.22 ms for a memory write onto a 2,000-record unterminated store, 7.95 → 49.87
+ms for a knowledge write onto 200 claims. The whole `--writes` suite (which is itself thousands of
+coordinated writes) went from 880.9 s to 1,456.9 s of wall time; process footprint did not move
+(106.5 MiB / 34.9 MiB before, 107.5 MiB / 35.6 MiB after).
+
+Two honest caveats about those columns. Absolute milliseconds on this machine move by up to 2x with
+system load, and the two runs did not have identical page-cache state - the second run's whole-store
+reads were *faster* (the validated read at 40,000 records measured 927.87 ms against 1,078.37 ms, and
+read+hash 126.08 ms against 178.15 ms), so a warm-write delta is an upper bound on nothing and a cold
+write can even come out negative (the 40,000-record cold write measured 1,121.93 ms after against
+1,374.81 ms before, which is the read environment, not a speed-up from the lock). The in-call table is
+the number to quote, because both sides of it are computed inside one call on one sample.
+
+What the overhead buys is the elimination of a class of wrong results: the same race that before Batch W
+let two processes each record a replacement of one claim now records exactly one and refuses the other
+with an explanation. `Correctness takes priority over throughput` was the instruction for this milestone
+and it is the reason the overhead was accepted rather than optimized away. The cost is not free and is
+not presented as free: one append issued as its own process (the shape the CLI actually has) measured
+483-567 ms of wall time, of which the coordinated write inside it measured 41-110 ms, so coordination is
+a fraction of a real command's cost, while a bulk import through the public API pays it per record.
+
+### W-08: races, waits and holds, measured
+
+`node benchmarks/run-world-state-benchmark.mjs --lock --repeats 7` (305.4 s, node v26.4.0, win32 x64,
+12 logical CPUs, 24 GiB reported, one machine, no model, temporary directory, nothing else running).
+Footprint at the end: 74.1 MiB RSS / 14.7 MiB heap.
+
+- **What the section alone costs.** `writeLock.run()` around a call that returns immediately, on a warm
+  instance, median of 7: **47.82 ms** (memory at 200), **33.66 ms** (memory at 2,000), **40.33 ms**
+  (knowledge at 200), **38.53 ms** (knowledge at 2,000). The store's own public write on that same
+  instance measured 73.42 / 73.99 / 86.52 / 81.44 ms, so the section is 45.5-65.1 % of a write at these
+  sizes - which is why the overhead is flat in milliseconds rather than proportional to the store. Every
+  sample created and removed its claim: residue `none` in all four fixtures.
+- **Concurrent writers, real processes.** 1, 2 and 4 child processes released from one start barrier, 4
+  append attempts each, on a fresh copy of the fixture per configuration. Every attempt was accepted in
+  every cell (`ok / sent` = 4/4, 8/8, 16/16), exit codes all 0, **0 corrupt lines**, no residue, and the
+  distinct record ids in the store afterwards equalled seed + appended in all twelve cells (200-memory:
+  204/208/216; 2,000-memory: 2,004/2,008/2,016; 200-claims: 204/208/216; 2,000-claims:
+  2,004/2,008/2,016). Medians of the writers' own in-process timings: memory at 200 31 → 48 → 30 ms,
+  memory at 2,000 34 → 105 → 79 ms, knowledge at 200 33 → 27 → 29 ms, knowledge at 2,000 30 → 38 → 116
+  ms for 1, 2 and 4 writers. No writer was refused in a race, because a coordinated write is short; the
+  wait appears as a longer attempt, not as a lost or duplicated decision. Throughput including process
+  start-up was 4.7-10.0 writes/s. One command per process (the shape the CLI actually has) measured
+  483-567 ms of wall time for one append, of which the writer's own coordinated write measured 41-110
+  ms. Attributed waits (the difference from that cell's 1-writer median) came out both positive and
+  negative - from +86 ms down to -6 ms - and a negative one is NTFS metadata noise, not a saving from
+  contention; these are one race per configuration, so nothing here is a throughput specification.
+- **Bounded waits end in a refusal that is true.** With a real holder process keeping the section:
+  a 250 ms budget expired after a measured **375 ms** and a 1,000 ms budget after **1,186 ms** - the
+  budget is a floor, not a promise, because the last poll can run one retry interval past it. Both
+  refusals reported `cannot write memory.jsonl: it is in use by process <pid>; nothing was written`, both
+  left the store **byte-identical** (69,490 bytes), both found the claim still held when they gave up,
+  and neither left residue after the holder exited. With the configured default (10,000 ms) a contender
+  instead waits and writes: against a 3,000 ms hold it waited 3,267 ms and against a 6,000 ms hold
+  5,766 ms, and the store then held 201 of 201 expected records (the holder writes nothing; it only owns
+  the section). The holder sleeps inside the section and performs no store work in it, so that wait is
+  coordination alone - the worst a well-behaved writer can impose on another, where a real hold is one
+  whole-store read plus one fsynced append.
+- **A damaged store is still refused, and the claim still goes away.** A memory write onto a
+  2,000-record store whose last line is unterminated was refused in 1,037.11 ms with `STORE_UNAVAILABLE`
+  and the unchanged reason `memory store contains 1 corrupt line(s); refusing incomplete write`; a
+  knowledge write onto 200 claims in 320.77 ms. For both, the run proves the authoritative read happened
+  **while the claim was held**, that the store's bytes were unchanged afterwards (696,901 and 69,936
+  bytes), and that no claim was left behind on the refusal path. The memory latency in this phase is
+  noisy - an earlier run of this same configuration measured 128.23 ms - so it is reported as a single
+  sample that establishes the behaviour, not the cost.
+- **Derived state after another process wrote underneath.** One held instance writes once, two real
+  processes then write while it is idle (4 of 4 attempts completed), and the instance writes again. The
+  on-disk count reached 205 = 200 seeded + 1 by the instance + 4 external; the instance's next write read
+  **205 records with the claim present during that read** and *saw everything the other processes wrote*;
+  its derived counters went `trackedRecords 201 → 206`, `reuses 0`, `rebuilds 1 → 2` - the foreign bytes
+  failed the hash proof, so the state re-derived rather than being repaired; and the retained records
+  equalled a fresh replay of the file exactly. Residue: none.
+
+**What none of this claims.** No measurement here says writes are constant time: every coordinated write
+still reads, hashes and fsyncs the whole store, and the `--writes` matrix shows that cost at 200, 2,000,
+20,000 and 40,000 records. No persistent index was added, because nothing measured here shows one is
+needed - the overhead is per write, not per record, and the read-side numbers in V-07 still say a
+persisted index could not make a read independent of store size either. Differences of a few
+milliseconds, in either direction, are noise on this machine.
+
+**Tests.** `tests/store-write-concurrency.test.js` drives real child processes through 18 scenarios -
+distinct concurrent adds, one conflict group, and each of the decision-bearing paths (correct,
+supersede, retract, resolve) raced two at a time so exactly one decision is recorded and the loser
+returns a truthful refusal; a live holder waited out within budget; a killed holder's claim taken over;
+an expired budget refusing with the store byte-identical; the default budget disclosed so a stuck
+holder cannot hang a command; an unreadable claim reported as `unknown` and never removed; recovery of
+sixteen abandoned tokens removing tokens only; an append that wrote nothing; a claim that could not be
+removed; a corrupt store discovered under the claim; a warm instance that cannot decide from state
+another process changed; five writers per store at once; three repeated stress rounds; and read-only
+commands that neither take a lock nor disturb a holder. Every assertion is about the authoritative
+records and lifecycle states on disk, not about exit codes. `tests/incremental-write-state.test.js`
+keeps the derived-state contract pinned across the same interleavings.
+
+Two points about those tests are part of the record, not footnotes. The ten-writer and stress scenarios
+give their writers an explicit 60,000 ms budget instead of the 10,000 ms default, because their question
+is whether simultaneous writers can lose, duplicate or corrupt a record, and a write that gave up waiting
+under the machine's own load would have answered a different question: in a full-suite run one ordinary
+write measured a 10,553 ms wait and was refused with `LOCKED` while its nine peers were still writing,
+which is correct behaviour and no data loss. The default budget is still pinned by the scenarios that
+assert it (the expired refusal and the disclosed-wait cases). The pre-existing `tests/lock-contention.test.js`
+also asserted that exactly one of six racers acquires a stale task lock and that the trace holds eight
+lines; under a loaded machine a late racer legitimately takes a lock its holder has already released, so
+it now asserts the invariants directly - never two processes inside, exactly one taker per stale claim,
+one report per racer, no claim left behind - which detects a breach as before and stops reporting a
+normal late process as one.
+
+**CLI smoke, no model.** 36 commands through `node bin/apex.js` against one fresh isolated
+`APEX_DATA_DIR` with no backend configured (win32, node v26.4.0): memory store, correct, health and
+`world`, `knowledge add` ×3 including a conflict group and a supersession, `resolve`, `retract`,
+`history`, `show`, `list`, `search`, `health`, then `history`, `audit health`, `queue`, `diagnose`,
+`repair locks`, `status --model`, and two usage-error commands. Every write path completed with
+`success_verified`, `repair locks` reported all four locks as absent before and after, `diagnose` stayed
+"local subsystems healthy; no model configured", and **no `*.lock` file remained**. The four non-zero
+exits are all truthful refusals rather than failures of coordination: `knowledge health` exits 1 while a
+conflict group is unresolved and 0 after the recorded resolution, `knowledge retract` of a claim that was
+already superseded is refused ("historical records are not retracted"), and the two malformed commands
+exit 2. `memory correct` of a day-name change ("Tuesday 02:00" to "Wednesday 02:00") is refused by the
+pre-existing memory contradiction rule (`DATE_WORDS`, `src/memory/memory-store.js:254`), which treats a
+date-word value as schedule detail rather than conflict - unchanged by this batch and documented here
+because the smoke run found it.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 

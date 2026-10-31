@@ -144,6 +144,49 @@ fresh copy of the same fixture so the store under measurement always holds the s
 - **Composition and footprint**: the cold/warm/reuse decomposition for the largest fixture per
   store, and RSS and heap at the end of the run.
 
+### Coordination mode (`--lock`)
+
+```bash
+cd apex_app
+node benchmarks/run-world-state-benchmark.mjs --lock --repeats 7
+```
+
+`--writes` and `--lock` measure different paths and refuse to run in one invocation, so neither shares
+a process with the other. `--lock` times the coordination Batch W added, on a fixed matrix (memory and
+knowledge at 200 and 2,000 records, with 1, 2 and 4 concurrent writers), in five phases:
+
+- **Uncontended section, and a whole write under it**: one warm store instance per sample, timing
+  `store.writeLock.run(async () => {})` against the store's own public write on that same instance,
+  and printing the section as a share of that write plus whether the claim left any residue. The empty
+  section is coordination alone: on this platform it is about six NTFS metadata operations - the
+  directory preparation, the staged body, the publishing link, the staged unlink, the ownership read at
+  release and the claim unlink. The design cannot give any of them up without weakening a guarantee:
+  the claim must never exist without its bytes, and it must never be removed by a process that cannot
+  prove it wrote them.
+- **Contended writes from real processes**: 1, 2 or 4 separate child processes on a fresh copy of the
+  fixture, released from one start barrier, each making the same number of append attempts and
+  reporting each attempt's own duration from inside itself. Per configuration the run prints wall time,
+  accepted attempts out of sent, records appended, distinct record ids in the store afterwards, the
+  median/min/max of the attempts, throughput, the refusals the writers printed, their exit codes,
+  corrupt lines and coordination residue. `--writes` cannot produce this table from one process: the
+  claim file *is* the mechanism, so an in-process promise race would measure the event loop instead of
+  the lock.
+- **Lock hold and lock wait**: a holder process that keeps the section for a declared time - doing no
+  store work in it - while a contender process tries to write. Short budgets (250 ms, 1,000 ms, and the
+  configured default with `--full`) are timed against holders that outlast them, and each refusal
+  reports its measured wait against its budget, the exact reason string, whether the store's bytes
+  changed, whether the claim was still held when the contender gave up, and what residue remained after
+  the holder exited. Longer holds report the contender's wait and how many records are on disk
+  afterwards.
+- **The refusal a damaged store forces under coordination**: a write onto a store whose last line is
+  unterminated, timed, with its error code, whether the authoritative read really ran while the claim
+  was held, whether the store stayed byte-identical, and whether the claim was released on the refusal
+  path.
+- **Incremental state after another process wrote underneath**: one held instance writes once, two real
+  processes write while it is idle, and the instance then writes again. The run reports what that last
+  write's own read saw and whether the claim was held during it, the derived-state counters before and
+  after, whether the retained records equal a fresh replay of the file, and the residue.
+
 ### Interpretation limits
 
 - Fixtures are uniform synthetic text in a one-clause-subject shape, which is the worst
@@ -175,5 +218,30 @@ fresh copy of the same fixture so the store under measurement always holds the s
   avoid, so the "cold write" column can be slower than the pre-Batch-V write it replaced: that
   is the retention cost line, and it is the honest price of the reuse. A one-command-per-process
   CLI pays the cold number; a session that writes repeatedly pays the warm one.
+- `--lock` measures races, and a race cannot be timed without starting processes. Every wall figure
+  includes Node start-up for each child (several hundred milliseconds on this machine), while the
+  attempt columns come from inside each writer and exclude it; the run prints both and never
+  subtracts one from the other.
+- The hold lines use second-scale holds on purpose. A contender's own start-up is a few hundred
+  milliseconds, so a 200 ms hold would end before the contender began and the measured wait would be
+  zero - which would be a false statement about the lock, not a small one.
+- A wait budget is a floor, not a promise: the last poll can overshoot it by one retry interval, and a
+  release is noticed only at polling granularity, so a contender can finish up to 250 ms before a
+  declared hold ends. Both directions are printed as they are measured.
+- Attributed waits (the difference from the 1-writer median) can come out negative. NTFS metadata
+  operations are the bulk of a coordinated write at these sizes and their cost moves with whatever
+  else the machine is doing, so a negative line is noise, not a saving from contention.
+- One race per configuration per run, on one machine, with no model and no network. The contended
+  figures describe this machine at this moment; compare the 1-, 2- and 4-writer medians within a run
+  and never across runs.
+- The same caution applies to a wait measured while anything else is running. In a full-suite run on
+  this 12-CPU machine, ten writer children plus 57 other test files competed for the same disk, and one
+  ordinary coordinated write waited 10,553 ms against the 10,000 ms budget and was refused with `LOCKED`
+  while its nine peers were all still writing normally. That is the protocol behaving as designed - a
+  refusal, nothing written, no data lost - but it says the default budget is not a throughput guarantee,
+  and a writer's measured wait on a loaded machine can exceed every figure in this file.
+- The pre-Batch-W comparison is a separate `--writes` run against a copy of the tree taken from
+  `HEAD` before coordination. It is a separate run because the store has no lock-free mode to switch
+  to, and a benchmark-only bypass would not be the code that ships.
 
 This script is not part of `npm test` and no test depends on it.

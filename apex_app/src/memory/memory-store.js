@@ -4,6 +4,7 @@
 // `sensitivity` marks records that must never be sent to a model ('private').
 import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from './jsonl-store.js';
+import { WriterLock } from './writer-lock.js';
 import { StoreError, ValidationError } from '../errors.js';
 import { CONTROL_CHARS, STOPWORDS, shortId } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
@@ -335,36 +336,50 @@ function memoryWindow(records, { limit, includePrivate }) {
 }
 
 export class MemoryStore {
-  constructor(filePath, { now = () => new Date(), parseCacheBytes = MEMORY_PARSE_CACHE_BYTES } = {}) {
+  constructor(filePath, {
+    now = () => new Date(),
+    parseCacheBytes = MEMORY_PARSE_CACHE_BYTES,
+    lockWaitMs,
+    lockRetryMs,
+    lockRetryMaxMs,
+  } = {}) {
     this.filePath = filePath;
     this.now = now;
     this.log = new JsonlStore(filePath, { validateRecord: validateMemoryRecord, parseCacheBytes });
+    // Every write here is a read-modify-write: it reads the whole authoritative log, derives a
+    // decision from those records, and appends one record. The lock covers that whole sequence so
+    // a second process cannot make its decision from a state this process has not written yet.
+    this.writeLock = new WriterLock(filePath, { waitMs: lockWaitMs, retryMs: lockRetryMs, retryMaxMs: lockRetryMaxMs });
   }
 
   async add({ content, kind = 'user_fact', source = 'user', sensitivity = 'normal', provenance = {} } = {}) {
     const text = validateContent(content);
     validateKindSource(kind, source);
     if (!SENSITIVITIES.has(sensitivity)) throw new ValidationError(`unknown sensitivity: ${String(sensitivity)}`);
-    // A damaged store must not accept new records: appending would bury the
-    // corrupt lines, and the write would be reported as verified while earlier
-    // memory is unreadable.
-    const records = await this.#loadComplete({ operation: 'write', beforeAppend: true });
+    // The provenance is derived from the request alone, so it is normalised before coordination is
+    // sought: an unauthorized or malformed request must not occupy the lock.
     const normalizedProvenance = finalizeProvenance({ source, provenance });
-    const id = randomUUID();
-    if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
-    const record = {
-      schema: MEMORY_SCHEMA,
-      id,
-      kind,
-      source,
-      sensitivity,
-      content: text,
-      contentSha256: sha256Hex(text),
-      createdAt: this.now().toISOString(),
-      provenance: normalizedProvenance,
-    };
-    await this.log.append(record);
-    return record;
+    return this.writeLock.run(async () => {
+      // A damaged store must not accept new records: appending would bury the
+      // corrupt lines, and the write would be reported as verified while earlier
+      // memory is unreadable.
+      const records = await this.#loadComplete({ operation: 'write', beforeAppend: true });
+      const id = randomUUID();
+      if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
+      const record = {
+        schema: MEMORY_SCHEMA,
+        id,
+        kind,
+        source,
+        sensitivity,
+        content: text,
+        contentSha256: sha256Hex(text),
+        createdAt: this.now().toISOString(),
+        provenance: normalizedProvenance,
+      };
+      await this.log.append(record);
+      return record;
+    });
   }
 
   async correct({ targetId, content, origin } = {}) {
@@ -373,37 +388,54 @@ export class MemoryStore {
       throw new ValidationError('replacement target must be a full memory record ID');
     }
     const text = validateContent(content);
-    const records = await this.#loadComplete({ beforeAppend: true });
-    const target = records.find((record) => record.id === targetId);
-    if (!target) throw new ValidationError(`replacement target ${targetId} not found in memory`);
-    if (records.some((record) => record.provenance?.replaces?.includes(targetId))) {
-      throw new ValidationError('that claim was already corrected; target the current claim instead');
-    }
-    if (!SENSITIVITIES.has(target.sensitivity ?? 'normal')) {
-      throw new ValidationError('replacement target has invalid sensitivity metadata');
-    }
+    return this.writeLock.run(async () => {
+      const records = await this.#loadComplete({ beforeAppend: true });
+      const target = records.find((record) => record.id === targetId);
+      if (!target) throw new ValidationError(`replacement target ${targetId} not found in memory`);
+      // Read under the lock, so a correction recorded by another process while this one waited is
+      // seen here and refused instead of becoming a second replacement of the same claim.
+      if (records.some((record) => record.provenance?.replaces?.includes(targetId))) {
+        throw new ValidationError('that claim was already corrected; target the current claim instead');
+      }
+      if (!SENSITIVITIES.has(target.sensitivity ?? 'normal')) {
+        throw new ValidationError('replacement target has invalid sensitivity metadata');
+      }
 
-    const record = {
-      schema: MEMORY_SCHEMA,
-      id: randomUUID(),
-      kind: 'user_fact',
-      source: 'user',
-      sensitivity: target.sensitivity ?? 'normal',
-      content: text,
-      contentSha256: sha256Hex(text),
-      createdAt: this.now().toISOString(),
-      provenance: {
-        origin: 'user_memory_correction',
-        updateMode: 'user_confirmed',
-        replaces: [target.id],
-      },
-    };
-    if (!isPotentialConflict(target, record)) {
-      throw new ValidationError('replacement content does not contradict the selected claim; nothing was changed');
-    }
-    if (records.some((existing) => existing.id === record.id)) throw new StoreError('identifier collision; nothing written');
-    await this.log.append(record);
-    return record;
+      const record = {
+        schema: MEMORY_SCHEMA,
+        id: randomUUID(),
+        kind: 'user_fact',
+        source: 'user',
+        sensitivity: target.sensitivity ?? 'normal',
+        content: text,
+        contentSha256: sha256Hex(text),
+        createdAt: this.now().toISOString(),
+        provenance: {
+          origin: 'user_memory_correction',
+          updateMode: 'user_confirmed',
+          replaces: [target.id],
+        },
+      };
+      if (!isPotentialConflict(target, record)) {
+        throw new ValidationError('replacement content does not contradict the selected claim; nothing was changed');
+      }
+      if (records.some((existing) => existing.id === record.id)) throw new StoreError('identifier collision; nothing written');
+      await this.log.append(record);
+      return record;
+    });
+  }
+
+  // Read-only view of the writer lock: the claim, its takeover tokens and the recovery guard. It
+  // never creates, removes or waits for the lock, so a report on a held write cannot disturb it.
+  async lockReport() {
+    return this.writeLock.state();
+  }
+
+  // Explicit recovery for the abandoned takeover tokens of a dead writer, with the task lock's
+  // limits: a live holder, a live takeover or an unidentified holder refuses, and the claim
+  // itself is left for the ordinary election. See ../tasks/lock-recovery.js.
+  async recover() {
+    return this.writeLock.recover();
   }
 
   async get(id) {
