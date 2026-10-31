@@ -107,6 +107,15 @@ export function route(request) {
     if (routed) return routed;
   }
 
+  // Questions about APEX's own stored state are answered from the stores, not by a
+  // model. The patterns are narrow: a question about a topic ("what do you believe
+  // about X") stays on the model path, where retrieval applies.
+  if (/^(?:what|which)\s+(?:conflicts|contradictions)\s+(?:do\s+you\s+(?:have|know)|are\s+(?:stored|unresolved|known))\s*\??$/i.test(r)
+    || /^what\s+is\s+(?:currently\s+)?unresolved\s*\??$/i.test(r)
+    || /^what\s+do\s+you\s+(?:currently\s+)?believe\s*\??$/i.test(r)) {
+    return { kind: 'action', capability: 'world.state', action: 'world.state', input: {} };
+  }
+
   const taskQuestion = taskQuestionRoute(r);
   if (taskQuestion) return taskQuestion;
 

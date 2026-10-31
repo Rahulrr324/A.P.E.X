@@ -276,6 +276,38 @@ function isPotentialConflict(a, b) {
   return claimsConflict(left, right);
 }
 
+// Read-only, store-wide conflict scan for a bounded set of records. Retrieval compares
+// only the records it returns; a caller that needs to describe what the store holds uses
+// this instead, and must state that the clause patterns are heuristic. Records are grouped
+// by clause subject and the same pairwise rule retrieval applies is tested between the
+// distinct values, so one contested subject yields one group rather than one entry per
+// record pair. It never merges records and never decides which value is right.
+export function findMemoryConflictGroups(records) {
+  if (!Array.isArray(records)) return [];
+  const bySubject = new Map();
+  for (const record of records) {
+    const clause = extractConflictClause(String(record?.content ?? '').trim());
+    if (!clause) continue;
+    const list = bySubject.get(clause.subject) ?? [];
+    list.push({ record, value: clause.value });
+    bySubject.set(clause.subject, list);
+  }
+  const groups = [];
+  for (const [subject, entries] of bySubject) {
+    const values = [...new Set(entries.map((entry) => entry.value))];
+    if (values.length < 2) continue;
+    let contested = false;
+    for (let i = 0; i < values.length && !contested; i += 1) {
+      for (let j = i + 1; j < values.length && !contested; j += 1) {
+        if (claimsConflict({ subject, value: values[i] }, { subject, value: values[j] })) contested = true;
+      }
+    }
+    if (!contested) continue;
+    groups.push({ subject, records: entries.map((entry) => entry.record), values });
+  }
+  return groups;
+}
+
 export class MemoryStore {
   constructor(filePath, { now = () => new Date() } = {}) {
     this.filePath = filePath;

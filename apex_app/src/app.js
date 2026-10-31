@@ -8,6 +8,7 @@ import { OperationLog } from './operations/operation-log.js';
 import { ActionRegistry } from './actions/registry.js';
 import { builtinActions } from './actions/builtin.js';
 import { knowledgeActions } from './actions/knowledge-actions.js';
+import { worldActions } from './actions/world-actions.js';
 import { Verifier } from './verify/verifier.js';
 import { CognitiveController } from './controller/controller.js';
 import { createGateway, ModelGateway, NoBackend } from './model/gateway.js';
@@ -64,7 +65,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...extraActions, ...fsActions]) registry.register(def);
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...worldActions(), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is
   // reported as absent; a damaged state still raises (it must not look empty).

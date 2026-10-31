@@ -15,6 +15,7 @@ import { TaskStatus } from './tasks/model.js';
 import { MAX_QUEUED_SUMMARIES } from './tasks/summary-queue.js';
 import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
 import { State, collectDiagnostics, renderDiagnostics, safeText } from './diagnostics.js';
+import { MAX_WORLD_LIMIT } from './world/world-state.js';
 
 export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION})
 
@@ -26,6 +27,7 @@ Usage:
   node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js memory health         store-wide record, provenance, and corruption counts (read-only)
+  node bin/apex.js world [--limit N]     stored beliefs, contradictions, decisions, and unknowns (read-only)
   node bin/apex.js history [--limit N]
   node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]
   node bin/apex.js knowledge retract <id> [--reason <text>]
@@ -73,6 +75,7 @@ Request examples (no model needed; use them with ask, or type the same words in 
   task plan "calc 1+1; calc 2+2"   plan a checked task; nothing runs yet
                                      task run <task-id> runs it, task show <task-id> shows the record
   diagnose              read-only preflight, including recovery guidance
+  what conflicts do you have   stored contradictions, answered from the stores (no model)
 
 Knowledge examples (explicit relationships; user-origin write only):
   knowledge add --subject APEX --relationship has_subsystem --object "Cognitive Controller"
@@ -701,6 +704,19 @@ export async function main(argv, {
         out(`Audit: ${corrupt} record(s) cannot be read, so this list is incomplete. A missing record does not prove an action did not execute; run "node bin/apex.js diagnose" before repeating anything.`);
       }
       return 0;
+    }
+
+    if (command === 'world') {
+      const { flags, rest } = parseFlags(args, ['limit']);
+      rejectUnexpected(rest, 'world [--limit N]');
+      if (flags.limit !== undefined && (flags.limit < 1 || flags.limit > MAX_WORLD_LIMIT)) {
+        err(`usage: world [--limit N]  (N is 1-${MAX_WORLD_LIMIT})`);
+        return 2;
+      }
+      // A direct, unaudited read, like `memory health`: it writes nothing.
+      const res = await app.controller.worldState({ limit: flags.limit });
+      out(res.display);
+      return res.world?.attention ? 1 : 0;
     }
 
     if (command === 'task') {

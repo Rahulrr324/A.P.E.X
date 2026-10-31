@@ -25,6 +25,7 @@ import { renderTask, renderTaskList, explainTask } from '../tasks/format.js';
 import { StoreError } from '../errors.js';
 import { KNOWLEDGE_PROMPT_LIMIT } from '../actions/knowledge-actions.js';
 import { MAX_HEALTH_SAMPLES, MAX_HISTORY_CHAIN } from '../knowledge/knowledge-store.js';
+import { buildWorldState, renderWorldState } from '../world/world-state.js';
 
 export const MAX_REQUEST_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 4000;
@@ -676,6 +677,24 @@ export class CognitiveController {
     };
   }
 
+  // Read-only epistemic projection. It owns no state: it reads memory and knowledge,
+  // writes no audit record, calls no model, and never repairs or resolves anything.
+  async worldState({ limit } = {}) {
+    const world = await buildWorldState({ memory: this.memory, knowledge: this.knowledge, now: this.now, limit });
+    const display = renderWorldState(world);
+    const status = world.complete ? Outcome.SUCCESS_VERIFIED : Outcome.EXECUTION_FAILED;
+    return {
+      operation: null,
+      status,
+      decision: classifyDecision({ status }),
+      output: display,
+      display,
+      recorded: false,
+      recordError: null,
+      world,
+    };
+  }
+
   // ---- knowledge operations --------------------------------------------------
   // All knowledge writes require user origin and go through runAction so that
   // authorization, execution, and verification follow the same path as memory.
@@ -1270,7 +1289,7 @@ export class CognitiveController {
     }
 
     const def = this.registry.get(name);
-    const ctx = { memory: this.memory, getStatus: this.getStatus, operationId, origin, root: this.rootForContext };
+    const ctx = { memory: this.memory, knowledge: this.knowledge, now: this.now, getStatus: this.getStatus, operationId, origin, root: this.rootForContext };
     // The filesystem actions receive the authorized root on ctx.root. It is set only by the
     // composition root and cannot be supplied by a model proposal, so the boundary cannot be
     // expanded from model output.

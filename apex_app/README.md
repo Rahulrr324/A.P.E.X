@@ -8,7 +8,9 @@ implementation of one workflow:
             -> a model -> authorize -> execute -> verify independently
             -> record -> restart -> still there
 
-It is not the whole of APEX. It has no world model, no general-purpose planner (only
+It is not the whole of APEX. It has no world model (it has a read-only
+[projection](#world-state-the-read-only-epistemic-projection) of what memory and knowledge
+already store), no general-purpose planner (only
 the bounded task planner described below), no persistent learning, no voice and no UI,
 and its model path depends entirely on a backend you configure yourself. The C++
 spiking-neuron research under `stark/` is a separate experiment, not a runtime this
@@ -32,9 +34,10 @@ from a milestone number or a passing build.
 | Filesystem inspection | Implemented only when `APEX_FILESYSTEM_ROOT` is set: bounded, read-only, single-root listing and reading. | `filesystem.test.js`, `tasks-filesystem.test.js`. |
 | Model gateway protocol handling | Implemented and **stub-tested**: request/response shapes, failure classification, retries, timeouts, and model-name mismatch against local stand-in servers that copy the documented OpenAI-compatible and Ollama shapes. | `gateway.test.js`, `model-workflow.test.js`. Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model. |
 | Real-model behaviour | **Observed outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on one Windows machine. One bounded request on 2026-10-31 completed through APEX in about 105 s; a bounded four-request benchmark the same day recorded 37.7-53.1 s per request, with 3.0-3.8 backend-reported tokens/s. Every answer was reported as unverified. Measurements and limits are in [Optional: a local model](#optional-a-local-model). | Manual, dated observations only; no automated regression test. |
+| Epistemic world-state projection | Implemented as a bounded, read-only projection of what the stores hold: beliefs classified by provenance (`user_asserted` vs `unverified_model`), knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. It is a view derived at read time, not a world model: it persists nothing, calls no model, and decides nothing. | `world-state.test.js`, `src/world/world-state.js`, the `world` command, and [World state](#world-state-the-read-only-epistemic-projection). Measured read cost is in [Benchmarks](#benchmarks). |
 | `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
 | Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
-| World model, general planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit; operation logs are not learning. | The scope paragraphs in this README and [Future learning interface](#future-learning-interface-not-implemented). |
+| World model, general planner, persistent learning, voice, UI | **Not implemented.** A world model would hold entities, events, time, and causal state of its own; the projection above only re-reads memory and knowledge and reports what they already contain. The task planner is bounded and explicit; operation logs are not learning. | The scope paragraphs in this README, [World state](#world-state-the-read-only-epistemic-projection), and [Future learning interface](#future-learning-interface-not-implemented). |
 
 The model path depends entirely on a backend you configure yourself. Without one,
 APEX answers deterministic requests and reports `model_unavailable` for everything
@@ -167,6 +170,7 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `ask --save-answer <request>` | As `ask`, and also stores a model answer as a `model_conclusion`. Only with this explicit flag. |
 | `memory correct --resolve <full-record-id> <replacement claim...>` | Explicitly corrects one selected claim. Appends a user-confirmed record and preserves the original. |
 | `memory health` | Read-only record, provenance, correction, and corruption summary for persistent memory. Exact counts, bounded samples, and a note when inspection is incomplete. Content and secrets are not printed. Never calls a model, writes no audit record, and repairs nothing. Exit 0 only when the store was fully inspected and nothing requires attention. |
+| `world [--limit N]` | Read-only epistemic projection of the stores: beliefs separated by provenance, knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. `N` is 1-50 beliefs shown (default 20). Derived at read time: it persists nothing, repairs nothing, never calls a model, and writes no audit record. Private memory is marked and never reaches the model path. Exit 0 only when both stores were fully inspected and nothing contradicts itself; exit 1 is a report, not a failure of the read. See [World state](#world-state-the-read-only-epistemic-projection). |
 | `new` | Starts a new conversation session. Memory is kept; earlier turns are no longer sent to the model. |
 | `history [--limit N]` | Lists recent operation records. |
 | `task plan <goal>` | Plans a multi-step task and stores it. Runs nothing. See [Tasks](#tasks). |
@@ -200,6 +204,11 @@ Request forms recognised without a model:
   replacement must be a conflicting claim. The correction is a new append-only record.
 - `calc <expression>`, `calculate ...`, or `what is 2+3*4?`: plain arithmetic (`+ - * /`, parentheses).
 - `status`: application status.
+- `what conflicts do you have`, `which contradictions are stored`, `what is currently
+  unresolved`, `what do you believe`: the read-only
+  [world-state projection](#world-state-the-read-only-epistemic-projection). No model is
+  asked. A question about a topic (`what do you believe about X`) is not matched here and
+  stays on the model path.
 
 A request of two or more parts separated by `;` or `then`, where every part is one of
 the forms above, runs as a task (see [Tasks](#tasks)). For example:
@@ -685,6 +694,7 @@ src/actions/
   executor.js         input validation + action body; reports what happened only
   calc.js             arithmetic: recursive-descent executor, shunting-yard verifier
   builtin.js          the built-in actions (input schema, permission, verify)
+  world-actions.js    the user-only `world.state` read: projection, audit-minimal result, independent re-read verify
 src/verify/
   verifier.js         separate verifier: decides whether a postcondition holds
 src/memory/
@@ -693,6 +703,8 @@ src/memory/
   conversation-store.js  conversation turns with origin; credential-like text is never stored
 src/knowledge/
   knowledge-store.js  triples, validation, conflict detection, lifecycle events (retraction, resolution), store-wide health
+src/world/
+  world-state.js      read-only epistemic projection of what memory and knowledge already hold; owns no state, writes nothing
 src/filesystem/
   path.js             absolute path validation: no traversal, no drive root, no UNC
   actions.js          bounded, read-only listing and reading
@@ -800,6 +812,9 @@ A bounded manual smoke test against the installed Ollama model was run on 2026-1
 (one request, about 105 s). A bounded four-request benchmark with a documented
 procedure (`benchmarks/run-model-benchmark.mjs`, using the ordinary application path)
 was run the same day. Neither is part of this suite; both are reported separately.
+`benchmarks/run-world-state-benchmark.mjs` is also outside the suite; it needs no model
+and measures the projection's read cost against synthetic fixtures
+([Benchmarks](#benchmarks)).
 
 | Acceptance test | Where |
 |---|---|
@@ -839,6 +854,7 @@ was run the same day. Neither is part of this suite; both are reported separatel
 | 34. Retrieval stays exact, bounded, and provenance-preserving at scale | `retrieval-contract.test.js` (4,000 records searched in under 5 s; ambiguous ids refused; conflicting triples kept with both ids and provenance; malformed writes refused; damage in one store does not block an unrelated deterministic request) |
 | 35. Capability statements match the evidence | `capability-truthfulness.test.js` (README categories for implemented, deterministic, stub-tested, real-model-tested, `stark/`, and proposed work; root README corrected; help and diagnostics never call a listing probe inference, and an unprobed model is "not checked") |
 | 36. Batch I as one story | `acceptance-batch-i.test.js` (14 scenarios: deterministic workflow, missing model in listing, denied proposal, corrupt storage, audit failure, interrupted task, explicit lock recovery, concurrent queue updates, credential minimization, uncertain outcome, read-only diagnostics, knowledge conflict and provenance in model context, CLI usage errors, listing-only model reporting) |
+| 37. What APEX currently holds as belief, stated without a model and without writing | `world-state.test.js` (empty stores; user-asserted beliefs kept apart from unverified model conclusions; missing evidence as an explicit unknown; an unresolved knowledge conflict and a heuristic memory disagreement both reported and neither changed by being read; a recorded decision reported as a decision; superseded and retracted records as history, not belief; private memory marked and the projection refused to model origin; audit carries ids and counts, never belief text; a damaged store contributes no beliefs and is disclosed; a bounded window and reproducible output; three reads and a rejected read byte-identical with zero model calls; restart persistence; routed questions answered from the projection while "what do you believe about X" stays on the model path; mid-read store change fails verification; legacy records without `updateMode` still classify; CLI exit codes and usage errors) |
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
@@ -896,6 +912,27 @@ questions that must change nothing).
   external anchor, so a clean parse does not prove the log is authentic or unedited.
   A store that is unavailable or partly corrupt yields an explicitly incomplete
   inspection. None of the three repairs anything or writes an audit record.
+- **The world-state projection is bounded and re-reads everything it describes.** It
+  represents at most 100 records per store (`MAX_WORLD_RECORD_LIMIT`), shows 20 beliefs
+  (1-50 with `--limit`), and lists at most 8 members of a conflict group. A contradiction
+  outside that window is real but unreported, so the projection states its own window in
+  `Projection:` and refuses to call the picture complete when a store was not fully
+  inspected. Memory contradictions are heuristic subject groups derived from the same
+  clause patterns retrieval uses, not records the store marks as conflicting: the grouping
+  can miss paraphrases and cannot tell whether two values are genuinely incompatible, and
+  memory has no user-decision mechanism, so a memory group is always reported unresolved.
+  Knowledge conflicts are read from the store's own conflict records. The audit record
+  keeps ids, counts, and group membership only - never belief text.
+- **Read cost grows with the whole store, not with the window.** Each read loads every
+  record and runs the integrity scan before it takes its 100-record projection, so the
+  three fixtures in [Benchmarks](#benchmarks) - 200 memories + 200 claims, 2,000 + 2,000,
+  and 20,000 + 2,000 - cost about 20 ms, 276 ms and 1.2 s per executed read while the
+  displayed projection stays a fixed ~3.5 KB. Separately, and unchanged by
+  this capability: appending 2,000 claims one at a time through `KnowledgeStore.add` took
+  about 59 s on the development machine, because every append re-reads the store to
+  recompute conflict state. That is existing write-path behaviour, it is what the
+  benchmark's fixture seeding step costs, and it is the reason the roadmap puts a
+  batched/incremental write path ahead of any larger store.
 - **The task lock serializes task changes, not every command.** `task plan`, `run`,
   `resume`, `approve`, `retry` and `cancel` take `tasks.jsonl.lock`; reads (`status`,
   `diagnose`, `task list/show/explain`, `history`) take no lock, and the other stores
@@ -1165,12 +1202,161 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this batch was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 862 tests, 860 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 884 tests, 882 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file
   list so it does not depend on shell globbing.
+- **One test is load-sensitive.** At the start of this batch the baseline run reported a
+  single failure in `lock-contention.test.js` ("real processes racing a stale lock"),
+  which spawns several child processes and asserts a timing-dependent outcome. The test
+  was not weakened: the same file passed 13/13 in three separate isolated re-runs and
+  passed inside the final full-suite run above. Under a concurrently busy machine it can
+  still be the first thing to fail, so treat a failure there as a result to re-run and
+  investigate, not as permission to relax the assertion.
 - Node 22 is the documented runtime; Node 26.4.0 was used for the runs above.
+
+## World state: the read-only epistemic projection
+
+`src/world/world-state.js` implements the first cognitive capability that goes beyond
+"answer a prompt": APEX can describe, on demand and without a model, what it currently
+holds as belief, who recorded it, what contradicts what, which contradictions a user has
+decided, and what it cannot establish.
+
+```
+node bin/apex.js world
+node bin/apex.js world --limit 5
+node bin/apex.js ask "what conflicts do you have"
+```
+
+### What it is
+
+A projection, computed at read time from the two persistent stores. It owns no state and
+introduces no new file or schema: `memory.jsonl` and `knowledge.jsonl` remain the only
+authoritative records, and nothing is written, repaired, or reinterpreted by a read.
+
+The output separates four things that a normal assistant tends to blend together:
+
+- **User-asserted beliefs** - records whose provenance says a user asked for them to be
+  stored, plus active knowledge triples.
+- **Unverified model conclusions** - `model_conclusion` memory records and claims stored
+  from a model proposal. They are listed in their own section and are never merged into
+  the user-asserted list. A stored model conclusion is evidence that the user approved
+  keeping it, not evidence that it is true.
+- **Contradictions** - live knowledge conflict groups (unresolved, or resolved by a
+  recorded user decision), plus heuristic memory groups where the same subject is asserted
+  with different values. A resolution reads as "a decision, not verified truth".
+- **Unknowns** - unresolved groups with no decision, claims with no recorded evidence,
+  model conclusions that nothing verified, a store that is unavailable or damaged, and
+  what the bounded projection window left out.
+
+### Guarantees and boundaries
+
+- The action `world.state` accepts **user origin only**. It is not in the model's list of
+  readable actions, so a model cannot ask for a projection that may surface private
+  memory. A model-origin request is denied before anything runs.
+- Private memory appears in the user's own read, explicitly marked
+  `[private: never sent to a model]`, and never enters a prompt.
+- The audited result of a routed `world.state` operation holds counts, record ids, and
+  bounded group membership. No belief statement or memory content is copied into the audit
+  record or into conversation history; the full display exists only in the terminal output.
+- Independent verification re-reads both stores and compares the derived shape. If the
+  stores changed between the two reads, the operation reports the mismatch instead of
+  claiming a verified read.
+- An unavailable or damaged store makes the projection **incomplete**, not empty: the read
+  reports which store could not be inspected, keeps representing the store that can be
+  read, and exits 1. `world` never reports success for a partial inspection.
+
+### What it does not do
+
+- It is **not a world model.** There are no entities, events, time intervals, or causal
+  links of its own; it re-reads records that already exist.
+- It resolves nothing, chooses nothing, and converts no inference into a fact.
+- Memory contradiction detection is the same narrow heuristic the memory store already uses
+  ("subject is/are value" clauses), so it can miss contradictions and can group records a
+  user considers compatible. It is labelled as heuristic in the output.
+- At most the most recent 100 records per store are represented; the rest are counted and
+  announced as outside the window. At most 50 beliefs, 5 contradiction groups, 8 listed
+  members per group, and 8 unknowns are shown.
+- Records never written to memory or knowledge are invisible to it.
+
+### Benchmarks
+
+`benchmarks/run-world-state-benchmark.mjs` measures the read path with synthetic fixtures
+in a temporary directory. It runs no model, downloads nothing, and verifies that repeated
+reads leave every store file byte-identical. It is not part of `npm test`.
+
+Observed on one Windows 11 machine (Node 26.4.0, 12 logical CPUs, 24 GiB reported memory,
+warm page cache, one 100-record window of memory sharing a single clause subject):
+
+| Fixture | Store size | Store-wide health scan | Projection build (median of 7) | `execute` + `verify` | Process RSS after |
+|---|---|---|---|---|---|
+| 200 memory + 200 claims | ~139 KB | 4.9 ms | 10.8 ms | 20.4 ms | 58 MiB |
+| 2,000 memory + 2,000 claims | ~1.4 MB | 88.7 ms | 141.6 ms | 275.6 ms | 97 MiB |
+| 20,000 memory + 2,000 claims | ~7.7 MB | 328.3 ms | 545.5 ms | 1212.2 ms | 148 MiB |
+
+Cost grows with total records because each read loads and scans both stores once, while the
+represented window stays fixed at 100 records per store; the rendered output stayed near
+3.5 KB at every size. These are single-machine observations at the stated fixture sizes, not
+a scaling guarantee, and they do not include concurrent writers.
+
+Fixture generation itself is a separate, honest finding: appending 2,000 claims through
+`KnowledgeStore.add` took about 59 s, because every append re-reads the whole store. That is
+existing write-path behaviour, not projection behaviour, and is listed under
+[Known limitations](#known-limitations) and in the roadmap.
+
+## Roadmap toward persistent cognition (dependency-ordered)
+
+This is a plan, not a status report. Nothing below is implemented except stage 2's
+projection. Each stage names the dependency it satisfies and the evidence that would
+demonstrate completion, so a later batch cannot claim progress by adding vocabulary.
+
+1. **Foundational infrastructure (done, keep).** Append-only stores, provenance,
+   authorization, independent verification, audit, recovery, health inspection.
+   *Dependency for everything else.* Acceptance: the existing suites stay green; no later
+   stage may weaken them.
+2. **Persistent cognitive state (partly done).** Memory, knowledge, task state, and
+   conversation are durable and separately owned; the read-only projection derived from
+   them is implemented in this batch. Acceptance for closing the stage: a projection whose
+   cost does not grow linearly with total records (an index or cached summary owned by the
+   store that produced it), proven that no read mutates any store.
+3. **Structured entity, event, and world state.** Entities with identity beyond an exact
+   triple, events with time and participants, and state that changes over time. Depends on
+   2 because a schema needs an owner and a migration story. Acceptance: records that
+   answer "what was true on <date>, and which record says so", with old values preserved
+   and labelled as history, plus retrieval that distinguishes current from expired.
+4. **Retrieval, evidence, uncertainty, and contradiction handling.** Evidence-linked belief
+   records with explicit confidence, provenance-aware retrieval, and contradiction handling
+   that is not a text heuristic. Depends on 3 (a claim must name what it is about).
+   Acceptance: a stored belief can be traced to the records supporting and contradicting
+   it, an inference stays labelled as an inference through retrieval, and a conflicting
+   record is surfaced rather than silently preferred.
+5. **Learning and adaptation.** Updates driven by user feedback and verified outcomes,
+   under the existing trust boundary: model output cannot authorize a write, and no
+   inference is promoted to a fact without evidence. Depends on 4. Acceptance: a bounded
+   feedback record changes what APEX surfaces, does not change what it claims is verified,
+   survives a restart, and is reversible and auditable.
+6. **Executive control and outcome evaluation.** Expectations recorded before an action,
+   outcomes compared against them, and the controller using that difference to decide the
+   next step. Depends on 1 and 5. Acceptance: an operation records an expectation, an
+   outcome, and a classification of the difference, and a wrong expectation changes
+   subsequent behaviour without granting any component new authority.
+7. **Neural-runtime integration.** Only through the contract described in
+   [Neural integration boundary](#neural-integration-boundary-proposal-not-implemented):
+   proposals in, authority out. Depends on 6, because a proposer needs an evaluation
+   channel to be measured at all. Acceptance: a real runtime answers a real request through
+   the boundary, is classified as a proposer in the audit record, and cannot write to any
+   store.
+8. **Resource-aware local operation.** Latency and memory budgets that adapt to this
+   machine rather than assuming a server. Depends on 2 (indexed reads) and on measurements
+   like the benchmark above. Acceptance: documented, repeated local measurements and a
+   degradation path that states what was skipped instead of silently timing out.
+
+Decisions deliberately left reversible: the projection stays a read-time derivation, so a
+later indexed store can replace it without touching memory or knowledge schemas; memory
+contradiction reporting stays heuristic and labelled, so a real entity model can supersede
+it; `world.state` stays user-origin-only, so a future model-facing view can be introduced
+as a separate, content-free action rather than by widening this one.
 
 ## Future learning interface (not implemented)
 

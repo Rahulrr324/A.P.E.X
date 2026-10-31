@@ -15,11 +15,14 @@ preserved for provenance.
 - The runnable **APEX Local Alpha** application in [`apex_app/`](apex_app/README.md):
   a Node.js CLI with a Cognitive Controller, personal memory, an explicit knowledge
   store, independent verification, audit records, crash recovery, and a bounded task
-  planner. It answers deterministic requests with no model and sends everything else to
-  a local model backend **you** configure; without one it reports `model_unavailable`
-  and generates nothing. Its model-path tests use local stand-in servers, and the only
-  real-model observations are the dated ones recorded in its README (the most recent
-  bounded local run is dated 2026-10-31).
+  planner. It can also state, from the records alone and with no model, what it currently
+  holds as belief and what contradicts what: `apex world` is a **read-only projection**
+  of the memory and knowledge stores, not a world model — it persists nothing, decides
+  nothing, and calls nothing. It answers deterministic requests with no model and sends
+  everything else to a local model backend **you** configure; without one it reports
+  `model_unavailable` and generates nothing. Its model-path tests use local stand-in
+  servers, and the only real-model observations are the dated ones recorded in its README
+  (the most recent bounded local run is dated 2026-10-31).
 
 **APEX Local Alpha is a vertical slice, not the whole system.** There is still no World
 Model, no general-purpose planner, no persistent learning, no voice, no UI, and no
