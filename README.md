@@ -18,7 +18,8 @@ preserved for provenance.
   planner. It answers deterministic requests with no model and sends everything else to
   a local model backend **you** configure; without one it reports `model_unavailable`
   and generates nothing. Its model-path tests use local stand-in servers, and the only
-  real-model observations are the dated ones recorded in its README.
+  real-model observations are the dated ones recorded in its README (the most recent
+  bounded local run is dated 2026-10-31).
 
 **APEX Local Alpha is a vertical slice, not the whole system.** There is still no World
 Model, no general-purpose planner, no persistent learning, no voice, no UI, and no

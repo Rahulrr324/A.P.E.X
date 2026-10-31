@@ -48,11 +48,13 @@ describe('107: capability statements match the evidence', () => {
       assert.ok(APP_README.includes(row), `capability table is missing the "${row}" row`);
     }
     assert.match(APP_README, /Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model\./);
-    assert.match(APP_README, /The changes in this batch were \*\*not\*\* re-validated against a real model\./);
+    assert.match(APP_README, /\*\*Observed outside the automated suite\*\*/);
+    assert.match(APP_README, /Every answer was reported as unverified\./);
     assert.match(APP_README, /\*\*Proposed, not implemented\.\*\*/);
     assert.match(APP_README, /World model, general planner, persistent learning, voice, UI \| \*\*Not implemented\.\*\*/);
-    assert.match(APP_README, /### Controlled real-model smoke test \(prerequisites only\)/);
-    assert.match(APP_README, /It is \*\*not run here\*\* and no\s+result is claimed\./);
+    assert.match(APP_README, /### Controlled real-model smoke test/);
+    assert.match(APP_README, /This was run once, on 2026-10-31/);
+    assert.match(APP_README, /one bounded `ask` completed in about 105 s and was reported as unverified\./);
     // The detailed model section keeps the same distinction.
     assert.match(APP_README, /no test in this repository runs a real model/);
   });

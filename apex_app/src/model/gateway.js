@@ -24,6 +24,27 @@ const RETRY_DELAY_MS = 300;
 // Failures where no answer reached APEX, so a repeat attempt is safe.
 const RETRYABLE = new Set(['UNREACHABLE', 'INTERRUPTED']);
 
+// Backend-reported counters are untrusted input. Only finite, non-negative, bounded
+// numbers are kept; a missing or implausible value is null, never estimated. Ollama
+// reports durations in nanoseconds and APEX exposes whole milliseconds.
+const MAX_REPORTED_COUNT = 1_000_000_000;
+function reportedCount(value) {
+  return Number.isFinite(value) && value >= 0 && value <= MAX_REPORTED_COUNT ? Math.trunc(value) : null;
+}
+function reportedMs(nanoseconds) {
+  return Number.isFinite(nanoseconds) && nanoseconds >= 0 && nanoseconds <= 3.6e15
+    ? Math.round(nanoseconds / 1e6)
+    : null;
+}
+// Returns null for a group where nothing usable was reported, so callers that never
+// see metadata keep their existing result shape.
+function backendMetadata({ promptTokens, completionTokens, totalNs, loadNs, promptEvalNs, evalNs } = {}) {
+  const usage = { promptTokens: reportedCount(promptTokens), completionTokens: reportedCount(completionTokens) };
+  const timings = { totalMs: reportedMs(totalNs), loadMs: reportedMs(loadNs), promptEvalMs: reportedMs(promptEvalNs), evalMs: reportedMs(evalNs) };
+  const any = (group) => Object.values(group).some((v) => v !== null);
+  return { usage: any(usage) ? usage : null, timings: any(timings) ? timings : null };
+}
+
 function failure(backend, provider, code, message, latencyMs = 0) {
   return { ok: false, backend, provider, error: { code, message }, latencyMs };
 }
@@ -243,7 +264,7 @@ class HttpBackend {
     }
   }
 
-  finishAnswer({ content, reasoning, finishReason, reportedModel, latencyMs }) {
+  finishAnswer({ content, reasoning, finishReason, reportedModel, latencyMs, usage, timings }) {
     if (typeof content !== 'string') {
       return failure(this.name, this.provider, 'MALFORMED_RESPONSE', 'endpoint response has no message content', latencyMs);
     }
@@ -263,6 +284,7 @@ class HttpBackend {
         latencyMs,
       );
     }
+    const meta = backendMetadata({ ...usage, ...timings });
     return {
       ok: true,
       backend: this.name,
@@ -272,6 +294,8 @@ class HttpBackend {
       finishReason: finishReason ?? null,
       truncated: finishReason === 'length' || text.length > MAX_OUTPUT_CHARS,
       latencyMs,
+      ...(meta.usage ? { usage: meta.usage } : {}),
+      ...(meta.timings ? { timings: meta.timings } : {}),
     };
   }
 }
@@ -367,6 +391,10 @@ export class OpenAICompatibleBackend extends HttpBackend {
       finishReason: choice?.finish_reason,
       reportedModel: typeof parsed.value?.model === 'string' ? parsed.value.model : null,
       latencyMs: r.latencyMs,
+      usage: {
+        promptTokens: parsed.value?.usage?.prompt_tokens,
+        completionTokens: parsed.value?.usage?.completion_tokens,
+      },
     });
   }
 }
@@ -436,6 +464,16 @@ export class OllamaBackend extends HttpBackend {
       finishReason: parsed.value?.done_reason ?? null,
       reportedModel: typeof parsed.value?.model === 'string' ? parsed.value.model : null,
       latencyMs: r.latencyMs,
+      usage: {
+        promptTokens: parsed.value?.prompt_eval_count,
+        completionTokens: parsed.value?.eval_count,
+      },
+      timings: {
+        totalNs: parsed.value?.total_duration,
+        loadNs: parsed.value?.load_duration,
+        promptEvalNs: parsed.value?.prompt_eval_duration,
+        evalNs: parsed.value?.eval_duration,
+      },
     });
   }
 }

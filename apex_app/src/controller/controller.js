@@ -1576,6 +1576,10 @@ export class CognitiveController {
       };
     }
     op.model = { name: res.model, provider: res.provider, latencyMs: res.latencyMs, finishReason: res.finishReason };
+    // Numeric backend counters are recorded only when the server reported them, so a
+    // missing measurement is visible as absent rather than as a zero.
+    if (res.usage) op.model.usage = res.usage;
+    if (res.timings) op.model.timings = res.timings;
 
     const parsed = parseModelOutput(res.text);
     for (const bad of parsed.malformed) {

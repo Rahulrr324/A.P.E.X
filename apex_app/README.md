@@ -31,7 +31,7 @@ from a milestone number or a passing build.
 | Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `calc`, `status`, `knowledge add/list/search/show`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `tasks.test.js`, `cli-workflow.test.js`. A model is never consulted for these. |
 | Filesystem inspection | Implemented only when `APEX_FILESYSTEM_ROOT` is set: bounded, read-only, single-root listing and reading. | `filesystem.test.js`, `tasks-filesystem.test.js`. |
 | Model gateway protocol handling | Implemented and **stub-tested**: request/response shapes, failure classification, retries, timeouts, and model-name mismatch against local stand-in servers that copy the documented OpenAI-compatible and Ollama shapes. | `gateway.test.js`, `model-workflow.test.js`. Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model. |
-| Real-model behaviour | **Observed once, outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on 2026-10-29, on one Windows machine. The measurements and what they showed are in [Optional: a local model](#optional-a-local-model). The changes in this batch were **not** re-validated against a real model. | Manual, dated observations only; no automated regression test. |
+| Real-model behaviour | **Observed outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on one Windows machine. One bounded request on 2026-10-31 completed through APEX in about 105 s; a bounded four-request benchmark the same day recorded 37.7-53.1 s per request, with 3.0-3.8 backend-reported tokens/s. Every answer was reported as unverified. Measurements and limits are in [Optional: a local model](#optional-a-local-model). | Manual, dated observations only; no automated regression test. |
 | `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
 | Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
 | World model, general planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit; operation logs are not learning. | The scope paragraphs in this README and [Future learning interface](#future-learning-interface-not-implemented). |
@@ -40,10 +40,12 @@ The model path depends entirely on a backend you configure yourself. Without one
 APEX answers deterministic requests and reports `model_unavailable` for everything
 else; it never fabricates an answer.
 
-### Controlled real-model smoke test (prerequisites only)
+### Controlled real-model smoke test
 
-This is what a future controlled check would require. It is **not run here** and no
-result is claimed. Complete it only where the constraints allow it:
+This was run once, on 2026-10-31, against Qwen3-4B GGUF on a local Ollama server:
+one bounded `ask` completed in about 105 s and was reported as unverified. The
+prerequisites below are what that check required; they are not a guarantee that it
+reproduces on other hardware or with other prompts.
 
 1. A local model server is installed and running by the operator (Ollama or an
    OpenAI-compatible `llama-server`). APEX neither downloads a model nor starts a
@@ -302,11 +304,38 @@ through APEX took 35.4 s and 41.5 s (APEX overhead 26-46 ms), both
 stored turns. A cold direct request took 63.6 s including 16.4 s of model loading,
 0.5 s of prompt evaluation, and 46.7 s generating 251 tokens (about 5.4 tokens/s).
 
+Measured on 2026-10-31 through the application path (same model and server, 300 s
+timeout, 1200-token budget, no retries, temperature 0, one short factual prompt
+repeated) with `benchmarks/run-model-benchmark.mjs`:
+
+- readiness/list check: 81 ms; it lists models and runs no inference;
+- four requests: 53.1 s (server cold; about 23 s of that was model load), then
+  37.7 s, 43.1 s and 38.7 s;
+- backend-reported generation: 101, 131, 131 and 112 tokens at 3.0-3.6 tokens/s;
+  prompt evaluation took 1.2-2.0 s;
+- APEX overhead beyond the server's own reported total: 0.22-0.33 s per request
+  (0.6-0.8%);
+- all four answers were reported as unverified, with no action proposed or executed.
+
+Generation is 95-96% of warm request time, so the model, not the application, is the
+bottleneck. A separate request with a 96-token budget produced only reasoning and was
+reported as `EMPTY_RESPONSE` after 28.8 s: on this template the budget is consumed by
+reasoning before an answer, so a very low cap is not a way to force a concise answer.
+The earlier 2026-10-31 request (about 105 s) is not pooled with these samples because
+it was the first cold start of that server and ran with different prior conditions.
+These are four observations on one machine, not a reliable benchmark.
+
+Operation records now include the backend's own counters as `model.usage`
+(`promptTokens`, `completionTokens`) and `model.timings` (`totalMs`, `loadMs`,
+`promptEvalMs`, `evalMs`) when the server reports them. Values are bounded numbers;
+an absent value is absent, never zero or estimated.
+
 **Verification status.** The automated tests use local stand-in servers that copy the
 documented request and response shapes of both protocols. They check protocol
 handling and failure classification only. They say nothing about answer quality, and
-no test in this repository runs a real model. See the report that accompanies this
-milestone for what was and was not run against a real server.
+no test in this repository runs a real model. A bounded manual run against a real
+server was performed on 2026-10-31 and is reported above; it is not an automated
+regression test.
 
 ## Optional: bounded filesystem inspection
 
@@ -729,8 +758,10 @@ is skipped. The suite uses only temporary directories under the OS temp folder
 (`apex-test-*`) and removes them afterwards. Tests never read or write `~/.apex`, and
 CLI tests point `HOME`/`USERPROFILE` at the temp directory too.
 
-A bounded manual smoke test against the installed Ollama model was run outside this
-suite; it is not an automated regression test and is reported separately.
+A bounded manual smoke test against the installed Ollama model was run on 2026-10-31
+(one request, about 105 s). A bounded four-request benchmark with a documented
+procedure (`benchmarks/run-model-benchmark.mjs`, using the ordinary application path)
+was run the same day. Neither is part of this suite; both are reported separately.
 
 | Acceptance test | Where |
 |---|---|
@@ -956,7 +987,7 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this batch was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 755 tests, 753 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 760 tests, 758 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file
