@@ -59,9 +59,9 @@ cd apex_app
 node benchmarks/run-world-state-benchmark.mjs --memory 2000 --claims 2000 --repeats 7
 ```
 
-1. The fixture sizes are capped on purpose: `--memory` is 1-20000, `--claims` is
-   1-2000, `--repeats` is 1-25. Larger fixtures were measured once, found to be slow for
-   reasons the script already reports, and are not offered as defaults.
+1. The fixture sizes are capped on purpose: `--memory` is 1-40000, `--claims` is 1-2000,
+   `--repeats` is 1-25. Claims stay small because each one is appended through the store,
+   which re-reads the whole store first; the seeding line reports that cost.
 2. Memory records are written directly as valid JSONL lines so that seeding does not
    dominate the run; claims are appended through `KnowledgeStore.add`, because that is
    the only path that produces a well-formed claim. Seeding time is therefore reported
@@ -71,29 +71,50 @@ node benchmarks/run-world-state-benchmark.mjs --memory 2000 --claims 2000 --repe
 
 ### What it reports
 
-- store-wide health scan time, projection build time (first run plus min, median and max
-  over the repeats), render time, and up to three full `execute` + independent `verify`
-  passes through the action layer;
-- the numbers the projection actually derived: represented beliefs out of stored records,
-  beliefs shown, memory conflict groups, largest group, whether the projection is
-  complete and whether it asks for attention, and the rendered display length;
-- process RSS and heap before and after, so a leak or an unexpected spike is visible;
-- byte length and SHA-256 of every file at the top of the data directory before and after
-  the reads, reported as "writes during N reads: none (every store file is
-  byte-identical)" only when each one is unchanged;
+- four reads of the same unchanged stores, so the cost of each part of the optimization is
+  visible separately rather than asserted: the first read in a process that has derived
+  nothing, the same read again once the derived snapshot exists, the same read with the
+  snapshot switched off (one authoritative read per store), and the pre-optimization read
+  pattern (two whole-store loads per store, no snapshot). The last two are compared to each
+  other and to the warm read, and the projection the old pattern returns is compared
+  record-for-record with the one the current code returns;
+- one store read on its own, cached against uncached, because the snapshot's benefit is
+  per store and a merged read's benefit is per projection;
+- store-wide health scan time, render time, and up to seven full `execute` + independent
+  `verify` passes through the action layer, reported separately and counted, so an
+  optimization cannot quietly delete the verifying read to look fast;
+- the write phases twice, once with the snapshot enabled and once with it disabled, and the
+  median difference per operation: `add()` on memory, `add()` on knowledge, and the read
+  after a memory append. A derived performance aid that slows the authoritative path shows
+  up here as a positive number;
+- the derived snapshot's own state at the end of the run (enabled, cap, cached bytes,
+  cached records, cumulative hits and misses). It is a performance aid and the run says so
+  in its label; nothing reads it to decide whether data exists;
+- what the projection actually derived: represented beliefs out of stored records, beliefs
+  shown, memory conflict groups, largest group, whether the projection is complete and
+  whether it asks for attention;
+- process RSS and heap before and after, and the byte length of every store file before and
+  after the unchanged-store reads, reported as "writes during N reads: none (every store
+  file is byte-identical)" only when each one is unchanged;
 - the conditions of the run: Node version, platform and architecture, logical CPU count,
-  reported total memory, and the fixture sizes with their write cost.
+  reported total memory, fixture sizes and their write cost, and a closing statement of
+  what the run cannot prove.
 
 ### Interpretation limits
 
 - Fixtures are uniform synthetic text in a one-clause-subject shape, which is the worst
   case for the memory conflict scan; a real store with varied records reads faster.
-- Cost is described at the three sizes measured in the main README
-  ([Benchmarks](../README.md#benchmarks)) and grows with total records, because each read
-  loads and integrity-scans both stores before taking its fixed 100-record window. These
-  are single-machine observations at stated fixture sizes, not a scaling guarantee, and no
-  concurrent writer is present.
+- A cold read and the read that follows a write still parse and validate the whole store, so
+  read cost is **not** independent of total store size. Only a repeat read of bytes that
+  have not changed is cheaper, and it is cheaper by skipping parsing, not I/O.
+- Claim seeding is quadratic in the number of claims and is reported as a write cost, not a
+  read cost. It is a property of the store's deliberate whole-store conflict check, not of
+  the projection, and no read-side optimization changes it.
+- Figures recorded in the main README before Batch U were measured with the two-loads-per-store
+  pattern and may include unrelated system load. Every run now re-creates that pattern in
+  the same process against the same fixture, so prefer the in-run comparison.
 - One repeat counts one process. Timing noise from the operating system is not separated
-  out, so treat the median as an indication, not a specification.
+  out, so treat the median as an indication, not a specification. Differences of a few
+  milliseconds, including negative ones in the write-overhead lines, are noise.
 
 This script is not part of `npm test` and no test depends on it.

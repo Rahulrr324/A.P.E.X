@@ -698,13 +698,13 @@ src/actions/
 src/verify/
   verifier.js         separate verifier: decides whether a postcondition holds
 src/memory/
-  jsonl-store.js      append-only JSON Lines with fsync and damage tolerance
-  memory-store.js     personal memory: validation, provenance, content hash, retrieval
+  jsonl-store.js      append-only JSON Lines with fsync and damage tolerance, plus an optional per-process derived parse snapshot
+  memory-store.js     personal memory: validation, provenance, content hash, retrieval, one-read `projectionRead`
   conversation-store.js  conversation turns with origin; credential-like text is never stored
 src/knowledge/
-  knowledge-store.js  triples, validation, conflict detection, lifecycle events (retraction, resolution), store-wide health
+  knowledge-store.js  triples, validation, conflict detection, lifecycle events (retraction, resolution), store-wide health, one-read `projectionRead`
 src/world/
-  world-state.js      read-only epistemic projection of what memory and knowledge already hold; owns no state, writes nothing
+  world-state.js      read-only epistemic projection of what memory and knowledge already hold; owns no state, writes nothing, one authoritative read per store
 src/filesystem/
   path.js             absolute path validation: no traversal, no drive root, no UNC
   actions.js          bounded, read-only listing and reading
@@ -855,6 +855,7 @@ and measures the projection's read cost against synthetic fixtures
 | 35. Capability statements match the evidence | `capability-truthfulness.test.js` (README categories for implemented, deterministic, stub-tested, real-model-tested, `stark/`, and proposed work; root README corrected; help and diagnostics never call a listing probe inference, and an unprobed model is "not checked") |
 | 36. Batch I as one story | `acceptance-batch-i.test.js` (14 scenarios: deterministic workflow, missing model in listing, denied proposal, corrupt storage, audit failure, interrupted task, explicit lock recovery, concurrent queue updates, credential minimization, uncertain outcome, read-only diagnostics, knowledge conflict and provenance in model context, CLI usage errors, listing-only model reporting) |
 | 37. What APEX currently holds as belief, stated without a model and without writing | `world-state.test.js` (empty stores; user-asserted beliefs kept apart from unverified model conclusions; missing evidence as an explicit unknown; an unresolved knowledge conflict and a heuristic memory disagreement both reported and neither changed by being read; a recorded decision reported as a decision; superseded and retracted records as history, not belief; private memory marked and the projection refused to model origin; audit carries ids and counts, never belief text; a damaged store contributes no beliefs and is disclosed; a bounded window and reproducible output; three reads and a rejected read byte-identical with zero model calls; restart persistence; routed questions answered from the projection while "what do you believe about X" stays on the model path; mid-read store change fails verification; legacy records without `updateMode` still classify; CLI exit codes and usage errors) |
+| 38. The read optimization does not weaken the projection | `world-state-performance.test.js` (a cold read and a warm read return the same records, the same damage and the same projection; a same-length external rewrite, a replaced file, and a deleted file are all detected, so invalidation is not a size or mtime guess; corrupt lines and an unreadable store are re-reported instead of masked by an earlier healthy read; the verifying read is a real re-read, and a write landing between the executed read and the verifying read fails verification; a caller mutating the records it was handed cannot poison the snapshot or reclassify a belief; neither read adjacent to this instance's own append consults or rewrites the snapshot, and a write still sees a record another process wrote; a store over the cap is never snapshotted; stores that never opt in report the snapshot disabled; projection reads never write a byte) |
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
@@ -924,15 +925,28 @@ questions that must change nothing).
   Knowledge conflicts are read from the store's own conflict records. The audit record
   keeps ids, counts, and group membership only - never belief text.
 - **Read cost grows with the whole store, not with the window.** Each read loads every
-  record and runs the integrity scan before it takes its 100-record projection, so the
-  three fixtures in [Benchmarks](#benchmarks) - 200 memories + 200 claims, 2,000 + 2,000,
-  and 20,000 + 2,000 - cost about 20 ms, 276 ms and 1.2 s per executed read while the
-  displayed projection stays a fixed ~3.5 KB. Separately, and unchanged by
-  this capability: appending 2,000 claims one at a time through `KnowledgeStore.add` took
-  about 59 s on the development machine, because every append re-reads the store to
-  recompute conflict state. That is existing write-path behaviour, it is what the
-  benchmark's fixture seeding step costs, and it is the reason the roadmap puts a
-  batched/incremental write path ahead of any larger store.
+  record and runs the integrity scan before it takes its 100-record projection. Batch U
+  removed duplicate reads and made an unchanged repeat read skip parsing, so at 20,000
+  memories the projection build went from 270.4 ms (the previous read pattern, re-measured
+  in the same process) to 57.1 ms warm - but a cold read still cost 253.5 ms and a read
+  after a write 143.6 ms, so the cost is still proportional to the store. Getting a read
+  that does not grow with total records needs a persisted, incrementally maintained index,
+  which is a storage redesign and is not part of this capability.
+- **Every write re-reads the store it is about to append to, and that is quadratic.**
+  `KnowledgeStore.add` re-reads and re-scans the whole store before appending, because
+  conflict and lifecycle state is deliberately computed store-wide and a damaged store must
+  be refused rather than compared against an incomplete record set; `MemoryStore.add` does
+  the same to refuse a damaged store. One `MemoryStore.add()` measured 16.1 ms against 2,000
+  memories, 123.7 ms against 20,000 and 281.4 ms against 40,000; one `KnowledgeStore.add()`
+  measured 21.4 ms against 2,000 claims. Appending those 2,000 claims one at a time took
+  26.0 s in one run and 56.5 s in another, and the cost of the nth write grows with n, so
+  seeding a large store is O(n^2). This is write-path behaviour, unchanged by the
+  read optimization and not fixable by it. The next separate milestone is a persisted
+  incremental conflict/lifecycle index owned by the store, and it must preserve append-only
+  history, conflict and lifecycle semantics, provenance, authorization, independent
+  verification, failure reporting and audit - no bulk rewrite and no unsafe replacement of
+  authoritative history. A batched write API is not the fix and is not planned just to make
+  a benchmark look better.
 - **The task lock serializes task changes, not every command.** `task plan`, `run`,
   `resume`, `approve`, `retry` and `cancel` take `tasks.jsonl.lock`; reads (`status`,
   `diagnose`, `task list/show/explain`, `history`) take no lock, and the other stores
@@ -1202,7 +1216,7 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this batch was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 884 tests, 882 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 910 tests, 908 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file
@@ -1280,6 +1294,56 @@ The output separates four things that a normal assistant tends to blend together
   members per group, and 8 unknowns are shown.
 - Records never written to memory or knowledge are invisible to it.
 
+### How the read path is made fast, and what that does not buy
+
+Batch U measured the projection's read path before changing it, and found two costs, not one:
+a projection performed **four** whole-file read-parse-validate passes (`memory.health()` +
+`memory.list()` + `knowledge.health()` + `knowledge.list()`, so an executed-and-verified read
+performed eight), and each pass parsed every line and recomputed each record's SHA-256. Both
+stores were therefore read twice per projection from two different moments of the same file.
+
+Only two interventions were made, both inside the existing architecture:
+
+- **One authoritative read per store per projection.** `projectionRead()` on each store
+  returns the store-wide integrity summary and the bounded record window from one snapshot of
+  one file. A projection can no longer combine a summary of one file state with records from
+  another. This is also a correctness improvement, and it is what most of the saving came from.
+- **An optional derived parse snapshot, owned by `JsonlStore`.** It is per store instance,
+  per process, in memory only, and holds the parsed and validated records of **one exact byte
+  sequence**, keyed by the SHA-256 of those bytes.
+
+What the snapshot guarantees, and what it is never allowed to become:
+
+- It is a performance aid, not a source of truth. Nothing is persisted, no new file or schema
+  exists, and no other component reads it. It is dropped implicitly the moment the bytes
+  differ: an append, a truncation, a same-length rewrite, a replaced file, or a file written
+  by another process all miss it and are parsed and validated again by the same rules.
+- Every read still reads the file from disk. A hit skips parsing, not I/O, and hands out
+  freshly copied records, so a caller cannot mutate the snapshot.
+- There is one parser. Cached and uncached reads get their records and their damage from the
+  same function, so a hit cannot apply weaker integrity rules than a cold read. A store with
+  corrupt lines reports them again on the next read; a healthy earlier read cannot mask them.
+- Neither read around one of this instance's own appends reads or writes the snapshot: the
+  read a write performs to inspect the store first asks for it to be left alone, and the read
+  immediately after the append skips it because the bytes just changed. Both parses and
+  validate the file as it actually is, so the write path still refuses a damaged store and
+  still sees a record another process added; what it no longer pays is a hash and a copy of
+  every record on bytes that are about to be superseded. Without that rule the snapshot made
+  every write slower than it was before Batch U, by an amount that grew with the store.
+- No store that does not opt in is affected: tasks, conversation turns, and the audit log keep
+  `parseCacheBytes: 0` and behave exactly as before.
+- Independent verification is untouched: `verify` performs its own read of both stores and
+  rebuilds the projection instead of comparing a cached object with itself, and it is measured
+  separately rather than folded into the read number.
+
+What it does not buy: a cold read and the read that follows a write still parse and validate
+the whole store, so **read cost is still not independent of total store size**. A warm read
+remains proportional to the store too, because the snapshot hands out a copy of every record
+even though the projection represents at most 100. The snapshot also retains a second copy of
+a cached store's records in process memory, bounded by 32 MiB per store. Constant-time reads
+would need a persisted, incrementally maintained index - a storage redesign this batch
+deliberately did not attempt.
+
 ### Benchmarks
 
 `benchmarks/run-world-state-benchmark.mjs` measures the read path with synthetic fixtures
@@ -1287,23 +1351,52 @@ in a temporary directory. It runs no model, downloads nothing, and verifies that
 reads leave every store file byte-identical. It is not part of `npm test`.
 
 Observed on one Windows 11 machine (Node 26.4.0, 12 logical CPUs, 24 GiB reported memory,
-warm page cache, one 100-record window of memory sharing a single clause subject):
+warm page cache, one 100-record window of memory sharing a single clause subject). The four
+"current" columns come from **one run per fixture, in one process, 7 timed samples**, so they
+are comparable to each other; the model is not involved and `npm test` does not run this. That
+run is the one whose write overhead is described below: the rule that removed that overhead
+changes only the two reads a write performs around its own append, not these unchanged-store
+read phases, and the whole matrix was re-run after the change (reported below).
 
-| Fixture | Store size | Store-wide health scan | Projection build (median of 7) | `execute` + `verify` | Process RSS after |
-|---|---|---|---|---|---|
-| 200 memory + 200 claims | ~139 KB | 4.9 ms | 10.8 ms | 20.4 ms | 58 MiB |
-| 2,000 memory + 2,000 claims | ~1.4 MB | 88.7 ms | 141.6 ms | 275.6 ms | 97 MiB |
-| 20,000 memory + 2,000 claims | ~7.7 MB | 328.3 ms | 545.5 ms | 1212.2 ms | 148 MiB |
+| Fixture | Batch T read pattern, re-run in the same process | one authoritative read per store, snapshot off | warm repeat read | first read of a fresh process (cold) | `execute` + `verify` | RSS after reads |
+|---|---|---|---|---|---|---|
+| 200 + 200 | 10.4 ms | 5.7 ms | 5.0 ms | 26.6 ms | 8.3 ms | 57 MiB |
+| 2,000 + 2,000 | 66.7 ms | 38.1 ms | 22.4 ms | 80.4 ms | 47.0 ms | 158 MiB |
+| 20,000 + 2,000 | 270.4 ms | 142.5 ms | 57.1 ms | 253.5 ms | 102.5 ms | 276 MiB |
+| 40,000 + 2,000 | 507.6 ms | 288.9 ms | 100.6 ms | 395.6 ms | 179.1 ms | 267 MiB |
 
-Cost grows with total records because each read loads and scans both stores once, while the
-represented window stays fixed at 100 records per store; the rendered output stayed near
-3.5 KB at every size. These are single-machine observations at the stated fixture sizes, not
-a scaling guarantee, and they do not include concurrent writers.
+Against Batch T's own recorded figures (projection build 10.8 / 141.6 / 545.5 ms and
+`execute` + `verify` 20.4 / 275.6 / 1212.2 ms at 200 / 2,000 / 20,000) the executed-and-verified
+read at 20,000 memories went from 1212.2 ms to 102.5 ms. Those two numbers were not measured
+side by side, and re-running the old strategy inside the later processes cost 270.4 ms rather
+than the 545.5 ms Batch T recorded, so Batch T's table was taken while the machine was busier:
+**the trustworthy comparison is column-by-column within one run** - 4.7x faster at 20,000
+memories and 5.0x at 40,000, warm, with the projection byte-identical apart from its timestamp
+in every case. Repeating all four fixtures later the same day, after the write-path rule below
+and with other work on the machine, gave 10.1 / 142.4 / 583.4 / 1010.3 ms for the old pattern and
+4.3 / 40.5 / 100.9 / 188.4 ms warm - every absolute value larger, and the warm-vs-old-pattern
+factor **larger rather than smaller** (2.4x / 3.5x / 5.8x / 5.4x against the table's 2.1x / 3.0x /
+4.7x / 5.0x), because load multiplies the pass that re-reads the same files four times. Absolute
+milliseconds here move by up to 2x with system load; the direction of the comparison held in both
+runs, and under load the measured saving was larger, not smaller.
 
-Fixture generation itself is a separate, honest finding: appending 2,000 claims through
-`KnowledgeStore.add` took about 59 s, because every append re-reads the whole store. That is
-existing write-path behaviour, not projection behaviour, and is listed under
-[Known limitations](#known-limitations) and in the roadmap.
+The cost the snapshot adds to writes is measured rather than assumed. In the first matrix every
+memory `add()` with the snapshot enabled cost 11.9 ms more at 20,000 records and 54.7 ms more at
+40,000 than the same write with it disabled, because the read a write performs in order to
+inspect the store hashed and copied the whole file for bytes it was about to change. Making that
+read declare that an append follows removed it: the same A/B then measured -11.7 ms and -8.3 ms,
+i.e. no detectable overhead, and `KnowledgeStore.add` -17.7 ms and -2.6 ms.
+
+Cost grows with total records all the same: a cold read and the read after a write still load,
+parse and integrity-scan both stores before taking the fixed 100-record window, and even a warm
+read copies every record it holds. The rendered projection stayed near 3.5 KB at every size.
+
+Fixture generation itself is a separate, honest finding and is reported as a write cost, not a
+read cost: appending 2,000 claims one at a time through `KnowledgeStore.add` took 26.0 s in one
+run and 56.5 s in another on the same fixture (Batch T recorded about 59 s), because every
+append re-reads and re-scans the whole store. That is existing write-path behaviour, not
+projection behaviour, and no read-side optimization can shorten it; it is listed under
+[Known limitations](#known-limitations) and named there as the next separate milestone.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 
@@ -1317,9 +1410,14 @@ demonstrate completion, so a later batch cannot claim progress by adding vocabul
    stage may weaken them.
 2. **Persistent cognitive state (partly done).** Memory, knowledge, task state, and
    conversation are durable and separately owned; the read-only projection derived from
-   them is implemented in this batch. Acceptance for closing the stage: a projection whose
-   cost does not grow linearly with total records (an index or cached summary owned by the
-   store that produced it), proven that no read mutates any store.
+   them is implemented. Batch U made one unchanged repeat read cheap with a bounded
+   per-process derived parse snapshot, and proved that no read mutates any store. It did
+   **not** close this stage: cold reads and the read after a write still parse and validate
+   the whole store, so the projection's cost still grows with total records. Acceptance for
+   closing the stage remains a projection whose cost does not grow linearly with total
+   records, which needs a persisted, incrementally maintained index owned by the store that
+   produced it - a storage redesign, deliberately not attempted as part of a read
+   optimization.
 3. **Structured entity, event, and world state.** Entities with identity beyond an exact
    triple, events with time and participants, and state that changes over time. Depends on
    2 because a schema needs an owner and a migration story. Acceptance: records that

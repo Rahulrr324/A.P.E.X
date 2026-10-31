@@ -30,6 +30,9 @@ export const MAX_RESOLUTION_REASON_CHARS = 500;
 // A history chain is bounded so one damaged or enormous store cannot produce
 // unbounded output. The view says when it stopped rather than implying completeness.
 export const MAX_HISTORY_CHAIN = 20;
+// The derived parse snapshot is bounded: a claim file this large is parsed on every read
+// rather than held in process memory alongside the user's other state.
+export const KNOWLEDGE_PARSE_CACHE_BYTES = 32 * 1024 * 1024;
 // Store-wide health is a summary, not a dump. Counts are exact; examples of conflict
 // groups and anomalies are capped so a damaged store cannot produce unbounded output.
 export const MAX_HEALTH_SAMPLES = 20;
@@ -190,11 +193,23 @@ function validateResolutionEvent(r) {
 
 // ---- KnowledgeStore ---------------------------------------------------------
 
+// The newest `limit` claims, newest first, annotated with supersession, conflict and
+// resolution state. Shared by list() and projectionRead() so the two can never apply
+// different lifecycle rules to the same record.
+function knowledgeWindow(records, limit) {
+  const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
+  const supersededByMap = buildSupersededByMap(claims);
+  const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+  const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
+  return claims.slice(-Math.max(1, limit)).reverse()
+    .map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex));
+}
+
 export class KnowledgeStore {
-  constructor(filePath, { now = () => new Date() } = {}) {
+  constructor(filePath, { now = () => new Date(), parseCacheBytes = KNOWLEDGE_PARSE_CACHE_BYTES } = {}) {
     this.filePath = filePath;
     this.now = now;
-    this.log = new JsonlStore(filePath, { validateRecord: validateKnowledgeRecord });
+    this.log = new JsonlStore(filePath, { validateRecord: validateKnowledgeRecord, parseCacheBytes });
   }
 
   // --- write (user origin only) ---
@@ -234,7 +249,7 @@ export class KnowledgeStore {
 
     // Conflict detection reads the whole store, so it must refuse a damaged store
     // rather than silently compare against an incomplete record set.
-    const records = await this.#loadComplete();
+    const records = await this.#loadComplete({ beforeAppend: true });
     const id = randomUUID();
     if (records.some((r) => r.id === id)) {
       throw new StoreError('identifier collision; nothing written');
@@ -297,7 +312,7 @@ export class KnowledgeStore {
     const why = validateRetractionReason(reason);
     const sanitized = sanitizeProvenance(provenance, origin);
 
-    const records = await this.#loadComplete();
+    const records = await this.#loadComplete({ beforeAppend: true });
     const { claims, retractionsByTarget } = splitLifecycle(records);
     const supersededByMap = buildSupersededByMap(claims);
 
@@ -348,7 +363,7 @@ export class KnowledgeStore {
     const why = validateRetractionReason(reason);
     const sanitized = sanitizeProvenance(provenance, origin);
 
-    const records = await this.#loadComplete();
+    const records = await this.#loadComplete({ beforeAppend: true });
     const { claims, resolutionEvents, retractionsByTarget } = splitLifecycle(records);
     const supersededByMap = buildSupersededByMap(claims);
     const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
@@ -427,9 +442,11 @@ export class KnowledgeStore {
     return records.find((r) => r.kind !== undefined && r.id === id) ?? null;
   }
 
-  // Loads all valid records; throws on any corrupt lines.
-  async #loadComplete() {
-    const { records, corrupt } = await this.log.load();
+  // Loads all valid records; throws on any corrupt lines. `beforeAppend` marks the read
+  // that a write performs to inspect the store first: its result is superseded by the
+  // append that follows it, so the derived parse snapshot is neither read nor rewritten.
+  async #loadComplete({ beforeAppend = false } = {}) {
+    const { records, corrupt } = await this.log.load({ maintainSnapshot: !beforeAppend });
     if (corrupt.length > 0) {
       throw new StoreError(`knowledge store contains ${corrupt.length} corrupt line(s); refusing an incomplete knowledge operation`);
     }
@@ -453,12 +470,30 @@ export class KnowledgeStore {
 
   async list({ limit = 20 } = {}) {
     const records = await this.#loadComplete();
-    const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
-    const supersededByMap = buildSupersededByMap(claims);
-    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
-    const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
-    return claims.slice(-Math.max(1, limit)).reverse()
-      .map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex));
+    return knowledgeWindow(records, limit);
+  }
+
+  // One authoritative read for the world-state projection: the store-wide lifecycle summary
+  // and the newest bounded claims, both from the same snapshot of the file. Calling health()
+  // and list() separately parses and validates the file twice and can report a lifecycle
+  // summary that does not describe the records the projection was given. Same parser, same
+  // integrity rules, same annotation as list(); nothing is written or repaired.
+  async projectionRead({ limit = 20 } = {}) {
+    let loaded;
+    try {
+      loaded = await this.log.load();
+    } catch (err) {
+      return {
+        health: summarizeKnowledgeHealth(null, [], { path: this.filePath, detail: err?.message ?? String(err) }),
+        claims: null,
+      };
+    }
+    const health = summarizeKnowledgeHealth(loaded.records, loaded.corrupt, { path: this.filePath });
+    const usable = health.inspected === true && health.corruptLines === 0;
+    return {
+      health,
+      claims: usable ? knowledgeWindow(loaded.records, limit) : null,
+    };
   }
 
   // Read-only lifecycle view: the stored claim, its direct supersession links in both

@@ -10,6 +10,9 @@ import { containsSecret } from '../security/secrets.js';
 
 export const MEMORY_SCHEMA = 1;
 export const MAX_CONTENT_CHARS = 4000;
+// A store this large is not snapshotted in process memory: the derived parse cache is a
+// performance aid, so it is bounded rather than allowed to grow with the user's data.
+export const MEMORY_PARSE_CACHE_BYTES = 32 * 1024 * 1024;
 // Minimum retrieval score for a record to be included in a model prompt.
 // Records below it are still shown to the user by the memory actions.
 export const PROMPT_RELEVANCE_MIN = 0.2;
@@ -308,11 +311,34 @@ export function findMemoryConflictGroups(records) {
   return groups;
 }
 
+// The newest `limit` visible records, newest first, each annotated with the corrections
+// that retired it and the status those imply. Shared by list() and projectionRead() so the
+// two can never disagree about what a record means.
+function memoryWindow(records, { limit, includePrivate }) {
+  const visible = records.filter((r) => includePrivate || r.sensitivity !== 'private');
+  const replacedByIds = new Map();
+  for (const record of records) {
+    for (const targetId of record.provenance?.replaces ?? []) {
+      const ids = replacedByIds.get(targetId) ?? [];
+      ids.push(record.id);
+      replacedByIds.set(targetId, ids);
+    }
+  }
+  return visible.slice(-Math.max(1, limit)).reverse().map((record) => {
+    const replacedBy = replacedByIds.get(record.id) ?? [];
+    return {
+      ...record,
+      replacedBy,
+      status: getRecordStatus(record, [], replacedBy),
+    };
+  });
+}
+
 export class MemoryStore {
-  constructor(filePath, { now = () => new Date() } = {}) {
+  constructor(filePath, { now = () => new Date(), parseCacheBytes = MEMORY_PARSE_CACHE_BYTES } = {}) {
     this.filePath = filePath;
     this.now = now;
-    this.log = new JsonlStore(filePath, { validateRecord: validateMemoryRecord });
+    this.log = new JsonlStore(filePath, { validateRecord: validateMemoryRecord, parseCacheBytes });
   }
 
   async add({ content, kind = 'user_fact', source = 'user', sensitivity = 'normal', provenance = {} } = {}) {
@@ -322,7 +348,7 @@ export class MemoryStore {
     // A damaged store must not accept new records: appending would bury the
     // corrupt lines, and the write would be reported as verified while earlier
     // memory is unreadable.
-    const records = await this.#loadComplete('write');
+    const records = await this.#loadComplete({ operation: 'write', beforeAppend: true });
     const normalizedProvenance = finalizeProvenance({ source, provenance });
     const id = randomUUID();
     if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
@@ -347,7 +373,7 @@ export class MemoryStore {
       throw new ValidationError('replacement target must be a full memory record ID');
     }
     const text = validateContent(content);
-    const records = await this.#loadComplete();
+    const records = await this.#loadComplete({ beforeAppend: true });
     const target = records.find((record) => record.id === targetId);
     if (!target) throw new ValidationError(`replacement target ${targetId} not found in memory`);
     if (records.some((record) => record.provenance?.replaces?.includes(targetId))) {
@@ -386,8 +412,8 @@ export class MemoryStore {
     return records.find((r) => r.id === id) ?? null;
   }
 
-  async #loadComplete(operation = 'retrieval') {
-    const { records, corrupt } = await this.log.load();
+  async #loadComplete({ operation = 'retrieval', beforeAppend = false } = {}) {
+    const { records, corrupt } = await this.log.load({ maintainSnapshot: !beforeAppend });
     if (corrupt.length > 0) {
       throw new StoreError(`memory store contains ${corrupt.length} corrupt line(s); refusing incomplete ${operation}`);
     }
@@ -396,23 +422,31 @@ export class MemoryStore {
 
   async list({ limit = 20, includePrivate = true } = {}) {
     const records = await this.#loadComplete();
-    const visible = records.filter((r) => includePrivate || r.sensitivity !== 'private');
-    const replacedByIds = new Map();
-    for (const record of records) {
-      for (const targetId of record.provenance?.replaces ?? []) {
-        const ids = replacedByIds.get(targetId) ?? [];
-        ids.push(record.id);
-        replacedByIds.set(targetId, ids);
-      }
-    }
-    return visible.slice(-Math.max(1, limit)).reverse().map((record) => {
-      const replacedBy = replacedByIds.get(record.id) ?? [];
+    return memoryWindow(records, { limit, includePrivate });
+  }
+
+  // One authoritative read that answers both questions the world-state projection asks:
+  // what the store holds (the store-wide integrity summary) and the newest bounded records
+  // with their lifecycle status. health() and list() separately read, parse and validate the
+  // file twice; this reads it once, so the two views cannot come from two different file
+  // states and a projection cannot be handed a record set that its own integrity summary
+  // does not describe. The integrity rules are the same ones health() already applies.
+  async projectionRead({ limit = 20, includePrivate = true } = {}) {
+    let loaded;
+    try {
+      loaded = await this.log.load();
+    } catch (err) {
       return {
-        ...record,
-        replacedBy,
-        status: getRecordStatus(record, [], replacedBy),
+        health: summarizeMemoryHealth(null, [], { path: this.filePath, detail: err?.message ?? String(err) }),
+        records: null,
       };
-    });
+    }
+    const health = summarizeMemoryHealth(loaded.records, loaded.corrupt, { path: this.filePath });
+    const usable = health.inspected === true && health.corruptLines === 0;
+    return {
+      health,
+      records: usable ? memoryWindow(loaded.records, { limit, includePrivate }) : null,
+    };
   }
 
   // Ranked retrieval. Each query term is weighted by its rarity in the store

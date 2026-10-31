@@ -148,30 +148,19 @@ export async function buildWorldState({
   const beliefLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), MAX_WORLD_LIMIT) : MAX_WORLD_BELIEFS;
   const windowLimit = Number.isInteger(recordLimit) ? Math.min(Math.max(recordLimit, 1), WORLD_RECORD_LIMIT) : WORLD_RECORD_LIMIT;
 
-  const memoryHealth = await memory.health();
-  const knowledgeHealth = await knowledge.health();
-
-  let memoryRecords = [];
-  let memoryContentAvailable = false;
-  if (memoryHealth.inspected && memoryHealth.corruptLines === 0) {
-    try {
-      memoryRecords = await memory.list({ limit: windowLimit, includePrivate: true });
-      memoryContentAvailable = true;
-    } catch {
-      memoryContentAvailable = false;
-    }
-  }
-
-  let claimRecords = [];
-  let knowledgeContentAvailable = false;
-  if (knowledgeHealth.inspected && knowledgeHealth.corruptLines === 0) {
-    try {
-      claimRecords = await knowledge.list({ limit: windowLimit });
-      knowledgeContentAvailable = true;
-    } catch {
-      knowledgeContentAvailable = false;
-    }
-  }
+  // One authoritative read per store. The integrity summary and the bounded record window
+  // come from the same snapshot of the same file, so a projection can never combine a
+  // summary of one file state with records read from another.
+  const memoryRead = await memory.projectionRead({ limit: windowLimit, includePrivate: true });
+  const knowledgeRead = await knowledge.projectionRead({ limit: windowLimit });
+  const memoryHealth = memoryRead.health;
+  const knowledgeHealth = knowledgeRead.health;
+  const memoryRecords = memoryRead.records ?? [];
+  const claimRecords = knowledgeRead.claims ?? [];
+  // A store that could not be read at all, or that has damage, contributes no beliefs; the
+  // distinction between the two is carried by the health summary and reported as an unknown.
+  const memoryContentAvailable = memoryRead.records !== null;
+  const knowledgeContentAvailable = knowledgeRead.claims !== null;
 
   // Only live records are beliefs. A superseded or retracted record is history: it is
   // counted, shown by its own store's history command, and never presented as current.

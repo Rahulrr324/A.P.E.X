@@ -559,25 +559,35 @@ test('world state - a store that changes mid-read fails verification instead of 
   const firstId = 'aaaaaaaa-1111-4111-8111-111111111111';
   const secondId = 'bbbbbbbb-2222-4222-8222-222222222222';
   let reads = 0;
+  // A store double shaped like the real projectionRead: one consulted method that returns
+  // the integrity summary and the record window from the same read. The counter is what
+  // makes the two reads distinguishable - if verification reused the first read's object,
+  // the second read would never happen and the change would go unnoticed.
   const ctx = {
     memory: {
-      health: async () => ({ inspected: true, corruptLines: 0, records: 1 }),
-      async list() {
+      async projectionRead() {
         reads += 1;
         const id = reads === 1 ? firstId : secondId;
-        return [{ id, content: `Claim ${reads}`, source: 'user', createdAt: AT }];
+        return {
+          health: { inspected: true, corruptLines: 0, records: 1 },
+          records: [{ id, content: `Claim ${reads}`, source: 'user', createdAt: AT }],
+        };
       },
     },
     knowledge: {
-      health: async () => ({ inspected: true, corruptLines: 0, claims: 0, conflicts: { groups: 0, resolvedGroups: 0 } }),
-      async list() { return []; },
+      async projectionRead() {
+        return {
+          health: { inspected: true, corruptLines: 0, claims: 0, conflicts: { groups: 0, resolvedGroups: 0 } },
+          claims: [],
+        };
+      },
     },
     now: FIXED_NOW,
   };
 
   const result = await definition.execute(ctx, { limit: undefined });
   const verification = await definition.verify(ctx, { limit: undefined }, result);
-  assert.equal(reads, 2, 'the read is re-taken independently');
+  assert.equal(reads, 2, 'the store is consulted again, independently, during verification');
   assert.equal(verification.ok, false);
   assert.match(verification.detail, /second read produced a different world-state projection/);
 
