@@ -27,6 +27,8 @@ Usage:
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js history [--limit N]
   node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]
+  node bin/apex.js knowledge retract <id> [--reason <text>]
+  node bin/apex.js knowledge history <id>
   node bin/apex.js knowledge list [--limit N]
   node bin/apex.js knowledge search <query words...>
   node bin/apex.js knowledge show <id>
@@ -72,6 +74,8 @@ Knowledge examples (explicit relationships; user-origin write only):
   knowledge add --subject APEX --relationship has_subsystem --object "Cognitive Controller"
   knowledge add --subject APEX --relationship has_subsystem --object "Memory Store" --evidence "README section 3"
   knowledge add --subject Engine --relationship fuel --object Electric --supersedes a1b2c3d4
+  knowledge retract a1b2c3d4 --reason "superseded by a later service record"
+  knowledge history a1b2c3d4
   knowledge list
   knowledge search subsystem
   knowledge show <record-id>
@@ -130,7 +134,7 @@ function parseFlags(args, allowed) {
         if (v === undefined || v.startsWith('--')) throw new ValidationError('--step needs a step id', 'USAGE');
         flags.step = v;
         i += 1;
-      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes'].includes(name)) {
+      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'reason'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -183,7 +187,7 @@ export function formatResult(res) {
   // A write whose executor reported a failure may already have changed data: the body was
   // invoked, so the outcome after the error is unknown. A rejected input never reached the
   // body and is reported above as rejected; this note is only for failures that started.
-  const writeActions = new Set(['memory.add', 'memory.save_conclusion', 'knowledge.add']);
+  const writeActions = new Set(['memory.add', 'memory.save_conclusion', 'knowledge.add', 'knowledge.retract']);
   if (res.operation.steps.some((s) => s.execution?.status === 'failed'
     && writeActions.has(s.action)
     && !/corrupt/i.test(s.execution?.error?.message ?? ''))) {
@@ -533,6 +537,29 @@ export async function main(argv, {
           supersedes,
         }));
       }
+      if (sub === 'retract') {
+        const { flags, rest: ids } = parseFlags(rest, ['reason']);
+        if (ids.length !== 1) {
+          err('usage: knowledge retract <record-id> [--reason <text>]');
+          return 2;
+        }
+        return emit(await app.controller.knowledgeRetract({
+          target: ids[0],
+          reason: flags.reason ?? null,
+        }));
+      }
+      if (sub === 'history') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) {
+          err('usage: knowledge history <record-id>');
+          return 2;
+        }
+        // A direct, unaudited read, like `knowledge show`: no operation record exists,
+        // so the exit code reports whether the lifecycle could be resolved.
+        const res = await app.controller.knowledgeHistory(ids[0]);
+        out(res.display ?? res.output ?? '(none)');
+        return res.status === Outcome.SUCCESS_VERIFIED ? 0 : 1;
+      }
       if (sub === 'list') {
         const { flags, rest: extra } = parseFlags(rest, ['limit']);
         rejectUnexpected(extra, 'knowledge list [--limit N]');
@@ -558,7 +585,7 @@ export async function main(argv, {
         out(res.display ?? res.output ?? '(none)');
         return res.status === Outcome.SUCCESS_VERIFIED ? 0 : 1;
       }
-      err('usage: knowledge add|list|search|show');
+      err('usage: knowledge add|retract|history|list|search|show');
       return 2;
     }
 

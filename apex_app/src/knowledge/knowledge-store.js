@@ -22,6 +22,16 @@ const MAX_FIELD_CHARS = 500;
 const MAX_EVIDENCE_CHARS = 1000;
 const MAX_CONTEXT_CHARS = 200;
 export const MAX_SUPERSEDES = 10;
+export const MAX_RETRACTION_REASON_CHARS = 500;
+// A history chain is bounded so one damaged or enormous store cannot produce
+// unbounded output. The view says when it stopped rather than implying completeness.
+export const MAX_HISTORY_CHAIN = 20;
+
+// A retraction is a lifecycle event appended to the same log as the claims. It never
+// rewrites, moves, or deletes the record it names: readers derive the record's state
+// from the events that target it. Keeping one append-only source of truth means a
+// reader that sees the claim also sees the evidence that retired it.
+const RETRACTION_KIND = 'retraction';
 
 const VALID_STATUSES = new Set(['supported', 'uncertain', 'conflicting', 'superseded']);
 const VALID_PROVENANCE_ORIGINS = new Set(['user_supplied', 'user_approved']);
@@ -66,6 +76,8 @@ function tripleHash(subject, relationship, object) {
 export function validateKnowledgeRecord(r) {
   if (!r || typeof r !== 'object' || Array.isArray(r)) return 'not an object';
   if (r.schema !== KNOWLEDGE_SCHEMA) return 'unsupported schema';
+  if (r.kind === RETRACTION_KIND) return validateRetractionEvent(r);
+  if (r.kind !== undefined) return 'unknown record kind';
   if (typeof r.id !== 'string' || !ID_RE.test(r.id)) return 'missing or invalid id';
   if (typeof r.subject !== 'string' || r.subject.length === 0) return 'missing subject';
   if (typeof r.relationship !== 'string' || r.relationship.length === 0) return 'missing relationship';
@@ -94,6 +106,29 @@ export function validateKnowledgeRecord(r) {
     if (!Array.isArray(r.supersededBy) || r.supersededBy.some((id) => typeof id !== 'string' || !ID_RE.test(id))) {
       return 'invalid supersededBy list';
     }
+  }
+  return null;
+}
+
+// A lifecycle event is not a claim: it carries no triple or status. Accepting one in
+// place of a claim would let a reader treat an event as knowledge, so the shape is
+// strict and a retraction may only carry user-origin provenance.
+function validateRetractionEvent(r) {
+  if (typeof r.id !== 'string' || !ID_RE.test(r.id)) return 'retraction event has missing or invalid id';
+  if (typeof r.targetId !== 'string' || !ID_RE.test(r.targetId)) return 'retraction event has missing or invalid targetId';
+  if (r.reason !== undefined && r.reason !== null) {
+    if (typeof r.reason !== 'string') return 'retraction reason must be text';
+    if (r.reason.trim().length === 0) return 'retraction reason is empty';
+    if (r.reason.length > MAX_RETRACTION_REASON_CHARS) return 'retraction reason is too long';
+    if (CONTROL_CHARS.test(r.reason)) return 'retraction reason contains control characters';
+    if (containsSecret(r.reason)) return 'retraction reason looks like a password, key, or token';
+  }
+  if (typeof r.createdAt !== 'string' || Number.isNaN(Date.parse(r.createdAt))) return 'bad timestamp';
+  if (!r.provenance || typeof r.provenance !== 'object') return 'missing provenance';
+  if (!VALID_PROVENANCE_ORIGINS.has(r.provenance.origin)) return 'retraction event requires user provenance';
+  if (r.provenance.updateMode !== 'user_confirmed') return 'retraction event provenance must be user_confirmed';
+  for (const field of ['subject', 'relationship', 'object', 'evidence', 'tripleHash', 'status', 'supersededBy']) {
+    if (r[field] !== undefined) return `retraction event must not carry ${field}`;
   }
   return null;
 }
@@ -150,20 +185,23 @@ export class KnowledgeStore {
       throw new StoreError('identifier collision; nothing written');
     }
 
+    const { claims, retractionsByTarget } = splitLifecycle(records);
+
     // Resolve every reference before writing. A missing, ambiguous, already-retired,
     // unrelated, or identical record refuses the whole write rather than partially
     // applying a change to durable knowledge.
-    const supersededByMap = buildSupersededByMap(records);
-    const targetIds = resolveSupersedeTargets(records, refs, supersededByMap, sub, rel, obj);
+    const supersededByMap = buildSupersededByMap(claims);
+    const targetIds = resolveSupersedeTargets(claims, refs, supersededByMap, retractionsByTarget, sub, rel, obj);
     const targetSet = new Set(targetIds);
 
     // Detect conflicts: another live record with the same subject+relationship but a
     // different object is a conflict. Equality is trimmed and case-insensitive for all
     // three fields, so case variants of the same triple are duplicates, not conflicts.
-    // A record this write supersedes is no longer a live conflict.
+    // A record this write supersedes is no longer a live conflict; a retracted record
+    // never is one.
     const tHash = tripleHash(sub, rel, obj);
     const reqKey = normalizedTriple(sub, rel, obj);
-    const conflictIndex = buildConflictIndex(records, supersededByMap);
+    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
     const conflictingIds = (conflictIndex.get(conflictIndexKey(sub, rel)) ?? [])
       .filter((r) => !targetSet.has(r.id))
       .filter((r) => normalizedTriple(r.subject, r.relationship, r.object) !== reqKey)
@@ -189,10 +227,60 @@ export class KnowledgeStore {
     return { record, conflictingIds, supersededIds: targetIds };
   }
 
+  // Retraction: an authorized user marks an existing claim as no longer active.
+  // The event is appended; the claim itself is never rewritten. A target that is
+  // missing, ambiguous, already superseded, already retracted, or ambiguous in its
+  // lifecycle is refused, so one record can never be in two terminal states.
+  async retract({ target, reason = null, provenance = {}, origin } = {}) {
+    if (origin !== 'user') {
+      throw new ValidationError(
+        'retracting a knowledge record requires an authorized user-origin operation; model output cannot retract knowledge',
+        'WRITE_REQUIRES_USER_ORIGIN',
+      );
+    }
+    const ref = validateRetractionRef(target);
+    const why = validateRetractionReason(reason);
+    const sanitized = sanitizeProvenance(provenance, origin);
+
+    const records = await this.#loadComplete();
+    const { claims, retractionsByTarget } = splitLifecycle(records);
+    const supersededByMap = buildSupersededByMap(claims);
+
+    const matches = claims.filter((r) => r.id === ref || r.id.startsWith(ref) || shortId(r.id) === ref);
+    if (matches.length === 0) throw new ValidationError('retraction target not found');
+    if (matches.length > 1) {
+      throw new ValidationError('retraction target is ambiguous; use a longer id prefix');
+    }
+    const record = matches[0];
+    if (isSuperseded(record, supersededByMap)) {
+      throw new ValidationError(`retraction target ${shortId(record.id)} is already superseded; historical records are not retracted`);
+    }
+    const existing = retractionsByTarget.get(record.id) ?? [];
+    if (existing.length > 0) {
+      throw new ValidationError(`retraction target ${shortId(record.id)} is already retracted`);
+    }
+
+    const eventId = randomUUID();
+    if (records.some((r) => r.id === eventId)) {
+      throw new StoreError('identifier collision; nothing written');
+    }
+    const event = {
+      schema: KNOWLEDGE_SCHEMA,
+      kind: RETRACTION_KIND,
+      id: eventId,
+      targetId: record.id,
+      ...(why ? { reason: why } : {}),
+      createdAt: this.now().toISOString(),
+      provenance: sanitized,
+    };
+    await this.log.append(event);
+    return { event, record };
+  }
+
   async get(id) {
     if (typeof id !== 'string' || id.length === 0) return null;
     const records = await this.#loadComplete();
-    return records.find((r) => r.id === id) ?? null;
+    return records.find((r) => r.kind !== RETRACTION_KIND && r.id === id) ?? null;
   }
 
   // Loads all valid records; throws on any corrupt lines.
@@ -204,30 +292,50 @@ export class KnowledgeStore {
     return records;
   }
 
-  // Resolve a full id or an id prefix. Never returns a partial or guessed match.
+  // Resolve a full id or an id prefix among claims. A retraction event id is not a
+  // claim and is never returned here. Never returns a partial or guessed match.
   async findByPrefix(prefix) {
     const p = typeof prefix === 'string' ? prefix.trim() : '';
     if (p.length === 0) return [];
     const records = await this.#loadComplete();
-    const supersededByMap = buildSupersededByMap(records);
-    const conflictIndex = buildConflictIndex(records, supersededByMap);
-    return records
+    const { claims, retractionsByTarget } = splitLifecycle(records);
+    const supersededByMap = buildSupersededByMap(claims);
+    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+    return claims
       .filter((r) => r.id === p || r.id.startsWith(p) || shortId(r.id) === p)
-      .map((r) => annotate(r, supersededByMap, conflictIndex));
+      .map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget));
   }
 
   async list({ limit = 20 } = {}) {
     const records = await this.#loadComplete();
-    const supersededByMap = buildSupersededByMap(records);
-    const conflictIndex = buildConflictIndex(records, supersededByMap);
-    return records.slice(-Math.max(1, limit)).reverse().map((r) => annotate(r, supersededByMap, conflictIndex));
+    const { claims, retractionsByTarget } = splitLifecycle(records);
+    const supersededByMap = buildSupersededByMap(claims);
+    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+    return claims.slice(-Math.max(1, limit)).reverse()
+      .map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget));
+  }
+
+  // Read-only lifecycle view: the stored claim, its direct supersession links in both
+  // directions, its retraction event when there is exactly one, and the connected
+  // chain. The chain reports when it is incomplete or truncated instead of asserting
+  // a completeness the store cannot establish.
+  async history(recordId) {
+    if (typeof recordId !== 'string' || recordId.length === 0) return null;
+    const records = await this.#loadComplete();
+    const { claims, retractionsByTarget } = splitLifecycle(records);
+    const byId = new Map(claims.map((r) => [r.id, r]));
+    const record = byId.get(recordId);
+    if (!record) return null;
+    const supersededByMap = buildSupersededByMap(claims);
+    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+    return buildKnowledgeHistory(record, claims, byId, supersededByMap, conflictIndex, retractionsByTarget);
   }
 
   // Keyword search over subject+relationship+object+evidence. Returns up to `limit`
   // records. Each query term is weighted by its rarity in the store (IDF), the same
   // policy the memory store uses, so a distinctive name match outranks an incidental
-  // common-word match; raw term overlap made the two indistinguishable. Superseded
-  // records are excluded. Results are bounded (never the full store).
+  // common-word match; raw term overlap made the two indistinguishable. Superseded and
+  // retracted records are excluded. Results are bounded (never the full store).
   async search(query, { limit = 5 } = {}) {
     const records = await this.#loadComplete();
     if (!query || typeof query !== 'string' || query.trim().length === 0) return [];
@@ -235,10 +343,11 @@ export class KnowledgeStore {
     const terms = [...new Set(tokenize(query))];
     if (terms.length === 0) return [];
 
-    const supersededByMap = buildSupersededByMap(records);
-    const conflictIndex = buildConflictIndex(records, supersededByMap);
+    const { claims, retractionsByTarget } = splitLifecycle(records);
+    const supersededByMap = buildSupersededByMap(claims);
+    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
 
-    const pool = records.filter((r) => !isSuperseded(r, supersededByMap));
+    const pool = claims.filter((r) => isActive(r, supersededByMap, retractionsByTarget));
     const docs = pool.map((r) => new Set(tokenize(`${r.subject} ${r.relationship} ${r.object} ${r.evidence ?? ''}`)));
 
     const df = new Map(terms.map((t) => [t, docs.filter((d) => d.has(t)).length]));
@@ -265,14 +374,20 @@ export class KnowledgeStore {
     }).slice(0, Math.max(1, limit));
 
     return scored.map(({ record, score }) => ({
-      record: annotate(record, supersededByMap, conflictIndex),
+      record: annotate(record, supersededByMap, conflictIndex, retractionsByTarget),
       score,
     }));
   }
 
   async status() {
     const { records, corrupt } = await this.log.load();
-    return { path: this.filePath, records: records.length, corrupt: corrupt.length };
+    const { claims, events } = splitLifecycle(records);
+    return {
+      path: this.filePath,
+      records: claims.length,
+      retractions: events.length,
+      corrupt: corrupt.length,
+    };
   }
 }
 
@@ -321,7 +436,7 @@ function validateSupersedeRefs(supersedes) {
   return refs;
 }
 
-function resolveSupersedeTargets(records, refs, supersededByMap, subject, relationship, object) {
+function resolveSupersedeTargets(records, refs, supersededByMap, retractionsByTarget, subject, relationship, object) {
   const ids = [];
   const seen = new Set();
   const relatedKey = conflictIndexKey(subject, relationship);
@@ -342,6 +457,9 @@ function resolveSupersedeTargets(records, refs, supersededByMap, subject, relati
     }
     if (isSuperseded(target, supersededByMap)) {
       throw new ValidationError(`supersession target ${shortId(target.id)} is already superseded`);
+    }
+    if ((retractionsByTarget.get(target.id)?.length ?? 0) > 0) {
+      throw new ValidationError(`supersession target ${shortId(target.id)} is retracted; a historical record cannot be replaced`);
     }
     if (conflictIndexKey(target.subject, target.relationship) !== relatedKey) {
       throw new ValidationError(`supersession target ${shortId(target.id)} has a different subject or relationship; only a conflicting claim can be superseded`);
@@ -380,10 +498,10 @@ function conflictIndexKey(subject, relationship) {
   return `${String(subject).trim().toLowerCase()}\x00${String(relationship).trim().toLowerCase()}`;
 }
 
-function buildConflictIndex(records, supersededByMap) {
+function buildConflictIndex(records, supersededByMap, retractionsByTarget) {
   const index = new Map();
   for (const record of records) {
-    if (isSuperseded(record, supersededByMap)) continue;
+    if (!isActive(record, supersededByMap, retractionsByTarget)) continue;
     const key = conflictIndexKey(record.subject, record.relationship);
     const group = index.get(key) ?? [];
     group.push(record);
@@ -396,33 +514,265 @@ function isSuperseded(record, supersededByMap) {
   return record.status === 'superseded' || (supersededByMap.get(record.id)?.length ?? 0) > 0;
 }
 
-function annotate(record, supersededByMap, conflictIndex) {
+function isRetracted(record, retractionsByTarget) {
+  return (retractionsByTarget.get(record.id)?.length ?? 0) > 0;
+}
+
+// A claim participates in retrieval and conflict detection only when neither a
+// supersession link nor a retraction event has retired it. Both are derived from the
+// append-only log, so a reader that sees the claim also sees the event that retired it.
+function isActive(record, supersededByMap, retractionsByTarget) {
+  return !isSuperseded(record, supersededByMap) && !isRetracted(record, retractionsByTarget);
+}
+
+function summarizeRetraction(event) {
+  return {
+    id: event.id,
+    reason: event.reason ?? null,
+    createdAt: event.createdAt,
+    operationId: event.provenance?.operationId ?? null,
+    origin: event.provenance?.origin ?? null,
+    updateMode: event.provenance?.updateMode ?? null,
+  };
+}
+
+function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = new Map()) {
   const sby = supersededByMap.get(record.id) ?? [];
   const selfSuperseded = isSuperseded(record, supersededByMap);
-  // Detect live conflicts: other non-superseded records with the same subject+relationship
-  // but a different object. A superseded record is historical and has no live conflicts.
+  const events = retractionsByTarget.get(record.id) ?? [];
+  const retracted = events.length > 0;
+  const retractionAmbiguous = events.length > 1;
+  const both = retracted && selfSuperseded;
+  const lifecycleNote = both
+    ? 'both retracted and superseded'
+    : retractionAmbiguous
+      ? 'multiple retraction events'
+      : null;
+  const lifecycleState = lifecycleNote
+    ? 'ambiguous'
+    : retracted
+      ? 'retracted'
+      : selfSuperseded
+        ? 'superseded'
+        : null;
+  const active = lifecycleState === null;
+
+  // Detect live conflicts only among active claims with the same subject+relationship
+  // but a different object. A historical record has no live conflicts, and an
+  // ambiguous record is not treated as active.
   const recordKey = normalizedTriple(record.subject, record.relationship, record.object);
   const group = conflictIndex.get(conflictIndexKey(record.subject, record.relationship)) ?? [];
-  const conflictIds = selfSuperseded ? [] : group
+  const conflictIds = active ? group
     .filter((r) => r.id !== record.id && normalizedTriple(r.subject, r.relationship, r.object) !== recordKey)
-    .map((r) => r.id);
+    .map((r) => r.id) : [];
 
   // The stored status is a snapshot from write time. A conflict that has since been
-  // superseded is not live, so a stale "conflicting" status becomes "supported".
-  const effectiveStatus = selfSuperseded
-    ? 'superseded'
-    : conflictIds.length > 0
+  // retired is not live, so a stale "conflicting" status becomes "supported".
+  const effectiveStatus = lifecycleState
+    ?? (conflictIds.length > 0
       ? 'conflicting'
       : record.status === 'conflicting'
         ? 'supported'
-        : record.status;
+        : record.status);
 
   return {
     ...record,
     status: effectiveStatus,
+    lifecycleState: lifecycleState ?? effectiveStatus,
+    lifecycleNote,
+    active,
     conflictsWith: conflictIds,
     supersededBy: sby,
+    replaces: [...(record.supersededBy ?? [])],
+    retractedBy: events.length === 1 ? events[0].id : null,
+    retraction: events.length === 1 ? summarizeRetraction(events[0]) : null,
+    retractionAmbiguous,
   };
+}
+
+// ---- lifecycle helpers ------------------------------------------------------
+
+function splitLifecycle(records) {
+  const claims = [];
+  const events = [];
+  for (const record of records) {
+    if (record.kind === RETRACTION_KIND) events.push(record);
+    else claims.push(record);
+  }
+  const retractionsByTarget = new Map();
+  for (const event of events) {
+    const list = retractionsByTarget.get(event.targetId) ?? [];
+    list.push(event);
+    retractionsByTarget.set(event.targetId, list);
+  }
+  return { claims, events, retractionsByTarget };
+}
+
+// A malformed or credential-like target is refused without quoting the value: this
+// message can reach the audit record through the execution error.
+function validateRetractionRef(target) {
+  if (typeof target !== 'string') throw new ValidationError('retraction target must be text');
+  const ref = target.trim();
+  if (ref.length === 0) throw new ValidationError('retraction target is empty');
+  if (ref.length > 64) throw new ValidationError('retraction target is longer than 64 characters');
+  if (CONTROL_CHARS.test(ref)) throw new ValidationError('retraction target contains control characters');
+  if (containsSecret(ref)) {
+    throw new ValidationError(
+      'the retraction target looks like a password, key, or token; it was not used',
+      'SECRET_REFUSED',
+    );
+  }
+  return ref;
+}
+
+function validateRetractionReason(reason) {
+  if (reason === undefined || reason === null) return null;
+  if (typeof reason !== 'string') throw new ValidationError('reason must be text');
+  const text = reason.trim();
+  if (text.length === 0) return null;
+  if (text.length > MAX_RETRACTION_REASON_CHARS) {
+    throw new ValidationError(`reason exceeds ${MAX_RETRACTION_REASON_CHARS} characters`);
+  }
+  if (CONTROL_CHARS.test(text)) throw new ValidationError('reason contains control characters');
+  if (containsSecret(text)) {
+    throw new ValidationError('reason looks like a password, key, or token; it was not stored', 'SECRET_REFUSED');
+  }
+  return text;
+}
+
+function buildKnowledgeHistory(record, claims, byId, supersededByMap, conflictIndex, retractionsByTarget) {
+  const annotated = annotate(record, supersededByMap, conflictIndex, retractionsByTarget);
+  const events = retractionsByTarget.get(record.id) ?? [];
+  const problems = new Set();
+
+  const predecessorIds = [...new Set(record.supersededBy ?? [])];
+  const successorIds = [...new Set(supersededByMap.get(record.id) ?? [])];
+  const replaces = describeLinks(predecessorIds, byId, problems);
+  const replacedBy = describeLinks(successorIds, byId, problems);
+
+  if (successorIds.length > 1) problems.add('more than one later record names this record as superseded');
+  if (record.status === 'superseded' && successorIds.length === 0) {
+    problems.add('stored status is superseded but no successor record names it');
+  }
+  if (events.length > 1) problems.add('more than one retraction event targets this record');
+  if (events.length > 0 && isSuperseded(record, supersededByMap)) {
+    problems.add('record is both retracted and superseded');
+  }
+
+  const chain = buildLifecycleChain(record.id, claims, byId, supersededByMap, retractionsByTarget, conflictIndex);
+  for (const problem of chain.problems) problems.add(problem);
+
+  return {
+    record: annotated,
+    state: annotated.lifecycleState,
+    lifecycleNote: annotated.lifecycleNote,
+    retraction: events.length === 1 ? summarizeRetraction(events[0]) : null,
+    retractions: events.map(summarizeRetraction),
+    retractionAmbiguous: events.length > 1,
+    replaces,
+    replacedBy,
+    chain: chain.entries,
+    chainTruncated: chain.truncated,
+    complete: problems.size === 0 && !chain.truncated,
+    problems: [...problems],
+  };
+}
+
+function describeLinks(ids, byId, problems) {
+  const out = [];
+  for (const id of ids) {
+    const linked = byId.get(id);
+    if (!linked) {
+      problems.add(`link target ${shortId(id)} is not in the store`);
+      continue;
+    }
+    out.push({
+      id: linked.id,
+      shortId: shortId(linked.id),
+      subject: linked.subject,
+      relationship: linked.relationship,
+      object: linked.object,
+      createdAt: linked.createdAt,
+    });
+  }
+  return out;
+}
+
+// Bounded traversal of the supersession component around one record. It follows only
+// explicit stored links; a missing target is reported, never inferred, and the view
+// never claims the chain is complete when it stopped early or a link is unresolved.
+function buildLifecycleChain(startId, claims, byId, supersededByMap, retractionsByTarget, conflictIndex) {
+  const problems = new Set();
+  const component = new Set([startId]);
+  const queue = [startId];
+  let truncated = false;
+  while (queue.length > 0) {
+    const id = queue.shift();
+    const claim = byId.get(id);
+    if (!claim) continue;
+    const neighbours = [
+      ...(claim.supersededBy ?? []),
+      ...(supersededByMap.get(id) ?? []),
+    ];
+    for (const neighbour of neighbours) {
+      if (!byId.has(neighbour)) {
+        problems.add(`link target ${shortId(neighbour)} is not in the store`);
+        continue;
+      }
+      if (component.has(neighbour)) continue;
+      if (component.size >= MAX_HISTORY_CHAIN) {
+        truncated = true;
+        continue;
+      }
+      component.add(neighbour);
+      queue.push(neighbour);
+    }
+  }
+  if (hasSupersessionCycle(component, byId)) {
+    problems.add('supersession links form a cycle');
+  }
+  const ordered = [...component]
+    .map((id) => byId.get(id))
+    .filter(Boolean)
+    .sort((a, b) => {
+      const delta = Date.parse(a.createdAt) - Date.parse(b.createdAt);
+      if (delta !== 0) return delta;
+      return claims.indexOf(a) - claims.indexOf(b);
+    });
+  const entries = ordered.map((item) => {
+    const view = annotate(item, supersededByMap, conflictIndex, retractionsByTarget);
+    return {
+      id: item.id,
+      shortId: shortId(item.id),
+      subject: item.subject,
+      relationship: item.relationship,
+      object: item.object,
+      state: view.lifecycleState,
+      recordedAt: item.createdAt,
+      replaces: [...(item.supersededBy ?? [])],
+      replacedBy: [...new Set(supersededByMap.get(item.id) ?? [])],
+    };
+  });
+  return { entries, truncated, problems: [...problems] };
+}
+
+function hasSupersessionCycle(ids, byId) {
+  const state = new Map();
+  const visit = (id) => {
+    const mark = state.get(id) ?? 0;
+    if (mark === 1) return true;
+    if (mark === 2) return false;
+    state.set(id, 1);
+    for (const predecessor of byId.get(id)?.supersededBy ?? []) {
+      if (ids.has(predecessor) && visit(predecessor)) return true;
+    }
+    state.set(id, 2);
+    return false;
+  };
+  for (const id of ids) {
+    if (visit(id)) return true;
+  }
+  return false;
 }
 
 // Lowercase words, drop short words and words that carry no retrieval signal

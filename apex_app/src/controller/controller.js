@@ -97,26 +97,47 @@ function knowledgeAddRequest(subject, relationship, object, supersedes = []) {
   return `knowledge add [${subject} -> ${relationship} -> ${object}${supersedeNote}]`;
 }
 
+function knowledgeRetractRequest(target, reason) {
+  if (typeof target !== 'string' || target.trim().length === 0) return 'knowledge retract [invalid input]';
+  const ref = containsSecret(target) ? '[target omitted: contained a password, key, or token]' : target.trim();
+  const reasonNote = typeof reason === 'string' && reason.trim().length > 0 ? ' (reason recorded)' : '';
+  return `knowledge retract [${ref}]${reasonNote}`;
+}
+
+const KNOWLEDGE_AUDIT_FIELDS = Object.freeze({
+  'knowledge.add': Object.freeze({
+    allowed: ['subject', 'relationship', 'object', 'evidence', 'supersedes'],
+    text: ['subject', 'relationship', 'object', 'evidence'],
+    arrays: ['supersedes'],
+  }),
+  'knowledge.search': Object.freeze({
+    allowed: ['query', 'limit'],
+    text: ['query'],
+    arrays: [],
+  }),
+  'knowledge.retract': Object.freeze({
+    allowed: ['target', 'reason'],
+    text: ['target', 'reason'],
+    arrays: [],
+  }),
+});
+
 // The audit input is derived from the raw request before validation, so a refused
 // credential-like value must be replaced here rather than copied into the audit log.
 // For knowledge inputs only the declared fields are kept; unexpected fields are
 // marked and their values discarded.
 function auditInputFor(name, rawInput) {
-  if ((name === 'knowledge.add' || name === 'knowledge.search')
-    && rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
-    const allowed = name === 'knowledge.add'
-      ? ['subject', 'relationship', 'object', 'evidence', 'supersedes']
-      : ['query', 'limit'];
-    const textKeys = name === 'knowledge.add'
-      ? ['subject', 'relationship', 'object', 'evidence']
-      : ['query'];
-    const secretTexts = textKeys.map((key) => rawInput[key]).filter((value) => typeof value === 'string');
-    if (name === 'knowledge.add' && Array.isArray(rawInput.supersedes)) {
-      secretTexts.push(...rawInput.supersedes.filter((value) => typeof value === 'string'));
+  const fields = KNOWLEDGE_AUDIT_FIELDS[name];
+  if (fields && rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
+    const secretTexts = fields.text.map((key) => rawInput[key]).filter((value) => typeof value === 'string');
+    for (const key of fields.arrays) {
+      if (Array.isArray(rawInput[key])) {
+        secretTexts.push(...rawInput[key].filter((value) => typeof value === 'string'));
+      }
     }
     const secret = containsSecret(secretTexts.join('\n'));
     const out = {};
-    for (const key of allowed) {
+    for (const key of fields.allowed) {
       if (!(key in rawInput)) continue;
       const value = rawInput[key];
       out[key] = !secret
@@ -128,7 +149,7 @@ function auditInputFor(name, rawInput) {
             : value;
     }
     for (const key of Object.keys(rawInput)) {
-      if (!allowed.includes(key)) out[key] = '[unexpected field omitted]';
+      if (!fields.allowed.includes(key)) out[key] = '[unexpected field omitted]';
     }
     return out;
   }
@@ -540,6 +561,20 @@ export class CognitiveController {
     return this.#newOp({ capability, origin: 'user', request: capability });
   }
 
+  // A direct, unaudited read (`show`, `history`) that could not resolve one record.
+  // Nothing was written, so there is no operation record to point at.
+  #knowledgeReadMiss(output) {
+    return {
+      operation: null,
+      status: Outcome.INPUT_REJECTED,
+      decision: classifyDecision({ status: Outcome.INPUT_REJECTED }),
+      output,
+      display: output,
+      recorded: false,
+      recordError: null,
+    };
+  }
+
   async #finishKnowledgeOp(op, step, failMsg) {
     op.steps.push(step);
     op.status = step.outcome;
@@ -583,6 +618,13 @@ export class CognitiveController {
     return this.#finishKnowledgeOp(op, step, 'The knowledge record may have been stored, but its audit record could not be written.');
   }
 
+  async knowledgeRetract({ target, reason = null } = {}) {
+    const op = this.#knowledgeOp('knowledge.retract');
+    op.request = knowledgeRetractRequest(target, reason);
+    const step = await this.runAction('knowledge.retract', { target, reason }, 'user', op.id);
+    return this.#finishKnowledgeOp(op, step, 'The knowledge record may have been retracted, but its audit record could not be written.');
+  }
+
   async knowledgeList({ limit } = {}) {
     const op = this.#knowledgeOp('knowledge.list');
     const step = await this.runAction('knowledge.list', { limit: limit ?? 20 }, 'user', op.id);
@@ -605,35 +647,26 @@ export class CognitiveController {
     if (typeof idPrefix !== 'string' || idPrefix.trim().length === 0) throw new ValidationError('knowledge show requires a record id');
     const records = await this.knowledge.findByPrefix(idPrefix);
     if (records.length === 0) {
-      const output = `No knowledge record found with id prefix "${idPrefix.trim()}"`;
-      return {
-        operation: null,
-        status: Outcome.INPUT_REJECTED,
-        decision: classifyDecision({ status: Outcome.INPUT_REJECTED }),
-        output,
-        display: output,
-        recorded: false,
-        recordError: null,
-      };
+      return this.#knowledgeReadMiss(`No knowledge record found with id prefix "${idPrefix.trim()}"`);
     }
     if (records.length > 1) {
-      const output = `Id prefix "${idPrefix.trim()}" matches ${records.length} knowledge records; use a longer prefix.`;
-      return {
-        operation: null,
-        status: Outcome.INPUT_REJECTED,
-        decision: classifyDecision({ status: Outcome.INPUT_REJECTED }),
-        output,
-        display: output,
-        recorded: false,
-        recordError: null,
-      };
+      return this.#knowledgeReadMiss(`Id prefix "${idPrefix.trim()}" matches ${records.length} knowledge records; use a longer prefix.`);
     }
     const match = records[0];
     const conflictLine = match.conflictsWith?.length
       ? `  CONFLICTS WITH: ${match.conflictsWith.map(shortId).join(', ')}`
       : '';
+    const replacesLine = match.replaces?.length
+      ? `  REPLACES:      ${match.replaces.map(shortId).join(', ')}`
+      : '';
     const supersededLine = match.supersededBy?.length
       ? `  SUPERSEDED BY:  ${match.supersededBy.map(shortId).join(', ')}`
+      : '';
+    const retractedLine = match.retraction
+      ? `  RETRACTED:     ${match.retraction.createdAt}${match.retraction.reason ? ` — ${match.retraction.reason}` : ' (no reason given)'} (event ${shortId(match.retraction.id)})`
+      : '';
+    const lifecycleLine = match.lifecycleState === 'ambiguous'
+      ? `  LIFECYCLE:     ambiguous — ${match.lifecycleNote}; not active`
       : '';
     const evidenceLine = match.evidence ? `  Evidence:      ${match.evidence}` : '';
     const display = [
@@ -643,11 +676,83 @@ export class CognitiveController {
       `  Object:        ${match.object}`,
       evidenceLine,
       `  Status:        ${match.status}`,
+      lifecycleLine,
       conflictLine,
+      replacesLine,
       supersededLine,
+      retractedLine,
       `  Provenance:    ${match.provenance?.origin ?? 'unknown'} (${match.provenance?.updateMode ?? 'unknown'})`,
       match.provenance?.operationId ? `  Operation:     ${match.provenance.operationId}` : '',
       `  Recorded at:   ${match.createdAt}`,
+    ].filter(Boolean).join('\n');
+    return {
+      operation: null,
+      status: Outcome.SUCCESS_VERIFIED,
+      decision: classifyDecision({ status: Outcome.SUCCESS_VERIFIED }),
+      output: display,
+      display,
+      recorded: false,
+      recordError: null,
+    };
+  }
+
+  // Read-only lifecycle inspection. Resolves exactly one claim, then reports only what
+  // the stored records and events establish. It never calls the model and writes nothing;
+  // like `show`, it is a direct read with no operation record.
+  async knowledgeHistory(idPrefix) {
+    if (!this.knowledge) throw new ValidationError('knowledge store is not available in this configuration');
+    if (typeof idPrefix !== 'string' || idPrefix.trim().length === 0) {
+      throw new ValidationError('knowledge history requires a record id');
+    }
+    const records = await this.knowledge.findByPrefix(idPrefix);
+    if (records.length === 0) {
+      return this.#knowledgeReadMiss(`No knowledge record found with id prefix "${idPrefix.trim()}"`);
+    }
+    if (records.length > 1) {
+      return this.#knowledgeReadMiss(`Id prefix "${idPrefix.trim()}" matches ${records.length} knowledge records; use a longer prefix.`);
+    }
+    const view = await this.knowledge.history(records[0].id);
+    if (!view) {
+      return this.#knowledgeReadMiss(`No knowledge record found with id prefix "${idPrefix.trim()}"`);
+    }
+    const rec = view.record;
+    const stateLine = view.lifecycleNote
+      ? `  State:         ambiguous — ${view.lifecycleNote}; not active`
+      : `  State:         ${rec.lifecycleState}${rec.active ? '' : ' (historical)'}`;
+    const retractionLine = view.retraction
+      ? `  Retraction:    ${view.retraction.createdAt}${view.retraction.reason ? ` — ${view.retraction.reason}` : ' (no reason given)'} (event ${shortId(view.retraction.id)})`
+      : view.retractionAmbiguous
+        ? '  Retraction:    ambiguous — more than one retraction event targets this record'
+        : '';
+    const replacesLine = view.replaces.length
+      ? `  Supersedes:    ${view.replaces.map((r) => `${r.shortId} (recorded ${String(r.createdAt).slice(0, 10)})`).join(', ')}`
+      : '  Supersedes:    (none)';
+    const replacedByLine = view.replacedBy.length
+      ? `  Superseded by: ${view.replacedBy.map((r) => `${r.shortId} (recorded ${String(r.createdAt).slice(0, 10)})`).join(', ')}`
+      : '  Superseded by: (none)';
+    const chainLines = view.chain.length
+      ? [
+          `  Chain:         ${view.chain.length} record(s), oldest first${view.chainTruncated ? ' (truncated)' : ''}`,
+          ...view.chain.map((entry, index) => `    ${index + 1}. [${entry.shortId}] ${truncate(entry.subject, 60)} --[${truncate(entry.relationship, 40)}]--> ${truncate(entry.object, 60)}  state: ${entry.state}`),
+        ]
+      : ['  Chain:         (none)'];
+    const chainNote = view.complete
+      ? '  Chain note:    complete: every supersession link resolves'
+      : `  Chain note:    limited: ${view.problems.join('; ') || 'chain was truncated'}`;
+    const evidenceLine = rec.evidence ? `  Evidence:      ${truncate(rec.evidence, 200)}` : '';
+    const display = [
+      `Knowledge lifecycle for ${rec.id}`,
+      `  Claim:         ${truncate(rec.subject, 60)} --[${truncate(rec.relationship, 40)}]--> ${truncate(rec.object, 60)}`,
+      evidenceLine,
+      `  Provenance:    ${rec.provenance?.origin ?? 'unknown'} (${rec.provenance?.updateMode ?? 'unknown'})`,
+      rec.provenance?.operationId ? `  Operation:     ${rec.provenance.operationId}` : '',
+      `  Recorded at:   ${rec.createdAt}`,
+      stateLine,
+      replacesLine,
+      replacedByLine,
+      retractionLine,
+      ...chainLines,
+      chainNote,
     ].filter(Boolean).join('\n');
     return {
       operation: null,

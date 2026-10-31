@@ -5,7 +5,7 @@
 import { ValidationError } from '../errors.js';
 import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
-import { MAX_SUPERSEDES } from '../knowledge/knowledge-store.js';
+import { MAX_RETRACTION_REASON_CHARS, MAX_SUPERSEDES } from '../knowledge/knowledge-store.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 
 const MAX_FIELD_CHARS = 500;
@@ -33,6 +33,35 @@ function optionalTextField(value, name, max = MAX_FIELD_CHARS) {
   return textField(value, name, max);
 }
 
+// A record reference is not a field of the claim, so it has its own limits and its
+// own refusal. The value is never quoted back in the error: that text can be audited.
+function recordRef(value, name) {
+  if (typeof value !== 'string') throw new ValidationError(`${name} must be text`);
+  const ref = value.trim();
+  if (ref.length === 0) throw new ValidationError(`${name} is empty`);
+  if (ref.length > 64) throw new ValidationError(`${name} is longer than 64 characters`);
+  if (CONTROL_CHARS.test(ref)) throw new ValidationError(`${name} contains control characters`);
+  if (containsSecret(ref)) {
+    throw new ValidationError(`${name} looks like a password, key, or token; it was not used`, 'SECRET_REFUSED');
+  }
+  return ref;
+}
+
+function optionalReason(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new ValidationError('reason must be text');
+  const text = value.trim();
+  if (text.length === 0) return null;
+  if (text.length > MAX_RETRACTION_REASON_CHARS) {
+    throw new ValidationError(`reason exceeds ${MAX_RETRACTION_REASON_CHARS} characters`);
+  }
+  if (CONTROL_CHARS.test(text)) throw new ValidationError('reason contains control characters');
+  if (containsSecret(text)) {
+    throw new ValidationError('reason looks like a password, key, or token; it was not stored', 'SECRET_REFUSED');
+  }
+  return text;
+}
+
 function expectObject(input, allowedKeys) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
     throw new ValidationError('input must be an object');
@@ -43,16 +72,20 @@ function expectObject(input, allowedKeys) {
   return input;
 }
 
-function renderStatus(status, conflictsWith, supersededBy) {
-  if (supersededBy && supersededBy.length > 0) return 'superseded';
-  if (status === 'conflicting' || (conflictsWith && conflictsWith.length > 0)) {
-    return `conflicting (conflicts with: ${(conflictsWith ?? []).map(shortId).join(', ')})`;
+function renderStatus(r) {
+  if (r.lifecycleState === 'ambiguous') {
+    return `ambiguous (${r.lifecycleNote ?? 'lifecycle evidence disagrees'}); not active`;
   }
-  return status ?? 'supported';
+  if (r.lifecycleState === 'retracted') return 'retracted';
+  if (r.supersededBy && r.supersededBy.length > 0) return 'superseded';
+  if (r.status === 'conflicting' || (r.conflictsWith && r.conflictsWith.length > 0)) {
+    return `conflicting (conflicts with: ${(r.conflictsWith ?? []).map(shortId).join(', ')})`;
+  }
+  return r.status ?? 'supported';
 }
 
 function renderRecord(r) {
-  const status = renderStatus(r.status, r.conflictsWith, r.supersededBy);
+  const status = renderStatus(r);
   const prov = r.provenance?.origin ?? 'unknown';
   const evi = r.evidence ? `\n      evidence: ${r.evidence}` : '';
   return `  [${shortId(r.id)}] ${r.subject} --[${r.relationship}]--> ${r.object}${evi}\n      status: ${status} | provenance: ${prov} | recorded: ${String(r.createdAt).slice(0, 10)}`;
@@ -167,6 +200,82 @@ export function knowledgeActions(knowledge) {
             ? `record present; provenance confirmed; ${supersededIds.length} prior claim(s) superseded`
             : 'record present; subject, relationship, object, and provenance confirmed',
         };
+      },
+    },
+
+    {
+      name: 'knowledge.retract',
+      description: 'Mark an existing knowledge claim as no longer active without deleting its history or supplying a replacement. Write: user origin only.',
+      inputHint: '{"target":"record id","reason":"optional text"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      // Retraction changes what APEX treats as active knowledge, so a model proposal
+      // can never authorize it. The registry also forbids write actions for the model.
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target', 'reason']);
+        return {
+          target: recordRef(o.target, 'target'),
+          reason: optionalReason(o.reason),
+        };
+      },
+      async execute(ctx, { target, reason }) {
+        const { event, record } = await knowledge.retract({
+          target,
+          reason,
+          provenance: { operationId: ctx.operationId },
+          origin: ctx.origin,
+        });
+        const reasonNote = event.reason ? ' with a recorded reason' : '';
+        return {
+          summary: `retracted knowledge record ${shortId(record.id)}${reasonNote}; the original claim is preserved`,
+          data: {
+            targetId: record.id,
+            retractionId: event.id,
+            reason: event.reason ?? null,
+            retractedAt: event.createdAt,
+            claim: {
+              subject: record.subject,
+              relationship: record.relationship,
+              object: record.object,
+              evidence: record.evidence ?? null,
+              createdAt: record.createdAt,
+            },
+          },
+          display: `Retracted knowledge record ${shortId(record.id)}: ${record.subject} --[${record.relationship}]--> ${record.object}. The original claim, evidence, and provenance remain stored.`,
+        };
+      },
+      async verify(ctx, { target }, result) {
+        const [rec] = await knowledge.findByPrefix(result.data.targetId);
+        if (!rec) return { ok: false, detail: 'retracted record not found in store after write' };
+        if (rec.active) return { ok: false, detail: 'record is still reported active' };
+        if (rec.status !== 'retracted') return { ok: false, detail: 'record is not reported retracted' };
+        const retraction = rec.retraction;
+        if (!retraction || retraction.id !== result.data.retractionId) {
+          return { ok: false, detail: 'stored retraction event differs from the write result' };
+        }
+        if ((retraction.reason ?? null) !== (result.data.reason ?? null)) {
+          return { ok: false, detail: 'stored retraction reason differs from the write result' };
+        }
+        if (retraction.origin !== 'user_supplied' && retraction.origin !== 'user_approved') {
+          return { ok: false, detail: 'retraction provenance is not user origin' };
+        }
+        if (retraction.updateMode !== 'user_confirmed') {
+          return { ok: false, detail: 'retraction provenance is not user confirmed' };
+        }
+        // Retraction is append-only: the claim that was retired must still be exactly
+        // the claim that was named in the write result.
+        const claim = result.data.claim ?? {};
+        if (rec.subject !== claim.subject || rec.relationship !== claim.relationship || rec.object !== claim.object) {
+          return { ok: false, detail: 'the original claim was altered by the retraction' };
+        }
+        if ((rec.evidence ?? null) !== (claim.evidence ?? null)) {
+          return { ok: false, detail: 'the original evidence was altered by the retraction' };
+        }
+        if (rec.createdAt !== claim.createdAt) {
+          return { ok: false, detail: 'the original timestamp was altered by the retraction' };
+        }
+        return { ok: true, detail: 'retraction event confirmed; original claim and evidence preserved' };
       },
     },
 

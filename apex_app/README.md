@@ -28,7 +28,7 @@ from a milestone number or a passing build.
 | Category | Status | Evidence |
 |---|---|---|
 | Runnable application | Implemented: the CLI in `bin/apex.js` / `src/cli.js`, the controller pipeline, memory, knowledge, audit, tasks, diagnostics. | `npm test` and the walkthrough in the [Commands](#commands) table. |
-| Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `calc`, `status`, `knowledge add/list/search/show`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `tasks.test.js`, `cli-workflow.test.js`. A model is never consulted for these. |
+| Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `calc`, `status`, `knowledge add/retract/history/list/search/show`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `knowledge-lifecycle.test.js`, `tasks.test.js`, `cli-workflow.test.js`. A model is never consulted for these. |
 | Filesystem inspection | Implemented only when `APEX_FILESYSTEM_ROOT` is set: bounded, read-only, single-root listing and reading. | `filesystem.test.js`, `tasks-filesystem.test.js`. |
 | Model gateway protocol handling | Implemented and **stub-tested**: request/response shapes, failure classification, retries, timeouts, and model-name mismatch against local stand-in servers that copy the documented OpenAI-compatible and Ollama shapes. | `gateway.test.js`, `model-workflow.test.js`. Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model. |
 | Real-model behaviour | **Observed outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on one Windows machine. One bounded request on 2026-10-31 completed through APEX in about 105 s; a bounded four-request benchmark the same day recorded 37.7-53.1 s per request, with 3.0-3.8 backend-reported tokens/s. Every answer was reported as unverified. Measurements and limits are in [Optional: a local model](#optional-a-local-model). | Manual, dated observations only; no automated regression test. |
@@ -179,7 +179,9 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `queue` | Read-only view of the task-summary retry queue: what is owed, its state, and whether the queue file or its lock needs attention. |
 | `repair locks` | Inspects the task and queue locks and removes only abandoned takeover tokens whose number no live process owns. It never takes a lock, never deletes a lock claim, and refuses while any holder or takeover number is live. A dead claim is taken over by the next normal run. A claim whose number has been recycled by an unrelated process looks live and is refused; resolving that needs the manual check described under Known limitations. |
 | `knowledge add --subject <s> --relationship <r> --object <o> [--evidence <e>] [--supersedes <id[,id...]>]` | Stores an explicit relationship triple. User origin only. Optional `--supersedes` retires named conflicting records as historical, without deleting them. |
-| `knowledge list [--limit N]` | Lists recent knowledge records with provenance and status. |
+| `knowledge retract <id> [--reason <text>]` | Marks an existing active claim as retracted without supplying a replacement. The original claim, evidence, and provenance are preserved. User origin only. |
+| `knowledge history <id>` | Read-only lifecycle view: state, retraction event and reason, direct and chained supersession links, and an explicit note when the evidence is incomplete or ambiguous. Never calls a model. |
+| `knowledge list [--limit N]` | Lists recent knowledge records with provenance and status, including historical (superseded and retracted) records. |
 | `knowledge search <query>` | Searches knowledge triples by keyword. |
 | `knowledge show <id>` | Shows a knowledge record in full with provenance and conflict details. |
 | `help`, `version` | Usage and version. |
@@ -928,8 +930,10 @@ explicit entity relationships, built alongside personal memory:
 - **Entity relationship triples:** Each record stores an explicit triple:
   `subject --[relationship]--> object`, together with optional `evidence`,
   canonical hash (`tripleHash`), timestamp, and explicit provenance.
-- **Write authority:** Knowledge writes (`knowledge add` / `knowledge.add`) require
-  explicit user origin. Model proposals cannot write knowledge.
+- **Write authority:** Knowledge writes (`knowledge add` / `knowledge.add` and
+  `knowledge retract` / `knowledge.retract`) require explicit user origin. Model
+  proposals cannot write or retract knowledge, and neither action can appear in a
+  model-generated plan.
 - **Conflict handling:** When a new relationship contradicts an existing one (same
   subject and relationship, different object), the conflict is detected and both
   records are preserved and marked `conflicting`. Contradictions are never silently
@@ -941,6 +945,30 @@ explicit entity relationships, built alongside personal memory:
   historical entries, are reported as `superseded`, and no longer enter retrieval or
   count as live conflicts. Model output cannot set supersession; the write remains
   user-origin only.
+- **Explicit retraction:** `knowledge retract <id> [--reason <text>]` marks an active
+  claim as no longer active without supplying a replacement. It appends a lifecycle
+  event (`kind: retraction`) naming the record, the optional reason, its timestamp,
+  and user-origin provenance; the original claim line is never rewritten, moved, or
+  deleted. Retraction refuses a missing or ambiguous id, an already superseded record,
+  and an already retracted record, so one claim cannot enter two terminal states by
+  this path. A retracted record leaves keyword retrieval and live conflict detection,
+  stays visible in `list` and `show`, and cannot be superseded later. A fresh
+  assertion of the same triple is a new record; it does not revive the old one.
+  Retraction is user-origin only and cannot be planned or authorized from model
+  output.
+- **Lifecycle history:** `knowledge history <id>` is a read-only view of what the
+  stored records establish: the original claim and provenance, active/superseded/
+  retracted/ambiguous state, the retraction event and reason, the records it replaced
+  and the records that replaced it, and the bounded connected chain. It reports
+  missing links, multiple successors, multiple retraction events, records that are
+  both retracted and superseded, cycles, and truncation as explicit limitations; it
+  never infers a missing link or claims the chain is complete when it is not. It
+  calls no model and writes nothing.
+- **Three different answers:** Supersession says "this claim was replaced by a newer
+  conflicting claim"; retraction says "this claim is no longer active and no
+  replacement is asserted"; independent verification says "the write APEX reports is
+  the write the store actually holds". Verification is not a claim that the content is
+  true, and neither supersession nor retraction changes the preserved original.
 - **Bounded retrieval into model context:** When answering a request on the model path,
   the controller retrieves up to 3 relevant knowledge records by searching the triple
   and evidence. Question words and other low-signal words are ignored, so a question
@@ -1021,7 +1049,7 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this batch was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 760 tests, 758 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 810 tests, 808 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file
