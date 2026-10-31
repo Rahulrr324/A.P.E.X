@@ -28,6 +28,9 @@ import { KNOWLEDGE_PROMPT_LIMIT } from '../actions/knowledge-actions.js';
 export const MAX_REQUEST_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 4000;
 const MEMORY_SHOWN_CHARS = 1000;
+// A reported load time below this is ordinary server overhead, not a cold start worth
+// mentioning. The number is display-only and never becomes part of the model's turn.
+const LOAD_NOTICE_MS = 1000;
 
 export const NO_MODEL_MESSAGE =
   'No inference backend is configured, so APEX cannot write a free-form answer. ' +
@@ -57,9 +60,15 @@ function modelFailureAdvice(code) {
   switch (code) {
     case 'MODEL_NOT_FOUND':
       return 'The endpoint is reachable but does not serve this model name; no action was proposed or run. Correct APEX_MODEL_NAME before retrying.';
+    case 'EMPTY_RESPONSE':
+      return 'No answer was generated. A retry is safe, but if the same empty answer repeats, adjust the token budget or model as described above rather than retrying unchanged.';
     case 'CONTEXT_TOO_LARGE':
       return 'No action was proposed or run; shorten the request rather than retrying it unchanged.';
     case 'TIMEOUT':
+      // A timeout says nothing about the model's ability to answer: a first request is
+      // slow while the server loads the model. APEX never resends a timed-out request,
+      // so the advice has to describe a deliberate retry rather than a hidden one.
+      return 'No answer and no action were produced, and APEX did not resend the request. A first request can exceed the limit while the server loads the model; wait for it, then retry once. If timeouts repeat, raise APEX_MODEL_TIMEOUT_MS (100-600000) or lower APEX_MODEL_MAX_TOKENS.';
     case 'INTERRUPTED':
     case 'UNREACHABLE':
       return 'No action was proposed or run, so retrying this request after the backend is available is safe.';
@@ -183,7 +192,7 @@ export class CognitiveController {
       .join('\n');
   }
 
-  async handle(requestText, { origin = 'user', saveAnswer = false, sessionId = null } = {}) {
+  async handle(requestText, { origin = 'user', saveAnswer = false, sessionId = null, onProgress = null } = {}) {
     const op = {
       schema: OPERATION_SCHEMA,
       app: APP_NAME,
@@ -348,7 +357,7 @@ export class CognitiveController {
           // If the session or conversation log cannot be read, the prompt must not
           // claim that no earlier messages exist.
           historyUnavailable: op.errors.some((e) => e.stage === 'context' || e.stage === 'session'),
-        }, op);
+        }, op, onProgress);
         status = m.status;
         // Any model proposal that did not execute and verify gets a deterministic
         // counter-notice, even if the model's own text claims success. The wording
@@ -1056,7 +1065,7 @@ export class CognitiveController {
     });
   }
 
-  async planTask(goalText) {
+  async planTask(goalText, { onProgress = null } = {}) {
     const op = this.#newOp({ capability: 'task.plan', origin: 'user', request: null });
     try {
       this.#requireTasks();
@@ -1076,7 +1085,7 @@ export class CognitiveController {
           `This goal cannot be planned from supported steps:\n  - ${det.problems.join('\n  - ')}\nNo model is configured to propose a plan. Nothing was stored.`,
         );
       }
-      return await this.#modelPlan(op, safeGoal, det.problems);
+      return await this.#modelPlan(op, safeGoal, onProgress);
     } catch (err) {
       return this.#refused(op, err, Outcome.PLAN_REJECTED);
     }
@@ -1084,7 +1093,7 @@ export class CognitiveController {
 
   // Asks the model for a plan. The prompt gets the redacted goal and only relevant,
   // non-private memory. The reply is parsed strictly and checked against the registry.
-  async #modelPlan(op, safeGoal) {
+  async #modelPlan(op, safeGoal, onProgress = null) {
     let hits;
     try {
       hits = await this.memory.search(safeGoal, { limit: this.retrievalLimit });
@@ -1103,6 +1112,13 @@ export class CognitiveController {
     // The prompt offers only the actions a model-origin plan may actually use, so the
     // model is not invited to propose user-only actions such as filesystem inspection.
     const { system, prompt } = planningPrompt({ goal: safeGoal, registry: this.registry, memoryLines, origin: 'model' });
+    if (typeof onProgress === 'function') {
+      try {
+        onProgress({ stage: 'model', timeoutMs: Number.isFinite(this.gateway.timeoutMs) ? this.gateway.timeoutMs : null });
+      } catch {
+        // Ignored: the caller's display failure is not the request's failure.
+      }
+    }
     const res = await this.gateway.complete({ system, prompt });
     op.backend = res.backend ?? null;
     op.model = res.ok
@@ -1456,7 +1472,7 @@ export class CognitiveController {
   // Model path. `relevant` is the already-filtered memory that may enter a prompt
   // or be shown directly. Everything retrieved but ineligible (private, secret,
   // superseded) stays out of both the prompt and the direct display.
-  async answerWithModel(request, { relevant, turns, historyUnavailable = false }, op) {
+  async answerWithModel(request, { relevant, turns, historyUnavailable = false }, op, onProgress = null) {
     const retrievalError = op.errors.find((error) => error.stage === 'retrieval');
     if (retrievalError) {
       return {
@@ -1562,6 +1578,17 @@ export class CognitiveController {
       ? '[Stored context contains conflicting records; APEX has not resolved them.]'
       : '';
 
+    // Called once, immediately before the model is asked. It reports only the wait
+    // and its limit; the transport is not streaming, so no progress or partial text is
+    // implied. A display callback must never change the request's outcome.
+    if (typeof onProgress === 'function') {
+      try {
+        onProgress({ stage: 'model', timeoutMs: Number.isFinite(this.gateway.timeoutMs) ? this.gateway.timeoutMs : null });
+      } catch {
+        // Ignored: the caller's display failure is not the request's failure.
+      }
+    }
+
     const res = await this.gateway.complete({ system, prompt: built.prompt });
 
     if (!res.ok) {
@@ -1580,6 +1607,11 @@ export class CognitiveController {
     // missing measurement is visible as absent rather than as a zero.
     if (res.usage) op.model.usage = res.usage;
     if (res.timings) op.model.timings = res.timings;
+    // A large reported load time explains a slow first answer. It is display-only and
+    // never part of the model's turn; the exact number stays in the audit record.
+    const loadNotice = res.timings && Number.isFinite(res.timings.loadMs) && res.timings.loadMs >= LOAD_NOTICE_MS
+      ? `[The backend reported ${(res.timings.loadMs / 1000).toFixed(1)} s of model load time for this answer.]`
+      : '';
 
     const parsed = parseModelOutput(res.text);
     for (const bad of parsed.malformed) {
@@ -1605,20 +1637,27 @@ export class CognitiveController {
 
     let answer = parsed.text || '(the model returned no answer text)';
     if (res.truncated) {
-      answer += '\n\n[The answer was cut off at the model output limit (APEX_MODEL_MAX_TOKENS).]';
-      op.errors.push({ stage: 'model', code: 'TRUNCATED', message: 'answer reached the output token limit' });
+      answer += res.truncatedBy === 'output-size-limit'
+        ? '\n\n[The answer was cut off at APEX\'s output-size limit.]'
+        : '\n\n[The answer was cut off at the model output limit (APEX_MODEL_MAX_TOKENS).]';
+      op.errors.push({
+        stage: 'model',
+        code: 'TRUNCATED',
+        message: res.truncatedBy === 'output-size-limit' ? 'answer exceeded the output-size limit' : 'answer reached the output token limit',
+      });
     }
     // The model's own conclusion has no independent check, so it is reported
     // honestly as verification_unavailable, never as verified.
     const answerText = answer + knowledgeNotice;
+    const displayExtras = [loadNotice, historyNotice].filter(Boolean).join('\n\n');
     return {
       status: Outcome.VERIFICATION_UNAVAILABLE,
       answer: answerText,
       // The text the model actually produced, without APEX notices. Conversation
-      // turns and a user-approved saved conclusion use this, so a notice can never
-      // be replayed later as if the model had said it.
+      // turns and a user-approved saved conclusion use this, so a notice can never be
+      // replayed later as if the model had said it.
       modelText: parsed.text,
-      display: historyNotice ? `${answerText}\n\n${historyNotice}` : undefined,
+      display: displayExtras ? `${answerText}\n\n${displayExtras}` : undefined,
       hasText: parsed.text.length > 0,
       backend: res.backend,
       error: null,

@@ -589,6 +589,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   const describe = app.gateway.describe();
   let modelState;
   let modelDetail = null;
+  let modelReachable = null;
   if (!describe.configured) {
     modelState = State.NOT_CONFIGURED;
   } else if (!checkModel) {
@@ -596,6 +597,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   } else {
     try {
       const result = await app.gateway.checkAvailability({ timeoutMs: modelTimeoutMs });
+      modelReachable = result.reachable ?? null;
       if (result.available && result.modelListed === false) {
         modelState = State.UNCONFIRMED;
         modelDetail = result.detail;
@@ -627,6 +629,9 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     summary: modelSummary,
     describe,
     detail: modelDetail,
+    // True when the endpoint answered the readiness request, even if it could not serve
+    // the configured model. It is evidence about the server, not about inference.
+    reachable: modelReachable,
     // Readiness probes the model listing, never completion. False says exactly that,
     // so a caller cannot read "available" as "inference was tested".
     inferenceTested: false,
@@ -708,7 +713,11 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     recovery.push('Audit links: do not repeat an action merely because its audit record is missing or inconsistent; it may have executed. Compare the task and audit records before deciding.');
   }
   if (modelState === State.UNAVAILABLE) {
-    recovery.push('Model: start the configured local model server, then re-run "apex diagnose --model"; retrying that read-only check is safe. The listing probe did not answer, so no inference was tested. Local storage checks above do not depend on the model.');
+    if (modelReachable === true) {
+      recovery.push(`Model: the endpoint answered, but it could not serve the configured model (${safeText(modelDetail)}). This is not an outage and no inference was tested. Correct the model name or install the model, then re-run "apex diagnose --model"; that read-only check is safe. Local storage checks above do not depend on the model.`);
+    } else {
+      recovery.push('Model: start the configured local model server, then re-run "apex diagnose --model"; retrying that read-only check is safe. The listing probe did not answer, so no inference was tested. Local storage checks above do not depend on the model.');
+    }
   } else if (modelState === State.UNCONFIRMED) {
     recovery.push(`Model: the endpoint is reachable but did not list "${safeText(describe.model, 80)}". A request may still work if the server accepts the configured name; this is unconfirmed, not a failure, and no inference was run. Retrying "apex diagnose --model" is safe.`);
   }

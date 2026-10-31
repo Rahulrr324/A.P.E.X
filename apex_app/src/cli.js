@@ -262,6 +262,18 @@ function modelLine(model) {
   return `Model backend: ${who} - unavailable: ${safeText(model.detail)}`;
 }
 
+// One bounded line on a terminal before the model is asked. The transport is not
+// streaming, so it says only what APEX is waiting for and for how long; it never shows
+// progress, partial text, or a claim that the model is working on an answer.
+function modelWaiting(err) {
+  return (event) => {
+    const seconds = event && Number.isFinite(event.timeoutMs) ? Math.round(event.timeoutMs / 1000) : null;
+    err(seconds
+      ? `Waiting for the model (up to ${seconds} s; no partial output is shown)...`
+      : 'Waiting for the model (no partial output is shown)...');
+  };
+}
+
 function sessionLine(session) {
   if (session.state === State.OK) return `Session: ${shortId(session.sessionId)}`;
   if (session.state === State.MISSING) {
@@ -446,7 +458,9 @@ export async function main(argv, {
       }
       out(modelLine(model));
       if (model.state === State.UNAVAILABLE) {
-        out('Model: no inference was tested. Starting the configured local server and re-running "status --model" is safe; that probe only reads the model list.');
+        out(model.reachable === true
+          ? 'Model: no inference was tested. The endpoint answered but readiness failed (see above); correct the model name or install the model, then re-run "status --model".'
+          : 'Model: no inference was tested. Starting the configured local server and re-running "status --model" is safe; that probe only reads the model list.');
       }
       out(filesystem.state === State.OK
         ? `Filesystem root: ${safeText(filesystem.root)} (root validated at startup, read-only)`
@@ -566,7 +580,11 @@ export async function main(argv, {
         err('usage: ask [--save-answer] <request>');
         return 2;
       }
-      const res = await app.controller.handle(text, { origin: 'user', saveAnswer: Boolean(flags['save-answer']) });
+      const res = await app.controller.handle(text, {
+        origin: 'user',
+        saveAnswer: Boolean(flags['save-answer']),
+        onProgress: stderr.isTTY ? modelWaiting(err) : null,
+      });
       out(formatResult(res));
       const session = sessionNotice(res);
       if (session) err(session);
@@ -612,7 +630,9 @@ export async function main(argv, {
           err('usage: task plan <goal...>');
           return 2;
         }
-        const res = await app.controller.planTask(words.join(' '));
+        const res = await app.controller.planTask(words.join(' '), {
+          onProgress: stderr.isTTY ? modelWaiting(err) : null,
+        });
         return emit(res);
       }
       if (sub === 'list') {
@@ -699,6 +719,7 @@ export async function main(argv, {
 // request through the controller, in the current session.
 async function runChat({ app, stdin, stdout, stderr, out }) {
   const interactive = Boolean(stdin.isTTY);
+  const err = (s) => stderr.write(`${s}\n`);
   out('APEX chat. Type a message. /new starts a new session, /exit ends. Memory and history persist.');
   const rl = readline.createInterface({ input: stdin, output: interactive ? stdout : undefined, terminal: false });
   if (interactive) stdout.write('you> ');
@@ -714,7 +735,10 @@ async function runChat({ app, stdin, stdout, stderr, out }) {
       out(`Started a new session: ${shortId(state.sessionId)}`);
     } else {
       try {
-        const res = await app.controller.handle(line, { origin: 'user' });
+        const res = await app.controller.handle(line, {
+          origin: 'user',
+          onProgress: interactive ? modelWaiting(err) : null,
+        });
         out(formatChatReply(res));
         const session = sessionNotice(res);
         if (session) stderr.write(`${session}\n`);

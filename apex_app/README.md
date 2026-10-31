@@ -244,6 +244,21 @@ APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
   `APEX_MODEL_MAX_TOKENS` (for example to 256) or raise the timeout. In a protocol run
   on a 2-CPU sandbox against a random-weight test model, the default 512-token answer did
   not finish within 120 s, and a 24-token answer did.
+- A first request after the model was unloaded can exceed the default 30 s even when the
+  server is working: that is a slow start, not a model failure. APEX does not raise the
+  limit by itself, does not resend a timed-out request, and does not warm up the model
+  behind your back. For a first run, set `APEX_MODEL_TIMEOUT_MS` (100-600000) high enough
+  for the load, or send one small request deliberately and wait for it. The timeout
+  message names the limit and says the model may still be loading; it is not evidence
+  that the model or a later answer is wrong.
+- On a terminal, `ask`, `chat` and `task plan` print one line such as
+  `Waiting for the model (up to 30 s; no partial output is shown)...` immediately before
+  the call. The transport is not streaming, so no progress bar, partial answer, or token
+  count is shown, and redirected or piped output does not get the line.
+- When the server reports at least 1 s of model load time, a produced answer is followed
+  by a display-only note giving the figure. The exact `model.timings` counters
+  (including `loadMs`) are in the operation record; a value the server did not report is
+  absent rather than zero.
 - Measured on 2026-10-29 with the installed Qwen3-4B GGUF on Windows, a 200-token
   budget, and a short prompt: the first request after the model was unloaded took
   48.4 s total (19.8 s loading, 1.3 s prompt evaluation, 26.7 s generating 128 tokens);
@@ -291,9 +306,13 @@ that genuinely mixes reasoning into content is passed through unchanged.
 
 Reasoning tokens count toward `APEX_MODEL_MAX_TOKENS`. If the budget is exhausted
 before any final answer is produced, `message.content` is empty and APEX reports
-`EMPTY_RESPONSE` with a message that the budget was likely spent on reasoning and
-suggests raising `APEX_MODEL_MAX_TOKENS` or using a model that can skip thinking. No
-partial reasoning is shown as an answer, and no model turn is stored. Observed on
+`EMPTY_RESPONSE`; no partial reasoning is shown as an answer, and no model turn is
+stored. The message describes only what the server reported: reasoning present with
+`done_reason: "length"` names both and suggests raising `APEX_MODEL_MAX_TOKENS` or
+using a model that can skip thinking; `done_reason: "length"` with no reasoning names
+the token limit; empty content with no such report stays "endpoint returned an empty
+answer" rather than guessing a cause. Retrying the same request unchanged is not
+suggested as a fix. Observed on
 2026-10-29 with a 256-token budget: one request produced the answer `391` after 251
 generated tokens; another produced only reasoning and no answer, which is reported as
 that failure rather than as text.
@@ -336,6 +355,14 @@ handling and failure classification only. They say nothing about answer quality,
 no test in this repository runs a real model. A bounded manual run against a real
 server was performed on 2026-10-31 and is reported above; it is not an automated
 regression test.
+
+**Interpreting `verification_unavailable`.** A model answer is reported with this
+outcome because APEX has no independent check for a claim a model makes. The request
+completed and the answer was produced and stored; the status says only that APEX
+cannot confirm it. It is not a timeout, an empty answer, or a provider failure, and
+the command exits 0 unless a proposed action was denied, failed, or could not be
+verified. Fluency is not evidence of correctness either: an unverified answer should
+be treated as a model assertion, not as an established fact.
 
 ## Optional: bounded filesystem inspection
 

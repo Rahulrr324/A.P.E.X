@@ -243,6 +243,11 @@ class HttpBackend {
   // as such, so the user knows to shorten the request rather than retry.
   httpFailure(r) {
     const e = r.error;
+    if (e.code === 'TIMEOUT') {
+      // Only the completion path gets this hint: a listing request that times out is not
+      // slow because the model is loading.
+      return failure(this.name, this.provider, 'TIMEOUT', `${e.message} (a first request can be slower while the server loads the model)`, r.latencyMs);
+    }
     if (e.code === 'HTTP_ERROR' && [400, 413, 422].includes(e.status) && /context|too (long|large)|exceed/i.test(e.detail ?? '')) {
       return failure(this.name, this.provider, 'CONTEXT_TOO_LARGE', 'the prompt is larger than the model context window; shorten the request or use a model with a larger context', r.latencyMs);
     }
@@ -272,19 +277,24 @@ class HttpBackend {
     if (text.length === 0) {
       // Reasoning is never a substitute for an answer, but its presence explains
       // why the answer is empty: the generation budget was spent before any final
-      // text was produced.
+      // text was produced. A reported "length" stop is used only when the provider
+      // actually said so; nothing is inferred from a missing finish reason.
       const spentOnReasoning = typeof reasoning === 'string' && reasoning.trim().length > 0;
-      return failure(
-        this.name,
-        this.provider,
-        'EMPTY_RESPONSE',
-        spentOnReasoning
-          ? 'the model produced reasoning but no final answer; the token budget was likely spent on reasoning, so raise APEX_MODEL_MAX_TOKENS or use a model that can skip thinking'
-          : 'endpoint returned an empty answer',
-        latencyMs,
-      );
+      const hitLimit = finishReason === 'length';
+      let message;
+      if (spentOnReasoning && hitLimit) {
+        message = 'the model produced reasoning but no final answer, and the provider reported the token limit was reached; raise APEX_MODEL_MAX_TOKENS or use a model that can skip thinking';
+      } else if (spentOnReasoning) {
+        message = 'the model produced reasoning but no final answer; the token budget was likely spent on reasoning, so raise APEX_MODEL_MAX_TOKENS or use a model that can skip thinking';
+      } else if (hitLimit) {
+        message = 'the provider reported the token limit was reached before any answer text was produced; raise APEX_MODEL_MAX_TOKENS';
+      } else {
+        message = 'endpoint returned an empty answer';
+      }
+      return failure(this.name, this.provider, 'EMPTY_RESPONSE', message, latencyMs);
     }
     const meta = backendMetadata({ ...usage, ...timings });
+    const overSizeLimit = text.length > MAX_OUTPUT_CHARS;
     return {
       ok: true,
       backend: this.name,
@@ -292,7 +302,10 @@ class HttpBackend {
       model: reportedModel || this.model,
       text: text.slice(0, MAX_OUTPUT_CHARS),
       finishReason: finishReason ?? null,
-      truncated: finishReason === 'length' || text.length > MAX_OUTPUT_CHARS,
+      truncated: finishReason === 'length' || overSizeLimit,
+      // Which limit cut the answer. A provider token stop and APEX's own output-size
+      // cap are different causes, and the user-facing notice must not name the wrong one.
+      truncatedBy: finishReason === 'length' ? 'token-limit' : (overSizeLimit ? 'output-size-limit' : null),
       latencyMs,
       ...(meta.usage ? { usage: meta.usage } : {}),
       ...(meta.timings ? { timings: meta.timings } : {}),
@@ -313,7 +326,11 @@ export class OpenAICompatibleBackend extends HttpBackend {
 
   async health(timeoutMs = 2000) {
     const r = await this.request('GET', '/v1/models', null, timeoutMs);
-    if (r.error) return { available: false, detail: r.error.message };
+    // "Reachable" means the endpoint returned an HTTP response. It does not mean it can
+    // serve the configured model: that is what available/modelListed report. The
+    // distinction matters because a reachable server with the wrong model is not an
+    // outage, and telling the operator to start the server would point at the wrong fix.
+    if (r.error) return { available: false, reachable: r.error.code === 'HTTP_ERROR', detail: r.error.message };
     // A 200 status says the socket answered, not that the endpoint can serve a model.
     // The completion path already refuses a 200 error envelope and a malformed body;
     // the health check must agree, or `status --model` reports "available" for a server
@@ -322,16 +339,16 @@ export class OpenAICompatibleBackend extends HttpBackend {
     // least one model is listed.
     const parsed = this.parseJson(r.text, r.latencyMs);
     if (parsed.failure) {
-      return { available: false, detail: `endpoint did not return a model list (${parsed.failure.error.message})` };
+      return { available: false, reachable: true, detail: `endpoint did not return a model list (${parsed.failure.error.message})` };
     }
     if (parsed.value?.error) {
-      return { available: false, detail: `endpoint reported an error: ${serverMessage(JSON.stringify({ error: parsed.value.error }))}` };
+      return { available: false, reachable: true, detail: `endpoint reported an error: ${serverMessage(JSON.stringify({ error: parsed.value.error }))}` };
     }
     if (!Array.isArray(parsed.value?.data)) {
-      return { available: false, detail: 'endpoint did not return a model list' };
+      return { available: false, reachable: true, detail: 'endpoint did not return a model list' };
     }
     if (parsed.value.data.length === 0) {
-      return { available: false, detail: 'endpoint lists no model' };
+      return { available: false, reachable: true, detail: 'endpoint lists no model' };
     }
     // The list is valid, but a reachable socket that lists some other model says
     // nothing about the configured one. Report that as unconfirmed rather than
@@ -419,10 +436,14 @@ export class OllamaBackend extends HttpBackend {
 
   async health(timeoutMs = 2000) {
     const listed = await this.installedModels(timeoutMs);
-    if (listed.error) return { available: false, detail: listed.error.message };
+    if (listed.error) {
+      // As with the OpenAI-compatible backend, an HTTP answer proves the server is up
+      // even when the installed-model list cannot be read.
+      return { available: false, reachable: listed.error.code === 'HTTP_ERROR', detail: listed.error.message };
+    }
     const wanted = this.model.includes(':') ? this.model : `${this.model}:latest`;
     if (!listed.names.some((n) => n === this.model || n === wanted)) {
-      return { available: false, detail: `model "${this.model}" is not installed on this Ollama server (run: ollama pull ${this.model})` };
+      return { available: false, reachable: true, detail: `model "${this.model}" is not installed on this Ollama server (run: ollama pull ${this.model})` };
     }
     return { available: true, modelListed: true, detail: `model "${this.model}" installed at ${this.origin}` };
   }
@@ -501,6 +522,9 @@ export class ModelGateway {
       configured: true,
       available: h.available,
       modelListed: h.modelListed ?? null,
+      // Reachability is separate evidence: a server can answer and still be unable to
+      // serve the configured model. Null means the backend did not report it.
+      reachable: h.reachable ?? null,
       backend: this.backend.name,
       provider: this.backend.provider,
       detail: h.detail,
