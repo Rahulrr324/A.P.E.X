@@ -729,7 +729,7 @@ describe('C. knowledge and memory', () => {
 
     const diag = await runCli(['diagnose'], envFor(app.dataDir));
     assert.equal(diag.code, 1);
-    assert.match(diag.stdout, /Knowledge: corrupt \(0 readable record\(s\), 2 corrupt line\(s\)/);
+    assert.match(diag.stdout, /Knowledge: corrupt \(0 claim\(s\), 0 lifecycle event\(s\), 2 corrupt line\(s\); lifecycle state cannot be fully established\)/);
     assert.match(diag.stdout, /knowledge reads and writes stay blocked/);
   });
 

@@ -24,6 +24,7 @@ import { buildTaskSummary, taskStateSignature } from '../tasks/summary.js';
 import { renderTask, renderTaskList, explainTask } from '../tasks/format.js';
 import { StoreError } from '../errors.js';
 import { KNOWLEDGE_PROMPT_LIMIT } from '../actions/knowledge-actions.js';
+import { MAX_HEALTH_SAMPLES, MAX_HISTORY_CHAIN } from '../knowledge/knowledge-store.js';
 
 export const MAX_REQUEST_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 4000;
@@ -762,6 +763,73 @@ export class CognitiveController {
       display,
       recorded: false,
       recordError: null,
+    };
+  }
+
+  // Read-only store-wide health. Like `show` and `history` it is a direct, unaudited
+  // read: no model is consulted and nothing is written. A damaged or unreadable store
+  // is reported as such and never as empty. The summary is derived at read time; there
+  // is no persisted copy that could go stale.
+  async knowledgeHealth() {
+    if (!this.knowledge) throw new ValidationError('knowledge store is not available in this configuration');
+    const health = await this.knowledge.health();
+    const lines = ['Knowledge health (read-only; derived from stored records; nothing is repaired)'];
+    if (!health.inspected) {
+      lines.push(`  Store:          unavailable (${truncate(health.detail ?? 'the store could not be read', 200)})`);
+      lines.push('  Claims:         unavailable');
+      lines.push('  Lifecycle:      unavailable');
+      lines.push('  Inspection:     incomplete: no claim, event, lifecycle, or conflict count can be established');
+      lines.push('  Note:           an unreadable store is not an empty store; check APEX_DATA_DIR, permissions, and free space.');
+    } else {
+      const empty = health.claims === 0 && health.lifecycleEvents === 0;
+      lines.push(`  Store:          ${health.corruptLines > 0
+        ? `damaged - ${health.corruptLines} corrupt line(s); inspection incomplete`
+        : empty
+          ? 'ok - empty store (no claims or lifecycle events)'
+          : 'ok - fully inspected'}`);
+      lines.push(`  Claims:         ${health.claims} total`);
+      lines.push(`    active:       ${health.active}`);
+      lines.push(`    superseded:   ${health.superseded}`);
+      lines.push(`    retracted:    ${health.retracted}`);
+      lines.push(`    ambiguous:    ${health.ambiguous}`);
+      const conflictNote = health.conflicts.groups > 0
+        ? ` (${health.conflicts.samples.join('; ')})`
+        : '';
+      lines.push(`  Conflicts:      ${health.conflicts.groups > 0
+        ? `${health.conflicts.groups} unresolved group(s), ${health.conflicts.claims} active claim(s)${conflictNote}`
+        : 'none among active claims'}`);
+      lines.push(`  Lifecycle:      ${health.lifecycleEvents} event(s) (retraction events; not claims)`);
+      const chainNote = health.chains.truncated > 0
+        ? `; ${health.chains.truncated} exceed the ${MAX_HISTORY_CHAIN}-record history view bound (history shows a truncated chain, not damage)`
+        : '';
+      lines.push(`  Chains:         ${health.chains.components} linked component(s), largest ${health.chains.largest} claim(s)${chainNote}`);
+      lines.push(`  Corrupt lines:  ${health.corruptLines}`);
+      for (const c of health.corrupt.slice(0, MAX_HEALTH_SAMPLES)) {
+        lines.push(`    - line ${c.line}: ${truncate(c.reason, 160)}${c.truncatedTail ? ' (final line without a newline)' : ''}`);
+      }
+      if (health.corrupt.length > MAX_HEALTH_SAMPLES) {
+        lines.push(`    - ${health.corrupt.length - MAX_HEALTH_SAMPLES} more corrupt line(s) not shown`);
+      }
+      lines.push(`  Anomalies:      ${health.anomalies.count === 0
+        ? 'none detected among readable records'
+        : `${health.anomalies.count}${health.anomalies.truncated ? ` (first ${health.anomalies.samples.length} shown)` : ''}`}`);
+      for (const sample of health.anomalies.samples) lines.push(`    - ${sample}`);
+      if (health.corruptLines > 0) {
+        lines.push('  Inspection:     incomplete: counts cover readable records only; corrupt lines could change every count, and lifecycle completeness cannot be established.');
+      }
+    }
+    lines.push('  Note:           supersession and retraction record history, not truth; unresolved conflicts require explicit handling.');
+    const display = lines.join('\n');
+    const status = health.inspected ? Outcome.SUCCESS_VERIFIED : Outcome.EXECUTION_FAILED;
+    return {
+      operation: null,
+      status,
+      decision: classifyDecision({ status }),
+      output: display,
+      display,
+      recorded: false,
+      recordError: null,
+      health,
     };
   }
 

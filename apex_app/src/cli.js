@@ -29,6 +29,7 @@ Usage:
   node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]
   node bin/apex.js knowledge retract <id> [--reason <text>]
   node bin/apex.js knowledge history <id>
+  node bin/apex.js knowledge health          store-wide counts, conflicts, and lifecycle anomalies (read-only)
   node bin/apex.js knowledge list [--limit N]
   node bin/apex.js knowledge search <query words...>
   node bin/apex.js knowledge show <id>
@@ -76,6 +77,7 @@ Knowledge examples (explicit relationships; user-origin write only):
   knowledge add --subject Engine --relationship fuel --object Electric --supersedes a1b2c3d4
   knowledge retract a1b2c3d4 --reason "superseded by a later service record"
   knowledge history a1b2c3d4
+  knowledge health
   knowledge list
   knowledge search subsystem
   knowledge show <record-id>
@@ -560,6 +562,15 @@ export async function main(argv, {
         out(res.display ?? res.output ?? '(none)');
         return res.status === Outcome.SUCCESS_VERIFIED ? 0 : 1;
       }
+      if (sub === 'health') {
+        rejectUnexpected(parseFlags(rest, []).rest, 'knowledge health');
+        // A direct, unaudited read. Exit 0 only when the store was fully inspected and
+        // nothing requires a decision; damage, ambiguity, anomalies, and unresolved
+        // conflicts exit 1 without changing anything.
+        const res = await app.controller.knowledgeHealth();
+        out(res.display ?? res.output ?? '(none)');
+        return res.health?.attention ? 1 : 0;
+      }
       if (sub === 'list') {
         const { flags, rest: extra } = parseFlags(rest, ['limit']);
         rejectUnexpected(extra, 'knowledge list [--limit N]');
@@ -585,7 +596,7 @@ export async function main(argv, {
         out(res.display ?? res.output ?? '(none)');
         return res.status === Outcome.SUCCESS_VERIFIED ? 0 : 1;
       }
-      err('usage: knowledge add|retract|history|list|search|show');
+      err('usage: knowledge add|retract|history|health|list|search|show');
       return 2;
     }
 

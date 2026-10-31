@@ -26,6 +26,10 @@ export const MAX_RETRACTION_REASON_CHARS = 500;
 // A history chain is bounded so one damaged or enormous store cannot produce
 // unbounded output. The view says when it stopped rather than implying completeness.
 export const MAX_HISTORY_CHAIN = 20;
+// Store-wide health is a summary, not a dump. Counts are exact; examples of conflict
+// groups and anomalies are capped so a damaged store cannot produce unbounded output.
+export const MAX_HEALTH_SAMPLES = 20;
+const MAX_CONFLICT_SAMPLES = 5;
 
 // A retraction is a lifecycle event appended to the same log as the claims. It never
 // rewrites, moves, or deletes the record it names: readers derive the record's state
@@ -389,6 +393,23 @@ export class KnowledgeStore {
       corrupt: corrupt.length,
     };
   }
+
+  // Store-wide, read-only lifecycle summary. The raw log is loaded rather than the
+  // complete-only path: the purpose is to report readable records and damage together,
+  // not to refuse and hide the readable part. Nothing is written, repaired, or inferred;
+  // a corrupt line makes every count cover readable records only.
+  async health() {
+    let loaded;
+    try {
+      loaded = await this.log.load();
+    } catch (err) {
+      return summarizeKnowledgeHealth(null, [], {
+        path: this.filePath,
+        detail: err?.message ?? String(err),
+      });
+    }
+    return summarizeKnowledgeHealth(loaded.records, loaded.corrupt, { path: this.filePath });
+  }
 }
 
 // ---- helpers ----------------------------------------------------------------
@@ -606,6 +627,222 @@ function splitLifecycle(records) {
     retractionsByTarget.set(event.targetId, list);
   }
   return { claims, events, retractionsByTarget };
+}
+
+// ---- store-wide health ------------------------------------------------------
+
+// Counting rules, applied to readable records only:
+//  - a retraction event is a lifecycle event, never a claim;
+//  - a supersession link is a property of a claim, so it never adds to the count;
+//  - every claim is counted in exactly one state: active, superseded, retracted, or
+//    ambiguous. Retracted-and-superseded and multiple-retraction records are ambiguous,
+//    never active;
+//  - conflict groups contain only active claims, grouped by normalized subject and
+//    relationship, and count as a group only when at least two distinct objects remain;
+//  - anomalies are detected facts about readable records. Missing links and corrupt
+//    lines are limitations, not proof that the remainder of the store is healthy.
+export function summarizeKnowledgeHealth(records, corrupt = [], { path = null, detail = null } = {}) {
+  if (!Array.isArray(records)) {
+    return {
+      path,
+      state: 'unavailable',
+      inspected: false,
+      complete: false,
+      detail,
+      claims: null,
+      lifecycleEvents: null,
+      active: null,
+      superseded: null,
+      retracted: null,
+      ambiguous: null,
+      conflicts: { groups: null, claims: null, samples: [] },
+      corruptLines: null,
+      corrupt: [],
+      chains: { components: null, largest: null, truncated: null },
+      anomalies: { count: null, samples: [], truncated: false },
+      attention: true,
+    };
+  }
+
+  const { claims, events, retractionsByTarget } = splitLifecycle(records);
+  const byId = new Map(claims.map((r) => [r.id, r]));
+  const supersededByMap = buildSupersededByMap(claims);
+  const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+
+  const samples = [];
+  let anomalyCount = 0;
+  const anomaly = (message) => {
+    anomalyCount += 1;
+    if (samples.length < MAX_HEALTH_SAMPLES) samples.push(message);
+  };
+
+  let active = 0;
+  let superseded = 0;
+  let retracted = 0;
+  let ambiguous = 0;
+  for (const claim of claims) {
+    const targets = retractionsByTarget.get(claim.id) ?? [];
+    const isRet = targets.length > 0;
+    const isSup = isSuperseded(claim, supersededByMap);
+    if (targets.length > 1 || (isRet && isSup)) ambiguous += 1;
+    else if (isRet) retracted += 1;
+    else if (isSup) superseded += 1;
+    else active += 1;
+  }
+
+  for (const claim of claims) {
+    for (const predecessorId of new Set(claim.supersededBy ?? [])) {
+      const predecessor = byId.get(predecessorId);
+      if (!predecessor) {
+        anomaly(`[${shortId(claim.id)}] supersedes [${shortId(predecessorId)}], which is not in the store`);
+        continue;
+      }
+      if (conflictIndexKey(predecessor.subject, predecessor.relationship)
+        !== conflictIndexKey(claim.subject, claim.relationship)) {
+        anomaly(`[${shortId(claim.id)}] supersedes [${shortId(predecessor.id)}] with a different subject or relationship`);
+      } else if (normalizedTriple(predecessor.subject, predecessor.relationship, predecessor.object)
+        === normalizedTriple(claim.subject, claim.relationship, claim.object)) {
+        anomaly(`[${shortId(claim.id)}] and [${shortId(predecessor.id)}] state the same triple; the link replaces no conflict`);
+      }
+    }
+    if (claim.status === 'superseded' && (supersededByMap.get(claim.id)?.length ?? 0) === 0) {
+      anomaly(`[${shortId(claim.id)}] has stored status superseded, but no successor names it`);
+    }
+  }
+
+  for (const [targetId, successors] of supersededByMap) {
+    if (successors.length > 1) {
+      anomaly(`[${shortId(targetId)}] is named by ${successors.length} later records as superseded`);
+    }
+  }
+
+  for (const event of events) {
+    if (!byId.has(event.targetId)) {
+      anomaly(`retraction event [${shortId(event.id)}] targets [${shortId(event.targetId)}], which is not in the store`);
+    }
+  }
+  for (const [targetId, list] of retractionsByTarget) {
+    if (list.length > 1) anomaly(`[${shortId(targetId)}] has ${list.length} retraction events`);
+    const target = byId.get(targetId);
+    if (target && isSuperseded(target, supersededByMap)) {
+      anomaly(`[${shortId(targetId)}] is both retracted and superseded`);
+    }
+  }
+
+  const cycleNodes = countUnorderableClaims(claims, byId);
+  if (cycleNodes > 0) {
+    anomaly(`supersession links contain a cycle (${cycleNodes} claim(s) cannot be ordered by them)`);
+  }
+
+  const conflicts = summarizeConflicts(conflictIndex);
+  const chains = summarizeChains(claims, byId);
+
+  return {
+    path,
+    state: corrupt.length > 0 ? 'damaged' : 'ok',
+    inspected: true,
+    complete: corrupt.length === 0,
+    detail: null,
+    claims: claims.length,
+    lifecycleEvents: events.length,
+    active,
+    superseded,
+    retracted,
+    ambiguous,
+    conflicts,
+    corruptLines: corrupt.length,
+    corrupt: corrupt.map((c) => ({
+      line: c.line,
+      reason: c.reason,
+      truncatedTail: Boolean(c.truncatedTail),
+    })),
+    chains,
+    anomalies: { count: anomalyCount, samples, truncated: anomalyCount > samples.length },
+    // Conflicts and ambiguity require a decision; superseded and retracted claims are
+    // ordinary history and do not. A chain beyond the view bound is reported as a
+    // limitation, not as damage.
+    attention: corrupt.length > 0 || anomalyCount > 0 || ambiguous > 0 || conflicts.groups > 0,
+  };
+}
+
+function summarizeConflicts(conflictIndex) {
+  const samples = [];
+  let groups = 0;
+  let claims = 0;
+  for (const group of conflictIndex.values()) {
+    const distinct = new Set(group.map((r) => normalizedTriple(r.subject, r.relationship, r.object)));
+    if (distinct.size < 2) continue;
+    groups += 1;
+    claims += group.length;
+    if (samples.length < MAX_CONFLICT_SAMPLES) {
+      samples.push(group.slice(0, MAX_CONFLICT_SAMPLES).map((r) => shortId(r.id)).join(', '));
+    }
+  }
+  return { groups, claims, samples };
+}
+
+// Connected components of valid supersession links. A component larger than the
+// history view bound is counted, but it is a display limit: the store is still readable.
+function summarizeChains(claims, byId) {
+  const adjacency = new Map();
+  for (const claim of claims) {
+    for (const predecessorId of claim.supersededBy ?? []) {
+      if (!byId.has(predecessorId)) continue;
+      if (!adjacency.has(claim.id)) adjacency.set(claim.id, new Set());
+      if (!adjacency.has(predecessorId)) adjacency.set(predecessorId, new Set());
+      adjacency.get(claim.id).add(predecessorId);
+      adjacency.get(predecessorId).add(claim.id);
+    }
+  }
+  const seen = new Set();
+  let components = 0;
+  let largest = 0;
+  let truncated = 0;
+  for (const start of adjacency.keys()) {
+    if (seen.has(start)) continue;
+    const queue = [start];
+    seen.add(start);
+    let size = 0;
+    for (let i = 0; i < queue.length; i += 1) {
+      size += 1;
+      for (const neighbour of adjacency.get(queue[i]) ?? []) {
+        if (!seen.has(neighbour)) {
+          seen.add(neighbour);
+          queue.push(neighbour);
+        }
+      }
+    }
+    components += 1;
+    if (size > largest) largest = size;
+    if (size > MAX_HISTORY_CHAIN) truncated += 1;
+  }
+  return { components, largest, truncated };
+}
+
+// Kahn's algorithm over successor -> predecessor links. Any node left without an order
+// lies in a cycle or depends on one; the result is a lower bound on the affected claims.
+function countUnorderableClaims(claims, byId) {
+  const indegree = new Map(claims.map((c) => [c.id, 0]));
+  const successorsOf = new Map(claims.map((c) => [c.id, []]));
+  for (const claim of claims) {
+    for (const predecessorId of new Set(claim.supersededBy ?? [])) {
+      if (!byId.has(predecessorId)) continue;
+      successorsOf.get(claim.id).push(predecessorId);
+      indegree.set(predecessorId, indegree.get(predecessorId) + 1);
+    }
+  }
+  const queue = [];
+  for (const [id, degree] of indegree) if (degree === 0) queue.push(id);
+  let ordered = 0;
+  for (let i = 0; i < queue.length; i += 1) {
+    ordered += 1;
+    for (const next of successorsOf.get(queue[i])) {
+      const degree = indegree.get(next) - 1;
+      indegree.set(next, degree);
+      if (degree === 0) queue.push(next);
+    }
+  }
+  return claims.length - ordered;
 }
 
 // A malformed or credential-like target is refused without quoting the value: this

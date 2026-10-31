@@ -227,14 +227,80 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   });
 
   // --- knowledge -------------------------------------------------------------
-  subsystems.knowledge = await inspectJsonlStore({
-    key: 'knowledge',
-    label: 'Knowledge',
-    noun: 'record(s)',
-    filePath: app.knowledge.filePath,
-    log: app.knowledge.log,
-    impact: 'knowledge reads and writes are blocked',
-  });
+  // A claim and a lifecycle event are different things: a retraction event records
+  // history, not a knowledge relationship. Store integrity (corrupt lines) and
+  // lifecycle consistency (broken links, cycles, contradictory states) are therefore
+  // separate. A damaged log makes every count a count of readable records only; it
+  // does not make valid historical (superseded or retracted) records corrupt.
+  const knowledgeHealth = await app.knowledge.health();
+  if (!knowledgeHealth.inspected) {
+    subsystems.knowledge = {
+      key: 'knowledge',
+      label: 'Knowledge',
+      state: State.UNAVAILABLE,
+      summary: `Knowledge: unavailable (${safeText(knowledgeHealth.detail)})`,
+      detail: knowledgeHealth.detail,
+      count: null,
+      claims: null,
+      lifecycleEvents: null,
+      corruptLines: 0,
+      conflicts: { groups: null, claims: null },
+      lifecycle: { state: 'unavailable', anomalies: null },
+      problems: [],
+    };
+    unchecked.push('knowledge lifecycle consistency was not checked because the knowledge store is unavailable');
+  } else {
+    const exists = await fileExists(app.knowledge.filePath);
+    const lifecycleState = !knowledgeHealth.complete
+      ? 'cannot be fully established (corrupt lines)'
+      : knowledgeHealth.anomalies.count > 0
+        ? 'inconsistent'
+        : 'consistent';
+    let state = State.OK;
+    if (knowledgeHealth.corruptLines > 0) state = State.CORRUPT;
+    else if (exists === false) state = State.MISSING;
+    const parts = [
+      `${knowledgeHealth.claims} claim(s)`,
+      `${knowledgeHealth.lifecycleEvents} lifecycle event(s)`,
+    ];
+    if (knowledgeHealth.conflicts.groups > 0) {
+      parts.push(`${knowledgeHealth.conflicts.groups} unresolved conflict group(s)`);
+    }
+    const summary = state === State.MISSING
+      ? 'Knowledge: missing (valid: no claim or lifecycle event yet)'
+      : state === State.CORRUPT
+        ? `Knowledge: corrupt (${parts.join(', ')}, ${knowledgeHealth.corruptLines} corrupt line(s); lifecycle state cannot be fully established)`
+        : `Knowledge: ok (${parts.join(', ')}; lifecycle ${lifecycleState})`;
+    const problems = corruptLineProblems(path.basename(app.knowledge.filePath), knowledgeHealth.corrupt);
+    const lifecycleProblems = knowledgeHealth.anomalies.samples.map(
+      (message) => `${path.basename(app.knowledge.filePath)}: lifecycle: ${message}`,
+    );
+    if (knowledgeHealth.anomalies.count > knowledgeHealth.anomalies.samples.length) {
+      lifecycleProblems.push(
+        `${path.basename(app.knowledge.filePath)}: lifecycle: ${knowledgeHealth.anomalies.count - knowledgeHealth.anomalies.samples.length} more anomaly(ies) not listed (the health summary carries the exact count)`,
+      );
+    }
+    subsystems.knowledge = {
+      key: 'knowledge',
+      label: 'Knowledge',
+      state,
+      summary,
+      count: knowledgeHealth.claims,
+      claims: knowledgeHealth.claims,
+      lifecycleEvents: knowledgeHealth.lifecycleEvents,
+      corruptLines: knowledgeHealth.corruptLines,
+      conflicts: { groups: knowledgeHealth.conflicts.groups, claims: knowledgeHealth.conflicts.claims },
+      lifecycle: {
+        state: lifecycleState,
+        anomalies: knowledgeHealth.anomalies.count,
+        anomaliesTruncated: knowledgeHealth.anomalies.truncated,
+      },
+      problems: [...problems, ...lifecycleProblems],
+    };
+    if (knowledgeHealth.corruptLines > 0) {
+      unchecked.push('knowledge lifecycle consistency was checked only against readable records; corrupt lines leave the remaining state unverified');
+    }
+  }
 
   if (session.status === 'corrupt') confirmed.push(`session.json: ${safeText(session.detail)}`);
   confirmed.push(
@@ -662,6 +728,9 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   }
   if (byKey('knowledge').state === State.CORRUPT) {
     recovery.push('Knowledge: no supported repair command exists. Preserve knowledge.jsonl; knowledge reads and writes stay blocked until it is repaired.');
+  }
+  if (byKey('knowledge').lifecycle?.anomalies > 0) {
+    recovery.push('Knowledge lifecycle: stored supersession links or retraction events are inconsistent. Run "node bin/apex.js knowledge health" (read-only) and "node bin/apex.js knowledge history <id>". No supported repair command exists; do not rewrite knowledge.jsonl to hide the anomaly.');
   }
   if (byKey('conversation').state === State.CORRUPT) {
     recovery.push('Conversation: no supported repair command exists. Preserve conversation.jsonl. "apex new" starts a new session but does not delete or repair stored turns.');

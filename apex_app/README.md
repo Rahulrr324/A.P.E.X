@@ -28,7 +28,7 @@ from a milestone number or a passing build.
 | Category | Status | Evidence |
 |---|---|---|
 | Runnable application | Implemented: the CLI in `bin/apex.js` / `src/cli.js`, the controller pipeline, memory, knowledge, audit, tasks, diagnostics. | `npm test` and the walkthrough in the [Commands](#commands) table. |
-| Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `calc`, `status`, `knowledge add/retract/history/list/search/show`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `knowledge-lifecycle.test.js`, `tasks.test.js`, `cli-workflow.test.js`. A model is never consulted for these. |
+| Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `calc`, `status`, `knowledge add/retract/history/health/list/search/show`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `knowledge-lifecycle.test.js`, `knowledge-health.test.js`, `tasks.test.js`, `cli-workflow.test.js`. A model is never consulted for these. |
 | Filesystem inspection | Implemented only when `APEX_FILESYSTEM_ROOT` is set: bounded, read-only, single-root listing and reading. | `filesystem.test.js`, `tasks-filesystem.test.js`. |
 | Model gateway protocol handling | Implemented and **stub-tested**: request/response shapes, failure classification, retries, timeouts, and model-name mismatch against local stand-in servers that copy the documented OpenAI-compatible and Ollama shapes. | `gateway.test.js`, `model-workflow.test.js`. Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model. |
 | Real-model behaviour | **Observed outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on one Windows machine. One bounded request on 2026-10-31 completed through APEX in about 105 s; a bounded four-request benchmark the same day recorded 37.7-53.1 s per request, with 3.0-3.8 backend-reported tokens/s. Every answer was reported as unverified. Measurements and limits are in [Optional: a local model](#optional-a-local-model). | Manual, dated observations only; no automated regression test. |
@@ -181,6 +181,7 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `knowledge add --subject <s> --relationship <r> --object <o> [--evidence <e>] [--supersedes <id[,id...]>]` | Stores an explicit relationship triple. User origin only. Optional `--supersedes` retires named conflicting records as historical, without deleting them. |
 | `knowledge retract <id> [--reason <text>]` | Marks an existing active claim as retracted without supplying a replacement. The original claim, evidence, and provenance are preserved. User origin only. |
 | `knowledge history <id>` | Read-only lifecycle view: state, retraction event and reason, direct and chained supersession links, and an explicit note when the evidence is incomplete or ambiguous. Never calls a model. |
+| `knowledge health` | Read-only store-wide summary: claim counts by lifecycle state, unresolved conflict groups, lifecycle-event count, corrupt lines, bounded chain components, and detected anomalies. Never calls a model, writes no audit record, and repairs nothing. Exit 0 only when the store was fully inspected with no anomaly, ambiguity, or unresolved conflict. |
 | `knowledge list [--limit N]` | Lists recent knowledge records with provenance and status, including historical (superseded and retracted) records. |
 | `knowledge search <query>` | Searches knowledge triples by keyword. |
 | `knowledge show <id>` | Shows a knowledge record in full with provenance and conflict details. |
@@ -683,7 +684,7 @@ src/memory/
   memory-store.js     personal memory: validation, provenance, content hash, retrieval
   conversation-store.js  conversation turns with origin; credential-like text is never stored
 src/knowledge/
-  knowledge-store.js  entity relationship triples: validation, hashing, conflict detection
+  knowledge-store.js  triples, validation, conflict detection, lifecycle events, store-wide health
 src/filesystem/
   path.js             absolute path validation: no traversal, no drive root, no UNC
   actions.js          bounded, read-only listing and reading
@@ -964,6 +965,31 @@ explicit entity relationships, built alongside personal memory:
   both retracted and superseded, cycles, and truncation as explicit limitations; it
   never infers a missing link or claims the chain is complete when it is not. It
   calls no model and writes nothing.
+- **Store-wide health:** `knowledge health` derives a bounded summary from the stored
+  records at read time; there is no persisted copy that could go stale. The counting
+  rules are explicit:
+  - a retraction event is a lifecycle event and is never counted as a claim;
+  - a supersession link is a property of a claim, so it never inflates the claim count;
+  - every claim is in exactly one state: active, superseded, retracted, or ambiguous;
+    a record that is both retracted and superseded, or has more than one retraction
+    event, is ambiguous and is never counted as active;
+  - a conflict group contains only active claims with the same normalized subject and
+    relationship and at least two distinct objects; superseded and retracted records
+    are not live conflicts;
+  - corrupt lines are counted separately and are never treated as valid historical
+    records;
+  - a supersession chain longer than the 20-record history view bound is reported as a
+    view limit, not as damage.
+  The command also reports detected anomalies: missing link targets, multiple
+  successors, cycles, multiple retraction events, contradictory terminal states,
+  stored `superseded` status without a successor, links across different subjects or
+  relationships, links that state the same triple, and retraction events whose target
+  is absent. If the log is corrupt or unreadable, every count covers readable records
+  only and the summary says that completeness cannot be established. Health reporting
+  is read-only: it never repairs, deletes, supersedes, or retracts anything, writes no
+  audit record, and calls no model. It describes the integrity and lifecycle state of
+  stored claims; it does not establish that any claim is true, and an incomplete
+  inspection cannot guarantee that the rest of the store is healthy.
 - **Three different answers:** Supersession says "this claim was replaced by a newer
   conflicting claim"; retraction says "this claim is no longer active and no
   replacement is asserted"; independent verification says "the write APEX reports is
@@ -988,7 +1014,9 @@ explicit entity relationships, built alongside personal memory:
   previous records remain append-only and continue to be inspectable.
 - **Corrupt JSONL logs fail closed and are never rewritten.** `status` and `diagnose`
   report the corrupt-line count and line numbers, and records are not deleted,
-  skipped silently, or truncated to make a file parse. Memory, knowledge, and task
+  skipped silently, or truncated to make a file parse. `diagnose` reports knowledge
+  claims and lifecycle events as separate counts and states lifecycle consistency
+  separately, so a valid historical record is not miscounted as damage. Memory, knowledge, and task
   reads and writes are refused while corrupt lines exist, so damage cannot be buried
   under a fresh write that would otherwise be reported as stored. Conversation replay
   is blocked and task state is refused; the audit log still lists its readable records
@@ -1049,7 +1077,7 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this batch was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 810 tests, 808 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 833 tests, 831 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file

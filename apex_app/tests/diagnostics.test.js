@@ -86,7 +86,7 @@ describe('diagnostics: subsystem states', () => {
     const diag = await runCli(['diagnose'], envFor(dir));
     assert.equal(diag.code, 0, diag.stderr);
     assert.match(diag.stdout, /Memory: missing \(valid: no record/);
-    assert.match(diag.stdout, /Knowledge: missing \(valid: no record/);
+    assert.match(diag.stdout, /Knowledge: missing \(valid: no claim or lifecycle event yet\)/);
     assert.match(diag.stdout, /Conversation: missing/);
     assert.match(diag.stdout, /Tasks: missing \(valid: no tasks yet\)/);
     assert.match(diag.stdout, /Audit: missing \(valid: no operations yet\)/);
@@ -108,7 +108,7 @@ describe('diagnostics: subsystem states', () => {
     const diag = await runCli(['diagnose'], env);
     assert.equal(diag.code, 0, diag.stderr);
     assert.match(diag.stdout, /Memory: ok \(1 record/);
-    assert.match(diag.stdout, /Knowledge: ok \(1 record/);
+    assert.match(diag.stdout, /Knowledge: ok \(1 claim\(s\), 0 lifecycle event\(s\); lifecycle consistent\)/);
     assert.match(diag.stdout, /Conversation: ok \([1-9]\d* turn/);
     assert.match(diag.stdout, /Tasks: ok \(1 task/);
     assert.match(diag.stdout, /Audit: ok \([2-9]\d* operation/);
@@ -162,9 +162,17 @@ describe('diagnostics: subsystem states', () => {
     assert.match(status.stdout, /Integrity: attention required/);
   });
 
-  for (const { file, label, guidance } of [
-    { file: 'knowledge.jsonl', label: 'Knowledge', guidance: /Preserve knowledge\.jsonl/ },
-    { file: 'conversation.jsonl', label: 'Conversation', guidance: /Preserve conversation\.jsonl/ },
+  for (const { file, guidance, summary } of [
+    {
+      file: 'knowledge.jsonl',
+      guidance: /Preserve knowledge\.jsonl/,
+      summary: /Knowledge: corrupt \(0 claim\(s\), 0 lifecycle event\(s\), 1 corrupt line\(s\); lifecycle state cannot be fully established\)/,
+    },
+    {
+      file: 'conversation.jsonl',
+      guidance: /Preserve conversation\.jsonl/,
+      summary: /Conversation: corrupt \(0 readable/,
+    },
   ]) {
     test(`a corrupt ${file} is reported as corrupt and left untouched`, async () => {
       const dir = tempDir();
@@ -174,7 +182,7 @@ describe('diagnostics: subsystem states', () => {
 
       const diag = await runCli(['diagnose'], envFor(dir));
       assert.equal(diag.code, 1);
-      assert.match(diag.stdout, new RegExp(`${label}: corrupt \\(0 readable`));
+      assert.match(diag.stdout, summary);
       assert.match(diag.stdout, new RegExp(`${file.replace('.', '\\.')}: line 1: invalid JSON`));
       assert.match(diag.stdout, guidance);
       assert.equal(fs.readFileSync(full, 'utf8'), damaged);

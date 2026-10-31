@@ -217,13 +217,16 @@ describe('069: gateway failures and retries, against local stand-in servers', ()
       res.on('close', () => { closed = true; });
       // Accept the request and never answer. The gateway's own timer has to end it.
     });
-    const gw = createGateway({ url, name: 'stub', timeoutMs: 100, retries: 3, allowRemote: false });
+    // The timeout must not race request delivery: under a loaded full-suite run a 100 ms
+    // budget could expire before the loopback server read the request, which would make
+    // "one request" unobservable even though the gateway never retried.
+    const gw = createGateway({ url, name: 'stub', timeoutMs: 500, retries: 3, allowRemote: false });
     const started = Date.now();
     const res = await gw.complete({ prompt: 'hi' });
     const elapsed = Date.now() - started;
     assert.equal(res.error.code, 'TIMEOUT');
     assert.equal(requests, 1, 'a timeout is not retried');
-    assert.equal(elapsed < 1000, true, `returned near the timeout (${elapsed} ms)`);
+    assert.equal(elapsed < 2000, true, `returned near the timeout (${elapsed} ms)`);
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(closed, true, 'the client closed the connection instead of leaving it open');
   });
