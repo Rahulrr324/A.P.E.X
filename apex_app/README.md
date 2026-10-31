@@ -178,7 +178,7 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `task cancel <id>` | Cancels a task that has not finished. Steps that have not run are cancelled. |
 | `queue` | Read-only view of the task-summary retry queue: what is owed, its state, and whether the queue file or its lock needs attention. |
 | `repair locks` | Inspects the task and queue locks and removes only abandoned takeover tokens whose number no live process owns. It never takes a lock, never deletes a lock claim, and refuses while any holder or takeover number is live. A dead claim is taken over by the next normal run. A claim whose number has been recycled by an unrelated process looks live and is refused; resolving that needs the manual check described under Known limitations. |
-| `knowledge add --subject <s> --relationship <r> --object <o> [--evidence <e>]` | Stores an explicit relationship triple. User origin only. |
+| `knowledge add --subject <s> --relationship <r> --object <o> [--evidence <e>] [--supersedes <id[,id...]>]` | Stores an explicit relationship triple. User origin only. Optional `--supersedes` retires named conflicting records as historical, without deleting them. |
 | `knowledge list [--limit N]` | Lists recent knowledge records with provenance and status. |
 | `knowledge search <query>` | Searches knowledge triples by keyword. |
 | `knowledge show <id>` | Shows a knowledge record in full with provenance and conflict details. |
@@ -934,6 +934,13 @@ explicit entity relationships, built alongside personal memory:
   subject and relationship, different object), the conflict is detected and both
   records are preserved and marked `conflicting`. Contradictions are never silently
   discarded or overwritten.
+- **Explicit supersession:** A user can resolve a conflict by adding the replacement
+  with `--supersedes <id>`. The named records must be live, must share the new
+  record's subject and relationship, and must state a different object; unrelated or
+  duplicate records are refused. Resolved records stay in the append-only log as
+  historical entries, are reported as `superseded`, and no longer enter retrieval or
+  count as live conflicts. Model output cannot set supersession; the write remains
+  user-origin only.
 - **Bounded retrieval into model context:** When answering a request on the model path,
   the controller retrieves up to 3 relevant knowledge records by searching the triple
   and evidence. Question words and other low-signal words are ignored, so a question

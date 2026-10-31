@@ -5,6 +5,7 @@
 import { ValidationError } from '../errors.js';
 import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
+import { MAX_SUPERSEDES } from '../knowledge/knowledge-store.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 
 const MAX_FIELD_CHARS = 500;
@@ -61,36 +62,56 @@ export function knowledgeActions(knowledge) {
   return [
     {
       name: 'knowledge.add',
-      description: 'Store an explicit knowledge relationship (subject, relationship, object). Write: user origin only.',
-      inputHint: '{"subject":"text","relationship":"text","object":"text","evidence":"optional text"}',
+      description: 'Store an explicit knowledge relationship (subject, relationship, object). Optionally supersede conflicting live records. Write: user origin only.',
+      inputHint: '{"subject":"text","relationship":"text","object":"text","evidence":"optional text","supersedes":["optional record ids"]}',
       permission: 'write',
       origins: [ORIGIN_USER],
       // A model-proposed write would be approved without showing the triple, then run
       // as the user. That would relabel model-authored text as a user-confirmed fact.
       plannable: false,
       validate(input) {
-        const o = expectObject(input, ['subject', 'relationship', 'object', 'evidence']);
+        const o = expectObject(input, ['subject', 'relationship', 'object', 'evidence', 'supersedes']);
+        let supersedes = [];
+        if (o.supersedes !== undefined) {
+          if (!Array.isArray(o.supersedes)) throw new ValidationError('supersedes must be a list of record ids');
+          if (o.supersedes.length > MAX_SUPERSEDES) {
+            throw new ValidationError(`supersedes may name at most ${MAX_SUPERSEDES} records`);
+          }
+          supersedes = o.supersedes.map((value) => {
+            if (typeof value !== 'string') throw new ValidationError('each supersedes entry must be text');
+            const ref = value.trim();
+            if (ref.length === 0) throw new ValidationError('a supersedes entry is empty');
+            if (ref.length > 64) throw new ValidationError('a supersedes entry is longer than 64 characters');
+            if (CONTROL_CHARS.test(ref)) throw new ValidationError('a supersedes entry contains control characters');
+            return ref;
+          });
+        }
         return {
           subject: textField(o.subject, 'subject'),
           relationship: textField(o.relationship, 'relationship'),
           object: textField(o.object, 'object'),
           evidence: optionalTextField(o.evidence, 'evidence', MAX_EVIDENCE_CHARS),
+          supersedes,
         };
       },
-      async execute(ctx, { subject, relationship, object, evidence }) {
-        const { record, conflictingIds } = await knowledge.add({
+      async execute(ctx, { subject, relationship, object, evidence, supersedes }) {
+        const { record, conflictingIds, supersededIds } = await knowledge.add({
           subject,
           relationship,
           object,
           evidence,
           provenance: { operationId: ctx.operationId },
           origin: ctx.origin,
+          supersedes,
         });
         const conflictNote = conflictingIds.length > 0
           ? ` (conflicts with ${conflictingIds.length} existing record(s): ${conflictingIds.map(shortId).join(', ')})`
           : '';
+        const supersedeNote = supersededIds.length > 0
+          ? ` (supersedes ${supersededIds.map(shortId).join(', ')})`
+          : '';
         return {
-          summary: `stored knowledge record ${shortId(record.id)}${conflictNote}`,
+          summary: `stored knowledge record ${shortId(record.id)}${conflictNote}${supersedeNote}`,
           data: {
             id: record.id,
             subject: record.subject,
@@ -99,8 +120,9 @@ export function knowledgeActions(knowledge) {
             evidence: record.evidence,
             status: record.status,
             conflictingIds,
+            supersededIds,
           },
-          display: `Stored knowledge record ${shortId(record.id)}: ${record.subject} --[${record.relationship}]--> ${record.object}${conflictNote}`,
+          display: `Stored knowledge record ${shortId(record.id)}: ${record.subject} --[${record.relationship}]--> ${record.object}${conflictNote}${supersedeNote}`,
         };
       },
       async verify(ctx, { subject, relationship, object }, result) {
@@ -112,7 +134,39 @@ export function knowledgeActions(knowledge) {
         if (rec.provenance?.updateMode !== 'user_confirmed') {
           return { ok: false, detail: 'stored provenance is not user_confirmed' };
         }
-        return { ok: true, detail: 'record present; subject, relationship, object, and provenance confirmed' };
+
+        const supersededIds = result.data.supersededIds ?? [];
+        const stored = [...(rec.supersededBy ?? [])].sort();
+        const expected = [...supersededIds].sort();
+        if (stored.length !== expected.length || stored.some((id, i) => id !== expected[i])) {
+          return { ok: false, detail: 'stored supersession list differs from the write result' };
+        }
+        for (const targetId of supersededIds) {
+          const [target] = await knowledge.findByPrefix(targetId);
+          if (!target) return { ok: false, detail: `superseded record ${shortId(targetId)} is no longer in the store` };
+          if (target.status !== 'superseded') {
+            return { ok: false, detail: `record ${shortId(targetId)} is not reported superseded` };
+          }
+          if (!(target.supersededBy ?? []).includes(rec.id)) {
+            return { ok: false, detail: `record ${shortId(targetId)} does not name the new record as its replacement` };
+          }
+        }
+        const [fresh] = await knowledge.findByPrefix(rec.id);
+        if (!fresh) return { ok: false, detail: 'record cannot be read back after write' };
+        if (fresh.status !== result.data.status) {
+          return { ok: false, detail: 'stored conflict status differs from the write result' };
+        }
+        const remaining = [...(fresh.conflictsWith ?? [])].sort();
+        const claimed = [...(result.data.conflictingIds ?? [])].sort();
+        if (remaining.length !== claimed.length || remaining.some((id, i) => id !== claimed[i])) {
+          return { ok: false, detail: 'remaining conflicts differ from an independent read' };
+        }
+        return {
+          ok: true,
+          detail: supersededIds.length > 0
+            ? `record present; provenance confirmed; ${supersededIds.length} prior claim(s) superseded`
+            : 'record present; subject, relationship, object, and provenance confirmed',
+        };
       },
     },
 

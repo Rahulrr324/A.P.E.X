@@ -26,7 +26,7 @@ Usage:
   node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js history [--limit N]
-  node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>]
+  node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]
   node bin/apex.js knowledge list [--limit N]
   node bin/apex.js knowledge search <query words...>
   node bin/apex.js knowledge show <id>
@@ -71,6 +71,7 @@ Request examples (no model needed; use them with ask, or type the same words in 
 Knowledge examples (explicit relationships; user-origin write only):
   knowledge add --subject APEX --relationship has_subsystem --object "Cognitive Controller"
   knowledge add --subject APEX --relationship has_subsystem --object "Memory Store" --evidence "README section 3"
+  knowledge add --subject Engine --relationship fuel --object Electric --supersedes a1b2c3d4
   knowledge list
   knowledge search subsystem
   knowledge show <record-id>
@@ -129,7 +130,7 @@ function parseFlags(args, allowed) {
         if (v === undefined || v.startsWith('--')) throw new ValidationError('--step needs a step id', 'USAGE');
         flags.step = v;
         i += 1;
-      } else if (['subject', 'relationship', 'object', 'evidence'].includes(name)) {
+      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -515,17 +516,21 @@ export async function main(argv, {
     if (command === 'knowledge') {
       const [sub, ...rest] = args;
       if (sub === 'add') {
-        const { flags, rest: extra } = parseFlags(rest, ['subject', 'relationship', 'object', 'evidence']);
-        rejectUnexpected(extra, 'knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>]');
+        const { flags, rest: extra } = parseFlags(rest, ['subject', 'relationship', 'object', 'evidence', 'supersedes']);
+        rejectUnexpected(extra, 'knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]');
         if (!flags.subject || !flags.relationship || !flags.object) {
-          err('usage: knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>]');
+          err('usage: knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]');
           return 2;
         }
+        const supersedes = typeof flags.supersedes === 'string'
+          ? flags.supersedes.split(',').map((value) => value.trim()).filter(Boolean)
+          : [];
         return emit(await app.controller.knowledgeAdd({
           subject: flags.subject,
           relationship: flags.relationship,
           object: flags.object,
           evidence: flags.evidence ?? null,
+          supersedes,
         }));
       }
       if (sub === 'list') {

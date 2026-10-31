@@ -85,13 +85,16 @@ function renderShown(hits) {
 
 const AUDIT_OMITTED_SECRET = '[omitted: contained a password, key, or token]';
 
-function knowledgeAddRequest(subject, relationship, object) {
+function knowledgeAddRequest(subject, relationship, object, supersedes = []) {
   const values = [subject, relationship, object];
   if (values.some((value) => typeof value !== 'string')) return 'knowledge add [invalid input]';
   if (containsSecret(values.join('\n'))) {
     return 'knowledge add [content omitted: contained a password, key, or token]';
   }
-  return `knowledge add [${subject} -> ${relationship} -> ${object}]`;
+  const supersedeNote = Array.isArray(supersedes) && supersedes.length > 0
+    ? `; supersedes ${supersedes.length} record(s)`
+    : '';
+  return `knowledge add [${subject} -> ${relationship} -> ${object}${supersedeNote}]`;
 }
 
 // The audit input is derived from the raw request before validation, so a refused
@@ -102,19 +105,27 @@ function auditInputFor(name, rawInput) {
   if ((name === 'knowledge.add' || name === 'knowledge.search')
     && rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
     const allowed = name === 'knowledge.add'
-      ? ['subject', 'relationship', 'object', 'evidence']
+      ? ['subject', 'relationship', 'object', 'evidence', 'supersedes']
       : ['query', 'limit'];
     const textKeys = name === 'knowledge.add'
       ? ['subject', 'relationship', 'object', 'evidence']
       : ['query'];
-    const secret = containsSecret(
-      textKeys.map((key) => rawInput[key]).filter((value) => typeof value === 'string').join('\n'),
-    );
+    const secretTexts = textKeys.map((key) => rawInput[key]).filter((value) => typeof value === 'string');
+    if (name === 'knowledge.add' && Array.isArray(rawInput.supersedes)) {
+      secretTexts.push(...rawInput.supersedes.filter((value) => typeof value === 'string'));
+    }
+    const secret = containsSecret(secretTexts.join('\n'));
     const out = {};
     for (const key of allowed) {
       if (!(key in rawInput)) continue;
       const value = rawInput[key];
-      out[key] = secret && typeof value === 'string' ? AUDIT_OMITTED_SECRET : value;
+      out[key] = !secret
+        ? value
+        : typeof value === 'string'
+          ? AUDIT_OMITTED_SECRET
+          : Array.isArray(value)
+            ? value.map((entry) => (typeof entry === 'string' ? AUDIT_OMITTED_SECRET : entry))
+            : value;
     }
     for (const key of Object.keys(rawInput)) {
       if (!allowed.includes(key)) out[key] = '[unexpected field omitted]';
@@ -560,10 +571,15 @@ export class CognitiveController {
     };
   }
 
-  async knowledgeAdd({ subject, relationship, object: obj, evidence = null } = {}) {
+  async knowledgeAdd({ subject, relationship, object: obj, evidence = null, supersedes = [] } = {}) {
     const op = this.#knowledgeOp('knowledge.add');
-    op.request = knowledgeAddRequest(subject, relationship, obj);
-    const step = await this.runAction('knowledge.add', { subject, relationship, object: obj, evidence }, 'user', op.id);
+    op.request = knowledgeAddRequest(subject, relationship, obj, supersedes);
+    const step = await this.runAction(
+      'knowledge.add',
+      { subject, relationship, object: obj, evidence, supersedes },
+      'user',
+      op.id,
+    );
     return this.#finishKnowledgeOp(op, step, 'The knowledge record may have been stored, but its audit record could not be written.');
   }
 

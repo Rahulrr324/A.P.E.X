@@ -21,6 +21,7 @@ export const KNOWLEDGE_SCHEMA = 1;
 const MAX_FIELD_CHARS = 500;
 const MAX_EVIDENCE_CHARS = 1000;
 const MAX_CONTEXT_CHARS = 200;
+export const MAX_SUPERSEDES = 10;
 
 const VALID_STATUSES = new Set(['supported', 'uncertain', 'conflicting', 'superseded']);
 const VALID_PROVENANCE_ORIGINS = new Set(['user_supplied', 'user_approved']);
@@ -108,6 +109,11 @@ export class KnowledgeStore {
 
   // --- write (user origin only) ---
 
+  // `supersedes` names existing live records this new record replaces. The stored field
+  // is `supersededBy` (the direction the readers use: a later record lists the earlier
+  // ids it supersedes). Only a conflicting claim can be superseded — same subject and
+  // relationship, different object. Unrelated records are never retired, so a mistyped
+  // id cannot hide an unrelated fact.
   async add({
     subject,
     relationship,
@@ -115,6 +121,7 @@ export class KnowledgeStore {
     evidence = null,
     provenance = {},
     origin,
+    supersedes = [],
   } = {}) {
     if (origin !== 'user') {
       throw new ValidationError(
@@ -133,6 +140,7 @@ export class KnowledgeStore {
 
     // Validate and sanitize provenance.
     const sanitized = sanitizeProvenance(provenance, origin);
+    const refs = validateSupersedeRefs(supersedes);
 
     // Conflict detection reads the whole store, so it must refuse a damaged store
     // rather than silently compare against an incomplete record set.
@@ -142,14 +150,22 @@ export class KnowledgeStore {
       throw new StoreError('identifier collision; nothing written');
     }
 
+    // Resolve every reference before writing. A missing, ambiguous, already-retired,
+    // unrelated, or identical record refuses the whole write rather than partially
+    // applying a change to durable knowledge.
+    const supersededByMap = buildSupersededByMap(records);
+    const targetIds = resolveSupersedeTargets(records, refs, supersededByMap, sub, rel, obj);
+    const targetSet = new Set(targetIds);
+
     // Detect conflicts: another live record with the same subject+relationship but a
     // different object is a conflict. Equality is trimmed and case-insensitive for all
     // three fields, so case variants of the same triple are duplicates, not conflicts.
+    // A record this write supersedes is no longer a live conflict.
     const tHash = tripleHash(sub, rel, obj);
     const reqKey = normalizedTriple(sub, rel, obj);
-    const supersededByMap = buildSupersededByMap(records);
     const conflictIndex = buildConflictIndex(records, supersededByMap);
     const conflictingIds = (conflictIndex.get(conflictIndexKey(sub, rel)) ?? [])
+      .filter((r) => !targetSet.has(r.id))
       .filter((r) => normalizedTriple(r.subject, r.relationship, r.object) !== reqKey)
       .map((r) => r.id);
 
@@ -166,10 +182,11 @@ export class KnowledgeStore {
       status,
       createdAt: this.now().toISOString(),
       provenance: sanitized,
+      ...(targetIds.length > 0 ? { supersededBy: targetIds } : {}),
     };
 
     await this.log.append(record);
-    return { record, conflictingIds };
+    return { record, conflictingIds, supersededIds: targetIds };
   }
 
   async get(id) {
@@ -284,6 +301,58 @@ function sanitizeProvenance(p, origin) {
   }
   // Should never reach here (add() already guards), but be explicit.
   throw new ValidationError('cannot determine valid provenance for this origin');
+}
+
+function validateSupersedeRefs(supersedes) {
+  if (supersedes === undefined || supersedes === null) return [];
+  if (!Array.isArray(supersedes)) throw new ValidationError('supersedes must be a list of record ids');
+  if (supersedes.length > MAX_SUPERSEDES) {
+    throw new ValidationError(`supersedes may name at most ${MAX_SUPERSEDES} records`);
+  }
+  const refs = [];
+  for (const value of supersedes) {
+    if (typeof value !== 'string') throw new ValidationError('each supersedes entry must be text');
+    const ref = value.trim();
+    if (ref.length === 0) throw new ValidationError('a supersedes entry is empty');
+    if (ref.length > 64) throw new ValidationError('a supersedes entry is longer than 64 characters');
+    if (CONTROL_CHARS.test(ref)) throw new ValidationError('a supersedes entry contains control characters');
+    refs.push(ref);
+  }
+  return refs;
+}
+
+function resolveSupersedeTargets(records, refs, supersededByMap, subject, relationship, object) {
+  const ids = [];
+  const seen = new Set();
+  const relatedKey = conflictIndexKey(subject, relationship);
+  const newTriple = normalizedTriple(subject, relationship, object);
+  for (const [index, ref] of refs.entries()) {
+    // A reference that matches no record is quoted back as a position, never as the
+    // value the user typed: the value reaches the audit log through this error, so
+    // echoing it would defeat the input redaction that already ran.
+    const label = refs.length === 1 ? 'supersession target' : `supersession target #${index + 1}`;
+    const matches = records.filter((r) => r.id === ref || r.id.startsWith(ref) || shortId(r.id) === ref);
+    if (matches.length === 0) throw new ValidationError(`${label} not found`);
+    if (matches.length > 1) {
+      throw new ValidationError(`${label} is ambiguous; use a longer id prefix`);
+    }
+    const target = matches[0];
+    if (seen.has(target.id)) {
+      throw new ValidationError(`supersession target ${shortId(target.id)} is named more than once`);
+    }
+    if (isSuperseded(target, supersededByMap)) {
+      throw new ValidationError(`supersession target ${shortId(target.id)} is already superseded`);
+    }
+    if (conflictIndexKey(target.subject, target.relationship) !== relatedKey) {
+      throw new ValidationError(`supersession target ${shortId(target.id)} has a different subject or relationship; only a conflicting claim can be superseded`);
+    }
+    if (normalizedTriple(target.subject, target.relationship, target.object) === newTriple) {
+      throw new ValidationError(`supersession target ${shortId(target.id)} states the same object; it is a duplicate, not a conflicting claim`);
+    }
+    seen.add(target.id);
+    ids.push(target.id);
+  }
+  return ids;
 }
 
 function buildSupersededByMap(records) {
