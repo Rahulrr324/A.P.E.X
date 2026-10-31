@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel, APP_ROOT } from './helpers.js';
+import { makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel, APP_ROOT, rebindDeadHolder } from './helpers.js';
 import { shortId } from '../src/util.js';
 
 const dirs = [];
@@ -175,6 +175,9 @@ describe('085: integrated acceptance', () => {
     const exit = await exited;
     assert.notEqual(exit.code, 0);
     assert.deepEqual(effectLines(), ['s1', 'block-start'], 'the lost process wrote no second effect');
+    const lockFile = path.join(dataDir, 'tasks.jsonl.lock');
+    assert.equal(fs.existsSync(lockFile), true, 'the lost process left its lock');
+    rebindDeadHolder(lockFile, child.pid);
 
     const taskId = events().find((e) => e.type === 'task_created').taskId;
     const short = shortId(taskId);

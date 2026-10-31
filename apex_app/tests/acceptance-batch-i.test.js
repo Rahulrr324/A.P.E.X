@@ -8,11 +8,11 @@ import { test, describe, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
 import {
-  makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel, APP_ROOT,
+  makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel, APP_ROOT, deadPid, rebindDeadHolder,
 } from './helpers.js';
 import { shortId } from '../src/util.js';
 import { main } from '../src/cli.js';
@@ -58,11 +58,6 @@ function snapshot(dir) {
   };
   walk(dir);
   return out;
-}
-function exitedPid() {
-  const r = spawnSync(process.execPath, ['-e', ''], { windowsHide: true });
-  assert.equal(r.status, 0);
-  return r.pid;
 }
 async function runThroughCli(app, dir, argv) {
   const stdout = capture();
@@ -197,8 +192,16 @@ describe('108: integrated acceptance', () => {
     });
     assert.deepEqual(effects(), ['s1', 'block-start'], 'each step ran once before the loss');
     child.kill();
-    await new Promise((resolve) => child.once('exit', resolve));
+    const exit = await new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+    assert.equal(exit.code !== 0 || exit.signal !== null, true, 'the child died from the termination, not from finishing');
     assert.deepEqual(effects(), ['s1', 'block-start'], 'the terminated process wrote no second effect');
+
+    // The holder is dead, but a freed process id can be reused by the very next child on
+    // Windows; rebinding it to a number the allocator cannot reach keeps recovery's
+    // judgement about a dead holder independent of that reuse.
+    const lockFile = path.join(dataDir, 'tasks.jsonl.lock');
+    assert.equal(fs.existsSync(lockFile), true, 'the lost process left its lock');
+    rebindDeadHolder(lockFile, child.pid);
 
     const taskId = jsonl(path.join(dataDir, 'tasks.jsonl')).find((e) => e.type === 'task_created').taskId;
     const resume = await runCli(['task', 'resume', shortId(taskId)], env);
@@ -218,7 +221,7 @@ describe('108: integrated acceptance', () => {
     const taskShort = /^Task ([0-9a-f]{8})\b/m.exec(planned.stdout)[1];
 
     const lock = path.join(dataDir, 'tasks.jsonl.lock');
-    const raw = JSON.stringify({ pid: exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    const raw = JSON.stringify({ pid: deadPid(), nonce: 'stale', at: new Date().toISOString() });
     fs.writeFileSync(lock, raw);
     const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
 
@@ -228,7 +231,12 @@ describe('108: integrated acceptance', () => {
     const exit = await new Promise((resolve) => child.once('exit', (code) => resolve(code)));
     assert.equal(exit, 9, 'the child exited inside the election');
     assert.equal(fs.readFileSync(lock, 'utf8'), raw, 'the dead claim is left for inspection');
-    assert.equal(fs.existsSync(`${lock}.takeover.${key}.0`), true, 'its abandoned token is left too');
+    const abandoned = `${lock}.takeover.${key}.0`;
+    assert.equal(fs.existsSync(abandoned), true, 'its abandoned token is left too');
+    assert.equal(JSON.parse(fs.readFileSync(abandoned, 'utf8')).pid, child.pid, 'the token names the process that is gone');
+    // The dead child's pid may already belong to a later process; rebinding keeps recovery's
+    // "remove a dead taker's token" judgement about the dead taker, not about pid reuse.
+    rebindDeadHolder(abandoned, child.pid);
 
     const repair = await runCli(['repair', 'locks'], env);
     assert.equal(repair.code, 0, repair.stdout + repair.stderr);
@@ -236,7 +244,7 @@ describe('108: integrated acceptance', () => {
     assert.match(repair.stdout, /removed 1 abandoned takeover token\(s\)/);
     assert.match(repair.stdout, /the claim was left for the next normal run/);
     assert.equal(fs.readFileSync(lock, 'utf8'), raw, 'repair never removes the lock claim');
-    assert.equal(fs.existsSync(`${lock}.takeover.${key}.0`), false);
+    assert.equal(fs.existsSync(abandoned), false);
 
     const run = await runCli(['task', 'run', taskShort], env);
     assert.equal(run.code, 0, run.stdout + run.stderr);

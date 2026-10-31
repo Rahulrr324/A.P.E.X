@@ -13,9 +13,8 @@ import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { makeTempDataDir, cleanup, runCli, cleanEnv } from './helpers.js';
+import { makeTempDataDir, cleanup, runCli, cleanEnv, deadPid } from './helpers.js';
 import { SummaryQueue } from '../src/tasks/summary-queue.js';
 
 const dirs = [];
@@ -31,17 +30,6 @@ function envFor(dir) {
   return cleanEnv({ APEX_DATA_DIR: dir, HOME: dir, USERPROFILE: dir });
 }
 
-// A pid that is certainly not running: a real process that has already exited.
-function exitedPid() {
-  const r = spawnSync(process.execPath, ['-e', ''], { windowsHide: true });
-  assert.equal(r.status, 0, `the pid probe failed to run: ${r.error?.message}`);
-  assert.ok(r.pid > 0);
-  let alive = true;
-  try { process.kill(r.pid, 0); } catch (err) { alive = err?.code === 'EPERM'; }
-  assert.equal(alive, false, `pid ${r.pid} is still alive; this test needs a dead pid`);
-  return r.pid;
-}
-
 function claim(pid, nonce = 'stale') {
   return JSON.stringify({ pid, nonce, at: new Date().toISOString() });
 }
@@ -52,7 +40,7 @@ function keyOf(raw) {
 
 function writeTokens(lockPath, raw, { count = 16, pid, bodyAt } = {}) {
   const key = keyOf(raw);
-  const dead = pid ?? exitedPid();
+  const dead = pid ?? deadPid();
   const tokens = [];
   for (let epoch = 0; epoch < count; epoch += 1) {
     const token = `${lockPath}.takeover.${key}.${epoch}`;
@@ -85,11 +73,11 @@ describe('098: abandoned takeover tokens are recovered explicitly and safely', (
     const dir = tempDir();
     const queueBytes = await seedQueueEntry(dir, 'task-queued');
 
-    const taskRaw = claim(exitedPid());
+    const taskRaw = claim(deadPid());
     fs.writeFileSync(TASK_LOCK(dir), taskRaw);
     const task = writeTokens(TASK_LOCK(dir), taskRaw);
 
-    const queueRaw = claim(exitedPid());
+    const queueRaw = claim(deadPid());
     fs.writeFileSync(QUEUE_LOCK(dir), queueRaw);
     const queue = writeTokens(QUEUE_LOCK(dir), queueRaw);
 
@@ -129,7 +117,7 @@ describe('098: abandoned takeover tokens are recovered explicitly and safely', (
   test('the queue remains readable while its lock is stale or held', async () => {
     const dir = tempDir();
     await seedQueueEntry(dir, 'task-readable');
-    const raw = claim(exitedPid());
+    const raw = claim(deadPid());
     fs.writeFileSync(QUEUE_LOCK(dir), raw);
     writeTokens(QUEUE_LOCK(dir), raw);
 
@@ -157,7 +145,7 @@ describe('098: abandoned takeover tokens are recovered explicitly and safely', (
 
   test('a live takeover is never displaced', async () => {
     const dir = tempDir();
-    const raw = claim(exitedPid(), 'dead-claim');
+    const raw = claim(deadPid(), 'dead-claim');
     fs.writeFileSync(TASK_LOCK(dir), raw);
     const { key } = writeTokens(TASK_LOCK(dir), raw, { count: 1 });
     const liveToken = `${TASK_LOCK(dir)}.takeover.${key}.0`;
@@ -184,7 +172,7 @@ describe('098: abandoned takeover tokens are recovered explicitly and safely', (
 
   test('a recovery already in progress refuses a second recovery', async () => {
     const dir = tempDir();
-    const raw = claim(exitedPid(), 'dead-claim');
+    const raw = claim(deadPid(), 'dead-claim');
     fs.writeFileSync(TASK_LOCK(dir), raw);
     const { tokens } = writeTokens(TASK_LOCK(dir), raw);
     fs.writeFileSync(`${TASK_LOCK(dir)}.recover`, claim(process.pid, 'recovering'));
@@ -198,11 +186,11 @@ describe('098: abandoned takeover tokens are recovered explicitly and safely', (
 
   test('an unfinished recovery claim from a dead process names the file and changes nothing', async () => {
     const dir = tempDir();
-    const raw = claim(exitedPid(), 'dead-claim');
+    const raw = claim(deadPid(), 'dead-claim');
     fs.writeFileSync(TASK_LOCK(dir), raw);
     const { tokens } = writeTokens(TASK_LOCK(dir), raw);
     const guard = `${TASK_LOCK(dir)}.recover`;
-    fs.writeFileSync(guard, claim(exitedPid(), 'abandoned-recovery'));
+    fs.writeFileSync(guard, claim(deadPid(), 'abandoned-recovery'));
 
     const res = await runCli(['repair', 'locks'], envFor(dir));
     assert.equal(res.code, 1, res.stdout + res.stderr);
@@ -215,11 +203,11 @@ describe('098: abandoned takeover tokens are recovered explicitly and safely', (
   test('a refused recovery leaves a corrupt queue untouched and still blocking', async () => {
     const dir = tempDir();
     const queueBytes = await seedQueueEntry(dir, 'task-held');
-    const raw = claim(exitedPid(), 'dead-claim');
+    const raw = claim(deadPid(), 'dead-claim');
     fs.writeFileSync(QUEUE_LOCK(dir), raw);
     // The last token cannot be attributed to a holder, so recovery must refuse before
     // removing any token: a partial clean-up would be evidence of nothing.
-    const dead = exitedPid();
+    const dead = deadPid();
     writeTokens(QUEUE_LOCK(dir), raw, { count: 16, bodyAt: (epoch) => (epoch === 15 ? 'not json' : claim(dead)) });
 
     const res = await runCli(['repair', 'locks'], envFor(dir));
@@ -237,7 +225,7 @@ describe('098: abandoned takeover tokens are recovered explicitly and safely', (
 
   test('two concurrent recoveries never both remove, and leave the claim for one elected taker', async () => {
     const dir = tempDir();
-    const raw = claim(exitedPid(), 'dead-claim');
+    const raw = claim(deadPid(), 'dead-claim');
     fs.writeFileSync(TASK_LOCK(dir), raw);
     const { tokens } = writeTokens(TASK_LOCK(dir), raw);
 

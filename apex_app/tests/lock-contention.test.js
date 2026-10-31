@@ -20,9 +20,9 @@ import { test, describe, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { makeTempDataDir, cleanup, runCli, cleanEnv, APP_ROOT } from './helpers.js';
+import { makeTempDataDir, cleanup, runCli, cleanEnv, APP_ROOT, deadPid, rebindDeadHolder } from './helpers.js';
 
 const dirs = [];
 const children = [];
@@ -41,17 +41,6 @@ const LOCK = (dataDir) => path.join(dataDir, 'tasks.jsonl.lock');
 
 function envFor(dataDir, extra = {}) {
   return cleanEnv({ APEX_DATA_DIR: dataDir, HOME: dataDir, USERPROFILE: dataDir, ...extra });
-}
-
-// A pid that is certainly not running: a real process that has already exited.
-function exitedPid() {
-  const r = spawnSync(process.execPath, ['-e', ''], { windowsHide: true });
-  assert.equal(r.status, 0, `the pid probe failed to run: ${r.error?.message}`);
-  assert.ok(r.pid > 0);
-  let alive = true;
-  try { process.kill(r.pid, 0); } catch (err) { alive = err?.code === 'EPERM'; }
-  assert.equal(alive, false, `pid ${r.pid} is still alive; this test needs a dead pid`);
-  return r.pid;
 }
 
 function readTrace(file) {
@@ -106,7 +95,7 @@ describe('061: the task lock is exclusive across processes', () => {
       const dataDir = tempDir();
       const traceFile = path.join(dataDir, 'trace.txt');
       // The state a lost process leaves: a lock naming a pid that no longer exists.
-      fs.writeFileSync(LOCK(dataDir), JSON.stringify({ pid: exitedPid(), at: new Date().toISOString() }));
+      fs.writeFileSync(LOCK(dataDir), JSON.stringify({ pid: deadPid(), at: new Date().toISOString() }));
 
       const exits = await spawnRacers(dataDir, { racers: 6, traceFile });
       assert.equal(exits.filter((e) => e.signal !== null).length, 0, 'no racer was killed by a signal');
@@ -141,7 +130,7 @@ describe('061: the task lock is exclusive across processes', () => {
     fs.mkdirSync(dataDir, { recursive: true });
     const { TaskStore } = await import('../src/tasks/store.js');
     const store = new TaskStore(path.join(dataDir, 'tasks.jsonl'));
-    const foreign = JSON.stringify({ pid: exitedPid(), nonce: 'not-mine', at: new Date().toISOString() });
+    const foreign = JSON.stringify({ pid: deadPid(), nonce: 'not-mine', at: new Date().toISOString() });
 
     // Inside our own hold, replace the lock with a foreign claim (what a competing taker
     // leaves when it takes over a lock whose holder has just died). Releasing must not
@@ -159,7 +148,7 @@ describe('061: the task lock is exclusive across processes', () => {
 
   test('repeated recovery: a stale lock is taken over once, then the lock is gone', async () => {
     const dataDir = tempDir();
-    fs.writeFileSync(LOCK(dataDir), JSON.stringify({ pid: exitedPid(), at: new Date().toISOString() }));
+    fs.writeFileSync(LOCK(dataDir), JSON.stringify({ pid: deadPid(), at: new Date().toISOString() }));
 
     const first = await runCli(['task', 'plan', 'calc 1+1; calc 2+2'], envFor(dataDir));
     assert.equal(first.code, 0, first.stdout + first.stderr);
@@ -220,11 +209,11 @@ describe('061: the task lock is exclusive across processes', () => {
     // epoch rather than be refused forever. This is deterministic: the abandoned token names
     // a pid that has already exited.
     const dataDir = tempDir();
-    const raw = JSON.stringify({ pid: exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    const raw = JSON.stringify({ pid: deadPid(), nonce: 'stale', at: new Date().toISOString() });
     fs.writeFileSync(LOCK(dataDir), raw);
     const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
     const abandoned = `${LOCK(dataDir)}.takeover.${key}.0`;
-    fs.writeFileSync(abandoned, JSON.stringify({ pid: exitedPid(), at: new Date().toISOString() }));
+    fs.writeFileSync(abandoned, JSON.stringify({ pid: deadPid(), at: new Date().toISOString() }));
 
     const { TaskStore } = await import('../src/tasks/store.js');
     const store = new TaskStore(path.join(dataDir, 'tasks.jsonl'));
@@ -240,7 +229,7 @@ describe('061: the task lock is exclusive across processes', () => {
     // The election's whole point: while one process is taking over, another must be refused
     // and must not delete anything. The token names this live test process.
     const dataDir = tempDir();
-    const raw = JSON.stringify({ pid: exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    const raw = JSON.stringify({ pid: deadPid(), nonce: 'stale', at: new Date().toISOString() });
     fs.writeFileSync(LOCK(dataDir), raw);
     const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
     fs.writeFileSync(`${LOCK(dataDir)}.takeover.${key}.0`, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
@@ -252,9 +241,33 @@ describe('061: the task lock is exclusive across processes', () => {
     assert.equal(fs.existsSync(`${LOCK(dataDir)}.takeover.${key}.0`), true, 'and the live token was not touched');
   });
 
+  test('a numeric pid now held by a different live process keeps the lock fail-closed', async () => {
+    // A stale claim is identified only by the numeric pid it recorded. If the original holder
+    // exited and the operating system gave that number to another live process - the reuse case
+    // seen on Windows - APEX cannot tell the two identities apart. It must not guess: the claim
+    // is treated as held, and neither a normal run nor recovery removes it.
+    const dataDir = tempDir();
+    const raw = JSON.stringify({ pid: process.pid, nonce: 'reused', at: new Date().toISOString() });
+    fs.writeFileSync(LOCK(dataDir), raw);
+
+    const { TaskStore } = await import('../src/tasks/store.js');
+    const store = new TaskStore(path.join(dataDir, 'tasks.jsonl'));
+    await assert.rejects(
+      () => store.withLock(async () => 'never'),
+      new RegExp(`tasks are in use by process ${process.pid}`),
+      'a live pid is treated as a live holder even if this process is not the original one',
+    );
+    assert.equal(fs.readFileSync(LOCK(dataDir), 'utf8'), raw, 'the claim was not removed');
+
+    const repair = await runCli(['repair', 'locks'], envFor(dataDir));
+    assert.equal(repair.code, 1, repair.stdout + repair.stderr);
+    assert.match(repair.stderr, new RegExp(`held by live process ${process.pid}; refusing recovery`), repair.stderr);
+    assert.equal(fs.readFileSync(LOCK(dataDir), 'utf8'), raw, 'recovery did not remove a claim it cannot prove dead');
+  });
+
   test('a process that exits inside the takeover leaves the claim and one token; the next taker supersedes it', async () => {
     const dataDir = tempDir();
-    const raw = JSON.stringify({ pid: exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    const raw = JSON.stringify({ pid: deadPid(), nonce: 'stale', at: new Date().toISOString() });
     fs.writeFileSync(LOCK(dataDir), raw);
     const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
 
@@ -271,6 +284,10 @@ describe('061: the task lock is exclusive across processes', () => {
     const abandoned = `${LOCK(dataDir)}.takeover.${key}.0`;
     assert.equal(fs.existsSync(abandoned), true, 'the token published before the exit is still there');
     assert.equal(JSON.parse(fs.readFileSync(abandoned, 'utf8')).pid, child.pid, 'and it names the process that is gone');
+    // The child's exit was awaited, so it is dead. Rebind only the pid to a number the
+    // allocator cannot reach during this test: the next taker's liveness check must not
+    // depend on the operating system not having recycled the child's pid.
+    rebindDeadHolder(abandoned, child.pid);
 
     const { TaskStore } = await import('../src/tasks/store.js');
     const store = new TaskStore(path.join(dataDir, 'tasks.jsonl'));
@@ -282,10 +299,10 @@ describe('061: the task lock is exclusive across processes', () => {
 
   test('sixteen abandoned takeover tokens are reported, and work resumes after they are removed', async () => {
     const dataDir = tempDir();
-    const raw = JSON.stringify({ pid: exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    const raw = JSON.stringify({ pid: deadPid(), nonce: 'stale', at: new Date().toISOString() });
     fs.writeFileSync(LOCK(dataDir), raw);
     const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
-    const dead = exitedPid();
+    const dead = deadPid();
     const tokens = Array.from({ length: 16 }, (_, epoch) => `${LOCK(dataDir)}.takeover.${key}.${epoch}`);
     for (const token of tokens) fs.writeFileSync(token, JSON.stringify({ pid: dead, at: new Date().toISOString() }));
 

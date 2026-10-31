@@ -438,7 +438,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
       const holder = report.alive === null
         ? 'holder not identifiable'
         : report.alive
-          ? `holder process ${report.pid} is live`
+          ? `holder process ${report.pid} is live (liveness only; identity is not checked)`
           : `holder process ${report.pid} has exited (the next normal run takes the claim over)`;
       const t = report.tokens;
       const stuck = t.current >= TAKEOVER_EPOCHS && t.live === 0;

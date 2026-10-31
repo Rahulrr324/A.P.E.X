@@ -14,10 +14,11 @@
 //
 // The synchronization is by marker, not by waiting: READY is printed after the side effect and
 // after the RUNNING event is on disk, and every later step is a separate process whose exit is
-// awaited. No timing assumption is made about how long a step takes. The one platform-dependent
-// step is the stale-lock check: it identifies the dead holder by pid, so a pid reused before the
-// next process checks the lock would make that process refuse the task as "in use". That would
-// fail this test loudly rather than pass it on the wrong evidence.
+// awaited. No timing assumption is made about how long a step takes. The stale-lock check
+// identifies a dead holder by numeric pid only, so once the child's exit is awaited the test
+// rewrites that pid to one the allocator cannot reach during the test (see deadPid/rebindDeadHolder
+// in tests/helpers.js). The original pid is asserted first. Without that, a pid recycled by
+// Windows would make the next process refuse the task as "in use" for no real reason.
 //
 // TEST FIXTURE: the probe actions write one line to a file the test reads back. That file is
 // the observable side effect, and it is how these tests show a step ran once, or not at all.
@@ -26,7 +27,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { makeTempDataDir, cleanup, runCli, cleanEnv, APP_ROOT } from './helpers.js';
+import { makeTempDataDir, cleanup, runCli, cleanEnv, APP_ROOT, rebindDeadHolder } from './helpers.js';
 import { shortId } from '../src/util.js';
 
 const dirs = [];
@@ -113,6 +114,7 @@ describe('a real process interrupted inside a step', () => {
     const exit = await running.exited;
     assert.notEqual(exit.code, 0, 'the child did not exit cleanly');
     assert.equal(fs.existsSync(lockFile), true, 'and it left its lock file behind');
+    rebindDeadHolder(lockFile, running.child.pid);
 
     // From here everything is a second, separate process reading what the first one left.
     const taskId = events().find((e) => e.type === 'task_created').taskId;

@@ -197,3 +197,39 @@ export function makePlanGateway(steps) {
 export function taskStep(id, action, dependsOn = [], input = { tag: id }) {
   return { id, description: `step ${id}`, action, input, depends_on: dependsOn };
 }
+
+// A process id that stays unused for the duration of a test. A pid taken from a process
+// that has just exited is not stable: Windows returns freed process ids to the allocator
+// immediately, so a later child in the same test (including the CLI under test) can be
+// assigned the same number. A dead lock holder would then look alive, and the lock would
+// be refused as "in use" for no real reason. Process ids are assigned in increasing order
+// from boot, so a value near the top of the 31-bit range cannot be reached by the
+// allocator during a test. Windows ids are multiples of four, so this value keeps that
+// shape as well.
+export const DEAD_PID = 0x7ffffffc;
+
+export function deadPid() {
+  let alive = false;
+  try {
+    process.kill(DEAD_PID, 0);
+    alive = true;
+  } catch (err) {
+    alive = err?.code === 'EPERM';
+  }
+  if (alive) throw new Error(`test fixture pid ${DEAD_PID} is in use; a stable dead pid cannot be assumed`);
+  return DEAD_PID;
+}
+
+// Rebinds the holder pid of a lock or takeover-token file left by a process the caller has
+// already confirmed dead. Later lock checks then do not depend on the operating system not
+// having reused the number. The original pid is checked first, so the file is still proven
+// to be that process's own record before only the pid field is changed.
+export function rebindDeadHolder(file, expectedPid) {
+  const body = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (body.pid !== expectedPid) {
+    throw new Error(`${path.basename(file)} names pid ${body.pid}, not the expected dead holder ${expectedPid}`);
+  }
+  const next = JSON.stringify({ ...body, pid: deadPid() });
+  fs.writeFileSync(file, next);
+  return next;
+}

@@ -13,6 +13,14 @@ import { TASK_SCHEMA, reduceEvents, validateEventShape } from './model.js';
 import { inspectLock, recoverLock, TAKEOVER_EPOCHS } from './lock-recovery.js';
 
 
+// Liveness, not identity: this asks whether *some* process currently has this number. A
+// process that exited can have its number reassigned immediately - Windows returns freed
+// process ids to the allocator without delay - so a live answer may describe a stranger.
+// A claim whose number is live is therefore treated as held, never as a stale claim to
+// remove: refusing is safe, guessing is not. No portable start-identity check exists
+// without a native dependency, so a recycled number keeps the lock fail-closed until an
+// operator verifies it by hand (see README, the task-lock limitation under Known
+// limitations).
 function processAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -111,6 +119,11 @@ export class TaskStore {
   // Runs `fn` while holding the store lock. A lock left by a process that has
   // exited is taken over by exactly one process. A lock held by a live process is
   // refused, not waited for.
+  //
+  // "Live" means the recorded number is in use by some process, not that the
+  // original holder is the one running it: a recycled process id is indistinguishable
+  // from the original holder. Such a claim is refused, and recovery refuses it too;
+  // only a number no process owns is treated as a stale claim.
   //
   // Deletion cannot be made conditional without a native dependency, and a plain
   // "read the dead claim, remove it, create ours" took over the same claim twice under
@@ -216,7 +229,9 @@ export class TaskStore {
   // taken over now, and we are refused. A token whose holder has exited cannot act, so the
   // next epoch supersedes it; this is what keeps a process killed during a takeover from
   // blocking the data directory forever. Tokens are small, created once, and removed by
-  // their own holder; an abandoned one is inert bookkeeping.
+  // their own holder; an abandoned one is inert bookkeeping. Token liveness has the same
+  // limit as the claim's: a number that is live is treated as a live taker even if it has
+  // been recycled, which refuses the takeover instead of risking two owners.
   async #electTakeover(raw) {
     const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
     const body = JSON.stringify({ pid: process.pid, nonce: this.idFactory(), at: this.now().toISOString() });

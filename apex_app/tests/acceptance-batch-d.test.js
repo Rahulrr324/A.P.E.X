@@ -29,7 +29,7 @@ import { TaskStatus, StepStatus } from '../src/tasks/model.js';
 import { buildTaskSummary, taskStateSignature, MAX_TASK_SUMMARY_CHARS } from '../src/tasks/summary.js';
 import { shortId } from '../src/util.js';
 import {
-  makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel, APP_ROOT,
+  makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel, APP_ROOT, rebindDeadHolder,
   makeFakeTaskActions, makePlanGateway, taskStep,
 } from './helpers.js';
 
@@ -300,6 +300,9 @@ describe('057: one workflow, four stores, no claim either store cannot support',
     child.kill();
     const killed = await exited;
     assert.equal(killed.code !== 0 || killed.signal !== null, true, 'the child died from the termination, not from finishing');
+    // The holder is dead (its exit was awaited); rebind its pid so the next process's
+    // liveness check cannot depend on the OS not having recycled the number.
+    rebindDeadHolder(path.join(dataDir, 'tasks.jsonl.lock'), child.pid);
 
     // A fresh process on the same directory: no model, only the files.
     const listed = await runCli(['task', 'list'], env);

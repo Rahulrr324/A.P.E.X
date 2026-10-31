@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { makeTempDataDir, cleanup, runCli, cleanEnv, closedPortUrl, startStubModel, APP_ROOT } from './helpers.js';
+import { makeTempDataDir, cleanup, runCli, cleanEnv, closedPortUrl, startStubModel, APP_ROOT, rebindDeadHolder } from './helpers.js';
 import { shortId } from '../src/util.js';
 
 const dirs = [];
@@ -240,6 +240,11 @@ describe('063: system readiness acceptance', () => {
     const exit = await running.exited;
     assert.notEqual(exit.code, 0, 'it did not exit cleanly');
     assert.deepEqual(readLines(opsFile), opsBeforeKill, 'the lost process wrote no operation record of its own');
+    // The holder is dead (its exit was awaited); rebind its pid so the recovery process's
+    // liveness check cannot depend on the OS not having recycled the number.
+    const lockFile = path.join(dataDir, 'tasks.jsonl.lock');
+    assert.equal(fs.existsSync(lockFile), true, 'the lost process left its lock');
+    rebindDeadHolder(lockFile, running.child.pid);
 
     const taskId = readJsonl(path.join(dataDir, 'tasks.jsonl')).find((e) => e.type === 'task_created').taskId;
     const short = shortId(taskId);

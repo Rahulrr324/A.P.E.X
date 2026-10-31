@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { makeTempDataDir, cleanup, cleanEnv, runCli, APP_ROOT } from './helpers.js';
+import { makeTempDataDir, cleanup, cleanEnv, runCli, APP_ROOT, rebindDeadHolder } from './helpers.js';
 import { createApp } from '../src/app.js';
 import { StoreError } from '../src/errors.js';
 import { Outcome } from '../src/outcomes.js';
@@ -85,6 +85,9 @@ describe('105: persistent stores survive interruption and refuse to pretend othe
     const exit = await running.exited;
     assert.notEqual(exit.code, 0);
     assert.equal(fs.existsSync(`${tasksFile}.lock`), true, 'the lost process left its lock');
+    // The holder is dead (its exit was awaited); rebind its pid so the recovery process's
+    // liveness check cannot depend on the OS not having recycled the number.
+    rebindDeadHolder(`${tasksFile}.lock`, running.child.pid);
 
     const taskId = readLines(tasksFile).map((l) => JSON.parse(l)).find((e) => e.type === 'task_created').taskId;
     const short = taskId.slice(0, 8);

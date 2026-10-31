@@ -20,7 +20,7 @@ import { builtinActions } from '../src/actions/builtin.js';
 import { randomUUID } from 'node:crypto';
 import { TaskStore } from '../src/tasks/store.js';
 import { TaskRunner } from '../src/controller/task-runner.js';
-import { makeTempDataDir, cleanup, startStubModel, closedPortUrl, runCli, cleanEnv, makeFakeTaskActions, makePlanGateway, taskStep } from './helpers.js';
+import { makeTempDataDir, cleanup, startStubModel, closedPortUrl, runCli, cleanEnv, makeFakeTaskActions, makePlanGateway, taskStep, deadPid } from './helpers.js';
 
 const dirs = [];
 const stubs = [];
@@ -329,7 +329,7 @@ describe('creation and persistence', () => {
     fs.rmSync(path.join(dataDir, 'tasks.jsonl.lock'));
 
     // A pid that cannot be alive counts as stale and is removed.
-    fs.writeFileSync(path.join(dataDir, 'tasks.jsonl.lock'), JSON.stringify({ pid: 2147483646, at: new Date().toISOString() }));
+    fs.writeFileSync(path.join(dataDir, 'tasks.jsonl.lock'), JSON.stringify({ pid: deadPid(), at: new Date().toISOString() }));
     const ok = await app.controller.planTask('calc 1+1; calc 2+2');
     assert.equal(ok.status, Outcome.PLAN_CREATED);
   });

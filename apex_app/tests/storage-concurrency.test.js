@@ -22,7 +22,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { makeTempDataDir, cleanup, cleanEnv, runCli, APP_ROOT } from './helpers.js';
+import { makeTempDataDir, cleanup, cleanEnv, runCli, APP_ROOT, deadPid, rebindDeadHolder } from './helpers.js';
 import { SessionState } from '../src/session.js';
 import { JsonlStore } from '../src/memory/jsonl-store.js';
 import { MemoryStore } from '../src/memory/memory-store.js';
@@ -198,13 +198,6 @@ describe('065: concurrent JSONL appends keep every record intact', () => {
   });
 });
 
-async function exitedPid() {
-  const child = spawn(process.execPath, ['-e', ''], { windowsHide: true });
-  const pid = child.pid;
-  await new Promise((resolve) => child.on('exit', resolve));
-  return pid;
-}
-
 describe('077: concurrent summary-queue updates preserve every intent', () => {
   const signature = 'a'.repeat(64);
   const lockFor = (dir) => path.join(dir, 'task-summary-queue.json.lock');
@@ -228,25 +221,30 @@ describe('077: concurrent summary-queue updates preserve every intent', () => {
 
   test('a lock left by an exited process is removed and the intent is queued', async () => {
     const dir = tempDir();
+    // A real process leaves the lock: it exits, then its body is rebound to a pid the
+    // allocator cannot reach. Windows returns freed process ids immediately, so the queue's
+    // own process could otherwise be given the dead holder's number and refuse the update.
     const exited = spawn(process.execPath, ['-e', ''], { windowsHide: true });
-    const deadPid = exited.pid;
+    const gone = exited.pid;
     await new Promise((resolve) => exited.on('exit', resolve));
-    fs.writeFileSync(lockFor(dir), JSON.stringify({ pid: deadPid, nonce: 'gone', at: new Date().toISOString() }));
+    const lock = lockFor(dir);
+    fs.writeFileSync(lock, JSON.stringify({ pid: gone, nonce: 'gone', at: new Date().toISOString() }));
+    rebindDeadHolder(lock, gone);
 
     const queue = new SummaryQueue(path.join(dir, 'task-summary-queue.json'));
     const result = await queue.add({ sessionId: 's1', taskId: 'task-x', signature, text: 'summary for task-x', verified: true });
     assert.equal(result.queued, true);
     assert.equal((await queue.entries()).length, 1);
-    assert.equal(fs.existsSync(lockFor(dir)), false, 'the dead holder was cleared');
+    assert.equal(fs.existsSync(lock), false, 'the dead holder was cleared');
   });
 
   test('an abandoned takeover token is superseded instead of wedging queue updates', async () => {
     const dir = tempDir();
-    const raw = JSON.stringify({ pid: await exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    const raw = JSON.stringify({ pid: deadPid(), nonce: 'stale', at: new Date().toISOString() });
     fs.writeFileSync(lockFor(dir), raw);
     const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
     const abandoned = `${lockFor(dir)}.takeover.${key}.0`;
-    fs.writeFileSync(abandoned, JSON.stringify({ pid: await exitedPid(), at: new Date().toISOString() }));
+    fs.writeFileSync(abandoned, JSON.stringify({ pid: deadPid(), at: new Date().toISOString() }));
 
     const queue = new SummaryQueue(path.join(dir, 'task-summary-queue.json'));
     const result = await queue.add({ sessionId: 's1', taskId: 'task-z', signature, text: 'summary for task-z', verified: true });
@@ -258,13 +256,13 @@ describe('077: concurrent summary-queue updates preserve every intent', () => {
 
   test('sixteen abandoned takeover tokens refuse the update without touching the queue, then work resumes', async () => {
     const dir = tempDir();
-    const raw = JSON.stringify({ pid: await exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    const raw = JSON.stringify({ pid: deadPid(), nonce: 'stale', at: new Date().toISOString() });
     fs.writeFileSync(lockFor(dir), raw);
     const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
     const tokens = [];
     for (let epoch = 0; epoch < 16; epoch += 1) {
       const token = `${lockFor(dir)}.takeover.${key}.${epoch}`;
-      fs.writeFileSync(token, JSON.stringify({ pid: await exitedPid(), at: new Date().toISOString() }));
+      fs.writeFileSync(token, JSON.stringify({ pid: deadPid(), at: new Date().toISOString() }));
       tokens.push(token);
     }
 

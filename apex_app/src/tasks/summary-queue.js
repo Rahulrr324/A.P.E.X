@@ -48,6 +48,8 @@ function validateEntry(entry) {
   return null;
 }
 
+// Liveness of a process number, not identity: a recycled number keeps the queue lock
+// fail-closed exactly as it does for the task lock in ../tasks/store.js.
 function processAlive(pid) {
   try {
     process.kill(pid, 0);

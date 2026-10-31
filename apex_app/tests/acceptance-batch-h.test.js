@@ -8,11 +8,11 @@ import { test, describe, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { randomUUID, createHash } from 'node:crypto';
 import {
-  makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel, closedPortUrl, APP_ROOT,
+  makeTempDataDir, cleanup, cleanEnv, runCli, startStubModel, closedPortUrl, APP_ROOT, deadPid, rebindDeadHolder,
 } from './helpers.js';
 import { shortId } from '../src/util.js';
 import { main } from '../src/cli.js';
@@ -60,12 +60,6 @@ function snapshot(dir) {
   walk(dir);
   return out;
 }
-function exitedPid() {
-  const r = spawnSync(process.execPath, ['-e', ''], { windowsHide: true });
-  assert.equal(r.status, 0);
-  return r.pid;
-}
-
 describe('097: integrated acceptance', () => {
   test('1. a deterministic operation completes with no model configured', async () => {
     const dataDir = tempDir();
@@ -183,8 +177,16 @@ describe('097: integrated acceptance', () => {
     });
     assert.deepEqual(effectLines(), ['s1', 'block-start'], 'each step ran once');
     child.kill();
-    await new Promise((resolve) => child.once('exit', resolve));
+    const exit = await new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+    assert.equal(exit.code !== 0 || exit.signal !== null, true, 'the child died from the termination, not from finishing');
     assert.deepEqual(effectLines(), ['s1', 'block-start'], 'the lost process wrote no second effect');
+
+    // The terminated holder is dead, but Windows recycles freed process ids immediately, so
+    // the number it left behind may already name the recovery process. Rebinding it to a
+    // number the allocator cannot reach keeps this check about a dead holder, not about luck.
+    const lockFile = path.join(dataDir, 'tasks.jsonl.lock');
+    assert.equal(fs.existsSync(lockFile), true, 'the lost process left its lock');
+    rebindDeadHolder(lockFile, child.pid);
 
     const taskId = jsonl(path.join(dataDir, 'tasks.jsonl')).find((e) => e.type === 'task_created').taskId;
     const resume = await runCli(['task', 'resume', shortId(taskId)], env);
@@ -249,7 +251,7 @@ describe('097: integrated acceptance', () => {
     const taskShort = /^Task ([0-9a-f]{8})\b/m.exec(planned.stdout)[1];
 
     const lock = path.join(dataDir, 'tasks.jsonl.lock');
-    const raw = JSON.stringify({ pid: exitedPid(), nonce: 'stale', at: new Date().toISOString() });
+    const raw = JSON.stringify({ pid: deadPid(), nonce: 'stale', at: new Date().toISOString() });
     fs.writeFileSync(lock, raw);
     const key = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
 
@@ -262,14 +264,19 @@ describe('097: integrated acceptance', () => {
     const exit = await new Promise((resolve) => child.once('exit', (code) => resolve(code)));
     assert.equal(exit, 9, 'the child exited inside the election');
     assert.equal(fs.readFileSync(lock, 'utf8'), raw, 'the dead claim is left for inspection');
-    assert.equal(fs.existsSync(`${lock}.takeover.${key}.0`), true, 'its abandoned token is left too');
+    const abandoned = `${lock}.takeover.${key}.0`;
+    assert.equal(fs.existsSync(abandoned), true, 'its abandoned token is left too');
+    assert.equal(JSON.parse(fs.readFileSync(abandoned, 'utf8')).pid, child.pid, 'the token names the process that is gone');
+    // The dead child's pid may already have been recycled by the next CLI child; rebinding
+    // keeps the "next taker supersedes a dead token" path independent of that reuse.
+    rebindDeadHolder(abandoned, child.pid);
 
     const run = await runCli(['task', 'run', taskShort], env);
     assert.equal(run.code, 0, run.stdout + run.stderr);
     assert.match(run.stdout, /status: completed/);
     assert.match(run.stdout, /6\*7 = 42 \(verified\)/);
     assert.equal(fs.existsSync(lock), false, 'the next taker released its own claim');
-    assert.equal(fs.existsSync(`${lock}.takeover.${key}.0`), true, 'the abandoned token is not deleted by a stranger');
+    assert.equal(fs.existsSync(abandoned), true, 'the abandoned token is not deleted by a stranger');
   });
 
   test('10. knowledge conflict retrieval stays bounded and exact at 3,200 records', async () => {

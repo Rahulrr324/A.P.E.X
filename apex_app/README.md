@@ -175,7 +175,7 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `task retry <id> <stepId>` | Retries one failed or uncertain step, only if it is read-only. |
 | `task cancel <id>` | Cancels a task that has not finished. Steps that have not run are cancelled. |
 | `queue` | Read-only view of the task-summary retry queue: what is owed, its state, and whether the queue file or its lock needs attention. |
-| `repair locks` | Inspects the task and queue locks and removes only abandoned takeover tokens whose process is provably gone. It never takes a lock, never deletes a lock claim, and refuses while any holder or takeover process is live. A dead claim is taken over by the next normal run. |
+| `repair locks` | Inspects the task and queue locks and removes only abandoned takeover tokens whose number no live process owns. It never takes a lock, never deletes a lock claim, and refuses while any holder or takeover number is live. A dead claim is taken over by the next normal run. A claim whose number has been recycled by an unrelated process looks live and is refused; resolving that needs the manual check described under Known limitations. |
 | `knowledge add --subject <s> --relationship <r> --object <o> [--evidence <e>]` | Stores an explicit relationship triple. User origin only. |
 | `knowledge list [--limit N]` | Lists recent knowledge records with provenance and status. |
 | `knowledge search <query>` | Searches knowledge triples by keyword. |
@@ -826,8 +826,9 @@ questions that must change nothing).
   exclusively, so concurrent first requests share one session instead of orphaning each
   other's turns; `apex new` still replaces it deliberately. The summary retry queue
   runs each update under its own lock file, so concurrent updates no longer lose an
-  intent. A stale lock (task or queue) is taken over only when its pid is provably dead,
-  and the right to remove it is elected first with create-once token files: only the
+  intent. A stale lock (task or queue) is taken over only when no process owns the
+  recorded number, and the right to remove it is elected first with create-once token
+  files: only the
   elected taker re-reads and removes the exact claim it validated, so a fresh lock
   another process created is never removed. A taker that loses the election is refused
   as "in use" and can retry. A process killed during a takeover leaves its token behind;
@@ -836,11 +837,21 @@ questions that must change nothing).
   update is refused and the claim and tokens are left untouched for inspection
   (`lock-contention.test.js`, `storage-concurrency.test.js`). That bound is a deliberate
   refusal, not automatic cleanup, because deleting another process's token on an
-  out-of-date observation could remove a live taker. PID liveness is the only signal
-  available; a recycled pid is treated as live, so the lock fails closed and the
-  operator resolves it. Node still has no conditional-delete primitive without a native
-  dependency, so the removal itself is a plain unlink - but it is performed by one
-  elected process at a time. `repair locks` is the explicit inspection step: it reports
+  out-of-date observation could remove a live taker. Liveness is a check of the recorded
+  process number, not of process identity: it answers only whether some process now owns
+  that number. Windows returns freed process ids to the allocator immediately, so a dead
+  holder's claim can look live after its number is reused. APEX treats such a claim as
+  held and refuses both normal work and `repair locks`; it never deletes a claim because a
+  pid "looks suspicious". That is the safe direction, but it leaves the directory blocked
+  until an operator resolves it by hand: confirm that no APEX task run or queue update is
+  in progress and that the number belongs to an unrelated process (`Get-Process -Id <pid>`
+  on Windows, `ps -p <pid>` on POSIX), then remove `tasks.jsonl.lock` or
+  `task-summary-queue.json.lock`. Verify first: running the check is what distinguishes
+  this from deleting a real holder's lock. No portable start-time or identity comparison
+  exists without a native dependency, so APEX cannot make that judgement itself. Node still
+  has no conditional-delete primitive without a native dependency, so the removal itself
+  is a plain unlink - but it is performed by one elected process at a time. `repair locks`
+  is the explicit inspection step: it reports
   the holder, every takeover token, and any recovery guard, then removes only abandoned
   takeover tokens for the current claim. It never takes a lock, never removes a lock
   claim, and refuses while any holder or takeover process is live, so it cannot displace
@@ -945,7 +956,7 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this batch was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 754 tests, 752 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 755 tests, 753 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file

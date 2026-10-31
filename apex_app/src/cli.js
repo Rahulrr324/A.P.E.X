@@ -276,7 +276,9 @@ function sessionLine(session) {
 function holderText(report) {
   if (report.error) return `unreadable (${safeText(report.error)})`;
   if (report.alive === null) return 'holder not identifiable';
-  return `holder process ${report.pid} is ${report.alive ? 'live' : 'not running'}`;
+  // "live" is a statement about the recorded number, not proof that the process that wrote
+  // it still runs: a recycled number is indistinguishable here.
+  return `holder process ${report.pid} is ${report.alive ? 'live (liveness only; identity is not checked)' : 'not running'}`;
 }
 
 // Read-only view of the deferred task summaries. The queue is a delivery work list, not

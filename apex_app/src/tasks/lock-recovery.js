@@ -17,6 +17,13 @@
 //    one process removes tokens. A recovery process that exits mid-way leaves the
 //    guard; later attempts refuse with the guard path rather than guessing.
 //
+// "Live" here is a liveness check of the recorded number, not a proof that the
+// original holder still runs. A number the operating system has recycled belongs to some
+// live process, so the claim is refused: recovery cannot tell the original holder from a
+// stranger, and removing the claim would risk admitting a second owner. This is a
+// fail-closed state an operator resolves by hand after verifying the pid, not something
+// APEX guesses about. No portable start-identity check exists without a native dependency.
+//
 // Deleting a token is safe because every token for the current claim is read and
 // checked just before removal, and a taker never creates a token at an occupied epoch:
 // a path holding a dead token cannot become a live taker's token while it still exists.
@@ -29,6 +36,7 @@ import { StoreError } from '../errors.js';
 // retried forever. Each epoch requires a process that exited during a takeover.
 export const TAKEOVER_EPOCHS = 16;
 
+// Liveness of a process number, not identity: see the note at the top of this file.
 export function processAlive(pid) {
   try {
     process.kill(pid, 0);
