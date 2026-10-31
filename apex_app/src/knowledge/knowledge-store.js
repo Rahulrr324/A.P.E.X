@@ -442,11 +442,15 @@ export class KnowledgeStore {
     return records.find((r) => r.kind !== undefined && r.id === id) ?? null;
   }
 
-  // Loads all valid records; throws on any corrupt lines. `beforeAppend` marks the read
-  // that a write performs to inspect the store first: its result is superseded by the
-  // append that follows it, so the derived parse snapshot is neither read nor rewritten.
+  // Loads all valid records; throws on any corrupt lines. `beforeAppend` marks the read that a
+  // write performs to inspect the store first: it goes through `loadForAppend()`, which reuses
+  // this instance's incrementally maintained validated records when the file is still byte-for-byte
+  // the sequence they were validated from, so an ordinary append no longer re-parses and
+  // re-validates the whole store. Records from a reused state are exactly the records a full
+  // re-read would have produced, and such a state only ever exists for a file with no damage in it,
+  // so the refusal below still fires on a damaged store.
   async #loadComplete({ beforeAppend = false } = {}) {
-    const { records, corrupt } = await this.log.load({ maintainSnapshot: !beforeAppend });
+    const { records, corrupt } = beforeAppend ? await this.log.loadForAppend() : await this.log.load();
     if (corrupt.length > 0) {
       throw new StoreError(`knowledge store contains ${corrupt.length} corrupt line(s); refusing an incomplete knowledge operation`);
     }

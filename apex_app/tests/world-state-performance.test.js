@@ -10,11 +10,13 @@
 //   3. damage and unavailability are re-reported rather than masked by a healthy result;
 //   4. independent verification still re-reads, so a write that lands between the two reads
 //      fails verification instead of being confirmed;
-//   5. neither read adjacent to this instance's own append — the one that inspects the store
-//      before writing, the one that follows the append — consults or rewrites the snapshot,
-//      because a match cannot exist there: writes pay no snapshot work, every one of those
-//      reads still parses and validates the file as it currently is, and the first unchanged
-//      read after them both returns and stores the current file.
+//   5. a write pays no snapshot work at all. The read that inspects the store before writing is
+//      the incremental validated read, which is accounted in `appendStateStats` and neither
+//      consults nor rewrites the snapshot (its own safety is pinned in
+//      tests/incremental-write-state.test.js); the read that follows the append skips snapshot
+//      work too, because a match cannot exist against bytes this instance just changed. Each of
+//      those reads still parses and validates the file exactly as it currently is, and the first
+//      unchanged read after them both returns and stores the current file.
 //
 // All fixtures are temporary directories and controlled records. No test here touches a
 // real user data directory, and no live model inference is involved.
@@ -27,7 +29,7 @@ import { makeTempDataDir, cleanup, runCli, cleanEnv } from './helpers.js';
 import { createApp } from '../src/app.js';
 import { ModelGateway, NoBackend } from '../src/model/gateway.js';
 import { JsonlStore } from '../src/memory/jsonl-store.js';
-import { MemoryStore, sha256Hex, validateMemoryRecord } from '../src/memory/memory-store.js';
+import { MemoryStore, sha256Hex, validateMemoryRecord, MEMORY_PARSE_CACHE_BYTES } from '../src/memory/memory-store.js';
 import { KnowledgeStore, validateKnowledgeRecord } from '../src/knowledge/knowledge-store.js';
 import { buildWorldState, renderWorldState } from '../src/world/world-state.js';
 import { worldActions } from '../src/actions/world-actions.js';
@@ -571,7 +573,7 @@ test('performance - a caller cannot poison the snapshot by mutating the records 
   assert.equal(world.counts.unverifiedModel, 0, 'a mutated copy cannot reclassify a stored user assertion');
 });
 
-test('performance - the reads around this instance write neither serve nor store a snapshot', async (t) => {
+test('performance - a write pays no snapshot work, in either of the reads around it', async (t) => {
   const dir = tempDir();
   t.after(() => cleanup(dir));
   const file = memoryPath(dir);
@@ -581,35 +583,59 @@ test('performance - the reads around this instance write neither serve nor store
   const store = new MemoryStore(file, { now: FIXED_NOW });
   const { store: knowledge } = await seedKnowledge(dir, []);
   const cold = await buildWorldState(ctxFor(store, knowledge));
+  assert.equal(cold.counts.representedBeliefs, 1);
   const populated = store.log.parseCacheStats;
   assert.equal(populated.misses, 1);
   assert.equal(populated.cachedRecords, 1);
+  assert.equal(
+    store.log.appendStateStats.tracked,
+    false,
+    'a projection read is not a write read: it tracks nothing for the write path',
+  );
+  assert.deepEqual(
+    { ...store.log.appendStateStats },
+    { enabled: true, maxBytes: MEMORY_PARSE_CACHE_BYTES, tracked: false, trackedRecords: 0, trackedBytes: 0, reuses: 0, rebuilds: 0 },
+  );
 
   await store.add({ content: 'The deploy target is staging', source: 'user', provenance: { origin: 'user_request' } });
-  // The write reads the store as it stands, then changes it. Consulting or re-copying the
-  // snapshot there is work that can only be thrown away, so the write path asks for the
-  // records without it and leaves the stored snapshot exactly where the previous read left it.
+  // The read a write performs is an incremental validated read, so it is accounted in
+  // appendStateStats and not here at all: the snapshot is untouched by the write, neither
+  // consulted (it describes bytes about to be superseded) nor rewritten (copying records the
+  // store is about to invalidate is work thrown away).
   const wrote = store.log.parseCacheStats;
-  assert.equal(wrote.misses, 2, 'the write read the file again instead of the snapshot');
+  assert.equal(wrote.misses, 1, 'the write read is not a snapshot read');
   assert.equal(wrote.hits, 0);
-  assert.equal(wrote.cachedRecords, 1, 'and paid for no snapshot copy of bytes about to be superseded');
+  assert.equal(wrote.cachedRecords, 1, 'the snapshot still holds the pre-write file, which can only miss');
+  assert.equal(store.log.appendStateStats.rebuilds, 1, 'the first write read on this instance derived the whole store');
+  assert.equal(store.log.appendStateStats.reuses, 0);
+  assert.equal(store.log.appendStateStats.trackedRecords, 2, 'and tracks both the record it derived and the one it appended');
 
   const afterWrite = await buildWorldState(ctxFor(store, knowledge));
   const deferred = store.log.parseCacheStats;
-  assert.equal(deferred.misses, 3, 'the read after the append re-parses the new bytes');
+  assert.equal(deferred.misses, 2, 'the read after the append re-parses the new bytes');
   assert.equal(deferred.hits, 0, 'and is not answered from the snapshot');
   assert.equal(deferred.cachedRecords, 1, 'nor maintains a snapshot on a match that cannot exist');
   assert.equal(afterWrite.counts.representedBeliefs, 2, 'the new record is read from disk, not deferred');
 
   const refreshed = await buildWorldState(ctxFor(store, knowledge));
   const refreshedStats = store.log.parseCacheStats;
-  assert.equal(refreshedStats.misses, 4);
+  assert.equal(refreshedStats.misses, 3);
   assert.equal(refreshedStats.cachedRecords, 2, 'the first unchanged read refreshes the snapshot');
   assert.deepEqual(refreshed, afterWrite, 'deferring snapshot work changes nothing a reader sees');
 
   const hit = await buildWorldState(ctxFor(store, knowledge));
   assert.equal(store.log.parseCacheStats.hits, 1);
   assert.deepEqual(hit, afterWrite);
+
+  // The next write on the same instance reuses what it already validated, and still leaves the
+  // snapshot exactly where the last read put it.
+  await store.add({ content: 'The rollback plan is the previous image', source: 'user', provenance: { origin: 'user_request' } });
+  assert.deepEqual(
+    { reuses: store.log.appendStateStats.reuses, rebuilds: store.log.appendStateStats.rebuilds, trackedRecords: store.log.appendStateStats.trackedRecords },
+    { reuses: 1, rebuilds: 1, trackedRecords: 3 },
+    'a second write on a warm instance reuses its validated records',
+  );
+  assert.deepEqual(store.log.parseCacheStats.cachedRecords, 2, 'and touched no snapshot');
 });
 
 test('external changes - a write reads the file as it is, never a snapshot of it', async (t) => {
@@ -661,7 +687,7 @@ test('performance - a store larger than the cap is never snapshotted and reads t
   assert.equal(uncached.parseCacheStats.enabled, false);
 });
 
-test('performance - repeated invalidation keeps one bounded snapshot and cannot retry forever', async (t) => {
+test('performance - a write loop keeps one bounded snapshot and accounts for every read exactly once', async (t) => {
   const dir = tempDir();
   t.after(() => cleanup(dir));
   const memory = await seedMemory(dir, ['The build runs on Node 26']);
@@ -675,11 +701,21 @@ test('performance - repeated invalidation keeps one bounded snapshot and cannot 
     assert.equal(projection.complete, true, `read ${i} of ${reads}`);
   }
 
+  // The 24 reads here are 12 write reads and 12 projection reads, and each is accounted for in
+  // exactly one place: the projection reads in parseCacheStats, the write reads in
+  // appendStateStats. A write read that also consulted the snapshot would show up as an extra
+  // miss, and a snapshot that retried after invalidating would show up as extra hits or misses;
+  // neither happens, which is what makes these counters a bound rather than a hope.
   const stats = memory.log.parseCacheStats;
-  assert.equal(stats.misses, 24, 'one re-parse per read: 12 write reads and 12 projections, no read parsed twice');
-  assert.equal(stats.hits, 0, 'every read here is adjacent to a write, so a snapshot match cannot exist');
-  assert.equal(stats.misses + stats.hits, 24, 'every cacheable read is accounted for exactly once, so invalidation cannot retry');
+  const writes = memory.log.appendStateStats;
+  assert.equal(stats.misses, 12, 'one re-parse per projection: each follows a write, so a match cannot exist');
+  assert.equal(stats.hits, 0, 'no read here is adjacent to a stable file');
+  assert.equal(stats.misses + stats.hits, 12, 'every snapshot-eligible read is accounted for exactly once');
+  assert.equal(writes.reuses + writes.rebuilds, 12, 'and every write read is accounted for once, in its own counter');
+  assert.equal(writes.reuses, 12, 'this instance wrote the whole store, so every write read after the seed reused what it had validated');
+  assert.equal(writes.rebuilds, 0, 'nothing arrived from outside, so nothing had to be derived again');
   assert.ok(stats.cachedBytes <= stats.maxBytes, 'the snapshot is bounded by the configured cap');
+  assert.ok(writes.trackedBytes <= writes.maxBytes, 'and so is the incremental validated state');
   assert.equal(stats.cachedRecords, 0, 'a write loop never maintains a snapshot at all, so the derived aid costs it nothing');
 
   // Two reads now that the writes have stopped: the first hashes a stable file and stores
@@ -687,11 +723,19 @@ test('performance - repeated invalidation keeps one bounded snapshot and cannot 
   // the projection they return is the same one the write loop last saw.
   const refreshed = await project();
   const populated = memory.log.parseCacheStats;
-  assert.equal(populated.misses, 25, 'the first read after the loop re-parses, it cannot be served by anything');
+  assert.equal(populated.misses, 13, 'the first read after the loop re-parses, it cannot be served by anything');
   assert.equal(populated.cachedRecords, 13, 'and stores the seed plus the 12 appends');
+  assert.equal(populated.cached, true);
   const warmed = await project();
   assert.equal(memory.log.parseCacheStats.hits, 1, 'the second unchanged read is served from it');
   assert.deepEqual(warmed, refreshed);
+  // The snapshot that just answered a read says nothing about the write state: the records the
+  // loop tracked are still tracked, and the next write still verifies the file's bytes.
+  assert.deepEqual(
+    { reuses: memory.log.appendStateStats.reuses, rebuilds: memory.log.appendStateStats.rebuilds, trackedRecords: memory.log.appendStateStats.trackedRecords },
+    { reuses: 12, rebuilds: 0, trackedRecords: 13 },
+    'a projection read neither consumes nor rebuilds the write state',
+  );
 });
 
 test('performance - stores that never opt in keep reporting the snapshot disabled', async (t) => {

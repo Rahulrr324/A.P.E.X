@@ -813,8 +813,8 @@ A bounded manual smoke test against the installed Ollama model was run on 2026-1
 procedure (`benchmarks/run-model-benchmark.mjs`, using the ordinary application path)
 was run the same day. Neither is part of this suite; both are reported separately.
 `benchmarks/run-world-state-benchmark.mjs` is also outside the suite; it needs no model
-and measures the projection's read cost against synthetic fixtures
-([Benchmarks](#benchmarks)).
+and measures the projection's read cost against synthetic fixtures, or the write path with
+`--writes` ([Benchmarks](#benchmarks)).
 
 | Acceptance test | Where |
 |---|---|
@@ -856,6 +856,7 @@ and measures the projection's read cost against synthetic fixtures
 | 36. Batch I as one story | `acceptance-batch-i.test.js` (14 scenarios: deterministic workflow, missing model in listing, denied proposal, corrupt storage, audit failure, interrupted task, explicit lock recovery, concurrent queue updates, credential minimization, uncertain outcome, read-only diagnostics, knowledge conflict and provenance in model context, CLI usage errors, listing-only model reporting) |
 | 37. What APEX currently holds as belief, stated without a model and without writing | `world-state.test.js` (empty stores; user-asserted beliefs kept apart from unverified model conclusions; missing evidence as an explicit unknown; an unresolved knowledge conflict and a heuristic memory disagreement both reported and neither changed by being read; a recorded decision reported as a decision; superseded and retracted records as history, not belief; private memory marked and the projection refused to model origin; audit carries ids and counts, never belief text; a damaged store contributes no beliefs and is disclosed; a bounded window and reproducible output; three reads and a rejected read byte-identical with zero model calls; restart persistence; routed questions answered from the projection while "what do you believe about X" stays on the model path; mid-read store change fails verification; legacy records without `updateMode` still classify; CLI exit codes and usage errors) |
 | 38. The read optimization does not weaken the projection | `world-state-performance.test.js` (a cold read and a warm read return the same records, the same damage and the same projection; a same-length external rewrite, a replaced file, and a deleted file are all detected, so invalidation is not a size or mtime guess; corrupt lines and an unreadable store are re-reported instead of masked by an earlier healthy read; the verifying read is a real re-read, and a write landing between the executed read and the verifying read fails verification; a caller mutating the records it was handed cannot poison the snapshot or reclassify a belief; neither read adjacent to this instance's own append consults or rewrites the snapshot, and a write still sees a record another process wrote; a store over the cap is never snapshotted; stores that never opt in report the snapshot disabled; projection reads never write a byte) |
+| 39. The incremental write state never outranks the log | `incremental-write-state.test.js` (a write loop and a full lifecycle sequence - conflict, supersession, retraction, resolution - produce exactly the records, conflicts and projections a fresh replay of the authoritative bytes produces; a reuse is proven by one read of the file and by the file's own hash, so an external append, a same-length rewrite, a truncation and a replaced file each force a fresh validated read; a write that accepted no bytes, a partial write, an invalid record and a damaged store leave the state behind the file rather than ahead of it; a store over the cap and a store that never opts in track nothing; two real child processes appending to one store keep every line and every decision visible; two instances of one store interleaving corrections both land their replacements and each instance's next write read equals the replay) |
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
@@ -929,24 +930,34 @@ questions that must change nothing).
   removed duplicate reads and made an unchanged repeat read skip parsing, so at 20,000
   memories the projection build went from 270.4 ms (the previous read pattern, re-measured
   in the same process) to 57.1 ms warm - but a cold read still cost 253.5 ms and a read
-  after a write 143.6 ms, so the cost is still proportional to the store. Getting a read
-  that does not grow with total records needs a persisted, incrementally maintained index,
-  which is a storage redesign and is not part of this capability.
-- **Every write re-reads the store it is about to append to, and that is quadratic.**
-  `KnowledgeStore.add` re-reads and re-scans the whole store before appending, because
-  conflict and lifecycle state is deliberately computed store-wide and a damaged store must
-  be refused rather than compared against an incomplete record set; `MemoryStore.add` does
-  the same to refuse a damaged store. One `MemoryStore.add()` measured 16.1 ms against 2,000
-  memories, 123.7 ms against 20,000 and 281.4 ms against 40,000; one `KnowledgeStore.add()`
-  measured 21.4 ms against 2,000 claims. Appending those 2,000 claims one at a time took
-  26.0 s in one run and 56.5 s in another, and the cost of the nth write grows with n, so
-  seeding a large store is O(n^2). This is write-path behaviour, unchanged by the
-  read optimization and not fixable by it. The next separate milestone is a persisted
-  incremental conflict/lifecycle index owned by the store, and it must preserve append-only
-  history, conflict and lifecycle semantics, provenance, authorization, independent
-  verification, failure reporting and audit - no bulk rewrite and no unsafe replacement of
-  authoritative history. A batched write API is not the fix and is not planned just to make
-  a benchmark look better.
+  after a write 143.6 ms, so the cost is still proportional to the store. A persisted,
+  incrementally maintained index was assessed again in Batch V against current measurements and
+  rejected - it would still require reading and hashing every byte of the store, so it cannot deliver a
+  read that does not grow with total records. See
+  [V-07: the read path after the write changes](#v-07-the-read-path-after-the-write-changes).
+- **Every write still re-reads the store it is about to append to, so write cost grows with the store -
+  but it no longer re-parses it.** `KnowledgeStore.add` inspects the whole store before appending,
+  because conflict and lifecycle state is deliberately computed store-wide and a damaged store must be
+  refused rather than compared against an incomplete record set; `MemoryStore.add` does the same to
+  refuse a damaged store. Batch V replaced the parse-and-validate half of that inspection with an
+  incrementally maintained, hash-proven validated record state (`src/memory/jsonl-store.js`,
+  `loadForAppend()`), which is why 1,000 appends onto 2,000 memories measured 27.0 s against the 44.4 s
+  the same store took with that state disabled in the same run, and seeding 1,000 claims 15.9 s against
+  24.2 s. What is left is real:
+  every write reads and SHA-256s the entire file, so a write is **not** constant time, a freshly
+  constructed instance still pays the whole-store derivation (and pays a small retention cost on top of
+  it), and a CLI that performs one write per process pays that cold case. The full numbers, including
+  the regression for the cold case, are in
+  [Batch V: incremental write state](#batch-v-incremental-write-state-as-implemented). A batched write
+  API is still not the fix and is not planned just to make a benchmark look better.
+- **Consecutive writes from separate processes can still lose one of their decisions.** The memory and
+  knowledge write paths have no lock and no in-process mutex (the task and queue stores do). Two
+  processes that each read, then decide, then append can both record a correction of the same target;
+  the history stays intact and every later read sees both records, but neither process saw the other's
+  write before deciding. This predates Batch V and Batch V deliberately added no locking and no
+  persistent index; derived state is invalidated by any foreign byte change, so it never hides the
+  other process's write from the *next* read. Making read-modify-write atomic needs a lock or a
+  compare-and-set contract on the store, which is a separate change with its own tests.
 - **The task lock serializes task changes, not every command.** `task plan`, `run`,
   `resume`, `approve`, `retry` and `cancel` take `tasks.jsonl.lock`; reads (`status`,
   `diagnose`, `task list/show/explain`, `history`) take no lock, and the other stores
@@ -1216,7 +1227,7 @@ explicit entity relationships, built alongside personal memory:
   the root, but not a bug shared by both reads. A file that changes and changes back
   between the two reads is not detected.
 - **Windows:** the full suite for this batch was run on Windows 11 with Node
-  26.4.0, in an isolated temporary directory: 910 tests, 908 passed, 0 failed, 2
+  26.4.0, in an isolated temporary directory: 928 tests, 926 passed, 0 failed, 2
   skipped (POSIX permission bits are not enforced here; this filesystem rejects control
   characters in file names). The permission-denied path is therefore untested here, and
   earlier milestones were validated on Linux. The test script uses an explicit file
@@ -1323,13 +1334,18 @@ What the snapshot guarantees, and what it is never allowed to become:
 - There is one parser. Cached and uncached reads get their records and their damage from the
   same function, so a hit cannot apply weaker integrity rules than a cold read. A store with
   corrupt lines reports them again on the next read; a healthy earlier read cannot mask them.
-- Neither read around one of this instance's own appends reads or writes the snapshot: the
-  read a write performs to inspect the store first asks for it to be left alone, and the read
-  immediately after the append skips it because the bytes just changed. Both parses and
-  validate the file as it actually is, so the write path still refuses a damaged store and
-  still sees a record another process added; what it no longer pays is a hash and a copy of
-  every record on bytes that are about to be superseded. Without that rule the snapshot made
-  every write slower than it was before Batch U, by an amount that grew with the store.
+- Neither read around one of this instance's own appends reads or writes *this* snapshot. The read a
+  write performs to inspect the store is served by the separate incremental validated state Batch V
+  added ([Batch V: incremental write state](#batch-v-incremental-write-state-as-implemented)); it
+  consults neither structure and is accounted in `appendStateStats`, never in `parseCacheStats`, so each
+  read of a process is charged exactly once. The read immediately after an append still skips the
+  snapshot, because the bytes just changed. When Batch U made this rule, both of those reads still
+  parsed and validated the file as it actually is and the saving was dropping a hash and a copy of every
+  record on bytes about to be superseded; Batch V removed the whole-store parse and validation from the
+  first of them as well. The write path still refuses a damaged store and still sees a record another
+  process added, because the state it reuses is proven against the file's own bytes rather than assumed.
+  Without this rule the snapshot made every write slower than it was before Batch U, by an amount that
+  grew with the store.
 - No store that does not opt in is affected: tasks, conversation turns, and the audit log keep
   `parseCacheBytes: 0` and behave exactly as before.
 - Independent verification is untouched: `verify` performs its own read of both stores and
@@ -1342,13 +1358,21 @@ remains proportional to the store too, because the snapshot hands out a copy of 
 even though the projection represents at most 100. The snapshot also retains a second copy of
 a cached store's records in process memory, bounded by 32 MiB per store. Constant-time reads
 would need a persisted, incrementally maintained index - a storage redesign this batch
-deliberately did not attempt.
+deliberately did not attempt, and which Batch V re-measured and rejected for the same reason
+(see [V-07](#v-07-the-read-path-after-the-write-changes)). Batch V did remove
+whole-store parsing from the write path, which is a different structure serving different reads;
+a write still reads and hashes the whole file.
 
 ### Benchmarks
 
 `benchmarks/run-world-state-benchmark.mjs` measures the read path with synthetic fixtures
 in a temporary directory. It runs no model, downloads nothing, and verifies that repeated
-reads leave every store file byte-identical. It is not part of `npm test`.
+reads leave every store file byte-identical. It is not part of `npm test`. Batch V extended the same
+script rather than adding a framework: `--writes` measures the write path (the parts of one append at
+each store size, the derived-state operations on the same fixtures, cumulative append workloads run
+twice on one seed with the incremental state on and off, the store-layer work timed inside a single
+public write, and the cost of a write refused by a damaged store) and `--full` adds the 1,000-append
+workloads. See `benchmarks/README.md` for the invocation, the columns, and the interpretation limits.
 
 Observed on one Windows 11 machine (Node 26.4.0, 12 logical CPUs, 24 GiB reported memory,
 warm page cache, one 100-record window of memory sharing a single clause subject). The four
@@ -1394,9 +1418,251 @@ read copies every record it holds. The rendered projection stayed near 3.5 KB at
 Fixture generation itself is a separate, honest finding and is reported as a write cost, not a
 read cost: appending 2,000 claims one at a time through `KnowledgeStore.add` took 26.0 s in one
 run and 56.5 s in another on the same fixture (Batch T recorded about 59 s), because every
-append re-reads and re-scans the whole store. That is existing write-path behaviour, not
-projection behaviour, and no read-side optimization can shorten it; it is listed under
-[Known limitations](#known-limitations) and named there as the next separate milestone.
+append re-reads the whole store. That seeding still costs 59.3 s in the current read-mode run
+because `writeKnowledgeFixture` deliberately constructs its store with `parseCacheBytes: 0`, which
+switches off both derived structures - the read snapshot, to keep the read phases clean, and with it
+the incremental write state Batch V added. So this number is the pre-Batch-V cost kept for
+comparability, not what a seeding process pays today: with one live store instance and the derived
+state enabled, the same kind of workload measured 15.9 s against 24.2 s in the write-path run. The
+write-path behaviour and its remaining limits are documented in
+[Batch V: incremental write state](#batch-v-incremental-write-state-as-implemented) and under
+[Known limitations](#known-limitations).
+
+## Authoritative state and derived state
+
+Batch V changes how fast the stores are written, so it needs a written line between the data
+and any aid built from that data. This is that line. It was written before the implementation and
+each item states whether the structure is **in place** or **not implemented**; the Batch V section
+below records what was actually built against it, and what the measurements decided.
+
+### Authoritative state
+
+Everything that decides what APEX believes, and nothing here is reconstructible from anything
+else in this list:
+
+- The append-only `memory.jsonl` and `knowledge.jsonl` records, in file order. A record's bytes
+  are the record; there is no other copy of it.
+- Provenance and evidence inside those records (`origin`, `updateMode`, `operationId`, `context`,
+  `replaces`, `supersedes` references, `evidence`).
+- Lifecycle events, which are records too: knowledge retraction events and resolution events.
+  They are appended, never rewritten, and they are the only account of what the user decided.
+- The record hashes (`contentSha256`, `tripleHash`) and the schema validation rules that recompute
+  them on every read.
+- The other append-only stores with their own contracts: tasks, operations, conversation turns,
+  and the audit log.
+- Authorization and verification evidence produced by the ECP pipeline.
+
+### Derived state
+
+Anything a reader can rebuild from the authoritative records by applying published rules. It may
+be a performance aid or an index; it is never evidence:
+
+- The per-instance parse snapshot in `JsonlStore` - the parsed and validated records of one exact
+  byte sequence, keyed by their SHA-256. **In place.** It serves reads.
+- Incremental validated state used by a write, so an ordinary append does not re-parse and
+  re-validate the whole store. **In place** (Batch V); see *Batch V: incremental write state* below.
+- Knowledge groupings and indexes: the conflict index keyed by subject and relationship, the
+  supersession map, the resolution applicability index, the lifecycle split into claims and
+  events. All are rebuilt from the record list on every read and every write. An incrementally
+  maintained version is **not implemented**: measured, see V-06 below.
+- Memory groupings: the replacement map (`replacedBy`), the record status it implies, and the
+  heuristic clause-subject conflict groups. Same rule - derived from the read window, never
+  stored, and likewise not indexed.
+- The world-state projection itself: a bounded, read-only view of the two stores, rebuilt from
+  disk on every read and verified by an independent read.
+
+**The governing rule.** Derived state must never be the reason a claim is reported as true,
+authorized, verified, complete, or healthy. Every one of those decisions is taken from records that
+were parsed and validated from the file's own bytes in the current operation. A derived structure
+may decide *where to look* and *what not to rebuild*; it may not decide *what is the case*. In
+particular a model-originated value can never write, refresh, or repair derived state: only a
+user-origin operation can cause a write, and derived state changes only as a consequence of a
+write that already happened.
+
+### The guarantees an incremental structure must satisfy
+
+These are the conditions Batch V may not trade away for speed. Each is testable, and V-08 tests
+them.
+
+1. **Update after an append.** Derived state advances only after the append has been reported
+   written, and only with the bytes that append actually wrote. The order is: read → validate →
+   build the record → append → fsync → advance derived state. Nothing before the fsync may leave
+   derived state ahead of the file.
+2. **Failed, partial, or interrupted writes.** A write that throws - refused validation, a refused
+   damaged store, an identifier collision, a partial write, an fsync that did not confirm - leaves
+   derived state untouched or, where the bytes may have changed, invalidates it. An invalidated
+   structure is not an error: the next read re-parses and re-validates and rebuilds it. A derived
+   structure can only ever be *behind* the file, never ahead of it.
+3. **Process restarts.** Derived state is per process and per store instance. A restart rebuilds
+   it from the file. Nothing is persisted into a new file, so there is no on-disk structure that
+   can outlive the records it describes and no migration or version to get wrong. (This is why
+   Batch V did not add a persistent index: see the read-path section.)
+4. **External writes.** The bytes on disk are re-read on every operation, and the structure
+   carries the SHA-256 of the exact byte sequence it was built from. A byte-for-byte identical
+   file is the only input that may reuse it. An append by another process, a truncation, a
+   same-length rewrite, or a replaced file all fail that test and are parsed and validated again
+   by the same rules - so an external change can never be answered from stale derived state.
+5. **Concurrent writers.** There is no lock around the memory or knowledge write path (the task
+   and queue stores have their own locking; these two do not). Concurrent appends from several
+   processes are line-safe - `JsonlStore` writes one complete line, fsyncs it, and repairs an
+   unterminated tail - but a read-then-append sequence in two processes can still lose one of
+   their decisions, and that is a pre-existing limitation of this storage design, not something
+   a derived structure introduces or fixes. Derived state must not be the reason the loss becomes
+   invisible: because it is invalidated by any byte change, a concurrent writer's append forces a
+   fresh validated read here. Making concurrent read-modify-write safe needs a lock or a
+   compare-and-set contract on the store, which is a separate change with its own tests.
+6. **Corruption and incomplete history.** A derived structure built from a store that contains
+   corrupt lines, an unterminated tail, an unresolvable supersession reference, or a lifecycle
+   event pointing at a missing claim must not report a complete or healthy state. Damage found on
+   a validated read invalidates the structure; the refusal to write or to claim health comes from
+   the re-validated records, not from the structure's own confidence. A structure that cannot be
+   validated against the current bytes is dropped, not repaired by guesswork.
+7. **Invalidation and rebuild.** Mismatch, damage, a store larger than the cap, or a write that
+   failed at an unknown point → discard and rebuild from a full validated read. Rebuild is the
+   ordinary cold read, it is bounded by the same caps as the structure it replaces, and it is the
+   only path that can repopulate. There is no partial repair, no merge, and no "trust the index
+   because it was written by us".
+
+[Known limitations](#known-limitations), the read-path section above, and
+`benchmarks/README.md` state what Batch V actually achieved against this contract, with the
+measurements.
+
+## Batch V: incremental write state (as implemented)
+
+Batch V aimed at the write path, which V-02 measured as the store's real scaling problem: every
+ordinary append re-read, re-parsed and re-validated the whole file before appending, so the *n*th
+write cost what the whole store costs and seeding a store through the public API was O(n²).
+
+**What was built.** `JsonlStore` owns one more derived structure, per instance and in memory only: the
+**incrementally maintained validated records** behind the read a write performs (`loadForAppend()`),
+alongside the existing read snapshot (`load()`). It holds the parsed and validated record list of one
+exact byte sequence, the SHA-256 of that sequence, and the live hash state that sequence produced. The
+rules it had to satisfy are in [Authoritative state and derived state](#authoritative-state-and-derived-state);
+what the implementation does:
+
+- A write read is a **reuse** only on proof: the file's bytes must hash to the key of the sequence the
+  retained records were validated from, at a matching byte length. One hashing pass per write read
+  yields both the digest that proves the reuse and the live state the next append advances.
+- Anything else is a **re-derivation**: the whole file is parsed and validated by the same
+  `parseLines()` and the same `validateRecord()` rules a cold read uses, and the state is rebuilt from
+  that result. No partial repair, no merge, no "trust the state because we wrote it".
+- The state advances only after a confirmed append: `append()` fsyncs, and only then adds the record it
+  just wrote to the retained list and rolls the key forward over the exact bytes written. A write that
+  throws, accepted no bytes, wrote a partial line, raced another process's bytes, or produced a record
+  that fails the current integrity rules drops the state instead of advancing it, so derived state can
+  be behind the file but never ahead of it.
+- A store with corrupt lines retains nothing. Damage found on a re-derivation clears the state, so no
+  retained record list ever represents a damaged file, and the corrupt lines the parser reports reach
+  the caller unchanged. The refusal itself is unchanged: both stores read `corrupt` from this same call
+  and refuse on it.
+- Records are handed out deep-frozen, in a fresh array per call, so a caller cannot turn a shared
+  record into something else. Nothing is persisted - no new file, no schema change, no version, no
+  on-disk structure that could outlive the records it describes.
+- Retention is bounded by the same 32 MiB cap as the read snapshot, and the cap is consulted *before*
+  anything is compared, so a store this instance grew from empty cannot track more bytes than the cap.
+  A store over the cap re-derives every write read, which is exactly the pre-Batch-V behaviour.
+  `parseCacheBytes: 0` (tasks, conversation turns, the audit log) tracks nothing and is untouched.
+
+**What it costs.** Retaining validated records means deep-freezing them and keeping a live hash state,
+and a freshly constructed instance pays that on its first write read *before* receiving any benefit.
+Measured as the write read a fresh instance performs minus the validated read it replaced (run 4, 7
+samples): **+4.04 ms at 2,000 memory records, +23.14 ms at 40,000, +6.43 ms at 2,000 knowledge
+claims**, and -1.64 ms at 200 claims (fsync noise at that size, not a saving). Every write after the
+first is cheaper by the whole cost of parsing and validating the store again.
+
+**What it buys**, measured in one run under matching conditions - the same store class with the derived
+write state enabled and with `parseCacheBytes: 0`, which is what a write cost before Batch V:
+
+| Cumulative workload (one live store instance) | incremental | revalidate (pre-Batch-V behaviour) | ratio |
+|---|---|---|---|
+| memory: 100 appends onto 200 | 1,488 ms | 2,155 ms | 1.45x |
+| memory: 1,000 appends onto 200 | 16,727 ms | 23,541 ms | 1.41x |
+| memory: 100 appends onto 2,000 | 1,687 ms | 3,517 ms | 2.08x |
+| memory: 1,000 appends onto 2,000 | 27,035 ms | 44,425 ms | 1.64x |
+| knowledge: 100 appends onto 200 | 1,408 ms | 1,879 ms | 1.34x |
+| knowledge: 1,000 appends onto 200 | 15,945 ms | 24,211 ms | 1.52x |
+
+Individual writes at 40,000 memory records: **101.79 ms warm** (57.53 ms incremental write read +
+35.50 ms fsynced append + 8.77 ms store-layer work) against the **583.31 ms validated read** it
+replaces, and **654.92 ms cold** for a freshly constructed instance. At 2,000 records: 6.85 ms warm,
+19.25 ms cold, 10.38 ms to validate the store. Knowledge at 2,000 claims: 22.63 ms warm, 64.56 ms cold,
+30.99 ms validated read. The gap between the cold and warm columns is the re-derivation a restart pays:
+553.13 ms at 40,000 memory records, 41.93 ms at 2,000 claims. Run 4 ended at 174.3 MiB RSS / 35.6 MiB
+heap used.
+
+Comparisons across runs are historical, not matching conditions. The pre-Batch-V baseline run measured
+one public write at 40,000 records as 556.56 ms and 1,000 appends onto 2,000 as 44,434 ms, against
+654.92 ms cold / 101.79 ms warm and 27,035 ms in run 4. Absolute milliseconds on this machine move by up
+to 2x with system load, which is why the in-run pairs above are the evidence - and why the cold column
+is reported as a real regression for one specific case rather than smoothed away. That said, the two runs
+do agree where it matters: the baseline's 44,434 ms for 1,000 appends onto 2,000 and run 4's in-run
+revalidate figure for the same workload, 44,425 ms, are within 0.02% of each other, so the revalidate
+column is a fair stand-in for what a write cost before Batch V.
+
+**Who pays the cold case today.** Every production call site performs one write per store instance per
+command (`src/actions/builtin.js`, `src/actions/knowledge-actions.js`) and the CLI is one process per
+command, so a single-write command pays the retention cost and gains nothing yet. The win belongs to any
+process that writes the same store more than once: seeding and importing, a future long-lived session,
+and the test and benchmark loops. That is the honest scope of Batch V - it is not a speed-up of one
+`apex remember`.
+
+**What did not change.** A write still reads and hashes the whole store, so writes are **not** constant
+time and their cost still grows with total records. The memory and knowledge write path still has no
+lock and no in-process mutex (a pre-existing boundary); Batch V adds none, and derived state is
+invalidated by a foreign byte change rather than hiding it. Damaged-store refusal is unchanged and still
+timed: 23.61 ms, rejected 5 of 5 samples (memory) and 7.83 ms, rejected 5 of 5 (knowledge), each leaving
+the store byte-identical. Two suites pin the contract: `tests/incremental-write-state.test.js` (18
+tests: reuse proof, foreign writes, partial and failed appends, corrupt stores, the cap, real concurrent
+child processes, and derived state compared against a fresh replay of the authoritative records every
+time) and `tests/world-state-performance.test.js` (26 tests, including that every read is accounted
+exactly once across the two structures).
+
+### V-06: conflict and lifecycle indexing - decided by measurement, not implemented
+
+The benchmark now times the store-layer work *inside* one public write instead of subtracting three
+independent medians. At 40,000 memory records one `MemoryStore.add()` measured 68.21 ms whole, of which
+its write read was 52.69 ms and its append 9.89 ms, leaving **3.40 ms** (min 2.29, max 4.84) for the
+conflict scan, the lifecycle rebuild, the record construction and the integrity checks - the whole
+body of work an incremental conflict/lifecycle index could remove. At 2,000 knowledge claims one
+`KnowledgeStore.add()` measured 20.38 ms whole, write read 4.70 ms, append 10.08 ms, store layer
+**5.81 ms** (min 4.40, max 11.57). Each write performed exactly 1 read and 1 append, and the write read
+was proven a reuse. Batch V had already removed the re-parse and re-validate, so that residual figure
+is the entire prize an incremental conflict/lifecycle index could contest: 5% of a warm memory write,
+and at most 29% of a knowledge write - where the append itself (an fsynced 10.08 ms) is the largest
+part, the spread between samples (4.40 to 11.57 ms) is wider than the median difference it would have
+to beat, and some of the store-layer work is record construction and the two SHA-256 computations a
+record needs whoever computes the grouping. An index that touches conflict grouping, supersession,
+retraction and resolution applicability would add a second representation of lifecycle truth for less
+than that. It is **not implemented**. Semantics were not touched: no
+conflict definition changed, no retired claim was revived, heuristic memory subject grouping is still
+reported as heuristic and unresolved, and the existing structures are still rebuilt from the authoritative
+record list on every read. The remaining store-layer work stays where it is - derivable, verifiable, and
+never authoritative.
+
+### V-07: the read path after the write changes
+
+Re-measured with the read-mode benchmark (2,000 memory records + 2,000 claims, 7 samples): cold first
+read of a projection 159.8 ms, warm repeat read median 79.1 ms, the same read with the snapshot switched
+off 75.5 ms (so warm-vs-off is -3.6 ms - noise at this fixture, as it was in Batch U), the Batch T read
+pattern 141.1 ms, `execute` median 38.1 ms, independent `verify` 35.0 ms with 7 of 7 verifications
+passing. The write change did not regress reads and improved the read that follows a write: a projection
+built after a memory append cost 65.1 ms median with derived state on against 72.1 ms with it off, and
+the append itself 30.4 ms against 41.6 ms; after a knowledge append the build was 78.6 ms against 73.6 ms
+while the append itself was 28.1 ms against 51.1 ms.
+
+A persisted derived index was considered and **rejected on measurement**. A snapshot file keyed by the
+whole-file SHA-256 could cut a cold read at 40,000 records from the 583.31 ms parse-and-validate toward
+the 105.60 ms read-and-hash - but only that far, because reading the store would still require reading
+and hashing every byte of it. It cannot make read cost independent of store size, so no constant-time
+read claim would be available from it, and at the sizes a personal install reaches it would buy tens of
+milliseconds per command in exchange for a new on-disk artifact that can disagree with the log it
+describes, plus its version contract, mismatch detection and rebuild path. The current safe projection -
+rebuilt from disk, verified by an independent read - is kept. The next architectural dependency, when
+read cost actually matters, is one of two named changes rather than a cache: **per-segment integrity**, so
+a read re-validates only the segments whose bytes changed, or **serving `load()` from the validated write
+state**, which is cheaper still but hands callers frozen shared records instead of copies and therefore
+changes a published read contract. Both are storage-behaviour changes with their own tests; neither is a
+reason to persist derived state today.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 
@@ -1411,13 +1677,20 @@ demonstrate completion, so a later batch cannot claim progress by adding vocabul
 2. **Persistent cognitive state (partly done).** Memory, knowledge, task state, and
    conversation are durable and separately owned; the read-only projection derived from
    them is implemented. Batch U made one unchanged repeat read cheap with a bounded
-   per-process derived parse snapshot, and proved that no read mutates any store. It did
-   **not** close this stage: cold reads and the read after a write still parse and validate
-   the whole store, so the projection's cost still grows with total records. Acceptance for
-   closing the stage remains a projection whose cost does not grow linearly with total
-   records, which needs a persisted, incrementally maintained index owned by the store that
-   produced it - a storage redesign, deliberately not attempted as part of a read
-   optimization.
+   per-process derived parse snapshot, and proved that no read mutates any store. Batch V
+   made an ordinary write cheap in the same way - a hash-proven, incrementally maintained
+   validated record state, in memory and per instance - but it changed the write path only.
+   Neither batch closed this stage: cold reads and the read after a write still parse and
+   validate the whole store, and every write still reads and hashes it, so the projection's
+   cost still grows with total records. Acceptance for closing the stage remains a projection
+   whose cost does not grow linearly with total records. Batch V re-examined the obvious means
+   - a persisted, incrementally maintained index owned by the store that produced it - and
+   rejected it on measurement, because reading the store through such an index still requires
+   reading and hashing every byte of it; the two changes that could actually move the ceiling
+   are named in
+   [V-07: the read path after the write changes](#v-07-the-read-path-after-the-write-changes).
+   Either is a storage-behaviour change with its own tests, deliberately not attempted as part
+   of a read or write optimization.
 3. **Structured entity, event, and world state.** Entities with identity beyond an exact
    triple, events with time and participants, and state that changes over time. Depends on
    2 because a schema needs an owner and a migration story. Acceptance: records that

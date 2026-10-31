@@ -1,13 +1,15 @@
 // TEST FIXTURE for Batch F / 065: a real process that appends to APEX stores while
 // other copies of itself do the same. It waits at a file barrier so the writers start
 // together, then performs its own appends and reports the outcome on stdout.
-//   append-jsonl <file> <writerId> <count> <padBytes>
-//   add-memory   <dataDir> <writerId> <count>
-//   append-ops   <dataDir> <writerId> <count>
+//   append-jsonl  <file> <writerId> <count> <padBytes>
+//   add-memory    <dataDir> <writerId> <count>
+//   add-knowledge <dataDir> <writerId> <count>
+//   append-ops    <dataDir> <writerId> <count>
 import fs from 'node:fs';
 import path from 'node:path';
 import { JsonlStore } from '../../src/memory/jsonl-store.js';
 import { MemoryStore } from '../../src/memory/memory-store.js';
+import { KnowledgeStore } from '../../src/knowledge/knowledge-store.js';
 import { OperationLog } from '../../src/operations/operation-log.js';
 
 const [mode, target, idText, countText, padText] = process.argv.slice(2);
@@ -34,6 +36,16 @@ try {
     const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
     for (let i = 0; i < count; i += 1) {
       await store.add({ content: `fact from writer ${writer} number ${i}` });
+    }
+  } else if (mode === 'add-knowledge') {
+    const store = new KnowledgeStore(path.join(dir, 'knowledge.jsonl'));
+    for (let i = 0; i < count; i += 1) {
+      await store.add({
+        subject: `claim from writer ${writer}`,
+        relationship: 'recorded by test',
+        object: `number ${i}`,
+        origin: 'user',
+      });
     }
   } else if (mode === 'append-ops') {
     const log = new OperationLog(path.join(dir, 'operations.jsonl'));

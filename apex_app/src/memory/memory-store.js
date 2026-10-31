@@ -413,7 +413,11 @@ export class MemoryStore {
   }
 
   async #loadComplete({ operation = 'retrieval', beforeAppend = false } = {}) {
-    const { records, corrupt } = await this.log.load({ maintainSnapshot: !beforeAppend });
+    // A write reads through the incremental validated state, so one append no longer costs the
+    // whole store's parse and validation. Nothing about the rule below changes: the records it
+    // returns come from the same parser and the same integrity rules, and a state is only ever
+    // retained for a file that had no damage in it, so a damaged store still reaches this refusal.
+    const { records, corrupt } = beforeAppend ? await this.log.loadForAppend() : await this.log.load();
     if (corrupt.length > 0) {
       throw new StoreError(`memory store contains ${corrupt.length} corrupt line(s); refusing incomplete ${operation}`);
     }

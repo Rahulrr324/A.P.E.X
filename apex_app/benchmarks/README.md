@@ -100,6 +100,50 @@ node benchmarks/run-world-state-benchmark.mjs --memory 2000 --claims 2000 --repe
   reported total memory, fixture sizes and their write cost, and a closing statement of
   what the run cannot prove.
 
+### Write-path mode (`--writes`)
+
+```bash
+cd apex_app
+node benchmarks/run-world-state-benchmark.mjs --writes --repeats 7
+```
+
+Read mode times the projection; `--writes` times the store's own write path, because Batch V
+changed that and a read benchmark cannot see it. The sizes are a fixed matrix (memory
+200 / 2,000 / 20,000 / 40,000 records, knowledge 200 / 2,000 claims) so that two runs are
+comparable, and each measurement is a median over `--repeats` samples, every sample taken on a
+fresh copy of the same fixture so the store under measurement always holds the same bytes.
+
+- **The parts of one append**, per size: reading the file, reading and hashing it, reading and
+  parsing it without integrity checks, the whole-store validated read a write used to perform,
+  the write read a freshly constructed instance performs now, the incremental validated read a
+  warm instance performs, the append on its own, the whole write on a fresh instance ("cold
+  write") and the next write on an instance that has already written once ("warm write"). Two
+  derived lines come from those columns: the integrity work a validated read does beyond
+  parsing, and the retention cost of a cold write read (what building the incremental state
+  costs on the first write of an instance, measured against the read that replaced it).
+- **The operations that read derived state** on the same fixtures: a conflicting memory `add()`,
+  a `correct()` replacement, ranked `search()`, a bounded `list()`, a `health()` scan and a
+  `projectionRead()`; for knowledge a conflicting claim, a supersession, a retraction and a
+  resolution. Each constructs its own store instance, so each is a cold-instance number.
+  `search()` scores every record against every query term, so it is timed at 2,000 records only
+  and the omission is printed rather than hidden.
+- **Cumulative append workloads**: a seeded store, then 100 or 1,000 ordinary writes through one
+  held store instance, which is what a continuous session does. Each workload runs twice on one
+  seed: "incremental" with the derived state enabled, "revalidate" with `parseCacheBytes: 0` so
+  every write read parses and validates the whole store again - what a write cost before Batch V.
+  Same fixture bytes, same machine, same page-cache state, so the ratio is a measurement and not
+  a comparison with a recorded number. Per-append medians over the first, middle and last ten
+  writes show the remaining growth, and the reuse provenance is printed beside the totals.
+- **Store-layer work inside one call**: one public write timed as a whole, with its write read and
+  its append timed inside that same call, so the difference is one number from one sample rather
+  than three medians subtracted across distributions. That difference is the conflict scan, the
+  lifecycle rebuild, the record construction and the integrity checks - everything an incremental
+  conflict or lifecycle index could still remove, which is why it is V-06's evidence.
+- **The refusal a damaged store forces**: a write onto a store whose last line is unterminated,
+  timed, with the exact reported reason and whether the refused write left any bytes behind.
+- **Composition and footprint**: the cold/warm/reuse decomposition for the largest fixture per
+  store, and RSS and heap at the end of the run.
+
 ### Interpretation limits
 
 - Fixtures are uniform synthetic text in a one-clause-subject shape, which is the worst
@@ -107,14 +151,29 @@ node benchmarks/run-world-state-benchmark.mjs --memory 2000 --claims 2000 --repe
 - A cold read and the read that follows a write still parse and validate the whole store, so
   read cost is **not** independent of total store size. Only a repeat read of bytes that
   have not changed is cheaper, and it is cheaper by skipping parsing, not I/O.
-- Claim seeding is quadratic in the number of claims and is reported as a write cost, not a
-  read cost. It is a property of the store's deliberate whole-store conflict check, not of
-  the projection, and no read-side optimization changes it.
+- Claim seeding in read mode is quadratic in the number of claims and is reported as a write cost, not
+  a read cost. It is a property of the store's deliberate whole-store conflict check, not of
+  the projection, and no read-side optimization changes it. It also runs against a store constructed
+  with `parseCacheBytes: 0`, which switches off the incremental write state as well as the read
+  snapshot, so this figure is deliberately the pre-Batch-V cost: `--writes` measures the same kind of
+  workload with the state enabled and disabled in one run.
 - Figures recorded in the main README before Batch U were measured with the two-loads-per-store
   pattern and may include unrelated system load. Every run now re-creates that pattern in
   the same process against the same fixture, so prefer the in-run comparison.
 - One repeat counts one process. Timing noise from the operating system is not separated
   out, so treat the median as an indication, not a specification. Differences of a few
   milliseconds, including negative ones in the write-overhead lines, are noise.
+- `--writes` runs with no concurrent writer and no model, in a temporary local directory. The
+  fixtures are far larger than a personal APEX install, so absolute medians move with system
+  load while the composition does not; read the ratios and the in-call decomposition, not a
+  single millisecond figure.
+- Every write measurement still reads and hashes the whole store, so a write is not constant
+  time and no number here should be read as claiming that. What the incremental state removes
+  is the parse-and-validate pass, and the run reports the pass it removes next to the pass that
+  remains.
+- A freshly constructed instance pays the whole-store derivation the incremental state exists to
+  avoid, so the "cold write" column can be slower than the pre-Batch-V write it replaced: that
+  is the retention cost line, and it is the honest price of the reuse. A one-command-per-process
+  CLI pays the cold number; a session that writes repeatedly pays the warm one.
 
 This script is not part of `npm test` and no test depends on it.
