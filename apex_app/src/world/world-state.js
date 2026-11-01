@@ -24,8 +24,11 @@ const LIMITS = Object.freeze([
   'A belief is a stored record, not verified truth. Provenance says who recorded it, not whether it is correct.',
   'At most 100 recent records per store are represented; older records are counted but not shown.',
   'Memory contradiction detection is heuristic: it compares "subject is value" clauses inside the represented records only, and memory has no user-decision mechanism.',
-  'APEX does not represent events, time intervals, causal links, or beliefs that were never written to memory or knowledge.',
+  'APEX does not represent causal links, hypotheses, or predictions, and a belief that was never written to memory or knowledge is not represented here.',
+  'When an experience store is available, a bounded temporal section reports recorded outcomes and their order. Order is not cause, nothing in it is a prediction, and no pattern is or becomes an adaptation.',
 ]);
+
+export const MAX_WORLD_TEMPORAL_PATTERNS = 3;
 
 function safeText(value, max) {
   return truncate(String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' '), max);
@@ -91,6 +94,34 @@ export function renderWorldState(world) {
   lines.push(`  Contradictions: ${world.counts.unresolvedConflicts} unresolved knowledge group(s), ${world.counts.resolvedConflicts} with a recorded user decision, ${world.counts.memoryConflictGroups} memory subject group(s) carrying different values`);
   lines.push(`  History:        ${world.history.superseded} superseded, ${world.history.retracted} retracted, ${world.history.resolutions} resolution(s) (history or decisions, not beliefs)`);
 
+  // The temporal section is present only when a caller supplied one, so a projection built from
+  // memory and knowledge alone has exactly the shape it had before. It reports counts, capability
+  // names, and pattern kinds - never a subject, feedback text, or the stored wording of a record.
+  if (world.temporal) {
+    const t = world.temporal;
+    if (t.available === false) {
+      lines.push(`  Temporal:       unavailable (${safeText(t.detail ?? 'the experience store could not be read', 120)}); recorded outcomes are not represented`);
+    } else {
+      const window = t.window ?? {};
+      const counts = t.counts ?? {};
+      lines.push(`  Temporal:       ${safeCount(counts.events) ?? 0} recorded event(s) from ${String(window.since ?? '').slice(0, 10)} to ${String(window.until ?? '').slice(0, 10)}: ${safeCount(counts.success) ?? 0} success, ${safeCount(counts.failure) ?? 0} failure; ${safeCount(counts.automatic) ?? 0} captured automatically, ${safeCount(counts.explicit) ?? 0} recorded by you; ${safeCount(counts.patterns) ?? 0} pattern(s) met their threshold`);
+      if ((t.capabilities ?? []).length > 0) {
+        const capabilities = t.capabilities.slice(0, 3)
+          .map((group) => `${group.capability} ${group.total} (${group.trend}${group.outcomeChanged ? ', outcome changed' : ''})`);
+        lines.push(`  Temporal caps:  ${capabilities.join('; ')}${t.capabilitiesTruncated ? '; further groups counted but not listed' : ''}`);
+      }
+      if ((t.patterns ?? []).length > 0) {
+        const patterns = t.patterns.slice(0, MAX_WORLD_TEMPORAL_PATTERNS)
+          .map((pattern) => `${pattern.kind}${pattern.capability ? ` in ${pattern.capability}` : ''} (${pattern.supporting} supporting, ${pattern.contradicting} contradicting)`);
+        lines.push(`  Temporal order: ${patterns.join('; ')}${t.patternsTruncated ? '; more patterns exist' : ''}`);
+      }
+      if ((counts.undated ?? 0) > 0) {
+        lines.push(`  Temporal gaps:  ${counts.undated} record(s) have no usable timestamp and are not placed in the window`);
+      }
+      lines.push('  Temporal limit: recorded order is not cause; nothing here is a prediction, and no pattern becomes an adaptation');
+    }
+  }
+
   const section = (title, items) => {
     if (!items.length) {
       lines.push(`  ${title}: (none)`);
@@ -143,6 +174,7 @@ export async function buildWorldState({
   now = () => new Date(),
   limit = MAX_WORLD_BELIEFS,
   recordLimit = WORLD_RECORD_LIMIT,
+  temporal = null,
 } = {}) {
   if (!memory || !knowledge) throw new Error('world state requires both stores');
   const beliefLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), MAX_WORLD_LIMIT) : MAX_WORLD_BELIEFS;
@@ -284,10 +316,16 @@ export async function buildWorldState({
   if (allBeliefs.length > shownBeliefs.length) {
     addUnknown(`${allBeliefs.length - shownBeliefs.length} represented belief(s) are not shown because the projection is bounded to ${beliefLimit}.`);
   }
+  if (temporal && temporal.available === false) {
+    addUnknown(`The experience store could not be read, so recorded outcomes and their order could not be inspected${temporal.detail ? ` (${safeText(temporal.detail, 100)})` : ''}.`);
+  } else if (temporal && (temporal.counts?.undated ?? 0) > 0) {
+    addUnknown(`${temporal.counts.undated} recorded experience(s) have no usable timestamp and are not placed in the temporal window.`);
+  }
 
   const memoryComplete = memoryHealth.inspected === true && memoryHealth.corruptLines === 0;
   const knowledgeComplete = knowledgeHealth.inspected === true && knowledgeHealth.corruptLines === 0;
-  const complete = memoryComplete && knowledgeComplete;
+  const temporalComplete = !temporal || temporal.available !== false;
+  const complete = memoryComplete && knowledgeComplete && temporalComplete;
   const attention = !complete || totalUnresolved > 0 || memoryGroups.length > 0;
   const history = {
     superseded: safeCount(knowledgeHealth.superseded) ?? 0,
@@ -321,6 +359,7 @@ export async function buildWorldState({
     contradictions,
     unknowns,
     history,
+    ...(temporal ? { temporal } : {}),
     limits: [...LIMITS],
   };
 }

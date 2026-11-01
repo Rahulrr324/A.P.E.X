@@ -35,7 +35,29 @@ function auditShape(world) {
     })),
     unknownCount: world.unknowns.length,
     limits: world.limits.length,
+    // The temporal section keeps only the shape that the verification compares: availability,
+    // counts, and pattern kinds. No experience subject, feedback text, or rule is reproduced,
+    // and the exact window instants are omitted because the two reads happen at slightly
+    // different times; the counts already change if an event crossed the boundary.
+    ...(world.temporal ? {
+      temporal: {
+        available: world.temporal.available !== false,
+        counts: world.temporal.counts ?? null,
+        patternKinds: (world.temporal.patterns ?? []).map((pattern) => pattern.kind),
+      },
+    } : {}),
   };
+}
+
+// A temporal store that cannot be read is stated as unavailable rather than as an empty
+// history: "nothing was recorded" and "the log could not be read" are different disclosures.
+async function temporalFor(ctx) {
+  if (!ctx.experience || typeof ctx.experience.temporalSummary !== 'function') return null;
+  try {
+    return { available: true, ...(await ctx.experience.temporalSummary()) };
+  } catch (err) {
+    return { available: false, detail: err?.message ?? String(err) };
+  }
 }
 
 export function worldActions() {
@@ -55,7 +77,8 @@ export function worldActions() {
         return { limit: o.limit };
       },
       async execute(ctx, { limit }) {
-        const world = await buildWorldState({ memory: ctx.memory, knowledge: ctx.knowledge, now: ctx.now, limit });
+        const temporal = await temporalFor(ctx);
+        const world = await buildWorldState({ memory: ctx.memory, knowledge: ctx.knowledge, now: ctx.now, limit, temporal });
         return {
           summary: `world state: ${world.counts.userAsserted} user-asserted belief(s), ${world.counts.unverifiedModel} unverified model conclusion(s), ${world.counts.unresolvedConflicts} unresolved knowledge conflict group(s), ${world.counts.memoryConflictGroups} memory subject group(s) with differing values`,
           data: auditShape(world),
@@ -63,7 +86,8 @@ export function worldActions() {
         };
       },
       async verify(ctx, { limit }, result) {
-        const fresh = await buildWorldState({ memory: ctx.memory, knowledge: ctx.knowledge, now: ctx.now, limit });
+        const temporal = await temporalFor(ctx);
+        const fresh = await buildWorldState({ memory: ctx.memory, knowledge: ctx.knowledge, now: ctx.now, limit, temporal });
         const expected = auditShape(fresh);
         if (JSON.stringify(expected) !== JSON.stringify(result.data)) {
           return { ok: false, detail: 'a second read produced a different world-state projection; the stores may have changed during the read' };

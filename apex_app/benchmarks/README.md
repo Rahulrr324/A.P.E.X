@@ -268,7 +268,9 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
 
 1. `--experiences` is 1-2000 (a comma-separated list makes a size matrix, default `20,100,400`) and
    `--repeats` is 1-25 (default 5). `--phase` selects one of `reads`, `writes`, `capture`, `context`,
-   `compare`, `finalize`; without it all six run in that order.
+   `compare`, `finalize`, `temporal`; without it all seven run in that order. A run that selects only
+   `temporal` does not seed the fixtures the other phases share, because the temporal phase builds its
+   own.
 2. A fixture is `N` audited events, each produced the way the application produces one (a verified
    request through the controller), then one recorded experience and one corrective feedback record
    per event, one derivation, and three approvals. Seeding time is reported separately from every
@@ -320,6 +322,18 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
   finalization of the same record object, which must be refused before it can append; `damaged audit`
   and `unreadable` run the armed path against an audit log that holds one corrupt line, or cannot be
   opened at all. Damaged and unreadable **experience** stores are measured in the capture phase.
+- **temporal**: the Batch AC reads. Its fixture is separate from the others because a temporal query
+  is a question about time: events are spread evenly across the 29 days ending an hour before the
+  benchmark clock, one request in ten is rejected before execution, and one experience in nine
+  carries corrective feedback, so every event is inside the default 30-day window and the last seven
+  days are a genuine subset. Reported per size: `timeline` (the full query: read, derive, filter,
+  detect patterns), `warm` (the same call again), `7 days` (the same query on a narrow window),
+  `compare` (the two-window query), and three engine-only columns measured on one already-derived
+  list - `filter` (window filtering, ordering, grouping), `analysis` (that plus pattern detection),
+  and `summary` (the bounded summary built from it). It also prints the window, outcome classes,
+  capability-group count and detected pattern kinds for each size, and the prompt contribution: the
+  characters and lines the bounded temporal summary adds to a time-related request, the base prompt
+  size, and the cost of stating that the store could not be read.
 
 ### Interpretation limits
 
@@ -339,6 +353,12 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
   armed-versus-unarmed pair runs on copies of the same bytes seconds apart. The finalize phase obeys
   the same rule: `finalize off` versus `audit only` is the contract's own overhead, and both run in
   the same process on copies of the same fixture.
+- In the temporal phase the `timeline`, `warm`, `7 days` and `compare` columns include a whole-store
+  read and derived-lifecycle recomputation, so they grow with the store as the other read phases do.
+  The `filter`, `analysis` and `summary` columns are engine-only: they run on one list that has
+  already been read and derived, outside the store, so they are additive within that same sample and
+  not a claim about a complete query. The temporal fixture is synthetic evenly spaced timestamps;
+  equal-timestamp tie-breaking and undated-record exclusion are covered by the tests, not measured.
 - No figure here involves a model. Nothing in this file shows that an approved adaptation improves
   an answer, only what it costs the context that carries it.
 

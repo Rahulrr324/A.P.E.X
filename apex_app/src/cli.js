@@ -40,6 +40,8 @@ Usage:
   node bin/apex.js experience record <operation-id> --subject <text> [--replaces <id[,id...]>]
   node bin/apex.js experience list [--limit N]
   node bin/apex.js experience show <experience-or-operation-id>
+  node bin/apex.js experience timeline|trends|patterns [--since <date>] [--until <date>] [--days N] [--capability <name>] [--limit N]
+  node bin/apex.js experience compare [--a-since <date>] [--a-until <date>] [--b-since <date>] [--b-until <date>] [--days N] [--capability <name>]
   node bin/apex.js experience health       experiences, feedback, adaptation states, and evidence checks (read-only)
   node bin/apex.js feedback record <experience-or-operation-id> --assessment <kind> [--guidance <text>] [--reason <text>] [--supersedes <id[,id...]>]
   node bin/apex.js adaptation derive [--min-support N]     turn repeated feedback into candidates (never active)
@@ -111,6 +113,14 @@ Experience and adaptation examples (what APEX did, what you thought, what to cha
   adaptation approve <id>     your decision; only an approved rule is offered to future answers
   adaptation retire <id>      stop using a rule without deleting the history of it
   experience health           re-checks every recorded experience against the audit log
+  experience timeline --days 7     recorded events in the window, newest first, corrections marked
+  experience trends --days 30      per-capability outcome counts and an early/late trend
+  experience patterns              repeated success/failure, alternation, regression, recurring corrections
+  experience compare               the last 30 days against the 30 days before them
+A timeline, trends, patterns, or comparison describes recorded order. It is not a cause and not a
+prediction, and no pattern becomes an adaptation: a rule still needs your corrective feedback and
+your explicit approval. Records without a usable timestamp are listed separately, never placed in a
+window.
 An experience is recorded when you ask, or by APEX itself for a verified successful operation when
 APEX_EXPERIENCE_CAPTURE=verified-success. Either route records only that the event happened; an
 assessment of it is written only by you. "experience list" and "experience show" name which route
@@ -173,6 +183,11 @@ function parseFlags(args, allowed) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--limit needs a whole number', 'USAGE');
         flags.limit = Number(v);
         i += 1;
+      } else if (name === 'days') {
+        const v = args[i + 1];
+        if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--days needs a whole number', 'USAGE');
+        flags.days = Number(v);
+        i += 1;
       } else if (name === 'step') {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError('--step needs a step id', 'USAGE');
@@ -183,7 +198,7 @@ function parseFlags(args, allowed) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--min-support needs a whole number', 'USAGE');
         flags['min-support'] = Number(v);
         i += 1;
-      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces'].includes(name)) {
+      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -742,6 +757,28 @@ export async function main(argv, {
         }
         return emit(await app.controller.experienceShow({ target: ids[0] }));
       }
+      // Temporal reads. The window is resolved by the temporal engine, so an unparseable bound is
+      // refused as usage here only when it has the wrong shape; a well-formed but unknown date is
+      // reported by the action as rejected input.
+      if (['timeline', 'trends', 'patterns'].includes(sub)) {
+        const { flags, rest: extra } = parseFlags(rest, ['since', 'until', 'days', 'capability', 'limit']);
+        rejectUnexpected(extra, `experience ${sub} [--since <date>] [--until <date>] [--days N] [--capability <name>] [--limit N]`);
+        const query = { since: flags.since, until: flags.until, days: flags.days, capability: flags.capability, limit: flags.limit };
+        const method = sub === 'timeline' ? 'experienceTimeline' : sub === 'trends' ? 'experienceTrends' : 'experiencePatterns';
+        return emit(await app.controller[method](query));
+      }
+      if (sub === 'compare') {
+        const { flags, rest: extra } = parseFlags(rest, ['a-since', 'a-until', 'b-since', 'b-until', 'days', 'capability']);
+        rejectUnexpected(extra, 'experience compare [--a-since <date>] [--a-until <date>] [--b-since <date>] [--b-until <date>] [--days N] [--capability <name>]');
+        return emit(await app.controller.experienceCompare({
+          aSince: flags['a-since'],
+          aUntil: flags['a-until'],
+          bSince: flags['b-since'],
+          bUntil: flags['b-until'],
+          days: flags.days,
+          capability: flags.capability,
+        }));
+      }
       if (sub === 'health') {
         rejectUnexpected(parseFlags(rest, []).rest, 'experience health');
         // A direct, unaudited read. Exit 0 only when the log was fully inspected, nothing needs
@@ -750,7 +787,7 @@ export async function main(argv, {
         out(res.display ?? res.output ?? '(none)');
         return res.health?.attention || res.evidenceMismatch > 0 ? 1 : 0;
       }
-      err('usage: experience record|list|show|health');
+      err('usage: experience record|list|show|timeline|trends|patterns|compare|health');
       return 2;
     }
 

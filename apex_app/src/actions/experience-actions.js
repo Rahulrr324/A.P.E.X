@@ -28,6 +28,18 @@ import {
   captureOf,
 } from '../experience/experience-store.js';
 import { MIN_SUPPORT_FEEDBACK } from '../experience/derivation.js';
+import {
+  MAX_TEMPORAL_EVENTS,
+  MAX_WINDOW_DAYS,
+  checkTimeBound,
+  comparisonAuditShape,
+  patternsAuditShape,
+  renderComparison,
+  renderPatterns,
+  renderTimeline,
+  renderTrends,
+  temporalAuditShape,
+} from '../experience/temporal.js';
 
 function textField(value, name, max) {
   if (typeof value !== 'string') throw new ValidationError(`${name} must be text`);
@@ -76,6 +88,49 @@ function limitValue(value, { name = 'limit', max = 50, fallback = 20 } = {}) {
     throw new ValidationError(`${name} must be an integer from 1 to ${max}`);
   }
   return value;
+}
+
+// A window bound is passed through as text: the temporal engine is the one place that decides what
+// a valid timestamp or calendar date is, so a request cannot be accepted with a bound the engine
+// would then read differently. This only rejects text that cannot be a bound at all.
+function timeBound(value, name, { end = false } = {}) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new ValidationError(`${name} must be an ISO 8601 timestamp or YYYY-MM-DD`);
+  const text = value.trim();
+  if (text.length === 0) return undefined;
+  if (text.length > 40) throw new ValidationError(`${name} is longer than 40 characters`);
+  if (CONTROL_CHARS.test(text)) throw new ValidationError(`${name} contains control characters`);
+  return checkTimeBound(text, { end, name });
+}
+
+function windowDays(value) {
+  if (value === undefined || value === null) return undefined;
+  if (!Number.isInteger(value) || value < 1 || value > MAX_WINDOW_DAYS) {
+    throw new ValidationError(`days must be an integer from 1 to ${MAX_WINDOW_DAYS}`);
+  }
+  return value;
+}
+
+function capabilityFilter(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new ValidationError('capability must be text');
+  const text = value.trim();
+  if (text.length === 0) return null;
+  if (text.length > 128) throw new ValidationError('capability is longer than 128 characters');
+  if (!/^[A-Za-z][A-Za-z0-9_.-]*$/.test(text)) {
+    throw new ValidationError('capability must be a name such as memory.add or filesystem');
+  }
+  return text;
+}
+
+function temporalQuery(o, names) {
+  return {
+    since: timeBound(o[names.since], names.since),
+    until: timeBound(o[names.until], names.until, { end: true }),
+    days: windowDays(o.days),
+    capability: capabilityFilter(o.capability),
+    limit: limitValue(o.limit, { max: MAX_TEMPORAL_EVENTS }),
+  };
 }
 
 function expectObject(input, allowedKeys) {
@@ -665,6 +720,145 @@ export function experienceActions(store) {
           return { ok: false, detail: 'listed adaptations or their states differ from an independent store read' };
         }
         return { ok: true, detail: `${fresh.length} adaptation(s) and their states confirmed against the store` };
+      },
+    },
+    {
+      name: 'experience.timeline',
+      description: 'Ordered, time-filtered view of recorded experiences: when each occurred, its recorded outcome, capture route, feedback counts, and correction state. Read-only; derives everything from the stored log and calls no model.',
+      inputHint: '{"since":"optional ISO 8601 or YYYY-MM-DD","until":"optional ISO 8601 or YYYY-MM-DD","days":"optional 1-3650","capability":"optional exact capability","limit":"optional 1-50"}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        const o = expectObject(input ?? {}, ['since', 'until', 'days', 'capability', 'limit']);
+        return temporalQuery(o, { since: 'since', until: 'until' });
+      },
+      async execute(_ctx, query) {
+        const analysis = await store.temporalAnalysis(query);
+        const { view } = analysis;
+        return {
+          summary: `experience timeline: ${view.counts.inWindow} dated event(s) in ${view.window.since}..${view.window.until}, ${view.counts.undated} undated, ${view.counts.superseded} corrected`,
+          data: { query, view: temporalAuditShape(view), adaptations: analysis.adaptations },
+          display: renderTimeline(view),
+        };
+      },
+      async verify(_ctx, query, result) {
+        // The default window ends at "now", which advances between the two reads. The second
+        // read re-uses the first read's resolved bounds, so it compares the same window rather
+        // than reporting a false change from a few milliseconds of clock drift.
+        const { since, until } = result.data.view.window;
+        const fresh = await store.temporalAnalysis({ ...query, since, until });
+        const expected = temporalAuditShape(fresh.view);
+        if (JSON.stringify(expected) !== JSON.stringify(result.data.view)) {
+          return { ok: false, detail: 'a second read produced a different timeline; the experience store changed during the read' };
+        }
+        return { ok: true, detail: `window bounds, ${fresh.view.counts.inWindow} dated event id(s), and ${fresh.view.counts.undated} undated record(s) confirmed by an independent read` };
+      },
+    },
+
+    {
+      name: 'experience.trends',
+      description: 'Per-capability outcome counts, success rate, first/last occurrence, and an early/late trend for the window. Read-only; a trend is a description of recorded order, not a cause or a prediction.',
+      inputHint: '{"since":"optional ISO 8601 or YYYY-MM-DD","until":"optional ISO 8601 or YYYY-MM-DD","days":"optional 1-3650","capability":"optional exact capability","limit":"optional 1-50"}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        const o = expectObject(input ?? {}, ['since', 'until', 'days', 'capability', 'limit']);
+        return temporalQuery(o, { since: 'since', until: 'until' });
+      },
+      async execute(_ctx, query) {
+        const analysis = await store.temporalAnalysis(query);
+        const { view } = analysis;
+        const leading = view.byCapability[0];
+        return {
+          summary: leading
+            ? `experience trends: ${view.byCapability.length} capability group(s) in the window; ${leading.capability} has ${leading.total} event(s), trend ${leading.trend}`
+            : 'experience trends: no dated experience falls inside the window',
+          data: { query, view: temporalAuditShape(view) },
+          display: renderTrends(view),
+        };
+      },
+      async verify(_ctx, query, result) {
+        const { since, until } = result.data.view.window;
+        const fresh = await store.temporalAnalysis({ ...query, since, until });
+        const expected = temporalAuditShape(fresh.view);
+        if (JSON.stringify(expected) !== JSON.stringify(result.data.view)) {
+          return { ok: false, detail: 'a second read produced different per-capability trends; the experience store changed during the read' };
+        }
+        return { ok: true, detail: `${fresh.view.byCapability.length} capability group(s) and their counts confirmed by an independent read` };
+      },
+    },
+
+    {
+      name: 'experience.patterns',
+      description: 'Deterministic descriptions of recorded outcome order: repeated success or failure, alternation, regression after success, improvement after a user correction, and recurring corrections. Every pattern names its supporting and contradicting records and its limits. Read-only; no pattern is a cause, a prediction, or an adaptation.',
+      inputHint: '{"since":"optional ISO 8601 or YYYY-MM-DD","until":"optional ISO 8601 or YYYY-MM-DD","days":"optional 1-3650","capability":"optional exact capability","limit":"optional 1-50"}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        const o = expectObject(input ?? {}, ['since', 'until', 'days', 'capability', 'limit']);
+        return temporalQuery(o, { since: 'since', until: 'until' });
+      },
+      async execute(_ctx, query) {
+        const analysis = await store.temporalAnalysis(query);
+        const detection = analysis.patterns;
+        return {
+          summary: `experience patterns: ${detection.total} pattern(s) met their threshold in the window${detection.truncated ? ' (the list is bounded)' : ''}`,
+          data: { query, patterns: patternsAuditShape(analysis.view, detection) },
+          display: renderPatterns(analysis.view, detection),
+        };
+      },
+      async verify(_ctx, query, result) {
+        const { since, until } = result.data.patterns.window;
+        const fresh = await store.temporalAnalysis({ ...query, since, until });
+        const expected = patternsAuditShape(fresh.view, fresh.patterns);
+        if (JSON.stringify(expected) !== JSON.stringify(result.data.patterns)) {
+          return { ok: false, detail: 'a second derivation produced different patterns or evidence; the experience store changed during the read' };
+        }
+        return { ok: true, detail: `${fresh.patterns.total} pattern(s) and their evidence ids reproduced by an independent derivation` };
+      },
+    },
+
+    {
+      name: 'experience.compare',
+      description: 'Compare two time windows over the same stored experiences: counts, outcomes, success rate, feedback, and the largest per-capability changes. Read-only; a difference is a difference in what was recorded, not a causal finding.',
+      inputHint: '{"aSince":"optional","aUntil":"optional","bSince":"optional","bUntil":"optional","days":"optional 1-3650","capability":"optional exact capability"}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        const o = expectObject(input ?? {}, ['aSince', 'aUntil', 'bSince', 'bUntil', 'days', 'capability']);
+        return {
+          aSince: timeBound(o.aSince, 'aSince'),
+          aUntil: timeBound(o.aUntil, 'aUntil', { end: true }),
+          bSince: timeBound(o.bSince, 'bSince'),
+          bUntil: timeBound(o.bUntil, 'bUntil', { end: true }),
+          days: windowDays(o.days),
+          capability: capabilityFilter(o.capability),
+        };
+      },
+      async execute(_ctx, query) {
+        const comparison = await store.temporalComparison(query);
+        return {
+          summary: `experience comparison: A ${comparison.totals.a.total} event(s), B ${comparison.totals.b.total} event(s); ${comparison.changed ? 'recorded counts differ' : 'recorded counts are equal'}`,
+          data: { query, comparison: comparisonAuditShape(comparison) },
+          display: renderComparison(comparison),
+        };
+      },
+      async verify(_ctx, query, result) {
+        // Both windows are re-read at the bounds the first comparison resolved, for the same
+        // reason the timeline verification does: the default B window ends at "now".
+        const windows = result.data.comparison.windows;
+        const fresh = await store.temporalComparison({
+          ...query,
+          aSince: windows.a.since,
+          aUntil: windows.a.until,
+          bSince: windows.b.since,
+          bUntil: windows.b.until,
+        });
+        const expected = comparisonAuditShape(fresh);
+        if (JSON.stringify(expected) !== JSON.stringify(result.data.comparison)) {
+          return { ok: false, detail: 'a second comparison produced different windows or counts; the experience store changed during the read' };
+        }
+        return { ok: true, detail: `both windows and their counts confirmed by an independent read` };
       },
     },
   ];

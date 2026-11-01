@@ -52,6 +52,15 @@ import {
   normalizeRuleText,
   deriveCandidateSpecs,
 } from './derivation.js';
+import {
+  MAX_PATTERNS,
+  MAX_TEMPORAL_EVENTS,
+  MIN_PATTERN_EVENTS,
+  analyzeTemporal,
+  compareTemporalWindows,
+  resolveWindow,
+  summarizeTemporal,
+} from './temporal.js';
 
 export const EXPERIENCE_SCHEMA = 1;
 
@@ -1166,6 +1175,64 @@ export class ExperienceStore {
     // most recently survives, and `truncated` says the rest exists.
     const window = ranked.slice(0, size).map((r) => r.a);
     return { adaptations: window, total: inScope.length, truncated: inScope.length > window.length, limit: size };
+  }
+
+  // --- temporal reads --------------------------------------------------------
+  //
+  // The temporal view is derived from the same append-only log, with one read per query. Nothing is
+  // persisted, so a log written by an older process is read the same way as one written now.
+  async #temporalSource() {
+    const records = await this.#loadComplete();
+    const derived = deriveStore(records);
+    // Order within one timestamp comes from the file, and the file holds every record kind, so the
+    // position map is built over all of them rather than over the derived experience array.
+    const position = new Map();
+    for (let i = 0; i < records.length; i += 1) position.set(records[i].id, i);
+    return {
+      experiences: derived.experiences,
+      feedback: derived.index.feedback,
+      retiredFeedback: derived.retiredFeedback,
+      adaptations: derived.adaptations,
+      position,
+    };
+  }
+
+  async temporalAnalysis({ since, until, days, capability = null, limit = MAX_TEMPORAL_EVENTS, minEvents = MIN_PATTERN_EVENTS, maxPatterns = MAX_PATTERNS } = {}) {
+    const source = await this.#temporalSource();
+    const window = resolveWindow({ since, until, days, now: this.now() });
+    return analyzeTemporal({ ...source, window, capability, limit, minEvents, maxPatterns });
+  }
+
+  // Two windows over one read of the log. With no window A given, A is the same-length period
+  // immediately before B, so the default comparison is "the period before" against "now" rather
+  // than one window against itself.
+  async temporalComparison({ aSince, aUntil, bSince, bUntil, days, capability = null } = {}) {
+    const source = await this.#temporalSource();
+    const now = this.now();
+    const b = resolveWindow({ since: bSince, until: bUntil, days, now });
+    const aUngiven = aSince === undefined && aUntil === undefined;
+    let a;
+    if (aUngiven) {
+      const span = b.untilMs - b.sinceMs + 1;
+      if (b.sinceMs - span < 0) {
+        throw new ValidationError('there is no earlier period of the same length to compare against');
+      }
+      a = resolveWindow({
+        since: new Date(b.sinceMs - span).toISOString(),
+        until: new Date(b.sinceMs - 1).toISOString(),
+        now,
+      });
+    } else {
+      a = resolveWindow({ since: aSince, until: aUntil, days, now });
+    }
+    return compareTemporalWindows({ ...source, windowA: a, windowB: b, capability });
+  }
+
+  // The bounded form the world-state projection and the model context receive: counts, at most a few
+  // capabilities and named patterns, and the limitations that keep it from being read as more.
+  async temporalSummary({ since, until, days, capability = null, limit = MAX_TEMPORAL_EVENTS } = {}) {
+    const analysis = await this.temporalAnalysis({ since, until, days, capability, limit });
+    return summarizeTemporal({ view: analysis.view, patterns: analysis.patterns, adaptations: analysis.adaptations });
   }
 
   // Independent verification of one experience against the audit log it names: re-read that record,

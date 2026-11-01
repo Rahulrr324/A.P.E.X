@@ -688,8 +688,18 @@ export class CognitiveController {
 
   // Read-only epistemic projection. It owns no state: it reads memory and knowledge,
   // writes no audit record, calls no model, and never repairs or resolves anything.
+  // The temporal section is derived from the experience log by deterministic code; when that log
+  // cannot be read it is reported as unavailable, and the projection is not presented as complete.
   async worldState({ limit } = {}) {
-    const world = await buildWorldState({ memory: this.memory, knowledge: this.knowledge, now: this.now, limit });
+    let temporal = null;
+    if (this.experience) {
+      try {
+        temporal = { available: true, ...(await this.experience.temporalSummary()) };
+      } catch (err) {
+        temporal = { available: false, detail: err?.message ?? String(err) };
+      }
+    }
+    const world = await buildWorldState({ memory: this.memory, knowledge: this.knowledge, now: this.now, limit, temporal });
     const display = renderWorldState(world);
     const status = world.complete ? Outcome.SUCCESS_VERIFIED : Outcome.EXECUTION_FAILED;
     return {
@@ -1089,6 +1099,38 @@ export class CognitiveController {
   async experienceShow({ target } = {}) {
     const op = this.#experienceOp('experience.show');
     const step = await this.runAction('experience.show', { target }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // Temporal reads. Each one runs through the same registry, verifier, and finalization path as
+  // every other command, but it writes nothing and its failure mode is a read error: an unreadable
+  // or corrupt log is reported as unreadable rather than as an empty history.
+  async experienceTimeline({ since, until, days, capability, limit } = {}) {
+    const op = this.#experienceOp('experience.timeline');
+    const step = await this.runAction('experience.timeline', { since, until, days, capability, limit }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async experienceTrends({ since, until, days, capability, limit } = {}) {
+    const op = this.#experienceOp('experience.trends');
+    const step = await this.runAction('experience.trends', { since, until, days, capability, limit }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async experiencePatterns({ since, until, days, capability, limit } = {}) {
+    const op = this.#experienceOp('experience.patterns');
+    const step = await this.runAction('experience.patterns', { since, until, days, capability, limit }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async experienceCompare({ aSince, aUntil, bSince, bUntil, days, capability } = {}) {
+    const op = this.#experienceOp('experience.compare');
+    const step = await this.runAction(
+      'experience.compare',
+      { aSince, aUntil, bSince, bUntil, days, capability },
+      'user',
+      op.id,
+    );
     return this.#finishCommandOp(op, step, null);
   }
 
@@ -1510,7 +1552,7 @@ export class CognitiveController {
     }
 
     const def = this.registry.get(name);
-    const ctx = { memory: this.memory, knowledge: this.knowledge, now: this.now, getStatus: this.getStatus, operationId, origin, root: this.rootForContext };
+    const ctx = { memory: this.memory, knowledge: this.knowledge, experience: this.experience, now: this.now, getStatus: this.getStatus, operationId, origin, root: this.rootForContext };
     // The filesystem actions receive the authorized root on ctx.root. It is set only by the
     // composition root and cannot be supplied by a model proposal, so the boundary cannot be
     // expanded from model output.
@@ -2184,6 +2226,20 @@ export class CognitiveController {
         worldUnavailable = true;
       }
     }
+    // A bounded temporal summary from the same experience log the experience commands read. It is
+    // offered to the prompt only when the request is about time, outcomes, or one of the represented
+    // capabilities, and the prompt drops it before any retrieved record. A store that cannot be read
+    // is disclosed for a relevant request rather than rendered as "no recorded history".
+    let temporal = null;
+    let temporalUnavailable = false;
+    if (this.experience) {
+      try {
+        temporal = await this.experience.temporalSummary();
+      } catch (err) {
+        op.errors.push({ stage: 'temporal', code: err.code || 'STORE_ERROR', message: err.message });
+        temporalUnavailable = true;
+      }
+    }
     const built = buildPrompt({
       request,
       memoryHits: relevant,
@@ -2196,6 +2252,8 @@ export class CognitiveController {
       historyUnavailable,
       world,
       worldUnavailable,
+      temporal,
+      temporalUnavailable,
       maxChars: this.maxContextChars,
     });
     const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });
@@ -2221,6 +2279,21 @@ export class CognitiveController {
       };
     } else if (worldUnavailable) {
       op.prompt.world = { included: false, unavailable: true };
+    }
+    // The temporal contribution is recorded as counts, the window, and whether the prompt kept it.
+    // No capability list, pattern detail, or subject is needed in the audit to say what was sent.
+    if (temporal) {
+      op.prompt.temporal = {
+        included: built.temporalIncluded,
+        lines: built.temporalLines,
+        linesTotal: built.temporalLinesTotal,
+        events: temporal.counts?.events ?? 0,
+        undated: temporal.counts?.undated ?? 0,
+        patterns: temporal.counts?.patterns ?? 0,
+        window: temporal.window ?? null,
+      };
+    } else if (temporalUnavailable) {
+      op.prompt.temporal = { included: false, unavailable: true };
     }
 
     // A conflict stays visible even if the model ignores the in-context markers.

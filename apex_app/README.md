@@ -183,6 +183,8 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `memory correct --resolve <full-record-id> <replacement claim...>` | Explicitly corrects one selected claim. Appends a user-confirmed record and preserves the original. |
 | `memory health` | Read-only record, provenance, correction, and corruption summary for persistent memory. Exact counts, bounded samples, and a note when inspection is incomplete. Content and secrets are not printed. Never calls a model, writes no audit record, and repairs nothing. Exit 0 only when the store was fully inspected and nothing requires attention. |
 | `world [--limit N]` | Read-only epistemic projection of the stores: beliefs separated by provenance, knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. `N` is 1-50 beliefs shown (default 20). Derived at read time: it persists nothing, repairs nothing, never calls a model, and writes no audit record. Private memory is marked and never reaches the model path. A bounded, counts-only view of the same projection is derived automatically for every model-path answer; `world` itself calls no model and writes nothing. Exit 0 only when both stores were fully inspected and nothing contradicts itself; exit 1 is a report, not a failure of the read. See [World state](#world-state-the-read-only-epistemic-projection). |
+| `experience timeline\|trends\|patterns` `[--since <date>] [--until <date>] [--days N] [--capability <name>] [--limit N]` | Read-only temporal views of recorded experiences: ordered events in a window, per-capability outcome trends, and detected outcome patterns. Derived at read time from the experience log; reads no audit file, calls no model, and changes no store - the command's own operation record is the only audit entry, as for every command. A malformed date is rejected before the read (`input_rejected`, exit 1); a window whose start is after its end is refused by the engine (exit 1). See [Batch AC](#batch-ac-temporal-experience-and-outcome-tracking-as-implemented). |
+| `experience compare [--a-since <date>] [--a-until <date>] [--b-since <date>] [--b-until <date>] [--days N] [--capability <name>]` | Read-only comparison of two time windows: counts, outcome classes, success rate, feedback, and per-capability changes. With no window A given, A is the same-length period immediately before B. A difference means the records differ, not that anything caused anything. |
 | `new` | Starts a new conversation session. Memory is kept; earlier turns are no longer sent to the model. |
 | `history [--limit N]` | Lists recent operation records. |
 | `task plan <goal>` | Plans a multi-step task and stores it. Runs nothing. See [Tasks](#tasks). |
@@ -984,6 +986,25 @@ questions that must change nothing).
   model path alone: with no model configured, stored records are still shown directly and no
   projection is built, and if either store is absent the view is not produced at all, because it
   describes both together.
+- **The temporal view describes recorded order, not causes.** `experience timeline`, `trends`,
+  `patterns` and `compare` derive everything from the append-only experience log at read time;
+  nothing is indexed, persisted, repaired, or approved. A window is at most 3,650 days and every
+  query re-reads the whole log, so its cost still grows with the store rather than with the window
+  (measured below). Events are ordered by `finishedAt`, then `requestedAt`, then `createdAt`; equal
+  timestamps keep their append-only log order; a record with no usable timestamp is listed as
+  undated and never placed in a window. A detected pattern is a description of the order in which
+  outcomes were recorded - never a claim that one event caused another, never a prediction, and
+  never an adaptation: no pattern can create or alter a behaviour rule, which still requires the
+  user's corrective feedback and explicit approval. A damaged or unreadable log is reported as
+  unavailable rather than as an empty history.
+- **The model receives at most a six-line temporal summary, and only when the request asks about
+  time.** Counts, window bounds, at most four capability groups and four named patterns, each line
+  truncated, with a fixed statement that the summary is order rather than cause. It is offered only
+  for a request whose words (or a represented capability name) are about time, outcomes, or
+  recurring behaviour, so an ordinary request does not pay for it; it is derived on the model path
+  alone, is dropped line by line before any retrieved record when the budget is tight, and its
+  omission is stated rather than silent. It writes nothing and can never turn a pattern into a
+  stored fact or a rule.
 - **Read cost grows with the whole store, not with the window.** Each read loads every
   record and runs the integrity scan before it takes its 100-record projection. Batch U
   removed duplicate reads and made an unchanged repeat read skip parsing, so at 20,000
@@ -2375,6 +2396,156 @@ improves a later answer; it shows what recording and refusing one costs, and tha
 what the operation was reported to have done. No local inference server of any kind was installed,
 downloaded, started, invoked, or recommended in this batch.
 
+## Batch AC: temporal experience and outcome tracking (as implemented)
+
+Batch AC reads the Batch Z-AB experience log as *history*: what happened, in what order, what the
+user said afterwards, and whether the recorded outcome changed. Everything is a deterministic
+derivation at read time from the append-only log (`<dataDir>/experiences.jsonl`); no new record kind
+is written, no index is persisted, and the read-only commands cannot repair, approve, or rewrite
+anything. The engine is `src/experience/temporal.js`; it imports no store, so a temporal read cannot
+start a write.
+
+### What a query distinguishes
+
+| Level | What it is | Its evidence |
+|---|---|---|
+| Observed event | One audited operation that ended with an outcome, placed at the time the record carries. | The experience record and, through it, the audit record it names. |
+| Recorded outcome | The outcome class the audit record reports: success, failure, blocked, other, or unknown. | The stored outcome; nothing is re-classified from prose. |
+| Explicit user feedback | The user's own assessment of one event, current or corrected. | Feedback records only. Silence is never an assessment. |
+| Later correction | Feedback the user superseded with a newer record, or an experience a later record replaced. | Supersession and replacement links; the corrected record stays readable and is counted as corrected. |
+| Subsequent related experience | Other events for the same capability, ordered by time. | Capability equality, not similarity of text. |
+| Current adaptation state | Whether a recorded behaviour rule is in effect now. | Read from the store; a pattern never changes it. |
+
+These are **historical observations**. A **detected pattern** is a deterministic statement about the
+order of those observations. There is no **hypothesis** stage in the implementation: nothing combines
+patterns into a candidate belief about the user or the world. There is no **prediction** stage
+either: APEX does not estimate a future outcome, and no record of a predicted outcome exists. If a
+future batch added one, it would have to be a separate record carrying prediction time, the expected
+outcome, its support, its uncertainty and, later, the actual result - and it could never be stored as,
+or later read back as, a historical observation. A prediction is not implemented, and a pattern is
+never presented as one.
+
+### Commands
+
+```bash
+apex experience timeline [--since <date>] [--until <date>] [--days N] [--capability <name>] [--limit N]
+apex experience trends   [--since <date>] [--until <date>] [--days N] [--capability <name>] [--limit N]
+apex experience patterns [--since <date>] [--until <date>] [--days N] [--capability <name>] [--limit N]
+apex experience compare  [--a-since <date>] [--a-until <date>] [--b-since <date>] [--b-until <date>] [--days N] [--capability <name>]
+```
+
+- `timeline` lists dated events newest first with outcome, capture route, feedback counts, and
+  correction state, plus any undated records outside every window.
+- `trends` groups by capability: totals per outcome class, success rate over classified outcomes,
+  first and last occurrence, an early/late trend, and whether the first and last outcome class differ.
+- `patterns` names the detected patterns with their supporting ids, contradicting counts, and the
+  threshold each one had to meet.
+- `compare` reports two windows side by side: counts, outcome classes, success rate, feedback, and
+  the largest per-capability changes. With no window A given, A is the same-length period immediately
+  before B, so the default comparison is "the period before" against "now".
+
+`--since` and `--until` accept an ISO 8601 timestamp or `YYYY-MM-DD`; a date is read in UTC so the
+result does not depend on the machine's time zone, and a date-only `until` includes that whole UTC
+day. Both bounds are inclusive. `--days` is 1-3,650 and fills only a bound you did not give; an
+explicit bound always wins, so "the last 7 days" and "since Monday" cannot quietly disagree about
+one end. The default window is 30 days. A malformed date is refused before the read starts
+(`input_rejected`), and a window whose start is after its end is refused by the engine - both exit 1
+and neither changes a store. As with every command, the attempt itself is the one audit record a
+user-issued command appends; the read adds nothing else.
+
+Ordering is by `finishedAt`, then `requestedAt`, then `createdAt`. Equal timestamps keep their
+append-only log position, so a restart re-derives the same order. A record with no usable timestamp
+is listed as undated and is never placed in a window. Output is bounded (50 events, 20 capability
+groups, 20 patterns, 20 evidence ids per pattern) and says when it is showing a subset.
+
+### Pattern rules
+
+Each candidate applies its own threshold; `minEvents` (default 3, configurable 2-20 inside the
+engine) is stated in the output. A capability is never inferred from similar wording: patterns are
+computed within one capability name.
+
+| Kind | Rule | Contradicting evidence |
+|---|---|---|
+| `repeated_failure` | The `minEvents` most recent dated events for the capability in the window all record failure. | Every other event in the window is counted and listed bounded. |
+| `repeated_success` | The same, for success. | Same. |
+| `alternating_outcomes` | At least 4 consecutive dated success/failure events with no two adjacent classes equal. | Events whose class is neither success nor failure are excluded from the sequence and counted. |
+| `regression_after_success` | The most recent event is a failure, preceded only by successes, with at least `minEvents - 1` of them. | None inside the run; the limitation says a change is not established. |
+| `improvement_after_correction` | A current corrective feedback record in the window, followed by at least one recorded success in the same capability. | Later events that are not successes are listed as counter-evidence. |
+| `recurring_corrections` | At least 2 current corrective feedback records in the same capability and window. | The other experiences in the group are listed as counter-evidence. |
+| `insufficient_evidence` | Fewer than `minEvents` dated events in the window. | Not applicable; the pattern states what is missing rather than what is true. |
+
+Every pattern carries `causal: false` and `adaptation: false`, counts supporting and contradicting
+evidence separately, separates automatic captures from records the user made, and names its own
+limitations in the output. Nothing in this module can create, approve, retire, or modify an
+adaptation: that path is still `adaptation derive` from the user's corrective feedback plus an
+explicit user decision, unchanged from Batch Z. A user correction that has itself been corrected
+stops supporting `improvement_after_correction` and `recurring_corrections`, and the corrected
+record remains readable and counted.
+
+A window with contradictory feedback and mixed outcomes therefore reports the disagreement instead
+of choosing a side; a window with too few events says so; and a corrupt or unreadable log makes the
+whole query unavailable rather than yielding an empty but confident history.
+
+### World state and model context
+
+`world` (and the world-state projection built for a model-path answer) now carries a bounded
+`temporal` section: event counts, success/failure, capture split, at most three detected patterns,
+the window bounds, and the same non-causal limitation. When the experience log cannot be read the
+section says `available: false`, the projection stops calling itself complete, and the world command
+exits 1. The `world.state` action's audit record keeps counts and pattern kinds only - no window
+instants, no evidence ids, and no user text - because the window moves with "now" and would make an
+independent re-read disagree with the first by milliseconds.
+
+The model context receives at most six short lines (counts, at most four capability groups, at most
+four patterns, and one fixed statement that this describes recorded order only). It is built only
+when the request is about time, outcomes, or a represented capability, so an ordinary question does
+not pay for it; if the experience store is unreadable and the request was about time, the prompt says
+the summary is unavailable instead of implying there is no history. Within the context budget it
+gives up its room first - before the world projection and before any retrieved record - and when all
+of it is gone the prompt states that it was omitted rather than silently dropping it.
+
+### Measured
+
+`node benchmarks/run-experience-benchmark.mjs --phase temporal`, 2026-11-01, node v26.4.0 on win32,
+5 repeats, medians. The fixture is the real request path: each event is an audited `calc` request,
+one in ten rejected before execution, one in nine carrying corrective feedback, spread evenly across
+the 29 days ending an hour before the benchmark clock - so every event is inside the default window
+and the last seven days are a genuine subset. The 1,000-event row is a separate run with 3 repeats.
+
+| Events | bytes | timeline (cold) | timeline (warm) | 7-day window | compare | filter (engine) | analysis (engine) | summary (engine) |
+|---|---|---|---|---|---|---|---|---|
+| 20 | 19,045 | 2.55 ms | 1.32 ms | 1.18 ms | 1.20 ms | 0.15 ms | 0.22 ms | 0.03 ms |
+| 100 | 94,368 | 6.01 ms | 2.54 ms | 2.26 ms | 2.62 ms | 0.40 ms | 0.48 ms | 0.08 ms |
+| 400 | 376,905 | 19.00 ms | 5.74 ms | 4.49 ms | 6.83 ms | 1.41 ms | 1.88 ms | 0.01 ms |
+| 1,000 | 942,278 | 47.35 ms | 14.31 ms | 11.68 ms | 13.53 ms | 3.69 ms | 4.91 ms | 0.14 ms |
+
+- The query cost is the store read and derivation, not the temporal work: at 1,000 events the whole
+  query is 14.31 ms warm, of which filtering is 3.69 ms and pattern detection brings it to 4.91 ms.
+  A narrow window filters the same derived list; it does not make the file smaller, so it saves only
+  the per-event work.
+- Summary construction is effectively free (well under a millisecond) because it is bounded: the
+  number of lines does not grow with the store.
+- Context contribution does not grow with the store either: on the 20/400/1,000-event fixtures the
+  summary added 555/560/564 characters (4 lines) to a 314-character base prompt, roughly 9% of the
+  6,000-character budget, and the unreadable-store disclosure cost 142 characters.
+- No index is persisted and none was added. The measurements above are the price of that choice;
+  at these sizes it does not justify a second source of truth beside the append-only log.
+
+What this batch does not claim: the numbers are from one machine on synthetic stores, no inference
+was run or simulated, and nothing here shows that a temporal summary improves a model answer - only
+what carrying it costs and that it cannot change what was recorded. No local inference server of any
+kind was installed, downloaded, started, invoked, or recommended.
+
+`tests/experience-temporal.test.js` (33 tests) covers ordering, equal/missing/invalid timestamps,
+time-zone normalization, window boundaries, supersession and retraction, repeated success/failure,
+alternation, regression and improvement, thresholds, contradictory evidence, automatic vs explicit
+capture, corrupt storage, large stores, bounded output, and the audit shapes.
+`tests/experience-temporal-integration.test.js` (14 tests) drives the four commands through the
+assembled application, proves the read paths write nothing (store queries, action execution, the
+world projection and the engine itself; a user-issued command still appends its own operation
+record), checks restart stability and verification against a concurrent append, and covers the
+world-state and prompt integration. Both are part of `npm test`.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 
@@ -2408,6 +2579,11 @@ demonstrate completion, so a later batch cannot claim progress by adding vocabul
    2 because a schema needs an owner and a migration story. Acceptance: records that
    answer "what was true on <date>, and which record says so", with old values preserved
    and labelled as history, plus retrieval that distinguishes current from expired.
+   Batch AC advanced the event-with-time clause for audited operations only: the experience
+   log can now be asked what happened between two instants, in what order, and with which
+   recorded outcome, and corrections stay labelled as history. Entities, participants,
+   arbitrary event kinds, and a schema owned by anything other than the experience log are
+   still not implemented; the temporal view is a derivation, not a new store.
 4. **Retrieval, evidence, uncertainty, and contradiction handling.** Evidence-linked belief
    records with explicit confidence, provenance-aware retrieval, and contradiction handling
    that is not a text heuristic. Depends on 3 (a claim must name what it is about).
