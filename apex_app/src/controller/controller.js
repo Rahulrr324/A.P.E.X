@@ -26,6 +26,8 @@ import { StoreError } from '../errors.js';
 import { KNOWLEDGE_PROMPT_LIMIT } from '../actions/knowledge-actions.js';
 import { MAX_HEALTH_SAMPLES, MAX_HISTORY_CHAIN } from '../knowledge/knowledge-store.js';
 import { buildWorldState, renderWorldState } from '../world/world-state.js';
+import { autoCaptureDecision, captureSettingPhrase, CAPTURE_OFF } from '../experience/capture.js';
+import { CAPTURE_AUTOMATIC } from '../experience/experience-store.js';
 
 export const MAX_REQUEST_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 4000;
@@ -38,7 +40,8 @@ export const NO_MODEL_MESSAGE =
   'No inference backend is configured, so APEX cannot write a free-form answer. ' +
   'Nothing has been generated. Non-model functions still work: "status", "calc 2+2", ' +
   '"remember that ...", "remember privately that ...", "recall ...", "list memory". ' +
-  'To enable a model, set APEX_MODEL_URL to a local server (see README). ' +
+  'APEX does not install, start, or recommend an inference server; if you have chosen an ' +
+  'endpoint yourself, point APEX_MODEL_URL at it (see README). ' +
   'Retrying this request will not produce an answer until a model is configured.';
 
 export function validateRequest(text) {
@@ -205,6 +208,7 @@ export class CognitiveController {
     rootForContext = null,
     knowledge = null,
     experience = null,
+    experienceCapture = CAPTURE_OFF,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -226,6 +230,10 @@ export class CognitiveController {
     // The experience store contributes only approved behaviour rules to a prompt. It is optional:
     // with no store configured the section is simply absent, and nothing claims rules were checked.
     this.experience = experience;
+    // Whether APEX may write an experience of a verified outcome without being asked. The mode is
+    // read in one place (autoCaptureDecision), which states its reason, so an unrecognized value
+    // is reported as a capture that did not happen rather than silently treated as a different one.
+    this.experienceCapture = typeof experienceCapture === 'string' ? experienceCapture : CAPTURE_OFF;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -515,7 +523,9 @@ export class CognitiveController {
       recorded = false;
       recordError = err.message;
     }
-    return { operation: persisted, status, decision: persisted.decision, output: op.output, display: displayText, recorded, recordError };
+    const captureNotice = await this.#captureExperience(persisted, { recorded });
+    const finalDisplay = captureNotice ? `${displayText ? `${displayText}\n\n` : ''}${captureNotice}` : displayText;
+    return { operation: persisted, status, decision: persisted.decision, output: op.output, display: finalDisplay, recorded, recordError };
   }
 
   async #resolveSession(sessionId, op) {
@@ -561,12 +571,14 @@ export class CognitiveController {
       op.decision = classifyDecision(op);
       op.output = 'The correction may have been stored, but its audit record could not be written; it is not reported as verified success.';
     }
+    const captureNotice = await this.#captureExperience(op, { recorded });
+    const baseDisplay = recorded ? (step.display ?? step.summary) : op.output;
     return {
       operation: op,
       status: op.status,
       decision: op.decision,
       output: op.output,
-      display: recorded ? (step.display ?? step.summary) : op.output,
+      display: captureNotice ? `${baseDisplay}\n\n${captureNotice}` : baseDisplay,
       recorded,
       recordError,
     };
@@ -722,6 +734,51 @@ export class CognitiveController {
     };
   }
 
+  // Automatic capture, attempted only after the audit record has been written: an experience is a
+  // verified reference to one, so without the audit line there is nothing for it to point at.
+  //
+  // It returns a notice for the user or `null`, and it never changes `op.status`. An operation that
+  // succeeded stays successful whether or not the experience was written, because the two claims
+  // rest on different evidence: the operation was confirmed by its own verifier, while the
+  // experience can only be reported once the store has read it back against the audit record.
+  async #captureExperience(op, { recorded }) {
+    if (!this.experience || typeof this.experience.recordExperience !== 'function') return null;
+    if (this.experienceCapture === CAPTURE_OFF) return null;
+    const decision = autoCaptureDecision(op, { mode: this.experienceCapture, recorded });
+    // An ineligible operation stays silent: nothing was asked for and nothing was attempted, so a
+    // line about it would read as a failure. Only a capture that was tried is reported.
+    if (!decision.eligible) return null;
+    const about = `operation ${shortId(op.id)} (${op.capability})`;
+    let written;
+    try {
+      // `origin` here is the store's permission check, not a claim about who authored the record:
+      // the user enabled capture, and the record's own provenance says `system_observed`.
+      written = await this.experience.recordExperience({
+        operationId: op.id,
+        subject: decision.subject,
+        capture: CAPTURE_AUTOMATIC,
+        provenance: { operationId: op.id },
+        origin: 'user',
+      });
+    } catch (err) {
+      if (err?.code === 'EXPERIENCE_EXISTS') {
+        return `Experience: ${about} already had a record, so nothing was duplicated.`;
+      }
+      return `Experience: not captured (${err?.message ?? String(err)}). ${about} succeeded and its audit record is unchanged; "experience record ${shortId(op.id)}" asks for it explicitly.`;
+    }
+    let check;
+    try {
+      check = await this.experience.evidenceCheck(written.record.id);
+    } catch (err) {
+      check = { ok: false, detail: `the independent check could not run (${err?.message ?? String(err)})` };
+    }
+    // Reported as captured only after that read-back agrees with the audit record.
+    if (!check.ok) {
+      return `Experience: appended as ${shortId(written.record.id)} for ${about}, but it does not match the audit record (${check.detail}); "experience health" shows the damage. ${about} itself succeeded and its audit record is unchanged.`;
+    }
+    return `Experience: captured automatically as ${shortId(written.record.id)} from ${about}. APEX recorded no assessment of it - feedback is yours alone.`;
+  }
+
   async #finishCommandOp(op, step, failMsg) {
     op.steps.push(step);
     op.status = step.outcome;
@@ -742,12 +799,14 @@ export class CognitiveController {
         op.output = failMsg;
       }
     }
+    const notice = await this.#captureExperience(op, { recorded });
+    const display = step.display ?? step.summary;
     return {
       operation: op,
       status: op.status,
       decision: op.decision,
       output: op.output,
-      display: step.display ?? step.summary,
+      display: notice ? `${display}\n\n${notice}` : display,
       recorded,
       recordError,
     };
@@ -1089,12 +1148,18 @@ export class CognitiveController {
   // meaning: every recorded experience re-verified against the audit record it names. Nothing is
   // repaired, nothing is approved, and an unreadable store is reported as unreadable, never as an
   // empty one.
+  // Stated from the configuration this controller holds, never from what a request claimed.
+  #captureSettingLine() {
+    return captureSettingPhrase(this.experienceCapture);
+  }
+
   async experienceHealth() {
     if (!this.experience) throw new ValidationError('the experience store is not available in this configuration');
     const health = await this.experience.health();
     const evidenceCheck = await this.#experienceEvidenceSummary();
     const evidence = evidenceCheck.line;
     const lines = ['Experience health (read-only; derived from stored records; nothing is repaired or approved)'];
+    lines.push(`  Capture:        ${this.#captureSettingLine()}`);
     if (!health.inspected) {
       lines.push(`  Store:          unavailable (${truncate(health.detail ?? 'the store could not be read', 200)})`);
       lines.push(`  Evidence:       ${evidence}`);
@@ -1108,6 +1173,7 @@ export class CognitiveController {
           ? 'ok - empty store (no experiences, feedback, or adaptations)'
           : 'ok - fully inspected'}`);
       lines.push(`  Experiences:    ${health.experiences} record(s) (${health.activeExperiences} live, ${health.supersededExperiences} corrected by a later record)`);
+      lines.push(`  How recorded:   ${health.recordedByUser} recorded by you, ${health.capturedAutomatically} captured automatically${health.unknownCapture > 0 ? `, ${health.unknownCapture} with capture provenance no writer produces` : ''}`);
       lines.push(`  Feedback:       ${health.feedback} record(s) (${health.currentFeedback} current, ${health.supersededFeedback} corrected)`);
       lines.push(`  Adaptations:    ${health.adaptations} derived - candidate ${health.candidates}, approved ${health.approved}, in effect ${health.activeAdaptations}, rejected ${health.rejectedAdaptations}, retired ${health.retiredAdaptations}, ambiguous ${health.ambiguousAdaptations}`);
       lines.push(`  Decisions:      ${health.decisions} user decision(s), ${health.retirements} retirement(s) recorded`);

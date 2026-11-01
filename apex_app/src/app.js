@@ -27,6 +27,7 @@ import { SummaryQueue } from './tasks/summary-queue.js';
 import { KnowledgeStore } from './knowledge/knowledge-store.js';
 import { ExperienceStore } from './experience/experience-store.js';
 import { experienceActions } from './actions/experience-actions.js';
+import { CAPTURE_OFF } from './experience/capture.js';
 
 export function createApp({
   dataDir,
@@ -39,6 +40,7 @@ export function createApp({
   filesystemMaxReadBytes = DEFAULT_FILESYSTEM_MAX_READ_BYTES,
   filesystemListDefaultLimit = FILESYSTEM_LIST_DEFAULT_LIMIT,
   filesystemListMaxLimit = FILESYSTEM_LIST_MAX_LIMIT,
+  experienceCapture = CAPTURE_OFF,
 } = {}) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new Error('dataDir is required');
   const clock = now ?? (() => new Date());
@@ -96,6 +98,9 @@ export function createApp({
       operationRecords: o.records,
       turnRecords: t.turns,
       experienceRecords: x.records,
+      experienceRecordedByUser: x.recordedByUser,
+      experienceCapturedAutomatically: x.capturedAutomatically,
+      experienceCaptureMode: experienceCapture,
       corruptExperienceLines: x.corrupt,
       sessionId: current.state?.sessionId ?? null,
       model: gateway.describe(),
@@ -120,6 +125,7 @@ export function createApp({
     rootForContext,
     knowledge,
     experience,
+    experienceCapture,
   });
   return {
     controller,
@@ -136,6 +142,7 @@ export function createApp({
     filesystemRoot: rootForContext,
     knowledge,
     experience,
+    experienceCapture,
   };
 }
 
@@ -150,6 +157,7 @@ export function createAppFromEnv(env = process.env) {
     filesystemMaxReadBytes: config.filesystem.maxReadBytes,
     filesystemListDefaultLimit: config.filesystem.listDefaultLimit,
     filesystemListMaxLimit: config.filesystem.listMaxLimit,
+    experienceCapture: config.experienceCapture,
   });
   return { config, ...app };
 }

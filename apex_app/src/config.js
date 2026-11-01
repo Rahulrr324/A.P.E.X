@@ -5,6 +5,7 @@ import path from 'node:path';
 import { ValidationError } from './errors.js';
 import { resolveRoot } from './filesystem/path.js';
 import { CONTROL_CHARS } from './util.js';
+import { CAPTURE_MODES, CAPTURE_OFF } from './experience/capture.js';
 
 export const DEFAULT_MODEL_TIMEOUT_MS = 30000;
 export const MODEL_PROVIDERS = Object.freeze(['openai', 'ollama']);
@@ -50,7 +51,7 @@ export function loadConfig(env = process.env) {
   // suggestion only after a request was attempted.
   if (provider === 'ollama' && modelUrl && !modelName) {
     throw new ValidationError(
-      'APEX_MODEL_NAME is required when APEX_MODEL_PROVIDER=ollama; set it to an installed model (run: ollama list)',
+      'APEX_MODEL_NAME is required when APEX_MODEL_PROVIDER=ollama; set it to a model that the endpoint you configured serves',
       'INVALID_CONFIG',
     );
   }
@@ -72,6 +73,18 @@ export function loadConfig(env = process.env) {
   const rawRoot = (env.APEX_FILESYSTEM_ROOT || '').trim();
   if (rawRoot) filesystemRoot = resolveRoot(rawRoot);
 
+  // Whether APEX may record an experience of a verified outcome on its own. The default is `off`
+  // for the same reason nothing else in APEX is on by default: a capability becomes active only
+  // when the user decides it should. A mistyped value is a startup error rather than a silent
+  // disable, so the operator is never left believing a setting they did not ask for.
+  const experienceCapture = (env.APEX_EXPERIENCE_CAPTURE || '').trim().toLowerCase() || CAPTURE_OFF;
+  if (!CAPTURE_MODES.includes(experienceCapture)) {
+    throw new ValidationError(
+      `APEX_EXPERIENCE_CAPTURE must be one of: ${CAPTURE_MODES.join(', ')}`,
+      'INVALID_CONFIG',
+    );
+  }
+
   return {
     dataDir,
     model: {
@@ -84,6 +97,7 @@ export function loadConfig(env = process.env) {
       allowRemote: env.APEX_ALLOW_REMOTE_MODEL === '1',
     },
     contextTurns: intEnv(env, 'APEX_CONTEXT_TURNS', 6, 0, 50),
+    experienceCapture,
     filesystem: {
       root: filesystemRoot,
       maxReadBytes: filesystemMaxReadBytes,

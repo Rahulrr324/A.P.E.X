@@ -153,7 +153,8 @@ describe('Ollama native API (protocol)', () => {
     const res = await gw.complete({ prompt: 'hi' });
     assert.equal(res.ok, false);
     assert.equal(res.error.code, 'MODEL_NOT_FOUND');
-    assert.match(res.error.message, /ollama pull nope/);
+    assert.match(res.error.message, /model "nope" is not installed on this Ollama server; configure APEX_MODEL_NAME to a model this server lists/);
+    assert.doesNotMatch(res.error.message, /ollama pull/, 'the protocol layer names a setting, not a model download');
     assert.equal(res.text, undefined);
   });
 

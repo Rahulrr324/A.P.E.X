@@ -56,8 +56,8 @@ describe('102: model configuration is validated before a request is attempted', 
 
   test('malformed endpoint, model name, timeout, and limit values exit 2 before any store is created', async () => {
     const cases = [
-      ['APEX_MODEL_URL', 'http://127.0.0.1:11434/v1/chat/completions', /must be the server base URL, not a chat endpoint/],
-      ['APEX_MODEL_URL', 'http://127.0.0.1:11434/api/chat', /must be the server base URL, not a chat endpoint/],
+      ['APEX_MODEL_URL', 'http://127.0.0.1:11434/v1/chat/completions', /must be the server base URL, not a chat or tags endpoint/],
+      ['APEX_MODEL_URL', 'http://127.0.0.1:11434/api/chat', /must be the server base URL, not a chat or tags endpoint/],
       ['APEX_MODEL_NAME', 'wanted\nmodel', /without control characters or line breaks/],
       ['APEX_MODEL_NAME', 'm'.repeat(201), /at most 200 characters/],
       ['APEX_MODEL_TIMEOUT_MS', '0', /must be between 100 and 600000/],

@@ -38,6 +38,26 @@ function store() {
 
 const ids = (csv) => String(csv ?? '').split(',').filter((x) => x !== '');
 
+// One whole-file read of the experience log, counted by hand: complete records and everything that
+// is not a complete record. A record the store itself would accept has an id, a kind and a schema,
+// so a partially visible append shows up as `torn` rather than as a shorter list.
+function sampleLog() {
+  const text = fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8') : '';
+  const lines = text.split('\n').filter((line) => line.trim() !== '');
+  let parsed = 0;
+  let torn = 0;
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line);
+      if (typeof obj.id !== 'string' || typeof obj.kind !== 'string' || obj.schema === undefined) torn += 1;
+      else parsed += 1;
+    } catch {
+      torn += 1;
+    }
+  }
+  return { lines: lines.length, parsed, torn };
+}
+
 // The writers start from the same instant, so a lost decision, a duplicated candidate or a write
 // that derived from a state another process had already changed is reproduced rather than
 // scheduled around. The barrier lives in its own directory: the store directory is asserted to hold
@@ -180,27 +200,20 @@ try {
       const startedAt = Date.now();
       let entry;
       try {
-        const text = fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf8') : '';
-        const lines = text.split('\n').filter((line) => line.trim() !== '');
-        let parsed = 0;
-        let torn = 0;
-        for (const line of lines) {
-          try {
-            const obj = JSON.parse(line);
-            if (typeof obj.id !== 'string' || typeof obj.kind !== 'string' || obj.schema === undefined) torn += 1;
-            else parsed += 1;
-          } catch {
-            torn += 1;
-          }
-        }
+        const { parsed, torn, lines } = sampleLog();
         let storeRead = 'ok';
+        let parsedAfter = parsed;
         try {
           const records = await store().list({ limit: 200 });
           storeRead = `ok:${records.length}`;
+          // The store read is one instant; the raw sample above is an earlier one, so a writer can
+          // legitimately append in between. Sampling the disk again immediately after the store
+          // answers gives the test both ends of that interval instead of one point inside it.
+          parsedAfter = sampleLog().parsed;
         } catch (err) {
           storeRead = String(err?.message ?? err);
         }
-        entry = { lines: lines.length, parsed, torn, storeRead };
+        entry = { lines, parsed, torn, parsedAfter, storeRead };
       } catch (err) {
         entry = { lines: 0, parsed: lastParsed, torn: 0, storeRead: `fatal`, code: err?.code ?? null, message: String(err?.message ?? err) };
       }

@@ -68,7 +68,7 @@ export function parseEndpoint(rawUrl, { allowRemote = false } = {}) {
   // HTTP 404 at request time.
   const endpointPath = url.pathname.replace(/\/+$/, '');
   if (/(?:^|\/)chat\/completions$/.test(endpointPath) || /(?:^|\/)api\/(?:chat|generate|tags)$/.test(endpointPath)) {
-    throw new ValidationError('APEX_MODEL_URL must be the server base URL, not a chat endpoint (for example http://127.0.0.1:11434)', 'INVALID_CONFIG');
+    throw new ValidationError('APEX_MODEL_URL must be the server base URL, not a chat or tags endpoint: APEX adds the API path itself', 'INVALID_CONFIG');
   }
   if (!allowRemote && !LOOPBACK_HOSTS.has(url.hostname)) {
     throw new ValidationError(
@@ -443,7 +443,7 @@ export class OllamaBackend extends HttpBackend {
     }
     const wanted = this.model.includes(':') ? this.model : `${this.model}:latest`;
     if (!listed.names.some((n) => n === this.model || n === wanted)) {
-      return { available: false, reachable: true, detail: `model "${this.model}" is not installed on this Ollama server (run: ollama pull ${this.model})` };
+      return { available: false, reachable: true, detail: `model "${this.model}" is not installed on this Ollama server; configure APEX_MODEL_NAME to a model this server lists` };
     }
     return { available: true, modelListed: true, detail: `model "${this.model}" installed at ${this.origin}` };
   }
@@ -468,7 +468,7 @@ export class OllamaBackend extends HttpBackend {
     const r = await this.request('POST', '/api/chat', body, timeoutMs);
     if (r.error) {
       if (r.error.code === 'HTTP_ERROR' && r.error.status === 404 && /not found/i.test(r.error.detail ?? '')) {
-        return failure(this.name, this.provider, 'MODEL_NOT_FOUND', `model "${this.model}" is not installed on this Ollama server (run: ollama pull ${this.model})`, r.latencyMs);
+        return failure(this.name, this.provider, 'MODEL_NOT_FOUND', `model "${this.model}" is not installed on this Ollama server; configure APEX_MODEL_NAME to a model this server lists`, r.latencyMs);
       }
       return this.httpFailure(r);
     }

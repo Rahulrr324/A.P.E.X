@@ -12,6 +12,7 @@ import { MAX_QUEUED_SUMMARIES } from './tasks/summary-queue.js';
 import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
 import { CONTROL_CHARS, shortId, truncate } from './util.js';
 import { redactSecrets } from './security/secrets.js';
+import { captureSettingPhrase } from './experience/capture.js';
 
 export const State = Object.freeze({
   OK: 'ok',
@@ -341,6 +342,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   // with history, and a coherent record can point at an operation that is no longer audited,
   // so neither answer is folded into a record count.
   const experienceHealth = await app.experience.health();
+  const captureSetting = captureSettingPhrase(app.experienceCapture);
   if (!experienceHealth.inspected) {
     subsystems.experience = {
       key: 'experience',
@@ -350,6 +352,12 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
       detail: experienceHealth.detail,
       count: null,
       experiences: null,
+      // The setting is reported even when the store cannot be read: it is configuration, and a
+      // reader needs to know whether capture is armed before judging what is missing.
+      capture: { mode: app.experienceCapture ?? null, setting: captureSetting },
+      recordedByUser: null,
+      capturedAutomatically: null,
+      unknownCapture: null,
       feedback: null,
       adaptations: null,
       activeAdaptations: null,
@@ -373,18 +381,24 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     if (experienceHealth.corruptLines > 0) state = State.CORRUPT;
     else if (exists === false) state = State.MISSING;
     const parts = [
-      `${experienceHealth.experiences} experience record(s)`,
+      `${experienceHealth.experiences} experience record(s) (${experienceHealth.recordedByUser} recorded by you, ${experienceHealth.capturedAutomatically} captured automatically)`,
       `${experienceHealth.feedback} feedback record(s)`,
       `${experienceHealth.adaptations} adaptation record(s) (${experienceHealth.activeAdaptations} active)`,
     ];
+    if (experienceHealth.unknownCapture > 0) {
+      parts.push(`${experienceHealth.unknownCapture} experience record(s) whose capture provenance no writer produces`);
+    }
     if (experienceHealth.conflicts.scopes > 0) {
       parts.push(`${experienceHealth.conflicts.scopes} conflicting adaptation scope(s)`);
     }
+    // The setting is stated in the summary, not only in the JSON: whether APEX writes experiences on
+    // its own is the first thing a reader needs to judge these counts.
+    const captureClause = `automatic capture ${captureSetting}`;
     const summary = state === State.MISSING
-      ? 'Experience: missing (valid: no experience, feedback, or adaptation record yet)'
+      ? `Experience: missing (valid: no experience, feedback, or adaptation record yet; ${captureClause})`
       : state === State.CORRUPT
-        ? `Experience: corrupt (${parts.join(', ')}, ${experienceHealth.corruptLines} corrupt line(s); adaptation states derived only from readable records)`
-        : `Experience: ok (${parts.join(', ')}; lifecycle ${lifecycleState})`;
+        ? `Experience: corrupt (${parts.join(', ')}, ${experienceHealth.corruptLines} corrupt line(s); adaptation states derived only from readable records; ${captureClause})`
+        : `Experience: ok (${parts.join(', ')}; lifecycle ${lifecycleState}; ${captureClause})`;
     const problems = corruptLineProblems(path.basename(app.experience.filePath), experienceHealth.corrupt);
     const lifecycleProblems = experienceHealth.anomalies.samples.map(
       (message) => `${path.basename(app.experience.filePath)}: lifecycle: ${message}`,
@@ -438,6 +452,10 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
       summary,
       count: experienceHealth.records,
       experiences: experienceHealth.experiences,
+      capture: { mode: app.experienceCapture ?? null, setting: captureSetting },
+      recordedByUser: experienceHealth.recordedByUser,
+      capturedAutomatically: experienceHealth.capturedAutomatically,
+      unknownCapture: experienceHealth.unknownCapture,
       feedback: experienceHealth.feedback,
       adaptations: experienceHealth.adaptations,
       candidates: experienceHealth.candidates,
@@ -966,9 +984,11 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   }
   if (modelState === State.UNAVAILABLE) {
     if (modelReachable === true) {
-      recovery.push(`Model: the endpoint answered, but it could not serve the configured model (${safeText(modelDetail)}). This is not an outage and no inference was tested. Correct the model name or install the model, then re-run "apex diagnose --model"; that read-only check is safe. Local storage checks above do not depend on the model.`);
+      recovery.push(`Model: the endpoint answered, but it could not serve the configured model (${safeText(modelDetail)}). This is not an outage and no inference was tested. Correct the model name you configured, or name a model that endpoint serves, then re-run "apex diagnose --model"; that read-only check is safe. The storage checks above do not depend on the model.`);
     } else {
-      recovery.push('Model: start the configured local model server, then re-run "apex diagnose --model"; retrying that read-only check is safe. The listing probe did not answer, so no inference was tested. Local storage checks above do not depend on the model.');
+      // States what the operator can check. APEX does not install, start, or recommend a server, so
+      // recovery guidance must not read as permission to obtain one.
+      recovery.push('Model: the endpoint you configured did not answer, so no inference was tested. Check that the server you configured is running and reachable at that URL, then re-run "apex diagnose --model"; retrying that read-only check is safe. APEX does not install, start, or recommend a model server. The storage checks above do not depend on the model.');
     }
   } else if (modelState === State.UNCONFIRMED) {
     recovery.push(`Model: the endpoint is reachable but did not list "${safeText(describe.model, 80)}". A request may still work if the server accepts the configured name; this is unconfirmed, not a failure, and no inference was run. Retrying "apex diagnose --model" is safe.`);

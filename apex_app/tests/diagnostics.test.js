@@ -395,7 +395,8 @@ describe('diagnostics: model independence', () => {
     assert.match(diag.stdout, /Model: unavailable/);
     assert.match(diag.stdout, /Memory: missing/);
     assert.match(diag.stdout, /Knowledge: missing/);
-    assert.match(diag.stdout, /start the configured local model server/);
+    assert.match(diag.stdout, /the endpoint you configured did not answer/, 'the outage is named as the configured endpoint not answering');
+    assert.match(diag.stdout, /APEX does not install, start, or recommend a model server/, 'and the recovery advice does not point at a local inference server');
     assert.doesNotMatch(diag.stdout, /Storage: /, 'a model outage is not a storage outage');
   });
 

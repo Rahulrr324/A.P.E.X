@@ -53,14 +53,14 @@ describe('O-02/O-03: model runtime states and slow starts are distinct and truth
     assert.equal(status.code, 1, status.stdout + status.stderr);
     assert.match(status.stdout, /unavailable: endpoint lists no model/, status.stdout);
     assert.match(status.stdout, /The endpoint answered but readiness failed/, status.stdout);
-    assert.doesNotMatch(status.stdout, /Starting the configured local server/, 'the server is up, so that advice would be wrong');
+    assert.doesNotMatch(status.stdout, /did not answer/, 'the server is up, so that advice would be wrong');
     assert.match(status.stdout, /no inference was tested/, status.stdout);
 
     const diag = await runCli(['diagnose', '--model'], env);
     assert.equal(diag.code, 1, diag.stdout + diag.stderr);
     assert.match(diag.stdout, /the endpoint answered, but it could not serve the configured model/, diag.stdout);
     assert.match(diag.stdout, /no inference was tested/, diag.stdout);
-    assert.doesNotMatch(diag.stdout, /start the configured local model server/, 'a reachable server is not an outage');
+    assert.doesNotMatch(diag.stdout, /did not answer/, 'a reachable server is not an outage');
     assert.equal(stub.requests.length, 0, 'a readiness probe sends no completion request');
   });
 
@@ -82,7 +82,7 @@ describe('O-02/O-03: model runtime states and slow starts are distinct and truth
 
     const diag = await runCli(['diagnose', '--model'], env);
     assert.match(diag.stdout, /the endpoint answered, but it could not serve the configured model/, diag.stdout);
-    assert.doesNotMatch(diag.stdout, /start the configured local model server/, 'pulling the model is the fix, not restarting the server');
+    assert.doesNotMatch(diag.stdout, /did not answer/, 'the model name is the fix, not an outage');
   });
 
   test('a model listed by readiness can still fail inference, and keeps its own error code', async () => {

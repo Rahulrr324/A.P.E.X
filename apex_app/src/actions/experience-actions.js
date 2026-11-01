@@ -24,6 +24,8 @@ import {
   MAX_SUBJECT_CHARS,
   MAX_SUPERSEDES,
   MAX_SUPPORT_REFS,
+  CAPTURE_AUTOMATIC,
+  captureOf,
 } from '../experience/experience-store.js';
 import { MIN_SUPPORT_FEEDBACK } from '../experience/derivation.js';
 
@@ -103,6 +105,14 @@ const ASSESSMENT_LABEL = Object.freeze({
 // needs to know which of the eight it was looking at.
 const CORRECTIVE = new Set(['incorrect', 'not_useful', 'user_correction', 'outcome_failed']);
 
+// A reader must be able to tell the two ways an experience exists: the user named the operation and
+// asked for it, or APEX captured a verified outcome. Neither one is the user's judgement of it.
+function captureLabel(r) {
+  if (r.capture === 'automatic') return 'captured automatically';
+  if (r.capture === 'explicit') return 'recorded by you';
+  return 'provenance unknown';
+}
+
 function experienceLine(r) {
   const state = r.active ? '' : ' [corrected by a later record]';
   const feedback = r.feedbackTotal === 0
@@ -111,7 +121,7 @@ function experienceLine(r) {
   return `  [${shortId(r.id)}] ${r.capability ?? 'unscoped'} | outcome ${r.outcome ?? 'unknown'}${state}\n`
     + `      about: ${r.subject}\n`
     + `      audit: ${shortId(r.operationId)} | requested: ${String(r.requestedAt).slice(0, 19)} | ${feedback}`
-    + `${r.adaptationEligible ? '' : ' | not adaptation-eligible'}`;
+    + ` | ${captureLabel(r)}${r.adaptationEligible ? '' : ' | not adaptation-eligible'}`;
 }
 
 function feedbackLine(f) {
@@ -173,6 +183,7 @@ export function experienceActions(store) {
           operationId,
           subject,
           replaces,
+          capture: 'explicit',
           provenance: { operationId: ctx.operationId },
           origin: ctx.origin,
         });
@@ -359,8 +370,16 @@ export function experienceActions(store) {
             `  guidance: ${record.guidance ?? 'none given'}`,
             `  reason: ${record.reason ?? 'not given'}`,
             correction ? `  corrects: ${supersededIds.map(shortId).join(', ')} (the earlier feedback stays in the log)` : '  earlier feedback on this experience is unchanged',
+            // The event and the judgement are different records. When the event was one APEX
+            // observed on its own, the display must say so, because the outcome line above the
+            // user is about a verified execution and not about their opinion. The record read back
+            // from the log carries only its provenance, so the route is derived the same way every
+            // other reader derives it.
+            captureOf(experience) === CAPTURE_AUTOMATIC
+              ? '  note: this experience was captured automatically from a verified outcome; APEX recorded no assessment of it, and this feedback is yours alone.'
+              : null,
             'Recording feedback changes nothing about your future requests. A behaviour change needs a candidate, and a candidate needs your explicit approval.',
-          ].join('\n'),
+          ].filter(Boolean).join('\n'),
         };
       },
       async verify(ctx, { assessment, guidance }, result) {

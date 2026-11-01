@@ -79,7 +79,8 @@ describe('059: a bad setting is refused before anything is read or written', () 
     const res = await runCli(['status'], envFor(dataDir, { APEX_MODEL_PROVIDER: 'ollama', APEX_MODEL_URL: 'http://127.0.0.1:1' }));
     assert.equal(res.code, 2, res.stdout + res.stderr);
     assert.match(res.stderr, /APEX_MODEL_NAME is required when APEX_MODEL_PROVIDER=ollama/);
-    assert.match(res.stderr, /ollama list/, 'and it points at the command that lists installed models');
+    assert.match(res.stderr, /a model that the endpoint you configured serves/, 'and it names the setting to fix');
+    assert.doesNotMatch(res.stderr, /run: ollama|ollama (list|pull|serve)\b/i, 'and does not tell the user to run an Ollama command');
   });
 });
 
@@ -208,7 +209,7 @@ describe('059: model errors are reported as model errors', () => {
     assert.equal(fs.existsSync(path.join(dataDir, 'operations.jsonl')), false, 'probing the model writes no audit record');
   });
 
-  test('an Ollama model that is not installed is named as missing, with the command to fix it', async () => {
+  test('an Ollama model that is not installed is named as missing, with the setting to fix it', async () => {
     const dataDir = tempDir();
     const server = http.createServer((req, res) => {
       if (req.method === 'GET' && req.url === '/api/tags') {
@@ -227,7 +228,8 @@ describe('059: model errors are reported as model errors', () => {
       }));
       assert.equal(asked.code, 1, asked.stdout + asked.stderr);
       assert.match(asked.stdout, /MODEL_NOT_FOUND|not installed/, `an unknown model name is named: ${asked.stdout}`);
-      assert.match(asked.stdout, /ollama pull nope/, 'and the fix is named');
+      assert.match(asked.stdout, /configure APEX_MODEL_NAME to a model this server lists/, 'and the fix is named');
+      assert.doesNotMatch(asked.stdout, /ollama pull/, 'the named fix is a setting, not a model download');
 
       const status = await runCli(['status', '--model'], envFor(dataDir, {
         APEX_MODEL_PROVIDER: 'ollama', APEX_MODEL_URL: url, APEX_MODEL_NAME: 'nope',

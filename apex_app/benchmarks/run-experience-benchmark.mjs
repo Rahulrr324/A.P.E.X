@@ -40,7 +40,9 @@ import {
   validateExperienceRecord,
   DEFAULT_ACTIVE_ADAPTATIONS,
   MAX_ACTIVE_ADAPTATIONS,
+  CAPTURE_AUTOMATIC,
 } from '../src/experience/experience-store.js';
+import { CAPTURE_VERIFIED_SUCCESS } from '../src/experience/capture.js';
 import { buildPrompt, adaptationLine, MAX_CONTEXT_CHARS } from '../src/controller/context.js';
 import { MemoryStore, validateMemoryRecord } from '../src/memory/memory-store.js';
 import { KnowledgeStore, validateKnowledgeRecord } from '../src/knowledge/knowledge-store.js';
@@ -82,7 +84,7 @@ function parseArgs(argv) {
     else if (arg === '--repeats') { opts.repeats = bounded(argv[i + 1], 1, MAX_REPEATS, '--repeats'); i += 1; }
     else if (arg === '--phase') {
       const name = String(argv[i + 1] ?? '');
-      if (!['reads', 'writes', 'context', 'compare'].includes(name)) throw new Error(`unknown phase ${name}`);
+      if (!['reads', 'writes', 'capture', 'context', 'compare'].includes(name)) throw new Error(`unknown phase ${name}`);
       opts.phase = name;
       i += 1;
     } else throw new Error(`unknown option ${arg}`);
@@ -139,8 +141,15 @@ function timedSync(fn) {
   return performance.now() - start;
 }
 
-function app(dir) {
-  return createApp({ dataDir: dir, gateway: new ModelGateway({ backend: new NoBackend() }), now: CLOCK });
+// `capture` is the one Batch AA setting, passed exactly as the application reads it from the
+// environment. Omitted, the application behaves as it does for a user who never set it.
+function app(dir, capture = undefined) {
+  return createApp({
+    dataDir: dir,
+    gateway: new ModelGateway({ backend: new NoBackend() }),
+    now: CLOCK,
+    ...(capture === undefined ? {} : { experienceCapture: capture }),
+  });
 }
 
 function storeOn(dir) {
@@ -298,6 +307,125 @@ async function phaseWrites(opts, fixtures) {
       [cell('retire'), 10], [cell('recheck'), 11],
     ]);
   }
+}
+
+// Capture: the cost Batch AA adds to the write path, measured against the same store bytes in two
+// conditions that differ only in the one setting. A = capture off (what Batch Z did), B = capture
+// armed for verified successes, both through the real request path on a fresh copy of the same
+// fixture. `B - A` is the capture: the audit reference, the lock, the append and the independent
+// re-read. The growth of that column across fixture sizes is what decides whether a persisted index
+// would be worth its own write cost - see benchmarks/README.md.
+async function phaseCapture(opts, fixtures) {
+  console.log('\n== capture: what automatic capture adds to an eligible operation ==');
+  console.log('  A = APEX_EXPERIENCE_CAPTURE off, B = verified-success; one fresh fixture copy per sample');
+  console.log('  eligible   = the whole controller call for a verified user-origin memory.add');
+  console.log('  append     = the store append the capture performs, on its own, for a real audited event');
+  console.log('  duplicate  = a second experience claim for one operation id, refused inside the lock');
+  console.log('  both at once = two writers, two operations, one store, started together (wall time of the pair)');
+  console.log('  damaged    = the same eligible request against a store with one corrupt line, where the');
+  console.log('               capture refuses and the operation keeps its own outcome');
+  console.log('  unreadable = the same request against a store that cannot be opened at all, which is');
+  console.log('               reported separately because the failure path and its cost differ');
+  header([
+    ['store', 20], ['A eligible', 12], ['B eligible', 12], ['B - A', 10],
+    ['append', 10], ['duplicate', 11], ['both at once', 14], ['damaged', 10], ['unreadable', 12],
+  ]);
+  const refuse = (promise) => promise.then(() => null, () => null);
+  for (const fixture of fixtures) {
+    const off = [];
+    const on = [];
+    const append = [];
+    const dupe = [];
+    const pair = [];
+    const damaged = [];
+    const unreadable = [];
+    for (let i = 0; i < opts.repeats; i += 1) {
+      const dirA = await copyDir(fixture.dir);
+      off.push((await timed(() => auditedEvent(app(dirA), `capture condition A ${i}`))).ms);
+
+      const dirB = await copyDir(fixture.dir);
+      on.push((await timed(() => auditedEvent(app(dirB, CAPTURE_VERIFIED_SUCCESS), `capture condition B ${i}`))).ms);
+
+      // The event is produced with capture off, so the append below is the only capture work in the
+      // sample and the duplicate refusal is measured against the record it just wrote.
+      const dirC = await copyDir(fixture.dir);
+      const plain = app(dirC);
+      const event = await auditedEvent(plain, `capture append ${i}`);
+      append.push((await timed(() => plain.experience.recordExperience({
+        operationId: event, subject: 'captured automatically here', capture: CAPTURE_AUTOMATIC, origin: 'user',
+      }))).ms);
+      dupe.push((await timed(() => refuse(plain.experience.recordExperience({
+        operationId: event, subject: 'a second claim to the same event', capture: CAPTURE_AUTOMATIC, origin: 'user',
+      })))).ms);
+
+      // Two writers on one store: each has its own audited event, so no refusal is involved and the
+      // only difference from `append` is that the two appends wait for one another.
+      const dirD = await copyDir(fixture.dir);
+      const first = app(dirD);
+      const second = app(dirD);
+      const eventD1 = await auditedEvent(first, `capture pair ${i}a`);
+      const eventD2 = await auditedEvent(second, `capture pair ${i}b`);
+      pair.push((await timed(() => Promise.all([
+        refuse(first.experience.recordExperience({
+          operationId: eventD1, subject: 'first of a concurrent pair', capture: CAPTURE_AUTOMATIC, origin: 'user',
+        })),
+        refuse(second.experience.recordExperience({
+          operationId: eventD2, subject: 'second of a concurrent pair', capture: CAPTURE_AUTOMATIC, origin: 'user',
+        })),
+      ]))).ms);
+
+      const dirE = await copyDir(fixture.dir);
+      fs.appendFileSync(path.join(dirE, 'experiences.jsonl'), 'this line is not a record\n');
+      damaged.push((await timed(() => auditedEvent(app(dirE, CAPTURE_VERIFIED_SUCCESS), `capture against damage ${i}`))).ms);
+
+      const dirF = await copyDir(fixture.dir);
+      const storePath = path.join(dirF, 'experiences.jsonl');
+      fs.rmSync(storePath);
+      fs.mkdirSync(storePath);
+      unreadable.push((await timed(() => auditedEvent(app(dirF, CAPTURE_VERIFIED_SUCCESS), `capture against an unreadable store ${i}`))).ms);
+    }
+    const a = stats(off).median;
+    const b = stats(on).median;
+    row([
+      [`${fixture.experiences} experiences`, 20],
+      [ms(a), 12], [ms(b), 12], [`${(b - a).toFixed(2)} ms`, 10],
+      [ms(stats(append).median), 10], [ms(stats(dupe).median), 11],
+      [ms(stats(pair).median), 14], [ms(stats(damaged).median), 10],
+      [ms(stats(unreadable).median), 12],
+    ]);
+  }
+
+  // An operation outside the capture subset is refused from the audit record alone, before any store
+  // is opened, so arming the setting must not slow the requests it does not apply to.
+  const fixture = fixtures[fixtures.length - 1];
+  const offReads = [];
+  const onReads = [];
+  for (let i = 0; i < opts.repeats; i += 1) {
+    const dirA = await copyDir(fixture.dir);
+    offReads.push((await timed(() => app(dirA).controller.handle('calc 2+2', { origin: 'user' }))).ms);
+    const dirB = await copyDir(fixture.dir);
+    onReads.push((await timed(() => app(dirB, CAPTURE_VERIFIED_SUCCESS).controller.handle('calc 2+2', { origin: 'user' }))).ms);
+  }
+  const noStore = stats(offReads).median;
+  const withSetting = stats(onReads).median;
+  console.log(`  ineligible request (calc 2+2) on the largest fixture: ${ms(noStore)} off, ${ms(withSetting)} armed, `
+    + `${(withSetting - noStore).toFixed(2)} ms apart`);
+
+  // What the setting itself costs when nothing is eligible to capture, and what a store that cannot
+  // be reached at all costs: both must be reported, because "capture is on" is also a claim about the
+  // requests that never reach a write.
+  const empty = tempDir('apex-bench-capture-empty-');
+  const bare = app(empty, CAPTURE_VERIFIED_SUCCESS);
+  const first = await timed(() => bare.controller.handle('remember that first note is held', { origin: 'user' }));
+  if (first.result.status !== Outcome.SUCCESS_VERIFIED) throw new Error(`empty-store seeding failed: ${first.result.status}`);
+  const rest = [];
+  for (let i = 1; i < opts.repeats; i += 1) {
+    const run = await timed(() => bare.controller.handle(`remember that first note ${i} is held`, { origin: 'user' }));
+    if (run.result.status !== Outcome.SUCCESS_VERIFIED) throw new Error(`empty-store seeding failed: ${run.result.status}`);
+    rest.push(run.ms);
+  }
+  console.log(`  capture into an empty store on a fresh directory: ${ms(first.ms)} for the first record, `
+    + (rest.length ? `${ms(stats(rest).median)} median for the ${rest.length} after it` : 'no further sample (increase --repeats)'));
 }
 
 async function phaseContext(opts, fixtures) {
@@ -470,7 +598,7 @@ async function phaseCompare(opts, fixtures) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
-    console.log('usage: node benchmarks/run-experience-benchmark.mjs [--experiences N] [--repeats R] [--phase reads|writes|context|compare] [--keep]');
+    console.log('usage: node benchmarks/run-experience-benchmark.mjs [--experiences N] [--repeats R] [--phase reads|writes|capture|context|compare] [--keep]');
     return;
   }
   console.log('experience benchmark: model-free, temporary data directories, no inference requested at any point.');
@@ -485,10 +613,11 @@ async function main() {
         + ` ${fixture.skippedCount} group(s) left as evidence without a candidate)`);
       fixtures.push(fixture);
     }
-    const phases = opts.phase ? [opts.phase] : ['reads', 'writes', 'context', 'compare'];
+    const phases = opts.phase ? [opts.phase] : ['reads', 'writes', 'capture', 'context', 'compare'];
     for (const name of phases) {
       if (name === 'reads') await phaseReads(opts, fixtures);
       if (name === 'writes') await phaseWrites(opts, fixtures);
+      if (name === 'capture') await phaseCapture(opts, fixtures);
       if (name === 'context') await phaseContext(opts, fixtures);
       if (name === 'compare') await phaseCompare(opts, fixtures);
     }

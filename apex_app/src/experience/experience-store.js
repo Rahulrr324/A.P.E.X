@@ -21,7 +21,8 @@
 // enough to create one.
 //
 // Trust boundaries, in the order a record can appear:
-//   1 observed experience  - written by the user, copied from the audit;
+//   1 observed experience  - copied from the audit record, either because the user asked for it
+//     (`user_recorded`) or because APEX captured a verified outcome on its own (`system_observed`);
 //   2 user feedback        - user origin only, always a new record;
 //   3 candidate adaptation - written by deterministic derivation, marked `candidate_unapproved`;
 //   4 approved adaptation  - only when a user-origin decision record says so;
@@ -110,6 +111,34 @@ const PROVENANCE_BY_KIND = Object.freeze({
   [RETIREMENT_KIND]: { origin: 'user_retirement', updateMode: 'user_confirmed' },
 });
 
+// An experience can arrive two ways, and the difference must stay visible forever: the user named
+// the operation and asked for it, or APEX captured a verified outcome on the user's behalf. Both are
+// evidence that the event happened; neither is the user's judgement of it, which is what only a
+// feedback record can say. A caller selects one of these two, never a value of its own making, so
+// the field that says who authorized the record cannot be set free-form.
+export const CAPTURE_EXPLICIT = 'explicit';
+export const CAPTURE_AUTOMATIC = 'automatic';
+export const CAPTURE_VALUES = Object.freeze([CAPTURE_EXPLICIT, CAPTURE_AUTOMATIC]);
+// The answer every reader gives for a record whose provenance names no capture route at all: a
+// line written before this distinction, or one no writer could have produced.
+export const CAPTURE_UNKNOWN = 'unknown';
+const EXPERIENCE_ORIGIN_BY_CAPTURE = Object.freeze({
+  [CAPTURE_EXPLICIT]: 'user_recorded',
+  [CAPTURE_AUTOMATIC]: 'system_observed',
+});
+const EXPERIENCE_CAPTURE_BY_ORIGIN = Object.freeze({
+  user_recorded: CAPTURE_EXPLICIT,
+  system_observed: CAPTURE_AUTOMATIC,
+});
+
+// How an experience entered the log, read the same way by every reader. A record whose provenance
+// predates this distinction, or that no writer could have produced, is reported as unknown rather
+// than assumed to be the user's own.
+export function captureOf(record) {
+  const origin = record?.provenance?.origin;
+  return EXPERIENCE_CAPTURE_BY_ORIGIN[origin] ?? CAPTURE_UNKNOWN;
+}
+
 // ---- field validators -------------------------------------------------------
 
 // An error message here never quotes the offending value: it can reach the audit record through
@@ -193,7 +222,11 @@ function validateTimestamp(value, name, { nullable = false } = {}) {
 function validateProvenance(r, kind) {
   const expected = PROVENANCE_BY_KIND[kind];
   if (!r.provenance || typeof r.provenance !== 'object' || Array.isArray(r.provenance)) return 'missing provenance';
-  if (r.provenance.origin !== expected.origin) return `provenance origin must be ${expected.origin}`;
+  if (kind === EXPERIENCE_KIND) {
+    if (!Object.hasOwn(EXPERIENCE_CAPTURE_BY_ORIGIN, r.provenance.origin)) {
+      return 'experience provenance origin must be user_recorded or system_observed';
+    }
+  } else if (r.provenance.origin !== expected.origin) return `provenance origin must be ${expected.origin}`;
   if (r.provenance.updateMode !== expected.updateMode) return `provenance updateMode must be ${expected.updateMode}`;
   if (r.provenance.operationId !== undefined
     && (typeof r.provenance.operationId !== 'string' || !OPERATION_ID_RE.test(r.provenance.operationId))) {
@@ -208,10 +241,20 @@ function validateProvenance(r, kind) {
 
 // Provenance is derived from the record kind and the operation that wrote it. A caller can attach
 // its operation id and a short context, and nothing else: `origin` and `updateMode` are refused
-// because they are the fields that say who authorized the record.
-function sanitizeProvenance(p, kind) {
+// because they are the fields that say who authorized the record. For an experience the caller may
+// say *how* the record arrived - `explicit` or `automatic` - and that choice is mapped to the fixed
+// origin vocabulary here, so the field stays non-forgeable while still distinguishing a captured
+// outcome from one the user asked for by name.
+function sanitizeProvenance(p, kind, { capture = CAPTURE_EXPLICIT } = {}) {
   const expected = PROVENANCE_BY_KIND[kind];
-  const base = { origin: expected.origin, updateMode: expected.updateMode };
+  if (!CAPTURE_VALUES.includes(capture)) throw new ValidationError(`an experience is either ${CAPTURE_EXPLICIT} or ${CAPTURE_AUTOMATIC} captured`);
+  if (kind !== EXPERIENCE_KIND && capture !== CAPTURE_EXPLICIT) {
+    throw new ValidationError('only an experience carries a capture kind');
+  }
+  const base = {
+    origin: kind === EXPERIENCE_KIND ? EXPERIENCE_ORIGIN_BY_CAPTURE[capture] : expected.origin,
+    updateMode: expected.updateMode,
+  };
   if (p === undefined || p === null) return base;
   if (typeof p !== 'object' || Array.isArray(p)) throw new ValidationError('provenance must be an object');
   if (p.origin !== undefined || p.updateMode !== undefined) {
@@ -543,6 +586,9 @@ function annotateExperience(record, { feedbackByExperience, replacedBy, retiredE
     ...record,
     active: !retiredExperiences.has(record.id),
     superseded: retiredExperiences.has(record.id),
+    // How this event entered the log, so a reader can tell the user's own record from one APEX
+    // captured, and never reads a captured outcome as a judgement the user made.
+    capture: captureOf(record),
     replaces: [...(record.replaces ?? [])],
     replacedBy: replacedBy.get(record.id) ?? [],
     feedbackCount: current.length,
@@ -691,12 +737,18 @@ export class ExperienceStore {
   // Record one audited event as an experience. `operationId` names the audit record and its
   // structural evidence is copied from it, hashed so a later reader can prove the two still agree.
   // `replaces` corrects an earlier experience; the corrected record stays in the log.
-  async recordExperience({ operationId, subject, replaces = [], provenance = {}, origin } = {}) {
+  // `capture` says how the request arrived: `explicit` (the user named the operation) or
+  // `automatic` (APEX captured a verified outcome). Both require a user-origin operation; neither
+  // writes feedback, an assessment, or any adaptation state.
+  async recordExperience({ operationId, subject, replaces = [], provenance = {}, capture = CAPTURE_EXPLICIT, origin } = {}) {
     this.#requireUser(origin, 'recording an experience');
+    if (!CAPTURE_VALUES.includes(capture)) {
+      throw new ValidationError(`an experience is recorded as either ${CAPTURE_EXPLICIT} or ${CAPTURE_AUTOMATIC} captured`);
+    }
     const opRef = validateOperationRef(operationId);
     const label = validateTextField(subject, 'subject', { max: MAX_SUBJECT_CHARS });
     const refs = validateRefList(replaces, 'corrected experience', MAX_SUPERSEDES);
-    const recorded = sanitizeProvenance(provenance, EXPERIENCE_KIND);
+    const recorded = sanitizeProvenance(provenance, EXPERIENCE_KIND, { capture });
     return this.writeLock.run(() => this.#recordExperienceFromAuthority({ opRef, label, refs, recorded }));
   }
 
@@ -710,6 +762,7 @@ export class ExperienceStore {
     if (live.length > 0 && !(live.length === 1 && targetIds.has(live[0].id))) {
       throw new ValidationError(
         `operation [${shortId(opRef)}] already has a recorded experience${live.length > 1 ? ', and a duplicate of it' : ''}; correct it by naming that record in replaces`,
+        'EXPERIENCE_EXISTS',
       );
     }
 
@@ -1018,6 +1071,9 @@ export class ExperienceStore {
       path: this.filePath,
       records: records.length,
       experiences: index.experiences.length,
+      recordedByUser: index.experiences.filter((r) => captureOf(r) === CAPTURE_EXPLICIT).length,
+      capturedAutomatically: index.experiences.filter((r) => captureOf(r) === CAPTURE_AUTOMATIC).length,
+      unknownCapture: index.experiences.filter((r) => captureOf(r) === CAPTURE_UNKNOWN).length,
       feedback: index.feedback.length,
       adaptations: index.adaptations.length,
       decisions: index.decisions.length,
@@ -1294,6 +1350,9 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
       retirements: null,
       activeExperiences: null,
       supersededExperiences: null,
+      recordedByUser: null,
+      capturedAutomatically: null,
+      unknownCapture: null,
       currentFeedback: null,
       supersededFeedback: null,
       candidates: null,
@@ -1411,6 +1470,9 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
     retirements: index.retirements.length,
     activeExperiences: experiences.length - retiredExperiences.size,
     supersededExperiences: retiredExperiences.size,
+    recordedByUser: index.experiences.filter((r) => captureOf(r) === CAPTURE_EXPLICIT).length,
+    capturedAutomatically: index.experiences.filter((r) => captureOf(r) === CAPTURE_AUTOMATIC).length,
+    unknownCapture: index.experiences.filter((r) => captureOf(r) === CAPTURE_UNKNOWN).length,
     currentFeedback: index.feedback.length - retiredFeedback.size,
     supersededFeedback: retiredFeedback.size,
     candidates: count('candidate'),

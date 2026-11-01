@@ -33,7 +33,7 @@ from a milestone number or a passing build.
 | Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `memory health`, `calc`, `status`, `knowledge add/retract/resolve/history/health/list/search/show`, `audit health`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `knowledge-lifecycle.test.js`, `knowledge-health.test.js`, `knowledge-resolution.test.js`, `store-health.test.js`, `tasks.test.js`, `cli-workflow.test.js`. A model is never consulted for these. |
 | Filesystem inspection | Implemented only when `APEX_FILESYSTEM_ROOT` is set: bounded, read-only, single-root listing and reading. | `filesystem.test.js`, `tasks-filesystem.test.js`. |
 | Model gateway protocol handling | Implemented and **stub-tested**: request/response shapes, failure classification, retries, timeouts, and model-name mismatch against local stand-in servers that copy the documented OpenAI-compatible and Ollama shapes. | `gateway.test.js`, `model-workflow.test.js`. Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model. |
-| Real-model behaviour | **Observed outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on one Windows machine. One bounded request on 2026-10-31 completed through APEX in about 105 s; a bounded four-request benchmark the same day recorded 37.7-53.1 s per request, with 3.0-3.8 backend-reported tokens/s. Every answer was reported as unverified. Measurements and limits are in [Optional: a local model](#optional-a-local-model). | Manual, dated observations only; no automated regression test. |
+| Real-model behaviour | **Observed outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on one Windows machine. One bounded request on 2026-10-31 completed through APEX in about 105 s; a bounded four-request benchmark the same day recorded 37.7-53.1 s per request, with 3.0-3.8 backend-reported tokens/s. Every answer was reported as unverified. Measurements and limits are in [Optional: a model endpoint you configure](#optional-a-model-endpoint-you-configure). | A dated historical observation, not an active setup instruction; no automated regression test. |
 | Epistemic world-state projection | Implemented as a bounded, read-only projection of what the stores hold: beliefs classified by provenance (`user_asserted` vs `unverified_model`), knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. It is a view derived at read time, not a world model: it persists nothing, calls no model, and decides nothing. A model-path answer also receives a bounded, counts-only view of it, so the model is told what the stores hold beyond the records retrieval happened to show. | `world-state.test.js`, `world-context.test.js`, `src/world/world-state.js`, the `world` command, and [World state](#world-state-the-read-only-epistemic-projection). Measured read cost is in [Benchmarks](#benchmarks). |
 | `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
 | Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
@@ -43,19 +43,21 @@ The model path depends entirely on a backend you configure yourself. Without one
 APEX answers deterministic requests and reports `model_unavailable` for everything
 else; it never fabricates an answer.
 
-### Controlled real-model smoke test
+### Historical record: the controlled real-model run of 2026-10-31
 
-This was run once, on 2026-10-31, against Qwen3-4B GGUF on a local Ollama server:
-one bounded `ask` completed in about 105 s and was reported as unverified. The
-prerequisites below are what that check required; they are not a guarantee that it
-reproduces on other hardware or with other prompts.
+This is a dated observation of one run, **not a setup instruction**. It was made on
+2026-10-31 against a Qwen3-4B GGUF that an Ollama server was serving on one Windows
+machine at that time: one bounded `ask` completed in about 105 s and was reported as unverified.
+The conditions below are what that check required; they are not a guarantee
+that it reproduces on other hardware or with other prompts, and nothing here asks you to
+install, download, or start anything. For what APEX does with an endpoint you have already
+configured, see [Optional: a model endpoint you configure](#optional-a-model-endpoint-you-configure).
 
-1. A local model server is installed and running by the operator (Ollama or an
-   OpenAI-compatible `llama-server`). APEX neither downloads a model nor starts a
-   server.
-2. A model is already installed and named (for Ollama, `ollama pull <model>` is done by
-   the operator; APEX reports `MODEL_NOT_FOUND` if it is missing).
-3. `APEX_MODEL_PROVIDER`, `APEX_MODEL_URL`, and `APEX_MODEL_NAME` point at that server
+1. An endpoint was already running, chosen and operated by the user. APEX neither
+   downloads a model nor starts a server, and does not recommend one.
+2. That endpoint already served the model named in `APEX_MODEL_NAME`; APEX reports
+   `MODEL_NOT_FOUND` and names the setting to correct if it serves something else.
+3. `APEX_MODEL_PROVIDER`, `APEX_MODEL_URL`, and `APEX_MODEL_NAME` point at that endpoint
    on loopback; raise `APEX_MODEL_TIMEOUT_MS` above the default 30 s if a cold start
    must succeed, and keep `APEX_MODEL_MAX_TOKENS` small for a bounded run.
 4. `node bin/apex.js diagnose --model` first. It lists models only and runs no
@@ -138,10 +140,18 @@ exits 2, names the setting, and reports that no data was read or changed.
 | `APEX_CONTEXT_TURNS` | 0-50 | 6 |
 | `APEX_FILESYSTEM_ROOT` | absolute directory; filesystem inspection is off when unset | none |
 | `APEX_FILESYSTEM_MAX_READ_BYTES` | 4096-10485760 | 1048576 |
+| `APEX_EXPERIENCE_CAPTURE` | `off`, `verified-success` | `off` |
 
 Both filesystem settings are validated on every run, whether or not
 `APEX_FILESYSTEM_ROOT` is set, so a mistyped limit is named at startup instead of
 lying dormant until the capability is switched on.
+
+`APEX_EXPERIENCE_CAPTURE` is the one switch for automatic experience capture; see
+[Batch AA: automatic experience capture](#batch-aa-automatic-experience-capture-as-implemented).
+When it is unset or
+`off`, an experience exists only because you recorded it, exactly as in earlier
+batches. An unrecognized value is refused at startup with exit 2 before any store is
+opened, so a misspelling cannot silently change what APEX writes.
 
 `node bin/apex.js diagnose` is the read-only preflight. It prints the effective
 settings above (with credential-like text redacted), the state of every store,
@@ -237,29 +247,37 @@ Error lines are presentation, not evidence: each is bounded to one line and
 credential-like text in it is redacted. An operation's audit record keeps the
 original error message.
 
-## Optional: a local model
+## Optional: a model endpoint you configure
 
-No model is bundled, downloaded, or required. APEX talks to a model server you run
-yourself, on this machine. Two protocols are supported; the choice is made in the
-Model Gateway (`src/model/gateway.js`), and nothing else in APEX knows about either one.
+APEX does not install, download, start, or recommend a model server, and no model is
+bundled or required.
+Every sentence below describes what APEX does **with an endpoint you have already chosen
+and configured yourself**; none of them is an instruction to install or run a server. Two
+protocols are supported; the choice is made in the Model Gateway
+(`src/model/gateway.js`), and nothing else in APEX knows about either one.
 
-| Server | `APEX_MODEL_PROVIDER` | `APEX_MODEL_URL` example | Endpoints used |
+| Endpoint protocol | `APEX_MODEL_PROVIDER` | `APEX_MODEL_URL` example | Endpoints used |
 |---|---|---|---|
-| Ollama (native API) | `ollama` | `http://127.0.0.1:11434` | `/api/tags`, `/api/chat` |
-| llama.cpp `llama-server`, or any OpenAI-compatible local server | `openai` (default) | `http://127.0.0.1:8080` | `/v1/models`, `/v1/chat/completions` |
+| Ollama's native API (`/api/tags`, `/api/chat`) | `ollama` | `http://127.0.0.1:11434` | `/api/tags`, `/api/chat` |
+| An OpenAI-compatible chat API (for example a `/v1` compatibility layer) | `openai` (default) | `http://127.0.0.1:8080` | `/v1/models`, `/v1/chat/completions` |
+
+The table maps a protocol to the provider value that speaks it. It is not a recommendation
+of any product, and APEX never starts, downloads, or probes for a server on its own.
 
 ```bash
-# Ollama (after you have pulled the model yourself: ollama pull <model>)
+# An endpoint you have configured, speaking Ollama's native API.
+# APEX_MODEL_NAME must name a model that endpoint already serves.
 APEX_MODEL_PROVIDER=ollama APEX_MODEL_URL=http://127.0.0.1:11434 APEX_MODEL_NAME=<model> node bin/apex.js chat
 
-# llama.cpp
+# An endpoint you have configured, speaking the OpenAI-compatible chat API.
 APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
 ```
 
 - Only loopback hosts (`127.0.0.1`, `localhost`, `::1`) are accepted by default. A
   remote host needs `APEX_ALLOW_REMOTE_MODEL=1`. URLs with credentials are refused.
 - `APEX_MODEL_NAME` is sent with each request. For Ollama it is required; if the named
-  model is not installed, APEX reports `MODEL_NOT_FOUND` and the command to run.
+  model is not served by that endpoint, APEX reports `MODEL_NOT_FOUND` and names the
+  setting to correct (`APEX_MODEL_NAME`). It does not tell you to download anything.
 - Temperature is 0. Answers are capped by `APEX_MODEL_MAX_TOKENS` (default 512); a cut-off answer
   is shown with a notice that it was truncated. On a slow machine a long answer can
   exceed `APEX_MODEL_TIMEOUT_MS` (default 30000) and is reported as `TIMEOUT`. Lower
@@ -281,7 +299,8 @@ APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
   by a display-only note giving the figure. The exact `model.timings` counters
   (including `loadMs`) are in the operation record; a value the server did not report is
   absent rather than zero.
-- Measured on 2026-10-29 with the installed Qwen3-4B GGUF on Windows, a 200-token
+- Measured on 2026-10-29, against a Qwen3-4B GGUF an endpoint was serving on Windows at
+  that time, with a 200-token
   budget, and a short prompt: the first request after the model was unloaded took
   48.4 s total (19.8 s loading, 1.3 s prompt evaluation, 26.7 s generating 128 tokens);
   the same request with the model already loaded took 25.1 s total (0.03 s loading,
@@ -314,11 +333,12 @@ APEX_MODEL_URL=http://127.0.0.1:8080 node bin/apex.js chat
 - Control characters in model output (including terminal escape codes) are removed
   before the text is shown, stored, or logged.
 
-**Reasoning text in answers (confirmed with Qwen3 GGUF on Ollama 0.35.0).** APEX does
+**Reasoning text in answers (a dated finding: confirmed on 2026-10-29 and 2026-10-31 with a
+Qwen3 GGUF served by Ollama 0.35.0).** APEX does
 not send a `think` flag: it uses the provider default so that a thinking model puts
 reasoning in `message.thinking` and the final answer in `message.content`. Only
 `message.content` is shown, stored, or audited; reasoning is never treated as an
-answer. Sending `think: false` was not reliable: the installed
+answer. Sending `think: false` was not reliable in that run: the
 `hf.co/Qwen/Qwen3-4B-GGUF:Q5_K_M` template unconditionally opens a think block and
 ignores the flag, so the reasoning arrived inside `message.content` with a literal
 `</think>` marker and was displayed as the answer. Sending `think: true` instead is
@@ -828,7 +848,8 @@ is skipped. The suite uses only temporary directories under the OS temp folder
 (`apex-test-*`) and removes them afterwards. Tests never read or write `~/.apex`, and
 CLI tests point `HOME`/`USERPROFILE` at the temp directory too.
 
-A bounded manual smoke test against the installed Ollama model was run on 2026-10-31
+A bounded manual smoke test against an Ollama endpoint that was configured on that
+machine at the time was run on 2026-10-31
 (one request, about 105 s). A bounded four-request benchmark with a documented
 procedure (`benchmarks/run-model-benchmark.mjs`, using the ordinary application path)
 was run the same day. Neither is part of this suite; both are reported separately.
@@ -2072,6 +2093,114 @@ adaptation may cite at most 20 evidence records, and a group whose support is la
 skipped rather than truncated, so a single preference restated across a very large store yields no
 candidate until the user scopes it. `npm test` covers the semantics;
 `benchmarks/run-experience-benchmark.mjs` is outside the suite and no test depends on it.
+
+## Batch AA: automatic experience capture (as implemented)
+
+Batch AA adds one thing to the Batch Z store: a second, narrow way for an **experience** record to
+be written. Everything else about that store is unchanged - the support threshold for a candidate,
+the retirement rules, the approval requirement, and the fact that feedback is only ever the user's
+own record.
+
+One environment setting controls it, validated at startup like every other APEX setting:
+
+| Setting | Values | Default |
+|---|---|---|
+| `APEX_EXPERIENCE_CAPTURE` | `off`, `verified-success` | `off` |
+
+Unset or `off`, an experience exists only because the user asked for it, exactly as in Batch Z. A
+value that is neither of those is refused before any store is opened (exit 2, the setting named), so
+a misspelling cannot quietly change what APEX writes. There is no second switch, no per-capability
+list, and no framework around it.
+
+**When a record is written.** The decision is made from the finished audit record alone, in
+`src/experience/capture.js` `autoCaptureDecision()`, and the write is attempted only **after** the
+audit append succeeded, at the three sites that end an operation (`controller.js` `#captureExperience`
+from `handle()`, `correctMemory()`, and `#finishCommandOp()`). Every guard must hold, in this order:
+the mode is `verified-success`; an operation record exists and was written to the audit log; it has a
+stable id; its origin is `user`; its status is `SUCCESS_VERIFIED`; it carries no errors; its
+capability is in the capture subset; it has at least one step; and **every** step independently stands
+(`authorization.decision === allow`, `execution.status === ok`, `verification.outcome ===
+SUCCESS_VERIFIED`); the account of the event can be built, contains no control characters and no
+secret-shaped text. Anything else is not captured, and the reason is always stated: `denied`,
+`failed`, `uncertain side effect`, `verification unavailable`, `audit evidence missing or unwritten`,
+`out-of-subset capability`, `secret in the account`. A read (`calc`, `recall`, `knowledge search`,
+`status`, `world`, `diagnose`) is never captured, a model-origin operation is never captured, model
+conclusions are never captured, and the experience/feedback/adaptation commands are excluded so the
+log cannot fill itself with its own bookkeeping.
+
+**What a captured record is.** `capture: 'automatic'` maps to the fixed provenance origin
+`system_observed`; the user's own `experience record` maps to `explicit` → `user_recorded`. The two
+are never conflated on a read: `captureOf()` derives the route from provenance, `experience list` and
+`experience show` name it per record, `status` and `experience health` print "N recorded by you, M
+captured automatically", and a record whose provenance names no route is reported as
+"capture provenance no writer produces" instead of being re-labelled. A captured experience carries
+no assessment - not `correct`, not `useful`, nothing. Silence is still not approval: a candidate can
+only be derived from corrective **feedback**, which only the user writes, so any number of captures
+produces zero candidates until feedback is recorded and `adaptation derive` is run. `verify` re-reads
+the appended record against the audit record before the notice calls it captured; a write that does
+not read back is reported as appended-but-mismatched, never as a success.
+
+**One operation, one experience - and one operation, one notice.** A second claim for an operation id
+already in the log is refused inside the write lock with `EXPERIENCE_EXISTS`, and the notice says
+nothing was duplicated. If the experience store is damaged, unreadable, or fails mid-append, the
+operation keeps its own outcome, exit code and audit record; the notice states the refusal and points
+at `experience record <id>` for the explicit retry. APEX never re-runs the original operation to
+repair a capture, and never claims exactly-once execution: what it guarantees is that a second
+capture attempt for the same audit record writes nothing, which is what the concurrency and
+process-interruption tests demonstrate with real child processes.
+
+**No conversation copying.** The subject line is built from `capability` plus the audit step
+summaries, which the action layer already minimizes to identifiers, counts, and expressions - never
+from the request text or the displayed answer. Over `MAX_SUBJECT_CHARS` it degrades to a content-free
+`<capability>: N verified step(s)` rather than a truncation that could cut an id in half.
+
+**Measured.** `tests/experience-capture.test.js` - 29 tests in 7 suites, registered in `npm test` -
+covers each case named above with deterministic synthetic fixtures, real child processes for the
+concurrency and interrupted-holder cases, and stand-in stores for the failure paths; it contacts no
+model and starts no service. `node benchmarks/run-experience-benchmark.mjs`, capture phase, 2026-11-01,
+node v26.4.0 on win32, 5 repeats, medians, one fresh fixture copy per sample. A is an eligible verified
+`memory.add` with the setting unset; B is the same request with it armed; `B - A` is therefore the
+capture. No model, endpoint, or service was involved in any figure below - every application in the
+run is built with `NoBackend`.
+
+| Store (records) | A eligible | B eligible | B - A | the append | a refused duplicate | two writers at once | damaged store | unreadable store |
+|---|---|---|---|---|---|---|---|---|
+| 47 | 93.07 ms | 193.16 ms | 100.09 ms | 60.48 ms | 34.51 ms | 132.48 ms | 129.76 ms | 144.99 ms |
+| 207 | 121.22 ms | 214.42 ms | 93.20 ms | 79.13 ms | 43.65 ms | 130.36 ms | 147.44 ms | 150.02 ms |
+| 807 | 109.79 ms | 251.30 ms | 141.51 ms | 91.87 ms | 34.37 ms | 220.72 ms | 177.45 ms | 148.57 ms |
+
+What the numbers say, and what they do not:
+
+- The added latency on an eligible operation is **the existing experience write, done
+  automatically**: this run's `append` column (60.48 → 91.87 ms) is the same work the writes phase
+  measures for a user-requested record (55.79 → 93.28 ms), and `B - A` is that append plus the
+  read-back that `verify` performs. It grows with the store because a Batch Z write is a whole-store
+  read followed by an append; capture inherits that, it does not add a second scan.
+- Arming the setting costs nothing to a request that is not in the subset: `calc 2+2` on the largest
+  fixture measured 51.27 ms unset against 44.33 ms armed, with 0 experience reads per request either
+  way (the difference is noise, and the decision is made before any store is opened).
+- Duplicate detection is a refusal inside the lock (34.37-43.65 ms), and two writers on one store pay
+  coordination, not corruption: 220.72 ms at 807 records against 91.87 ms for one append.
+- The failure paths are not cheaper than the success path: a store with one corrupt line (177.45 ms)
+  and a store that cannot be opened at all (148.57 ms) both still cost a read of the audit record and
+  a refusal, and in both cases the operation itself finished verified and its audit record was
+  unchanged.
+- Store growth is one record per eligible verified operation: at a few arithmetic steps from the
+  measured fixture bytes, 47 records occupied 27,972 bytes and 807 records 487,232 bytes (about 600
+  bytes per record in this fixture), so a month of daily verified writes produces hundreds of
+  records, not hundreds of thousands.
+- **No index was added.** The added cost above is the same whole-store read the explicit command
+  already pays, so capture does not demonstrate a need the pre-existing write path does not already
+  have; the Batch V decision - no persisted index at personal-install sizes - stands unchanged.
+
+What this batch does not claim: the capture point was tested against real child processes, killed
+holders and shared stores, but only on one machine (Windows 11, x64), and no measurement here
+involved a model, so nothing here shows that a captured experience improves a later answer - only
+what carrying and refusing it costs. No local inference server of any kind was installed,
+downloaded, started, invoked, or recommended at any point in this batch, and no model was used in
+any test or measurement; §8 removed the remaining active guidance that pointed a reader toward one,
+while the `openai` and `ollama` provider contracts, the loopback-only default, and every dated
+historical measurement were kept exactly as they were.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 

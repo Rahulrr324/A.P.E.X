@@ -52,11 +52,18 @@ describe('107: capability statements match the evidence', () => {
     assert.match(APP_README, /Every answer was reported as unverified\./);
     assert.match(APP_README, /\*\*Proposed, not implemented\.\*\*/);
     assert.match(APP_README, /World model, general planner, persistent learning, voice, UI \| \*\*Not implemented\.\*\*/);
-    assert.match(APP_README, /### Controlled real-model smoke test/);
-    assert.match(APP_README, /This was run once, on 2026-10-31/);
+    assert.match(APP_README, /### Historical record: the controlled real-model run of 2026-10-31/);
+    assert.match(APP_README, /This is a dated observation of one run, \*\*not a setup instruction\*\*\./);
     assert.match(APP_README, /one bounded `ask` completed in about 105 s and was reported as unverified\./);
     // The detailed model section keeps the same distinction.
     assert.match(APP_README, /no test in this repository runs a real model/);
+    // Batch AA: the README documents an endpoint the reader already configured; it must not
+    // turn into an instruction to install, download, start, or pull in a local inference server.
+    assert.match(APP_README, /^## Optional: a model endpoint you configure$/m);
+    assert.match(APP_README, /APEX does not install, download, start, or recommend a model server/);
+    for (const pattern of [/ollama pull/i, /llama-server/i, /LM Studio/i, /\bollama serve\b(?!r)/i, /install(?:ing)? ollama/i]) {
+      assert.doesNotMatch(APP_README, pattern, `active setup guidance must not point at a local inference server: ${pattern}`);
+    }
   });
 
   test('neither README makes an unqualified completion or real-model validation claim', () => {

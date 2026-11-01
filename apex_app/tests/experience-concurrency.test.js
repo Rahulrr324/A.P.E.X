@@ -541,7 +541,15 @@ describe('Z-08 D: a held lock, a dead holder, and a damaged log', () => {
       if (read.torn === 0) {
         assert.match(read.storeRead, /^ok:\d+$/, JSON.stringify(read));
         const [, count] = read.storeRead.split(':');
-        assert.equal(Number(count), read.parsed, 'a clean read is answered with exactly the records on disk');
+        // The store's own read is a later instant than the raw sample that produced `parsed`, so a
+        // writer can complete an append between them and the store is then right to answer with the
+        // extra record. Both ends of that interval are sampled by the child, and the store answer
+        // must sit inside them; whenever the disk was quiet across the interval the check is still
+        // the original exact one, because then both bounds are the same number.
+        assert.ok(
+          Number(count) >= read.parsed && Number(count) <= read.parsedAfter,
+          `a clean read is answered with the records on disk at both ends of the read interval: ${JSON.stringify(read)}`,
+        );
       } else {
         assert.match(read.storeRead, /corrupt line\(s\); refusing an incomplete experience operation/, JSON.stringify(read));
       }

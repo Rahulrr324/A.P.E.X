@@ -1,11 +1,15 @@
-// Bounded local-model benchmark through the ordinary APEX application path.
+// Bounded live model-endpoint benchmark through the ordinary APEX application path.
 //
 // It measures the controller (prompt build, gateway call, audit write, conversation
 // turns), not raw HTTP, so the numbers include APEX's own overhead. It never changes
 // production defaults and never runs under `npm test`.
 //
+// APEX does not install, download, start, or recommend a model server. Running this is a
+// deliberate decision to send bounded requests to an endpoint you configured yourself, so
+// it is opt-in: without APEX_BENCH_LIVE=1 nothing is sent.
+//
 //   APEX_BENCH_LIVE=1 APEX_MODEL_PROVIDER=ollama APEX_MODEL_URL=http://127.0.0.1:11434 \
-//   APEX_MODEL_NAME=<installed-model> APEX_MODEL_TIMEOUT_MS=300000 APEX_MODEL_MAX_TOKENS=1200 \
+//   APEX_MODEL_NAME=<model-that-endpoint-serves> APEX_MODEL_TIMEOUT_MS=300000 APEX_MODEL_MAX_TOKENS=1200 \
 //   APEX_MODEL_RETRIES=0 node benchmarks/run-model-benchmark.mjs --requests 4 --keep
 //
 // Without APEX_BENCH_LIVE=1 it prints the plan and exits 0: no request is sent.

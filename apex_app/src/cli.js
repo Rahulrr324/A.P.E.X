@@ -111,14 +111,20 @@ Experience and adaptation examples (what APEX did, what you thought, what to cha
   adaptation approve <id>     your decision; only an approved rule is offered to future answers
   adaptation retire <id>      stop using a rule without deleting the history of it
   experience health           re-checks every recorded experience against the audit log
+An experience is recorded when you ask, or by APEX itself for a verified successful operation when
+APEX_EXPERIENCE_CAPTURE=verified-success. Either route records only that the event happened; an
+assessment of it is written only by you. "experience list" and "experience show" name which route
+each record came from, and "experience health" states the current setting.
 An experience names one audited operation; it is not a fact about you. Feedback is your own
 assessment and is never invented from silence. A rule takes effect only after you approve it
 here, and even then it guides wording, never permission: APEX still asks before any write.
 
-With a configured local model, any other request is answered from the model,
+With a configured model endpoint, any other request is answered from that model,
 using relevant memory and the recent conversation. Without one, APEX says so.
 A model answer is unverified, and a proposed action is checked by APEX itself: a
 denied proposal is reported and does not run. Model output is never authorization.
+APEX connects only to an endpoint you have configured and chosen yourself. It does
+not install, download, start, or recommend a model server of any kind.
 
 Filesystem inspection is available only when APEX_FILESYSTEM_ROOT is set to an
 absolute directory. Paths are relative to it; it cannot be changed by a request.
@@ -127,14 +133,17 @@ Environment:
   APEX_DATA_DIR            data directory (default: ~/.apex/local-alpha)
   APEX_FILESYSTEM_ROOT     absolute directory APEX may inspect (unset: no filesystem access)
   APEX_FILESYSTEM_MAX_READ_BYTES  maximum file size for a read (default: 1048576)
-  APEX_MODEL_URL           local model server, e.g. http://127.0.0.1:11434 (Ollama) or http://127.0.0.1:8080 (llama.cpp)
-  APEX_MODEL_PROVIDER      openai (default: llama.cpp / OpenAI-compatible) or ollama
-  APEX_MODEL_NAME          model name to request (default: local; required for Ollama)
+  APEX_MODEL_URL           endpoint URL of a model server you have configured (unset: no model)
+  APEX_MODEL_PROVIDER      protocol of that endpoint: openai (default) or ollama
+  APEX_MODEL_NAME          model name to request (default: local; required for ollama)
   APEX_MODEL_TIMEOUT_MS    model call timeout in ms, 100-600000 (default: 30000)
   APEX_MODEL_MAX_TOKENS    maximum answer length in tokens, 1-8192 (default: 512)
   APEX_MODEL_RETRIES       retries for unreachable or interrupted calls, 0-3 (default: 1)
   APEX_CONTEXT_TURNS       recent conversation turns sent to the model, 0-50 (default: 6)
   APEX_ALLOW_REMOTE_MODEL  set to 1 to allow a non-loopback endpoint (not recommended)
+  APEX_EXPERIENCE_CAPTURE  off (default) or verified-success: whether APEX records an experience of
+                           a verified successful operation without being asked. It never records
+                           feedback; "experience record <operation-id>" is always available.
 `;
 
 // The views `task explain` prints. Each one is the same view the conversation uses when it
@@ -534,6 +543,14 @@ export async function main(argv, {
       // an adaptation in effect changes how APEX answers, so both counts belong where the user
       // can see what is currently being applied without running a second command.
       out(`Experiences: ${experience.state === State.UNAVAILABLE ? 'unavailable' : `${experience.experiences} record(s), ${experience.feedback} feedback record(s), ${experience.activeAdaptations} approved adaptation(s) in effect`}${skipped(experience)}`);
+      if (experience.state !== State.UNAVAILABLE) {
+        // How each experience arrived is printed with the counts because the two lead to different
+        // questions: a record the user asked for, and a record of an outcome APEX verified on its own.
+        out(`Experience capture: ${experience.capture?.setting ?? 'not reported'}; ${experience.recordedByUser} recorded by you, ${experience.capturedAutomatically} captured automatically`);
+        if (experience.unknownCapture > 0) {
+          out(`Experience capture: ${experience.unknownCapture} record(s) carry capture provenance no writer produces; run "node bin/apex.js experience health"`);
+        }
+      }
       if (experience.state !== State.UNAVAILABLE && experience.conflicts.scopes > 0) {
         out(`Experiences: ${experience.conflicts.scopes} capability scope(s) hold approved adaptations that disagree; run "node bin/apex.js adaptation list"`);
       }
@@ -544,8 +561,8 @@ export async function main(argv, {
       out(modelLine(model));
       if (model.state === State.UNAVAILABLE) {
         out(model.reachable === true
-          ? 'Model: no inference was tested. The endpoint answered but readiness failed (see above); correct the model name or install the model, then re-run "status --model".'
-          : 'Model: no inference was tested. Starting the configured local server and re-running "status --model" is safe; that probe only reads the model list.');
+          ? 'Model: no inference was tested. The endpoint answered but readiness failed (see above); correct the model name you configured, then re-run "status --model".'
+          : 'Model: no inference was tested. The endpoint you configured did not answer; re-running "status --model" is safe because that probe only reads the model list. APEX does not install, start, or recommend a model server; check that the server you configured is running and reachable at that URL.');
       }
       out(filesystem.state === State.OK
         ? `Filesystem root: ${safeText(filesystem.root)} (root validated at startup, read-only)`

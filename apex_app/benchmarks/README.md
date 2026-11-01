@@ -1,15 +1,17 @@
 # Bounded benchmarks
 
-## Local-model benchmark
+## Model-endpoint benchmark (live, opt-in)
 
 `run-model-benchmark.mjs` measures the ordinary APEX path (controller, gateway, audit,
-conversation write) against one configured loopback model. It sends no request unless
-`APEX_BENCH_LIVE=1` is set; otherwise it prints the plan.
+conversation write) against one configured endpoint. It sends no request unless
+`APEX_BENCH_LIVE=1` is set; otherwise it prints the plan. APEX does not install,
+download, start, or recommend a model server: running this script is a decision to send
+requests to an endpoint **you** have configured, so it is off by default.
 
 ### Procedure
 
-1. Reuse an installed model and a server you start for the run. The harness never starts
-   a server, downloads a model, or changes a default.
+1. Point the settings at an endpoint that already exists and already serves the model you
+   name. The harness never starts a server, downloads a model, or changes a default.
 2. Use a fresh temporary APEX data directory. The harness creates one under the OS temp
    folder, gives every sample its own store, and removes it unless `--keep` is passed.
 3. Fix the prompt and settings before running. The harness supports four non-sensitive
@@ -20,9 +22,12 @@ conversation write) against one configured loopback model. It sends no request u
 ```bash
 cd apex_app
 APEX_BENCH_LIVE=1 APEX_MODEL_PROVIDER=ollama APEX_MODEL_URL=http://127.0.0.1:11434 \
-APEX_MODEL_NAME=<installed-model> APEX_MODEL_TIMEOUT_MS=300000 APEX_MODEL_MAX_TOKENS=1200 \
+APEX_MODEL_NAME=<model-that-endpoint-serves> APEX_MODEL_TIMEOUT_MS=300000 APEX_MODEL_MAX_TOKENS=1200 \
 APEX_MODEL_RETRIES=0 node benchmarks/run-model-benchmark.mjs --requests 4 --out /tmp/bench.json
 ```
+
+The values above are the settings one dated run used; the URLs are examples of an
+operator-configured endpoint, not a recommendation to run one.
 
 ## What it reports
 
@@ -43,7 +48,7 @@ transport and receives the whole answer at once.
 - Model text is never verified by APEX; `verification_unavailable` is the correct
   outcome for a model answer.
 
-This script is not part of `npm test` and no test depends on a model being installed.
+This script is not part of `npm test` and no test depends on a model endpoint existing.
 
 ## World-state projection benchmark
 
@@ -262,8 +267,8 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
 ```
 
 1. `--experiences` is 1-2000 (a comma-separated list makes a size matrix, default `20,100,400`) and
-   `--repeats` is 1-25 (default 5). `--phase` selects one of `reads`, `writes`, `context`, `compare`;
-   without it all four run in that order.
+   `--repeats` is 1-25 (default 5). `--phase` selects one of `reads`, `writes`, `capture`, `context`,
+   `compare`; without it all five run in that order.
 2. A fixture is `N` audited events, each produced the way the application produces one (a verified
    request through the controller), then one recorded experience and one corrective feedback record
    per event, one derivation, and three approvals. Seeding time is reported separately from every
@@ -286,6 +291,16 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
   inside the write lock, the end-to-end controller call (audit record plus independent re-check), a
   feedback record, an approval of a genuinely undecided candidate, a retirement, and the evidence
   re-check.
+- **capture**: what one setting adds, measured as a difference inside the same run. Condition A runs
+  an eligible verified request with `APEX_EXPERIENCE_CAPTURE` unset (the default) and condition B runs
+  the same request against a fresh copy of the same fixture with it armed, so `B - A` is the capture
+  itself. Alongside it: the store append the capture performs on its own, a second claim for one
+  operation id refused inside the write lock (duplicate detection), two writers on one store started
+  together (lock contention), the same request against a store with one corrupt line, and the same
+  request against a store that cannot be opened at all - both of which must still succeed as the
+  operation. The two conditions that must not be slowed are reported too: an ineligible request
+  (`calc 2+2`) with the setting armed against it unset, and the first capture into an empty store on a
+  fresh directory.
 - **context**: the prompt characters each approved rule adds and for the default window, the cost of
   the note that rules were cut, the cost of stating that the store could not be read, the longest
   single rule line, the retrieval window and its hard maximum, and what one request actually pays:
@@ -311,6 +326,9 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
   grows with the store.
 - `repeats` samples in one process on one machine. Treat a median as an indication; differences of a
   few milliseconds - including a populated store that measures faster than an empty one - are noise.
+- The capture phase is read as `B - A` within one run and never against another run's absolute
+  figures: the machine, the background load and the fixture size all move the medians, while the
+  armed-versus-unarmed pair runs on copies of the same bytes seconds apart.
 - No figure here involves a model. Nothing in this file shows that an approved adaptation improves
   an answer, only what it costs the context that carries it.
 
