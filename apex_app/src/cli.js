@@ -180,6 +180,12 @@ export function formatResult(res) {
   lines.push(`Context:   ${hits.length} memory record(s) retrieved${hits.length ? ` [${hits.map((h) => shortId(h.id)).join(', ')}]` : ''}`);
   if (res.operation.prompt) {
     lines.push(`Prompt:    ${res.operation.prompt.memoryIds.length} memory record(s) and ${res.operation.prompt.turnIds.length} earlier turn(s) sent to the model`);
+    const world = res.operation.prompt.world;
+    if (world) {
+      lines.push(world.unavailable
+        ? 'Projection: could not be read for this answer, so APEX cannot say whether other stored records disagree.'
+        : `Projection: ${world.included ? 'sent to the model' : 'omitted to keep the context within its budget'} (${world.unresolvedConflicts} unresolved knowledge group(s), ${world.memoryConflictGroups} memory group(s), ${world.unknowns} explicit unknown(s)${world.complete === false ? ', incomplete read' : ''})`);
+    }
   }
   if (res.operation.steps.length) {
     lines.push('Steps:');

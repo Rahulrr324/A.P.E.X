@@ -20,7 +20,7 @@ export const MAX_WORLD_EVIDENCE_CHARS = 160;
 export const MAX_WORLD_LIMIT = 50;
 
 const LIMITS = Object.freeze([
-  'Derived at read time from stored records; nothing is persisted, repaired, or sent to a model.',
+  'Derived at read time from stored records; nothing is persisted or repaired. A model answer built from stored context is sent a bounded, counts-only view of this projection, never a belief statement.',
   'A belief is a stored record, not verified truth. Provenance says who recorded it, not whether it is correct.',
   'At most 100 recent records per store are represented; older records are counted but not shown.',
   'Memory contradiction detection is heuristic: it compares "subject is value" clauses inside the represented records only, and memory has no user-decision mechanism.',

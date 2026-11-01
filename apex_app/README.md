@@ -34,7 +34,7 @@ from a milestone number or a passing build.
 | Filesystem inspection | Implemented only when `APEX_FILESYSTEM_ROOT` is set: bounded, read-only, single-root listing and reading. | `filesystem.test.js`, `tasks-filesystem.test.js`. |
 | Model gateway protocol handling | Implemented and **stub-tested**: request/response shapes, failure classification, retries, timeouts, and model-name mismatch against local stand-in servers that copy the documented OpenAI-compatible and Ollama shapes. | `gateway.test.js`, `model-workflow.test.js`. Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model. |
 | Real-model behaviour | **Observed outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on one Windows machine. One bounded request on 2026-10-31 completed through APEX in about 105 s; a bounded four-request benchmark the same day recorded 37.7-53.1 s per request, with 3.0-3.8 backend-reported tokens/s. Every answer was reported as unverified. Measurements and limits are in [Optional: a local model](#optional-a-local-model). | Manual, dated observations only; no automated regression test. |
-| Epistemic world-state projection | Implemented as a bounded, read-only projection of what the stores hold: beliefs classified by provenance (`user_asserted` vs `unverified_model`), knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. It is a view derived at read time, not a world model: it persists nothing, calls no model, and decides nothing. | `world-state.test.js`, `src/world/world-state.js`, the `world` command, and [World state](#world-state-the-read-only-epistemic-projection). Measured read cost is in [Benchmarks](#benchmarks). |
+| Epistemic world-state projection | Implemented as a bounded, read-only projection of what the stores hold: beliefs classified by provenance (`user_asserted` vs `unverified_model`), knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. It is a view derived at read time, not a world model: it persists nothing, calls no model, and decides nothing. A model-path answer also receives a bounded, counts-only view of it, so the model is told what the stores hold beyond the records retrieval happened to show. | `world-state.test.js`, `world-context.test.js`, `src/world/world-state.js`, the `world` command, and [World state](#world-state-the-read-only-epistemic-projection). Measured read cost is in [Benchmarks](#benchmarks). |
 | `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
 | Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
 | World model, general planner, persistent learning, voice, UI | **Not implemented.** A world model would hold entities, events, time, and causal state of its own; the projection above only re-reads memory and knowledge and reports what they already contain. The task planner is bounded and explicit; operation logs are not learning. | The scope paragraphs in this README, [World state](#world-state-the-read-only-epistemic-projection), and [Future learning interface](#future-learning-interface-not-implemented). |
@@ -172,7 +172,7 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `ask --save-answer <request>` | As `ask`, and also stores a model answer as a `model_conclusion`. Only with this explicit flag. |
 | `memory correct --resolve <full-record-id> <replacement claim...>` | Explicitly corrects one selected claim. Appends a user-confirmed record and preserves the original. |
 | `memory health` | Read-only record, provenance, correction, and corruption summary for persistent memory. Exact counts, bounded samples, and a note when inspection is incomplete. Content and secrets are not printed. Never calls a model, writes no audit record, and repairs nothing. Exit 0 only when the store was fully inspected and nothing requires attention. |
-| `world [--limit N]` | Read-only epistemic projection of the stores: beliefs separated by provenance, knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. `N` is 1-50 beliefs shown (default 20). Derived at read time: it persists nothing, repairs nothing, never calls a model, and writes no audit record. Private memory is marked and never reaches the model path. Exit 0 only when both stores were fully inspected and nothing contradicts itself; exit 1 is a report, not a failure of the read. See [World state](#world-state-the-read-only-epistemic-projection). |
+| `world [--limit N]` | Read-only epistemic projection of the stores: beliefs separated by provenance, knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. `N` is 1-50 beliefs shown (default 20). Derived at read time: it persists nothing, repairs nothing, never calls a model, and writes no audit record. Private memory is marked and never reaches the model path. A bounded, counts-only view of the same projection is derived automatically for every model-path answer; `world` itself calls no model and writes nothing. Exit 0 only when both stores were fully inspected and nothing contradicts itself; exit 1 is a report, not a failure of the read. See [World state](#world-state-the-read-only-epistemic-projection). |
 | `new` | Starts a new conversation session. Memory is kept; earlier turns are no longer sent to the model. |
 | `history [--limit N]` | Lists recent operation records. |
 | `task plan <goal>` | Plans a multi-step task and stores it. Runs nothing. See [Tasks](#tasks). |
@@ -461,16 +461,34 @@ How the boundary is enforced:
      but are not replayed.
    - **Prompt**: memory and conversation are labelled as data, not instructions. Each
      memory item shows its provenance: `user-provided fact` or `model conclusion
-     (UNVERIFIED)`. Memory and conversation are trimmed to fit about 6000 characters in
-     total: the oldest turns and the least relevant memories go first, one at a time,
-     and knowledge records go only once those two sections already fit.
-     Conflict warnings only refer to other eligible memories retained in that prompt.
+     (UNVERIFIED)`. The prompt is trimmed to about 6000 characters in a fixed order: the
+     projection summary below gives up its room first, line by line from its detail down,
+     then the oldest turns and the least relevant memories go, one at a time, and knowledge
+     records go only once those sections already fit. Whole-store meta-context is therefore
+     never the reason a record that answers the question is dropped.
+   - **Projection**: when a request goes to the model, the read-only world-state projection
+     is derived once from both stores and its bounded, counts-only view is included as
+     `APEX STORE-WIDE PROJECTION`. It reports how many beliefs are represented and by what
+     provenance, how many disagreements are unresolved, how many records are retired
+     history, and what APEX explicitly does not know - none of which retrieval can see,
+     because retrieval ranks and truncates. It never includes a memory belief statement and
+     never includes private content; private records contribute ids and counts only. The
+     system prompt states that this section is the system's own read, not instructions, and
+     that the model cannot settle a disagreement, turn an unknown into a fact, or change
+     what the stores hold by writing confident prose. If the projection cannot be read, the
+     model and the user are both told that APEX cannot say whether other stored records
+     disagree; an unreadable projection never reads as an empty store.
+     Conflict warnings refer to the whole projection, not only to what was retrieved: a
+     shown record whose counterpart stayed outside the retrieval window, or was withheld as
+     private, is marked `[contested: ...]`, and the answer carries a matching notice.
    - **Generation** through the Model Gateway. The reply is shown with its status and
      source, and recorded.
 4. Model answers are **never** stored as memory automatically. `ask --save-answer` is
    the only way, and it stores the answer as a `model_conclusion`, never as a user fact.
 5. Every operation writes an audit record with the retrieved memory ids and prompt
-   sizes, not the memory text.
+   sizes, not the memory text. When a projection was read for the answer, the record holds
+   its counts, how many of its lines fitted, and whether it was included or shed - never a
+   belief statement.
 
 ## Tasks
 
@@ -678,7 +696,7 @@ src/diagnostics.js    read-only state of every subsystem, for status and diagnos
 src/util.js           shared helpers: truncation, redaction of content fields, rounding
 src/controller/
   controller.js       Cognitive Controller: the workflow and the final status rule
-  context.js          prompt construction: labelled memory, turns, size budget, system prompt
+  context.js          prompt construction: labelled memory, turns, the bounded counts-only world-state view, size budget, system prompt
   router.js           deterministic capability table (action pattern -> action)
   task-context.js     which question class a follow-up is, and which recorded task it points at
   proposals.js        parser for model output; proposals are untrusted requests
@@ -706,7 +724,7 @@ src/memory/
 src/knowledge/
   knowledge-store.js  triples, validation, conflict detection, lifecycle events (retraction, resolution), store-wide health, one-read `projectionRead`
 src/world/
-  world-state.js      read-only epistemic projection of what memory and knowledge already hold; owns no state, writes nothing, one authoritative read per store
+  world-state.js      read-only epistemic projection of what memory and knowledge already hold; owns no state, writes nothing, one authoritative read per store; `worldPromptLines` renders the counts-only view a model prompt may carry
 src/filesystem/
   path.js             absolute path validation: no traversal, no drive root, no UNC
   actions.js          bounded, read-only listing and reading
@@ -862,6 +880,8 @@ and measures the projection's read cost against synthetic fixtures, or the write
 
 | 40. Two processes cannot each decide one store's next state | `store-write-concurrency.test.js` (18 scenarios, all with real child processes and assertions on the authoritative records and lifecycle states rather than exit codes: distinct memory and knowledge adds, one conflict group, corrections, supersessions, retractions and resolutions raced two at a time so exactly one decision is recorded and the loser returns a truthful refusal; a live holder is waited for within its budget, an expired budget refuses with the store byte-identical, and the default budget is disclosed so a stuck holder cannot hang a command; a process killed while holding the claim is taken over by the next write, an unreadable claim is reported as in use by an unknown process and never removed, and recovery of sixteen abandoned tokens removes tokens only; an append that writes nothing and a claim that cannot be removed are both refused with the store left parseable; a corrupt store is discovered under the claim and refused; a warm instance cannot decide from state another process has already changed; five writers per store together, three repeated stress rounds, and read-only commands that take no lock and never disturb a live holder; plus `diagnose` and `repair locks` for both new lock files, and the authorization review - an unauthorized request is refused before any coordination, a model-proposed plan cannot reach the write lock, private content stays out of the audit on a coordinated write, and post-append ownership loss (`LOCK_LOST`, the record exists) stays distinguishable from a pre-write refusal (`LOCKED`, nothing was written)) |
 
+| 41. What the model is told about the whole store, not only what retrieval showed | `world-context.test.js` (16 scenarios through the assembled application with a recording test double: a clean store adds no section; an unverified model conclusion and an evidence-less claim reach the model as their own disclosures; a private counterpart marks the record that was shown while its content stays out of the prompt; a conflicting record outside the retrieval boundary, and a disagreement larger than the prompt's knowledge cap, are both reported by the projection; a recorded user decision is stated as a decision and not as an open conflict; superseded and retracted records are counted as history; a damaged store is disclosed as damage and an unreadable projection is disclosed as unavailable without blocking the answer; the system prompt states the section's boundary; deterministic requests touch neither the model nor the projection; reading the projection writes nothing to either store; a model cannot obtain the projection or erase the disclosure with confident prose; and a tight budget sheds retrieved records before trimming the summary, then drops the summary before stored knowledge while the user-facing notice stays) |
+
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
 validation (`gateway.test.js`), the verifier-independence check (`actions.test.js`), and
@@ -929,6 +949,16 @@ questions that must change nothing).
   memory has no user-decision mechanism, so a memory group is always reported unresolved.
   Knowledge conflicts are read from the store's own conflict records. The audit record
   keeps ids, counts, and group membership only - never belief text.
+- **What the model receives is a summary of that projection, not the projection.** The prompt view
+  lists at most 3 disagreement groups, 4 explicit unknowns, and 3 members of a group, with each
+  line truncated; when the context budget is tight it gives up its room line by line *before* any
+  retrieved record does, and once no line is left it is replaced by one notice line saying it was
+  omitted to stay within budget - but only while that notice itself still fits, so the notice can
+  never be the reason a record that answers the question is dropped. It contributes counts, record
+  ids and stated gaps only - no belief statement and no private wording - and it is derived on the
+  model path alone: with no model configured, stored records are still shown directly and no
+  projection is built, and if either store is absent the view is not produced at all, because it
+  describes both together.
 - **Read cost grows with the whole store, not with the window.** Each read loads every
   record and runs the integrity scan before it takes its 100-record projection. Batch U
   removed duplicate reads and made an unchanged repeat read skip parsing, so at 20,000
@@ -1293,6 +1323,13 @@ The output separates four things that a normal assistant tends to blend together
 - The action `world.state` accepts **user origin only**. It is not in the model's list of
   readable actions, so a model cannot ask for a projection that may surface private
   memory. A model-origin request is denied before anything runs.
+- The same projection is derived automatically for every model-path answer, but only as a
+  **bounded, counts-only view**: disagreement groups by record id and count, explicit
+  unknowns by the gap they state, retired records as history counts, and private memory
+  contributing neither content nor statement. That view is built by the system, not
+  requested by the model, and it does not widen what the model may read: `world.state`
+  stays user-origin only, and the full read that names private wording stays in the
+  terminal.
 - Private memory appears in the user's own read, explicitly marked
   `[private: never sent to a model]`, and never enters a prompt.
 - The audited result of a routed `world.state` operation holds counts, record ids, and
@@ -1440,6 +1477,60 @@ state enabled, the same kind of workload measured 15.9 s against 24.2 s in the w
 write-path behaviour and its remaining limits are documented in
 [Batch V: incremental write state](#batch-v-incremental-write-state-as-implemented) and under
 [Known limitations](#known-limitations).
+
+**Batch X: the cost of reading the projection for the model.** Batch X put a bounded, counts-only
+view of this projection into every model-path prompt, so the cost was measured before and after the
+change, on one machine (Windows 11, Node 26.4.0, 12 logical CPUs, 24 GiB), in three sequential
+rounds and never overlapped. "Before" is a copy of `apex_app` restored from commit `d9cd504`, the
+commit that predates Batch X; "after" is the working tree. Both ran the same probe against the same
+seeded fixture (154 memory records, 58,532 B; 125 knowledge claims, 53,112 B; 40 unresolved
+disagreement groups, 9 memory groups carrying different values, 5 explicit unknowns), with one cold
+and 25 warm model requests plus 20 `calc` and 10 `status` requests per round. The "model" is an
+in-process test double that records the prompt and resolves immediately, so the figures are APEX's
+own context assembly, store reads, writes and verification - not inference, and nothing here
+demonstrates real model reasoning.
+
+| Measure (median of the three rounds) | before | after |
+|---|---|---|
+| memory store reads per model request | 1.77 | 2.77 |
+| knowledge store reads per model request | 1.00 | 2.00 |
+| parse-snapshot hits / misses over the run (memory) | 45 / 1 | 71 / 1 |
+| parse-snapshot hits / misses over the run (knowledge) | 25 / 1 | 51 / 1 |
+| warm model request | 69.0 ms | 84.5 ms |
+| cold model request (fresh process) | 168.6 ms | 209.6 ms |
+| warm `calc` request | 49.5 ms | 48.4 ms |
+| prompt for the fixture query | 644 chars | 2,368 chars |
+
+Each added read is one more read-and-hash of a file the request already read, and the parse behind
+it is served by the existing derived snapshot: the added reads produced 26 more snapshot hits on
+each store and **no additional miss**, so no second whole-store parse was introduced, and no index
+or cache was added because the measurement showed none was needed. Warm latency rose by roughly
+11-16 ms on this fixture, which is the projection build itself (13.4-16.4 ms called directly, 100
+times, on the same stores); cold rose by roughly 40 ms, dominated by the first parse of both files.
+The deterministic path is unchanged: `calc` and `status` performed zero projection reads and
+recorded `prompt: null` in both builds, and their medians moved inside the noise.
+
+Context size grew by the projection block only - 1,722 chars for 12 lines at its **bounded
+maximum** (3 disagreement groups, 4 explicit unknowns, the counts and completeness lines; an
+estimate of roughly 430 tokens at four characters per token), against a 6,000-character budget, and
+**0 chars** for a store with nothing to disclose. The block gives up its room line by line before
+any retrieved record does, so the records that answer the question are shed last. Measured on the
+context-budget fixture (12 retrieved records, a 7-line summary), in a fresh process and a fresh copy
+of the stores per budget: 2,000 chars keeps 4 summary lines and all 12 records, 1,700 keeps 2 lines
+and all 12, 1,600 keeps the leading counts line alone and all 12, 1,500 replaces the whole summary
+with its one-line omission notice and still keeps all 12, 1,400 carries neither block nor notice and
+keeps all 12 - and only at 1,200 does a record go, one at a time after that as the budget tightens
+further.
+Shedding records first was tried against this fixture and displaced the user's own fact in an
+existing budget case (the knowledge-suite prompt-budget test), which is the regression the current
+order fixes.
+
+These are single-machine figures with the same caveat as every table above: absolute milliseconds
+move with system load, so the round-by-round spread (before warm 67.6-80.0 ms, after 80.1-86.2 ms)
+is smaller than the difference it should be read against. The fixture is deliberately a stress case
+for disclosure - 40 conflict groups is far more disagreement than a normal store holds - so the size
+figure is a ceiling, not a typical request. The probe itself was a temporary script outside the
+repository and is not part of `npm test`.
 
 ## Authoritative state and derived state
 
@@ -1949,7 +2040,13 @@ demonstrate completion, so a later batch cannot claim progress by adding vocabul
    that is not a text heuristic. Depends on 3 (a claim must name what it is about).
    Acceptance: a stored belief can be traced to the records supporting and contradicting
    it, an inference stays labelled as an inference through retrieval, and a conflicting
-   record is surfaced rather than silently preferred.
+   record is surfaced rather than silently preferred. Batch X advanced the third clause of
+   that acceptance and only that clause: a conflict retrieval never showed - because the
+   counterpart was ranked out, withheld as private, or outside the prompt cap - is now
+   surfaced to the model as a bounded, counts-only view of the whole store, alongside the
+   explicit unknowns and the completeness of the read. Confidence values, entity-linked
+   evidence traces, and non-heuristic contradiction detection still depend on stage 3 and
+   are not implemented.
 5. **Learning and adaptation.** Updates driven by user feedback and verified outcomes,
    under the existing trust boundary: model output cannot authorize a write, and no
    inference is promoted to a fact without evidence. Depends on 4. Acceptance: a bounded
@@ -1975,7 +2072,10 @@ Decisions deliberately left reversible: the projection stays a read-time derivat
 later indexed store can replace it without touching memory or knowledge schemas; memory
 contradiction reporting stays heuristic and labelled, so a real entity model can supersede
 it; `world.state` stays user-origin-only, so a future model-facing view can be introduced
-as a separate, content-free action rather than by widening this one.
+as a separate, content-free action rather than by widening this one. Batch X took the second
+option in the form this note reserved: the model-facing view is a system-generated,
+counts-only section built inside prompt assembly for the request at hand, not a new action the
+model can call, and `world.state` was not widened.
 
 ## Future learning interface (not implemented)
 

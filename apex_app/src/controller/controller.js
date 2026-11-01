@@ -1914,6 +1914,25 @@ export class CognitiveController {
         knowledgeNotice = `\n\n[Knowledge context was unavailable (${err.code || 'STORE_ERROR'}); this answer did not use stored knowledge.]`;
       }
     }
+    // Read the epistemic projection once, from the same store instances this answer was
+    // retrieved from, so the model is told what the stores as a whole hold rather than
+    // only the records that happened to match. It is a read-only derivation: it writes
+    // nothing, and a failure here is disclosed rather than shown as an empty store. The
+    // model cannot request this projection itself (the `world.state` action is user-origin
+    // only) because the projection is built with private records included; the privacy
+    // boundary is enforced by the prompt view, which never reproduces private content.
+    let world = null;
+    let worldUnavailable = false;
+    if (this.memory && this.knowledge) {
+      try {
+        world = await buildWorldState({ memory: this.memory, knowledge: this.knowledge, now: this.now });
+      } catch (err) {
+        // Supplementary, like knowledge: the answer still goes ahead, but the model is
+        // told the whole-store check did not happen.
+        op.errors.push({ stage: 'world', code: err.code || 'STORE_ERROR', message: err.message });
+        worldUnavailable = true;
+      }
+    }
     const built = buildPrompt({
       request,
       memoryHits: relevant,
@@ -1921,6 +1940,8 @@ export class CognitiveController {
       knowledge,
       knowledgeUnavailable,
       historyUnavailable,
+      world,
+      worldUnavailable,
       maxChars: this.maxContextChars,
     });
     const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });
@@ -1930,17 +1951,47 @@ export class CognitiveController {
       knowledgeIds: built.knowledgeIds,
       chars: built.prompt.length,
     };
+    // The projection contributes counts and record ids to the audit, never a belief
+    // statement, so the stored audit stays free of memory content.
+    if (world) {
+      op.prompt.world = {
+        included: built.worldIncluded,
+        lines: built.worldLines,
+        linesTotal: built.worldLinesTotal,
+        representedBeliefs: world.counts.representedBeliefs,
+        unresolvedConflicts: world.counts.unresolvedConflicts,
+        memoryConflictGroups: world.counts.memoryConflictGroups,
+        unknowns: world.unknowns.length,
+        complete: world.complete,
+      };
+    } else if (worldUnavailable) {
+      op.prompt.world = { included: false, unavailable: true };
+    }
 
     // A conflict stays visible even if the model ignores the in-context markers.
     const includedMemory = new Set(built.memoryIds);
     const memoryConflict = relevant.some((h) => includedMemory.has(h.record.id)
       && (h.conflict ?? []).some((id) => includedMemory.has(id)));
     const includedKnowledge = new Set(built.knowledgeIds);
+    // A resolved group still carries its `conflictsWith` list, so an open conflict and a
+    // settled decision must not produce the same notice: the second one is false. The
+    // decision itself stays marked on the record line inside the prompt.
     const knowledgeConflict = knowledge.some((r) => includedKnowledge.has(r.id)
-      && (r.conflictsWith?.length ?? 0) > 0);
+      && (r.conflictsWith?.length ?? 0) > 0 && r.conflictState !== 'resolved');
+    // Retrieval only compares the records it returned, so one side of a stored
+    // disagreement can reach the model with no marker. The projection reads the whole
+    // bounded window, so it can say that the record APEX showed is contested even when
+    // the record that disagrees with it was never retrieved.
+    const shownIds = new Set([...includedMemory, ...includedKnowledge]);
+    const worldConflict = (world?.contradictions ?? []).filter((group) => group.state === 'unresolved')
+      .some((group) => (group.claimIds ?? []).some((id) => shownIds.has(id)));
     const annotation = memoryConflict || knowledgeConflict
       ? '[Stored context contains conflicting records; APEX has not resolved them.]'
-      : '';
+      : worldConflict
+        ? '[APEX showed one side of a disagreement stored in its own records; the other record is not shown in this answer and APEX has not resolved them. Run "world" to list stored conflicts.]'
+        : worldUnavailable
+          ? '[APEX could not read its world-state projection for this answer, so it cannot say whether other stored records disagree with what was shown.]'
+          : '';
 
     // Called once, immediately before the model is asked. It reports only the wait
     // and its limit; the transport is not streaming, so no progress or partial text is
