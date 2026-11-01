@@ -2114,8 +2114,12 @@ list, and no framework around it.
 
 **When a record is written.** The decision is made from the finished audit record alone, in
 `src/experience/capture.js` `autoCaptureDecision()`, and the write is attempted only **after** the
-audit append succeeded, at the three sites that end an operation (`controller.js` `#captureExperience`
-from `handle()`, `correctMemory()`, and `#finishCommandOp()`). Every guard must hold, in this order:
+audit append succeeded. Batch AA made that attempt from the three controller methods that ended an
+operation at the time (`handle()`, `correctMemory()`, and `#finishCommandOp()`); Batch AB replaced
+that repeated tail with one function, `finalizeOperation()` in `src/controller/finalization.js`,
+called by all four controller completion paths - including `#finishTaskOp()` - and by the
+`TaskRunner` for none of its step records. A task operation is outside the subset, so its capture is
+refused by eligibility rather than skipped silently. Every guard must hold, in this order:
 the mode is `verified-success`; an operation record exists and was written to the audit log; it has a
 stable id; its origin is `user`; its status is `SUCCESS_VERIFIED`; it carries no errors; its
 capability is in the capture subset; it has at least one step; and **every** step independently stands
@@ -2202,7 +2206,177 @@ any test or measurement; §8 removed the remaining active guidance that pointed 
 while the `openai` and `ollama` provider contracts, the loopback-only default, and every dated
 historical measurement were kept exactly as they were.
 
+## Batch AB: one completion contract for every operation (as implemented)
+
+Batch AB adds no capability. It makes the ending of an operation a single, testable contract, so a
+later action cannot accidentally finish without an audit record, treat an unwritten audit record as
+a success, or attempt an experience before the event it claims to describe exists.
+
+### The capability inventory, reconciled
+
+The Batch AA report said the capture subset held nine capabilities. The source did not: the subset
+is `AUTO_CAPTURE_CAPABILITIES` in `src/experience/capture.js`, and it has exactly five entries. No
+capability was added to reach nine; the report's number was simply wrong. The exact inventory is
+below, and `tests/finalization-contract.test.js` (AB-1) derives it from the registry and the two
+data tables, so a new action fails the suite until it is deliberately classified.
+
+| Capability | Operation path | Outcome classification | Audit recorded | Experience capture eligible |
+|---|---|---|---|---|
+| `memory.add` | `handle()` → deterministic route → `runAction` → `finalizeOperation` | the step's own outcome; only `SUCCESS_VERIFIED` when the action verifier re-read the stored record | yes, exactly one record | yes, when user-origin, `SUCCESS_VERIFIED`, no errors, and every step independently stands |
+| `memory.correct` | `correctMemory()` → `runAction` → `finalizeOperation` | same | yes | yes, under the same guards |
+| `knowledge.add` | `knowledge add` → controller → `runAction` → `#finishCommandOp` → `finalizeOperation` | same | yes | yes, under the same guards |
+| `knowledge.retract` | `knowledge retract` → `#finishCommandOp` | same | yes | yes, under the same guards |
+| `knowledge.resolve` | `knowledge resolve` → `#finishCommandOp` | same | yes | yes, under the same guards; needs a conflicting pair to reach a verified success |
+
+The other 27 capability names are refused by data, in six categories: read (10), model-words (2),
+self-bookkeeping (5), task (7), filesystem (2), no-action (1). With a configured filesystem root the
+registry holds 23 actions; the 9 non-registry names (`model.answer`, `none`, the seven `task.*`
+commands, and the runner's `task.step`) bring the classified total to 32. Every one is either in the
+five-row table above or carries a category and a one-line reason in `CAPTURE_EXCLUDED_CAPABILITIES`.
+A capability in neither is refused by `autoCaptureDecision()` but the coverage test fails first.
+
+### The finalization order
+
+`finalizeOperation(op, { append, capture, onAuditFailure })` is the one tail every controller
+completion path runs. The order is fixed by which evidence each step needs:
+
+1. **outcome finalized** (caller) - status, decision, output and `finishedAt` are already set; only
+   the caller knows what its step did.
+2. **side effect established** (caller) - the final outcome already says whether something may have
+   changed. Nothing is upgraded here, ever.
+3. **audit appended** - the record is written to `operations.jsonl`.
+4. **audit recording established** - success is taken from the append itself, never assumed.
+5. **capture attempted** - only when the append succeeded, and the decision is told `recorded`.
+6. **capture verified** - the store reads the new record back against the audit record.
+7. **disclosure produced** (caller) - a notice states capture, refusal or failure without changing
+   the operation's outcome.
+8. **operation result returned** (caller) - the original status, output and exit code.
+
+The helper never writes `status`, `decision`, `output`, or `errors`. An append failure is reported
+to the caller, which decides what it means: the command, correction and task paths turn it into
+`AUDIT_INTEGRITY_FAILED` when something may have changed; an audited read keeps its own outcome
+because nothing could have changed. A capture that throws becomes a notice, never an operation
+failure. Finalizing the same record object twice is refused before the second append, so a retry in
+one call path cannot duplicate the audit line. The mark is non-enumerable, so it never reaches the
+JSONL file or a caller's deep comparison.
+
+### Five completion paths
+
+| Path | Entry | Audit writer | Capture |
+|---|---|---|---|
+| request | `CognitiveController.handle` | controller | attempted |
+| memory correction | `CognitiveController.correctMemory` | controller | attempted |
+| command | `CognitiveController#finishCommandOp` | controller | attempted |
+| task operation | `CognitiveController#finishTaskOp` | controller | attempted, then refused by eligibility for `task.*` |
+| task step | `TaskRunner#audit` | task runner | not attempted; `task.step` is outside the subset |
+
+The five declarations are frozen in `OPERATION_COMPLETION_PATHS`; AB-1 checks the ids, entries,
+audit writers and capture stances. AB-2 drives one operation through every path and asserts exactly
+seven audit records with unique ids and exactly three experiences (the eligible writes); it also
+asserts that capture only ran after the audit record could be read from disk, and that
+`knowledge.resolve` captures through a real conflicting pair.
+
+### Failure semantics
+
+| What failed | Operation outcome | Audit record | Experience | Disclosure |
+|---|---|---|---|---|
+| audit append for a write that may have changed something | `AUDIT_INTEGRITY_FAILED` | absent | none attempted | the result states it may have happened and the audit trail does not contain it; the CLI prints `Audit: NOT RECORDED` and says not to repeat the request |
+| audit append for a read that changed nothing | unchanged (normally `SUCCESS_VERIFIED`) | absent | none (reads are never captured) | same `Audit: NOT RECORDED` line; the read result itself still stands |
+| experience append after a verified audit | unchanged | present | absent | "not captured (...)", with the operation and its audit record unchanged; `experience record <id>` is the explicit retry |
+| experience read-back disagrees | unchanged | present | appended, kept for inspection | "appended ... but it does not match the audit record"; `experience health` names the damage |
+| capture refused as ineligible | unchanged | present | none | silent; nothing was asked for and nothing was tried |
+| a second finalization of the same record | unchanged | still one record | unchanged | refused: "already finalized; a second audit record would duplicate it" |
+
+In every row the operation is never executed a second time to repair a bookkeeping step, and no
+claim of exactly-once execution is made. What is guaranteed is narrower and testable: a second
+capture for one audit record writes nothing, and a capture failure cannot falsify an operation's
+success.
+
+### Interruption and restart
+
+`tests/finalization-interruption.test.js` starts a real child for each boundary, stops it with exit
+status 9 at that point, then inspects the directory with new processes (`status`, `audit health`,
+`experience health`) and a fresh application instance.
+
+| Boundary | Durable state after the stop | What a restart reports | Recovery |
+|---|---|---|---|
+| before the audit append | the side effect is in its own store; no audit record | `status` shows the memory record and 0 operations; `audit health` says the log is empty | none automatic; the event has no id, so it can never be referenced. Do not repeat the request |
+| during the audit append | half an audit line, no newline; side effect present | `audit health` exits 1 with `damaged - 1 corrupt line(s)` and `(final line without a newline)`; `status` counts it as skipped | operator inspection only; APEX neither repairs nor invents the record |
+| after the audit, before capture | complete audit record; no experience | `experience health` shows 0 record(s) and an empty evidence check | `experience record <operation-id> --subject ...` creates an explicit, user-attributed record; the original write is not re-run |
+| during the experience append | complete audit record; half an experience line | `experience health` exits 1 as damaged; reads and writes refuse the incomplete store | preserve the line for inspection; no automatic reconstruction and no silent dropping |
+| after the experience append, before its read-back | both records complete | the record re-verifies against the audit log in the restarting process | none needed; the missing read-back changed nothing durable |
+| after the read-back, before disclosure | identical to the previous row | same | none; the process died before it returned a result, so nothing was displayed as a success |
+
+The control case runs the same operation without interruption and leaves exactly one audit record
+and one experience. No restart appends anything: the after-audit test compares file sizes before and
+after building a new application and reading both stores.
+
+### Outcomes, in this context
+
+| Outcome | What it means here |
+|---|---|
+| `success_verified` | the action's own verifier re-read the postcondition; the only outcome that can be captured |
+| `execution_failed` | the action did not complete; never captured |
+| `verification_failed` | the action ran but its postcondition was not confirmed; never captured |
+| `verification_unavailable` | the action ran but no independent confirmation was possible; never captured |
+| `audit_integrity_failed` | something may have changed but the audit append did not succeed; never captured, never reported as success |
+| `action_denied` | authorization refused before execution; nothing ran |
+| `input_rejected` | the request was refused before any action; nothing ran |
+| `clarification_required` | the request lacked information; nothing ran |
+| `model_unavailable` | no inference backend answered; no action ran |
+| `plan_created` | a deterministic task plan was stored |
+| `plan_proposed` | a model plan was stored and waits for the user's approval; it is not permission |
+| `plan_rejected` | a plan failed validation; nothing was stored |
+| `task_paused` | the task stopped for an explicit user decision |
+| `task_cancelled` | the task was cancelled by the user |
+
+### Control and boundaries
+
+`APEX_EXPERIENCE_CAPTURE` remains the only switch, validated at startup and **off by default**
+(`off` / `verified-success`). An automatic experience is evidence that a verified event happened;
+it is not feedback, not an assessment, and not a behaviour rule. Only the user's own corrective
+feedback supports a candidate, and only the user's approval puts a rule in effect. Capture never
+grants permission: the audit record keeps the operation's real `origin`, a model-origin operation is
+never captured, a captured record cannot authorize any later action, and the Executive Control Plane
+remains the sole authorization authority.
+
+### Measured
+
+`node benchmarks/run-experience-benchmark.mjs --phase finalize`, 2026-11-01, node v26.4.0 on win32,
+5 repeats, medians, one fresh fixture copy per sample, all applications built with `NoBackend`. The
+record finalized in every sample is a real verified `memory.add` produced through the controller.
+
+| Store (records) | audit only | `finalizeOperation` (capture off) | finalize + capture + read-back | second finalization refused | damaged audit log | unreadable audit log |
+|---|---|---|---|---|---|---|
+| 47 | 12.62 ms | 12.38 ms | 74.09 ms | 0.10 ms | 71.58 ms | 10.79 ms |
+| 207 | 14.87 ms | 10.92 ms | 90.24 ms | 0.11 ms | 88.93 ms | 9.47 ms |
+| 807 | 13.14 ms | 13.91 ms | 181.40 ms | 0.10 ms | 147.34 ms | 9.12 ms |
+
+What these numbers say, and what they do not:
+
+- The shared helper costs nothing measurable when capture is off: `finalize off` and `audit only`
+  are the same append within noise. The contract adds no extra store read - it only sequences the
+  reads and writes the path already performed.
+- The armed column is the existing experience write plus its read-back, so it grows with the store
+  exactly as the Batch AA `B - A` column does (53.04 / 77.84 / 150.12 ms in this run's capture
+  phase). Finalization did not add a second scan.
+- Refusing a duplicate finalization is ~0.1 ms: the check is a non-enumerable mark on the record,
+  not a read of the log.
+- A damaged audit log costs a counted corrupt line and a full scan to the target (71.58-147.34 ms),
+  and an unreadable one fails the append fast (9.12-10.79 ms) while the operation still ends as it
+  would have without capture. Neither path repairs or rewrites evidence.
+- Damaged and unreadable **experience** stores were measured in the capture phase of the same
+  benchmark (169.04/136.80/175.48 ms and 139.37/131.04/139.14 ms): the capture refuses, the
+  operation keeps its outcome, and its audit record is unchanged.
+
+What this batch does not claim: measurements are from one machine (Windows 11, x64), on synthetic
+stores, with no model inference anywhere in the run. Nothing here shows that a captured experience
+improves a later answer; it shows what recording and refusing one costs, and that neither can change
+what the operation was reported to have done. No local inference server of any kind was installed,
+downloaded, started, invoked, or recommended in this batch.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
+
 
 This is a plan, not a status report. Nothing below is implemented except stage 2's
 projection. Each stage names the dependency it satisfies and the evidence that would

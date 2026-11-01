@@ -20,6 +20,10 @@
 //   compare   the same raw append, the same store-level append, the same full read and the same
 //            read-plus-derived-state call on the memory and knowledge stores at matched record
 //            counts, so the difference between these stores is measured rather than asserted.
+//   finalize  the Batch AB completion contract in parts: the audit append alone, the same append
+//            through `finalizeOperation`, that helper with a capture that appends and re-checks,
+//            a refused second finalization, a damaged audit log and an unreadable one. The damaged
+//            and unreadable experience stores are measured in the capture phase.
 //
 // Fixtures are seeded through the real paths - one verified, audited request per experience - and
 // the seeding cost is reported separately from the measured cost. Every write sample runs against
@@ -43,6 +47,7 @@ import {
   CAPTURE_AUTOMATIC,
 } from '../src/experience/experience-store.js';
 import { CAPTURE_VERIFIED_SUCCESS } from '../src/experience/capture.js';
+import { finalizeOperation } from '../src/controller/finalization.js';
 import { buildPrompt, adaptationLine, MAX_CONTEXT_CHARS } from '../src/controller/context.js';
 import { MemoryStore, validateMemoryRecord } from '../src/memory/memory-store.js';
 import { KnowledgeStore, validateKnowledgeRecord } from '../src/knowledge/knowledge-store.js';
@@ -84,7 +89,7 @@ function parseArgs(argv) {
     else if (arg === '--repeats') { opts.repeats = bounded(argv[i + 1], 1, MAX_REPEATS, '--repeats'); i += 1; }
     else if (arg === '--phase') {
       const name = String(argv[i + 1] ?? '');
-      if (!['reads', 'writes', 'capture', 'context', 'compare'].includes(name)) throw new Error(`unknown phase ${name}`);
+      if (!['reads', 'writes', 'capture', 'context', 'compare', 'finalize'].includes(name)) throw new Error(`unknown phase ${name}`);
       opts.phase = name;
       i += 1;
     } else throw new Error(`unknown option ${arg}`);
@@ -595,10 +600,109 @@ async function phaseCompare(opts, fixtures) {
   }
 }
 
+// Finalization: what the shared completion contract costs, in parts, on one already-sealed operation
+// record. The record is produced once through the controller (capture off) in its own directory, so
+// every sample appends a real, verifier-produced audit record rather than a fixture the log would
+// reject. Each sample runs on a fresh copy of the fixture, exactly like the capture phase.
+//
+// `audit only` and `finalize off` differ only by the helper, so their gap bounds what the contract
+// itself adds when capture is off - the setting every installation starts with. `finalize armed`
+// adds the store append and its independent read-back that the controller performs after the
+// eligibility decision. A refused second finalization is measured because refusing must be cheaper
+// than writing, not merely correct.
+async function phaseFinalize(opts, fixtures) {
+  console.log('\n== finalize: the shared completion contract, in parts (fresh fixture copy per sample) ==');
+  console.log('  audit only    = operations.append of one sealed, verified operation record');
+  console.log('  finalize off  = the same append through finalizeOperation with capture disabled');
+  console.log('  finalize armed= finalizeOperation with a capture that appends an experience and re-checks it');
+  console.log('  duplicate     = a second finalization of the same record object (refused before any append)');
+  console.log('  damaged audit = the armed path when operations.jsonl already holds one corrupt line');
+  console.log('  unreadable    = the armed path when operations.jsonl cannot be opened at all');
+  header([
+    ['store', 20], ['audit only', 11], ['finalize off', 13], ['finalize armed', 15],
+    ['duplicate', 10], ['damaged audit', 14], ['unreadable', 11],
+  ]);
+  const donorDir = tempDir('apex-bench-finalize-donor-');
+  const donor = await app(donorDir).controller.handle('remember that the finalization donor note is held', { origin: 'user' });
+  if (donor.status !== Outcome.SUCCESS_VERIFIED) throw new Error(`finalize donor seeding failed: ${donor.status}`);
+  const sealed = donor.operation;
+
+  // The capture work the controller performs after eligibility: one store append, then the read-back
+  // that is the only thing allowed to make the caller report "captured".
+  async function captureInto(target, record, { recorded } = {}) {
+    if (!recorded) return null;
+    const written = await target.experience.recordExperience({
+      operationId: record.id,
+      subject: 'a finalization benchmark note',
+      capture: CAPTURE_AUTOMATIC,
+      origin: 'user',
+    });
+    const check = await target.experience.evidenceCheck(written.record.id);
+    return check.ok ? 'captured' : `mismatch: ${check.detail}`;
+  }
+
+  for (const fixture of fixtures) {
+    const samples = { audit: [], off: [], armed: [], duplicate: [], damaged: [], unreadable: [] };
+    for (let i = 0; i < opts.repeats; i += 1) {
+      const auditCopy = await copyDir(fixture.dir);
+      const auditApp = app(auditCopy);
+      samples.audit.push((await timed(() => auditApp.operations.append(structuredClone(sealed)))).ms);
+
+      const offCopy = await copyDir(fixture.dir);
+      const offApp = app(offCopy);
+      samples.off.push((await timed(() => finalizeOperation(structuredClone(sealed), {
+        append: (record) => offApp.operations.append(record),
+      }))).ms);
+
+      const armedCopy = await copyDir(fixture.dir);
+      const armedApp = app(armedCopy);
+      samples.armed.push((await timed(() => finalizeOperation(structuredClone(sealed), {
+        append: (record) => armedApp.operations.append(record),
+        capture: (record, opts_) => captureInto(armedApp, record, opts_),
+      }))).ms);
+
+      const dupeCopy = await copyDir(fixture.dir);
+      const dupeApp = app(dupeCopy);
+      const once = structuredClone(sealed);
+      await finalizeOperation(once, { append: (record) => dupeApp.operations.append(record) });
+      samples.duplicate.push((await timed(async () => {
+        try { await finalizeOperation(once, { append: (record) => dupeApp.operations.append(record) }); } catch { /* the refusal is the measurement */ }
+      })).ms);
+
+      const damagedCopy = await copyDir(fixture.dir);
+      const damagedOps = path.join(damagedCopy, 'operations.jsonl');
+      const existing = fs.readFileSync(damagedOps, 'utf8');
+      fs.writeFileSync(damagedOps, `this line is not an operation record\n${existing}`);
+      const damagedApp = app(damagedCopy);
+      samples.damaged.push((await timed(() => finalizeOperation(structuredClone(sealed), {
+        append: (record) => damagedApp.operations.append(record),
+        capture: (record, opts_) => captureInto(damagedApp, record, opts_),
+      }))).ms);
+
+      const unreadableCopy = await copyDir(fixture.dir);
+      const unreadableOps = path.join(unreadableCopy, 'operations.jsonl');
+      fs.rmSync(unreadableOps);
+      fs.mkdirSync(unreadableOps);
+      const unreadableApp = app(unreadableCopy);
+      samples.unreadable.push((await timed(() => finalizeOperation(structuredClone(sealed), {
+        append: (record) => unreadableApp.operations.append(record),
+        capture: (record, opts_) => captureInto(unreadableApp, record, opts_),
+      }))).ms);
+    }
+    const cell = (key) => ms(stats(samples[key]).median);
+    row([
+      [`${fixture.experiences} experiences`, 20], [cell('audit'), 11], [cell('off'), 13],
+      [cell('armed'), 15], [cell('duplicate'), 10], [cell('damaged'), 14], [cell('unreadable'), 11],
+    ]);
+  }
+  console.log('  a damaged experience log is measured in the capture phase ("damaged"), and an unreadable one');
+  console.log('  there as "unreadable"; both refuse the capture without touching the operation\'s outcome.');
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
-    console.log('usage: node benchmarks/run-experience-benchmark.mjs [--experiences N] [--repeats R] [--phase reads|writes|capture|context|compare] [--keep]');
+    console.log('usage: node benchmarks/run-experience-benchmark.mjs [--experiences N] [--repeats R] [--phase reads|writes|capture|context|compare|finalize] [--keep]');
     return;
   }
   console.log('experience benchmark: model-free, temporary data directories, no inference requested at any point.');
@@ -613,13 +717,14 @@ async function main() {
         + ` ${fixture.skippedCount} group(s) left as evidence without a candidate)`);
       fixtures.push(fixture);
     }
-    const phases = opts.phase ? [opts.phase] : ['reads', 'writes', 'capture', 'context', 'compare'];
+    const phases = opts.phase ? [opts.phase] : ['reads', 'writes', 'capture', 'context', 'compare', 'finalize'];
     for (const name of phases) {
       if (name === 'reads') await phaseReads(opts, fixtures);
       if (name === 'writes') await phaseWrites(opts, fixtures);
       if (name === 'capture') await phaseCapture(opts, fixtures);
       if (name === 'context') await phaseContext(opts, fixtures);
       if (name === 'compare') await phaseCompare(opts, fixtures);
+      if (name === 'finalize') await phaseFinalize(opts, fixtures);
     }
   } finally {
     if (opts.keep) console.log(`\nkept ${dirs.length} temporary directory/directories under ${TMP_ROOT}`);

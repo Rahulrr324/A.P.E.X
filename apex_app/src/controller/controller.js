@@ -28,6 +28,7 @@ import { MAX_HEALTH_SAMPLES, MAX_HISTORY_CHAIN } from '../knowledge/knowledge-st
 import { buildWorldState, renderWorldState } from '../world/world-state.js';
 import { autoCaptureDecision, captureSettingPhrase, CAPTURE_OFF } from '../experience/capture.js';
 import { CAPTURE_AUTOMATIC } from '../experience/experience-store.js';
+import { finalizeOperation } from './finalization.js';
 
 export const MAX_REQUEST_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 4000;
@@ -515,15 +516,10 @@ export class CognitiveController {
     op.finishedAt = this.now().toISOString();
 
     const persisted = { ...op, steps: op.steps.map(stripDisplay) };
-    let recorded = true;
-    let recordError = null;
-    try {
-      await this.operations.append(persisted);
-    } catch (err) {
-      recorded = false;
-      recordError = err.message;
-    }
-    const captureNotice = await this.#captureExperience(persisted, { recorded });
+    const { recorded, recordError, captureNotice } = await finalizeOperation(persisted, {
+      append: (record) => this.operations.append(record),
+      capture: (record, opts) => this.#captureExperience(record, opts),
+    });
     const finalDisplay = captureNotice ? `${displayText ? `${displayText}\n\n` : ''}${captureNotice}` : displayText;
     return { operation: persisted, status, decision: persisted.decision, output: op.output, display: finalDisplay, recorded, recordError };
   }
@@ -559,19 +555,16 @@ export class CognitiveController {
     op.output = step.summary ? truncate(step.summary, MAX_OUTPUT_CHARS) : null;
     op.finishedAt = this.now().toISOString();
 
-    let recorded = true;
-    let recordError = null;
-    try {
-      await this.operations.append({ ...op, steps: op.steps.map(stripDisplay) });
-    } catch (err) {
-      recorded = false;
-      recordError = err.message;
-      op.errors.push({ stage: 'audit', code: 'AUDIT_WRITE_FAILED', message: err.message });
-      op.status = Outcome.AUDIT_INTEGRITY_FAILED;
-      op.decision = classifyDecision(op);
-      op.output = 'The correction may have been stored, but its audit record could not be written; it is not reported as verified success.';
-    }
-    const captureNotice = await this.#captureExperience(op, { recorded });
+    const { recorded, recordError, captureNotice } = await finalizeOperation(op, {
+      append: (record) => this.operations.append({ ...record, steps: record.steps.map(stripDisplay) }),
+      capture: (record, opts) => this.#captureExperience(record, opts),
+      onAuditFailure: (err) => {
+        op.errors.push({ stage: 'audit', code: 'AUDIT_WRITE_FAILED', message: err.message });
+        op.status = Outcome.AUDIT_INTEGRITY_FAILED;
+        op.decision = classifyDecision(op);
+        op.output = 'The correction may have been stored, but its audit record could not be written; it is not reported as verified success.';
+      },
+    });
     const baseDisplay = recorded ? (step.display ?? step.summary) : op.output;
     return {
       operation: op,
@@ -785,28 +778,26 @@ export class CognitiveController {
     op.decision = classifyDecision(op);
     op.output = step.summary ? truncate(step.summary, MAX_OUTPUT_CHARS) : null;
     op.finishedAt = this.now().toISOString();
-    let recorded = true;
-    let recordError = null;
-    try {
-      await this.operations.append({ ...op, steps: op.steps.map(stripDisplay) });
-    } catch (err) {
-      recorded = false;
-      recordError = err.message;
-      if (failMsg) {
+    const { recorded, recordError, captureNotice } = await finalizeOperation(op, {
+      append: (record) => this.operations.append({ ...record, steps: record.steps.map(stripDisplay) }),
+      capture: (record, opts) => this.#captureExperience(record, opts),
+      onAuditFailure: (err) => {
+        // An audited read has nothing that could have changed, so it keeps its own outcome; a
+        // command whose failMsg is set may have changed something and must not claim success.
+        if (!failMsg) return;
         op.errors.push({ stage: 'audit', code: 'AUDIT_WRITE_FAILED', message: err.message });
         op.status = Outcome.AUDIT_INTEGRITY_FAILED;
         op.decision = classifyDecision(op);
         op.output = failMsg;
-      }
-    }
-    const notice = await this.#captureExperience(op, { recorded });
+      },
+    });
     const display = step.display ?? step.summary;
     return {
       operation: op,
       status: op.status,
       decision: op.decision,
       output: op.output,
-      display: notice ? `${display}\n\n${notice}` : display,
+      display: captureNotice ? `${display}\n\n${captureNotice}` : display,
       recorded,
       recordError,
     };
@@ -1598,14 +1589,13 @@ export class CognitiveController {
     op.output = truncate(display ?? '', MAX_OUTPUT_CHARS);
     op.finishedAt = this.now().toISOString();
     if (task) op.task = { id: task.id, status: task.status };
-    let recorded = true;
-    let recordError = null;
-    try {
-      await this.operations.append(op);
-    } catch (err) {
-      recorded = false;
-      recordError = err.message;
-    }
+    // Capture is attempted here for the same reason as everywhere else - one contract - and is
+    // refused by eligibility: task.* is outside the capture subset, and a task operation covers
+    // several steps whose outcomes the task log already records separately.
+    const { recorded, recordError } = await finalizeOperation(op, {
+      append: (record) => this.operations.append(record),
+      capture: (record, opts) => this.#captureExperience(record, opts),
+    });
     return { status, decision: op.decision, display, output: op.output, operation: op, recorded, recordError, task, ...extra };
   }
 

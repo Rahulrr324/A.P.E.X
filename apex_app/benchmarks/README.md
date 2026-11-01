@@ -268,7 +268,7 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
 
 1. `--experiences` is 1-2000 (a comma-separated list makes a size matrix, default `20,100,400`) and
    `--repeats` is 1-25 (default 5). `--phase` selects one of `reads`, `writes`, `capture`, `context`,
-   `compare`; without it all five run in that order.
+   `compare`, `finalize`; without it all six run in that order.
 2. A fixture is `N` audited events, each produced the way the application produces one (a verified
    request through the controller), then one recorded experience and one corrective feedback record
    per event, one derivation, and three approvals. Seeding time is reported separately from every
@@ -312,6 +312,14 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
   at matched record counts, so the difference between these stores is measured rather than asserted.
   The raw-append probe re-appends the last line of each store's own file, read back verbatim into a
   throwaway copy, so no store is measured appending a shape the benchmark invented.
+- **finalize**: the Batch AB completion contract in parts, all on one real verified `memory.add`
+  record produced once through the controller and copied into a fresh fixture per sample. `audit
+  only` is the raw append; `finalize off` is the same append through `finalizeOperation()` with no
+  capture, so the gap between them bounds the helper's own cost (measured: none beyond noise);
+  `finalize armed` adds the experience append and its independent read-back; `duplicate` is a second
+  finalization of the same record object, which must be refused before it can append; `damaged audit`
+  and `unreadable` run the armed path against an audit log that holds one corrupt line, or cannot be
+  opened at all. Damaged and unreadable **experience** stores are measured in the capture phase.
 
 ### Interpretation limits
 
@@ -328,7 +336,9 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
   few milliseconds - including a populated store that measures faster than an empty one - are noise.
 - The capture phase is read as `B - A` within one run and never against another run's absolute
   figures: the machine, the background load and the fixture size all move the medians, while the
-  armed-versus-unarmed pair runs on copies of the same bytes seconds apart.
+  armed-versus-unarmed pair runs on copies of the same bytes seconds apart. The finalize phase obeys
+  the same rule: `finalize off` versus `audit only` is the contract's own overhead, and both run in
+  the same process on copies of the same fixture.
 - No figure here involves a model. Nothing in this file shows that an approved adaptation improves
   an answer, only what it costs the context that carries it.
 

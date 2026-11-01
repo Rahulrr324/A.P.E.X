@@ -25,20 +25,9 @@ export const CAPTURE_VERIFIED_SUCCESS = 'verified-success';
 // here is durable state the user asked for, and its audit step states the result as an identifier
 // or a count rather than as the user's words.
 //
-// Excluded on purpose, with the reason a reader can check:
-//  - `model.answer` and any model-proposed step: a model conclusion is never evidence of anything
-//    except that a model said it;
-//  - `memory.save_conclusion`: what it stores is a model's words, and the audit record already
-//    says the write happened;
-//  - reads (`memory.search`, `memory.list`, `knowledge.search`, `knowledge.list`/`show`/`history`,
-//    `world.state`, `app.status`, `calc.evaluate`): their result is re-derivable from the stores at
-//    any time, so an experience of one would say less than a fresh read does while making every
-//    later read slower. Feedback on a read is still available, just explicit;
-//  - `experience.*`, `feedback.*`, `adaptation.*`: the experience log must not fill itself with
-//    records about its own bookkeeping, which would make the counts meaningless;
-//  - `task.*`: one task operation covers several steps with separate outcomes, so a single
-//    experience would say less than the task log already says;
-//  - `filesystem.*`: the read result is other people's file content, and no outcome here needs it.
+// Everything else that can end an operation is classified, with its reason, in
+// CAPTURE_EXCLUDED_CAPABILITIES below. The exclusion is data rather than prose so that the
+// coverage test can require an explicit decision for every capability, including one added later.
 export const AUTO_CAPTURE_CAPABILITIES = Object.freeze([
   'memory.add',
   'memory.correct',
@@ -46,6 +35,48 @@ export const AUTO_CAPTURE_CAPABILITIES = Object.freeze([
   'knowledge.retract',
   'knowledge.resolve',
 ]);
+
+export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
+  read: 'its result is re-derivable from the stores at any time, so an experience of it would say less than a fresh read while making every later read slower',
+  'model-words': 'what it stores or produces is a model conclusion, which is evidence only that a model said it',
+  'self-bookkeeping': 'the experience log must not fill itself with records about its own bookkeeping, which would make the counts meaningless',
+  task: 'one task operation covers several steps with separate outcomes, so a single experience would say less than the task log already says',
+  filesystem: 'the read result is other people\'s file content, and no outcome here needs it',
+  'no-action': 'the request ran no action, so there is no postcondition that could have been verified',
+});
+
+// Every capability that can reach an operation-end path without being captured. A capability that
+// appears in neither list is refused by autoCaptureDecision, but the coverage test fails first: a
+// new action has to be classified here or added to the subset on purpose.
+export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
+  'app.status': 'read',
+  'calc.evaluate': 'read',
+  'world.state': 'read',
+  'memory.search': 'read',
+  'memory.list': 'read',
+  'knowledge.list': 'read',
+  'knowledge.search': 'read',
+  'experience.list': 'read',
+  'experience.show': 'read',
+  'adaptation.list': 'read',
+  'memory.save_conclusion': 'model-words',
+  'model.answer': 'model-words',
+  'experience.record': 'self-bookkeeping',
+  'feedback.record': 'self-bookkeeping',
+  'adaptation.derive': 'self-bookkeeping',
+  'adaptation.decide': 'self-bookkeeping',
+  'adaptation.retire': 'self-bookkeeping',
+  'task.plan': 'task',
+  'task.run': 'task',
+  'task.approve': 'task',
+  'task.retry': 'task',
+  'task.cancel': 'task',
+  'task.explain': 'task',
+  'task.step': 'task',
+  'filesystem.list': 'filesystem',
+  'filesystem.read': 'filesystem',
+  none: 'no-action',
+});
 
 // A step that was denied, rejected as input, failed, or executed without an independent
 // confirmation of its postcondition cannot support a claim about what APEX did.
