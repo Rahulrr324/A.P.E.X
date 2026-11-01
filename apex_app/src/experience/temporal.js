@@ -80,6 +80,8 @@ const LIMITS = Object.freeze([
   'Patterns describe the order of recorded outcomes. Temporal order alone does not establish that one event caused another, and no pattern is a prediction.',
   'No pattern becomes an adaptation. A behaviour rule needs the user\'s corrective feedback and an explicit user approval, exactly as before.',
   'Events are ordered by finishedAt, then requestedAt, then createdAt; equal timestamps keep their append-only log order. Undated records are never placed in a window.',
+  'A success rate is computed over completed attempts (success or failure). Refused, other, and unknown outcomes are counted but are not attempts, so they neither raise nor lower the rate.',
+  'An experience a later record replaced is reported in the timeline and counts, but it is not current evidence and is excluded from every pattern, which says how many it left out.',
 ]);
 
 export function isCorrectiveAssessment(assessment) {
@@ -96,12 +98,19 @@ export function outcomeClass(outcome) {
 
 // ---- time -------------------------------------------------------------------
 
+// A date-and-time without a zone is ambiguous: `Date.parse` reads it in the machine's local time,
+// so the same stored text would order differently on two machines and across a DST change. Date-only
+// values are already read as UTC; a zone-less date-and-time is read as UTC for the same reason.
+// Writers store `toISOString()` values, so this only affects hand-edited or external records.
+const ZONELESS_DATETIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?$/;
+
 export function parseInstant(value) {
   if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : null;
   if (typeof value !== 'string') return null;
   const text = value.trim();
   if (text.length === 0) return null;
-  const ms = Date.parse(text);
+  const candidate = ZONELESS_DATETIME.test(text) ? `${text.replace(' ', 'T')}Z` : text;
+  const ms = Date.parse(candidate);
   return Number.isNaN(ms) ? null : ms;
 }
 
@@ -226,6 +235,11 @@ function compareEvents(a, b) {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
+// Code-point order, not locale order: the same records must sort the same way on every machine.
+function compareNames(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function newCounts() {
   return {
     total: 0,
@@ -254,11 +268,17 @@ function addToCounts(counts, event) {
   if (event.superseded) counts.superseded += 1;
 }
 
+// A success rate is computed over attempts: events that ended in success or failure. A refusal,
+// an unclassified outcome, and an event with no outcome were not attempts, so counting them as
+// failures would understate the rate and counting them as successes would overstate it. They are
+// still reported in their own counts. The trend uses the same denominator, so a reported rate and
+// a reported trend cannot disagree about the same events.
 function finalizeCounts(counts) {
-  const classified = counts.success + counts.failure + counts.blocked + counts.other + counts.unknown;
+  const attempts = counts.success + counts.failure;
   return {
     ...counts,
-    successRate: classified === 0 ? null : Math.round((counts.success / classified) * 1000) / 1000,
+    attempts,
+    successRate: attempts === 0 ? null : Math.round((counts.success / attempts) * 1000) / 1000,
   };
 }
 
@@ -301,7 +321,7 @@ function buildSlice({ experiences, feedbackByExperience, retiredFeedback, positi
         trend: trendOf(group.events),
       };
     })
-    .sort((a, b) => b.total - a.total || a.capability.localeCompare(b.capability));
+    .sort((a, b) => b.total - a.total || compareNames(a.capability, b.capability));
 
   const totals = finalizeCounts(dated.reduce((acc, event) => {
     addToCounts(acc, event);
@@ -330,6 +350,17 @@ function trendOf(events) {
   return 'stable';
 }
 
+function compareCorrections(a, b) {
+  if (a.ms === null && b.ms === null) return (a.logPosition ?? 0) - (b.logPosition ?? 0);
+  if (a.ms === null) return 1;
+  if (b.ms === null) return -1;
+  if (a.ms !== b.ms) return a.ms - b.ms;
+  return (a.logPosition ?? 0) - (b.logPosition ?? 0);
+}
+
+// Two indexes over the same corrective feedback. `current` supports patterns; `corrected` holds
+// feedback a later feedback record superseded, which no longer supports anything. Both are returned
+// so the read can say how many were left out instead of silently counting fewer.
 function feedbackIndex(experiences, feedback, retiredFeedback, position) {
   const byExperience = new Map();
   for (const entry of feedback) {
@@ -337,36 +368,32 @@ function feedbackIndex(experiences, feedback, retiredFeedback, position) {
     list.push(entry);
     byExperience.set(entry.experienceId, list);
   }
-  const byCapability = new Map();
+  const current = new Map();
+  const corrected = new Map();
   for (const experience of experiences) {
     for (const entry of byExperience.get(experience.id) ?? []) {
-      if (retiredFeedback.has(entry.id)) continue;
       if (!isCorrectiveAssessment(entry.assessment)) continue;
-      const ms = parseInstant(entry.createdAt);
+      const target = retiredFeedback.has(entry.id) ? corrected : current;
       const item = {
         id: entry.id,
         experienceId: experience.id,
         capability: experience.capability ?? null,
         assessment: entry.assessment,
         createdAt: entry.createdAt ?? null,
-        ms,
+        ms: parseInstant(entry.createdAt),
         logPosition: position.get(entry.id) ?? null,
+        // The experience a feedback record assesses may itself have been replaced. The feedback
+        // stays readable, but it is not current evidence about the current record.
+        experienceSuperseded: experience.superseded === true,
       };
-      const list = byCapability.get(item.capability) ?? [];
+      const list = target.get(item.capability) ?? [];
       list.push(item);
-      byCapability.set(item.capability, list);
+      target.set(item.capability, list);
     }
   }
-  for (const list of byCapability.values()) {
-    list.sort((a, b) => {
-      if (a.ms === null && b.ms === null) return (a.logPosition ?? 0) - (b.logPosition ?? 0);
-      if (a.ms === null) return 1;
-      if (b.ms === null) return -1;
-      if (a.ms !== b.ms) return a.ms - b.ms;
-      return (a.logPosition ?? 0) - (b.logPosition ?? 0);
-    });
-  }
-  return byCapability;
+  for (const list of current.values()) list.sort(compareCorrections);
+  for (const list of corrected.values()) list.sort(compareCorrections);
+  return { current, corrected };
 }
 
 // ---- patterns ---------------------------------------------------------------
@@ -376,9 +403,33 @@ function evidenceOf(events) {
   return { experienceIds: ids, truncated: events.length > ids.length };
 }
 
-function patternBase({ kind, capability, window, events, supporting, contradicting, feedbackIds = [], basis }) {
+// Every pattern separates the live dated events it examined into three disjoint groups:
+//
+//   supporting     records that meet the rule the pattern states
+//   contradicting  records that count against that rule
+//   excluded       records the rule does not use and that do not refute it
+//
+// An outcome that merely differs from the rule's evidence is not counter-evidence. An earlier
+// failure does not contradict "the three most recent events are successes", and an experience the
+// user never assessed does not contradict "two corrective records exist". Calling such records
+// contradicting overstates the disagreement; dropping them hides it. They are listed as excluded
+// with the reason, their count is always reported in full, and only their ids are bounded.
+function patternBase({
+  kind,
+  capability,
+  window,
+  events,
+  supporting,
+  contradicting = [],
+  excludedReason = null,
+  feedbackIds = [],
+  basis,
+}) {
+  const used = new Set([...supporting, ...contradicting].map((event) => event.id));
+  const excluded = events.filter((event) => !used.has(event.id));
   const automatic = supporting.filter((event) => event.capture === 'automatic').length;
   const explicit = supporting.filter((event) => event.capture === 'explicit').length;
+  const shownFeedback = feedbackIds.slice(0, MAX_PATTERN_EVIDENCE);
   return {
     stage: 'pattern',
     kind,
@@ -386,11 +437,17 @@ function patternBase({ kind, capability, window, events, supporting, contradicti
     basis,
     window: { since: window.since, until: window.until },
     evidence: evidenceOf(supporting),
-    feedbackIds: feedbackIds.slice(0, MAX_PATTERN_EVIDENCE),
+    feedbackIds: shownFeedback,
+    feedbackCount: feedbackIds.length,
+    feedbackTruncated: feedbackIds.length > shownFeedback.length,
     counterEvidence: evidenceOf(contradicting),
+    excludedEvidence: evidenceOf(excluded),
+    excludedReason: excluded.length > 0 ? excludedReason : null,
     counts: {
       supporting: supporting.length,
       contradicting: contradicting.length,
+      excluded: excluded.length,
+      feedback: feedbackIds.length,
       automatic,
       explicit,
       unknownCapture: supporting.length - automatic - explicit,
@@ -398,12 +455,13 @@ function patternBase({ kind, capability, window, events, supporting, contradicti
     },
     supportTruncated: supporting.length > MAX_PATTERN_EVIDENCE,
     counterTruncated: contradicting.length > MAX_PATTERN_EVIDENCE,
+    excludedTruncated: excluded.length > MAX_PATTERN_EVIDENCE,
     causal: false,
     adaptation: false,
   };
 }
 
-function streakPattern({ kind, label, capability, window, events, expected, contradicting, min = MIN_PATTERN_EVENTS }) {
+function streakPattern({ kind, label, capability, window, events, expected, min = MIN_PATTERN_EVENTS }) {
   const recent = events.slice(-min);
   if (recent.length < min) return null;
   if (!recent.every((event) => event.outcomeClass === expected)) return null;
@@ -413,21 +471,21 @@ function streakPattern({ kind, label, capability, window, events, expected, cont
     window,
     events,
     supporting: recent,
-    contradicting,
+    excludedReason: `recorded before the most recent ${min}; the rule names only the most recent ${min}`,
     basis: 'recorded_experiences',
   });
   pattern.threshold = `the ${min} most recent dated events in this window all record ${expected}`;
   pattern.explanation = `${min} consecutive recorded ${expected} outcome(s) ending at ${recent.at(-1).occurredAt}`;
   pattern.limitations = [
     `${label} describes these ${min} recorded events. It does not show why they ended that way, and a different set of events may exist outside this window.`,
-    ...(contradicting.length > 0
-      ? [`${contradicting.length} other recorded event(s) in the window have a different outcome and are listed as contradicting evidence.`]
+    ...(pattern.counts.excluded > 0
+      ? [`${pattern.counts.excluded} other recorded event(s) in the window fall outside this run and are listed as excluded, not as counter-evidence; they neither support nor refute it.`]
       : []),
   ];
   return pattern;
 }
 
-function alternatingPattern({ capability, window, events, contradicting }) {
+function alternatingPattern({ capability, window, events }) {
   const sequence = events.filter((event) => event.outcomeClass === 'success' || event.outcomeClass === 'failure');
   if (sequence.length < 4) return null;
   let start = sequence.length - 1;
@@ -440,14 +498,16 @@ function alternatingPattern({ capability, window, events, contradicting }) {
     window,
     events,
     supporting: run,
-    contradicting,
+    excludedReason: 'outside the alternating run, or an outcome that is neither success nor failure',
     basis: 'recorded_experiences',
   });
-  pattern.threshold = 'at least 4 consecutive dated success/failure events with no two adjacent outcomes equal';
-  pattern.explanation = `${run.length} consecutive recorded events alternate between success and failure`;
+  pattern.threshold = 'at least 4 consecutive dated success/failure outcomes with no two adjacent classes equal';
+  pattern.explanation = `${run.length} consecutive recorded success/failure outcomes alternate between success and failure`;
   pattern.limitations = [
     'Alternation is a description of the recorded order, not evidence of a cycle or a rule. It does not predict that the next outcome alternates, and it does not show cause.',
-    `Only success and failure outcomes participate; ${events.length - sequence.length} event(s) with another outcome were left out of the sequence.`,
+    ...(pattern.counts.excluded > 0
+      ? [`${pattern.counts.excluded} recorded event(s) are outside the run or have another outcome; they are listed as excluded, not as counter-evidence.`]
+      : []),
   ];
   return pattern;
 }
@@ -465,7 +525,6 @@ function regressionPattern({ capability, window, events, min = MIN_PATTERN_EVENT
     window,
     events,
     supporting: [...before, last],
-    contradicting: [],
     basis: 'recorded_experiences',
   });
   pattern.threshold = `at least ${min - 1} successes followed by a failure, with no other outcome between them`;
@@ -480,23 +539,25 @@ function improvementPattern({ capability, window, events, corrections }) {
   if (corrections.length === 0) return null;
   for (const correction of corrections) {
     if (correction.ms === null || correction.ms < window.sinceMs || correction.ms > window.untilMs) continue;
-    const laterSuccesses = events.filter((event) => {
+    // A correction of an experience a later record replaced is not current evidence.
+    if (correction.experienceSuperseded) continue;
+    const later = events.filter((event) => {
       const ms = parseInstant(event.occurredAt);
-      return ms !== null && ms > correction.ms && event.outcomeClass === 'success';
+      return event.id !== correction.experienceId && ms !== null && ms > correction.ms;
     });
+    const laterSuccesses = later.filter((event) => event.outcomeClass === 'success');
     if (laterSuccesses.length === 0) continue;
-    const laterOther = events.filter((event) => {
-      const ms = parseInstant(event.occurredAt);
-      return ms !== null && ms > correction.ms && event.outcomeClass !== 'success';
-    });
-    const supporting = events.filter((event) => event.id === correction.experienceId).concat(laterSuccesses);
+    const laterFailures = later.filter((event) => event.outcomeClass === 'failure');
+    const corrected = events.find((event) => event.id === correction.experienceId);
+    const supporting = corrected ? [corrected, ...laterSuccesses] : laterSuccesses;
     const pattern = patternBase({
       kind: 'improvement_after_correction',
       capability,
       window,
       events,
       supporting,
-      contradicting: laterOther,
+      contradicting: laterFailures,
+      excludedReason: 'recorded before or at the correction, or after it with a refused or unclassified outcome',
       feedbackIds: [correction.id],
       basis: 'mixed',
     });
@@ -505,70 +566,90 @@ function improvementPattern({ capability, window, events, corrections }) {
     pattern.limitations = [
       'A later success is not proof that the user correction caused it. Other changes between the two events are not represented here.',
       'Only current corrective feedback is considered; corrected feedback remains readable but no longer supports or contradicts this pattern.',
+      'The corrected event is counted once and is never later evidence for its own correction.',
+      'A later refused or unclassified event is listed as excluded, not as counter-evidence: it was not a failed attempt.',
+      ...(corrected
+        ? []
+        : ['The experience this correction assesses is not in this dated window (it may be earlier, undated, or replaced), so only the later events are listed as evidence.']),
     ];
     return pattern;
   }
   return null;
 }
 
-function correctionPattern({ capability, window, events, corrections }) {
+function correctionPattern({ capability, window, events, corrections, correctedFeedback = [] }) {
   const inWindow = corrections.filter((correction) => correction.ms !== null
     && correction.ms >= window.sinceMs
     && correction.ms <= window.untilMs);
-  if (inWindow.length < MIN_CORRECTION_FEEDBACK) return null;
-  const experienceIds = new Set(inWindow.map((correction) => correction.experienceId));
+  // The threshold is about current feedback, so feedback on an experience a later record replaced
+  // does not count. It is disclosed instead of silently reducing the count.
+  const usable = inWindow.filter((correction) => !correction.experienceSuperseded);
+  if (usable.length < MIN_CORRECTION_FEEDBACK) return null;
+  const experienceIds = new Set(usable.map((correction) => correction.experienceId));
   const supporting = events.filter((event) => experienceIds.has(event.id));
-  const without = events.filter((event) => !experienceIds.has(event.id));
+  const replaced = inWindow.length - usable.length;
+  const supersededByFeedback = correctedFeedback.filter((correction) => correction.ms !== null
+    && correction.ms >= window.sinceMs
+    && correction.ms <= window.untilMs).length;
   const pattern = patternBase({
     kind: 'recurring_corrections',
     capability,
     window,
     events,
     supporting,
-    contradicting: without,
-    feedbackIds: inWindow.map((correction) => correction.id),
+    excludedReason: 'not assessed by a current corrective feedback record in this window',
+    feedbackIds: usable.map((correction) => correction.id),
     basis: 'user_feedback',
   });
-  pattern.threshold = `${MIN_CORRECTION_FEEDBACK} current corrective feedback records in the same capability and window`;
-  pattern.explanation = `${inWindow.length} corrective feedback record(s) assess experiences in this capability`;
+  pattern.threshold = `${MIN_CORRECTION_FEEDBACK} current corrective feedback records in the same capability and window, each assessing a record that still stands`;
+  pattern.explanation = `${usable.length} corrective feedback record(s) assess experiences in this capability`;
   pattern.limitations = [
     'The feedback records are the user\'s assessments of separate events. They may concern different aspects, and their number alone does not identify a rule.',
     'A candidate adaptation still requires the deterministic derivation rule and your explicit approval.',
+    ...(replaced > 0
+      ? [`${replaced} corrective feedback record(s) in the window assess an experience a later record replaced and are not counted.`]
+      : []),
+    ...(supersededByFeedback > 0
+      ? [`${supersededByFeedback} corrective feedback record(s) in the window were themselves corrected by a later feedback record and are not counted.`]
+      : []),
+    ...(supporting.length === 0
+      ? ['The assessed experience records are outside this dated window, so the evidence is the feedback records alone.']
+      : []),
   ];
   return pattern;
 }
 
-function insufficientPattern({ window, events, feedbackCount, min = MIN_PATTERN_EVENTS }) {
-  const pattern = {
-    stage: 'pattern',
+// Insufficient evidence is not a finding about outcomes; it says the window does not contain enough
+// current records to describe a sequence. It keeps the query's capability scope so a filtered query
+// cannot be read as a statement about every capability.
+function insufficientPattern({
+  capability = null,
+  window,
+  events,
+  feedbackCount,
+  replacedCount = 0,
+  min = MIN_PATTERN_EVENTS,
+}) {
+  const pattern = patternBase({
     kind: 'insufficient_evidence',
-    capability: null,
+    capability,
+    window,
+    events,
+    supporting: events,
     basis: 'recorded_experiences',
-    window: { since: window.since, until: window.until },
-    evidence: evidenceOf(events),
-    feedbackIds: [],
-    counterEvidence: { experienceIds: [], truncated: false },
-    counts: {
-      supporting: events.length,
-      contradicting: 0,
-      automatic: events.filter((event) => event.capture === 'automatic').length,
-      explicit: events.filter((event) => event.capture === 'explicit').length,
-      unknownCapture: events.filter((event) => event.capture === 'unknown').length,
-      evaluated: events.length,
-    },
-    supportTruncated: events.length > MAX_PATTERN_EVIDENCE,
-    counterTruncated: false,
-    causal: false,
-    adaptation: false,
-    threshold: `at least ${min} dated events in the window`,
-    explanation: events.length === 0
-      ? `no dated experience falls inside the window; ${feedbackCount} feedback record(s) were considered`
-      : `${events.length} dated event(s) fall inside the window, below the threshold for a sequence pattern`,
-    limitations: [
-      `A sequence pattern needs at least ${min} dated events. Fewer events are not enough to describe a repeated or changing outcome.`,
-      'Absence of a pattern is not evidence that outcomes are stable; it means this window does not contain enough recorded events to say.',
-    ],
-  };
+  });
+  const scope = capability ? ` for ${capability}` : '';
+  pattern.threshold = `at least ${min} current dated events in the window${scope}`;
+  pattern.explanation = events.length === 0
+    ? `no current dated experience falls inside the window${scope}; ${feedbackCount} current corrective feedback record(s) were considered${replacedCount > 0 ? `, and ${replacedCount} event(s) were replaced by a later record` : ''}`
+    : `${events.length} current dated event(s) fall inside the window${scope}, below the threshold for a sequence pattern${replacedCount > 0 ? `; ${replacedCount} replaced event(s) are not counted` : ''}`;
+  pattern.limitations = [
+    `A sequence pattern needs at least ${min} current dated events. Fewer events are not enough to describe a repeated or changing outcome.`,
+    'Absence of a pattern is not evidence that outcomes are stable; it means this window does not contain enough current recorded events to say.',
+    ...(replacedCount > 0
+      ? [`${replacedCount} event(s) in the window were replaced by a later record and are not current evidence; the timeline still lists them as corrected.`]
+      : []),
+  ];
   return pattern;
 }
 
@@ -577,31 +658,56 @@ export function detectPatterns({
   window,
   dated,
   feedback = [],
+  correctedFeedback = [],
   minEvents = MIN_PATTERN_EVENTS,
   maxPatterns = MAX_PATTERNS,
 } = {}) {
   if (!window) throw new ValidationError('a window is required to detect patterns');
   const min = Number.isInteger(minEvents) && minEvents >= 2 && minEvents <= 20 ? minEvents : MIN_PATTERN_EVENTS;
+  // A record a later record replaced is still listed by every other read, but it is not current
+  // evidence: the correction is the current statement about that event. Patterns are built from
+  // current records only, and the number left out is reported rather than dropped.
+  const live = dated.filter((event) => !event.superseded);
+  const replaced = dated.filter((event) => event.superseded);
   const correctionsByCapability = new Map();
   for (const item of feedback) {
-    const list = correctionsByCapability.get(item.capability) ?? [];
+    const key = item.capability ?? 'unscoped';
+    const list = correctionsByCapability.get(key) ?? [];
     list.push(item);
-    correctionsByCapability.set(item.capability, list);
+    correctionsByCapability.set(key, list);
+  }
+  const correctedByCapability = new Map();
+  for (const item of correctedFeedback) {
+    const key = item.capability ?? 'unscoped';
+    const list = correctedByCapability.get(key) ?? [];
+    list.push(item);
+    correctedByCapability.set(key, list);
   }
 
   const patterns = [];
   const groups = new Map();
-  for (const event of dated) {
+  const names = new Set();
+  for (const event of live) {
     const key = event.capability ?? 'unscoped';
     const list = groups.get(key) ?? [];
     list.push(event);
     groups.set(key, list);
+    names.add(key);
   }
-  const capabilities = [...groups.keys()].sort();
+  // A capability whose assessed experiences fall outside the window can still have current
+  // corrective feedback inside it. Its recurring-correction threshold is about the feedback, so the
+  // capability must be examined even when it has no in-window event.
+  for (const item of feedback) {
+    if (item.ms === null || item.ms < window.sinceMs || item.ms > window.untilMs) continue;
+    if (item.experienceSuperseded) continue;
+    names.add(item.capability ?? 'unscoped');
+  }
+  const capabilities = [...names].sort(compareNames);
 
   for (const name of capabilities) {
-    const events = groups.get(name);
-    const corrections = correctionsByCapability.get(name === 'unscoped' ? null : name) ?? [];
+    const events = groups.get(name) ?? [];
+    const corrections = correctionsByCapability.get(name) ?? [];
+    const corrected = correctedByCapability.get(name) ?? [];
     // Each candidate applies its own threshold. The group is not gated on the event count here:
     // `recurring_corrections` is supported by the user's assessments, and a window with two
     // corrective records but only two events would otherwise never reach its own stated minimum.
@@ -613,7 +719,6 @@ export function detectPatterns({
         window,
         events,
         expected: 'failure',
-        contradicting: events.filter((event) => event.outcomeClass !== 'failure'),
         min,
       }),
       streakPattern({
@@ -623,26 +728,31 @@ export function detectPatterns({
         window,
         events,
         expected: 'success',
-        contradicting: events.filter((event) => event.outcomeClass !== 'success'),
         min,
       }),
-      alternatingPattern({
-        capability: name,
-        window,
-        events,
-        contradicting: events.filter((event) => event.outcomeClass !== 'success' && event.outcomeClass !== 'failure'),
-      }),
+      alternatingPattern({ capability: name, window, events }),
       regressionPattern({ capability: name, window, events, min }),
       improvementPattern({ capability: name, window, events, corrections }),
-      correctionPattern({ capability: name, window, events, corrections }),
+      correctionPattern({ capability: name, window, events, corrections, correctedFeedback: corrected }),
     ].filter(Boolean);
     // A sequence that failed the threshold still shows in `trends` as counts. Only the patterns
     // above are named, and `minEvents` is stated in the output.
     patterns.push(...candidates);
   }
 
-  if (dated.length < min) {
-    patterns.unshift(insufficientPattern({ window, events: dated, feedbackCount: feedback.length, min }));
+  const inWindowFeedback = feedback.filter((item) => item.ms !== null
+    && item.ms >= window.sinceMs
+    && item.ms <= window.untilMs
+    && !item.experienceSuperseded).length;
+  if (live.length < min) {
+    patterns.unshift(insufficientPattern({
+      capability,
+      window,
+      events: live,
+      feedbackCount: inWindowFeedback,
+      replacedCount: replaced.length,
+      min,
+    }));
   }
 
   const bounded = patterns.slice(0, Math.max(1, maxPatterns));
@@ -652,6 +762,8 @@ export function detectPatterns({
     truncated: patterns.length > bounded.length,
     minEvents: min,
     minCorrections: MIN_CORRECTION_FEEDBACK,
+    liveEvents: live.length,
+    replacedExcluded: replaced.length,
     kinds: [...PATTERN_KINDS],
   };
 }
@@ -697,6 +809,7 @@ export function buildTemporalView({
       blocked: totals.blocked,
       other: totals.other,
       unknown: totals.unknown,
+      attempts: totals.attempts,
       successRate: totals.successRate,
       automatic: totals.automatic,
       explicit: totals.explicit,
@@ -749,22 +862,32 @@ export function analyzeTemporal({
     slice,
   });
   const correctionIndex = feedbackIndex(experiences, feedback, retiredFeedback, position);
-  const allCorrections = capability
-    ? (correctionIndex.get(capability) ?? [])
-    : [...correctionIndex.values()].flat().sort((a, b) => {
-      if (a.ms === null && b.ms === null) return (a.logPosition ?? 0) - (b.logPosition ?? 0);
-      if (a.ms === null) return 1;
-      if (b.ms === null) return -1;
-      return a.ms - b.ms;
-    });
+  const scopedCorrections = (map) => (capability
+    ? (map.get(capability) ?? [])
+    : [...map.values()].flat().sort(compareCorrections));
+  const allCorrections = scopedCorrections(correctionIndex.current);
+  const correctedCorrections = scopedCorrections(correctionIndex.corrected);
   const detection = detectPatterns({
     capability,
     window,
     dated: slice.dated,
     feedback: allCorrections,
+    correctedFeedback: correctedCorrections,
     minEvents,
     maxPatterns,
   });
+  const inWindow = (correction) => correction.ms !== null
+    && correction.ms >= window.sinceMs
+    && correction.ms <= window.untilMs;
+  const currentInWindow = allCorrections.filter(inWindow);
+  // What the correction-based pattern could and could not use, stated as counts so a reader can
+  // reconcile the pattern's feedback count with the timeline's event-level feedback counts.
+  detection.feedbackScope = {
+    currentInWindow: currentInWindow.length,
+    onReplacedExperience: currentInWindow.filter((correction) => correction.experienceSuperseded).length,
+    supersededByFeedback: correctedCorrections.filter(inWindow).length,
+    undated: allCorrections.filter((correction) => correction.ms === null).length,
+  };
   // The current adaptation state is read, never changed. It says which recorded rules cite
   // experiences inside this window; no pattern is allowed to create or alter one.
   const experienceIds = new Set(slice.dated.map((event) => event.id));
@@ -835,7 +958,7 @@ export function compareTemporalWindows({
     .sort((x, y) => {
       const ax = Math.abs(x.delta.total) + Math.abs(x.delta.success) + Math.abs(x.delta.failure);
       const ay = Math.abs(y.delta.total) + Math.abs(y.delta.success) + Math.abs(y.delta.failure);
-      return ay - ax || x.capability.localeCompare(y.capability);
+      return ay - ax || compareNames(x.capability, y.capability);
     });
   const byCapability = allRows.slice(0, MAX_TEMPORAL_CAPABILITIES);
   const totalsOf = (slice) => ({
@@ -846,7 +969,9 @@ export function compareTemporalWindows({
     blocked: slice.totals.blocked,
     other: slice.totals.other,
     unknown: slice.totals.unknown,
+    attempts: slice.totals.attempts,
     successRate: slice.totals.successRate,
+    superseded: slice.totals.superseded,
     feedback: slice.totals.feedback,
     correctiveFeedback: slice.totals.correctiveFeedback,
     automatic: slice.totals.automatic,
@@ -871,6 +996,7 @@ export function compareTemporalWindows({
         failure: totalsB.failure - totalsA.failure,
         feedback: totalsB.feedback - totalsA.feedback,
         correctiveFeedback: totalsB.correctiveFeedback - totalsA.correctiveFeedback,
+        superseded: totalsB.superseded - totalsA.superseded,
         successRate: totalsA.successRate === null || totalsB.successRate === null
           ? null
           : Math.round((totalsB.successRate - totalsA.successRate) * 1000) / 1000,
@@ -915,6 +1041,8 @@ export function summarizeTemporal({ view, patterns, adaptations = null } = {}) {
     capability: pattern.capability,
     supporting: pattern.counts.supporting,
     contradicting: pattern.counts.contradicting,
+    excluded: pattern.counts.excluded,
+    feedback: pattern.counts.feedback,
   }));
   const limitations = [
     'A pattern describes recorded order, not cause, and never a prediction.',
@@ -924,7 +1052,10 @@ export function summarizeTemporal({ view, patterns, adaptations = null } = {}) {
     limitations.push(`${view.counts.undated} experience record(s) have no usable timestamp and are not placed in the window.`);
   }
   if (view.counts.superseded > 0) {
-    limitations.push(`${view.counts.superseded} experience record(s) in the window were corrected by a later record; the correction is reported, not hidden.`);
+    limitations.push(`${view.counts.superseded} experience record(s) in the window were corrected by a later record; the correction is reported, not hidden, and those records are not used by any pattern.`);
+  }
+  if ((patterns?.feedbackScope?.supersededByFeedback ?? 0) > 0) {
+    limitations.push(`${patterns.feedbackScope.supersededByFeedback} corrective feedback record(s) in the window were themselves corrected by later feedback and do not support any pattern.`);
   }
   if (view.capabilitiesTruncated || (patterns?.truncated ?? false)) {
     limitations.push('The summary is bounded: some capabilities or patterns are counted but not listed.');
@@ -940,6 +1071,7 @@ export function summarizeTemporal({ view, patterns, adaptations = null } = {}) {
       superseded: view.counts.superseded,
       success: view.counts.success,
       failure: view.counts.failure,
+      attempts: view.counts.attempts,
       successRate: view.counts.successRate,
       automatic: view.counts.automatic,
       explicit: view.counts.explicit,
@@ -980,7 +1112,7 @@ function capturePhrase(capture) {
 export function renderTimeline(view) {
   const lines = [`Experience timeline (read-only; derived from stored records; window ${view.window.since} to ${view.window.until}, inclusive)`];
   lines.push(`  Events:         ${view.counts.inWindow} dated event(s) in the window, ${view.counts.undated} undated; ${view.counts.live} live, ${view.counts.superseded} corrected by a later record`);
-  lines.push(`  Outcomes:       ${view.counts.success} success, ${view.counts.failure} failure, ${view.counts.blocked} refused, ${view.counts.other + view.counts.unknown} other/unknown${view.counts.successRate === null ? '' : ` (success rate ${(view.counts.successRate * 100).toFixed(0)}% of classified)`}`);
+  lines.push(`  Outcomes:       ${view.counts.success} success, ${view.counts.failure} failure, ${view.counts.blocked} refused, ${view.counts.other + view.counts.unknown} other/unknown${view.counts.successRate === null ? '' : ` (success rate ${(view.counts.successRate * 100).toFixed(0)}% of ${view.counts.attempts} completed attempt(s); refusals are not attempts)`}`);
   lines.push(`  Provenance:     ${view.counts.automatic} captured automatically, ${view.counts.explicit} recorded by you${view.counts.unknownCapture > 0 ? `, ${view.counts.unknownCapture} with capture provenance no writer produces` : ''}`);
   lines.push(`  Feedback:       ${view.counts.feedback} current record(s), ${view.counts.correctiveFeedback} corrective`);
   if (view.events.length === 0) {
@@ -1012,14 +1144,14 @@ export function renderTimeline(view) {
 
 export function renderTrends(view) {
   const lines = [`Experience trends (read-only; derived from stored records; window ${view.window.since} to ${view.window.until}, inclusive)`];
-  lines.push(`  Totals:         ${view.counts.inWindow} dated event(s); ${view.counts.success} success, ${view.counts.failure} failure, ${view.counts.blocked} refused, ${view.counts.other + view.counts.unknown} other/unknown${view.counts.successRate === null ? '' : ` (success rate ${(view.counts.successRate * 100).toFixed(0)}%)`}`);
+  lines.push(`  Totals:         ${view.counts.inWindow} dated event(s); ${view.counts.success} success, ${view.counts.failure} failure, ${view.counts.blocked} refused, ${view.counts.other + view.counts.unknown} other/unknown${view.counts.successRate === null ? '' : ` (success rate ${(view.counts.successRate * 100).toFixed(0)}% of ${view.counts.attempts} completed attempt(s))`}`);
   lines.push(`  Feedback:       ${view.counts.feedback} current record(s), ${view.counts.correctiveFeedback} corrective; ${view.counts.superseded} experience(s) corrected by a later record`);
   if (view.byCapability.length === 0) {
     lines.push('  (no dated experience in this window, so no capability has a trend)');
   } else {
     lines.push('  By capability (largest first):');
     for (const group of view.byCapability) {
-      const rate = group.successRate === null ? 'no classified outcome' : `${(group.successRate * 100).toFixed(0)}% success`;
+      const rate = group.successRate === null ? 'no completed attempt' : `${(group.successRate * 100).toFixed(0)}% success of ${group.attempts} attempt(s)`;
       lines.push(`    ${group.capability}: ${group.total} event(s) | ${group.success} success, ${group.failure} failure, ${group.blocked} refused, ${group.other + group.unknown} other | ${rate} | trend ${group.trend}${group.outcomeChanged ? ` | outcome changed from ${group.firstClass} to ${group.lastClass}` : ''}`);
       lines.push(`        first ${clockOf(group.firstAt)} | last ${clockOf(group.lastAt)} | ${group.automatic} automatic, ${group.explicit} explicit | ${group.feedback} current feedback, ${group.correctiveFeedback} corrective`);
     }
@@ -1034,15 +1166,24 @@ export function renderTrends(view) {
 
 export function renderPatterns(view, detection) {
   const lines = [`Experience patterns (read-only; descriptions of recorded order, not causes; window ${view.window.since} to ${view.window.until}, inclusive)`];
-  lines.push(`  Thresholds:     at least ${detection.minEvents} dated event(s) for a sequence; at least ${detection.minCorrections} current corrective feedback record(s) for recurring corrections`);
+  lines.push(`  Thresholds:     at least ${detection.minEvents} current dated event(s) for a sequence; at least ${detection.minCorrections} current corrective feedback record(s) for recurring corrections`);
+  lines.push(`  Evidence:       ${detection.liveEvents} current dated event(s) examined${detection.replacedExcluded > 0 ? `; ${detection.replacedExcluded} replaced by a later record and excluded from every pattern` : ''}; ${view.counts.undated} undated record(s) are never ordered`);
+  if (detection.feedbackScope) {
+    const scope = detection.feedbackScope;
+    lines.push(`  Corrections:    ${scope.currentInWindow} current corrective feedback record(s) in the window${scope.onReplacedExperience > 0 ? `, ${scope.onReplacedExperience} assessing a replaced experience` : ''}${scope.supersededByFeedback > 0 ? `, ${scope.supersededByFeedback} corrected by later feedback` : ''}${scope.undated > 0 ? `; ${scope.undated} undated and not placed` : ''}`);
+  }
   if (detection.patterns.length === 0) {
     lines.push('  (no pattern meets its threshold in this window)');
   } else {
     for (const pattern of detection.patterns) {
       lines.push(`  [${pattern.kind}] ${pattern.capability ?? 'all capabilities'}: ${pattern.explanation}`);
-      lines.push(`      evidence: ${pattern.evidence.experienceIds.length} experience(s)${pattern.evidence.truncated ? ` (first ${pattern.evidence.experienceIds.length} shown)` : ''}${pattern.feedbackIds.length > 0 ? `, ${pattern.feedbackIds.length} feedback record(s)` : ''}`);
-      if (pattern.counterEvidence.experienceIds.length > 0) {
-        lines.push(`      contradicting: ${pattern.counts.contradicting} event(s) with a different outcome${pattern.counterEvidence.truncated ? ` (first ${pattern.counterEvidence.experienceIds.length} shown)` : ''}`);
+      lines.push(`      evidence: ${pattern.evidence.experienceIds.length} experience(s)${pattern.evidence.truncated ? ` (first ${pattern.evidence.experienceIds.length} shown)` : ''}${pattern.feedbackCount > 0 ? `, ${pattern.feedbackCount} feedback record(s)${pattern.feedbackTruncated ? ` (first ${pattern.feedbackIds.length} shown)` : ''}` : ''}`);
+      if (pattern.counts.contradicting > 0) {
+        lines.push(`      contradicting: ${pattern.counts.contradicting} event(s) count against this rule${pattern.counterEvidence.truncated ? ` (first ${pattern.counterEvidence.experienceIds.length} shown)` : ''}`);
+      }
+      if (pattern.counts.excluded > 0) {
+        lines.push(`      excluded: ${pattern.counts.excluded} event(s) are not used by this rule and do not refute it${pattern.excludedTruncated ? ` (first ${pattern.excludedEvidence.experienceIds.length} shown)` : ''}`);
+        if (pattern.excludedReason) lines.push(`      exclusion reason: ${truncate(pattern.excludedReason, MAX_LIMITATION_CHARS)}`);
       }
       lines.push(`      basis: ${pattern.counts.automatic} captured automatically, ${pattern.counts.explicit} recorded by you${pattern.counts.unknownCapture > 0 ? `, ${pattern.counts.unknownCapture} unknown capture` : ''}; ${pattern.basis}`);
       lines.push(`      threshold: ${pattern.threshold}`);
@@ -1060,7 +1201,7 @@ export function renderComparison(comparison) {
   const lines = ['Experience comparison (read-only; two windows over the same stored records)'];
   lines.push(`  Window A:       ${comparison.windows.a.since} to ${comparison.windows.a.until} (inclusive)`);
   lines.push(`  Window B:       ${comparison.windows.b.since} to ${comparison.windows.b.until} (inclusive)`);
-  const rate = (value) => (value === null ? 'no classified outcome' : `${(value * 100).toFixed(0)}%`);
+  const rate = (value) => (value === null ? 'no completed attempt' : `${(value * 100).toFixed(0)}%`);
   const side = (label, totals) => `${label}: ${totals.total} event(s), ${totals.success} success, ${totals.failure} failure | ${rate(totals.successRate)} | ${totals.feedback} current feedback, ${totals.correctiveFeedback} corrective`;
   lines.push(`  ${side('A', comparison.totals.a)}`);
   lines.push(`  ${side('B', comparison.totals.b)}`);
@@ -1117,12 +1258,19 @@ export function patternsAuditShape(view, detection) {
     minCorrections: detection.minCorrections,
     total: detection.total,
     truncated: detection.truncated,
+    liveEvents: detection.liveEvents,
+    replacedExcluded: detection.replacedExcluded,
+    feedbackScope: detection.feedbackScope ?? null,
     patterns: detection.patterns.map((pattern) => ({
       kind: pattern.kind,
       capability: pattern.capability,
       supporting: pattern.counts.supporting,
       contradicting: pattern.counts.contradicting,
+      excluded: pattern.counts.excluded,
+      feedback: pattern.counts.feedback,
       experienceIds: pattern.evidence.experienceIds,
+      counterIds: pattern.counterEvidence.experienceIds,
+      excludedIds: pattern.excludedEvidence.experienceIds,
       feedbackIds: pattern.feedbackIds,
     })),
   };

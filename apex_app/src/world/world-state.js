@@ -112,11 +112,14 @@ export function renderWorldState(world) {
       }
       if ((t.patterns ?? []).length > 0) {
         const patterns = t.patterns.slice(0, MAX_WORLD_TEMPORAL_PATTERNS)
-          .map((pattern) => `${pattern.kind}${pattern.capability ? ` in ${pattern.capability}` : ''} (${pattern.supporting} supporting, ${pattern.contradicting} contradicting)`);
+          .map((pattern) => `${pattern.kind}${pattern.capability ? ` in ${pattern.capability}` : ''} (${pattern.supporting} supporting, ${pattern.contradicting} contradicting, ${pattern.excluded ?? 0} excluded${pattern.feedback ? `, ${pattern.feedback} feedback` : ''})`);
         lines.push(`  Temporal order: ${patterns.join('; ')}${t.patternsTruncated ? '; more patterns exist' : ''}`);
       }
-      if ((counts.undated ?? 0) > 0) {
-        lines.push(`  Temporal gaps:  ${counts.undated} record(s) have no usable timestamp and are not placed in the window`);
+      if ((counts.undated ?? 0) > 0 || (counts.superseded ?? 0) > 0) {
+        const gaps = [];
+        if ((counts.superseded ?? 0) > 0) gaps.push(`${counts.superseded} corrected by a later record and excluded from patterns`);
+        if ((counts.undated ?? 0) > 0) gaps.push(`${counts.undated} with no usable timestamp and not placed in the window`);
+        lines.push(`  Temporal gaps:  ${gaps.join('; ')}`);
       }
       lines.push('  Temporal limit: recorded order is not cause; nothing here is a prediction, and no pattern becomes an adaptation');
     }

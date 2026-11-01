@@ -24,10 +24,16 @@
 //            through `finalizeOperation`, that helper with a capture that appends and re-checks,
 //            a refused second finalization, a damaged audit log and an unreadable one. The damaged
 //            and unreadable experience stores are measured in the capture phase.
-//   temporal  the Batch AC reads over a fixture whose events are spread across the window them-
-//            selves: the full timeline query, the same query on a narrow window, a comparison of
-//            two windows, and the engine's own filtering, pattern detection and summary work on
-//            one derived list. The prompt contribution of the bounded summary is reported too.
+//   temporal  the Batch AC/AD reads at 100, 1,000, 5,000 and 10,000 events: the store read and
+//            validation, the lifecycle derivation on those records, the full timeline query on a
+//            cold and a warm store instance, a narrow window, the two-window comparison, and the
+//            engine's own filtering, pattern detection and summary construction on one derived
+//            list. The prompt contribution of the bounded summary is reported too.
+//
+// The temporal fixture is written as records in the store's own validated shape rather than through
+// the write path: a temporal query only reads the log, and every read below validates all of those
+// records, so the fixture is exercising the same reader a real log would. This keeps the seeding
+// cost from dominating a 10,000-event run (one real request per event took ~2 minutes per 1,000).
 //
 // Fixtures are seeded through the real paths - one verified, audited request per experience - and
 // the seeding cost is reported separately from the measured cost. Every write sample runs against
@@ -37,6 +43,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { createApp } from '../src/app.js';
 import { ModelGateway, NoBackend } from '../src/model/gateway.js';
@@ -46,6 +53,11 @@ import {
   ExperienceStore,
   summarizeExperienceHealth,
   validateExperienceRecord,
+  evidenceFromOperation,
+  evidenceSha,
+  EXPERIENCE_SCHEMA,
+  EXPERIENCE_KIND,
+  FEEDBACK_KIND,
   DEFAULT_ACTIVE_ADAPTATIONS,
   MAX_ACTIVE_ADAPTATIONS,
   CAPTURE_AUTOMATIC,
@@ -79,6 +91,11 @@ const GUIDED_EXPERIENCES = 16;
 const MAX_EXPERIENCES = 2000;
 const MAX_REPEATS = 25;
 const DEFAULT_SIZES = [20, 100, 400];
+// The temporal phase measures a reader rather than a writer, so it can afford the larger sizes Batch
+// AD asks about without seeding thousands of audited operations. A run that passes --experiences
+// overrides these.
+const DEFAULT_TEMPORAL_SIZES = [100, 1000, 5000, 10000];
+const MAX_TEMPORAL_EXPERIENCES = 10000;
 // The temporal fixture asks a question about time, so its events must differ in time. They run from
 // 29 days before TEMPORAL_END up to it, one hour before the benchmark clock, which puts every event
 // inside the default 30-day window at every size and leaves the last seven days as a genuine subset.
@@ -93,12 +110,12 @@ function bounded(raw, min, max, label) {
 }
 
 function parseArgs(argv) {
-  const opts = { sizes: DEFAULT_SIZES, repeats: 5, keep: false, phase: null, help: false };
+  const opts = { sizes: DEFAULT_SIZES, sizesGiven: false, repeats: 5, keep: false, phase: null, help: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') opts.help = true;
     else if (arg === '--keep') opts.keep = true;
-    else if (arg === '--experiences') { opts.sizes = [bounded(argv[i + 1], 4, MAX_EXPERIENCES, '--experiences')]; i += 1; }
+    else if (arg === '--experiences') { opts.sizes = [bounded(argv[i + 1], 4, MAX_TEMPORAL_EXPERIENCES, '--experiences')]; opts.sizesGiven = true; i += 1; }
     else if (arg === '--repeats') { opts.repeats = bounded(argv[i + 1], 1, MAX_REPEATS, '--repeats'); i += 1; }
     else if (arg === '--phase') {
       const name = String(argv[i + 1] ?? '');
@@ -241,12 +258,14 @@ async function buildFixture(experiences) {
 }
 
 function header(cells) {
-  console.log(`  ${cells.map(([label, width]) => label.padStart(width)).join('')}`);
+  console.log(`  ${cells.map(([label, width]) => label.padStart(width)).join('  ')}`);
 }
 
 function row(cells) {
-  console.log(`  ${cells.map(([value, width]) => String(value).padStart(width)).join('')}`);
+  console.log(`  ${cells.map(([value, width]) => String(value).padStart(width)).join('  ')}`);
 }
+
+const byteCount = (value) => Number(value).toLocaleString('en-US');
 
 async function phaseReads(opts, fixtures) {
   console.log('\n== reads: one read, split into what it costs ==');
@@ -712,45 +731,81 @@ async function phaseFinalize(opts, fixtures) {
   console.log('  there as "unreadable"; both refuse the capture without touching the operation\'s outcome.');
 }
 
-// Temporal fixture: the same audited request repeated, spread evenly across the 29 days ending at
-// TEMPORAL_END. One request in ten is rejected before execution (an audited, recordable outcome of a
+// Temporal fixture: records in the store's own validated shape, spread evenly across the 29 days
+// ending at TEMPORAL_END. One request in ten is refused before execution (a blocked outcome, a
 // different class), and one experience in nine carries the user's corrective feedback, so pattern
-// detection has more than one class and more than one kind of evidence to order. The clock advances
-// with the fixture, because a temporal query is a question about order and time: records seeded at
-// one instant would measure the filter without exercising it.
+// detection has more than one class and more than one kind of evidence to order. The timestamps
+// differ because a temporal query is a question about order and time; records seeded at one instant
+// would measure the filter without exercising it.
+//
+// The fixture is written directly rather than through the write path: a temporal read never replays
+// the writer, and `#loadComplete` validates every line on every read, so these records exercise the
+// same reader a real log does. Writing 10,000 audited operations one request at a time cost about
+// two minutes per thousand and measured the seed path, not the read being asked about here.
+function temporalRecord({ at, index, outcome }) {
+  const decision = outcome === Outcome.SUCCESS_VERIFIED ? 'answer' : 'refuse_or_block';
+  const operation = {
+    capability: 'calc.evaluate',
+    origin: 'user',
+    status: outcome,
+    decision,
+    requestedAt: at,
+    finishedAt: at,
+    steps: [],
+  };
+  const evidence = evidenceFromOperation(operation);
+  return {
+    schema: EXPERIENCE_SCHEMA,
+    kind: EXPERIENCE_KIND,
+    id: randomUUID(),
+    operationId: `op-${index}`,
+    capability: 'calc.evaluate',
+    subject: `temporal benchmark note ${index}`,
+    outcome,
+    decision,
+    origin: 'user',
+    requestedAt: at,
+    finishedAt: at,
+    evidence,
+    evidenceSha256: evidenceSha(evidence),
+    adaptationEligible: true,
+    createdAt: at,
+    provenance: { origin: 'user_recorded', updateMode: 'user_confirmed' },
+  };
+}
+
+function temporalFeedback({ at, experienceId }) {
+  return {
+    schema: EXPERIENCE_SCHEMA,
+    kind: FEEDBACK_KIND,
+    id: randomUUID(),
+    experienceId,
+    assessment: 'user_correction',
+    guidance: 'show the working',
+    createdAt: at,
+    provenance: { origin: 'user_feedback', updateMode: 'user_confirmed' },
+  };
+}
+
 async function buildTemporalFixture(experiences) {
   const dir = tempDir('apex-bench-temporal-');
   const endMs = Date.parse(TEMPORAL_END);
   const startMs = endMs - TEMPORAL_SPAN_DAYS * 86400000;
   const stepMs = experiences > 1 ? (endMs - startMs) / (experiences - 1) : 0;
-  let ms = startMs;
-  const target = createApp({
-    dataDir: dir,
-    gateway: new ModelGateway({ backend: new NoBackend() }),
-    now: () => new Date(ms),
-  });
-  const seeded = await timed(async () => {
+  const seeded = await timed(() => {
+    const lines = [];
     let corrected = 0;
     for (let i = 0; i < experiences; i += 1) {
-      ms = Math.round(startMs + stepMs * i);
-      const request = i % 10 === 3 ? `calc ${i}+` : `calc ${i}+${i}`;
-      const res = await target.controller.handle(request, { origin: 'user' });
-      if (!res.operation) throw new Error(`temporal seeding failed at event ${i}: ${res.status}`);
-      const rec = await target.experience.recordExperience({
-        operationId: res.operation.id,
-        subject: `temporal benchmark note ${i}`,
-        origin: 'user',
-      });
+      const at = new Date(Math.round(startMs + stepMs * i)).toISOString();
+      const outcome = i % 10 === 3 ? Outcome.INPUT_REJECTED : Outcome.SUCCESS_VERIFIED;
+      const record = temporalRecord({ at, index: i, outcome });
+      lines.push(JSON.stringify(record));
       if (i % 9 === 0) {
-        await target.experience.recordFeedback({
-          target: rec.record.id,
-          assessment: 'user_correction',
-          guidance: 'show the working',
-          origin: 'user',
-        });
+        lines.push(JSON.stringify(temporalFeedback({ at, experienceId: record.id })));
         corrected += 1;
       }
     }
+    fs.writeFileSync(path.join(dir, 'experiences.jsonl'), `${lines.join('\n')}\n`);
     return corrected;
   });
   const status = await storeOn(dir).status();
@@ -764,13 +819,18 @@ async function buildTemporalFixture(experiences) {
   };
 }
 
-// Temporal: what a temporal query costs, and what the bounded summary adds to a prompt. `timeline`,
-// `7 days` and `compare` run the real store paths, including the read and the derived state each
-// needs. `filter`, `analysis` and `summary` are the engine's own work on one already-derived list,
-// so the cost of ordering, grouping, pattern detection and summary construction is visible apart
-// from the store read. Nothing is persisted and no index is used: the columns say what that costs.
+// Temporal: what a temporal query costs, and what the bounded summary adds to a prompt. `read` and
+// `derive` separate the store's whole-file read, hash, parse and validation from the lifecycle
+// derivation over those records; `timeline`, `7 days` and `compare` run the real store paths,
+// including both of those. `filter`, `analysis` and `summary` are the engine's own work on one
+// already-derived list, so ordering, grouping, pattern detection and summary construction are
+// visible apart from the store. Nothing is persisted and no index is used: the columns say what
+// that costs, and the growth ratios printed after each size are the evidence for keeping it so.
 async function phaseTemporal(opts) {
+  const sizes = opts.sizesGiven ? opts.sizes : DEFAULT_TEMPORAL_SIZES;
   console.log('\n== temporal: what a temporal query costs, and what its summary adds to a prompt ==');
+  console.log('  read     = whole-file read, hash, parse and per-record validation');
+  console.log('  derive   = lifecycle derivation (corrections, feedback, adaptations) over those records');
   console.log('  timeline = the full experience timeline query: read, derive, filter, detect patterns');
   console.log('  warm     = the same call again on the same store instance');
   console.log('  7 days   = the same query with a seven-day window');
@@ -779,27 +839,37 @@ async function phaseTemporal(opts) {
   console.log('  analysis = engine only: that filter plus pattern detection over the same list');
   console.log('  summary  = engine only: the bounded summary built from that analysis');
   header([
-    ['store', 20], ['events', 8], ['bytes', 9], ['timeline', 11], ['warm', 9],
-    ['7 days', 9], ['compare', 10], ['filter', 9], ['analysis', 11], ['summary', 10],
+    ['store', 20], ['events', 8], ['bytes', 10], ['read', 9], ['derive', 9], ['timeline', 11],
+    ['warm', 9], ['7 days', 9], ['compare', 10], ['filter', 9], ['analysis', 11], ['summary', 10],
   ]);
   let summaryForPrompt = null;
   let summaryFixture = null;
-  for (const experiences of opts.sizes) {
+  let first = null;
+  let previous = null;
+  for (const experiences of sizes) {
     const fixture = await buildTemporalFixture(experiences);
     console.log(`\nfixture ${experiences} experiences: ${fixture.status.records} record(s), ${fixture.bytes} bytes, `
-      + `${fixture.corrected} corrective feedback record(s), seeded in ${ms(fixture.seedMs)}`);
-    const samples = { timeline: [], warm: [], narrow: [], compare: [], filter: [], analysis: [], summary: [] };
+      + `${fixture.corrected} corrective feedback record(s), written in ${ms(fixture.seedMs)}`);
+    const samples = { read: [], derive: [], timeline: [], warm: [], narrow: [], compare: [], filter: [], analysis: [], summary: [] };
     const window = resolveWindow({ now: CLOCK() });
     const narrowSince = new Date(CLOCK().getTime() - 7 * 86400000).toISOString();
     let lastAnalysis = null;
     for (let i = 0; i < opts.repeats; i += 1) {
-      const store = storeOn(fixture.dir);
-      samples.timeline.push((await timed(() => store.temporalAnalysis({}))).ms);
-      samples.warm.push((await timed(() => store.temporalAnalysis({}))).ms);
-      samples.narrow.push((await timed(() => store.temporalAnalysis({ since: narrowSince, until: CLOCK().toISOString() }))).ms);
-      samples.compare.push((await timed(() => store.temporalComparison({}))).ms);
+      // Every query below gets its own store instance, so each one pays the whole read rather than
+      // riding a parse cache warmed by the measurement before it. `warm` is the deliberate
+      // exception: it is the same instance asked twice.
+      const coldStore = () => storeOn(fixture.dir);
+      samples.timeline.push((await timed(() => coldStore().temporalAnalysis({}))).ms);
+      const warmStore = coldStore();
+      await warmStore.temporalAnalysis({});
+      samples.warm.push((await timed(() => warmStore.temporalAnalysis({}))).ms);
+      samples.narrow.push((await timed(() => coldStore().temporalAnalysis({ since: narrowSince, until: CLOCK().toISOString() }))).ms);
+      samples.compare.push((await timed(() => coldStore().temporalComparison({}))).ms);
+      const loaded = await timed(() => coldStore().log.load());
+      samples.read.push(loaded.ms);
+      samples.derive.push(timedSync(() => summarizeExperienceHealth(loaded.result.records)));
       // The derived list the engine receives, read once so the engine columns measure the engine.
-      const annotated = (await store.list({ limit: experiences })).reverse();
+      const annotated = (await coldStore().list({ limit: experiences })).reverse();
       samples.filter.push(timedSync(() => buildTemporalView({ experiences: annotated, window })));
       samples.analysis.push(timedSync(() => { lastAnalysis = analyzeTemporal({ experiences: annotated, window }); }));
       samples.summary.push(timedSync(() => summarizeTemporal({
@@ -808,13 +878,21 @@ async function phaseTemporal(opts) {
         adaptations: lastAnalysis.adaptations,
       })));
     }
+    const medians = Object.fromEntries(Object.entries(samples).map(([key, list]) => [key, stats(list).median]));
     row([
-      [`${experiences} experiences`, 20], [experiences, 8], [fixture.bytes, 9],
-      [ms(stats(samples.timeline).median), 11], [ms(stats(samples.warm).median), 9],
-      [ms(stats(samples.narrow).median), 9], [ms(stats(samples.compare).median), 10],
-      [ms(stats(samples.filter).median), 9], [ms(stats(samples.analysis).median), 11],
-      [ms(stats(samples.summary).median), 10],
+      [`${experiences} experiences`, 20], [fixture.status.experiences, 8], [byteCount(fixture.bytes), 10],
+      [ms(medians.read), 9], [ms(medians.derive), 9], [ms(medians.timeline), 11],
+      [ms(medians.warm), 9], [ms(medians.narrow), 9], [ms(medians.compare), 10],
+      [ms(medians.filter), 9], [ms(medians.analysis), 11], [ms(medians.summary), 10],
     ]);
+    if (previous) {
+      const factor = experiences / previous.experiences;
+      const ratio = (key) => (previous.medians[key] > 0 ? (medians[key] / previous.medians[key]).toFixed(2) : 'n/a');
+      console.log(`  growth for ${factor}x more events: read ${ratio('read')}x, derive ${ratio('derive')}x, `
+        + `timeline ${ratio('timeline')}x, filter+analysis ${ratio('analysis')}x`);
+    }
+    first = first ?? { experiences, medians };
+    previous = { experiences, medians };
     const view = lastAnalysis.view;
     const kinds = lastAnalysis.patterns.patterns.map((pattern) => pattern.kind).join(', ') || 'none';
     console.log(`  window ${view.window.since}..${view.window.until}: ${view.counts.inWindow} event(s) in window, `
@@ -826,6 +904,15 @@ async function phaseTemporal(opts) {
       adaptations: lastAnalysis.adaptations,
     });
     summaryFixture = fixture;
+  }
+
+  if (first && previous && previous.experiences > first.experiences) {
+    const factor = previous.experiences / first.experiences;
+    const totalRatio = (key) => (first.medians[key] > 0 ? (previous.medians[key] / first.medians[key]).toFixed(2) : 'n/a');
+    console.log(`\n  scaling ${first.experiences} -> ${previous.experiences} events (${factor}x): `
+      + `read ${totalRatio('read')}x, derive ${totalRatio('derive')}x, timeline ${totalRatio('timeline')}x, `
+      + `engine analysis ${totalRatio('analysis')}x. Sub-linear or linear growth keeps a full read viable; `
+      + `a super-linear jump at a size is the point to measure an index, not before.`);
   }
 
   if (!summaryForPrompt || !summaryFixture) return;
@@ -851,11 +938,17 @@ async function main() {
     return;
   }
   console.log('experience benchmark: model-free, temporary data directories, no inference requested at any point.');
-  console.log(`node ${process.version} on ${process.platform}; sizes ${opts.sizes.join(', ')} experiences; ${opts.repeats} repeat(s) per measurement.`);
+  const sharedSizes = opts.sizesGiven ? opts.sizes : DEFAULT_SIZES;
+  const temporalSizes = opts.sizesGiven ? opts.sizes : DEFAULT_TEMPORAL_SIZES;
+  console.log(`node ${process.version} on ${process.platform}; shared phases ${sharedSizes.join(', ')}, `
+    + `temporal ${temporalSizes.join(', ')} experiences; ${opts.repeats} repeat(s) per measurement.`);
   try {
     const phases = opts.phase ? [opts.phase] : ['reads', 'writes', 'capture', 'context', 'compare', 'finalize', 'temporal'];
-    // The temporal phase builds its own fixture (its events must differ in time), so a run that asks
-    // only for it does not pay to seed the fixtures the other phases share.
+    // The larger default sizes belong to the temporal reader. Seeding any other phase one real
+    // audited request at a time at that size would measure the seed, not the phase.
+    if (phases.some((name) => name !== 'temporal') && opts.sizes.some((size) => size > MAX_EXPERIENCES)) {
+      throw new Error(`--experiences above ${MAX_EXPERIENCES} is only supported for --phase temporal`);
+    }
     const fixtures = [];
     if (phases.some((name) => name !== 'temporal')) {
       for (const experiences of opts.sizes) {

@@ -231,12 +231,17 @@ describe('AC-3 pattern detection', () => {
     assert.equal(pattern.counts.supporting, 3);
   });
 
-  test('an event with another outcome is listed as contradicting evidence rather than hidden', () => {
+  test('an earlier event with another outcome is listed as excluded, not hidden and not counter-evidence', () => {
+    // "The three most recent events are successes" is not refuted by an earlier failure. Calling
+    // that failure contradicting would overstate the disagreement; dropping it would hide it. It is
+    // reported in full under `excluded`, with its id bounded like every other evidence list.
     const { patterns } = run(three([Outcome.EXECUTION_FAILED, Outcome.SUCCESS_VERIFIED, Outcome.SUCCESS_VERIFIED, Outcome.SUCCESS_VERIFIED])
       .map((event, index) => ({ ...event, id: `x${index + 1}` })));
     const pattern = patterns.patterns.find((item) => item.kind === 'repeated_success');
-    assert.equal(pattern.counts.contradicting, 1);
-    assert.deepEqual(pattern.counterEvidence.experienceIds, ['x1']);
+    assert.equal(pattern.counts.contradicting, 0);
+    assert.equal(pattern.counts.excluded, 1);
+    assert.deepEqual(pattern.excludedEvidence.experienceIds, ['x1']);
+    assert.match(pattern.excludedReason, /most recent 3/);
     assert.match(pattern.limitations.join(' '), /1 other recorded event/);
   });
 

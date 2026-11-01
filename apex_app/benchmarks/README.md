@@ -266,11 +266,13 @@ node benchmarks/run-experience-benchmark.mjs --experiences 400 --repeats 7
 node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phase reads
 ```
 
-1. `--experiences` is 1-2000 (a comma-separated list makes a size matrix, default `20,100,400`) and
+1. `--experiences` is 1-10,000 (a comma-separated list makes a size matrix, default `20,100,400`) and
    `--repeats` is 1-25 (default 5). `--phase` selects one of `reads`, `writes`, `capture`, `context`,
-   `compare`, `finalize`, `temporal`; without it all seven run in that order. A run that selects only
-   `temporal` does not seed the fixtures the other phases share, because the temporal phase builds its
-   own.
+   `compare`, `finalize`, `temporal`; without it all seven run in that order. A size above 2,000 is
+   accepted only for `--phase temporal`: seeding the other phases goes through the request path, and
+   10,000 events that way would take hours, so the script refuses rather than appearing hung. A run
+   that selects only `temporal` does not seed the fixtures the other phases share, because the
+   temporal phase builds its own, with default sizes `100,1,000,5,000,10,000`.
 2. A fixture is `N` audited events, each produced the way the application produces one (a verified
    request through the controller), then one recorded experience and one corrective feedback record
    per event, one derivation, and three approvals. Seeding time is reported separately from every
@@ -322,18 +324,26 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
   finalization of the same record object, which must be refused before it can append; `damaged audit`
   and `unreadable` run the armed path against an audit log that holds one corrupt line, or cannot be
   opened at all. Damaged and unreadable **experience** stores are measured in the capture phase.
-- **temporal**: the Batch AC reads. Its fixture is separate from the others because a temporal query
+- **temporal**: the Batch AC/AD reads. Its fixture is separate from the others because a temporal query
   is a question about time: events are spread evenly across the 29 days ending an hour before the
   benchmark clock, one request in ten is rejected before execution, and one experience in nine
   carries corrective feedback, so every event is inside the default 30-day window and the last seven
-  days are a genuine subset. Reported per size: `timeline` (the full query: read, derive, filter,
-  detect patterns), `warm` (the same call again), `7 days` (the same query on a narrow window),
-  `compare` (the two-window query), and three engine-only columns measured on one already-derived
-  list - `filter` (window filtering, ordering, grouping), `analysis` (that plus pattern detection),
-  and `summary` (the bounded summary built from it). It also prints the window, outcome classes,
-  capability-group count and detected pattern kinds for each size, and the prompt contribution: the
-  characters and lines the bounded temporal summary adds to a time-related request, the base prompt
-  size, and the cost of stating that the store could not be read.
+  days are a genuine subset. Because a temporal query only reads, the fixture writes records
+  directly in the exact shape the store validates, instead of driving 10,000 requests through the
+  controller (measured: about 125 s of seeding per 1,000 events, so roughly 21 minutes at the
+  largest size, for data the reads validate on every load anyway). Reported per size: `read` (the
+  store load and integrity scan alone) and `derive` (the derived lifecycle over those records)
+  as the two parts a temporal query cannot avoid, then `timeline` (the full query over a fresh
+  store instance: read, derive, filter, detect patterns), `warm` (the same call again on the same
+  instance, which is the only column allowed to reuse the parse cache), `7 days` (the same query on
+  a narrow window), `compare` (the two-window query), and three engine-only columns measured on one
+  already-derived list - `filter` (window filtering, ordering, grouping), `analysis` (that plus
+  pattern detection), and `summary` (the bounded summary built from it). It prints the growth factor
+  of each column between sizes, the window, outcome classes, capability-group count and detected
+  pattern kinds, a closing statement naming the dominant cost and the evidence-based threshold for
+  revisiting indexing or archival, and the prompt contribution: the characters and lines the bounded
+  temporal summary adds to a time-related request, the base prompt size, and the cost of stating
+  that the store could not be read.
 
 ### Interpretation limits
 
@@ -357,8 +367,18 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
   read and derived-lifecycle recomputation, so they grow with the store as the other read phases do.
   The `filter`, `analysis` and `summary` columns are engine-only: they run on one list that has
   already been read and derived, outside the store, so they are additive within that same sample and
-  not a claim about a complete query. The temporal fixture is synthetic evenly spaced timestamps;
+  not a claim about a complete query. Measured over five repeats, `timeline` at 100 / 1,000 / 5,000 /
+  10,000 events was about 5 / 35 / 310 / 686 ms, and the whole-file read plus validation was the
+  largest share of it at every size (about half at 100 events and about four fifths at 5,000). The
+  engine-only columns grew more
+  slowly: detection (`analysis`) stayed under 85 ms at 10,000 events and the bounded `summary` was
+  effectively free. That composition, not one absolute figure, is the finding: at these sizes the
+  query is dominated by reading the store, not by pattern detection. The temporal fixture is
+  synthetic evenly spaced timestamps, and it is read-only, so the write path is not measured here;
   equal-timestamp tie-breaking and undated-record exclusion are covered by the tests, not measured.
+  Revisit indexing or archival only when a cold temporal query exceeds roughly one second, or when
+  the store passes about 50,000 events, whichever comes first; a time-based archive is preferable to
+  an index because the log is append-only and already ordered.
 - No figure here involves a model. Nothing in this file shows that an approved adaptation improves
   an answer, only what it costs the context that carries it.
 

@@ -216,15 +216,23 @@ export function temporalPromptRelevant(request, temporal = null) {
 export function temporalPromptLines(temporal) {
   if (!temporal || temporal.available === false) return [];
   const counts = temporal.counts ?? {};
-  if (!(Number.isInteger(counts.events) && counts.events > 0) && !(Number.isInteger(counts.undated) && counts.undated > 0)) {
+  const hasEvents = Number.isInteger(counts.events) && counts.events > 0;
+  // A window with no dated event can still contain current corrective feedback about earlier
+  // events, which can meet the recurring-correction threshold. Suppressing that would present an
+  // empty history when the record actually says something.
+  // `insufficient_evidence` on its own says only that nothing was recorded, which the omitted
+  // line already conveys. A substantive pattern can exist with no in-window event when current
+  // corrective feedback assesses earlier experiences, and that must not be suppressed.
+  const hasPatterns = (temporal.patterns ?? []).some((pattern) => pattern.kind !== 'insufficient_evidence');
+  if (!hasEvents && !hasPatterns && !(Number.isInteger(counts.undated) && counts.undated > 0)) {
     return [];
   }
   const window = temporal.window ?? {};
   const since = String(window.since ?? '').slice(0, 10);
   const until = String(window.until ?? '').slice(0, 10);
-  const rate = Number.isFinite(counts.successRate) ? `, ${Math.round(counts.successRate * 100)}% of classified outcomes succeeded` : '';
+  const rate = Number.isFinite(counts.successRate) ? `, ${Math.round(counts.successRate * 100)}% of ${counts.attempts ?? 0} completed attempt(s) succeeded` : '';
   const lines = [
-    `Window ${since} to ${until}: ${counts.events ?? 0} recorded event(s) - ${counts.success ?? 0} success, ${counts.failure ?? 0} failure${rate}; ${counts.automatic ?? 0} captured automatically, ${counts.explicit ?? 0} recorded by you${counts.undated > 0 ? `; ${counts.undated} record(s) have no usable timestamp and are outside the window` : ''}.`,
+    `Window ${since} to ${until}: ${counts.events ?? 0} recorded event(s) - ${counts.success ?? 0} success, ${counts.failure ?? 0} failure${rate}; ${counts.automatic ?? 0} captured automatically, ${counts.explicit ?? 0} recorded by you${counts.superseded > 0 ? `; ${counts.superseded} corrected by a later record and not used by patterns` : ''}${counts.undated > 0 ? `; ${counts.undated} record(s) have no usable timestamp and are outside the window` : ''}.`,
   ];
   const capabilities = (temporal.capabilities ?? []).slice(0, MAX_TEMPORAL_PROMPT_CAPS)
     .map((group) => `${group.capability} ${group.total} (${group.trend}${group.outcomeChanged ? ', outcome changed' : ''})`);
@@ -232,7 +240,7 @@ export function temporalPromptLines(temporal) {
     lines.push(`By capability: ${capabilities.join('; ')}${temporal.capabilitiesTruncated ? '; further groups are counted but not listed' : ''}.`);
   }
   const patterns = (temporal.patterns ?? []).slice(0, MAX_TEMPORAL_PROMPT_PATTERNS)
-    .map((pattern) => `${pattern.kind}${pattern.capability ? ` in ${pattern.capability}` : ''} (${pattern.supporting} supporting, ${pattern.contradicting} contradicting)`);
+    .map((pattern) => `${pattern.kind}${pattern.capability ? ` in ${pattern.capability}` : ''} (${pattern.supporting} supporting, ${pattern.contradicting} contradicting, ${pattern.excluded ?? 0} excluded${pattern.feedback ? `, ${pattern.feedback} feedback` : ''})`);
   if (patterns.length > 0) {
     lines.push(`Order patterns: ${patterns.join('; ')}${temporal.patternsTruncated ? '; the list is bounded' : ''}.`);
   }
