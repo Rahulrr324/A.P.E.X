@@ -835,6 +835,10 @@ was run the same day. Neither is part of this suite; both are reported separatel
 `benchmarks/run-world-state-benchmark.mjs` is also outside the suite; it needs no model
 and measures the projection's read cost against synthetic fixtures, or the write path with
 `--writes` ([Benchmarks](#benchmarks)).
+`benchmarks/run-experience-benchmark.mjs` is outside the suite for the same reason and also
+needs no model: it measures the experience store's reads, writes, context contribution, and
+cost against the memory and knowledge stores at matched record counts
+([Benchmarks](#benchmarks)).
 
 | Acceptance test | Where |
 |---|---|
@@ -2002,6 +2006,72 @@ exit 2. `memory correct` of a day-name change ("Tuesday 02:00" to "Wednesday 02:
 pre-existing memory contradiction rule (`DATE_WORDS`, `src/memory/memory-store.js:254`), which treats a
 date-word value as schedule detail rather than conflict - unchanged by this batch and documented here
 because the smoke run found it.
+
+## Batch Z: experience, feedback, and controlled adaptation (as implemented)
+
+One append-only JSONL log, `<dataDir>/experiences.jsonl`, carries five record kinds - `experience`,
+`feedback`, `adaptation`, `adaptation_decision`, `adaptation_retirement` - and every read of it
+recomputes the adaptation lifecycle from the whole log rather than trusting a stored status. That
+recomputation is what makes a corrected experience unable to leave a stale rule in effect, and its
+cost is measured below rather than presented as free.
+
+Commands (all writes are refused unless the origin is the user; `experience health` exits 1 whenever
+the store reports attention or an evidence mismatch):
+
+```bash
+apex experience record <operation-id> --subject <text> [--replaces <id[,id...]>]
+apex experience list|show <experience-or-operation-id>|health
+apex feedback record <experience-or-operation-id> --assessment <kind> [--guidance <text>] [--reason <text>] [--supersedes <id[,id...]>]
+apex adaptation derive|list|approve <adaptation-id>|reject <adaptation-id>|retire <adaptation-id>
+```
+
+An adaptation moves through five states - experience, feedback, candidate, approved, in effect - and
+only the user's recorded decision moves it from candidate to approved; a retirement excludes it. The
+model path is the only reader: `controller.js` `#adaptationsFor` calls `activeAdaptations()` for a
+request that would build a model prompt, and a deterministic request performs no experience read at
+all (measured: 0 calls for `calc 2+2`, 1 for a free-form ask). Approved rules enter the prompt as
+data with the explicit label that they are neither instructions nor authorization, and they are
+trimmed after memory and turns but before knowledge.
+
+**How it differs from memory and knowledge, measured.** Memory stores what the user says is the
+case; knowledge stores explicit subject-relationship-object claims and their retractions; the
+experience store stores what APEX did, what the user thought of the result, and - only through a
+recorded user decision - what APEX should do differently. The consequence is a store with more
+per-record structure (each experience carries a canonical subset of its audit record, each
+adaptation a support list) and a read that derives rather than looks up. At 807 matched records in
+one run (`node benchmarks/run-experience-benchmark.mjs`, node v26.4.0, win32, 5 samples, medians):
+
+| Store | bytes | one raw append | store write | full read | read + derived state |
+|---|---|---|---|---|---|
+| memory | 294,445 | 5.69 ms | 21.24 ms | 8.58 ms | 10.06 ms |
+| knowledge | 295,250 | 5.40 ms | 28.97 ms | 7.47 ms | 23.31 ms |
+| experience | 487,232 | 4.58 ms | 46.24 ms | 19.69 ms | 23.75 ms |
+
+Growth with store size follows the same shape as the other two stores - a read is a whole-file read
+and a write is a whole-file read plus an append - and it is real: from 47 to 807 records the cold
+read went 2.02 → 22.69 ms, the warm read 0.88 → 5.35 ms, an `evidenceCheck()` 1.98 → 3.61 ms, a
+bounded `list()` 1.17 → 3.33 ms, retrieval 1.05 → 2.98 ms, and `health()` 1.25 → 3.40 ms. Writes grow
+faster because a write reads the whole store before appending it: the store-level append went
+17.36 → 39.37 ms, feedback 21.81 → 49.05 ms, an approval 25.01 → 65.75 ms, a retirement
+27.76 → 65.23 ms, and the end-to-end controller call (audit record plus independent re-check)
+27.52 → 80.12 ms. A repeat `deriveAdaptations()` over a store whose candidates already exist is the
+expensive read-write hybrid: 11.31 → 32.10 ms, dominated by the write coordination it must perform
+even when it appends nothing.
+
+Context cost is bounded and does not grow with the store: one approved rule adds 770 characters to a
+prompt, the default window of three adds 1,362 (of a 6,000-character budget), the note that further
+rules were cut brings that to 1,507, and the disclosure that the store could not be read costs 193
+characters. The longest single rule line in the fixture is 302 characters; retrieval returns at most
+10 (default window 3). On the request path, a free-form ask at 807 records cost 26.19 ms against
+17.79 ms for the same ask against an empty store - the one extra whole-store read - while `calc 2+2`
+cost 18.53 ms with 0 experience reads (17.95 ms on an empty store; the difference is noise).
+
+What this batch does not claim: no inference was run or simulated in any measurement above, so
+nothing here shows that an approved rule improves an answer - only what carrying it costs. One
+adaptation may cite at most 20 evidence records, and a group whose support is larger is reported as
+skipped rather than truncated, so a single preference restated across a very large store yields no
+candidate until the user scopes it. `npm test` covers the semantics;
+`benchmarks/run-experience-benchmark.mjs` is outside the suite and no test depends on it.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 

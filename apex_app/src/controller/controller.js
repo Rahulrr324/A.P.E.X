@@ -13,7 +13,7 @@ import { MAX_PROPOSALS, parseModelOutput } from './proposals.js';
 import { executeAction } from '../actions/executor.js';
 import { CONTROL_CHARS, redact, round3, shortId, truncate } from '../util.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
-import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, selectPromptMemory, systemPrompt, MAX_CONTEXT_CHARS } from './context.js';
+import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, selectPromptMemory, systemPrompt, adaptationLine, adaptationOmittedNote, MAX_CONTEXT_CHARS } from './context.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret } from '../security/secrets.js';
@@ -204,6 +204,7 @@ export class CognitiveController {
     summaryQueue = null,
     rootForContext = null,
     knowledge = null,
+    experience = null,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -222,6 +223,9 @@ export class CognitiveController {
     this.summaryQueue = summaryQueue;
     this.rootForContext = rootForContext;
     this.knowledge = knowledge;
+    // The experience store contributes only approved behaviour rules to a prompt. It is optional:
+    // with no store configured the section is simply absent, and nothing claims rules were checked.
+    this.experience = experience;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -718,7 +722,7 @@ export class CognitiveController {
     };
   }
 
-  async #finishKnowledgeOp(op, step, failMsg) {
+  async #finishCommandOp(op, step, failMsg) {
     op.steps.push(step);
     op.status = step.outcome;
     op.decision = classifyDecision(op);
@@ -758,21 +762,21 @@ export class CognitiveController {
       'user',
       op.id,
     );
-    return this.#finishKnowledgeOp(op, step, 'The knowledge record may have been stored, but its audit record could not be written.');
+    return this.#finishCommandOp(op, step, 'The knowledge record may have been stored, but its audit record could not be written.');
   }
 
   async knowledgeRetract({ target, reason = null } = {}) {
     const op = this.#knowledgeOp('knowledge.retract');
     op.request = knowledgeRetractRequest(target, reason);
     const step = await this.runAction('knowledge.retract', { target, reason }, 'user', op.id);
-    return this.#finishKnowledgeOp(op, step, 'The knowledge record may have been retracted, but its audit record could not be written.');
+    return this.#finishCommandOp(op, step, 'The knowledge record may have been retracted, but its audit record could not be written.');
   }
 
   async knowledgeResolve({ target, choose, reason = null } = {}) {
     const op = this.#knowledgeOp('knowledge.resolve');
     op.request = knowledgeResolveRequest(target, choose, reason);
     const step = await this.runAction('knowledge.resolve', { target, choose, reason }, 'user', op.id);
-    return this.#finishKnowledgeOp(
+    return this.#finishCommandOp(
       op,
       step,
       'The resolution decision may have been recorded, but its audit record could not be written; it is not reported as verified success.',
@@ -782,7 +786,7 @@ export class CognitiveController {
   async knowledgeList({ limit } = {}) {
     const op = this.#knowledgeOp('knowledge.list');
     const step = await this.runAction('knowledge.list', { limit: limit ?? 20 }, 'user', op.id);
-    return this.#finishKnowledgeOp(op, step, null);
+    return this.#finishCommandOp(op, step, null);
   }
 
   async knowledgeSearch(query) {
@@ -793,7 +797,7 @@ export class CognitiveController {
       : `knowledge search [${safeQuery}]`;
     const op = this.#newOp({ capability: 'knowledge.search', origin: 'user', request });
     const step = await this.runAction('knowledge.search', { query, limit: 10 }, 'user', op.id);
-    return this.#finishKnowledgeOp(op, step, null);
+    return this.#finishCommandOp(op, step, null);
   }
 
   async knowledgeShow(idPrefix) {
@@ -1006,6 +1010,166 @@ export class CognitiveController {
       recordError: null,
       health,
     };
+  }
+
+  // ---- experience, feedback, and adaptation operations -------------------------
+  // Every command below names one registered action and runs it through `runAction`, so
+  // authorization, execution, and independent verification are the same as for any other write.
+  // There is deliberately no natural-language route to them: a model choosing words like
+  // "remember that this worked" must not be able to record the user's assessment or approve a
+  // behaviour rule, so this explicit, user-origin call is the only entry point besides the CLI.
+
+  #experienceOp(capability) {
+    if (!this.experience) throw new ValidationError('the experience store is not available in this configuration');
+    return this.#newOp({ capability, origin: 'user', request: capability });
+  }
+
+  async experienceRecord({ operationId, subject, replaces = [] } = {}) {
+    const op = this.#experienceOp('experience.record');
+    const step = await this.runAction('experience.record', { operationId, subject, replaces }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The experience may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  async experienceList({ limit } = {}) {
+    const op = this.#experienceOp('experience.list');
+    const step = await this.runAction('experience.list', { limit: limit ?? 20 }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async experienceShow({ target } = {}) {
+    const op = this.#experienceOp('experience.show');
+    const step = await this.runAction('experience.show', { target }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async feedbackRecord({ target, assessment, guidance = null, reason = null, supersedes = [] } = {}) {
+    const op = this.#experienceOp('feedback.record');
+    const step = await this.runAction(
+      'feedback.record',
+      { target, assessment, guidance, reason, supersedes },
+      'user',
+      op.id,
+    );
+    return this.#finishCommandOp(op, step, 'The feedback may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  async adaptationDerive({ minSupport } = {}) {
+    const op = this.#experienceOp('adaptation.derive');
+    const input = minSupport === undefined || minSupport === null ? {} : { minSupport };
+    const step = await this.runAction('adaptation.derive', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The candidates may have been derived, but their audit record could not be written; they are not reported as verified success.');
+  }
+
+  // `decision` comes from the command that was typed (approve / reject), never from a default:
+  // silence is not approval, and neither is a missing argument.
+  async adaptationDecide({ target, decision, reason = null } = {}) {
+    const op = this.#experienceOp(`adaptation.${decision === 'rejected' ? 'reject' : 'approve'}`);
+    const step = await this.runAction('adaptation.decide', { target, decision, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The decision may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  async adaptationRetire({ target, reason = null } = {}) {
+    const op = this.#experienceOp('adaptation.retire');
+    const step = await this.runAction('adaptation.retire', { target, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The retirement may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  async adaptationList({ limit, includeRetired } = {}) {
+    const op = this.#experienceOp('adaptation.list');
+    const input = { limit: limit ?? 20 };
+    // Passed through as written: a value that is not a boolean is refused by the action's validator
+    // rather than quietly read as one, because the difference decides whether retired rules the
+    // user approved are hidden from the list they are checking.
+    if (includeRetired !== undefined && includeRetired !== null) input.includeRetired = includeRetired;
+    const step = await this.runAction('adaptation.list', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // Read-only inspection of the whole experience log, plus the check that gives the store its
+  // meaning: every recorded experience re-verified against the audit record it names. Nothing is
+  // repaired, nothing is approved, and an unreadable store is reported as unreadable, never as an
+  // empty one.
+  async experienceHealth() {
+    if (!this.experience) throw new ValidationError('the experience store is not available in this configuration');
+    const health = await this.experience.health();
+    const evidenceCheck = await this.#experienceEvidenceSummary();
+    const evidence = evidenceCheck.line;
+    const lines = ['Experience health (read-only; derived from stored records; nothing is repaired or approved)'];
+    if (!health.inspected) {
+      lines.push(`  Store:          unavailable (${truncate(health.detail ?? 'the store could not be read', 200)})`);
+      lines.push(`  Evidence:       ${evidence}`);
+      lines.push('  Inspection:     incomplete: no experience, feedback, or adaptation count can be established');
+      lines.push('  Note:           an unreadable store is not an empty store; check APEX_DATA_DIR, permissions, and free space.');
+    } else {
+      const empty = health.experiences === 0 && health.feedback === 0 && health.adaptations === 0;
+      lines.push(`  Store:          ${health.corruptLines > 0
+        ? `damaged - ${health.corruptLines} corrupt line(s); inspection incomplete`
+        : empty
+          ? 'ok - empty store (no experiences, feedback, or adaptations)'
+          : 'ok - fully inspected'}`);
+      lines.push(`  Experiences:    ${health.experiences} record(s) (${health.activeExperiences} live, ${health.supersededExperiences} corrected by a later record)`);
+      lines.push(`  Feedback:       ${health.feedback} record(s) (${health.currentFeedback} current, ${health.supersededFeedback} corrected)`);
+      lines.push(`  Adaptations:    ${health.adaptations} derived - candidate ${health.candidates}, approved ${health.approved}, in effect ${health.activeAdaptations}, rejected ${health.rejectedAdaptations}, retired ${health.retiredAdaptations}, ambiguous ${health.ambiguousAdaptations}`);
+      lines.push(`  Decisions:      ${health.decisions} user decision(s), ${health.retirements} retirement(s) recorded`);
+      lines.push(`  Evidence:       ${evidence}`);
+      lines.push(`  Conflicts:      ${health.conflicts.scopes > 0
+        ? `${health.conflicts.scopes} scope(s) with ${health.conflicts.adaptations} active rule(s) that say different things (${health.conflicts.samples.join('; ')}) - both are shown as conflicting; APEX does not choose`
+        : 'none among adaptations in effect'}`);
+      lines.push(`  Next step:      ${health.pending.derivableCandidates > 0
+        ? `${health.pending.derivableCandidates} candidate(s) could be derived from feedback already recorded${health.pending.scopes.length ? ` (scope(s): ${health.pending.scopes.join(', ')})` : ''}; run "apex adaptation derive"`
+        : 'no feedback support that has not already been derived'}`);
+      lines.push(`  Corrupt lines:  ${health.corruptLines}`);
+      for (const c of health.corrupt.slice(0, MAX_HEALTH_SAMPLES)) {
+        lines.push(`    - line ${c.line}: ${truncate(c.reason, 160)}${c.truncatedTail ? ' (final line without a newline)' : ''}`);
+      }
+      if (health.corrupt.length > MAX_HEALTH_SAMPLES) {
+        lines.push(`    - ${health.corrupt.length - MAX_HEALTH_SAMPLES} more corrupt line(s) not shown`);
+      }
+      lines.push(`  Anomalies:      ${health.anomalies.count === 0
+        ? 'none detected among readable records'
+        : `${health.anomalies.count}${health.anomalies.truncated ? ` (first ${health.anomalies.samples.length} shown)` : ''}`}`);
+      for (const sample of health.anomalies.samples) lines.push(`    - ${sample}`);
+      if (health.corruptLines > 0) {
+        lines.push('  Inspection:     incomplete: counts cover readable records only; corrupt lines could change every count, and no lifecycle state can be established for them.');
+      }
+    }
+    lines.push('  Note:           an experience is a reference to an audited event, not a fact about the user; feedback is the user\'s own assessment, never a model\'s; a rule applies only after the user approves it, and approval is not permission for any action.');
+    const display = lines.join('\n');
+    const status = health.inspected ? Outcome.SUCCESS_VERIFIED : Outcome.EXECUTION_FAILED;
+    return {
+      operation: null,
+      status,
+      decision: classifyDecision({ status }),
+      output: display,
+      display,
+      recorded: false,
+      recordError: null,
+      health,
+      // Carried apart from `health.attention`, which the store derives from its own log alone:
+      // an experience that contradicts the audit event it names needs the user even when the
+      // experience log itself parses.
+      evidenceMismatch: evidenceCheck.mismatched,
+    };
+  }
+
+  // The distinctive claim of this store is that a recorded experience still matches the event it
+  // names, so health recomputes that instead of only counting lines. An audit log that cannot be
+  // read is stated as unprovable, never as a pass. `mismatched` is returned separately because a
+  // positive disagreement between two readable records is a defect the exit code must carry, while
+  // an experience whose audit record is simply absent is not proof that it was invented.
+  async #experienceEvidenceSummary() {
+    try {
+      const report = await this.experience.evidenceReport({ limit: 20 });
+      if (!report.auditReadable) return { line: 'could not be checked against the audit log', mismatched: 0 };
+      const parts = [`${report.verified}/${report.checked} recent experience(s) re-verified against the audit log`];
+      if (report.mismatched > 0) parts.push(`${report.mismatched} disagree with the event they name`);
+      if (report.missingAudit > 0) parts.push(`${report.missingAudit} name an operation that is not in the audit log`);
+      if (report.experiences > report.checked) parts.push(`${report.experiences - report.checked} older experience(s) not sampled`);
+      if (report.auditCorruptLines > 0) parts.push(`${report.auditCorruptLines} corrupt audit line(s)`);
+      return { line: parts.join('; '), mismatched: report.mismatched };
+    } catch (err) {
+      return { line: `could not be checked (${truncate(err?.message ?? String(err), 160)})`, mismatched: 0 };
+    }
   }
 
   async #recentTurns(sid, op) {
@@ -1833,6 +1997,24 @@ export class CognitiveController {
   }
 
 
+  // Bounded retrieval of the behaviour rules the user approved, for this request only. The store
+  // returns active records alone: a candidate, a rejected rule, a retired rule, and an approved
+  // rule whose supporting evidence has since been corrected all stay out. A store that cannot be
+  // read is disclosed as unavailable, which is a different statement from "no rule applies", so
+  // the caller is told which of the two it is showing. The same distinction applies to the bound:
+  // `omitted` counts the active rules the window cut, because a partial list read as a complete
+  // one would tell the user that no other rule they approved applies.
+  async #adaptationsFor(request, op) {
+    if (!this.experience) return { adaptations: [], unavailable: false, omitted: 0 };
+    try {
+      const { adaptations, total, truncated } = await this.experience.activeAdaptations({ query: request });
+      return { adaptations, unavailable: false, omitted: truncated ? total - adaptations.length : 0 };
+    } catch (err) {
+      op.errors.push({ stage: 'adaptation', code: err.code || 'STORE_ERROR', message: err.message });
+      return { adaptations: [], unavailable: true, omitted: 0 };
+    }
+  }
+
   // Model path. `relevant` is the already-filtered memory that may enter a prompt
   // or be shown directly. Everything retrieved but ineligible (private, secret,
   // superseded) stays out of both the prompt and the direct display.
@@ -1871,6 +2053,15 @@ export class CognitiveController {
           failureNotice = `[Knowledge context was unavailable (${code}); this display did not use stored knowledge.]`;
           sections.push(failureNotice);
         }
+      }
+      const shown = await this.#adaptationsFor(request, op);
+      if (shown.adaptations.length > 0) {
+        // Shown, not applied: with no model there is nothing to follow a rule, and saying that
+        // plainly is part of the disclosure. The record is the user's own approved wording.
+        const omitted = adaptationOmittedNote(shown.omitted);
+        sections.push(`Approved adaptations covering this request (shown directly; without a model APEX did not apply them):\n${shown.adaptations.map(adaptationLine).join('\n')}${omitted ? `\nNote: ${omitted}.` : ''}`);
+      } else if (shown.unavailable) {
+        sections.push('[APEX could not read its approved adaptations for this request, so a behaviour rule you approved may be missing from what is shown here.]');
       }
       return {
         status: Outcome.MODEL_UNAVAILABLE,
@@ -1914,6 +2105,10 @@ export class CognitiveController {
         knowledgeNotice = `\n\n[Knowledge context was unavailable (${err.code || 'STORE_ERROR'}); this answer did not use stored knowledge.]`;
       }
     }
+    // The approved behaviour rules for this request, retrieved once and bounded. Supplementary
+    // like knowledge: an unreadable store does not stop the answer, but the model is told that no
+    // rule could be checked rather than that none applies.
+    const { adaptations, unavailable: adaptationsUnavailable, omitted: adaptationsOmitted } = await this.#adaptationsFor(request, op);
     // Read the epistemic projection once, from the same store instances this answer was
     // retrieved from, so the model is told what the stores as a whole hold rather than
     // only the records that happened to match. It is a read-only derivation: it writes
@@ -1939,6 +2134,9 @@ export class CognitiveController {
       turns,
       knowledge,
       knowledgeUnavailable,
+      adaptations,
+      adaptationsUnavailable,
+      adaptationsOmitted,
       historyUnavailable,
       world,
       worldUnavailable,
@@ -1949,6 +2147,7 @@ export class CognitiveController {
       memoryIds: built.memoryIds,
       turnIds: built.turnIds,
       knowledgeIds: built.knowledgeIds,
+      adaptationIds: built.adaptationIds,
       chars: built.prompt.length,
     };
     // The projection contributes counts and record ids to the audit, never a belief
@@ -1985,13 +2184,29 @@ export class CognitiveController {
     const shownIds = new Set([...includedMemory, ...includedKnowledge]);
     const worldConflict = (world?.contradictions ?? []).filter((group) => group.state === 'unresolved')
       .some((group) => (group.claimIds ?? []).some((id) => shownIds.has(id)));
-    const annotation = memoryConflict || knowledgeConflict
+    const storedNotice = memoryConflict || knowledgeConflict
       ? '[Stored context contains conflicting records; APEX has not resolved them.]'
       : worldConflict
         ? '[APEX showed one side of a disagreement stored in its own records; the other record is not shown in this answer and APEX has not resolved them. Run "world" to list stored conflicts.]'
         : worldUnavailable
           ? '[APEX could not read its world-state projection for this answer, so it cannot say whether other stored records disagree with what was shown.]'
           : '';
+    // An approved adaptation changes how APEX behaves, so the user is told which rule was in the
+    // answer rather than only reading it out of the audit record. Two rules that disagree for one
+    // scope are reported as unresolved: the system did not pick a winner and must not imply one.
+    const includedAdaptations = new Set(built.adaptationIds);
+    const conflicting = adaptations.filter((a) => includedAdaptations.has(a.id) && (a.conflicts?.length ?? 0) > 0);
+    const omission = adaptationsOmitted > 0 && !adaptationsUnavailable
+      ? ` [${adaptationOmittedNote(adaptationsOmitted)}.]`
+      : '';
+    const adaptationNotice = conflicting.length > 0
+      ? `[${conflicting.length} of your approved adaptations cover this scope and say different things; APEX has not resolved which one you would prefer.]${omission}`
+      : adaptationsUnavailable
+        ? '[APEX could not read its approved adaptations for this answer, so a behaviour rule you approved may not have reached it.]'
+        : includedAdaptations.size > 0
+          ? `[APEX included ${includedAdaptations.size} approved adaptation(s) you recorded for this scope: ${adaptations.filter((a) => includedAdaptations.has(a.id)).map((a) => `"${truncate(a.rule, 120)}"`).join('; ')}]${omission}`
+          : '';
+    const annotation = [storedNotice, adaptationNotice].filter(Boolean).join('\n\n');
 
     // Called once, immediately before the model is asked. It reports only the wait
     // and its limit; the transport is not streaming, so no progress or partial text is

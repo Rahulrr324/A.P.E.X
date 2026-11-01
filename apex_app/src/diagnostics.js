@@ -121,6 +121,17 @@ async function inspectJsonlStore({ key, label, noun, filePath, log, impact, summ
   };
 }
 
+// Whether a recorded experience still matches the audit event it names is a second, separate
+// question from whether the experience log parses. The store refuses to answer it from a
+// damaged log, so the refusal is returned as a plain "not checked" rather than guessed at.
+async function inspectExperienceEvidence(app, limit = 20) {
+  try {
+    return { ok: true, report: await app.experience.evidenceReport({ limit }) };
+  } catch (err) {
+    return { ok: false, detail: errorDetail(err) };
+  }
+}
+
 export async function collectDiagnostics(app, { checkModel = false, modelTimeoutMs = 2000 } = {}) {
   const confirmed = [];
   const suspicions = [];
@@ -322,11 +333,138 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     }
   }
 
+  // --- experience, feedback, adaptation ----------------------------------------
+  // Three separate questions are kept separate here: whether the log parses, whether its
+  // records describe a coherent lifecycle (a feedback that assesses a recorded experience, a
+  // decision that names a derived adaptation, one live experience per operation), and whether
+  // each experience still matches the audit event it names. A well-formed line can disagree
+  // with history, and a coherent record can point at an operation that is no longer audited,
+  // so neither answer is folded into a record count.
+  const experienceHealth = await app.experience.health();
+  if (!experienceHealth.inspected) {
+    subsystems.experience = {
+      key: 'experience',
+      label: 'Experience',
+      state: State.UNAVAILABLE,
+      summary: `Experience: unavailable (${safeText(experienceHealth.detail)})`,
+      detail: experienceHealth.detail,
+      count: null,
+      experiences: null,
+      feedback: null,
+      adaptations: null,
+      activeAdaptations: null,
+      corruptLines: 0,
+      conflicts: { scopes: null, adaptations: null },
+      lifecycle: { state: 'unavailable', anomalies: null },
+      evidence: { state: 'not checked' },
+      problems: [],
+    };
+    unchecked.push('experience, feedback, and adaptation states were not checked because the experience store is unavailable');
+    unchecked.push('whether each recorded experience matches its audited operation was not checked because the experience store is unavailable');
+  } else {
+    const exists = await fileExists(app.experience.filePath);
+    const experienceEvidence = await inspectExperienceEvidence(app);
+    const lifecycleState = !experienceHealth.complete
+      ? 'cannot be fully established (corrupt lines)'
+      : experienceHealth.anomalies.count > 0
+        ? 'inconsistent'
+        : 'consistent';
+    let state = State.OK;
+    if (experienceHealth.corruptLines > 0) state = State.CORRUPT;
+    else if (exists === false) state = State.MISSING;
+    const parts = [
+      `${experienceHealth.experiences} experience record(s)`,
+      `${experienceHealth.feedback} feedback record(s)`,
+      `${experienceHealth.adaptations} adaptation record(s) (${experienceHealth.activeAdaptations} active)`,
+    ];
+    if (experienceHealth.conflicts.scopes > 0) {
+      parts.push(`${experienceHealth.conflicts.scopes} conflicting adaptation scope(s)`);
+    }
+    const summary = state === State.MISSING
+      ? 'Experience: missing (valid: no experience, feedback, or adaptation record yet)'
+      : state === State.CORRUPT
+        ? `Experience: corrupt (${parts.join(', ')}, ${experienceHealth.corruptLines} corrupt line(s); adaptation states derived only from readable records)`
+        : `Experience: ok (${parts.join(', ')}; lifecycle ${lifecycleState})`;
+    const problems = corruptLineProblems(path.basename(app.experience.filePath), experienceHealth.corrupt);
+    const lifecycleProblems = experienceHealth.anomalies.samples.map(
+      (message) => `${path.basename(app.experience.filePath)}: lifecycle: ${message}`,
+    );
+    if (experienceHealth.anomalies.count > experienceHealth.anomalies.samples.length) {
+      lifecycleProblems.push(
+        `${path.basename(app.experience.filePath)}: lifecycle: ${experienceHealth.anomalies.count - experienceHealth.anomalies.samples.length} more anomaly(ies) not listed (the health summary carries the exact count)`,
+      );
+    }
+    let evidence;
+    if (!experienceEvidence.ok) {
+      evidence = { state: 'not checked', detail: experienceEvidence.detail };
+      unchecked.push(`whether each recorded experience matches its audited operation was not checked: ${safeText(experienceEvidence.detail)}`);
+    } else {
+      const r = experienceEvidence.report;
+      const unresolved = r.mismatched + r.missingAudit;
+      evidence = {
+        state: !r.auditReadable ? 'not provable' : unresolved > 0 ? 'inconsistent' : 'consistent',
+        checked: r.checked,
+        of: r.experiences,
+        verified: r.verified,
+        mismatched: r.mismatched,
+        missingAudit: r.missingAudit,
+        auditReadable: r.auditReadable,
+        auditCorruptLines: r.auditCorruptLines,
+        samples: r.samples.map((s) => ({ experienceId: s.shortId, operationId: safeId(s.operationId), state: s.state, detail: safeText(s.detail) })),
+      };
+      if (!r.auditReadable) {
+        unchecked.push('whether each recorded experience matches its audited operation could not be proven: the audit log could not be read');
+      } else {
+        if (r.checked < r.experiences) {
+          unchecked.push(`whether each recorded experience matches its audited operation was checked for the ${r.checked} newest of ${r.experiences} experience record(s); the rest were not re-checked`);
+        }
+        for (const s of r.samples) {
+          // A disagreement between two readable records is a defect. An experience whose audit
+          // record is absent is not proof of invention: the audit log may hold less history than
+          // the experience store, which is stated rather than concluded.
+          const line = `${path.basename(app.experience.filePath)}: experience [${safeId(s.id)}] names operation [${safeId(s.operationId)}]: ${safeText(s.detail)}`;
+          if (s.state === 'mismatch') confirmed.push(line);
+          else suspicions.push(`${line}. This does not establish that the operation never ran.`);
+        }
+        if (unresolved > r.samples.length) {
+          unchecked.push(`${unresolved - r.samples.length} further experience evidence problem(s) not listed (the health summary carries the exact counts)`);
+        }
+      }
+    }
+    subsystems.experience = {
+      key: 'experience',
+      label: 'Experience',
+      state,
+      summary,
+      count: experienceHealth.records,
+      experiences: experienceHealth.experiences,
+      feedback: experienceHealth.feedback,
+      adaptations: experienceHealth.adaptations,
+      candidates: experienceHealth.candidates,
+      approved: experienceHealth.approved,
+      activeAdaptations: experienceHealth.activeAdaptations,
+      ambiguousAdaptations: experienceHealth.ambiguousAdaptations,
+      corruptLines: experienceHealth.corruptLines,
+      conflicts: { scopes: experienceHealth.conflicts.scopes, adaptations: experienceHealth.conflicts.adaptations },
+      lifecycle: {
+        state: lifecycleState,
+        anomalies: experienceHealth.anomalies.count,
+        anomaliesTruncated: experienceHealth.anomalies.truncated,
+      },
+      evidence,
+      problems: [...problems, ...lifecycleProblems],
+    };
+    if (experienceHealth.corruptLines > 0) {
+      unchecked.push('adaptation states were derived only from readable records; corrupt lines leave the remaining state unverified');
+    }
+  }
+
   if (session.status === 'corrupt') confirmed.push(`session.json: ${safeText(session.detail)}`);
   confirmed.push(
     ...subsystems.conversation.problems,
     ...subsystems.memory.problems,
     ...subsystems.knowledge.problems,
+    ...subsystems.experience.problems,
   );
 
   // --- tasks -----------------------------------------------------------------
@@ -512,6 +650,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     ['queue', app.summaryQueue, 'Summary queue lock'],
     ['memory', app.memory, 'Memory lock'],
     ['knowledge', app.knowledge, 'Knowledge lock'],
+    ['experience', app.experience, 'Experience lock'],
   ]) {
     let report;
     try {
@@ -559,6 +698,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   subsystems.tasks.lock = locks.task;
   subsystems.memory.lock = locks.memory;
   subsystems.knowledge.lock = locks.knowledge;
+  subsystems.experience.lock = locks.experience;
 
 
   const uncertainSteps = [];
@@ -766,6 +906,18 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   if (byKey('conversation').state === State.CORRUPT) {
     recovery.push('Conversation: no supported repair command exists. Preserve conversation.jsonl. "apex new" starts a new session but does not delete or repair stored turns.');
   }
+  if (byKey('experience').state === State.CORRUPT) {
+    recovery.push('Experience: no supported repair command exists. Preserve experiences.jsonl; experience, feedback, and adaptation reads and writes stay blocked until it is repaired. An approved adaptation that cannot be read simply does not apply - it is never treated as retired.');
+  }
+  if (byKey('experience').lifecycle?.anomalies > 0) {
+    recovery.push('Experience lifecycle: a feedback, decision, or retirement record names a record that is not present, or two live experiences name one operation. Run "node bin/apex.js experience health" (read-only) for the counts and samples. No supported repair command exists; the historical records are preserved and are corrected by recording a new one, not by editing the log.');
+  }
+  if (byKey('experience').conflicts?.scopes > 0) {
+    recovery.push(`Adaptation conflict: ${byKey('experience').conflicts.scopes} capability scope(s) hold approved rules that disagree. Run "node bin/apex.js adaptation list" to see each one named as conflicting, then retire one rule with "node bin/apex.js adaptation retire <id> --reason ..." yourself. APEX does not choose between rules the user approved.`);
+  }
+  if (byKey('experience').evidence?.state === 'inconsistent') {
+    recovery.push('Experience evidence: a recorded experience no longer matches the audit operation it names. Run "node bin/apex.js experience health" (read-only) for the samples. Both records are preserved; nothing was replayed and no adaptation was changed as a result of this report.');
+  }
   if (byKey('tasks').state === State.CORRUPT) {
     recovery.push('Tasks: no supported repair command exists. Preserve tasks.jsonl and do not append to it; task list/show/run/resume/retry/cancel are unavailable until it is repaired.');
   }
@@ -781,10 +933,10 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   if (unavailable.length > 0) {
     recovery.push(`Storage: ${unavailable.map((s) => s.label).join(', ')} unavailable. Check APEX_DATA_DIR, file permissions, and disk space. APEX does not recreate or truncate data automatically.`);
   }
-  if ([locks.task, locks.queue, locks.memory, locks.knowledge].some((lock) => lock?.state === State.CORRUPT)) {
-    recovery.push('Locks: abandoned takeover tokens block the next takeover. Run "apex repair locks" after confirming that no task run, queue update, memory write, knowledge write, or recovery is active. It removes only dead takeover tokens; it never removes a lock claim or displaces a live holder.');
+  if ([locks.task, locks.queue, locks.memory, locks.knowledge, locks.experience].some((lock) => lock?.state === State.CORRUPT)) {
+    recovery.push('Locks: abandoned takeover tokens block the next takeover. Run "apex repair locks" after confirming that no task run, queue update, memory write, knowledge write, experience write, or recovery is active. It removes only dead takeover tokens; it never removes a lock claim or displaces a live holder.');
   }
-  for (const lock of [locks.task, locks.queue, locks.memory, locks.knowledge]) {
+  for (const lock of [locks.task, locks.queue, locks.memory, locks.knowledge, locks.experience]) {
     if (lock?.guard?.present) {
       recovery.push(`${lock.label}: ${lock.guard.alive === true
         ? `a recovery is in progress by process ${lock.guard.pid}`
@@ -861,12 +1013,12 @@ export function renderDiagnostics(diag) {
           : 'local subsystems healthy';
   lines.push(`Overall: ${overall}`);
   lines.push('Subsystems:');
-  for (const key of ['configuration', 'session', 'conversation', 'memory', 'knowledge', 'tasks', 'audit', 'queue', 'model', 'filesystem']) {
+  for (const key of ['configuration', 'session', 'conversation', 'memory', 'knowledge', 'experience', 'tasks', 'audit', 'queue', 'model', 'filesystem']) {
     lines.push(`  ${diag.subsystems[key].summary}`);
   }
 
   lines.push('Locks (read-only):');
-  for (const lock of [diag.locks?.task, diag.locks?.queue, diag.locks?.memory, diag.locks?.knowledge]) {
+  for (const lock of [diag.locks?.task, diag.locks?.queue, diag.locks?.memory, diag.locks?.knowledge, diag.locks?.experience]) {
     if (lock) lines.push(`  ${lock.summary}`);
   }
 

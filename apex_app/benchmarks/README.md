@@ -244,4 +244,74 @@ knowledge at 200 and 2,000 records, with 1, 2 and 4 concurrent writers), in five
   `HEAD` before coordination. It is a separate run because the store has no lock-free mode to switch
   to, and a benchmark-only bypass would not be the code that ships.
 
+## Experience, feedback and adaptation benchmark
+
+`run-experience-benchmark.mjs` measures the experience store (`src/experience/experience-store.js`)
+and the context its approved rules add. It contacts no model, starts no service and downloads
+nothing: every application it times is built with `NoBackend`, so the request path stops at
+`model_unavailable` and what is measured is APEX's own work. It needs no configuration; it builds a
+fresh temporary APEX data directory per fixture, fills it through the real paths, and removes it
+unless `--keep` is passed.
+
+### Procedure
+
+```bash
+cd apex_app
+node benchmarks/run-experience-benchmark.mjs --experiences 400 --repeats 7
+node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phase reads
+```
+
+1. `--experiences` is 1-2000 (a comma-separated list makes a size matrix, default `20,100,400`) and
+   `--repeats` is 1-25 (default 5). `--phase` selects one of `reads`, `writes`, `context`, `compare`;
+   without it all four run in that order.
+2. A fixture is `N` audited events, each produced the way the application produces one (a verified
+   request through the controller), then one recorded experience and one corrective feedback record
+   per event, one derivation, and three approvals. Seeding time is reported separately from every
+   measurement.
+3. Only the first 16 feedback records of a fixture carry guidance text, because one adaptation may
+   cite at most 20 evidence records and a larger group is skipped rather than truncated. Restating
+   one preference across a 400-experience store would therefore leave the store with no rules in it
+   and nothing to measure; the rest of the feedback still records the user's assessment.
+4. Every write sample runs against a fresh copy of its fixture, so each repeat measures the same
+   bytes. Nothing outside the OS temp folder is written.
+
+### What it reports
+
+- **reads**: one read split into its parts at each size - cold (a process that has read nothing) and
+  warm, the load alone, the derived-lifecycle recomputation alone, a bounded `list()`, an
+  `activeAdaptations()` retrieval, a repeat `deriveAdaptations()` scan over a store that already
+  carries those candidates, `health()`, and one `evidenceCheck()`. The recomputation is measured on
+  every read deliberately: it is why a corrected experience cannot leave a stale rule in effect.
+- **writes**: one append in parts - the audited event an experience must name, the store append
+  inside the write lock, the end-to-end controller call (audit record plus independent re-check), a
+  feedback record, an approval of a genuinely undecided candidate, a retirement, and the evidence
+  re-check.
+- **context**: the prompt characters each approved rule adds and for the default window, the cost of
+  the note that rules were cut, the cost of stating that the store could not be read, the longest
+  single rule line, the retrieval window and its hard maximum, and what one request actually pays:
+  `calc 2+2` and a free-form ask are timed against both a populated store and an empty one, with the
+  number of `activeAdaptations()` calls counted per request by an observing wrapper that returns
+  exactly what the store returned.
+- **compare**: the same raw append through the shared JSONL layer, the same store-level write, the
+  same whole-file read and the same read-plus-derived-state call on the memory and knowledge stores
+  at matched record counts, so the difference between these stores is measured rather than asserted.
+  The raw-append probe re-appends the last line of each store's own file, read back verbatim into a
+  throwaway copy, so no store is measured appending a shape the benchmark invented.
+
+### Interpretation limits
+
+- Fixtures are uniform synthetic text with one audited capability (`memory.add`), which is the worst
+  case for derivation grouping and for the support bound; a real store spreads its evidence more.
+- A read parses, hashes and validates the whole file and then recomputes the lifecycle, so read cost
+  is **not** independent of total store size, and neither is write cost: each write reads the whole
+  store before appending. The growth across the size matrix is the finding, not an artifact.
+- The context figures are measured against the largest fixture, but they do not depend on store
+  size: the adaptation section is bounded by the retrieval window (default 3, hard maximum 10), so
+  the prompt characters are a function of rule text and window, while the retrieval *time* is what
+  grows with the store.
+- `repeats` samples in one process on one machine. Treat a median as an indication; differences of a
+  few milliseconds - including a populated store that measures faster than an empty one - are noise.
+- No figure here involves a model. Nothing in this file shows that an approved adaptation improves
+  an answer, only what it costs the context that carries it.
+
 This script is not part of `npm test` and no test depends on it.

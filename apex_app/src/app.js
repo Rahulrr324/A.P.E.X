@@ -25,6 +25,8 @@ import { listAction, readAction } from './filesystem/actions.js';
 import { TaskStore } from './tasks/store.js';
 import { SummaryQueue } from './tasks/summary-queue.js';
 import { KnowledgeStore } from './knowledge/knowledge-store.js';
+import { ExperienceStore } from './experience/experience-store.js';
+import { experienceActions } from './actions/experience-actions.js';
 
 export function createApp({
   dataDir,
@@ -49,6 +51,10 @@ export function createApp({
   // never task state or audit evidence, so the two authoritative logs are unaffected by it.
   const summaryQueue = new SummaryQueue(path.join(dataDir, 'task-summary-queue.json'), { now: clock, idFactory });
   const knowledge = new KnowledgeStore(path.join(dataDir, 'knowledge.jsonl'), { now: clock });
+  // An experience is a verified reference to one audit record, so this store is given the audit
+  // log: a write whose operation cannot be found there is refused instead of recorded, and every
+  // later read can recompute the evidence hash against it.
+  const experience = new ExperienceStore(path.join(dataDir, 'experiences.jsonl'), { now: clock, operations });
   const registry = new ActionRegistry();
 
   // Filesystem inspection exists only when a root is configured. The root is resolved
@@ -65,7 +71,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...worldActions(), ...extraActions, ...fsActions]) registry.register(def);
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...worldActions(), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is
   // reported as absent; a damaged state still raises (it must not look empty).
@@ -73,6 +79,7 @@ export function createApp({
     const m = await memory.status();
     const o = await operations.status();
     const t = await conversation.status();
+    const x = await experience.status();
     const current = await session.peek();
     if (current.status === 'corrupt') {
       throw new StoreError(`${current.detail}; run "apex new" to start a new session`);
@@ -88,6 +95,8 @@ export function createApp({
       corruptMemoryLines: m.corrupt,
       operationRecords: o.records,
       turnRecords: t.turns,
+      experienceRecords: x.records,
+      corruptExperienceLines: x.corrupt,
       sessionId: current.state?.sessionId ?? null,
       model: gateway.describe(),
       filesystemRoot: rootForContext,
@@ -110,6 +119,7 @@ export function createApp({
     summaryQueue,
     rootForContext,
     knowledge,
+    experience,
   });
   return {
     controller,
@@ -125,6 +135,7 @@ export function createApp({
     summaryQueue,
     filesystemRoot: rootForContext,
     knowledge,
+    experience,
   };
 }
 

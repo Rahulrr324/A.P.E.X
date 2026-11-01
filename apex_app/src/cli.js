@@ -37,6 +37,16 @@ Usage:
   node bin/apex.js knowledge list [--limit N]
   node bin/apex.js knowledge search <query words...>
   node bin/apex.js knowledge show <id>
+  node bin/apex.js experience record <operation-id> --subject <text> [--replaces <id[,id...]>]
+  node bin/apex.js experience list [--limit N]
+  node bin/apex.js experience show <experience-or-operation-id>
+  node bin/apex.js experience health       experiences, feedback, adaptation states, and evidence checks (read-only)
+  node bin/apex.js feedback record <experience-or-operation-id> --assessment <kind> [--guidance <text>] [--reason <text>] [--supersedes <id[,id...]>]
+  node bin/apex.js adaptation derive [--min-support N]     turn repeated feedback into candidates (never active)
+  node bin/apex.js adaptation list [--limit N] [--exclude-retired]
+  node bin/apex.js adaptation approve <id> [--reason <text>]     your decision; the only way a rule takes effect
+  node bin/apex.js adaptation reject <id> [--reason <text>]
+  node bin/apex.js adaptation retire <id> [--reason <text>]      stop using a rule; its history stays readable
   node bin/apex.js task plan <goal...>   plan a multi-step task (checked; nothing runs yet)
   node bin/apex.js task list
   node bin/apex.js task show <id>
@@ -49,7 +59,7 @@ Usage:
   node bin/apex.js task cancel <id>
   node bin/apex.js queue                 deferred task summaries and their state (read-only)
   node bin/apex.js audit health          operation-log integrity and outcome counts (read-only)
-  node bin/apex.js repair locks          inspect task, queue, memory and knowledge write locks; remove only abandoned takeover tokens
+  node bin/apex.js repair locks          inspect task, queue, memory, knowledge and experience write locks; remove only abandoned takeover tokens
   node bin/apex.js help
 
 Exit codes:
@@ -88,6 +98,22 @@ Knowledge examples (explicit relationships; user-origin write only):
   knowledge list
   knowledge search subsystem
   knowledge show <record-id>
+
+Experience and adaptation examples (what APEX did, what you thought, what to change):
+  history                     find the operation id of something APEX already did
+  experience record <operation-id> --subject "stored the review date"
+  feedback record <experience-id> --assessment not_useful --guidance "give one dated fact, not a reminder"
+  feedback record <experience-id> --assessment incorrect --reason "the file it names does not exist"
+      assessments: correct | incorrect | partially_correct | useful | not_useful
+                 | user_correction | outcome_succeeded | outcome_failed
+  adaptation derive           repeated feedback becomes a candidate; a candidate does nothing yet
+  adaptation list             shows each state: candidate, approved, in effect, rejected, retired, ambiguous
+  adaptation approve <id>     your decision; only an approved rule is offered to future answers
+  adaptation retire <id>      stop using a rule without deleting the history of it
+  experience health           re-checks every recorded experience against the audit log
+An experience names one audited operation; it is not a fact about you. Feedback is your own
+assessment and is never invented from silence. A rule takes effect only after you approve it
+here, and even then it guides wording, never permission: APEX still asks before any write.
 
 With a configured local model, any other request is answered from the model,
 using relevant memory and the recent conversation. Without one, APEX says so.
@@ -143,7 +169,12 @@ function parseFlags(args, allowed) {
         if (v === undefined || v.startsWith('--')) throw new ValidationError('--step needs a step id', 'USAGE');
         flags.step = v;
         i += 1;
-      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason'].includes(name)) {
+      } else if (name === 'min-support') {
+        const v = args[i + 1];
+        if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--min-support needs a whole number', 'USAGE');
+        flags['min-support'] = Number(v);
+        i += 1;
+      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -162,6 +193,12 @@ function parseFlags(args, allowed) {
 // "status extra" says the request was understood when it was not.
 function rejectUnexpected(rest, usage) {
   if (rest.length > 0) throw new ValidationError(`usage: ${usage}`, 'USAGE');
+}
+
+// A comma-separated list of record ids on the command line. Blank entries are dropped, so
+// "a,,b" is the same list as "a,b" instead of a reference to nothing.
+function idList(value) {
+  return typeof value === 'string' ? value.split(',').map((item) => item.trim()).filter(Boolean) : [];
 }
 
 function describeStepLine(step) {
@@ -208,6 +245,7 @@ export function formatResult(res) {
   // user otherwise would invite them to treat a safe retry as dangerous.
   const writeActions = new Set([
     'memory.add', 'memory.correct', 'memory.save_conclusion', 'knowledge.add', 'knowledge.retract', 'knowledge.resolve',
+    'experience.record', 'feedback.record', 'adaptation.derive', 'adaptation.decide', 'adaptation.retire',
   ]);
   const refusedBeforeWriting = (s) => s.execution?.error?.code === 'LOCKED'
     || /nothing was written/i.test(s.execution?.error?.message ?? '');
@@ -226,7 +264,7 @@ export function formatResult(res) {
   // cannot help until the path is usable, so say what to check instead of implying that the
   // request itself was wrong.
   if (res.operation.steps.some((s) => s.execution?.status === 'failed'
-    && /^cannot (?:read|write|prepare)\b.*\b(?:memory|knowledge|conversation|operations|session|tasks?|queue)\b/i.test(s.execution?.error?.message ?? ''))) {
+    && /^cannot (?:read|write|prepare)\b.*\b(?:memory|knowledge|experienc\w*|conversation|operations|session|tasks?|queue)\b/i.test(s.execution?.error?.message ?? ''))) {
     lines.push('Note:      a data file could not be read or written, so this request was not completed and nothing was confirmed. Check APEX_DATA_DIR, its permissions, and free space; run "node bin/apex.js diagnose" for a read-only report.');
   }
   lines.push('Output:');
@@ -390,6 +428,7 @@ async function repairLocks({ app, out, err }) {
     { label: 'Summary queue lock', store: app.summaryQueue },
     { label: 'Memory lock', store: app.memory },
     { label: 'Knowledge lock', store: app.knowledge },
+    { label: 'Experience lock', store: app.experience },
   ];
   let failed = 0;
   for (const target of targets) {
@@ -481,7 +520,7 @@ export async function main(argv, {
       const { flags, rest } = parseFlags(args, ['model']);
       rejectUnexpected(rest, 'status [--model]');
       const diag = await collectDiagnostics(app, { checkModel: Boolean(flags.model) });
-      const { session, conversation, memory, audit, queue, model, filesystem } = diag.subsystems;
+      const { session, conversation, memory, experience, audit, queue, model, filesystem } = diag.subsystems;
       out(`${APP_NAME} ${APP_STAGE} ${APP_VERSION} (${APP_EXPANSION})`);
       out(`Data directory: ${safeText(diag.dataDir)}`);
       out(sessionLine(session));
@@ -491,6 +530,13 @@ export async function main(argv, {
       out(`Memory records: ${memory.state === State.UNAVAILABLE ? 'unavailable' : memory.count} (corrupt lines skipped: ${memory.corruptLines})`);
       out(`Conversation turns: ${conversation.state === State.UNAVAILABLE ? 'unavailable' : conversation.count}${skipped(conversation)}`);
       out(`Operation records: ${audit.state === State.UNAVAILABLE ? 'unavailable' : audit.count}${skipped(audit)}`);
+      // Named separately from memory on purpose: an experience references one audited event and
+      // an adaptation in effect changes how APEX answers, so both counts belong where the user
+      // can see what is currently being applied without running a second command.
+      out(`Experiences: ${experience.state === State.UNAVAILABLE ? 'unavailable' : `${experience.experiences} record(s), ${experience.feedback} feedback record(s), ${experience.activeAdaptations} approved adaptation(s) in effect`}${skipped(experience)}`);
+      if (experience.state !== State.UNAVAILABLE && experience.conflicts.scopes > 0) {
+        out(`Experiences: ${experience.conflicts.scopes} capability scope(s) hold approved adaptations that disagree; run "node bin/apex.js adaptation list"`);
+      }
       out(`Deferred task summaries: ${queue.count === null ? queue.state : `${queue.count}/${queue.max}${queue.full ? ' (full)' : ''}`}`);
       if (diag.locks?.task?.state === State.CORRUPT || diag.locks?.queue?.state === State.CORRUPT) {
         out('Locks: abandoned takeover tokens require recovery; run "node bin/apex.js repair locks".');
@@ -649,6 +695,106 @@ export async function main(argv, {
         return res.status === Outcome.SUCCESS_VERIFIED ? 0 : 1;
       }
       err('usage: knowledge add|retract|resolve|history|health|list|search|show');
+      return 2;
+    }
+
+    if (command === 'experience') {
+      const [sub, ...rest] = args;
+      if (sub === 'record') {
+        const { flags, rest: ids } = parseFlags(rest, ['subject', 'replaces']);
+        if (ids.length !== 1 || !flags.subject) {
+          err('usage: experience record <operation-id> --subject <text> [--replaces <id[,id...]>]');
+          return 2;
+        }
+        return emit(await app.controller.experienceRecord({
+          operationId: ids[0],
+          subject: flags.subject,
+          replaces: idList(flags.replaces),
+        }));
+      }
+      if (sub === 'list') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit']);
+        rejectUnexpected(extra, 'experience list [--limit N]');
+        return emit(await app.controller.experienceList({ limit: flags.limit }));
+      }
+      if (sub === 'show') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) {
+          err('usage: experience show <experience-or-operation-id>');
+          return 2;
+        }
+        return emit(await app.controller.experienceShow({ target: ids[0] }));
+      }
+      if (sub === 'health') {
+        rejectUnexpected(parseFlags(rest, []).rest, 'experience health');
+        // A direct, unaudited read. Exit 0 only when the log was fully inspected, nothing needs
+        // a decision, and every recorded experience still matches the audit event it names.
+        const res = await app.controller.experienceHealth();
+        out(res.display ?? res.output ?? '(none)');
+        return res.health?.attention || res.evidenceMismatch > 0 ? 1 : 0;
+      }
+      err('usage: experience record|list|show|health');
+      return 2;
+    }
+
+    if (command === 'feedback') {
+      const [sub, ...rest] = args;
+      if (sub !== 'record') {
+        err('usage: feedback record <experience-or-operation-id> --assessment <kind> [--guidance <text>] [--reason <text>] [--supersedes <id[,id...]>]');
+        return 2;
+      }
+      const { flags, rest: ids } = parseFlags(rest, ['assessment', 'guidance', 'reason', 'supersedes']);
+      if (ids.length !== 1 || !flags.assessment) {
+        err('usage: feedback record <experience-or-operation-id> --assessment <kind> [--guidance <text>] [--reason <text>] [--supersedes <id[,id...]>]');
+        return 2;
+      }
+      return emit(await app.controller.feedbackRecord({
+        target: ids[0],
+        assessment: flags.assessment,
+        guidance: flags.guidance ?? null,
+        reason: flags.reason ?? null,
+        supersedes: idList(flags.supersedes),
+      }));
+    }
+
+    if (command === 'adaptation') {
+      const [sub, ...rest] = args;
+      if (sub === 'derive') {
+        const { flags, rest: extra } = parseFlags(rest, ['min-support']);
+        rejectUnexpected(extra, 'adaptation derive [--min-support N]');
+        return emit(await app.controller.adaptationDerive({ minSupport: flags['min-support'] }));
+      }
+      if (sub === 'list') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit', 'exclude-retired']);
+        rejectUnexpected(extra, 'adaptation list [--limit N] [--exclude-retired]');
+        return emit(await app.controller.adaptationList({
+          limit: flags.limit,
+          includeRetired: flags['exclude-retired'] ? false : undefined,
+        }));
+      }
+      if (sub === 'approve' || sub === 'reject') {
+        const { flags, rest: ids } = parseFlags(rest, ['reason']);
+        if (ids.length !== 1) {
+          err(`usage: adaptation ${sub} <adaptation-id> [--reason <text>]`);
+          return 2;
+        }
+        // The decision is the command that was typed. There is no default: a bare
+        // `adaptation decide` cannot approve anything.
+        return emit(await app.controller.adaptationDecide({
+          target: ids[0],
+          decision: sub === 'approve' ? 'approved' : 'rejected',
+          reason: flags.reason ?? null,
+        }));
+      }
+      if (sub === 'retire') {
+        const { flags, rest: ids } = parseFlags(rest, ['reason']);
+        if (ids.length !== 1) {
+          err('usage: adaptation retire <adaptation-id> [--reason <text>]');
+          return 2;
+        }
+        return emit(await app.controller.adaptationRetire({ target: ids[0], reason: flags.reason ?? null }));
+      }
+      err('usage: adaptation derive|list|approve|reject|retire');
       return 2;
     }
 

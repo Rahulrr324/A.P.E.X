@@ -73,6 +73,57 @@ export class OperationLog {
     return summarizeAuditHealth(loaded.records, loaded.corrupt, { path: this.filePath });
   }
 
+  // One audit record by its exact id, read line by line so the scan stops as soon as the record is
+  // found. Absence is different: it takes a read to the end, so it is never inferred from truncated
+  // evidence, and `inspected` reports what the answer needed while `stoppedEarly` says whether that
+  // was fewer lines than the log holds. Damaged lines are counted and never used as evidence. A log
+  // that does not exist yet is a real empty answer; a log that cannot be read throws, because it
+  // establishes nothing either way. The first line in append order is the one returned - an id that
+  // appears twice is damage, which `health()` reports, and the earlier append is the record that was
+  // actually written.
+  async findById(id) {
+    const result = { found: false, record: null, inspected: 0, corrupt: 0, stoppedEarly: false };
+    if (typeof id !== 'string' || id.length === 0) return result;
+
+    const stream = fs.createReadStream(this.filePath, { encoding: 'utf8' });
+    const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    let streamError = null;
+    stream.on('error', (err) => { streamError = err; });
+    try {
+      for await (const line of lines) {
+        result.inspected += 1;
+        if (line.trim() === '') continue;
+        let record;
+        try {
+          record = JSON.parse(line);
+        } catch {
+          result.corrupt += 1;
+          continue;
+        }
+        if (validateOperation(record)) {
+          result.corrupt += 1;
+          continue;
+        }
+        if (record.id !== id) continue;
+        result.found = true;
+        result.record = record;
+        result.stoppedEarly = true;
+        break;
+      }
+    } catch (err) {
+      // The interface forwards a stream failure as a rejection; either way it is the same signal.
+      streamError = streamError ?? err;
+    } finally {
+      lines.close();
+      stream.destroy();
+    }
+
+    if (streamError && !(streamError.code === 'ENOENT' && result.inspected === 0)) {
+      throw new StoreError(`cannot read ${path.basename(this.filePath)}: ${streamError.code || streamError.message}`);
+    }
+    return result;
+  }
+
   // Which of these task steps have an operation record of their own. The log is read
   // line by line and the scan stops as soon as every wanted record has been found, so the
   // common case costs one pass over the recent lines rather than a parse of the whole
