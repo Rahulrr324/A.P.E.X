@@ -65,7 +65,9 @@ const BLOCKED_OUTCOMES = new Set([
   Outcome.PLAN_REJECTED,
 ]);
 
-const PATTERN_KINDS = Object.freeze([
+// Exported because a record that cites a pattern has to be validated against the same closed
+// vocabulary that produced it; a private copy here and a copy elsewhere would drift.
+export const PATTERN_KINDS = Object.freeze([
   'repeated_failure',
   'repeated_success',
   'alternating_outcomes',

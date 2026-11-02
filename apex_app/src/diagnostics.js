@@ -478,11 +478,73 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   }
 
   if (session.status === 'corrupt') confirmed.push(`session.json: ${safeText(session.detail)}`);
+  // --- predictions -------------------------------------------------------------
+  // The ledger that answers "what did I expect would happen", reported as its own subsystem
+  // precisely because its records are not evidence of anything that happened. Three questions, in
+  // the same shape as the experience read: whether the log parses, how each record kind counts, and
+  // whether every withdrawal and verdict names an expectation that is in the log. Nothing here is
+  // merged into the experience counts above, and an unreadable ledger reports null counts rather
+  // than zero, so a reader cannot take "no expectations" from a file that could not be opened.
+  const predictionHealth = await app.predictions.health();
+  const predictionsExist = await fileExists(app.predictions.filePath);
+  let predictionState = State.OK;
+  if (predictionHealth.state === 'unavailable') predictionState = State.UNAVAILABLE;
+  else if (predictionHealth.corruptLines > 0) predictionState = State.CORRUPT;
+  else if (predictionsExist === false) predictionState = State.MISSING;
+  const predictionSummary = predictionState === State.UNAVAILABLE
+    ? `Predictions: unavailable (${safeText(predictionHealth.detail)})`
+    : predictionState === State.CORRUPT
+      ? `Predictions: corrupt (${predictionHealth.records} readable line(s), ${predictionHealth.corruptLines} corrupt line(s); counts cover readable records only)`
+      : predictionState === State.MISSING
+        ? missingValid('Predictions', 'expectation recorded')
+        : `Predictions: ok (${predictionHealth.predictions} expectation(s), ${predictionHealth.live} standing, ${predictionHealth.superseded} superseded, ${predictionHealth.invalidations} withdrawal(s), ${predictionHealth.evaluations} verdict(s); no confidence is stored in any record)`;
+  const predictionProblems = predictionState === State.CORRUPT
+    ? corruptLineProblems(path.basename(app.predictions.filePath), predictionHealth.corrupt)
+    : [];
+  if (predictionState === State.OK && predictionHealth.anomalies.count > 0) {
+    // Two readable records that disagree is a defect, not a suspicion: a withdrawal or a verdict can
+    // only name an expectation this same log holds.
+    for (const message of predictionHealth.anomalies.samples) {
+      predictionProblems.push(`${path.basename(app.predictions.filePath)}: lifecycle: ${safeText(message, 200)}`);
+    }
+    if (predictionHealth.anomalies.count > predictionHealth.anomalies.samples.length) {
+      predictionProblems.push(`${path.basename(app.predictions.filePath)}: lifecycle: ${predictionHealth.anomalies.count - predictionHealth.anomalies.samples.length} more anomaly(ies) not listed (the health summary carries the exact count)`);
+    }
+  }
+  if (predictionState === State.UNAVAILABLE) {
+    unchecked.push('prediction ledger counts were not established because the ledger could not be read');
+  } else if (predictionState === State.CORRUPT) {
+    unchecked.push('prediction counts were derived only from readable lines; corrupt lines leave the remaining state unverified');
+  }
+  subsystems.predictions = {
+    key: 'predictions',
+    label: 'Predictions',
+    state: predictionState,
+    summary: predictionSummary,
+    detail: predictionHealth.detail,
+    count: predictionHealth.records,
+    predictions: predictionHealth.predictions,
+    live: predictionHealth.live,
+    superseded: predictionHealth.superseded,
+    invalidations: predictionHealth.invalidations,
+    evaluations: predictionHealth.evaluations,
+    kinds: predictionHealth.kinds,
+    corruptLines: predictionHealth.corruptLines,
+    anomalies: {
+      count: predictionHealth.anomalies.count,
+      truncated: predictionHealth.anomalies.truncated,
+    },
+    // Expectations, never events: the counts above answer what the user recorded, not what happened.
+    note: 'a prediction is an expectation, not an observation; an expired horizon is not a wrong prediction',
+    problems: predictionProblems,
+  };
+
   confirmed.push(
     ...subsystems.conversation.problems,
     ...subsystems.memory.problems,
     ...subsystems.knowledge.problems,
     ...subsystems.experience.problems,
+    ...subsystems.predictions.problems,
   );
 
   // --- tasks -----------------------------------------------------------------
@@ -669,6 +731,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     ['memory', app.memory, 'Memory lock'],
     ['knowledge', app.knowledge, 'Knowledge lock'],
     ['experience', app.experience, 'Experience lock'],
+    ['prediction', app.predictions, 'Prediction lock'],
   ]) {
     let report;
     try {
@@ -717,6 +780,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   subsystems.memory.lock = locks.memory;
   subsystems.knowledge.lock = locks.knowledge;
   subsystems.experience.lock = locks.experience;
+  subsystems.predictions.lock = locks.prediction;
 
 
   const uncertainSteps = [];
@@ -942,6 +1006,9 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   if (byKey('audit').state === State.CORRUPT) {
     recovery.push('Audit: no supported repair command exists. Preserve operations.jsonl; "apex history" skips damaged lines and new operations are still appended, so the audit trail remains incomplete.');
   }
+  if (byKey('predictions').state === State.CORRUPT) {
+    recovery.push('Predictions: no supported repair command exists. Preserve predictions.jsonl and do not append to it by hand; the prediction reads and writes are unavailable until it is repaired, and "apex prediction health" names the damaged lines. Expectations are never recreated or inferred from the readable lines.');
+  }
   if (byKey('session').state === State.CORRUPT) {
     recovery.push('Session: "apex new" starts a new session and replaces session.json. Earlier conversation remains stored but is no longer replayed. Do this only if you accept losing the current session pointer.');
   } else if (byKey('session').state === State.MISSING && byKey('session').orphanTurns > 0) {
@@ -951,10 +1018,10 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   if (unavailable.length > 0) {
     recovery.push(`Storage: ${unavailable.map((s) => s.label).join(', ')} unavailable. Check APEX_DATA_DIR, file permissions, and disk space. APEX does not recreate or truncate data automatically.`);
   }
-  if ([locks.task, locks.queue, locks.memory, locks.knowledge, locks.experience].some((lock) => lock?.state === State.CORRUPT)) {
-    recovery.push('Locks: abandoned takeover tokens block the next takeover. Run "apex repair locks" after confirming that no task run, queue update, memory write, knowledge write, experience write, or recovery is active. It removes only dead takeover tokens; it never removes a lock claim or displaces a live holder.');
+  if ([locks.task, locks.queue, locks.memory, locks.knowledge, locks.experience, locks.prediction].some((lock) => lock?.state === State.CORRUPT)) {
+    recovery.push('Locks: abandoned takeover tokens block the next takeover. Run "apex repair locks" after confirming that no task run, queue update, memory write, knowledge write, experience write, prediction write, or recovery is active. It removes only dead takeover tokens; it never removes a lock claim or displaces a live holder.');
   }
-  for (const lock of [locks.task, locks.queue, locks.memory, locks.knowledge, locks.experience]) {
+  for (const lock of [locks.task, locks.queue, locks.memory, locks.knowledge, locks.experience, locks.prediction]) {
     if (lock?.guard?.present) {
       recovery.push(`${lock.label}: ${lock.guard.alive === true
         ? `a recovery is in progress by process ${lock.guard.pid}`
@@ -1033,12 +1100,12 @@ export function renderDiagnostics(diag) {
           : 'local subsystems healthy';
   lines.push(`Overall: ${overall}`);
   lines.push('Subsystems:');
-  for (const key of ['configuration', 'session', 'conversation', 'memory', 'knowledge', 'experience', 'tasks', 'audit', 'queue', 'model', 'filesystem']) {
+  for (const key of ['configuration', 'session', 'conversation', 'memory', 'knowledge', 'experience', 'predictions', 'tasks', 'audit', 'queue', 'model', 'filesystem']) {
     lines.push(`  ${diag.subsystems[key].summary}`);
   }
 
   lines.push('Locks (read-only):');
-  for (const lock of [diag.locks?.task, diag.locks?.queue, diag.locks?.memory, diag.locks?.knowledge, diag.locks?.experience]) {
+  for (const lock of [diag.locks?.task, diag.locks?.queue, diag.locks?.memory, diag.locks?.knowledge, diag.locks?.experience, diag.locks?.prediction]) {
     if (lock) lines.push(`  ${lock.summary}`);
   }
 

@@ -24,11 +24,12 @@ const LIMITS = Object.freeze([
   'A belief is a stored record, not verified truth. Provenance says who recorded it, not whether it is correct.',
   'At most 100 recent records per store are represented; older records are counted but not shown.',
   'Memory contradiction detection is heuristic: it compares "subject is value" clauses inside the represented records only, and memory has no user-decision mechanism.',
-  'APEX does not represent causal links, hypotheses, or predictions, and a belief that was never written to memory or knowledge is not represented here.',
+  'APEX represents no causal links and no hypotheses, and a belief that was never written to memory or knowledge is not represented here. A prediction is represented, when a ledger is available, only as the user\'s own recorded expectation about a later outcome - in its own section, never as a belief and never as an observation.',
   'When an experience store is available, a bounded temporal section reports recorded outcomes and their order. Order is not cause, nothing in it is a prediction, and no pattern is or becomes an adaptation.',
 ]);
 
 export const MAX_WORLD_TEMPORAL_PATTERNS = 3;
+export const MAX_WORLD_PREDICTION_ITEMS = 3;
 
 function safeText(value, max) {
   return truncate(String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' '), max);
@@ -125,6 +126,29 @@ export function renderWorldState(world) {
     }
   }
 
+  // Expectations get their own section and their own label, one deliberately unlike "Beliefs". A
+  // belief here is a stored record of something the user or a model asserted; an expectation is the
+  // user's own record of what they think will happen later. The counts come from the prediction
+  // ledger's published prompt shape, so this says nothing about a prediction that the ledger's own
+  // reader would not say, and no subject or reason text appears here at all.
+  if (world.predictions) {
+    const p = world.predictions;
+    if (p.available === false) {
+      lines.push(`  Expectations:   unavailable (${safeText(p.detail ?? 'the prediction ledger could not be read', 120)}); recorded expectations are not represented`);
+    } else {
+      const c = p.counts ?? {};
+      const n = (value) => (Number.isInteger(value) ? value : 0);
+      lines.push(`  Expectations:   ${n(c.live)} standing expectation(s) of ${n(c.evaluated) + n(c.recorded) + n(c.awaiting_evaluation) + n(c.expired)} recorded: ${n(c.recorded)} with nothing establishing them, ${n(c.awaiting_evaluation)} whose outcome evidence exists but no verdict was recorded, ${n(c.expired)} past their horizon with no outcome evidence, ${n(c.evaluated)} with a recorded verdict; ${n(c.invalidated)} withdrawn, ${n(c.superseded)} superseded`);
+      lines.push(`  Expectation verdicts: ${n(c.matched)} matched, ${n(c.contradicted)} contradicted${p.matchRate?.value === null ? `; no rate stated (${safeText(p.matchRate?.reason ?? 'no evaluation exists', 100)})` : `; ${p.matchRate.value} over ${n(p.matchRate.denominator)} evaluation(s)`}; confidence is unavailable for every record`);
+      const items = (p.active ?? []).slice(0, MAX_WORLD_PREDICTION_ITEMS)
+        .map((item) => `[${shortId(item.id)}] ${item.capability} expects ${item.expectation} (${item.status}, horizon ${String(item.expiresAt ?? '').slice(0, 10)}, evidence at creation ${item.evidenceBasis ?? 'unknown'})`);
+      if (items.length > 0) {
+        lines.push(`  Expectations standing: ${items.join('; ')}${p.omitted > 0 ? `; ${p.omitted} more in the ledger, readable with "prediction list"` : ''}`);
+      }
+      lines.push('  Expectation limit: an expectation is what the user recorded about a later outcome, not an observation and not a belief; it authorizes nothing, and a horizon that passed without outcome evidence establishes nothing in either direction');
+    }
+  }
+
   const section = (title, items) => {
     if (!items.length) {
       lines.push(`  ${title}: (none)`);
@@ -178,6 +202,7 @@ export async function buildWorldState({
   limit = MAX_WORLD_BELIEFS,
   recordLimit = WORLD_RECORD_LIMIT,
   temporal = null,
+  predictions = null,
 } = {}) {
   if (!memory || !knowledge) throw new Error('world state requires both stores');
   const beliefLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), MAX_WORLD_LIMIT) : MAX_WORLD_BELIEFS;
@@ -324,11 +349,17 @@ export async function buildWorldState({
   } else if (temporal && (temporal.counts?.undated ?? 0) > 0) {
     addUnknown(`${temporal.counts.undated} recorded experience(s) have no usable timestamp and are not placed in the temporal window.`);
   }
+  // An unreadable ledger is an explicit unknown, not an empty expectations section: "the user
+  // recorded no expectation" and "this could not be checked" must not sound the same here.
+  if (predictions && predictions.available === false) {
+    addUnknown(`The prediction ledger could not be read, so the user's recorded expectations could not be inspected${predictions.detail ? ` (${safeText(predictions.detail, 100)})` : ''}.`);
+  }
 
   const memoryComplete = memoryHealth.inspected === true && memoryHealth.corruptLines === 0;
   const knowledgeComplete = knowledgeHealth.inspected === true && knowledgeHealth.corruptLines === 0;
   const temporalComplete = !temporal || temporal.available !== false;
-  const complete = memoryComplete && knowledgeComplete && temporalComplete;
+  const predictionsComplete = !predictions || predictions.available !== false;
+  const complete = memoryComplete && knowledgeComplete && temporalComplete && predictionsComplete;
   const attention = !complete || totalUnresolved > 0 || memoryGroups.length > 0;
   const history = {
     superseded: safeCount(knowledgeHealth.superseded) ?? 0,
@@ -363,6 +394,9 @@ export async function buildWorldState({
     unknowns,
     history,
     ...(temporal ? { temporal } : {}),
+    // Expectations, kept in their own field and never merged into `beliefs`: a reader must be able to
+    // tell what the stores say happened from what the user said they expect to happen.
+    ...(predictions ? { predictions } : {}),
     limits: [...LIMITS],
   };
 }

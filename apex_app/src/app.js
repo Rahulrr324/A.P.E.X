@@ -27,6 +27,8 @@ import { SummaryQueue } from './tasks/summary-queue.js';
 import { KnowledgeStore } from './knowledge/knowledge-store.js';
 import { ExperienceStore } from './experience/experience-store.js';
 import { experienceActions } from './actions/experience-actions.js';
+import { PredictionStore } from './prediction/prediction-store.js';
+import { predictionActions } from './actions/prediction-actions.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 
 export function createApp({
@@ -57,6 +59,10 @@ export function createApp({
   // log: a write whose operation cannot be found there is refused instead of recorded, and every
   // later read can recompute the evidence hash against it.
   const experience = new ExperienceStore(path.join(dataDir, 'experiences.jsonl'), { now: clock, operations });
+  // A prediction cites recorded events, so this store is given the experience log: a write whose
+  // citations do not resolve there is refused, and every later read re-opens the horizon against it.
+  // It is a separate log on purpose - see the header of prediction-store.js.
+  const predictions = new PredictionStore(path.join(dataDir, 'predictions.jsonl'), { now: clock, experiences: experience });
   const registry = new ActionRegistry();
 
   // Filesystem inspection exists only when a root is configured. The root is resolved
@@ -73,7 +79,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...worldActions(), ...extraActions, ...fsActions]) registry.register(def);
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...worldActions(), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is
   // reported as absent; a damaged state still raises (it must not look empty).
@@ -82,6 +88,7 @@ export function createApp({
     const o = await operations.status();
     const t = await conversation.status();
     const x = await experience.status();
+    const p = await predictions.status();
     const current = await session.peek();
     if (current.status === 'corrupt') {
       throw new StoreError(`${current.detail}; run "apex new" to start a new session`);
@@ -102,6 +109,15 @@ export function createApp({
       experienceCapturedAutomatically: x.capturedAutomatically,
       experienceCaptureMode: experienceCapture,
       corruptExperienceLines: x.corrupt,
+      // Stated as expectations, never as events: `predictions` counts what the user recorded, and the
+      // verdict count is how many of those an outcome has been recorded against.
+      predictionRecords: p.records,
+      predictionsLive: p.live,
+      predictionsSuperseded: p.superseded,
+      predictionsEvaluated: p.evaluations,
+      predictionsPastHorizon: p.pastHorizon,
+      predictionConfidenceValues: p.confidenceValues,
+      corruptPredictionLines: p.corrupt,
       sessionId: current.state?.sessionId ?? null,
       model: gateway.describe(),
       filesystemRoot: rootForContext,
@@ -126,6 +142,7 @@ export function createApp({
     knowledge,
     experience,
     experienceCapture,
+    predictions,
   });
   return {
     controller,
@@ -143,6 +160,7 @@ export function createApp({
     knowledge,
     experience,
     experienceCapture,
+    predictions,
   };
 }
 

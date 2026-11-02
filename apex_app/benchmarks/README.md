@@ -383,3 +383,99 @@ node benchmarks/run-experience-benchmark.mjs --experiences 20 --repeats 3 --phas
   an answer, only what it costs the context that carries it.
 
 This script is not part of `npm test` and no test depends on it.
+
+## Prediction ledger benchmark
+
+`run-prediction-benchmark.mjs` measures the expectation ledger (`src/prediction/prediction-store.js`,
+`src/prediction/prediction-engine.js`) and the bounded context section it contributes. It contacts no
+model, starts no service, downloads nothing and needs no configuration: every application it times is
+built with `NoBackend`, so the request path stops at `model_unavailable` and what is measured is APEX's
+own work. It builds fresh temporary APEX data directories, fills them, and removes them unless
+`--keep` is passed; the removal helper refuses to touch any path that is not one of its own benchmark
+directories.
+
+### Procedure
+
+```bash
+cd apex_app
+node benchmarks/run-prediction-benchmark.mjs
+node benchmarks/run-prediction-benchmark.mjs --repeats 7 --phase reads
+```
+
+1. `--repeats` is 1-25 (default 5) and `--phase` selects one of `reads`, `writes`, `contention`,
+   `context`; without it all four run in that order. There is no size flag: the read matrix is fixed
+   (10 / 50 / 100 / 200 predictions against a 1,000-event log, then 50 predictions against logs of
+   100 and 5,000 events) so that two runs of this script are comparable. Hard caps are 2,000
+   predictions and 10,000 events.
+2. Both fixtures are seeded as records written directly in the stores' own validated shapes rather
+   than through the write paths, because a prediction read only reads: seeding this way exercises the
+   same readers a real log does and keeps seeding cost out of the measurement. Every ledger line the
+   fixture produces is checked with the ledger's own validator as it is written, so a line no reader
+   would accept cannot quietly become a fast number.
+3. The clock is one fixed instant for the whole run and every fixture is spread over the same 29 days
+   ending an hour before it, so a horizon boundary cannot move between seeding and measuring. The
+   ledger fixture carries every lifecycle state a reader can report - half its horizons already past,
+   one prediction in five citing events that predate it, one in nine replacing an earlier expectation,
+   one in eleven withdrawn, and a fixed group holding a recorded verdict - because an aggregate read
+   derives a state per record and a single-shape fixture would measure a ledger that does not exist.
+4. Each write sample appends into its own fresh copy of the seeded fixture, so no cell can enlarge or
+   slow the ledger a later cell reads.
+
+### What it reports
+
+- **reads**: eleven columns per row, with the two axes of the cost stated separately. `load` is the
+  ledger's whole-file read, hash, parse and per-record validation; `project` is the ledger derivation
+  over those records with no experience read at all; `status` and `health` are the two ledger-only
+  reads that open no horizon; `horizon` is **one** re-opening of one prediction's horizon against the
+  experience log - the unit an aggregate read multiplies; `show`, `list`, `history`, `summary` and
+  `prompt` are the public store paths, each on a fresh instance, and `warm` is a second `list()` on
+  one instance. When a row moves one axis and holds the other, the run prints the growth factor of
+  `list` between the two rows rather than leaving the reader to subtract them.
+- **writes**: one append in parts - the raw JSONL append with no read and no lock (printed to bound
+  the store-level write, not offered as an operation APEX performs), the uncontended write-lock
+  section, `recordPrediction` with and without citations, the same write through the authorized action
+  layer with its audit record and independent re-read, an evaluation that judges an outcome, an
+  evaluation whose horizon has nothing to judge and therefore writes nothing, and a withdrawal. A
+  "records after" column makes each refusal visible as a total that did not move.
+- **contention**: 1, 2 and 4 **real child processes** (`tests/fixtures/prediction-writer-child.mjs`)
+  appending to one ledger released from a shared start, each timing its own attempt from inside
+  itself. Per configuration: wall time, accepted attempts out of sent, ledger records, distinct record
+  ids after the race, the median/min/max of the attempts, the refusals with their codes, corrupt lines,
+  coordination residue, and the number of stored confidence values - which the run prints because it
+  must be zero.
+- **context**: the lines and characters the bounded expectation section adds, how many standing
+  expectations it names against its binding maximum of 4, the base prompt length and the section's
+  share of the context budget, the characters the one sentence costs when the ledger cannot be read,
+  and a gate control that runs the **same** assembled request with and without the section so the
+  printed difference is the gate rather than the difference between two request lengths. It also
+  times the read behind that section (`promptView()`) at the largest and smallest ledger, which is
+  where the run shows that the section's *size* is fixed while its *cost* is not.
+
+### Interpretation limits
+
+- This script measures the code as it stands. It has no pre-optimization mode, so the before/after
+  table in [Batch AE: Measured](../README.md#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented)
+  is two runs of this script on one machine, and the claim that the two paths return the *same*
+  projection is carried by the AE-8 regression tests, not by a benchmark number.
+- Medians over `repeats` samples in one process on one machine, with nothing else deliberately
+  excluded. Differences of a few milliseconds are noise; read the growth factors and the composition
+  of a read, not one figure.
+- In the reads phase every aggregate column opens one horizon per standing prediction from one snapshot
+  of the experience log, so the whole-file read, the per-record validation and the lifecycle
+  derivation run once per operation while the window slice and pattern detection still grow per
+  prediction. The residual per-expectation cost is the difference between the `list` and `horizon`
+  columns on each row, and it is the reason the main README states a threshold for revisiting indexing.
+- The fixture gives every prediction the same capability (`calc.evaluate`) and evenly spread
+  timestamps, which is the worst case for the per-capability grouping and makes equal-timestamp
+  tie-breaking likelier than in a real ledger. Tie-breaking and undated-record exclusion are covered by
+  tests, not measured here.
+- In the contention phase the wall column includes Node start-up for each child (several hundred
+  milliseconds on this machine) while the attempt columns come from inside each writer and exclude it.
+  The run prints both and never subtracts one from the other. A race figure describes this machine at
+  this moment.
+- The `evaluate` cell can print a per-sample note that the expectation it picked offered no verdict;
+  that is the fixture and the judge disagreeing honestly, not a suppressed refusal.
+- No model is contacted anywhere in this file, and nothing here shows that a recorded expectation
+  improves an answer. It measures what the ledger costs to read, write, race and carry.
+
+This script is not part of `npm test` and no test depends on it.

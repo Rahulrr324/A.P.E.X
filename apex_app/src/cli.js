@@ -49,6 +49,14 @@ Usage:
   node bin/apex.js adaptation approve <id> [--reason <text>]     your decision; the only way a rule takes effect
   node bin/apex.js adaptation reject <id> [--reason <text>]
   node bin/apex.js adaptation retire <id> [--reason <text>]      stop using a rule; its history stays readable
+  node bin/apex.js prediction record --capability <name> --expect <kind> --subject <text> (--expires <iso> | --in-days N) [--supports <id[,id...]>] [--contradicts <id[,id...]>] [--feedback <id[,id...]>] [--pattern <kind[,kind...]>] [--replaces <id[,id...]>]
+  node bin/apex.js prediction list [--limit N] [--capability <name>] [--status <name>]
+  node bin/apex.js prediction show <prediction-id>
+  node bin/apex.js prediction history <prediction-id>
+  node bin/apex.js prediction evaluate <prediction-id>
+  node bin/apex.js prediction invalidate <prediction-id> --reason <text>
+  node bin/apex.js prediction summary [--capability <name>] [--limit N]
+  node bin/apex.js prediction health      record kinds, standing expectations, and anomalies (read-only)
   node bin/apex.js task plan <goal...>   plan a multi-step task (checked; nothing runs yet)
   node bin/apex.js task list
   node bin/apex.js task show <id>
@@ -61,7 +69,7 @@ Usage:
   node bin/apex.js task cancel <id>
   node bin/apex.js queue                 deferred task summaries and their state (read-only)
   node bin/apex.js audit health          operation-log integrity and outcome counts (read-only)
-  node bin/apex.js repair locks          inspect task, queue, memory, knowledge and experience write locks; remove only abandoned takeover tokens
+  node bin/apex.js repair locks          inspect task, queue, memory, knowledge, experience and prediction write locks; remove only abandoned takeover tokens
   node bin/apex.js help
 
 Exit codes:
@@ -128,6 +136,32 @@ each record came from, and "experience health" states the current setting.
 An experience names one audited operation; it is not a fact about you. Feedback is your own
 assessment and is never invented from silence. A rule takes effect only after you approve it
 here, and even then it guides wording, never permission: APEX still asks before any write.
+
+Prediction examples (what you expect to happen, kept apart from what happened):
+  prediction record --capability memory.add --expect success --subject "the corrected record is read back on the next search" --in-days 30
+  prediction record --capability knowledge.search --expect failure --subject "the stale claim still wins" \
+      --expires 2026-12-01T00:00:00.000Z --supports <experience-id> --pattern repeated_failure
+      expectations: success | failure | blocked
+      pattern kinds: repeated_failure | repeated_success | alternating_outcomes
+                   | regression_after_success | improvement_after_correction | recurring_corrections
+      citations: name an experience, a feedback record, or a prediction by the id a read prints, its
+                 first eight characters; APEX stores the whole id it resolves to and refuses a prefix
+                 that matches more than one record
+  prediction list [--status awaiting_evaluation]   what stands, and in which of its states
+  prediction show <prediction-id>       the expectation, the evidence it cited, and what is known now
+  prediction history <prediction-id>    every record about that one expectation, oldest first
+  prediction evaluate <prediction-id>   the ledger compares the expectation to recorded outcomes
+  prediction invalidate <prediction-id> --reason "the condition it assumed no longer holds"
+  prediction summary                    what the verdicts support, their denominator, and their limits
+  prediction health                     the ledger parses, and every withdrawal and verdict names a prediction
+A prediction is an expectation you record, not an observation: nothing about it has happened. It lives
+in predictions.jsonl, separate from experiences.jsonl, so no read of what happened can count it, and it
+never enters the world-state observations. Recording, evaluating, and withdrawing are writes, and they
+are yours alone: a model cannot create, evaluate, or withdraw a prediction, and no prediction authorizes
+an action or approves an adaptation. You give only the expected kind, the horizon, and the evidence you
+relied on; the verdict is computed from recorded outcomes, so "prediction evaluate" reports insufficient
+or unavailable evidence rather than inventing one, and an expired horizon is not a wrong prediction.
+This build stores no confidence in any record and computes none: the reads say it is unavailable.
 
 With a configured model endpoint, any other request is answered from that model,
 using relevant memory and the recent conversation. Without one, APEX says so.
@@ -198,7 +232,15 @@ function parseFlags(args, allowed) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--min-support needs a whole number', 'USAGE');
         flags['min-support'] = Number(v);
         i += 1;
-      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until'].includes(name)) {
+      } else if (name === 'in-days') {
+        // A whole number here, so a mistaken value is a usage error that says what to type rather
+        // than an action refusal about a field the user never meant to write badly. The ledger's own
+        // bound (1 to MAX_PREDICTION_HORIZON_DAYS) is still enforced by the action.
+        const v = args[i + 1];
+        if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--in-days needs a whole number of days', 'USAGE');
+        flags['in-days'] = Number(v);
+        i += 1;
+      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -270,6 +312,7 @@ export function formatResult(res) {
   const writeActions = new Set([
     'memory.add', 'memory.correct', 'memory.save_conclusion', 'knowledge.add', 'knowledge.retract', 'knowledge.resolve',
     'experience.record', 'feedback.record', 'adaptation.derive', 'adaptation.decide', 'adaptation.retire',
+    'prediction.record', 'prediction.evaluate', 'prediction.invalidate',
   ]);
   const refusedBeforeWriting = (s) => s.execution?.error?.code === 'LOCKED'
     || /nothing was written/i.test(s.execution?.error?.message ?? '');
@@ -288,7 +331,7 @@ export function formatResult(res) {
   // cannot help until the path is usable, so say what to check instead of implying that the
   // request itself was wrong.
   if (res.operation.steps.some((s) => s.execution?.status === 'failed'
-    && /^cannot (?:read|write|prepare)\b.*\b(?:memory|knowledge|experienc\w*|conversation|operations|session|tasks?|queue)\b/i.test(s.execution?.error?.message ?? ''))) {
+    && /^cannot (?:read|write|prepare)\b.*\b(?:memory|knowledge|experienc\w*|prediction\w*|conversation|operations|session|tasks?|queue)\b/i.test(s.execution?.error?.message ?? ''))) {
     lines.push('Note:      a data file could not be read or written, so this request was not completed and nothing was confirmed. Check APEX_DATA_DIR, its permissions, and free space; run "node bin/apex.js diagnose" for a read-only report.');
   }
   lines.push('Output:');
@@ -453,6 +496,7 @@ async function repairLocks({ app, out, err }) {
     { label: 'Memory lock', store: app.memory },
     { label: 'Knowledge lock', store: app.knowledge },
     { label: 'Experience lock', store: app.experience },
+    { label: 'Prediction lock', store: app.predictions },
   ];
   let failed = 0;
   for (const target of targets) {
@@ -544,7 +588,7 @@ export async function main(argv, {
       const { flags, rest } = parseFlags(args, ['model']);
       rejectUnexpected(rest, 'status [--model]');
       const diag = await collectDiagnostics(app, { checkModel: Boolean(flags.model) });
-      const { session, conversation, memory, experience, audit, queue, model, filesystem } = diag.subsystems;
+      const { session, conversation, memory, experience, predictions, audit, queue, model, filesystem } = diag.subsystems;
       out(`${APP_NAME} ${APP_STAGE} ${APP_VERSION} (${APP_EXPANSION})`);
       out(`Data directory: ${safeText(diag.dataDir)}`);
       out(sessionLine(session));
@@ -568,6 +612,12 @@ export async function main(argv, {
       }
       if (experience.state !== State.UNAVAILABLE && experience.conflicts.scopes > 0) {
         out(`Experiences: ${experience.conflicts.scopes} capability scope(s) hold approved adaptations that disagree; run "node bin/apex.js adaptation list"`);
+      }
+      // Counted apart from experiences because it answers a different question: what the user
+      // recorded expecting, not what happened. The two live in separate logs for that reason.
+      out(`Predictions: ${predictions.state === State.UNAVAILABLE ? 'unavailable' : `${predictions.predictions} expectation(s) recorded, ${predictions.live} standing, ${predictions.evaluations} evaluated against recorded outcomes`}${skipped(predictions)}`);
+      if (predictions.state !== State.UNAVAILABLE && predictions.predictions > 0) {
+        out('  Expectations the user recorded, not observations, and no confidence is stored in any of them; run "node bin/apex.js prediction list" or "prediction summary".');
       }
       out(`Deferred task summaries: ${queue.count === null ? queue.state : `${queue.count}/${queue.max}${queue.full ? ' (full)' : ''}`}`);
       if (diag.locks?.task?.state === State.CORRUPT || diag.locks?.queue?.state === State.CORRUPT) {
@@ -849,6 +899,91 @@ export async function main(argv, {
         return emit(await app.controller.adaptationRetire({ target: ids[0], reason: flags.reason ?? null }));
       }
       err('usage: adaptation derive|list|approve|reject|retire');
+      return 2;
+    }
+
+    if (command === 'prediction') {
+      const [sub, ...rest] = args;
+      const recordUsage = 'prediction record --capability <name> --expect <kind> --subject <text> (--expires <iso> | --in-days N) [--supports <id[,id...]>] [--contradicts <id[,id...]>] [--feedback <id[,id...]>] [--pattern <kind[,kind...]>] [--replaces <id[,id...]>]';
+      if (sub === 'record') {
+        const { flags, rest: extra } = parseFlags(rest, ['capability', 'expect', 'subject', 'expires', 'in-days', 'supports', 'contradicts', 'feedback', 'pattern', 'replaces']);
+        rejectUnexpected(extra, recordUsage);
+        if (!flags.capability || !flags.expect || !flags.subject) {
+          err(`usage: ${recordUsage}`);
+          return 2;
+        }
+        // One horizon, stated here rather than left to the action, because the two spellings are a
+        // question of what to type: the ledger stores an instant, while "in 30 days" is what the
+        // user means. Accepting both and preferring one would quietly record a bound that was not
+        // the one asked for.
+        if (flags.expires !== undefined && flags['in-days'] !== undefined) {
+          err('usage: give the horizon either as --expires or as --in-days, not both');
+          return 2;
+        }
+        if (flags.expires === undefined && flags['in-days'] === undefined) {
+          err('usage: prediction record needs a horizon: --expires <iso> or --in-days N');
+          return 2;
+        }
+        return emit(await app.controller.predictionRecord({
+          capability: flags.capability,
+          expectation: flags.expect,
+          subject: flags.subject,
+          expiresAt: flags.expires,
+          inDays: flags['in-days'],
+          evidence: {
+            supportingExperienceIds: idList(flags.supports),
+            contradictingExperienceIds: idList(flags.contradicts),
+            feedbackIds: idList(flags.feedback),
+            patternKinds: idList(flags.pattern),
+          },
+          replaces: idList(flags.replaces),
+        }));
+      }
+      if (sub === 'list') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit', 'capability', 'status']);
+        rejectUnexpected(extra, 'prediction list [--limit N] [--capability <name>] [--status <name>]');
+        return emit(await app.controller.predictionList({
+          limit: flags.limit,
+          capability: flags.capability,
+          status: flags.status,
+        }));
+      }
+      if (sub === 'show' || sub === 'history' || sub === 'evaluate') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) {
+          err(`usage: prediction ${sub} <prediction-id>`);
+          return 2;
+        }
+        // "evaluate" is the only one of these three that writes, and it writes a verdict the ledger
+        // computes from recorded outcomes; the command supplies a reference and nothing else.
+        const method = sub === 'show' ? 'predictionShow' : sub === 'history' ? 'predictionHistory' : 'predictionEvaluate';
+        return emit(await app.controller[method]({ target: ids[0] }));
+      }
+      if (sub === 'invalidate') {
+        const { flags, rest: ids } = parseFlags(rest, ['reason']);
+        // The reason is part of the withdrawal, not a comment on it: the ledger keeps it with the
+        // record so a later reader knows why the expectation was withdrawn. The store refuses an
+        // absent reason, and a usage refusal costs no operation record.
+        if (ids.length !== 1 || !flags.reason) {
+          err('usage: prediction invalidate <prediction-id> --reason <text>');
+          return 2;
+        }
+        return emit(await app.controller.predictionInvalidate({ target: ids[0], reason: flags.reason }));
+      }
+      if (sub === 'summary') {
+        const { flags, rest: extra } = parseFlags(rest, ['capability', 'limit']);
+        rejectUnexpected(extra, 'prediction summary [--capability <name>] [--limit N]');
+        return emit(await app.controller.predictionSummary({ capability: flags.capability, limit: flags.limit }));
+      }
+      if (sub === 'health') {
+        rejectUnexpected(parseFlags(rest, []).rest, 'prediction health');
+        // A direct, unaudited read, like `experience health`: exit 0 only when the ledger was fully
+        // inspected and every withdrawal and verdict names a prediction that is in the log.
+        const res = await app.controller.predictionHealth();
+        out(res.display ?? res.output ?? '(none)');
+        return res.health?.attention ? 1 : 0;
+      }
+      err('usage: prediction record|list|show|history|evaluate|invalidate|summary|health');
       return 2;
     }
 

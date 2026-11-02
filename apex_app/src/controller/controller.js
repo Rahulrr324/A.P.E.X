@@ -13,7 +13,7 @@ import { MAX_PROPOSALS, parseModelOutput } from './proposals.js';
 import { executeAction } from '../actions/executor.js';
 import { CONTROL_CHARS, redact, round3, shortId, truncate } from '../util.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
-import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, selectPromptMemory, systemPrompt, adaptationLine, adaptationOmittedNote, MAX_CONTEXT_CHARS } from './context.js';
+import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, selectPromptMemory, systemPrompt, adaptationLine, adaptationOmittedNote, MAX_CONTEXT_CHARS, predictionPromptRelevant } from './context.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret } from '../security/secrets.js';
@@ -119,7 +119,7 @@ function knowledgeResolveRequest(target, choose, reason) {
   return `knowledge resolve [target ${ref(target)}; choose ${ref(choose)}]${reasonNote}`;
 }
 
-const KNOWLEDGE_AUDIT_FIELDS = Object.freeze({
+const AUDIT_TEXT_FIELDS = Object.freeze({
   'knowledge.add': Object.freeze({
     allowed: ['subject', 'relationship', 'object', 'evidence', 'supersedes'],
     text: ['subject', 'relationship', 'object', 'evidence'],
@@ -140,20 +140,73 @@ const KNOWLEDGE_AUDIT_FIELDS = Object.freeze({
     text: ['target', 'choose', 'reason'],
     arrays: [],
   }),
+  // The prediction ledger's commands every take a caller-supplied string the action may refuse as
+  // credential-like - an expectation's subject, a withdrawal reason, a cited record reference - and a
+  // refusal is still audited, so those inputs need the same treatment as a knowledge field.
+  'prediction.record': Object.freeze({
+    allowed: ['capability', 'expectation', 'subject', 'expiresAt', 'inDays', 'evidence', 'replaces'],
+    text: ['capability', 'expectation', 'subject', 'expiresAt'],
+    arrays: ['replaces'],
+    objects: ['evidence'],
+  }),
+  'prediction.evaluate': Object.freeze({
+    allowed: ['target'], text: ['target'], arrays: [], objects: [],
+  }),
+  'prediction.invalidate': Object.freeze({
+    allowed: ['target', 'reason'], text: ['target', 'reason'], arrays: [], objects: [],
+  }),
+  'prediction.list': Object.freeze({
+    allowed: ['limit', 'capability', 'status'], text: ['capability', 'status'], arrays: [], objects: [],
+  }),
+  'prediction.show': Object.freeze({
+    allowed: ['target'], text: ['target'], arrays: [], objects: [],
+  }),
+  'prediction.history': Object.freeze({
+    allowed: ['target'], text: ['target'], arrays: [], objects: [],
+  }),
+  'prediction.summary': Object.freeze({
+    allowed: ['capability', 'limit'], text: ['capability'], arrays: [], objects: [],
+  }),
 });
+
+// A refused value is not evidence about what was refused: every string in a credential-bearing input
+// is replaced, while the field names and the non-text values stay so the audit record still shows
+// which command was attempted. Bounded like `redact`, because a raw input is not yet validated.
+const AUDIT_LEAF_DEPTH = 8;
+
+function stringLeaves(value, depth = 0) {
+  if (depth > AUDIT_LEAF_DEPTH) return [];
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap((entry) => stringLeaves(entry, depth + 1));
+  if (value && typeof value === 'object') return Object.values(value).flatMap((entry) => stringLeaves(entry, depth + 1));
+  return [];
+}
+
+function maskStringLeaves(value, depth = 0) {
+  if (depth > AUDIT_LEAF_DEPTH) return '[truncated]';
+  if (typeof value === 'string') return AUDIT_OMITTED_SECRET;
+  if (Array.isArray(value)) return value.map((entry) => maskStringLeaves(entry, depth + 1));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, maskStringLeaves(entry, depth + 1)]));
+  }
+  return value;
+}
 
 // The audit input is derived from the raw request before validation, so a refused
 // credential-like value must be replaced here rather than copied into the audit log.
-// For knowledge inputs only the declared fields are kept; unexpected fields are
+// For an action with declared fields only those fields are kept; unexpected fields are
 // marked and their values discarded.
 function auditInputFor(name, rawInput) {
-  const fields = KNOWLEDGE_AUDIT_FIELDS[name];
+  const fields = AUDIT_TEXT_FIELDS[name];
   if (fields && rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
     const secretTexts = fields.text.map((key) => rawInput[key]).filter((value) => typeof value === 'string');
     for (const key of fields.arrays) {
       if (Array.isArray(rawInput[key])) {
         secretTexts.push(...rawInput[key].filter((value) => typeof value === 'string'));
       }
+    }
+    for (const key of fields.objects ?? []) {
+      if (rawInput[key] && typeof rawInput[key] === 'object') secretTexts.push(...stringLeaves(rawInput[key]));
     }
     const secret = containsSecret(secretTexts.join('\n'));
     const out = {};
@@ -166,7 +219,9 @@ function auditInputFor(name, rawInput) {
           ? AUDIT_OMITTED_SECRET
           : Array.isArray(value)
             ? value.map((entry) => (typeof entry === 'string' ? AUDIT_OMITTED_SECRET : entry))
-            : value;
+            : (fields.objects ?? []).includes(key) && value && typeof value === 'object'
+              ? maskStringLeaves(value)
+              : value;
     }
     for (const key of Object.keys(rawInput)) {
       if (!fields.allowed.includes(key)) out[key] = '[unexpected field omitted]';
@@ -210,6 +265,7 @@ export class CognitiveController {
     knowledge = null,
     experience = null,
     experienceCapture = CAPTURE_OFF,
+    predictions = null,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -235,6 +291,10 @@ export class CognitiveController {
     // read in one place (autoCaptureDecision), which states its reason, so an unrecognized value
     // is reported as a capture that did not happen rather than silently treated as a different one.
     this.experienceCapture = typeof experienceCapture === 'string' ? experienceCapture : CAPTURE_OFF;
+    // The prediction ledger contributes nothing to a prompt in this batch. It is held here so the
+    // explicit user commands have one entry point, and it is optional: with no store configured the
+    // commands refuse and no prediction is claimed.
+    this.predictions = predictions;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -699,7 +759,18 @@ export class CognitiveController {
         temporal = { available: false, detail: err?.message ?? String(err) };
       }
     }
-    const world = await buildWorldState({ memory: this.memory, knowledge: this.knowledge, now: this.now, limit, temporal });
+    // The ledger is reported beside the temporal section, in its own field, and only as the counts and
+    // standing ids the prediction store publishes. A projection that cannot read it says so; an
+    // expectation never enters the belief lists above.
+    let expectations = null;
+    if (this.predictions) {
+      try {
+        expectations = { available: true, ...(await this.predictions.promptView()) };
+      } catch (err) {
+        expectations = { available: false, detail: err?.message ?? String(err) };
+      }
+    }
+    const world = await buildWorldState({ memory: this.memory, knowledge: this.knowledge, now: this.now, limit, temporal, predictions: expectations });
     const display = renderWorldState(world);
     const status = world.complete ? Outcome.SUCCESS_VERIFIED : Outcome.EXECUTION_FAILED;
     return {
@@ -1181,6 +1252,124 @@ export class CognitiveController {
   // meaning: every recorded experience re-verified against the audit record it names. Nothing is
   // repaired, nothing is approved, and an unreadable store is reported as unreadable, never as an
   // empty one.
+  // ---- prediction operations ---------------------------------------------------
+  // An expectation enters the ledger only through one of these explicit, user-origin commands. There
+  // is no natural-language route and no automatic capture: `route()` never returns a prediction
+  // action, a model plan is refused by `plannable: false`, and the ledger itself refuses a
+  // non-user origin. Each one names a registered action and runs through `runAction`, so
+  // authorization, execution, and independent verification are the same as for any other write.
+
+  #predictionOp(capability) {
+    if (!this.predictions) throw new ValidationError('the prediction ledger is not available in this configuration');
+    return this.#newOp({ capability, origin: 'user', request: capability });
+  }
+
+  async predictionRecord({ capability, expectation, subject, expiresAt, inDays, evidence = {}, replaces = [] } = {}) {
+    const op = this.#predictionOp('prediction.record');
+    const input = { capability, expectation, subject, evidence, replaces };
+    // Exactly one horizon spelling reaches the action: a request that gave both is refused by the
+    // action rather than having one of the two silently preferred.
+    if (expiresAt !== undefined && expiresAt !== null) input.expiresAt = expiresAt;
+    if (inDays !== undefined && inDays !== null) input.inDays = inDays;
+    const step = await this.runAction('prediction.record', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The expectation may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  async predictionList({ limit, capability, status } = {}) {
+    const op = this.#predictionOp('prediction.list');
+    const step = await this.runAction(
+      'prediction.list',
+      { limit: limit ?? 20, capability, status },
+      'user',
+      op.id,
+    );
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async predictionShow({ target } = {}) {
+    const op = this.#predictionOp('prediction.show');
+    const step = await this.runAction('prediction.show', { target }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async predictionHistory({ target } = {}) {
+    const op = this.#predictionOp('prediction.history');
+    const step = await this.runAction('prediction.history', { target }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // The verdict is computed by the ledger from recorded outcomes. This command supplies a target and
+  // nothing else, so there is no path by which the caller - or a model whose answer prompted it -
+  // could assert that an expectation matched.
+  async predictionEvaluate({ target } = {}) {
+    const op = this.#predictionOp('prediction.evaluate');
+    const step = await this.runAction('prediction.evaluate', { target }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'An evaluation may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  async predictionInvalidate({ target, reason } = {}) {
+    const op = this.#predictionOp('prediction.invalidate');
+    const step = await this.runAction('prediction.invalidate', { target, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The withdrawal may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  async predictionSummary({ capability, limit } = {}) {
+    const op = this.#predictionOp('prediction.summary');
+    const step = await this.runAction('prediction.summary', { capability, limit: limit ?? 5 }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // Read-only inspection of the whole ledger: whether it parses, what each record kind counts, and
+  // whether the withdrawals and evaluations still name predictions that exist. Nothing is repaired,
+  // nothing is evaluated, and an unreadable ledger is reported as unreadable rather than as an empty
+  // one - the same distinction the experience and knowledge health reads make.
+  async predictionHealth() {
+    if (!this.predictions) throw new ValidationError('the prediction ledger is not available in this configuration');
+    const health = await this.predictions.health();
+    const lines = ['Prediction ledger health (read-only; derived from stored records; nothing is repaired, evaluated, or deleted)'];
+    if (health.state === 'unavailable') {
+      // Not the same as an empty ledger: the bytes could not be read, so nothing about the records
+      // inside them is known, and a count of zero here would be a claim about data we cannot see.
+      lines.push(`  Ledger:         unavailable (${truncate(health.detail ?? 'the ledger could not be read', 200)})`);
+      lines.push('  Inspection:     incomplete: no record, expectation, withdrawal, or verdict count can be established');
+      lines.push('  Note:           an unreadable ledger is not an empty ledger; check APEX_DATA_DIR, permissions, and free space.');
+    } else if (!health.inspected) {
+      lines.push(`  Ledger:         damaged - ${health.corruptLines} corrupt line(s); inspection incomplete`);
+      lines.push('  Inspection:     no lifecycle state, verdict, or count can be established for a line that does not parse');
+      lines.push('  Note:           the bytes are preserved. A retry of the command that failed is safe only after the log is repaired.');
+    } else {
+      const empty = health.predictions === 0 && health.invalidations === 0 && health.evaluations === 0;
+      lines.push(`  Ledger:         ok - ${empty ? 'empty (no expectations recorded)' : 'fully inspected'}`);
+      lines.push(`  Records:        ${health.records} line(s): ${health.predictions} expectation(s), ${health.invalidations} withdrawal(s), ${health.evaluations} evaluation(s)`);
+      lines.push(`  Standing:       ${health.live} expectation(s) stand, ${health.superseded} superseded by a later one`);
+      lines.push('  Confidence:     none stored in any record - this build supplies no method that could produce one');
+      lines.push(`  Corrupt lines:  ${health.corruptLines}`);
+      for (const c of health.corrupt.slice(0, MAX_HEALTH_SAMPLES)) {
+        lines.push(`    - line ${c.line}: ${truncate(c.reason, 160)}${c.truncatedTail ? ' (final line without a newline)' : ''}`);
+      }
+      if (health.corrupt.length > MAX_HEALTH_SAMPLES) {
+        lines.push(`    - ${health.corrupt.length - MAX_HEALTH_SAMPLES} more corrupt line(s) not shown`);
+      }
+      lines.push(`  Anomalies:      ${health.anomalies.count === 0
+        ? 'none detected among readable records'
+        : `${health.anomalies.count}${health.anomalies.truncated ? ` (first ${health.anomalies.samples.length} shown)` : ''}`}`);
+      for (const sample of health.anomalies.samples) lines.push(`    - ${sample}`);
+    }
+    lines.push('  Note:           a prediction is an expectation, not an observation; an expired horizon is not a wrong prediction; a verdict is computed from recorded outcomes, never supplied; and nothing in this ledger authorizes an action or approves an adaptation.');
+    const display = lines.join('\n');
+    const status = health.inspected && health.anomalies.count === 0 ? Outcome.SUCCESS_VERIFIED : Outcome.EXECUTION_FAILED;
+    return {
+      operation: null,
+      status,
+      decision: classifyDecision({ status }),
+      output: display,
+      display,
+      recorded: false,
+      recordError: null,
+      health,
+    };
+  }
+
   // Stated from the configuration this controller holds, never from what a request claimed.
   #captureSettingLine() {
     return captureSettingPhrase(this.experienceCapture);
@@ -2240,6 +2429,23 @@ export class CognitiveController {
         temporalUnavailable = true;
       }
     }
+    // The user's recorded expectations, read only when the request's own words speak about a
+    // prediction, an expectation, a horizon or a deadline. The gate is deliberately narrower than the
+    // temporal one and is applied before the ledger is opened: an expectation about a later outcome
+    // must not ride into an unrelated answer, where its presence beside recalled records is exactly
+    // how it would come to read as something that happened. What is read is the store's published
+    // prompt shape - aggregate counts and at most a few standing ids, never a subject or reason.
+    const predictionsRelevant = predictionPromptRelevant(request);
+    let predictions = null;
+    let predictionsUnavailable = false;
+    if (this.predictions && predictionsRelevant) {
+      try {
+        predictions = await this.predictions.promptView();
+      } catch (err) {
+        op.errors.push({ stage: 'predictions', code: err.code || 'STORE_ERROR', message: err.message });
+        predictionsUnavailable = true;
+      }
+    }
     const built = buildPrompt({
       request,
       memoryHits: relevant,
@@ -2254,6 +2460,8 @@ export class CognitiveController {
       worldUnavailable,
       temporal,
       temporalUnavailable,
+      predictions,
+      predictionsUnavailable,
       maxChars: this.maxContextChars,
     });
     const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });
@@ -2294,6 +2502,26 @@ export class CognitiveController {
       };
     } else if (temporalUnavailable) {
       op.prompt.temporal = { included: false, unavailable: true };
+    }
+    // The expectation contribution is counts and whether the prompt kept them, including whether the
+    // request made the ledger worth reading at all: "not read" and "read and empty" are different
+    // statements, and an audit record must not let a later reader confuse them.
+    if (predictions) {
+      op.prompt.predictions = {
+        included: built.predictionsIncluded,
+        lines: built.predictionLines,
+        linesTotal: built.predictionLinesTotal,
+        relevant: true,
+        live: predictions.counts?.live ?? 0,
+        evaluated: predictions.counts?.evaluated ?? 0,
+        expired: predictions.counts?.expired ?? 0,
+      };
+    } else if (predictionsUnavailable) {
+      op.prompt.predictions = { included: false, unavailable: true, relevant: true };
+    } else if (predictionsRelevant) {
+      // Reached only when no prediction store is configured for this app, which is a different
+      // statement from an empty ledger and from one that could not be read.
+      op.prompt.predictions = { included: false, relevant: true, noLedgerConfigured: true };
     }
 
     // A conflict stays visible even if the model ignores the in-context markers.

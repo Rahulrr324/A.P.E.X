@@ -43,6 +43,12 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   task: 'one task operation covers several steps with separate outcomes, so a single experience would say less than the task log already says',
   filesystem: 'the read result is other people\'s file content, and no outcome here needs it',
   'no-action': 'the request ran no action, so there is no postcondition that could have been verified',
+  // The prediction ledger's own operations. This is a separate category from `self-bookkeeping`
+  // because the reason is not about filling a log with its own traffic: an experience answers "what
+  // happened", a prediction answers "what I expected", and capturing one of these operations would
+  // put the expectation into the experience log - where the pattern detector and the adaptation
+  // derivation read, and from there into how APEX behaves.
+  expectation: 'it reads or writes the prediction ledger, whose records are expectations about later events; an experience of one would put an expectation into the log that answers what happened, and from there into pattern and adaptation reads',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
@@ -63,6 +69,10 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'experience.patterns': 'read',
   'experience.compare': 'read',
   'adaptation.list': 'read',
+  'prediction.list': 'read',
+  'prediction.show': 'read',
+  'prediction.history': 'read',
+  'prediction.summary': 'read',
   'memory.save_conclusion': 'model-words',
   'model.answer': 'model-words',
   'experience.record': 'self-bookkeeping',
@@ -70,6 +80,9 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'adaptation.derive': 'self-bookkeeping',
   'adaptation.decide': 'self-bookkeeping',
   'adaptation.retire': 'self-bookkeeping',
+  'prediction.record': 'expectation',
+  'prediction.evaluate': 'expectation',
+  'prediction.invalidate': 'expectation',
   'task.plan': 'task',
   'task.run': 'task',
   'task.approve': 'task',

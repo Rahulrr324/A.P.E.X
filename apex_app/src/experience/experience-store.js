@@ -58,6 +58,8 @@ import {
   MIN_PATTERN_EVENTS,
   analyzeTemporal,
   compareTemporalWindows,
+  outcomeClass,
+  parseInstant,
   resolveWindow,
   summarizeTemporal,
 } from './temporal.js';
@@ -708,6 +710,35 @@ function matchesRef(record, ref, extraIds = []) {
   return extraIds.some((value) => value === ref || String(value).startsWith(ref) || shortId(String(value)) === ref);
 }
 
+// The largest id list `evidenceIndex` will resolve in one call. A caller that names more ids than
+// this is refusing to bound its own read, so it is an error rather than a silent truncation.
+const MAX_INDEX_IDS = 100;
+
+function indexIdList(values, label) {
+  if (values === undefined || values === null) return [];
+  if (!Array.isArray(values)) throw new ValidationError(`${label} must be a list of record ids`);
+  if (values.length > MAX_INDEX_IDS) throw new ValidationError(`${label} may name at most ${MAX_INDEX_IDS} records`);
+  const seen = new Set();
+  for (const value of values) {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 64 || CONTROL_CHARS.test(value)) {
+      throw new ValidationError(`${label} has an invalid id`);
+    }
+    seen.add(value.trim());
+  }
+  return [...seen].sort();
+}
+
+// When an event happened, and which field said so. Same precedence the temporal view uses: a finished
+// operation is timed by its completion, then its request, then its record. `source` is reported so a
+// reader can see which of the three a timestamp came from.
+function occurredAtOf(record) {
+  for (const source of ['finishedAt', 'requestedAt', 'createdAt']) {
+    const ms = parseInstant(record?.[source]);
+    if (ms !== null) return { ms, source };
+  }
+  return { ms: null, source: null };
+}
+
 // ---- ExperienceStore --------------------------------------------------------
 
 export class ExperienceStore {
@@ -1112,6 +1143,16 @@ export class ExperienceStore {
     return experiences.filter((r) => matchesRef(r, p, [r.operationId])).reverse();
   }
 
+  // The feedback counterpart to `findByPrefix`, matching a feedback id only and never the experience
+  // it describes, so a reference cannot change which record is meant. It exists because a prediction
+  // may cite a recorded assessment, and the id a reader prints for one is its first eight characters.
+  async findFeedbackByPrefix(prefix) {
+    const p = typeof prefix === 'string' ? prefix.trim() : '';
+    if (p.length === 0) return [];
+    const records = await this.#loadComplete();
+    return deriveStore(records).index.feedback.filter((r) => matchesRef(r, p)).reverse();
+  }
+
   // Read-only lifecycle view for one experience: its current feedback and the full history, so a
   // correction never hides what the user said first, even when the two disagree.
   async feedbackFor(target, { limit = 20 } = {}) {
@@ -1197,6 +1238,14 @@ export class ExperienceStore {
     };
   }
 
+  // The derived log, read once, for a caller that must answer questions about many windows inside one
+  // operation. Each window is still sliced, scoped and pattern-detected on its own; sharing this
+  // removes only the repeated file read, hash and per-record validation, and it makes the whole
+  // operation describe one instant of the log instead of one instant per window.
+  async evidenceSnapshot() {
+    return this.#temporalSource();
+  }
+
   async temporalAnalysis({ since, until, days, capability = null, limit = MAX_TEMPORAL_EVENTS, minEvents = MIN_PATTERN_EVENTS, maxPatterns = MAX_PATTERNS } = {}) {
     const source = await this.#temporalSource();
     const window = resolveWindow({ since, until, days, now: this.now() });
@@ -1233,6 +1282,87 @@ export class ExperienceStore {
   async temporalSummary({ since, until, days, capability = null, limit = MAX_TEMPORAL_EVENTS } = {}) {
     const analysis = await this.temporalAnalysis({ since, until, days, capability, limit });
     return summarizeTemporal({ view: analysis.view, patterns: analysis.patterns, adaptations: analysis.adaptations });
+  }
+
+  // One authoritative read of the experience log that answers two questions at once, for a caller
+  // that must be able to prove what a reference points at: which dated experiences fall in this
+  // window (ordered, scoped, bounded, and marked superseded), and whether each named id exists.
+  // Read-only and derived - it writes nothing and knows nothing about why it is asked. A corrupt
+  // log throws rather than returning a partial index, so an unresolved id always means the record
+  // is absent and never that a line could not be read.
+  //
+  // `snapshot` is the derived log from `evidenceSnapshot()`, for a caller that reads many windows of
+  // one operation. It is not a cache: nothing here keeps it, and a caller that holds it across two
+  // operations is holding a point-in-time view by its own choice.
+  async evidenceIndex({ experienceIds = [], feedbackIds = [], since, until, capability = null, limit = MAX_TEMPORAL_EVENTS, snapshot = null } = {}) {
+    if (typeof since !== 'string' || typeof until !== 'string') {
+      throw new ValidationError('evidenceIndex needs explicit since and until bounds');
+    }
+    const wantedExperiences = indexIdList(experienceIds, 'experience ids');
+    const wantedFeedback = indexIdList(feedbackIds, 'feedback ids');
+    const source = snapshot ?? await this.#temporalSource();
+    const window = resolveWindow({ since, until, now: this.now() });
+    const analysis = analyzeTemporal({ ...source, window, capability, limit });
+    const experienceById = new Map(source.experiences.map((record) => [record.id, record]));
+    const feedbackById = new Map(source.feedback.map((record) => [record.id, record]));
+    const resolvedExperiences = [];
+    const unresolvedExperienceIds = [];
+    for (const id of wantedExperiences) {
+      const record = experienceById.get(id);
+      if (!record) {
+        unresolvedExperienceIds.push(id);
+        continue;
+      }
+      const occurred = occurredAtOf(record);
+      resolvedExperiences.push({
+        id: record.id,
+        operationId: record.operationId,
+        capability: record.capability ?? null,
+        outcome: record.outcome ?? null,
+        outcomeClass: outcomeClass(record.outcome),
+        occurredAt: occurred.ms === null ? null : new Date(occurred.ms).toISOString(),
+        timeSource: occurred.source,
+        undated: occurred.ms === null,
+        createdAt: record.createdAt ?? null,
+        active: record.active === true,
+        superseded: record.superseded === true,
+      });
+    }
+    const resolvedFeedback = [];
+    const unresolvedFeedbackIds = [];
+    for (const id of wantedFeedback) {
+      const record = feedbackById.get(id);
+      if (!record) {
+        unresolvedFeedbackIds.push(id);
+        continue;
+      }
+      resolvedFeedback.push({
+        id: record.id,
+        experienceId: record.experienceId,
+        assessment: record.assessment,
+        createdAt: record.createdAt ?? null,
+        experiencePresent: experienceById.has(record.experienceId),
+        experienceSuperseded: experienceById.get(record.experienceId)?.superseded === true,
+      });
+    }
+    return {
+      window: { since: window.since, until: window.until },
+      capability,
+      events: analysis.view.events,
+      counts: {
+        storedExperiences: source.experiences.length,
+        storedFeedback: source.feedback.length,
+        inWindow: analysis.view.counts.inWindow,
+        shown: analysis.view.counts.shown,
+        undated: analysis.view.counts.undated,
+      },
+      truncated: analysis.view.counts.inWindow > analysis.view.counts.shown,
+      patternKinds: analysis.patterns.patterns.map((pattern) => pattern.kind),
+      experiences: resolvedExperiences,
+      unresolvedExperienceIds,
+      feedback: resolvedFeedback,
+      unresolvedFeedbackIds,
+    };
   }
 
   // Independent verification of one experience against the audit log it names: re-read that record,

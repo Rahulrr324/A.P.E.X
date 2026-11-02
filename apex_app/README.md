@@ -30,14 +30,15 @@ from a milestone number or a passing build.
 | Category | Status | Evidence |
 |---|---|---|
 | Runnable application | Implemented: the CLI in `bin/apex.js` / `src/cli.js`, the controller pipeline, memory, knowledge, audit, tasks, diagnostics. | `npm test` and the walkthrough in the [Commands](#commands) table. |
-| Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `memory health`, `calc`, `status`, `knowledge add/retract/resolve/history/health/list/search/show`, `audit health`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `knowledge-lifecycle.test.js`, `knowledge-health.test.js`, `knowledge-resolution.test.js`, `store-health.test.js`, `tasks.test.js`, `cli-workflow.test.js`. A model is never consulted for these. |
+| Deterministic capabilities (no model) | Implemented and independently verified: `remember`, `recall`, `list memory`, `memory correct`, `memory health`, `calc`, `status`, `knowledge add/retract/resolve/history/health/list/search/show`, `audit health`, `task plan/run/resume/approve/retry/cancel`, `queue`, `repair locks`, `diagnose`, `experience timeline/trends/patterns/compare`, `prediction record/list/show/history/evaluate/invalidate/summary/health`. | `actions.test.js`, `memory.test.js`, `knowledge.test.js`, `knowledge-lifecycle.test.js`, `knowledge-health.test.js`, `knowledge-resolution.test.js`, `store-health.test.js`, `tasks.test.js`, `cli-workflow.test.js`, `experience-*.test.js`, `prediction-*.test.js`. A model is never consulted for these. |
 | Filesystem inspection | Implemented only when `APEX_FILESYSTEM_ROOT` is set: bounded, read-only, single-root listing and reading. | `filesystem.test.js`, `tasks-filesystem.test.js`. |
 | Model gateway protocol handling | Implemented and **stub-tested**: request/response shapes, failure classification, retries, timeouts, and model-name mismatch against local stand-in servers that copy the documented OpenAI-compatible and Ollama shapes. | `gateway.test.js`, `model-workflow.test.js`. Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model. |
 | Real-model behaviour | **Observed outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on one Windows machine. One bounded request on 2026-10-31 completed through APEX in about 105 s; a bounded four-request benchmark the same day recorded 37.7-53.1 s per request, with 3.0-3.8 backend-reported tokens/s. Every answer was reported as unverified. Measurements and limits are in [Optional: a model endpoint you configure](#optional-a-model-endpoint-you-configure). | A dated historical observation, not an active setup instruction; no automated regression test. |
 | Epistemic world-state projection | Implemented as a bounded, read-only projection of what the stores hold: beliefs classified by provenance (`user_asserted` vs `unverified_model`), knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. It is a view derived at read time, not a world model: it persists nothing, calls no model, and decides nothing. A model-path answer also receives a bounded, counts-only view of it, so the model is told what the stores hold beyond the records retrieval happened to show. | `world-state.test.js`, `world-context.test.js`, `src/world/world-state.js`, the `world` command, and [World state](#world-state-the-read-only-epistemic-projection). Measured read cost is in [Benchmarks](#benchmarks). |
+| Prediction ledger and outcome evaluation | Implemented as an append-only record of expectations **the user states**, with a lifecycle and verdicts derived at read time from recorded outcomes: `prediction record/list/show/history/evaluate/invalidate/summary/health`. It is not a predictor: nothing estimates a future outcome, no record carries a confidence or probability, no prediction authorizes an action or an adaptation, and a model cannot write one. An expired horizon is not a wrong prediction, and a rate below 20 recorded evaluations is withheld rather than printed. | `prediction-store.test.js`, `prediction-lifecycle.test.js`, `prediction-integration.test.js`, `prediction-context.test.js`, `prediction-adversarial.test.js`, `prediction-concurrency.test.js` (128 tests, real child processes). See [Batch AE](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented); measured read cost is in [Benchmarks](#benchmarks). |
 | `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
 | Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
-| World model, general planner, persistent learning, voice, UI | **Not implemented.** A world model would hold entities, events, time, and causal state of its own; the projection above only re-reads memory and knowledge and reports what they already contain. The task planner is bounded and explicit; operation logs are not learning. | The scope paragraphs in this README, [World state](#world-state-the-read-only-epistemic-projection), and [Future learning interface](#future-learning-interface-not-implemented). |
+| World model, general planner, persistent learning, voice, UI | **Not implemented.** A world model would hold entities, events, time, and causal state of its own; the projection above only re-reads the stores - memory, knowledge, the experience log, and the prediction ledger - and reports what they already contain, keeping an expectation in a section of its own rather than among the beliefs. The task planner is bounded and explicit; operation logs are not learning. | The scope paragraphs in this README, [World state](#world-state-the-read-only-epistemic-projection), and [Future learning interface](#future-learning-interface-not-implemented). |
 
 The model path depends entirely on a backend you configure yourself. Without one,
 APEX answers deterministic requests and reports `model_unavailable` for everything
@@ -185,6 +186,11 @@ byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
 | `world [--limit N]` | Read-only epistemic projection of the stores: beliefs separated by provenance, knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. `N` is 1-50 beliefs shown (default 20). Derived at read time: it persists nothing, repairs nothing, never calls a model, and writes no audit record. Private memory is marked and never reaches the model path. A bounded, counts-only view of the same projection is derived automatically for every model-path answer; `world` itself calls no model and writes nothing. Exit 0 only when both stores were fully inspected and nothing contradicts itself; exit 1 is a report, not a failure of the read. See [World state](#world-state-the-read-only-epistemic-projection). |
 | `experience timeline\|trends\|patterns` `[--since <date>] [--until <date>] [--days N] [--capability <name>] [--limit N]` | Read-only temporal views of recorded experiences: ordered events in a window, per-capability outcome trends, and detected outcome patterns. Derived at read time from the experience log; reads no audit file, calls no model, and changes no store - the command's own operation record is the only audit entry, as for every command. A malformed date is rejected before the read (`input_rejected`, exit 1); a window whose start is after its end is refused by the engine (exit 1). See [Batch AC](#batch-ac-temporal-experience-and-outcome-tracking-as-implemented). |
 | `experience compare [--a-since <date>] [--a-until <date>] [--b-since <date>] [--b-until <date>] [--days N] [--capability <name>]` | Read-only comparison of two time windows: counts, outcome classes, success rate over completed attempts, feedback, and per-capability changes. With no window A given, A is the same-length period immediately before B. A difference means the records differ, not that anything caused anything. |
+| `prediction record --capability <name> --expect success\|failure\|blocked --subject <text> (--expires <date> \| --in-days N) [--supports <id,...>] [--contradicts <id,...>] [--feedback <id,...>] [--pattern <kind,...>] [--replaces <id,...>]` | Records one expectation **you** hold about a later outcome of a named capability, with an explicit horizon and the recorded events it is based on. User origin only: a model proposal naming this command is denied. Cited ids must resolve in the experience log and must predate the moment of recording; nothing is written when they do not. The record stores no confidence and can store no state or verdict. See [Batch AE](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented). |
+| `prediction list [--limit N] [--capability <name>] [--status <name>]`, `prediction show <id>`, `prediction history <id>`, `prediction summary [--capability <name>]` | Read-only views of the ledger: standing expectations and their derived state, one expectation with its evidence lineage, every record that names one expectation (oldest first), and the aggregate counts with each rate's denominator named and its exclusions counted. Derived at read time; calls no model; the only audit entry is the command's own operation record. |
+| `prediction evaluate <id>` | Compares one expectation with the outcomes recorded inside its horizon and stores the verdict **only** when those records establish one. Otherwise it reports `insufficient_evidence`, `outcome_unavailable`, `expired`, `invalidated`, `superseded`, `already_evaluated`, or `evidence_unavailable` and writes nothing. A verdict already stored is never rewritten. User origin only. |
+| `prediction invalidate <id> --reason <text>` | Withdraws one expectation, keeping its reason and provenance in the log. The expectation is not deleted and stays auditable. User origin only. |
+| `prediction health` | Read-only ledger report: kind counts, standing versus superseded expectations, corrupt lines, and anomalies (a replacement that names nothing, a replacement circle, a reused record id), each with bounded samples. Never calls a model, writes no audit record, repairs nothing. Exit 0 only when the ledger was fully inspected and nothing requires attention. |
 | `new` | Starts a new conversation session. Memory is kept; earlier turns are no longer sent to the model. |
 | `history [--limit N]` | Lists recent operation records. |
 | `task plan <goal>` | Plans a multi-step task and stores it. Runs nothing. See [Tasks](#tasks). |
@@ -736,6 +742,9 @@ src/actions/
   executor.js         input validation + action body; reports what happened only
   calc.js             arithmetic: recursive-descent executor, shunting-yard verifier
   builtin.js          the built-in actions (input schema, permission, verify)
+  knowledge-actions.js the knowledge actions: add, retract, resolve, list, search
+  experience-actions.js the experience, feedback and adaptation actions
+  prediction-actions.js the prediction ledger actions: three user-only writes and four reads, each with an independent re-read verify
   world-actions.js    the user-only `world.state` read: projection, audit-minimal result, independent re-read verify
 src/verify/
   verifier.js         separate verifier: decides whether a postcondition holds
@@ -745,8 +754,16 @@ src/memory/
   conversation-store.js  conversation turns with origin; credential-like text is never stored
 src/knowledge/
   knowledge-store.js  triples, validation, conflict detection, lifecycle events (retraction, resolution), store-wide health, one-read `projectionRead`
+src/experience/
+  experience-store.js append-only `experiences.jsonl`: audited events, user feedback, adaptation records and their lifecycle; `evidenceSnapshot` / `evidenceIndex` for a horizon read
+  derivation.js       the deterministic adaptation derivation: repeated user corrections in one capability scope yield one candidate rule, carrying the user's own words; approves nothing
+  capture.js          the bounded automatic capture on the finalization path: an operation APEX proved may be recorded as an experience, and nothing else
+  temporal.js         the read-time temporal engine: ordering, windows, outcome classes, detected patterns; imports no store
+src/prediction/
+  prediction-store.js  append-only `predictions.jsonl` with its own write lock: validated appends, citation resolution against the experience log, list/show/history/calibration/prompt/health reads
+  prediction-engine.js the record validator, the lifecycle and lineage derivation, the evaluation rule, calibration counts, and the bounded audit and prompt shapes; no state is stored
 src/world/
-  world-state.js      read-only epistemic projection of what memory and knowledge already hold; owns no state, writes nothing, one authoritative read per store; `worldPromptLines` renders the counts-only view a model prompt may carry
+  world-state.js      read-only epistemic projection of what memory and knowledge already hold, with a separate bounded temporal section and an `Expectations` section that never joins the beliefs; owns no state, writes nothing, one authoritative read per store; `worldPromptLines` renders the counts-only view a model prompt may carry
 src/filesystem/
   path.js             absolute path validation: no traversal, no drive root, no UNC
   actions.js          bounded, read-only listing and reading
@@ -862,6 +879,10 @@ and measures the projection's read cost against synthetic fixtures, or the write
 needs no model: it measures the experience store's reads, writes, context contribution, and
 cost against the memory and knowledge stores at matched record counts
 ([Benchmarks](#benchmarks)).
+`benchmarks/run-prediction-benchmark.mjs` is outside the suite for the same reason and needs no
+model: it measures the prediction ledger's reads against both axes (ledger size and experience-log
+size), its writes in parts, real child-process contention on the prediction lock, and the context
+contribution of the bounded expectation section ([Batch AE](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented)).
 
 | Acceptance test | Where |
 |---|---|
@@ -1005,6 +1026,44 @@ questions that must change nothing).
   alone, is dropped line by line before any retrieved record when the budget is tight, and its
   omission is stated rather than silent. It writes nothing and can never turn a pattern into a
   stored fact or a rule.
+- **The prediction ledger records expectations; it does not predict.** `prediction record` stores what
+  you said you expect, and `prediction evaluate` compares it with outcomes the experience log already
+  holds. Nothing estimates a future outcome, and nothing evaluates on its own: a verdict exists only
+  after the user runs the evaluation for that one expectation. No record carries a confidence,
+  probability, or score in this build - `confidence` is the explicit `null` that says no value is
+  available, a caller that supplies one is refused, and a number that appears in a stored line is
+  reported as damage because no method here could have produced it. Calibration therefore has nothing
+  to calibrate against, and a match rate is printed only over at least 20 recorded evaluations, always
+  with its denominator named and every excluded kind counted. An expectation whose horizon has passed
+  with no outcome evidence is **expired**, which is not a wrong prediction and never enters a rate.
+  Capability scope is exact-name, so an expectation about a capability that is later renamed is not
+  matched to the renamed records; and the ledger is append-only, so every aggregate read re-reads all
+  of it. See [Batch AE](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented).
+- **An aggregate prediction read still costs one horizon slice per standing expectation, on top of one
+  whole-file read of the experience log.** Batch AE-08 removed the repeated read itself: an aggregate
+  projection now takes one snapshot of `experiences.jsonl` per operation and slices every horizon out
+  of it, so 178 standing expectations cost one file read, hash, validation pass and lifecycle
+  derivation instead of 178 (`prediction list` on a 200-record ledger over 1,000 events: 3,931.39 ms
+  before, 1,449.04 ms after; the same read on 5,000 events: 4,661.22 ms before, 1,591.93 ms after).
+  What remains is measured: about 7.8 ms per standing expectation for the window slice and pattern
+  detection, and one whole-file read that grows with the log (8.80 ms at 100 events, 317.54 ms at
+  5,000). No persisted index is added, and no horizon read is silently bounded, because a count that
+  omits part of the log is a false number rather than a cheap one. The stated threshold for revisiting
+  that is in [Batch AE - Measured](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented).
+- **A refused credential-like value still reaches the audit log on the experience and adaptation
+  commands.** The prediction surface was fixed in Batch AE: an input field map in `controller.js`
+  masks every string of a refused action input before it is audited. The same defect is **demonstrated
+  and unrepaired** for the three earlier write commands, because they fall through to the generic
+  `redact()`, which omits only a field named `content`:
+  `experience record <op-id> --subject "api_key=<secret>"`, `feedback record <exp-id> --assessment
+  incorrect --guidance "api_key=<secret>"`, and `adaptation approve <id> --reason "token=<secret>"`
+  each refuse the value - nothing is stored in the experience log - and each still writes it verbatim
+  into `operations.jsonl`, confirmed on this machine on 2026-11-02 in a temporary data directory. The
+  fix is to extend the declared field map to those actions and give them the same regression test; it
+  is a change to Batch Z's audit path, so it was not widened into this batch. Treat
+  `operations.jsonl` as containing what was typed, and delete the file only knowing that history is
+  lost. `prediction record`, `prediction invalidate`, the `knowledge` commands and `memory` writes are
+  the surfaces where the masking is in place and tested.
 - **Read cost grows with the whole store, not with the window.** Each read loads every
   record and runs the integrity scan before it takes its 100-record projection. Batch U
   removed duplicate reads and made an unchanged repeat read skip parsing, so at 20,000
@@ -2411,7 +2470,8 @@ lists; replaced experiences and superseded feedback are excluded from pattern ev
 exclusion is stated; `insufficient_evidence` carries the query's capability scope; success rate is
 computed over completed attempts only; a zone-less timestamp is read as UTC so one stored text has
 one instant on every machine; and the tests below include adversarial histories as well as the
-ordinary ones. No predictive stage was added.
+ordinary ones. No predictive stage was added by either of those batches; Batch AE, below, is the
+batch that adds an expectation ledger, and it adds it as a separate store.
 
 ### What a query distinguishes
 
@@ -2426,12 +2486,12 @@ ordinary ones. No predictive stage was added.
 
 These are **historical observations**. A **detected pattern** is a deterministic statement about the
 order of those observations. There is no **hypothesis** stage in the implementation: nothing combines
-patterns into a candidate belief about the user or the world. There is no **prediction** stage
-either: APEX does not estimate a future outcome, and no record of a predicted outcome exists. If a
-future batch added one, it would have to be a separate record carrying prediction time, the expected
-outcome, its support, its uncertainty and, later, the actual result - and it could never be stored as,
-or later read back as, a historical observation. A prediction is not implemented, and a pattern is
-never presented as one.
+patterns into a candidate belief about the user or the world. Batch AC added no prediction stage, and
+Batch AD did not add one either: what is described here estimates nothing about a future outcome and
+holds no record of one. (Batch AE, below, is the batch that adds an expectation ledger - a separate
+append-only log, a separate record kind, and a reader that cannot present an expectation as something
+that happened. Nothing in this section changed: the temporal engine reads `experiences.jsonl` only and
+still cannot see a prediction.) A pattern is never presented as a prediction.
 
 ### Commands
 
@@ -2590,12 +2650,427 @@ assembled application, proves the read paths write nothing, checks restart stabi
 verification against a concurrent append, and covers the world-state and prompt integration. All
 three are part of `npm test`.
 
+## Batch AE: prediction ledger, hypothesis lifecycle and outcome evaluation (as implemented)
+
+Batch AE gives APEX somewhere to write down what the user expects to happen, keep the recorded
+events that expectation was based on, and compare it later against the outcomes the experience log
+actually holds. It is infrastructure, not a predictor: nothing in this batch estimates a future
+outcome, nothing decides what should be expected, and no stored value expresses how likely anything
+is. An expectation is entered by the user, judged only by a deterministic reader, and never allowed
+to turn into any of the records that sit beside it.
+
+The point is to keep three questions separately answerable: **what happened** (the experience log),
+**what did I expect would happen** (`predictions.jsonl`), and **what evidence established the actual
+outcome** (an evaluation record naming the experience it decided from). No read merges them, and no
+record of one kind can be produced by a read of another.
+
+### What is kept apart
+
+| Kind of information | Where it lives | Who can write it | What it must never be read as |
+|---|---|---|---|
+| Observation | `experiences.jsonl` (Batch Z-AB) | the capture path and the user | an expectation |
+| Explicit user feedback | `experiences.jsonl`, feedback records | the user, about one named event | an outcome of anything else |
+| Derived pattern | no store: derived at read time by `src/experience/temporal.js` | nobody; it is a read | a cause, an adaptation, or a prediction |
+| Hypothesis (a candidate belief derived from patterns) | **not implemented** | — | — |
+| Prediction | `predictions.jsonl`, record kind `prediction` | **user origin only** | an observation, a verified outcome, or an authorization |
+| Evaluation | `predictions.jsonl`, record kind `prediction_evaluation` | user origin, and only as a verdict the records support | a re-write of the experience it cites |
+| Withdrawal | `predictions.jsonl`, record kind `prediction_invalidation` | the user | a deletion; the expectation stays in the log |
+
+**Prediction versus observation.** The prediction ledger is a different file with its own record
+kinds, and the experience store's kind list does not contain a prediction. A temporal query, a
+`world` belief, and retrieval all read `experiences.jsonl` and therefore cannot see a prediction at
+all; a prediction read cannot write an experience. Nothing converts an expectation into an event,
+and an expectation's own reader states that it is "an expectation about a later event, not evidence
+that anything happened".
+
+**Prediction versus temporal pattern.** A pattern is derived from outcomes already recorded; a
+prediction is stated before any outcome exists. A prediction may *cite* pattern kinds, and the
+citation is read as a description of the order of past records - never as support for the future. The
+reader recomputes which cited kinds the current log still detects and which it no longer does, so a
+prediction cannot keep a pattern alive by asserting it.
+
+**Prediction versus adaptation.** No prediction, evaluation, or withdrawal can create, approve,
+retire, or modify a behaviour rule. That path is unchanged from Batch Z: `adaptation derive` from the
+user's corrective feedback plus an explicit user decision. Each stored record carries
+`no_authorization` - "grants no permission, approval, or adaptation to anything" - in its own
+limitation list.
+
+**There is still no hypothesis stage,** and this batch does not add one: nothing combines detected
+patterns into a candidate belief about the user or the world. The lifecycle implemented here is the
+lifecycle of an expectation the user states; the word "hypothesis" in the batch title names that
+lifecycle's owner (a person who formed the expectation), not a new record type.
+
+### Storage decision
+
+Predictions live in their own append-only log, `<dataDir>/predictions.jsonl`, with a `WriterLock` on
+`predictions.jsonl.lock` - the same `JsonlStore` + lock protocol as every other persistent store
+(Batch W). Three reasons decided this, in order of weight:
+
+1. **The separation has to be physical.** `ExperienceStore` validates a *closed* kind list. Appending
+   prediction kinds there would require every reader of that log - retrieval, the temporal engine,
+   the world-state projection, health inspection, and the write path's own re-validation - to grow a
+   "skip prediction records" clause. One clause missed in a future batch silently turns an
+   expectation into an event, which is exactly the failure this batch exists to prevent. A separate
+   file makes "a prediction is not an observation" a fact about the bytes rather than a convention
+   about a field.
+2. **The lifecycle semantics differ in kind.** An experience is immutable evidence about something
+   that already happened; a prediction is a statement about something that has not, and it can be
+   withdrawn, replaced, or judged. Sharing one log would mean one validator, one health report and
+   one set of anomaly rules governing both.
+3. **Cost isolation.** A prediction read opens the experience log only for the horizons it needs. The
+   two logs grow on different axes (see [Measured](#measured)), and keeping them in separate files
+   keeps a large ledger from slowing every ordinary experience query.
+
+The alternative - an `experiences.jsonl` kind plus reader clauses - was rejected for reason 1. Nothing
+else changed: no existing store, schema, or command lost or gained a field.
+
+### The record, and why it carries no confidence
+
+Every `prediction` record the store writes:
+
+| Field | Rule |
+|---|---|
+| `schema`, `kind`, `id` | `1`, `prediction`, a fresh UUID; a repeated id in the log is damage and every read and write refuses the ledger. |
+| `createdAt` | the store's clock, at record time. |
+| `capability` | a real capability name (the same scopable form every other store accepts, 1-64 characters, no control characters). Free text, blank, and `none` are refused, because an unscoped expectation cannot be evaluated against anything. |
+| `expectation` | one of `success`, `failure`, `blocked` - the three outcome classes the experience log can establish. There is no `improved` or `succeeded_eventually` for a reader to guess at. |
+| `subject` | the user's own words, 1-300 characters. Never copied into the audit record and never sent to a model. |
+| `expiresAt` | an explicit horizon, 1 ms to 366 days after `createdAt`. No default horizon: a command that gives none is refused. |
+| `confidence` | **always `null`**, with `confidenceReason`: "this build records no confidence: no defensible method exists for supplying one, so none is invented". A caller that supplies one is refused with an error naming the field; a number that appears in a stored record is reported as damage, because no method in this build could have produced it. |
+| `evidence` | `supportingExperienceIds`, `contradictingExperienceIds`, `feedbackIds` (20 ids each at most) and `patternKinds`. Also a place `confidence`, `probability` and `score` are refused rather than dropped. |
+| `evidenceBasis` | `cited` or `none_cited`, derived from the citation lists and then checked, so a record cannot claim support it does not name. |
+| `limitations` | recomputed from the record's own canonical fields by every reader. Storing them means the statement travels with the record; deriving them means the author cannot choose a weaker one: `expectation_not_observation`, `confidence_unavailable`, `no_cited_evidence`, `pattern_kinds_descriptive`, `expiry_not_failure`, `no_authorization`. |
+| `provenance` | per kind: `user_recorded` / `user_confirmed` for a prediction, `user_retirement` / `user_confirmed` for a withdrawal, `user_authorized_derivation` / `user_confirmed` for an evaluation, plus the operation id and a bounded (200-character) context. Not supplyable by a caller. |
+| `replaces` | up to 10 predictions this one retires. Optional; the replaced records stay readable. |
+
+`probability`, `score`, `weight`, `likelihood`, `certainty`, `status`, `evaluation`, `outcome` and
+`outcomeIds` are refused on write and counted as damage on read. The last four because a reader
+derives them: a record that stored a state could disagree with the ledger it was read from.
+
+### Lifecycle
+
+State is **never stored**. `resolveStatus` derives it at read time from the records that exist, in
+this precedence order - the first rule that holds is the state a reader reports:
+
+| State | Precise rule | What it does not mean |
+|---|---|---|
+| `invalidated` | a `prediction_invalidation` record names this prediction. | deletion: the expectation, its evidence and its reason all stay in the log, and `prediction history` lists the withdrawal. |
+| `superseded` | this expectation is named by another's `replaces`, or is inside a replacement circle. | wrongness. Its verdict, if one was recorded, stays with the record and is still readable. |
+| `evaluated` | a `prediction_evaluation` record names it and it has not been superseded. | that anything is verified about the world; it means the ledger holds a verdict computed from records. |
+| `awaiting_evaluation` | outcome evidence that could settle it exists inside the horizon, and no evaluation record was written. | a pending failure. It is an unrecorded judgement. |
+| `expired` | the horizon passed with nothing inside it that establishes an outcome. | **a wrong prediction.** Expiry is never counted as contradicted and never as matched. |
+| `recorded` | still inside its horizon with nothing establishing it. | anything at all about the future. |
+
+`superseded` outranks `evaluated` on purpose: the two derived fields about one record must not
+disagree, and a state that counted toward `evaluated` while no denominator includes it would
+overstate how much of the ledger was scored. A prediction whose horizon has not started yet is
+`recorded` with an explicit "its horizon has not started yet" reason.
+
+Replacement is auditable in both directions (`replaces` forward, `supersededBy` from the reader) and
+has one disclosed edge case: a cycle of `replaces` links retires every member and leaves none
+standing, so the ledger **names the circle** instead of choosing a winner, and reports it as an
+anomaly. Likewise a `replaces` that names a prediction never written is a dangling reference: it is
+reported, and `live` / `superseded` are counted over the records that exist rather than by subtracting
+the retirement set.
+
+### Evidence lineage
+
+Four kinds of evidence, kept in four places, because conflating them is the classic way a prediction
+becomes unfalsifiable:
+
+| Lineage | Where it comes from | Guarantee |
+|---|---|---|
+| Available at creation | the ids the user cited in the command, stored in the record. | validated against the real records at write time; see below. |
+| Added after the prediction | derived at read time from experience records dated after `createdAt` and inside the horizon, split into supporting / contradicting / excluded with reasons. | carries the note "derived at read time from records dated after the prediction; never stored as original support", and cannot be written: the record's own evidence lists are fixed when it is appended. No retrospective leakage. |
+| Contradictory | two lists: the ids the user cited as contradicting, and the in-horizon records whose outcome class differs from the expectation. | never merged into the supporting list; both counts are reported. |
+| Outcome evidence | the evaluation record's `outcomeExperienceIds` and its single `decidingExperienceId`. | present only when an evaluation was recorded; otherwise the reader states the window it would have judged and what is missing. |
+
+Citation validation is the reason a prediction cannot be built on an event nothing can confirm. Each
+cited id must resolve in the experience log - exact UUID, or the id prefix a read prints (a prefix
+that matches two records is refused, not chosen). A cited record dated *after* the moment the
+expectation is being recorded is refused: what had not happened yet cannot be what it was based on.
+A citation that does not resolve is a refusal, not a dropped field. And an unavailable evidence read
+is reported as unavailable: `evidence_unavailable` (the store could not be read) is a different
+statement from `outcome_unavailable` (nothing recorded establishes it either way), and neither is
+reported as "no evidence exists".
+
+### Evaluation
+
+One rule, stated in every output: *"the latest live experience dated inside the horizon establishes
+the outcome; only a success, failure, or blocked outcome establishes anything"*. Only an outcome the
+experience log already holds can settle an expectation; nothing is inferred from prose, and a missing
+event is never a failed prediction.
+
+| Decision | Writes a verdict? | Reason |
+|---|---|---|
+| `matched` | yes | the deciding experience's outcome class is the one expected. |
+| `contradicted` | yes | it is not. |
+| `already_evaluated` | no | a verdict exists; a second would duplicate it. |
+| `invalidated` | no | the user withdrew the expectation, so it is not scored. |
+| `superseded` | no | it judges a statement the user no longer holds. |
+| `insufficient_evidence` | no | live records fall inside the horizon, but every one carries an outcome that establishes nothing (`other`, `unknown`). |
+| `expired` | no | the horizon passed with no establishing record. Expiry, not wrongness. |
+| `outcome_unavailable` | no | nothing inside the horizon has established an outcome yet (or the horizon has not started). |
+| `evidence_unavailable` | no | the experience log could not be read - a statement about the store. |
+
+A recorded evaluation is never rewritten. If a fresh read would decide differently, the projection
+sets `evaluationStale` and names both readings: the stored verdict stands and the difference is
+disclosed. Superseded experiences, undated records, and unclassified outcomes are excluded from the
+decision **by name and count**, so a rate can always be reconstructed from what was left out.
+
+Every aggregate rate states its denominator and its exclusions. The denominator is verbatim
+`recorded evaluations whose prediction the user has not withdrawn (matched + contradicted)`, and the
+named exclusions are `expired`, `awaiting_evaluation`, `recorded`, `invalidated`, `superseded`,
+`insufficient_evidence`, `outcome_unavailable`, `evidence_unavailable` - each with its count and
+reason. Below `MIN_CALIBRATION_EVALUATIONS = 20` evaluations **no ratio is printed at all**, per
+capability as well as overall: the counts are reported and the rate is withheld with the reason
+("only 4 evaluation(s), below the 20 needed to state a rate"). Reliability is labelled
+`no_evaluations`, `insufficient_sample`, or `counts_only` accordingly. Calibration against confidence
+is reported as impossible here, not deferred: `confidence.available: false`,
+`predictionsWithConfidence: 0`, because no prediction carries a value to calibrate.
+
+Examples, all from the test fixtures: a `success` expectation on `calc.evaluate` with a later
+`success_verified` experience inside the horizon → `matched`, deciding id named. The same expectation
+with a `verification_failed` experience → `contradicted`. With only `model_unavailable` records →
+`insufficient_evidence`, nothing written. With nothing at all and the horizon passed → `expired`,
+which never enters a denominator. With the horizon not yet started → `outcome_unavailable`.
+
+### Authorization and audit
+
+- The three writes (`prediction.record`, `prediction.evaluate`, `prediction.invalidate`) declare
+  `permission: 'write'` and `origins: [ORIGIN_USER]`. The registry refuses to register a write action
+  for the model origin, so a `PROPOSE_ACTION` naming any of them is denied before it is validated: no
+  ordinary model response can create, evaluate, or withdraw a durable prediction, and no model can
+  change a prediction's own authorization status - there is no such field to change.
+- The four reads (`prediction.list`, `prediction.show`, `prediction.history`, `prediction.summary`)
+  accept user and model origins and call no model.
+- Creating a prediction is an explicitly authorized operation: it arrives as a user command naming the
+  capability, the expectation, the subject and the horizon, with provenance the caller cannot supply.
+  Nothing in the router, the capture path, or the controller can append a prediction record as a
+  side effect of any other request.
+- Verification follows the existing contract: each write's `verify` re-reads the ledger
+  independently and compares the minimized projection - id, capability, expectation, subject,
+  horizon, citation counts, derived state - and refuses to report success if the read disagrees. The
+  record's `confidence` must be `null` in the re-read, a just-recorded prediction must not already
+  carry a verdict or a withdrawal, and a refusal (`insufficient_evidence` and friends) verifies as
+  "no evaluation recorded, as the evidence requires".
+- The audit record carries ids, enums, counts and timestamps only. Subject and reason are user words
+  and stay out of `operations.jsonl`, as they do for experiences, feedback, and adaptations.
+- Every prediction operation goes through the controller's existing finalization path
+  (Batch AB), so the outcome the user sees, the audit record, and the experience capture are decided
+  from the same result. A usage or authorization refusal appends no ledger line and no audit step it
+  did not earn; a damaged ledger is reported as damaged rather than as empty, and the repair command
+  is not offered for it (`prediction health` is the read that names the damage).
+- Audit-input minimization was fixed on this surface, and the fix is a demonstration of a defect:
+  a credential-like value that a prediction action *refused* was previously copied verbatim into
+  `operations.jsonl`, because the audit-input masker masked only a knowledge-only field map.
+  `controller.js` now walks the action input's string leaves (`AUDIT_TEXT_FIELDS`, bounded depth 8)
+  and replaces credential-like text with `[omitted: contained a password, key, or token]` before the
+  input is logged. See `tests/prediction-adversarial.test.js` ("a refused credential-like value").
+
+### Commands
+
+```bash
+apex prediction record --capability <name> --expect success|failure|blocked --subject <text> (--expires <iso> | --in-days N)
+                        [--supports <id[,id...]>] [--contradicts <id[,...]>] [--feedback <id[,...]>] [--pattern <kind[,...]>] [--replaces <id[,...]>]
+apex prediction list   [--limit N] [--capability <name>] [--status <name>]
+apex prediction show <prediction-id> | history <prediction-id> | evaluate <prediction-id>
+apex prediction invalidate <prediction-id> --reason <text>
+apex prediction summary [--capability <name>] [--limit N]
+apex prediction health
+```
+
+- `record` needs a horizon: `--expires` (ISO instant or `YYYY-MM-DD`, read in UTC) or `--in-days`
+  (1-366). An unresolvable or future-dated citation, a made-up capability, a supplied confidence, and
+  an expectation outside the three classes are all refused before anything is appended (`input_rejected`,
+  exit 1, nothing written).
+- `list` is bounded (1-50, default 20), filters by exact capability and by derived status, and says
+  when it shows a subset.
+- `show` prints the expectation, its cited evidence, what the log holds now, the verdict if one is
+  recorded, and the reason it carries no confidence. An id may be shortened the way every other APEX
+  id is; a prefix that matches more than one expectation is refused with the number of matches and
+  the instruction to use a longer prefix, never resolved by choosing one.
+- `history` lists, oldest first, every record that names that one expectation: the prediction, the
+  withdrawals and verdicts describing it, and the expectations that replaced it. Nothing is rewritten.
+- `evaluate` is the only path that stores a verdict, and it stores one only when the records establish
+  an outcome; otherwise it reports the decision and writes nothing.
+- `invalidate` keeps the expectation and records the user's reason with it.
+- `summary` is the aggregate view: state counts, matched/contradicted with the denominator named,
+  exclusions counted, the per-capability groups (at most 20), and the limits.
+- `prediction health` is a controller read, not a registry action: it parses the ledger, reports kind
+  counts, standing versus superseded expectations, corrupt lines, and anomalies (dangling references,
+  replacement circles, a reused record id) with bounded samples. It writes no audit record, calls no
+  model, repairs nothing, and exits 0 only when the ledger was fully inspected and nothing requires
+  attention. Exit 1 is a report, not a failed read.
+- `repair locks` now covers `predictions.jsonl.lock`, and `diagnose` / `status` report the ledger
+  (expectations recorded, standing, evaluated) with an explicit note that no confidence is stored in
+  any of them.
+
+### Actions
+
+| Action | Permission | Origins | Input | Verification (independent check) |
+|---|---|---|---|---|
+| `prediction.record` | **write** | user | `capability`, `expectation`, `subject`, `expiresAt`, evidence id lists, `replaces` | an independent ledger re-read agrees about the stored record and every citation; the stored confidence is `null`; a just-recorded expectation carries no verdict and no withdrawal |
+| `prediction.evaluate` | **write** | user | `prediction` (id or prefix) | a recorded verdict is present, equal to the one the write reported, and decided from outcome records the ledger can name; a refusal is confirmed by an independent read that finds no verdict |
+| `prediction.invalidate` | **write** | user | `prediction`, `reason` | a withdrawal record names the expectation with the exact reason and user retirement provenance, the reader resolves it as withdrawn, and the expectation itself is still in the log |
+| `prediction.list` | read | user, model | `limit`, `capability`, `status` | a fresh list gives the same ids, order, counts, and truncation flag |
+| `prediction.show` | read | user, model | `prediction` | a fresh detail read gives the same projection, including the derived state |
+| `prediction.history` | read | user, model | `prediction` | a fresh history read gives the same records in the same append order |
+| `prediction.summary` | read | user, model | `capability`, `limit` | an independent read produces the same counts and the same rate, or the same withheld rate with the same reason |
+
+`prediction health` is deliberately absent from this table: it is a controller read like the other
+health reports, not something an origin may request.
+
+### World state and model context
+
+`world` carries an **`Expectations` section of its own**, separate from beliefs, from the
+observation-derived parts of the projection, and from the temporal section. A prediction never enters
+the observation or belief side: the section states that these are recorded expectations about later
+outcomes, lists at most `MAX_PREDICTION_PROMPT_ITEMS = 4` standing items by capability, status and
+horizon, and gives the rest as counts. If the ledger cannot be read, the projection adds an explicit
+unknown saying so and stops calling itself complete (`complete` now requires a readable prediction
+ledger) - it is never reported as an empty history.
+
+The model prompt receives the same bounded view and nothing more:
+`predictionPromptShape` / `predictionPromptLines` allow at most 5 lines, each truncated at 320
+characters, and each line is capability, expectation class, horizon, lifecycle state, and citation
+counts. **No subject text, no reason text, no verdict wording, never the whole ledger.** The first
+line states the boundary: these are expectations, not observations; nothing here reports that anything
+happened; none of it authorizes an action or approves an adaptation; no prediction in this build
+carries a confidence value. An empty ledger contributes no section at all rather than a line
+announcing that nothing is expected.
+
+The block is gated on the user's own words, not on capability names: it is built only when the request
+mentions a prediction, an expectation, a horizon or a deadline, or a word in the same family
+(`predict`, `expect`, `anticipat`, `forecast`, `horizon`, `deadline`, `due`, `soon`, `tomorrow`,
+`later`, `next`, `likely`, `chance`, `estimat`). An unrelated answer carries no expectation, because a
+line of prose next to recalled records is exactly how "the user expects X" would come to be treated as
+"X happened". Within the context budget the section gives up its room line by line before any
+retrieved record does, and when nothing of it is left, the per-section omission notice replaces it -
+stated rather than silent.
+
+### Measured
+
+`node benchmarks/run-prediction-benchmark.mjs`, 2026-11-01, node v26.4.0 on win32 x64 (12 logical
+CPUs, 24 GiB reported memory), 5 repeats, medians, clock fixed at `2026-11-01T10:00:00.000Z`.
+Synthetic fixtures, `NoBackend` everywhere: no model was configured, contacted, or simulated in any
+phase. "before" is the read path as AE-06 left it; "after" is the same script after AE-08, both on
+this machine. `list` is the aggregate read that opens every standing horizon; `summary` and `prompt`
+behave the same way.
+
+| predictions / events | `list` before | `list` after | one `horizon` read (after) | `summary` (after) | `prompt` (after) |
+|---|---|---|---|---|---|
+| 10 / 1,000 | 131.64 ms | 82.16 ms | 33.39 ms | 75.79 ms | 86.57 ms |
+| 50 / 1,000 | 1,086.95 ms | 437.68 ms | 58.56 ms | 407.09 ms | 409.84 ms |
+| 100 / 1,000 | 2,068.30 ms | 768.79 ms | 63.14 ms | 723.79 ms | 740.57 ms |
+| 200 / 1,000 (178 standing) | 3,931.39 ms | 1,449.04 ms | 62.22 ms | 1,375.88 ms | 1,216.00 ms |
+| 50 / 100 | 346.22 ms | 50.48 ms | 8.80 ms | 49.41 ms | 50.61 ms |
+| 50 / 5,000 | 4,661.22 ms | 1,591.93 ms | 317.54 ms | 1,684.97 ms | 1,718.91 ms |
+
+What changed, and why: the ledger read used to open the experience log once per standing expectation.
+The whole-file read, the hash, the per-record validation and the lifecycle derivation - about one
+`horizon` column each - were therefore repeated 178 times on a 200-expectation ledger. An aggregate
+read now takes **one snapshot of the experience log per operation** and slices every horizon out of
+it, so those four steps happen once. The snapshot is read-scoped and never retained: `list()`,
+`calibration()`, `promptView()` and `world()` are unaffected by a write that lands after they return,
+and a read that names one expectation still opens exactly one horizon and takes no snapshot at all.
+A single-horizon read (`show`, `history`) is unchanged at ~75 ms, as are the ledger-only reads
+(`load`, `project`, `status`, `health`), which never open a window.
+
+Rejected alternatives: bounding or caching the horizon reads themselves, which would silently change
+the counts published in `summary` and calibration - a count that omits part of the log is a false
+number, not a cheaper one; and a persisted or cross-operation cache, which Batch V measured and
+rejected for the same reason it does not remove the whole-file read.
+
+- **Truthfulness improved with the speed.** Before, 178 horizons described 178 different instants of
+  the experience log, so one read could report an event as inside one expectation's horizon and
+  outside another's because the file changed mid-operation. Now every horizon in one projection
+  describes the same instant. The regression tests prove the shared and per-horizon paths return
+  byte-identical projections and identical calibration.
+- **Residual cost, stated in numbers.** After the change, the cost that still grows per standing
+  expectation is the window slice plus pattern detection over the shared log: about 7.8 ms per
+  expectation at 200 predictions / 1,000 events (`list` 1,449 ms minus one 62 ms `horizon`, over 178
+  standing). The cost that grows with the log is one whole-file read plus validation: 8.80 ms at 100
+  events, 317.54 ms at 5,000.
+- **Threshold, stated before it is reached.** No persisted index is added now. Revisit that decision
+  only when (a) a real ledger approaches 200 standing expectations *and* an aggregate prediction read
+  exceeds ~2 s on this machine, or (b) the experience log approaches 5,000 events, at which point the
+  single shared read - not the per-expectation slice - is the dominant term. The two changes that
+  could actually move the ceiling are the same ones named in
+  [V-07: the read path after the write changes](#v-07-the-read-path-after-the-write-changes): a store
+  that can be read without hashing every byte, or time-partitioned experience segments. Either is a
+  storage-behaviour change with its own tests, not something to attempt from a read optimization.
+- Writes, before → after (50 expectations in 62 records over 1,000 events): append 20.60 → 17.93 ms,
+  uncontended lock section 40.96 → 36.50 ms, `record` (no citation) 60.39 → 63.06 ms, `record` citing
+  three events 155.12 → 174.96 ms, `record` through the authorized action 172.11 → 173.40 ms,
+  `evaluate` with a verdict 148.87 → 143.39 ms, `evaluate` that writes nothing 113.00 → 100.68 ms,
+  `invalidate` 74.76 → 58.06 ms. The two that moved most are cross-store citation validation (an
+  extra bounded read of the experience log) and a write-path re-projection; both grew with the
+  snapshot change and are within the spread of individual repeats. No write is constant time: each
+  re-reads and hashes the whole ledger inside its lock, exactly as memory and knowledge do.
+- Contention, real child processes appending from a shared start: 1 / 2 / 4 concurrent writers, 5 / 10
+  / 20 attempts, **all accepted** (5/5, 10/10, 20/20), ledger totals 18 / 23 / 33 records for 13
+  seeded, every id distinct, attempt medians 14 / 13 / 13 ms, 0 refusals, 0 corrupt lines, 0 partial
+  residue, and **0 records carrying a confidence value** on every row.
+- Context contribution does not grow with the ledger: on a 243-record / 178-standing fixture the
+  section is 4 lines and 913 characters, naming 4 of 178 expectations (the bound) and counting the
+  rest. It added 1,017 characters to a 299-character base prompt - 17.0% of the 6,000-character
+  budget. An unreadable ledger costs one 200-character sentence that says the ledger could not be
+  read. The same section attached to a request whose words did not make it prediction-shaped added
+  **exactly 0 characters** to a 271-character base, measured on the same request. `promptView()` on
+  the 243-line ledger measured 1,235.92 ms median (1194.13 min, 1435.55 max) after the change against
+  4,051.27 ms before; the same call on a 13-line ledger is 112.39 ms, so the section's *size* is fixed
+  while its read cost is not.
+
+What this batch does not claim: no predictive intelligence is implemented, and nothing measured here
+shows that a recorded expectation improves a later answer - only what recording, judging, and
+refusing one costs. Every number is from one machine on synthetic stores. Nothing in this batch
+installed, downloaded, started, invoked, or recommended a local inference server of any kind; no model
+ran in any phase, and no test in `npm test` runs one. A prediction is an expectation, and this build
+cannot produce a probability for it.
+
+### Tests
+
+Six files, 128 tests, all registered in `npm test`:
+`tests/prediction-store.test.js` (33) - the record and its field rules, the refusal of a
+caller-supplied confidence, citation resolution against the real log, bounded lists, the read-only
+`status` and `health` views, restart, and the AE-8 block that pins the shared experience snapshot (one
+snapshot per aggregate read, byte-identical projections and counts against the per-horizon path, no
+snapshot for a read that names one expectation, and a snapshot that cannot be taken costing the old
+read rather than losing a horizon);
+`tests/prediction-lifecycle.test.js` (25) - every state and its precedence, expiry versus a wrong
+prediction, a verdict that is never rewritten, replacement and withdrawal, excluded evidence counted
+by reason, per-capability denominators, the sample floor that withholds a rate, and the limitation
+codes a reader recomputes;
+`tests/prediction-integration.test.js` (18) - the seven commands through the assembled application and
+the real CLI, the audit shape, the model-origin refusal at both the registry and the store, a
+prediction that never becomes an experience even with automatic capture on, and the operational
+surface (`status`, `diagnose`, `repair locks`);
+`tests/prediction-context.test.js` (13) - the word gate, the bounds, the whole ledger never injected,
+an expectation kept out of the sections that describe what happened and out of the belief list, the
+unavailable-ledger disclosure on both surfaces, and the budget order;
+`tests/prediction-adversarial.test.js` (21) - forged and hand-edited ledgers, every field a writer may
+not supply, a reused record id, a replacement ring, a dangling replacement, a second contrary verdict,
+an outcome from the wrong capability, horizon edges at one millisecond, expectation-shaped prose and a
+model plan naming a prediction command, a credential-shaped subject that reaches neither ledger nor
+audit log, and an audit append that fails after the line was written;
+`tests/prediction-concurrency.test.js` (18) - real child processes racing record, replace, evaluate and
+withdraw on one ledger, a live holder, a writer killed holding the lock and one killed between appends,
+an unreadable claim, a corrupt line, a reused id, a reader running alongside writers, reads that take
+no lock, and the lock's `diagnose` / `repair locks` recovery. `tests/fixtures/prediction-writer-child.mjs`
+is the child process the concurrency suite runs.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 
-This is a plan, not a status report. Nothing below is implemented except stage 2's
-projection. Each stage names the dependency it satisfies and the evidence that would
-demonstrate completion, so a later batch cannot claim progress by adding vocabulary.
+This is a plan, not a status report. **No stage below is closed.** Five of the eight hold
+a partial implementation and the notes name both the clause each batch advanced and the
+remainder that keeps the stage open: stage 2's read-only projection, stage 3's
+event-with-time clause for the experience log (Batches AC and AD), stage 4's
+contradiction-surfacing clause (Batch X), stage 5's feedback-to-surface path (Batches Z,
+AA and AB), and stage 6's expectation ledger, outcome capture and classification (Batch
+AE). Each stage names the dependency it satisfies and the evidence that would demonstrate
+completion, so a later batch cannot claim progress by adding vocabulary.
 
 1. **Foundational infrastructure (done, keep).** Append-only stores, provenance,
    authorization, independent verification, audit, recovery, health inspection.
@@ -2625,9 +3100,12 @@ demonstrate completion, so a later batch cannot claim progress by adding vocabul
    and labelled as history, plus retrieval that distinguishes current from expired.
    Batch AC advanced the event-with-time clause for audited operations only: the experience
    log can now be asked what happened between two instants, in what order, and with which
-   recorded outcome, and corrections stay labelled as history. Entities, participants,
-   arbitrary event kinds, and a schema owned by anything other than the experience log are
-   still not implemented; the temporal view is a derivation, not a new store.
+   recorded outcome, and corrections stay labelled as history. Batch AD hardened that same
+   view without extending it - adversarial histories, evidence lineage, query correctness
+   under concurrent writers, and truthfulness of what the temporal summary claims. Entities,
+   participants, arbitrary event kinds, and a schema owned by anything other than the
+   experience log are still not implemented; the temporal view is a derivation, not a new
+   store.
 4. **Retrieval, evidence, uncertainty, and contradiction handling.** Evidence-linked belief
    records with explicit confidence, provenance-aware retrieval, and contradiction handling
    that is not a text heuristic. Depends on 3 (a claim must name what it is about).
@@ -2637,19 +3115,47 @@ demonstrate completion, so a later batch cannot claim progress by adding vocabul
    that acceptance and only that clause: a conflict retrieval never showed - because the
    counterpart was ranked out, withheld as private, or outside the prompt cap - is now
    surfaced to the model as a bounded, counts-only view of the whole store, alongside the
-   explicit unknowns and the completeness of the read. Confidence values, entity-linked
-   evidence traces, and non-heuristic contradiction detection still depend on stage 3 and
-   are not implemented.
+   explicit unknowns and the completeness of the read. Batch AE did not add the confidence
+   clause either: every prediction record carries `confidence: null` by design, because no
+   defensible method for supplying one exists in this build. Entity-linked evidence traces,
+   and non-heuristic contradiction detection still depend on stage 3 and are not implemented.
 5. **Learning and adaptation.** Updates driven by user feedback and verified outcomes,
    under the existing trust boundary: model output cannot authorize a write, and no
    inference is promoted to a fact without evidence. Depends on 4. Acceptance: a bounded
    feedback record changes what APEX surfaces, does not change what it claims is verified,
    survives a restart, and is reversible and auditable.
+   Batch Z advanced the feedback half of that acceptance: a user-recorded feedback comment
+   can become an adaptation candidate, only the user's recorded decision approves it, an
+   approved rule changes what enters a model-shaped prompt (labelled there as neither an
+   instruction nor authorization), every read recomputes the lifecycle so a corrected
+   experience cannot leave a stale rule in effect, and a retirement is itself a record. Batch
+   AA added one bounded automatic path for the *experience* record only, behind one validated
+   setting that defaults to off. Batch AB made the ending of every operation - audit record,
+   experience capture, completion - one testable contract instead of four lookalike tails. The
+   second half of the stage's first sentence is still open: no update is driven by a *verified
+   outcome*, because nothing consumes an outcome classification yet. See stage 6.
 6. **Executive control and outcome evaluation.** Expectations recorded before an action,
    outcomes compared against them, and the controller using that difference to decide the
    next step. Depends on 1 and 5. Acceptance: an operation records an expectation, an
    outcome, and a classification of the difference, and a wrong expectation changes
    subsequent behaviour without granting any component new authority.
+   Batch AE implemented the first three clauses of that acceptance, and did not implement the
+   fourth. An expectation is now a durable record naming a capability and a horizon, made
+   before its outcome is established and kept separate from the events that establish it; the
+   outcome is the recorded experience inside that horizon; the classification is a stored
+   verdict of `matched` or `contradicted`, or a named decision recording that no verdict was
+   written - the outcome is unavailable, the evidence establishes nothing, the horizon has
+   expired, the expectation was withdrawn or superseded, an evaluation already exists, or the
+   experience log could not be read. **What is not implemented: a wrong expectation changes
+   no subsequent behaviour.** No planner, controller, gateway, adapter, or adaptation read
+   consumes a verdict, and no component gained authority from this batch - the ledger is read
+   only to answer a prediction-shaped question, to fill a bounded, separately labelled context
+   section, and to fill the `Expectations` section of the read-only world projection. Two
+   further honest deviations from this stage's wording: the expectation is not bound to one
+   operation (it describes a capability over a horizon, and its provenance names the operation
+   that recorded it), and an outcome is never classified automatically - the user runs
+   `prediction evaluate`, which judges against records that already exist and writes nothing
+   when the evidence does not establish anything.
 7. **Neural-runtime integration.** Only through the contract described in
    [Neural integration boundary](#neural-integration-boundary-proposal-not-implemented):
    proposals in, authority out. Depends on 6, because a proposer needs an evaluation
