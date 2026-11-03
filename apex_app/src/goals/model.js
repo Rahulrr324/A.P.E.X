@@ -175,6 +175,31 @@ export function validateEventShape(e) {
     return null;
   }
 
+  if (e.type === 'goal_revised') {
+    if (e.request !== undefined && (typeof e.request !== 'string' || e.request.trim().length === 0 || e.request.length > MAX_GOAL_REQUEST_CHARS)) {
+      return 'bad revised request';
+    }
+    if (!Array.isArray(e.criteria) || e.criteria.length === 0) return 'at least one success criterion is required';
+    if (e.criteria.length > MAX_CRITERIA) return `at most ${MAX_CRITERIA} success criteria are allowed`;
+    const ids = new Set();
+    for (const c of e.criteria) {
+      if (!c || typeof c !== 'object') return 'bad criterion';
+      if (typeof c.id !== 'string' || !CRITERION_ID_RE.test(c.id)) return 'bad criterion id';
+      if (ids.has(c.id)) return 'duplicate criterion id';
+      ids.add(c.id);
+      if (typeof c.description !== 'string' || c.description.trim().length === 0 || c.description.length > MAX_CRITERION_CHARS) {
+        return 'bad criterion description';
+      }
+    }
+    if (e.priority !== undefined && (!Number.isInteger(e.priority) || e.priority < 1 || e.priority > 5)) return 'bad priority';
+    if (e.deadline !== undefined && e.deadline !== null && (typeof e.deadline !== 'string' || Number.isNaN(Date.parse(e.deadline)))) {
+      return 'bad deadline';
+    }
+    if (typeof e.reason !== 'string' || e.reason.trim().length === 0) return 'a revision needs a reason';
+    if (e.reason.length > MAX_GOAL_REASON_CHARS) return 'revision reason too long';
+    return null;
+  }
+
   return 'unknown event type';
 }
 
@@ -216,6 +241,8 @@ export function applyEvent(goals, e) {
       priority: e.priority,
       deadline: e.deadline ?? null,
       dependsOn: [...e.dependsOn],
+      revision: 1,
+      revisionHistory: [{ revision: 1, at: e.at, reason: e.reason ?? 'recorded' }],
       status: GoalStatus.PROPOSED,
       statusHistory: [{ from: null, to: GoalStatus.PROPOSED, at: e.at, reason: e.reason ?? 'recorded' }],
       blockedReason: null,
@@ -319,6 +346,28 @@ export function applyEvent(goals, e) {
     return null;
   }
 
+  if (e.type === 'goal_revised') {
+    if (!isOpenStatus(goal.status)) {
+      return `goal is ${goal.status}; its criteria can be revised only while it is open`;
+    }
+    if (e.request !== undefined) {
+      const duplicate = finding(goals, goal.id, e.request);
+      if (duplicate) return `an open goal already records this request (${singleLine(duplicate.id, 40)})`;
+      goal.request = e.request.trim();
+    }
+    // A revision replaces the success criteria, so evidence for the old wording cannot count
+    // toward the new one. The old evidence stays in the event log; it is no longer current.
+    goal.criteria = e.criteria.map((c) => criterionEntry(c, e.at));
+    if (e.priority !== undefined) goal.priority = e.priority;
+    if (e.deadline !== undefined) goal.deadline = e.deadline;
+    goal.revision = (goal.revision ?? 1) + 1;
+    goal.revisionHistory.push({ revision: goal.revision, at: e.at, reason: e.reason });
+    goal.completion = null;
+    goal.contradiction = null;
+    goal.updatedAt = e.at;
+    return null;
+  }
+
   if (e.type === 'goal_linked') {
     if (goal.status === GoalStatus.CANCELLED || goal.status === GoalStatus.ABANDONED || goal.status === GoalStatus.SUPERSEDED) {
       return `goal is ${goal.status}; no new link is accepted`;
@@ -359,6 +408,7 @@ export function goalSummary(goal) {
     status: goal.status,
     priority: goal.priority,
     deadline: goal.deadline,
+    revision: goal.revision ?? 1,
     progress: p,
     plans: goal.planIds.length,
     tasks: goal.taskIds.length,

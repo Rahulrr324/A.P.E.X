@@ -163,6 +163,44 @@ export class GoalStore {
     });
   }
 
+  // Revising replaces the success criteria (and optionally the request, priority, or deadline).
+  // It is accepted only while the goal is open; a completed goal must be reopened with
+  // contradicting evidence first. Evidence recorded for the old criteria stays in the log but
+  // no longer counts, because the reducer rebuilds the criteria as pending.
+  async revise(ref, { request = undefined, criteria, priority = undefined, deadline = undefined, reason }) {
+    const text = typeof reason === 'string' ? reason.trim() : '';
+    if (text.length === 0) throw new ValidationError('a revision needs a reason');
+    if (text.length > MAX_GOAL_REASON_CHARS) throw new ValidationError(`reason exceeds ${MAX_GOAL_REASON_CHARS} characters`);
+    assertNoSecret(text, 'the reason');
+    if (request !== undefined) assertNoSecret(request, 'the goal');
+    if (!Array.isArray(criteria) || criteria.length === 0) throw new ValidationError('at least one success criterion is required');
+    if (criteria.length > MAX_CRITERIA) throw new ValidationError(`at most ${MAX_CRITERIA} success criteria are allowed`);
+    if (deadline !== undefined && deadline !== null && (typeof deadline !== 'string' || Number.isNaN(Date.parse(deadline)))) {
+      throw new ValidationError('deadline must be an ISO date or time');
+    }
+    return this.#mutate((goals) => {
+      const goal = this.#pick(goals, ref);
+      if (!isOpenStatus(goal.status)) {
+        throw new ValidationError(`goal is ${goal.status}; its criteria can be revised only while it is proposed, accepted, active, or blocked`);
+      }
+      const entries = criteria.map((description, i) => {
+        assertNoSecret(description, `criterion ${i + 1}`);
+        const value = String(description).trim();
+        if (value.length === 0) throw new ValidationError(`criterion ${i + 1} is empty`);
+        if (value.length > MAX_CRITERION_CHARS) throw new ValidationError(`criterion ${i + 1} exceeds ${MAX_CRITERION_CHARS} characters`);
+        return { id: `c${i + 1}`, description: value };
+      });
+      return {
+        ...this.#base('goal_revised', goal.id),
+        ...(request !== undefined ? { request: String(request).trim() } : {}),
+        criteria: entries,
+        ...(priority !== undefined ? { priority } : {}),
+        ...(deadline !== undefined ? { deadline } : {}),
+        reason: text,
+      };
+    });
+  }
+
   // Re-opens the audit log for one cited operation. The log is append-only, so a record that is
   // found cannot later disappear; absence, an unreadable log, and a non-success are all refused.
   async #evidenceOperation(operationId) {

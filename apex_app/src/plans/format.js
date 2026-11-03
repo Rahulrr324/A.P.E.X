@@ -60,7 +60,7 @@ export function renderPlan(plan) {
   const p = planProgress(plan);
   const lines = [
     `Plan ${shortId(plan.id)}  v${plan.version}  status: ${plan.status}  risk: ${planRisk(plan.steps)}`,
-    `Goal: ${plan.goalId ? shortId(plan.goalId) : 'none referenced'}`,
+    `Goal: ${plan.goalId ? `${shortId(plan.goalId)}${plan.goalRevision ? ` (revision ${plan.goalRevision})` : ''}` : 'none referenced'}`,
     `Intended outcome: ${storedText(plan.outcome)}`,
     `Progress: ${p.completed} of ${p.total} step(s) completed`
       + `${p.failed ? `, ${p.failed} failed` : ''}${p.uncertain ? `, ${p.uncertain} uncertain` : ''}${p.skipped ? `, ${p.skipped} skipped` : ''}`,

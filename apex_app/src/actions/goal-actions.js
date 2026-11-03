@@ -137,6 +137,68 @@ export function goalActions(store) {
     },
 
     {
+      name: 'goal.revise',
+      description: 'Replace the success criteria of an open goal, optionally its request, priority, or deadline. Evidence for the old criteria stops counting; the revision is recorded, never overwritten. Write: user origin only.',
+      inputHint: '{"target":"goal id","request":"optional revised request","criteria":["new success criteria"],"priority":"optional 1-5","deadline":"optional ISO date or null","reason":"why the goal changed"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target', 'request', 'criteria', 'priority', 'deadline', 'reason']);
+        const criteria = criterionList(o.criteria);
+        const reason = textField(o.reason, 'reason', MAX_GOAL_REASON_CHARS);
+        const request = o.request === undefined ? undefined : textField(o.request, 'request', MAX_GOAL_REQUEST_CHARS);
+        let priority;
+        if (o.priority !== undefined) {
+          if (!Number.isInteger(o.priority) || o.priority < 1 || o.priority > 5) {
+            throw new ValidationError('priority must be an integer from 1 to 5');
+          }
+          priority = o.priority;
+        }
+        let deadline;
+        if (o.deadline !== undefined) {
+          if (o.deadline !== null && (typeof o.deadline !== 'string' || Number.isNaN(Date.parse(o.deadline)))) {
+            throw new ValidationError('deadline must be an ISO date, a time, or null');
+          }
+          deadline = o.deadline === null ? null : o.deadline.trim();
+        }
+        return { target: recordRef(o.target, 'target'), request, criteria, priority, deadline, reason };
+      },
+      async execute(_ctx, { target, request, criteria, priority, deadline, reason }) {
+        const before = await store.resolve(target);
+        const { goal } = await store.revise(target, { request, criteria, priority, deadline, reason });
+        return {
+          summary: `goal ${shortId(goal.id)} revised to revision ${goal.revision} with ${goal.criteria.length} criterion(s); previous evidence no longer counts`,
+          data: {
+            goalId: goal.id,
+            previousRevision: before.revision ?? 1,
+            revision: goal.revision,
+            status: goal.status,
+            criteria: goal.criteria.map((c) => ({ id: c.id, description: c.description, status: c.status })),
+            reason,
+          },
+          display: [
+            `Goal ${shortId(goal.id)} is now revision ${goal.revision} (was ${before.revision ?? 1}); its criteria were replaced.`,
+            ...goal.criteria.map((c) => `  ${c.id} [${c.status}] ${c.description}`),
+            'Earlier criteria and evidence remain in the event log but no longer count toward completion.',
+            'A plan approved against the previous goal revision must be revalidated before it can run.',
+          ].join('\n'),
+        };
+      },
+      async verify(_ctx, { request, criteria }, result) {
+        const goal = await store.get(result.data.goalId);
+        if (!goal) return { ok: false, detail: 'the revised goal cannot be read back' };
+        if (goal.revision !== result.data.revision) return { ok: false, detail: 'the stored revision differs from the recorded one' };
+        if (goal.criteria.length !== criteria.length) return { ok: false, detail: 'stored criterion count differs from the revision' };
+        if (goal.criteria.some((c, i) => c.description !== criteria[i] || c.status !== 'pending')) {
+          return { ok: false, detail: 'revised criteria are not present and pending' };
+        }
+        if (request !== undefined && goal.request !== request) return { ok: false, detail: 'the stored request differs from the revision' };
+        return { ok: true, detail: `revision ${goal.revision} confirmed; all criteria are pending and earlier evidence does not count` };
+      },
+    },
+
+    {
       name: 'goal.update',
       description: 'Move a goal through its lifecycle: accepted, active, blocked, failed, cancelled, abandoned, superseded, or completed. Completion is refused unless every criterion has verified supporting evidence. Write: user origin only.',
       inputHint: '{"target":"goal id","status":"accepted|active|blocked|completed|failed|cancelled|abandoned|superseded","reason":"required for stopping states","by":"replacement goal id for superseded"}',

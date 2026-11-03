@@ -59,6 +59,7 @@ const NON_ACTION_CAPABILITIES = [
   'model.answer', 'task.plan', 'task.run', 'task.approve', 'task.retry', 'task.cancel',
   'task.explain', 'task.step', 'none',
   'goal.list', 'goal.show',
+  'proposal.create',
   'plan.list', 'plan.show', 'plan.validate', 'plan.activate', 'plan.reconcile',
   'recover',
 ];
@@ -100,7 +101,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 42, 'the default registry has 42 actions');
+    assert.equal(plain.registry.list().length, 46, 'the default registry has 46 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -131,7 +132,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 24, 'the inventory counts twenty-four write actions');
+    assert.equal(writes.length, 28, 'the inventory counts twenty-eight write actions');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);

@@ -91,9 +91,13 @@ export function planProgress(plan) {
 
 // The exact bytes approval is bound to. Status, approvals, activations, and outcomes are
 // deliberately excluded: they are records about the plan, not the plan the user approved.
+// The goal revision is included when one is recorded, so a plan approved against one wording
+// of a goal does not silently remain approved after the goal's criteria change. Plans written
+// before the field existed omit it, and their hashes replay exactly as before.
 export function planContent(plan) {
   return {
     goalId: plan.goalId ?? null,
+    ...(plan.goalRevision != null ? { goalRevision: plan.goalRevision } : {}),
     outcome: plan.outcome,
     steps: plan.steps.map((s) => ({
       id: s.id,
@@ -231,6 +235,7 @@ export function validateEventShape(e) {
   if (e.type === 'plan_created') {
     if (e.origin !== 'user') return 'unknown origin';
     if (e.goalId !== null && (typeof e.goalId !== 'string' || !PLAN_ID_RE.test(e.goalId))) return 'bad goal reference';
+    if (e.goalRevision !== undefined && (!Number.isInteger(e.goalRevision) || e.goalRevision < 1)) return 'bad goal revision';
     if (e.version !== 1) return 'a new plan starts at version 1';
     if (typeof e.reason !== 'string') return 'missing reason';
     const problems = validatePlanContent(contentOf(e));
@@ -239,6 +244,7 @@ export function validateEventShape(e) {
 
   if (e.type === 'plan_revised') {
     if (e.version !== undefined && !Number.isInteger(e.version)) return 'bad version';
+    if (e.goalRevision !== undefined && (!Number.isInteger(e.goalRevision) || e.goalRevision < 1)) return 'bad goal revision';
     if (typeof e.reason !== 'string' || e.reason.trim().length === 0) return 'a revision needs a reason';
     const problems = validatePlanContent(contentOf(e));
     return problems.length > 0 ? problems[0] : null;
@@ -293,6 +299,7 @@ function newPlan(e) {
   return {
     id: e.planId,
     goalId: e.goalId ?? null,
+    goalRevision: e.goalRevision ?? null,
     origin: 'user',
     version: 1,
     status: PlanStatus.DRAFT,
@@ -327,6 +334,7 @@ function newPlan(e) {
 }
 
 function applyContent(plan, e) {
+  plan.goalRevision = e.goalRevision ?? null;
   plan.outcome = e.outcome;
   plan.steps = e.steps.map((s) => ({
     id: s.id,
@@ -483,6 +491,7 @@ export function planSummary(plan) {
   return {
     id: plan.id,
     goalId: plan.goalId,
+    goalRevision: plan.goalRevision ?? null,
     version: plan.version,
     status: plan.status,
     outcome: plan.outcome,

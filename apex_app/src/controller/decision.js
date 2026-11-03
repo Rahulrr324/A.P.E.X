@@ -42,6 +42,8 @@ export function classifyDecision({ status, steps = [] }) {
     || status === Outcome.PLAN_STORED
     || status === Outcome.GOAL_CREATED
     || status === Outcome.GOAL_UPDATED
+    || status === Outcome.PROPOSAL_CREATED
+    || status === Outcome.PROPOSAL_DECIDED
     || status === Outcome.TASK_PAUSED
   ) {
     return Decision.PROPOSE_ACTION;

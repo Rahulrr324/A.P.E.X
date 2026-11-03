@@ -71,6 +71,7 @@ const NON_REGISTRY_CAPABILITIES = Object.freeze([
   'model.answer', 'none',
   'task.plan', 'task.run', 'task.approve', 'task.retry', 'task.cancel', 'task.explain', 'task.step',
   'goal.list', 'goal.show',
+  'proposal.create',
   'plan.list', 'plan.show', 'plan.validate', 'plan.activate', 'plan.reconcile',
   'recover',
 ]);

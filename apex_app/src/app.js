@@ -33,8 +33,10 @@ import { PredictionStore } from './prediction/prediction-store.js';
 import { predictionActions } from './actions/prediction-actions.js';
 import { GoalStore } from './goals/store.js';
 import { PlanStore } from './plans/store.js';
+import { ProposalStore } from './proposals/store.js';
 import { goalActions } from './actions/goal-actions.js';
 import { planActions } from './actions/plan-actions.js';
+import { proposalActions } from './actions/proposal-actions.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 
 export function createApp({
@@ -80,6 +82,9 @@ export function createApp({
   // anything, and both use their own writer lock for every mutation.
   const goals = new GoalStore(path.join(dataDir, 'goals.jsonl'), { now: clock, idFactory, operations });
   const plans = new PlanStore(path.join(dataDir, 'plans.jsonl'), { now: clock, idFactory, registry, goals, operations });
+  // Proposals are model suggestions. The store records them and the user's decision about them;
+  // it cannot approve, activate, or execute anything, and it is not a source of authority.
+  const proposals = new ProposalStore(path.join(dataDir, 'proposals.jsonl'), { now: clock, idFactory });
 
   // Filesystem inspection exists only when a root is configured. The root is resolved
   // and validated here, once, and captured by the action closures: no request, model
@@ -95,7 +100,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...goalActions(goals), ...planActions(plans), ...worldActions(), ...extraActions, ...fsActions]) registry.register(def);
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...worldActions(), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is
   // reported as absent; a damaged state still raises (it must not look empty).
@@ -107,6 +112,7 @@ export function createApp({
     const p = await predictions.status();
     const g = await goals.status();
     const pl = await plans.status();
+    const pr = await proposals.status();
     const current = await session.peek();
     if (current.status === 'corrupt') {
       throw new StoreError(`${current.detail}; run "apex new" to start a new session`);
@@ -144,6 +150,9 @@ export function createApp({
       planRecords: pl.records,
       planCount: pl.plans,
       corruptPlanLines: pl.corrupt,
+      proposalRecords: pr.records,
+      proposalCount: pr.proposals,
+      corruptProposalLines: pr.corrupt,
       sessionId: current.state?.sessionId ?? null,
       model: gateway.describe(),
       filesystemRoot: rootForContext,
@@ -171,6 +180,7 @@ export function createApp({
     predictions,
     goals,
     plans,
+    proposals,
   });
   return {
     controller,
@@ -191,6 +201,7 @@ export function createApp({
     predictions,
     goals,
     plans,
+    proposals,
   };
 }
 

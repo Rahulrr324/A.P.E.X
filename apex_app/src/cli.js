@@ -62,13 +62,16 @@ Usage:
   node bin/apex.js goal list [--limit N]
   node bin/apex.js goal show <id>
   node bin/apex.js goal update <id> <status> [--reason <text>] [--by <goal-id>]
+  node bin/apex.js goal revise <id> --criterion <text>... --reason <text> [--request <text>] [--priority N] [--deadline <iso>]
   node bin/apex.js goal evidence <id> --criterion <c1> --kind supports|contradicts [--operation <audit-id>] [--detail <text>] [--reopen]
   node bin/apex.js goal complete <id> [--reason <text>]
   node bin/apex.js goal link <id> (--plan <id> | --task <id>)
   node bin/apex.js plan add --outcome <text> --step <json>... [--goal <id>] [--precondition <text>]... [--assertion <json>]... [--estimate N] [--reason <text>]
   node bin/apex.js plan list [--limit N]
   node bin/apex.js plan show <id>
-  node bin/apex.js plan validate <id>     check a stored plan against the live action registry (read-only)
+  node bin/apex.js plan validate <id>     check a stored plan against live state (read-only)
+  node bin/apex.js plan history <id>       recorded versions of a plan (read-only)
+  node bin/apex.js plan compare <id> [--from N] [--to N]   compare two recorded versions (read-only)
   node bin/apex.js plan revise <id> --outcome <text> --step <json>... --reason <text> [--precondition <text>]... [--assertion <json>]... [--estimate N]
   node bin/apex.js plan approve <id>
   node bin/apex.js plan start <id>        create a user-origin task from an approved plan, then run it
@@ -76,6 +79,14 @@ Usage:
   node bin/apex.js plan cancel <id> --reason <text>
   node bin/apex.js plan supersede <id> --by <plan-id> --reason <text>
   node bin/apex.js recover                interrupted, uncertain, resumable, and blocked work (read-only)
+  node bin/apex.js work [--limit N]      ranked next work from the records (read-only, executes nothing)
+  node bin/apex.js next                  the single top recommendation and why (read-only)
+  node bin/apex.js propose [--kind goal_create|goal_clarify|plan_create|plan_revise|advice] [--goal <id>] [--plan <id>] <request>
+  node bin/apex.js proposal list [--limit N]
+  node bin/apex.js proposal show <id>
+  node bin/apex.js proposal accept <id> [--reason <text>]
+  node bin/apex.js proposal reject <id> --reason <text>
+  node bin/apex.js proposal invalidate <id> --reason <text>
   node bin/apex.js task plan <goal...>   plan a multi-step task (checked; nothing runs yet)
   node bin/apex.js task list
   node bin/apex.js task show <id>
@@ -191,11 +202,15 @@ Goal and plan examples (recorded intent; never permission to execute):
   plan add --goal <goal-id> --outcome "the corrected claim is stored and read back" \
       --step '{"id":"s1","action":"knowledge.add","description":"store the correction","input":{"subject":"Engine","relationship":"fuel","object":"Electric"},"expectedResult":"the record is stored","verification":"read it back","criterion":"c1"}' \
       --step '{"id":"s2","action":"knowledge.search","description":"read it back","input":{"query":"Engine fuel"},"dependsOn":["s1"],"expectedResult":"the new claim is first","verification":"the search names it","criterion":"c2"}'
-  plan validate <plan-id>              live check: registered actions, dependencies, capabilities (read-only)
+  plan validate <plan-id>              live check: approval binding, goal revision, actions, evidence (read-only)
+  plan history <plan-id>               every recorded version with its reason (read-only)
+  plan compare <plan-id> [--from N] [--to N]   differences between two recorded versions (read-only)
   plan approve <plan-id>               binds approval to this exact content; every step is still authorized again
   plan start <plan-id>                 creates a user-origin task, runs it, and records each step's outcome
   plan reconcile <plan-id>             after an interrupted run, re-reads the task and records outcomes
   recover                              states what was interrupted, what is uncertain, and what can resume
+  work                                 ranks the next work from goals, plans, tasks, and execution state
+  next                                 states the single top recommendation; nothing is executed
 A goal records what you intend; a plan records how you propose to get there; neither grants any
 action permission. A task completing does not complete a goal: completion needs verified evidence
 for every success criterion. Goal and plan writes are yours alone; a model cannot create, approve,
@@ -453,6 +468,9 @@ function exitCodeFor(res) {
   // a claim that any work ran: the record's own status says what it means.
   if (res.status === Outcome.GOAL_CREATED || res.status === Outcome.GOAL_UPDATED
     || res.status === Outcome.GOAL_COMPLETED || res.status === Outcome.PLAN_STORED) return 0;
+  // A stored proposal and a recorded user decision are completed commands. A proposal is not
+  // approval or execution; the record's own status and validation say what it means.
+  if (res.status === Outcome.PROPOSAL_CREATED || res.status === Outcome.PROPOSAL_DECIDED) return 0;
   if (res.status === Outcome.VERIFICATION_UNAVAILABLE && res.operation.capability === 'model.answer') {
     // Answer text alone is usable, but when a proposal was denied, failed, or could
     // not be verified the request only partly succeeded; the operation's own
@@ -1188,6 +1206,24 @@ export async function main(argv, {
           dependsOn: flags['depends-on'] ?? [],
         }));
       }
+      if (sub === 'revise') {
+        const { flags, rest: ids } = parseFlags(rest, ['request', 'criterion', 'priority', 'deadline', 'reason']);
+        if (ids.length !== 1) {
+          throw new ValidationError('usage: goal revise <id> --criterion <text>... --reason <text> [--request <text>] [--priority N] [--deadline <iso>]', 'USAGE');
+        }
+        if ((flags.criterion ?? []).length === 0) {
+          throw new ValidationError('goal revise needs at least one --criterion; a goal without success criteria cannot be completed', 'USAGE');
+        }
+        if (!flags.reason) throw new ValidationError('goal revise needs --reason <text>', 'USAGE');
+        return emit(await app.controller.goalRevise({
+          target: ids[0],
+          request: flags.request ?? undefined,
+          criteria: flags.criterion,
+          priority: flags.priority,
+          deadline: flags.deadline,
+          reason: flags.reason,
+        }));
+      }
       if (sub === 'list') {
         const { flags, rest: extra } = parseFlags(rest, ['limit']);
         rejectUnexpected(extra, 'goal list [--limit N]');
@@ -1251,7 +1287,7 @@ export async function main(argv, {
           taskId: flags.task ?? null,
         }));
       }
-      err('usage: goal add|list|show|update|evidence|complete|link');
+      err('usage: goal add|revise|list|show|update|evidence|complete|link');
       return 2;
     }
 
@@ -1301,6 +1337,19 @@ export async function main(argv, {
         out(res.display);
         return res.validation.ok ? 0 : 1;
       }
+      if (sub === 'history') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) throw new ValidationError('usage: plan history <id>', 'USAGE');
+        out((await app.controller.planHistory(ids[0])).display);
+        return 0;
+      }
+      if (sub === 'compare') {
+        const { flags, rest: ids } = parseFlags(rest, ['from', 'to']);
+        if (ids.length !== 1) throw new ValidationError('usage: plan compare <id> [--from N] [--to N]', 'USAGE');
+        const res = await app.controller.planCompare(ids[0], { from: flags.from ?? null, to: flags.to ?? null });
+        out(res.display);
+        return res.diff.unchanged ? 0 : 1;
+      }
       if (sub === 'revise') {
         const { flags, rest: ids } = parseFlags(rest, ['outcome', 'step', 'precondition', 'assertion', 'estimate', 'reason']);
         if (ids.length !== 1) throw new ValidationError('usage: plan revise <id> --outcome <text> --step <json>... --reason <text>', 'USAGE');
@@ -1342,7 +1391,55 @@ export async function main(argv, {
           reason: flags.reason,
         }));
       }
-      err('usage: plan add|list|show|validate|revise|approve|start|reconcile|cancel|supersede');
+      err('usage: plan add|list|show|validate|history|compare|revise|approve|start|reconcile|cancel|supersede');
+      return 2;
+    }
+
+    if (command === 'propose') {
+      const { flags, rest: words } = parseFlags(args, ['kind', 'goal', 'plan']);
+      const request = words.join(' ').trim();
+      if (request === '') {
+        throw new ValidationError('usage: propose [--kind goal_create|goal_clarify|plan_create|plan_revise|advice] [--goal <id>] [--plan <id>] <request>', 'USAGE');
+      }
+      return emit(await app.controller.proposeExecutive({
+        kind: flags.kind ?? null,
+        request,
+        goal: flags.goal ?? null,
+        plan: flags.plan ?? null,
+        onProgress: modelWaiting(err),
+      }));
+    }
+
+    if (command === 'proposal') {
+      const [sub, ...rest] = args;
+      if (sub === 'list') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit']);
+        rejectUnexpected(extra, 'proposal list [--limit N]');
+        out(await app.controller.listProposals({ limit: flags.limit ?? null }));
+        return 0;
+      }
+      if (sub === 'show') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) throw new ValidationError('usage: proposal show <id>', 'USAGE');
+        out((await app.controller.showProposal(ids[0])).display);
+        return 0;
+      }
+      if (sub === 'accept') {
+        const { flags, rest: ids } = parseFlags(rest, ['reason']);
+        if (ids.length !== 1) throw new ValidationError('usage: proposal accept <id> [--reason <text>]', 'USAGE');
+        return emit(await app.controller.acceptProposal({ target: ids[0], reason: flags.reason ?? null }));
+      }
+      if (sub === 'reject') {
+        const { flags, rest: ids } = parseFlags(rest, ['reason']);
+        if (ids.length !== 1 || !flags.reason) throw new ValidationError('usage: proposal reject <id> --reason <text>', 'USAGE');
+        return emit(await app.controller.rejectProposal({ target: ids[0], reason: flags.reason }));
+      }
+      if (sub === 'invalidate') {
+        const { flags, rest: ids } = parseFlags(rest, ['reason']);
+        if (ids.length !== 1 || !flags.reason) throw new ValidationError('usage: proposal invalidate <id> --reason <text>', 'USAGE');
+        return emit(await app.controller.invalidateProposal({ target: ids[0], reason: flags.reason }));
+      }
+      err('usage: proposal list|show|accept|reject|invalidate');
       return 2;
     }
 
@@ -1353,6 +1450,18 @@ export async function main(argv, {
       const res = await app.controller.recoveryReport();
       out(res.display ?? res.output ?? '(none)');
       return res.attention ? 1 : 0;
+    }
+
+    if (command === 'work' || command === 'next') {
+      const { flags, rest: extra } = parseFlags(args, ['limit']);
+      rejectUnexpected(extra, command === 'next' ? 'next' : 'work [--limit N]');
+      const res = await app.controller.continuationReport(
+        command === 'next' ? { limit: 1, top: true } : { limit: flags.limit ?? null },
+      );
+      out(res.display);
+      // Candidates are not errors. Only an unreadable or damaged record makes the answer
+      // incomplete, and that is reported as a nonzero exit.
+      return res.problems.length > 0 ? 1 : 0;
     }
 
     if (command === 'task') {

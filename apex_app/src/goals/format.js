@@ -48,7 +48,7 @@ export function renderGoal(goal) {
   const p = goalProgress(goal);
   const origin = goal.origin === 'user' ? 'your request' : goal.origin;
   const lines = [
-    `Goal ${shortId(goal.id)}  status: ${goal.status}  origin: ${origin}  priority: ${goal.priority}`,
+    `Goal ${shortId(goal.id)}  status: ${goal.status}  origin: ${origin}  priority: ${goal.priority}  revision: ${goal.revision ?? 1}`,
     `Request: ${storedText(goal.request)}`,
     `Deadline: ${goal.deadline ?? 'none recorded'}`,
     `Progress: ${p.satisfied} of ${p.total} criterion(s) satisfied`
@@ -75,6 +75,12 @@ export function renderGoal(goal) {
   for (const h of goal.statusHistory) {
     lines.push(`  ${h.from ?? '(recorded)'} -> ${h.to}  ${String(h.at).slice(0, 19)}${h.reason ? `  ${storedText(h.reason)}` : ''}`);
   }
+  if ((goal.revisionHistory?.length ?? 0) > 1) {
+    lines.push('Revisions:');
+    for (const r of goal.revisionHistory) {
+      lines.push(`  r${r.revision}  ${String(r.at).slice(0, 19)}  ${storedText(r.reason)}`);
+    }
+  }
   lines.push(`Next: ${nextHint(goal)}`);
   return lines.join('\n');
 }
@@ -85,7 +91,7 @@ export function renderGoalList(goals) {
     .map((g) => {
       const p = goalProgress(g);
       const open = isOpenStatus(g.status) ? '' : '  (closed)';
-      return `${shortId(g.id)}  ${g.status.padEnd(9)}  ${p.satisfied}/${p.total} criteria  p${g.priority}  ${truncate(storedText(g.request), 120)}${open}`;
+      return `${shortId(g.id)}  ${g.status.padEnd(9)}  r${g.revision ?? 1}  ${p.satisfied}/${p.total} criteria  p${g.priority}  ${truncate(storedText(g.request), 120)}${open}`;
     })
     .join('\n');
 }

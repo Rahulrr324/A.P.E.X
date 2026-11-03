@@ -114,8 +114,8 @@ test('plan lifecycle through the real CLI: add, validate, approve, start, reconc
 
   const validate = await runCli(['plan', 'validate', planId], env);
   assert.equal(validate.code, 0, validate.stdout);
-  assert.match(validate.stdout, /Validation: passed\./);
-  assert.match(validate.stdout, /Nothing has run/);
+  assert.match(validate.stdout, /Live validation: passed/);
+  assert.match(validate.stdout, /wrote nothing and ran nothing/);
 
   const approve = await runCli(['plan', 'approve', planId], env);
   assert.equal(approve.code, 0, approve.stdout + approve.stderr);
@@ -160,7 +160,7 @@ test('a plan naming an unavailable capability stays a draft and cannot be approv
 
   const validate = await runCli(['plan', 'validate', planId], env);
   assert.equal(validate.code, 1, validate.stdout);
-  assert.match(validate.stdout, /Validation: NOT passed/);
+  assert.match(validate.stdout, /Live validation: NOT passed/);
   assert.match(validate.stdout, /not available in this configuration/);
 
   const approve = await runCli(['plan', 'approve', planId], env);

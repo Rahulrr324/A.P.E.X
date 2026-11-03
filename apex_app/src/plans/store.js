@@ -20,6 +20,7 @@ import {
   PLAN_SCHEMA,
   PlanStatus,
   isOpenPlan,
+  planContent,
   planContentHash,
   planProgress,
   planRisk,
@@ -193,6 +194,7 @@ export class PlanStore {
     assertNoSecret(outcome, 'the intended outcome');
     for (const p of preconditions) assertNoSecret(p, 'a precondition');
     for (const a of assertions) assertNoSecret(a?.text, 'an assertion');
+    let goalRevision = null;
     if (goalId !== null) {
       if (!this.goals) throw new ValidationError('the goal store is not available, so a goal cannot be referenced');
       let goal;
@@ -208,12 +210,14 @@ export class PlanStore {
       }
       if (TERMINAL_GOAL.has(goal.status)) throw new ValidationError(`goal ${shortId(goal.id)} is ${goal.status}; a new plan is not accepted for it`);
       goalId = goal.id;
+      goalRevision = goal.revision ?? 1;
     }
     const planId = this.idFactory();
     const result = await this.#mutate(() => ({
       ...this.#base('plan_created', planId),
       origin: 'user',
       goalId,
+      ...(goalRevision !== null ? { goalRevision } : {}),
       version: 1,
       reason: reason ?? 'created by the user',
       outcome,
@@ -238,11 +242,19 @@ export class PlanStore {
   async revise(ref, { outcome, steps, preconditions = [], assertions = [], resources = null, reason }) {
     assertNoSecret(outcome, 'the intended outcome');
     if (typeof reason !== 'string' || reason.trim().length === 0) throw new ValidationError('a revision needs a reason');
-    return this.#mutate((plans) => {
+    return this.#mutate(async (plans) => {
       const plan = this.#pick(plans, ref);
+      let goalRevision = plan.goalRevision ?? null;
+      if (plan.goalId && this.goals) {
+        // A revision is bound to the goal wording it was written for. If the goal moved on,
+        // the revision records the new revision, and approval must then be given again.
+        const goal = await this.goals.resolve(plan.goalId);
+        goalRevision = goal.revision ?? 1;
+      }
       return {
         ...this.#base('plan_revised', plan.id),
         version: plan.version + 1,
+        ...(goalRevision !== null ? { goalRevision } : {}),
         reason: reason.trim(),
         outcome,
         steps,
@@ -360,6 +372,32 @@ export class PlanStore {
         by: by ?? null,
       };
     });
+  }
+
+  // Read-only: every recorded version of a plan, in order, with the content each version
+  // contained. Revisions reset step results, so a version is the plan as written, not the
+  // outcomes later recorded against it.
+  async history(ref) {
+    const { plans, records } = await this.#readComplete();
+    const plan = this.#pick(plans, ref);
+    const versions = records
+      .filter((e) => e.planId === plan.id && (e.type === 'plan_created' || e.type === 'plan_revised'))
+      .map((e) => ({
+        version: e.version,
+        at: e.at,
+        kind: e.type === 'plan_created' ? 'created' : 'revised',
+        reason: e.reason,
+        snapshot: planContent({
+          goalId: plan.goalId,
+          goalRevision: e.goalRevision ?? null,
+          outcome: e.outcome,
+          steps: e.steps,
+          preconditions: e.preconditions,
+          assertions: e.assertions,
+          resources: e.resources ?? { estimatedSeconds: null },
+        }),
+      }));
+    return { plan, versions };
   }
 
   async lockState() {

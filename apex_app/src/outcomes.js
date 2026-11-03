@@ -19,6 +19,8 @@ export const Outcome = Object.freeze({
   GOAL_CREATED: 'goal_created', // a goal was recorded; nothing has run
   GOAL_UPDATED: 'goal_updated', // a goal's status, evidence, or links changed
   GOAL_COMPLETED: 'goal_completed', // every criterion has verified supporting evidence
+  PROPOSAL_CREATED: 'proposal_created', // a model proposal was stored; nothing ran
+  PROPOSAL_DECIDED: 'proposal_decided', // the user accepted, rejected, or invalidated a proposal
   TASK_PAUSED: 'task_paused', // stopped for an explicit user decision
   TASK_CANCELLED: 'task_cancelled',
 });
