@@ -49,6 +49,10 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // put the expectation into the experience log - where the pattern detector and the adaptation
   // derivation read, and from there into how APEX behaves.
   expectation: 'it reads or writes the prediction ledger, whose records are expectations about later events; an experience of one would put an expectation into the log that answers what happened, and from there into pattern and adaptation reads',
+  // Executive records are the user's intentions and the plans derived from them. An experience
+  // answers "what happened", not "what was intended", and a plan's steps are not events: capturing
+  // either would put intentions into the log the pattern and adaptation reads draw from.
+  executive: 'it records a goal, a plan, or evidence about them; these are intentions and their classified support, not events that happened, and they must not enter the experience log the pattern and adaptation reads draw from',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
@@ -83,6 +87,24 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'prediction.record': 'expectation',
   'prediction.evaluate': 'expectation',
   'prediction.invalidate': 'expectation',
+  'goal.add': 'executive',
+  'goal.update': 'executive',
+  'goal.evidence': 'executive',
+  'goal.complete': 'executive',
+  'goal.link': 'executive',
+  'goal.list': 'read',
+  'goal.show': 'read',
+  'plan.add': 'executive',
+  'plan.revise': 'executive',
+  'plan.approve': 'executive',
+  'plan.cancel': 'executive',
+  'plan.supersede': 'executive',
+  'plan.activate': 'executive',
+  'plan.reconcile': 'executive',
+  'plan.list': 'read',
+  'plan.show': 'read',
+  'plan.validate': 'read',
+  'recover': 'read',
   'task.plan': 'task',
   'task.run': 'task',
   'task.approve': 'task',

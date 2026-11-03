@@ -31,6 +31,10 @@ import { ExperienceStore } from './experience/experience-store.js';
 import { experienceActions } from './actions/experience-actions.js';
 import { PredictionStore } from './prediction/prediction-store.js';
 import { predictionActions } from './actions/prediction-actions.js';
+import { GoalStore } from './goals/store.js';
+import { PlanStore } from './plans/store.js';
+import { goalActions } from './actions/goal-actions.js';
+import { planActions } from './actions/plan-actions.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 
 export function createApp({
@@ -71,6 +75,11 @@ export function createApp({
   // It is a separate log on purpose - see the header of prediction-store.js.
   const predictions = new PredictionStore(path.join(dataDir, 'predictions.jsonl'), { now: clock, experiences: experience });
   const registry = new ActionRegistry();
+  // Goals and plans are append-only records of intent. The plan store validates against the
+  // live registry and reads goals, so it is constructed after both; neither store can execute
+  // anything, and both use their own writer lock for every mutation.
+  const goals = new GoalStore(path.join(dataDir, 'goals.jsonl'), { now: clock, idFactory, operations });
+  const plans = new PlanStore(path.join(dataDir, 'plans.jsonl'), { now: clock, idFactory, registry, goals, operations });
 
   // Filesystem inspection exists only when a root is configured. The root is resolved
   // and validated here, once, and captured by the action closures: no request, model
@@ -86,7 +95,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...worldActions(), ...extraActions, ...fsActions]) registry.register(def);
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...goalActions(goals), ...planActions(plans), ...worldActions(), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is
   // reported as absent; a damaged state still raises (it must not look empty).
@@ -96,6 +105,8 @@ export function createApp({
     const t = await conversation.status();
     const x = await experience.status();
     const p = await predictions.status();
+    const g = await goals.status();
+    const pl = await plans.status();
     const current = await session.peek();
     if (current.status === 'corrupt') {
       throw new StoreError(`${current.detail}; run "apex new" to start a new session`);
@@ -125,6 +136,14 @@ export function createApp({
       predictionsPastHorizon: p.pastHorizon,
       predictionConfidenceValues: p.confidenceValues,
       corruptPredictionLines: p.corrupt,
+      // Goals and plans are records of intent, not work done. The counts say what is stored,
+      // never that anything ran: progress lives on each record.
+      goalRecords: g.records,
+      goalCount: g.goals,
+      corruptGoalLines: g.corrupt,
+      planRecords: pl.records,
+      planCount: pl.plans,
+      corruptPlanLines: pl.corrupt,
       sessionId: current.state?.sessionId ?? null,
       model: gateway.describe(),
       filesystemRoot: rootForContext,
@@ -150,6 +169,8 @@ export function createApp({
     experience,
     experienceCapture,
     predictions,
+    goals,
+    plans,
   });
   return {
     controller,
@@ -168,6 +189,8 @@ export function createApp({
     experience,
     experienceCapture,
     predictions,
+    goals,
+    plans,
   };
 }
 

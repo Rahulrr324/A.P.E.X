@@ -194,8 +194,15 @@ export function validateEventShape(e) {
   if (e.type === 'task_created') {
     if (typeof e.goal !== 'string' || e.goal.length === 0) return 'missing goal';
     if (e.origin !== 'user' && e.origin !== 'model') return 'unknown origin';
-    if (e.planner !== 'deterministic' && e.planner !== 'model') return 'unknown planner';
+    if (e.planner !== 'deterministic' && e.planner !== 'model' && e.planner !== 'plan') return 'unknown planner';
     if (!Array.isArray(e.steps)) return 'missing steps';
+    // Optional executive links. They are references recorded for provenance; neither
+    // grants authorization, which still comes from the action registry per step.
+    for (const key of ['goalId', 'planId']) {
+      if (e[key] !== undefined && e[key] !== null && (typeof e[key] !== 'string' || e[key].length === 0 || e[key].length > 64)) {
+        return `bad ${key}`;
+      }
+    }
     return null;
   }
   if (e.type === 'transition') {
@@ -247,6 +254,8 @@ export function applyEvent(tasks, e) {
       goal: e.goal,
       origin: e.origin,
       planner: e.planner,
+      goalId: e.goalId ?? null,
+      planId: e.planId ?? null,
       createdAt: e.at,
       updatedAt: e.at,
       status: e.origin === 'model' ? TaskStatus.PROPOSED : TaskStatus.PENDING,
@@ -331,5 +340,5 @@ export function reduceEvents(events) {
 
 export function taskSummary(task) {
   const { completed, total } = progressOf(task);
-  return { id: task.id, goal: task.goal, origin: task.origin, status: task.status, progress: { completed, total }, createdAt: task.createdAt, updatedAt: task.updatedAt };
+  return { id: task.id, goal: task.goal, origin: task.origin, status: task.status, goalId: task.goalId ?? null, planId: task.planId ?? null, progress: { completed, total }, createdAt: task.createdAt, updatedAt: task.updatedAt };
 }

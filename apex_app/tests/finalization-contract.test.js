@@ -65,10 +65,14 @@ async function remember(app, note) {
 const lastMemoryId = (dir) => readRecords(path.join(dir, 'memory.jsonl')).at(-1).id;
 
 // Capabilities that end an operation without being a registered action: the router's model path,
-// rejected input, the task commands, and the task-step record the runner writes itself.
+// rejected input, the task commands, the task-step record the runner writes itself, and the
+// read-only executive routes that reuse the command completion path.
 const NON_REGISTRY_CAPABILITIES = Object.freeze([
   'model.answer', 'none',
   'task.plan', 'task.run', 'task.approve', 'task.retry', 'task.cancel', 'task.explain', 'task.step',
+  'goal.list', 'goal.show',
+  'plan.list', 'plan.show', 'plan.validate', 'plan.activate', 'plan.reconcile',
+  'recover',
 ]);
 
 describe('AB-1 the capability inventory is complete, exclusive, and source-backed', () => {

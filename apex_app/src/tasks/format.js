@@ -42,9 +42,13 @@ export function renderTask(task) {
   const lines = [
     `Task ${shortId(task.id)}  status: ${task.status}  origin: ${origin}  planner: ${task.planner}`,
     `Goal: ${storedText(task.goal)}`,
+  ];
+  if (task.goalId) lines.push(`Linked goal: ${shortId(task.goalId)}`);
+  if (task.planId) lines.push(`Linked plan: ${shortId(task.planId)}`);
+  lines.push(
     `Progress: ${completed} of ${total} step(s) completed`,
     'Steps:',
-  ];
+  );
   task.steps.forEach((s, i) => {
     // Descriptions are validated on the way in, but a task stored by an older build can
     // still hold a line break; it is rendered as one line here so it cannot imitate a

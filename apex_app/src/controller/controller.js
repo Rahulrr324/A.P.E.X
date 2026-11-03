@@ -22,6 +22,10 @@ import { TaskRunner } from './task-runner.js';
 import { TaskStatus, StepStatus } from '../tasks/model.js';
 import { buildTaskSummary, taskStateSignature } from '../tasks/summary.js';
 import { renderTask, renderTaskList, explainTask } from '../tasks/format.js';
+import { renderGoal, renderGoalList } from '../goals/format.js';
+import { GoalStatus, goalProgress, isOpenStatus } from '../goals/model.js';
+import { renderPlan, renderPlanList } from '../plans/format.js';
+import { PlanStatus, isOpenPlan, planProgress } from '../plans/model.js';
 import { StoreError } from '../errors.js';
 import { KNOWLEDGE_PROMPT_LIMIT } from '../actions/knowledge-actions.js';
 import { MAX_HEALTH_SAMPLES, MAX_HISTORY_CHAIN } from '../knowledge/knowledge-store.js';
@@ -57,6 +61,29 @@ export function validateRequest(text) {
 function stripDisplay(step) {
   const { display, ...rest } = step;
   return rest;
+}
+
+// A goal in one of these states accepts no new plan and cannot be advanced by activation.
+const TERMINAL_GOAL_STATUSES = new Set([
+  GoalStatus.COMPLETED,
+  GoalStatus.FAILED,
+  GoalStatus.CANCELLED,
+  GoalStatus.ABANDONED,
+  GoalStatus.SUPERSEDED,
+]);
+
+// The step outcomes a plan can record. A cancelled step is deliberately absent: a plan
+// outcome describes what a step established, and cancellation establishes nothing.
+function terminalStepOutcomes(task) {
+  const recordable = new Set([StepStatus.COMPLETED, StepStatus.FAILED, StepStatus.UNCERTAIN, StepStatus.SKIPPED]);
+  return task.steps
+    .filter((s) => recordable.has(s.status))
+    .map((s) => ({
+      stepId: s.id,
+      status: s.status,
+      operationId: s.operationId ?? null,
+      detail: s.summary ? truncate(s.summary, 300) : null,
+    }));
 }
 
 // The advice after a failed model call depends on why it failed. A reachable endpoint
@@ -265,6 +292,8 @@ export class CognitiveController {
     experience = null,
     experienceCapture = CAPTURE_OFF,
     predictions = null,
+    goals = null,
+    plans = null,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -294,6 +323,11 @@ export class CognitiveController {
     // explicit user commands have one entry point, and it is optional: with no store configured the
     // commands refuse and no prediction is claimed.
     this.predictions = predictions;
+    // Goals and their plans are user records. They contribute provenance to a task and a bounded
+    // summary to the prompt; neither ever grants permission. Agent-less configurations keep the
+    // commands refused rather than pretending the stores exist.
+    this.goals = goals;
+    this.plans = plans;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -862,9 +896,11 @@ export class CognitiveController {
     return `Experience: captured automatically as ${shortId(written.record.id)} from ${about}. APEX recorded no assessment of it - feedback is yours alone.`;
   }
 
-  async #finishCommandOp(op, step, failMsg) {
+  async #finishCommandOp(op, step, failMsg, { status = null } = {}) {
     op.steps.push(step);
-    op.status = step.outcome;
+    // A goal or plan command records the operation's own vocabulary (goals created, plans stored),
+    // not a bare success: the audit line then says what happened rather than only that a write passed.
+    op.status = status ?? step.outcome;
     op.decision = classifyDecision(op);
     op.output = step.summary ? truncate(step.summary, MAX_OUTPUT_CHARS) : null;
     op.finishedAt = this.now().toISOString();
@@ -1750,7 +1786,23 @@ export class CognitiveController {
     }
 
     const def = this.registry.get(name);
-    const ctx = { memory: this.memory, knowledge: this.knowledge, experience: this.experience, now: this.now, getStatus: this.getStatus, operationId, origin, root: this.rootForContext };
+    const ctx = {
+      memory: this.memory,
+      knowledge: this.knowledge,
+      experience: this.experience,
+      now: this.now,
+      getStatus: this.getStatus,
+      operationId,
+      origin,
+      root: this.rootForContext,
+      // Goal, plan and task references are readable so an action's own verifier can check them.
+      // They remain data: authorization is still the registry's, decided above.
+      goals: this.goals,
+      plans: this.plans,
+      operations: this.operations,
+      registry: this.registry,
+      taskStore: this.taskStore,
+    };
     // The filesystem actions receive the authorized root on ctx.root. It is set only by the
     // composition root and cannot be supplied by a model proposal, so the boundary cannot be
     // expanded from model output.
@@ -1790,6 +1842,646 @@ export class CognitiveController {
       step.display = step.summary;
     }
     return step;
+  }
+
+  // ---- executive: goals and plans ---------------------------------------------
+  // A goal records what the user intends. A plan records how the user intends to reach it.
+  // Neither is permission: every step a plan contains is authorized again by the registry
+  // when it runs. A model cannot create, revise, approve, activate, or complete either
+  // record, and completing a task never completes a goal.
+
+  #requireGoals() {
+    if (!this.goals) throw new ValidationError('goals are not available in this configuration');
+  }
+
+  #requirePlans() {
+    if (!this.plans) throw new ValidationError('plans are not available in this configuration');
+  }
+
+  // The audit keeps the first line of an intention, not a second full copy of it. A
+  // credential-shaped value is never repeated, the same rule the stores apply.
+  #intentSummary(label, text) {
+    if (typeof text !== 'string' || text.trim().length === 0) return label;
+    if (containsSecret(text)) return `${label} [text omitted: contained a password, key, or token]`;
+    return `${label} ${truncate(text.replace(/[\r\n\t]+/g, ' '), 120)}`;
+  }
+
+  // Every goal and plan mutation takes the same shape: one registry action, then one audit
+  // record that says what kind of record changed. The vocabulary override is applied only
+  // when the action verified, so a refusal keeps its own outcome in the audit log.
+  async #executiveMutation({ capability, request, action, input, failMessage, status }) {
+    const op = this.#newOp({ capability, origin: 'user', request });
+    const step = await this.runAction(action, input, 'user', op.id);
+    return this.#finishCommandOp(op, step, failMessage, {
+      status: step.outcome === Outcome.SUCCESS_VERIFIED ? status : null,
+    });
+  }
+
+  async goalAdd({ request, criteria, priority = 3, deadline = null, dependsOn = [] } = {}) {
+    return this.#executiveMutation({
+      capability: 'goal.add',
+      request: this.#intentSummary('goal', request),
+      action: 'goal.add',
+      input: { request, criteria, priority, deadline, dependsOn },
+      failMessage: 'The goal may have been stored, but its audit record could not be written.',
+      status: Outcome.GOAL_CREATED,
+    });
+  }
+
+  async goalUpdate({ target, status, reason = null, by = null } = {}) {
+    return this.#executiveMutation({
+      capability: 'goal.update',
+      request: `goal update ${truncate(String(target ?? ''), 40)} -> ${truncate(String(status ?? ''), 40)}`,
+      action: 'goal.update',
+      input: { target, status, reason, by },
+      failMessage: 'The goal may have been updated, but its audit record could not be written.',
+      status: Outcome.GOAL_UPDATED,
+    });
+  }
+
+  async goalEvidence({ target, criterion, kind, operationId = null, detail = null, reopen = false } = {}) {
+    return this.#executiveMutation({
+      capability: 'goal.evidence',
+      request: `goal evidence ${truncate(String(target ?? ''), 40)} ${truncate(String(criterion ?? ''), 20)} ${truncate(String(kind ?? ''), 20)}`,
+      action: 'goal.evidence',
+      input: { target, criterion, kind, operationId, detail, reopen },
+      failMessage: 'The evidence may have been recorded, but its audit record could not be written.',
+      status: Outcome.GOAL_UPDATED,
+    });
+  }
+
+  async goalComplete({ target, reason = null } = {}) {
+    return this.#executiveMutation({
+      capability: 'goal.complete',
+      request: `goal complete ${truncate(String(target ?? ''), 40)}`,
+      action: 'goal.complete',
+      input: { target, reason },
+      failMessage: 'The goal may have been completed, but its audit record could not be written.',
+      status: Outcome.GOAL_COMPLETED,
+    });
+  }
+
+  async goalLink({ target, planId = null, taskId = null } = {}) {
+    return this.#executiveMutation({
+      capability: 'goal.link',
+      request: `goal link ${truncate(String(target ?? ''), 40)}`,
+      action: 'goal.link',
+      input: { target, planId, taskId },
+      failMessage: 'The link may have been recorded, but its audit record could not be written.',
+      status: Outcome.GOAL_UPDATED,
+    });
+  }
+
+  async listGoals({ limit = null } = {}) {
+    this.#requireGoals();
+    const goals = await this.goals.list();
+    return renderGoalList(limit ? goals.slice(0, limit) : goals);
+  }
+
+  async showGoal(ref) {
+    this.#requireGoals();
+    const goal = await this.goals.resolve(ref);
+    return { goal, display: renderGoal(goal) };
+  }
+
+  async planAdd({ goal = null, goalId = null, outcome, steps, preconditions = [], assertions = [], estimatedSeconds = null, reason = null } = {}) {
+    return this.#executiveMutation({
+      capability: 'plan.add',
+      request: this.#intentSummary('plan', outcome),
+      action: 'plan.add',
+      input: { goal, goalId, outcome, steps, preconditions, assertions, estimatedSeconds, reason },
+      failMessage: 'The plan may have been stored, but its audit record could not be written.',
+      status: Outcome.PLAN_STORED,
+    });
+  }
+
+  async planRevise({ target, outcome, steps, preconditions = [], assertions = [], estimatedSeconds = null, reason } = {}) {
+    return this.#executiveMutation({
+      capability: 'plan.revise',
+      request: `plan revise ${truncate(String(target ?? ''), 40)}`,
+      action: 'plan.revise',
+      input: { target, outcome, steps, preconditions, assertions, estimatedSeconds, reason },
+      failMessage: 'The plan may have been revised, but its audit record could not be written.',
+      status: Outcome.PLAN_STORED,
+    });
+  }
+
+  async planApprove({ target } = {}) {
+    return this.#executiveMutation({
+      capability: 'plan.approve',
+      request: `plan approve ${truncate(String(target ?? ''), 40)}`,
+      action: 'plan.approve',
+      input: { target },
+      failMessage: 'The plan may have been approved, but its audit record could not be written.',
+      status: Outcome.PLAN_STORED,
+    });
+  }
+
+  async planCancel({ target, reason } = {}) {
+    return this.#executiveMutation({
+      capability: 'plan.cancel',
+      request: `plan cancel ${truncate(String(target ?? ''), 40)}`,
+      action: 'plan.cancel',
+      input: { target, reason },
+      failMessage: 'The plan may have been cancelled, but its audit record could not be written.',
+      status: Outcome.PLAN_STORED,
+    });
+  }
+
+  async planSupersede({ target, by, reason } = {}) {
+    return this.#executiveMutation({
+      capability: 'plan.supersede',
+      request: `plan supersede ${truncate(String(target ?? ''), 40)} by ${truncate(String(by ?? ''), 40)}`,
+      action: 'plan.supersede',
+      input: { target, by, reason },
+      failMessage: 'The supersession may have been recorded, but its audit record could not be written.',
+      status: Outcome.PLAN_STORED,
+    });
+  }
+
+  async listPlans({ limit = null } = {}) {
+    this.#requirePlans();
+    const plans = await this.plans.list();
+    return renderPlanList(limit ? plans.slice(0, limit) : plans);
+  }
+
+  async showPlan(ref) {
+    this.#requirePlans();
+    const plan = await this.plans.resolve(ref);
+    return { plan, display: renderPlan(plan) };
+  }
+
+  // Read-only: checks the stored plan against the live registry without writing anything.
+  async validateStoredPlan(ref) {
+    this.#requirePlans();
+    const plan = await this.plans.resolve(ref);
+    const validation = this.plans.validatePlan(plan);
+    const verdict = validation.ok
+      ? `Validation: passed. ${validation.steps} step(s): ${validation.reads} read, ${validation.writes} write; risk ${validation.risk}. Nothing has run.`
+      : [
+        'Validation: NOT passed. The plan cannot be approved or started until these are resolved:',
+        ...validation.problems.map((p) => `  - ${p}`),
+      ].join('\n');
+    return { plan, validation, display: `${renderPlan(plan)}\n${verdict}` };
+  }
+
+  // The executive control loop. Activation creates a user-origin task from the approved
+  // plan, records the activation, then runs the task through the same runner as any other
+  // task: each step is authorized and verified separately. Every later failure is reported
+  // as what it is, never as a successful run.
+  async planActivate(ref, { mode = 'run' } = {}) {
+    const op = this.#newOp({ capability: 'plan.activate', origin: 'user', request: `plan ${mode}` });
+    let plan = null;
+    let task = null;
+    let linkNotice = null;
+    try {
+      this.#requirePlans();
+      this.#requireTasks();
+      plan = await this.plans.resolve(ref);
+      op.request = `plan ${mode} ${shortId(plan.id)}`;
+      if (plan.status !== PlanStatus.APPROVED) {
+        throw new ValidationError(`plan is ${plan.status}; only an approved plan can be started`);
+      }
+      const validation = this.plans.validatePlan(plan);
+      if (!validation.ok) {
+        throw new ValidationError(`plan cannot be started: ${validation.problems.join('; ')}`, 'PLAN_INVALID');
+      }
+      let goal = null;
+      if (plan.goalId) {
+        this.#requireGoals();
+        goal = await this.goals.get(plan.goalId);
+        if (!goal) throw new ValidationError(`goal ${shortId(plan.goalId)} is referenced by this plan but cannot be read`);
+        if (TERMINAL_GOAL_STATUSES.has(goal.status)) {
+          throw new ValidationError(`goal ${shortId(goal.id)} is ${goal.status}; its plan cannot be started`);
+        }
+      }
+      // The plan's steps have already passed validation, but they are checked again here
+      // through the same code the task planner uses, which also normalises their inputs.
+      const checked = checkSteps(
+        plan.steps.map((s) => ({
+          id: s.id,
+          description: s.description,
+          action: s.action,
+          input: s.input,
+          dependsOn: s.dependsOn,
+        })),
+        this.registry,
+        'user',
+      );
+      if (checked.problems.length > 0) {
+        throw new ValidationError(`plan cannot be started: ${checked.problems.join('; ')}`, 'PLAN_INVALID');
+      }
+      task = await this.#createTask({
+        goal: plan.outcome,
+        origin: 'user',
+        planner: 'plan',
+        steps: checked.steps,
+        goalId: plan.goalId,
+        planId: plan.id,
+      });
+      try {
+        await this.plans.activate(plan.id, { taskId: task.id, goal });
+      } catch (err) {
+        // The plan was not activated, so the task created for it must never run. It is
+        // cancelled best-effort and the refusal says so either way.
+        let cancelNote = '';
+        try {
+          await this.taskStore.withLock(() => this.tasks.cancel(task.id));
+        } catch (cancelErr) {
+          cancelNote = ` The task ${shortId(task.id)} could not be cancelled either (${redactSecrets(cancelErr.message)}); it remains pending and was not run. Do not run it: the plan was not activated.`;
+        }
+        throw new ValidationError(`${redactSecrets(err.message)}.${cancelNote}`);
+      }
+      if (goal) {
+        try {
+          await this.goals.link(goal.id, { taskId: task.id });
+        } catch (err) {
+          linkNotice = `Note: the task is recorded, but the goal's task index was not updated (${redactSecrets(err.message)}).`;
+        }
+      }
+    } catch (err) {
+      if (err instanceof ValidationError || err instanceof StoreError) {
+        return this.#finishTaskOp(op, Outcome.INPUT_REJECTED, redactSecrets(err.message), task);
+      }
+      throw err;
+    }
+
+    let result;
+    try {
+      result = await this.taskStore.withLock(() => this.tasks.run(task.id, { mode }));
+    } catch (err) {
+      if (err instanceof StoreError && err.executedSteps?.length) {
+        const current = err.taskId
+          ? await this.taskStore.get(err.taskId).catch(() => null)
+          : await this.taskStore.get(task.id).catch(() => null);
+        const recorded = current ? await this.#recordPlanOutcomes(plan.id, current) : { error: null };
+        const outcomeNote = recorded.error ? ` Plan outcomes were not recorded: ${redactSecrets(recorded.error.message)}.` : '';
+        return this.#finishTaskOp(
+          op,
+          Outcome.AUDIT_INTEGRITY_FAILED,
+          `Plan ${shortId(plan.id)} was activated as task ${shortId(task.id)}. ${this.#unrecordedTaskState(err)}${outcomeNote}`,
+          current,
+        );
+      }
+      // Activation is already a recorded fact. A refusal to run must not imply the plan is
+      // still inactive or that anything ran.
+      const current = await this.taskStore.get(task.id).catch(() => null);
+      return this.#finishTaskOp(
+        op,
+        Outcome.INPUT_REJECTED,
+        `Plan ${shortId(plan.id)} is active as task ${shortId(task.id)}, but the run was refused before it started: ${redactSecrets(err.message)}`,
+        current,
+      );
+    }
+
+    const recorded = await this.#recordPlanOutcomes(plan.id, result.task);
+    const notes = [];
+    if (recorded.error) {
+      notes.push(`The step outcomes were not recorded against the plan: ${redactSecrets(recorded.error.message)}.`);
+    }
+    let planStatus = null;
+    try {
+      const fresh = await this.plans.get(plan.id);
+      if (fresh) {
+        planStatus = fresh.status;
+        const progress = planProgress(fresh);
+        if (!recorded.error && result.task.status === TaskStatus.COMPLETED && progress.completed === progress.total) {
+          await this.plans.setStatus(plan.id, PlanStatus.COMPLETED, { reason: 'every step has a completed, verified operation' });
+          planStatus = PlanStatus.COMPLETED;
+          notes.push(`Plan ${shortId(plan.id)} is completed against ${progress.total} verified step outcome(s). No goal is completed by this: a goal is completed only by the user against its own criteria.`);
+        } else if (progress.failed || progress.uncertain || progress.skipped || result.task.status === TaskStatus.FAILED) {
+          if (fresh.status === PlanStatus.ACTIVE) {
+            await this.plans.setStatus(plan.id, PlanStatus.BLOCKED, { reason: 'a step did not complete; the task record states why' });
+            planStatus = PlanStatus.BLOCKED;
+            notes.push(`Plan ${shortId(plan.id)} is blocked. Resolve the obstacle, then reconcile: node bin/apex.js plan reconcile ${shortId(plan.id)}`);
+          }
+        }
+      }
+    } catch (err) {
+      notes.push(`The plan status was not updated: ${redactSecrets(err.message)}.`);
+    }
+
+    const gaps = result.auditGaps.length;
+    if (gaps) {
+      op.errors.push({
+        stage: 'audit',
+        code: 'AUDIT_WRITE_FAILED',
+        message: `${gaps} step record(s) were not written to the operation log`,
+        steps: result.auditGaps,
+        underlyingStatus: result.underlyingStatus,
+      });
+    }
+    await this.#recordTaskSummary(op, result.task, { recovery: result.recovery, auditGaps: result.auditGaps });
+    const warning = gaps
+      ? `\nAudit integrity failure: ${gaps} required task-step operation record(s) could not be written (${result.auditGaps.join(', ')}). Underlying task result: ${result.underlyingStatus}.`
+      : '';
+    const display = [
+      `Plan ${shortId(plan.id)} was activated as task ${shortId(task.id)} (${mode}).`,
+      `Plan status: ${planStatus ?? 'unavailable'}`,
+      renderTask(result.task),
+      linkNotice,
+      ...notes,
+    ].filter(Boolean).join('\n');
+    return this.#finishTaskOp(
+      op,
+      result.status,
+      `${display}${warning}${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}`,
+      result.task,
+      {
+        auditGaps: gaps,
+        auditGapSteps: result.auditGaps,
+        underlyingStatus: result.underlyingStatus,
+        recovery: result.recovery ?? null,
+        planStatus,
+        linkNotice: linkNotice ?? null,
+      },
+    );
+  }
+
+  // Reads the task log for the task a plan activated and records its terminal step
+  // outcomes against the plan. It never runs anything. A completed outcome is accepted
+  // only when its own audit record is still a verified success.
+  async #recordPlanOutcomes(planId, task) {
+    const outcomes = terminalStepOutcomes(task);
+    if (outcomes.length === 0) return { outcomes, error: null };
+    try {
+      await this.plans.recordOutcome(planId, { taskId: task.id, steps: outcomes });
+      return { outcomes, error: null };
+    } catch (err) {
+      if (err instanceof ValidationError || err instanceof StoreError) return { outcomes, error: err };
+      throw err;
+    }
+  }
+
+  // Reconciles a plan with the task it activated and the audit log. Nothing is executed.
+  async planReconcile(ref) {
+    const op = this.#newOp({ capability: 'plan.reconcile', origin: 'user', request: 'plan reconcile' });
+    const finish = (step) => this.#finishCommandOp(
+      op,
+      step,
+      'The plan outcome may have been recorded, but its audit record could not be written.',
+      { status: step.outcome === Outcome.SUCCESS_VERIFIED ? Outcome.PLAN_STORED : null },
+    );
+    const refuse = (message) => finish({
+      action: 'plan.reconcile',
+      origin: 'user',
+      input: {},
+      authorization: { decision: 'allow', reason: 'explicit user command' },
+      execution: { status: 'not_run' },
+      verification: { outcome: Outcome.INPUT_REJECTED, detail: null },
+      outcome: Outcome.INPUT_REJECTED,
+      summary: message,
+      display: message,
+      result: null,
+    });
+
+    let plan;
+    try {
+      this.#requirePlans();
+      this.#requireTasks();
+      plan = await this.plans.resolve(ref);
+      op.request = `plan reconcile ${shortId(plan.id)}`;
+      if (!plan.activation?.taskId) {
+        throw new ValidationError('this plan was never activated, so there is no task to reconcile');
+      }
+    } catch (err) {
+      if (err instanceof ValidationError || err instanceof StoreError) return refuse(redactSecrets(err.message));
+      throw err;
+    }
+
+    let task;
+    try {
+      task = await this.taskStore.get(plan.activation.taskId);
+    } catch (err) {
+      if (err instanceof StoreError) return refuse(`${redactSecrets(err.message)}. Some plan records may already be written; this read only reports what the task log could not provide.`);
+      throw err;
+    }
+    if (!task) return refuse(`the task ${shortId(plan.activation.taskId)} recorded on this plan cannot be read; nothing was reconciled`);
+
+    const outcomes = terminalStepOutcomes(task);
+    if (outcomes.length === 0) {
+      return refuse(`the task ${shortId(task.id)} has no terminal step outcome yet; nothing was reconciled`);
+    }
+    // A step outcome that is already final is never re-written: the plan store refuses it,
+    // and reconciling twice must be a truthful no-op rather than an error. An uncertain or
+    // non-completed failed step is the only kind a later read may replace, and only when the
+    // later read actually differs; the same status adds no new outcome.
+    const reconcilable = outcomes.filter((o) => {
+      const prior = plan.stepResults?.[o.stepId];
+      if (!prior) return true;
+      if (prior.status === o.status) return false;
+      if (prior.status === StepStatus.UNCERTAIN) return true;
+      return prior.status === StepStatus.FAILED && o.status !== StepStatus.COMPLETED;
+    });
+    let outcomeError = null;
+    if (reconcilable.length > 0) {
+      try {
+        await this.plans.recordOutcome(plan.id, { taskId: task.id, steps: reconcilable });
+      } catch (err) {
+        if (err instanceof ValidationError || err instanceof StoreError) outcomeError = err;
+        else throw err;
+      }
+    }
+    if (outcomeError) {
+      return refuse(`The task outcomes were not recorded against the plan: ${redactSecrets(outcomeError.message)}`);
+    }
+
+    const notes = reconcilable.length === 0
+      ? ['No new terminal outcome was recorded: the plan already holds a final outcome for every finished step.']
+      : [`Recorded ${reconcilable.length} new terminal step outcome(s).`];
+    try {
+      const fresh = await this.plans.get(plan.id);
+      const progress = planProgress(fresh);
+      if (task.status === TaskStatus.COMPLETED && progress.completed === progress.total) {
+        if (fresh.status !== PlanStatus.COMPLETED) {
+          await this.plans.setStatus(plan.id, PlanStatus.COMPLETED, { reason: 'every step has a completed, verified operation' });
+          notes.push(`Plan ${shortId(plan.id)} is completed against ${progress.total} verified step outcome(s). No goal is completed by this; goals have their own criteria and evidence.`);
+        } else {
+          notes.push(`Plan ${shortId(plan.id)} was already recorded as completed; this reconciliation did not re-check that earlier completion evidence.`);
+        }
+      } else if (fresh.status === PlanStatus.ACTIVE
+        && (progress.failed || progress.uncertain || progress.skipped || task.status === TaskStatus.FAILED)) {
+        await this.plans.setStatus(plan.id, PlanStatus.BLOCKED, { reason: 'a step did not complete; the task record states why' });
+        notes.push(`Plan ${shortId(plan.id)} is blocked; resolve the obstacle before starting it again.`);
+      }
+    } catch (err) {
+      if (err instanceof ValidationError || err instanceof StoreError) {
+        return refuse(`The outcomes were recorded, but the plan status was not updated: ${redactSecrets(err.message)}`);
+      }
+      throw err;
+    }
+
+    const updated = await this.plans.get(plan.id);
+    const step = {
+      action: 'plan.reconcile',
+      origin: 'user',
+      input: { taskId: task.id },
+      authorization: { decision: 'allow', reason: 'explicit user command' },
+      execution: { status: 'ok' },
+      verification: { outcome: Outcome.SUCCESS_VERIFIED, detail: 'recorded outcomes re-checked against the audit log by the plan store' },
+      outcome: Outcome.SUCCESS_VERIFIED,
+      summary: `reconciled plan ${shortId(plan.id)} against task ${shortId(task.id)}: ${reconcilable.length} new outcome(s), ${outcomes.length - reconcilable.length} already final`,
+      display: [renderPlan(updated), ...notes].filter(Boolean).join('\n'),
+      result: null,
+    };
+    return finish(step);
+  }
+
+  // Read-only recovery inspection. It reports what the records establish; it never resumes,
+  // retries, approves, reconciles, or changes anything. A store that cannot be read is
+  // reported as unavailable or damaged, never as empty.
+  async recoveryReport() {
+    const sections = { interrupted: [], uncertain: [], resumable: [], needsUser: [], completed: [] };
+    const problems = [];
+    let goals = [];
+    let plans = [];
+    let tasks = [];
+
+    if (this.goals) {
+      try {
+        const g = await this.goals.inspect();
+        goals = g.goals;
+        if (g.corrupt.length > 0 || g.problems.length > 0) {
+          problems.push(`goal log: ${g.corrupt.length} corrupt line(s), ${g.problems.length} event(s) that cannot be applied; the goal state below is incomplete`);
+        }
+      } catch (err) {
+        problems.push(`goal records unavailable: ${redactSecrets(err.message)}`);
+      }
+    } else {
+      problems.push('goal records are not configured');
+    }
+    if (this.plans) {
+      try {
+        const p = await this.plans.inspect();
+        plans = p.plans;
+        if (p.corrupt.length > 0 || p.problems.length > 0) {
+          problems.push(`plan log: ${p.corrupt.length} corrupt line(s), ${p.problems.length} event(s) that cannot be applied; the plan state below is incomplete`);
+        }
+      } catch (err) {
+        problems.push(`plan records unavailable: ${redactSecrets(err.message)}`);
+      }
+    } else {
+      problems.push('plan records are not configured');
+    }
+    if (this.taskStore) {
+      try {
+        const t = await this.taskStore.inspect();
+        tasks = t.tasks;
+        if (t.corrupt.length > 0 || t.problems.length > 0) {
+          problems.push(`task log: ${t.corrupt.length} corrupt line(s), ${t.problems.length} event(s) that cannot be applied; the task state below is incomplete`);
+        }
+      } catch (err) {
+        problems.push(`task records unavailable: ${redactSecrets(err.message)}`);
+      }
+    } else {
+      problems.push('task records are not configured');
+    }
+
+    const tasksById = new Map(tasks.map((t) => [t.id, t]));
+    const plansByTask = new Map();
+    for (const p of plans) {
+      if (p.activation?.taskId) plansByTask.set(p.activation.taskId, p);
+    }
+
+    for (const task of tasks) {
+      const plan = plansByTask.get(task.id);
+      const planNote = plan ? ` (plan ${shortId(plan.id)})` : '';
+      const uncertainSteps = task.steps.filter((s) => s.status === StepStatus.UNCERTAIN).map((s) => s.id);
+      const failedSteps = task.steps.filter((s) => s.status === StepStatus.FAILED).map((s) => s.id);
+      if (task.status === TaskStatus.RUNNING) {
+        sections.interrupted.push(`task ${shortId(task.id)}${planNote}: recorded as running, but no live process holds the task lock. Run "node bin/apex.js task resume ${shortId(task.id)}" to resolve each interrupted step from its own audit record; a step is never run again.`);
+      }
+      if (uncertainSteps.length > 0) {
+        sections.uncertain.push(`task ${shortId(task.id)}${planNote}: step(s) ${uncertainSteps.join(', ')} ended without a confirmed outcome. It is not known whether the effect happened; no automatic retry is safe.`);
+      }
+      if (task.status === TaskStatus.PENDING || task.status === TaskStatus.PAUSED) {
+        const waiting = task.steps.filter((s) => s.status === StepStatus.AWAITING_APPROVAL).map((s) => s.id);
+        const label = waiting.length > 0
+          ? `needs your approval for step(s) ${waiting.join(', ')} before it can continue`
+          : `${task.status}, not finished`;
+        sections.resumable.push(`task ${shortId(task.id)}${planNote}: ${label}. Run "node bin/apex.js task ${waiting.length > 0 ? 'approve' : 'resume'} ${shortId(task.id)}${waiting.length > 0 ? ` --step ${waiting[0]}` : ''}".`);
+      }
+      if (failedSteps.length > 0) {
+        sections.needsUser.push(`task ${shortId(task.id)}${planNote}: step(s) ${failedSteps.join(', ')} failed. Review "task explain ${shortId(task.id)} why"; nothing retries automatically.`);
+      } else if (task.status === TaskStatus.FAILED) {
+        sections.needsUser.push(`task ${shortId(task.id)}${planNote}: failed. Review "task explain ${shortId(task.id)} why"; nothing retries automatically.`);
+      }
+      if (task.status === TaskStatus.PROPOSED) {
+        sections.needsUser.push(`task ${shortId(task.id)}: proposed and waiting for your approval.`);
+      }
+      if (task.status === TaskStatus.COMPLETED || task.status === TaskStatus.CANCELLED) {
+        sections.completed.push(`task ${shortId(task.id)}${planNote}: ${task.status}.`);
+      }
+    }
+
+    for (const plan of plans) {
+      const task = plan.activation?.taskId ? tasksById.get(plan.activation.taskId) : null;
+      const taskNote = task ? ` (task ${shortId(task.id)})` : '';
+      if (plan.status === PlanStatus.ACTIVE && plan.activation?.taskId && !task) {
+        sections.needsUser.push(`plan ${shortId(plan.id)}: active, but the task ${shortId(plan.activation.taskId)} it names cannot be read. Do not start it again; inspect the task log.`);
+      }
+      if (plan.status === PlanStatus.BLOCKED) {
+        sections.needsUser.push(`plan ${shortId(plan.id)}${taskNote}: blocked. Resolve the obstacle, then run "node bin/apex.js plan reconcile ${shortId(plan.id)}".`);
+      }
+      if (plan.status === PlanStatus.APPROVED) {
+        sections.resumable.push(`plan ${shortId(plan.id)}: approved and not started. Run "node bin/apex.js plan start ${shortId(plan.id)}".`);
+      }
+      if (plan.status === PlanStatus.DRAFT) {
+        sections.needsUser.push(`plan ${shortId(plan.id)}: draft. Validate it, then approve it before it can start.`);
+      }
+      if (plan.status === PlanStatus.COMPLETED || plan.status === PlanStatus.CANCELLED || plan.status === PlanStatus.SUPERSEDED || plan.status === PlanStatus.FAILED) {
+        sections.completed.push(`plan ${shortId(plan.id)}${taskNote}: ${plan.status}.`);
+      }
+    }
+
+    for (const goal of goals) {
+      if (goal.contradiction) {
+        sections.uncertain.push(`goal ${shortId(goal.id)}: criterion ${goal.contradiction.criterionId} is contradicted; the goal is not satisfied.`);
+      }
+      if (goal.status === GoalStatus.BLOCKED) {
+        sections.needsUser.push(`goal ${shortId(goal.id)}: blocked${goal.blockedReason ? ` (${truncate(goal.blockedReason, 120)})` : ''}.`);
+      }
+      if (goal.status === GoalStatus.PROPOSED || goal.status === GoalStatus.ACCEPTED) {
+        sections.needsUser.push(`goal ${shortId(goal.id)}: ${goal.status}; it has not started.`);
+      }
+      if (goal.status === GoalStatus.ACTIVE) {
+        const linked = goal.planIds.length > 0 || goal.taskIds.length > 0;
+        if (!linked) sections.needsUser.push(`goal ${shortId(goal.id)}: active, with no plan or task linked yet.`);
+        const progress = goalProgress(goal);
+        if (progress.total > 0 && progress.satisfied === 0) {
+          sections.resumable.push(`goal ${shortId(goal.id)}: active; ${progress.pending} criterion(s) still need evidence.`);
+        }
+      }
+      if (goal.status === GoalStatus.COMPLETED || goal.status === GoalStatus.CANCELLED
+        || goal.status === GoalStatus.ABANDONED || goal.status === GoalStatus.SUPERSEDED || goal.status === GoalStatus.FAILED) {
+        sections.completed.push(`goal ${shortId(goal.id)}: ${goal.status}.`);
+      }
+    }
+
+    const MAX_SHOWN = 10;
+    const render = (title, entries) => {
+      if (entries.length === 0) return [`${title}: none`];
+      const shown = entries.slice(0, MAX_SHOWN);
+      if (entries.length > MAX_SHOWN) shown.push(`... and ${entries.length - MAX_SHOWN} more`);
+      return [`${title}:`, ...shown.map((line) => `  - ${line}`)];
+    };
+    const lines = [
+      'Recovery inspection (read-only)',
+      'Nothing here is resumed, retried, approved, reconciled, or changed. An interrupted step is never assumed not to have happened.',
+      `Records read: ${goals.length} goal(s), ${plans.length} plan(s), ${tasks.length} task(s).`,
+      ...(problems.length > 0 ? ['Problems reading records:', ...problems.map((p) => `  - ${p}`)] : []),
+      ...render('Interrupted', sections.interrupted),
+      ...render('Uncertain', sections.uncertain),
+      ...render('Resumable', sections.resumable),
+      ...render('Needs your intervention', sections.needsUser),
+      ...render('Completed or closed', sections.completed),
+      'Next: "node bin/apex.js task resume <id>" for a task, "node bin/apex.js plan reconcile <id>" for a plan. Recovery is separately authorized; this command runs nothing.',
+    ];
+    const attention = problems.length > 0
+      || sections.interrupted.length > 0
+      || sections.uncertain.length > 0
+      || sections.needsUser.length > 0;
+    return { display: lines.join('\n'), attention, sections, problems };
   }
 
   // ---- tasks ------------------------------------------------------------------
@@ -1886,10 +2578,10 @@ export class CognitiveController {
       + ` To reconcile the recorded state from the audit: node bin/apex.js task run ${shortId(err.taskId)}`;
   }
 
-  async #createTask({ goal, origin, planner, steps }) {
+  async #createTask({ goal, origin, planner, steps, goalId = null, planId = null }) {
     return this.taskStore.withLock(async () => {
       const taskId = this.idFactory();
-      await this.taskStore.createTask({ taskId, goal, origin, planner, steps });
+      await this.taskStore.createTask({ taskId, goal, origin, planner, steps, goalId, planId });
       return this.taskStore.get(taskId);
     });
   }
@@ -2460,6 +3152,24 @@ export class CognitiveController {
         predictionsUnavailable = true;
       }
     }
+    // Goals, plans, and unfinished tasks are read as records, not as permission. They are
+    // offered to the prompt only when the request concerns them; a store that cannot be read
+    // is disclosed for such a request rather than rendered as "nothing is recorded".
+    let executive = null;
+    let executiveUnavailable = false;
+    if (this.goals || this.plans || this.taskStore) {
+      try {
+        const [goalRecords, planRecords, taskRecords] = await Promise.all([
+          this.goals ? this.goals.list() : Promise.resolve([]),
+          this.plans ? this.plans.list() : Promise.resolve([]),
+          this.taskStore ? this.taskStore.list() : Promise.resolve([]),
+        ]);
+        executive = { goals: goalRecords, plans: planRecords, tasks: taskRecords, unavailable: false };
+      } catch (err) {
+        op.errors.push({ stage: 'executive', code: err.code || 'STORE_ERROR', message: err.message });
+        executiveUnavailable = true;
+      }
+    }
     const built = buildPrompt({
       request,
       memoryHits: relevant,
@@ -2476,6 +3186,8 @@ export class CognitiveController {
       temporalUnavailable,
       predictions,
       predictionsUnavailable,
+      executive,
+      executiveUnavailable,
       maxChars: this.maxContextChars,
     });
     const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });
@@ -2536,6 +3248,20 @@ export class CognitiveController {
       // Reached only when no prediction store is configured for this app, which is a different
       // statement from an empty ledger and from one that could not be read.
       op.prompt.predictions = { included: false, relevant: true, noLedgerConfigured: true };
+    }
+    // Goal and plan state contributes counts and ids to the audit, never the user's request
+    // text: the stores hold the authoritative record and every read reopens it.
+    if (executive) {
+      op.prompt.executive = {
+        included: built.executiveIncluded,
+        lines: built.executiveLines,
+        linesTotal: built.executiveLinesTotal,
+        openGoals: executive.goals.filter((g) => isOpenStatus(g.status)).length,
+        openPlans: executive.plans.filter((p) => isOpenPlan(p.status)).length,
+        unfinishedTasks: executive.tasks.filter((t) => t.status !== 'completed' && t.status !== 'cancelled').length,
+      };
+    } else if (executiveUnavailable) {
+      op.prompt.executive = { included: false, unavailable: true };
     }
 
     // A conflict stays visible even if the model ignores the in-context markers.

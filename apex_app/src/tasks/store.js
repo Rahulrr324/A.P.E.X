@@ -350,8 +350,17 @@ export class TaskStore {
     return { schema: TASK_SCHEMA, eventId: this.idFactory(), type, taskId, at: this.now().toISOString() };
   }
 
-  async createTask({ taskId, goal, origin, planner, steps, reason }) {
-    return this.#append({ ...this.#base('task_created', taskId), goal, origin, planner, steps, reason: reason ?? 'created' });
+  async createTask({ taskId, goal, origin, planner, steps, reason, goalId = null, planId = null }) {
+    return this.#append({
+      ...this.#base('task_created', taskId),
+      goal,
+      origin,
+      planner,
+      ...(goalId ? { goalId } : {}),
+      ...(planId ? { planId } : {}),
+      steps,
+      reason: reason ?? 'created',
+    });
   }
 
   // One atomic change: any task status change, step status changes, and an optional

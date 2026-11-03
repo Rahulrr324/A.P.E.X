@@ -14,6 +14,8 @@ import { CONTROL_CHARS, shortId, truncate } from './util.js';
 import { redactSecrets } from './security/secrets.js';
 import { scanCredentialShapedRecords } from './operations/operation-log.js';
 import { captureSettingPhrase } from './experience/capture.js';
+import { isOpenStatus } from './goals/model.js';
+import { isOpenPlan } from './plans/model.js';
 
 export const State = Object.freeze({
   OK: 'ok',
@@ -540,12 +542,83 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     problems: predictionProblems,
   };
 
+  // --- goals and plans ---------------------------------------------------------
+  // Recorded intent, not work. The counts separate open records from closed ones because an
+  // open goal or plan is unfinished intent, while a closed one is history. A damaged log is
+  // reported as incomplete rather than as empty, and an unreadable store reports null counts.
+  for (const spec of [
+    { key: 'goals', label: 'Goals', store: app.goals, recordsField: 'goals', isOpen: isOpenStatus, noun: 'goal' },
+    { key: 'plans', label: 'Plans', store: app.plans, recordsField: 'plans', isOpen: isOpenPlan, noun: 'plan' },
+  ]) {
+    if (!spec.store || typeof spec.store.inspect !== 'function') {
+      subsystems[spec.key] = {
+        key: spec.key,
+        label: spec.label,
+        state: State.UNAVAILABLE,
+        summary: `${spec.label}: unavailable (the store is not configured)`,
+        detail: 'not configured',
+        count: null,
+        open: null,
+        corruptLines: 0,
+        problems: [],
+      };
+      unchecked.push(`${spec.label.toLowerCase()} were not inspected because their store is not configured`);
+      continue;
+    }
+    try {
+      const r = await spec.store.inspect();
+      const recordsExist = await fileExists(spec.store.filePath);
+      const corrupt = r.corrupt.length > 0 || r.problems.length > 0;
+      const state = corrupt ? State.CORRUPT : recordsExist === false ? State.MISSING : State.OK;
+      const records = r[spec.recordsField];
+      const open = records.filter((x) => spec.isOpen(x.status)).length;
+      const problems = [
+        ...corruptLineProblems(path.basename(spec.store.filePath), r.corrupt),
+        ...r.problems.map((p) => `${path.basename(spec.store.filePath)}: replay: ${safeText(p.reason, 200)}`),
+      ];
+      subsystems[spec.key] = {
+        key: spec.key,
+        label: spec.label,
+        state,
+        summary: state === State.MISSING
+          ? `${spec.label}: none recorded`
+          : state === State.CORRUPT
+            ? `${spec.label}: corrupt (${records.length} readable ${spec.noun}(s), ${r.corrupt.length} corrupt line(s), ${r.problems.length} event(s) that cannot be applied; the state is incomplete)`
+            : `${spec.label}: ok (${records.length} ${spec.noun}(s), ${open} open)`,
+        detail: null,
+        count: records.length,
+        events: r.events,
+        open,
+        corruptLines: r.corrupt.length,
+        problems,
+      };
+      if (state === State.CORRUPT) {
+        unchecked.push(`${spec.label.toLowerCase()} were read from a damaged log; the remaining state is unverified`);
+      }
+    } catch (err) {
+      subsystems[spec.key] = {
+        key: spec.key,
+        label: spec.label,
+        state: State.UNAVAILABLE,
+        summary: `${spec.label}: unavailable (${safeText(errorDetail(err))})`,
+        detail: errorDetail(err),
+        count: null,
+        open: null,
+        corruptLines: 0,
+        problems: [],
+      };
+      unchecked.push(`${spec.label.toLowerCase()} could not be inspected because their store could not be read`);
+    }
+  }
+
   confirmed.push(
     ...subsystems.conversation.problems,
     ...subsystems.memory.problems,
     ...subsystems.knowledge.problems,
     ...subsystems.experience.problems,
     ...subsystems.predictions.problems,
+    ...subsystems.goals.problems,
+    ...subsystems.plans.problems,
   );
 
   // --- tasks -----------------------------------------------------------------

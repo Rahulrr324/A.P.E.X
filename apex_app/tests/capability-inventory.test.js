@@ -52,11 +52,15 @@ function auditLines(dir) {
   return fs.readFileSync(p, 'utf8').split('\n').filter((line) => line.trim().length > 0).length;
 }
 
-// The capabilities that are not registry actions but do end an operation. Frozen here on purpose: a new
-// route has to be named in this list and classified for capture, or these tests fail.
+// The capabilities that are not registry actions but can still produce an operation or a
+// classified read. Frozen here on purpose: a new route has to be named in this list and
+// classified for capture, or these tests fail.
 const NON_ACTION_CAPABILITIES = [
   'model.answer', 'task.plan', 'task.run', 'task.approve', 'task.retry', 'task.cancel',
   'task.explain', 'task.step', 'none',
+  'goal.list', 'goal.show',
+  'plan.list', 'plan.show', 'plan.validate', 'plan.activate', 'plan.reconcile',
+  'recover',
 ];
 
 // The refusal kinds that are about policy rather than about a malformed argument.
@@ -96,7 +100,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 32, 'the default registry has 32 actions');
+    assert.equal(plain.registry.list().length, 42, 'the default registry has 42 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -127,7 +131,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 14, 'the inventory counts fourteen write actions');
+    assert.equal(writes.length, 24, 'the inventory counts twenty-four write actions');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);

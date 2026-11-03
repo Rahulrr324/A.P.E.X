@@ -36,7 +36,14 @@ const REFUSED = new Set([
 export function classifyDecision({ status, steps = [] }) {
   if (status === Outcome.CLARIFICATION_REQUIRED) return Decision.CLARIFY;
   if (REFUSED.has(status)) return Decision.REFUSE_OR_BLOCK;
-  if (status === Outcome.PLAN_CREATED || status === Outcome.PLAN_PROPOSED || status === Outcome.TASK_PAUSED) {
+  if (
+    status === Outcome.PLAN_CREATED
+    || status === Outcome.PLAN_PROPOSED
+    || status === Outcome.PLAN_STORED
+    || status === Outcome.GOAL_CREATED
+    || status === Outcome.GOAL_UPDATED
+    || status === Outcome.TASK_PAUSED
+  ) {
     return Decision.PROPOSE_ACTION;
   }
   const modelSteps = steps.filter((step) => step && step.origin === 'model');

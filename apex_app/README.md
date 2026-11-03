@@ -36,9 +36,10 @@ from a milestone number or a passing build.
 | Real-model behaviour | **Observed outside the automated suite**: Qwen3-4B GGUF served by Ollama 0.35.0 on one Windows machine. One bounded request on 2026-10-31 completed through APEX in about 105 s; a bounded four-request benchmark the same day recorded 37.7-53.1 s per request, with 3.0-3.8 backend-reported tokens/s. Every answer was reported as unverified. Measurements and limits are in [Optional: a model endpoint you configure](#optional-a-model-endpoint-you-configure). | A dated historical observation, not an active setup instruction; no automated regression test. |
 | Epistemic world-state projection | Implemented as a bounded, read-only projection of what the stores hold: beliefs classified by provenance (`user_asserted` vs `unverified_model`), knowledge conflicts and recorded user decisions, heuristic memory disagreements, missing evidence, and explicit unknowns. It is a view derived at read time, not a world model: it persists nothing, calls no model, and decides nothing. A model-path answer also receives a bounded, counts-only view of it, so the model is told what the stores hold beyond the records retrieval happened to show. | `world-state.test.js`, `world-context.test.js`, `src/world/world-state.js`, the `world` command, and [World state](#world-state-the-read-only-epistemic-projection). Measured read cost is in [Benchmarks](#benchmarks). |
 | Prediction ledger and outcome evaluation | Implemented as an append-only record of expectations **the user states**, with a lifecycle and verdicts derived at read time from recorded outcomes: `prediction record/list/show/history/evaluate/invalidate/summary/health`. It is not a predictor: nothing estimates a future outcome, no record carries a confidence or probability, no prediction authorizes an action or an adaptation, and a model cannot write one. An expired horizon is not a wrong prediction, and a rate below 20 recorded evaluations is withheld rather than printed. | `prediction-store.test.js`, `prediction-lifecycle.test.js`, `prediction-integration.test.js`, `prediction-context.test.js`, `prediction-adversarial.test.js`, `prediction-concurrency.test.js` (128 tests, real child processes). See [Batch AE](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented); measured read cost is in [Benchmarks](#benchmarks). |
+| Goal and executive plan system | Implemented as two append-only stores (`goals.jsonl`, `plans.jsonl`) and a user-origin command surface: `goal add/list/show/update/evidence/complete/link`, `plan add/list/show/validate/revise/approve/start/reconcile/cancel/supersede`, and the read-only `recover`. A plan is a draft until approved; approval is bound to a content hash, activation re-validates against the live registry and creates an ordinary task, and every step is authorized again when it runs. A goal is completed only against evidence that names a live `success_verified` audit operation. It is not an autonomous planner: nothing here invents a goal, starts a plan, or grants permission. | `goal-system.test.js`, `executive-control.test.js` (scenarios A, B, C, E, F, G; 13 tests), `executive-cli.test.js` (4 real CLI tests), `executive-interruption.test.js` (scenario D: a real child process killed inside a plan step, 1 test). See [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented). |
 | `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
 | Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
-| World model, general planner, persistent learning, voice, UI | **Not implemented.** A world model would hold entities, events, time, and causal state of its own; the projection above only re-reads the stores - memory, knowledge, the experience log, and the prediction ledger - and reports what they already contain, keeping an expectation in a section of its own rather than among the beliefs. The task planner is bounded and explicit; operation logs are not learning. | The scope paragraphs in this README, [World state](#world-state-the-read-only-epistemic-projection), and [Future learning interface](#future-learning-interface-not-implemented). |
+| World model, general planner, persistent learning, voice, UI | **Not implemented.** A world model would hold entities, events, time, and causal state of its own; the projection above only re-reads the stores - memory, knowledge, the experience log, and the prediction ledger - and reports what they already contain, keeping an expectation in a section of its own rather than among the beliefs. The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [World state](#world-state-the-read-only-epistemic-projection), [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
 
 The model path depends entirely on a backend you configure yourself. Without one,
 APEX answers deterministic requests and reports `model_unavailable` for everything
@@ -268,6 +269,20 @@ suites re-hash the directory afterwards to prove it.
 | `prediction evaluate <id>` | Compares one expectation with the outcomes recorded inside its horizon and stores the verdict **only** when those records establish one. Otherwise it reports `insufficient_evidence`, `outcome_unavailable`, `expired`, `invalidated`, `superseded`, `already_evaluated`, or `evidence_unavailable` and writes nothing. A verdict already stored is never rewritten. User origin only. |
 | `prediction invalidate <id> --reason <text>` | Withdraws one expectation, keeping its reason and provenance in the log. The expectation is not deleted and stays auditable. User origin only. |
 | `prediction health` | Read-only ledger report: kind counts, standing versus superseded expectations, corrupt lines, and anomalies (a replacement that names nothing, a replacement circle, a reused record id), each with bounded samples. Never calls a model, writes no audit record, repairs nothing. Exit 0 only when the ledger was fully inspected and nothing requires attention. |
+| `goal add [--criterion <text>]... [--priority N] [--deadline <iso>] [--depends-on <id>]... <request>` | Records a goal with at least one success criterion. The goal starts `proposed`; nothing runs, and the goal grants no permission. User origin only. |
+| `goal list [--limit N]`, `goal show <id>` | Read-only views of open and closed goals, and of one goal with its criteria, evidence, history, and linked plans/tasks. |
+| `goal update <id> <status> [--reason <text>] [--by <goal-id>]` | Moves a goal through its lifecycle (`accepted`, `active`, `blocked`, `failed`, `cancelled`, `abandoned`, `superseded`, `completed`). Stopping states need a reason; `superseded` names a live replacement. User origin only. |
+| `goal evidence <id> --criterion <c1> --kind supports\|contradicts [--operation <audit-id>] [--detail <text>] [--reopen]` | Records evidence for one criterion. Supporting evidence must name a live `success_verified` operation. Contradicting evidence on a completed goal requires `--reopen`, which returns it to `blocked` and preserves the history. User origin only. |
+| `goal complete <id> [--reason <text>]` | Completes a goal only when every criterion is satisfied by evidence that the audit log still confirms. A task result completes no goal by itself. User origin only. |
+| `goal link <id> (--plan <id> \| --task <id>)` | Records a reference from a goal to a plan or task. The link does not authorize execution. |
+| `plan add --outcome <text> --step <json>... [--goal <id>] [--precondition <text>]... [--assertion <json>]... [--estimate N] [--reason <text>]` | Records an executive plan as a draft: ordered steps with dependencies, expected results, verification requirements, risk, preconditions, and classified assertions. Nothing runs. User origin only. |
+| `plan list [--limit N]`, `plan show <id>`, `plan validate <id>` | Read-only views: the plan log, one plan with its steps and outcomes, and a validation of a stored plan against the live registry (`validate` exits 1 when it would not pass). |
+| `plan revise <id> --outcome <text> --step <json>... --reason <text>` | Replaces a draft or blocked plan with a new version. The revision clears any approval and must be approved again. |
+| `plan approve <id>` | Validates the plan against the live registry and records an approval bound to the exact content hash and version. Approval permits starting the plan; it authorizes no step by itself. |
+| `plan start <id>` (alias `plan activate <id>`) | Re-validates the approved plan, re-checks its goal and steps, creates an ordinary task, and runs it. Every step is authorized separately. |
+| `plan reconcile <id>` | Read-only with respect to execution: copies terminal task-step outcomes onto the plan, re-checks completed outcomes against the audit log, and is a no-op on a second call. It never runs a step. |
+| `plan cancel <id> --reason <text>`, `plan supersede <id> --by <plan-id> --reason <text>` | Closes a plan record. A task already created from it is not cancelled by these commands. |
+| `recover` | Read-only recovery inspection across goals, plans, and tasks: interrupted work, uncertain steps, resumable items, matters needing the user, and closed work. Never resumes, retries, approves, reconciles, or cancels. Exit 1 when anything needs attention. |
 | `new` | Starts a new conversation session. Memory is kept; earlier turns are no longer sent to the model. |
 | `history [--limit N]` | Lists recent operation records. |
 | `task plan <goal>` | Plans a multi-step task and stores it. Runs nothing. See [Tasks](#tasks). |
@@ -813,6 +828,14 @@ src/tasks/
   format.js           plain-text rendering of tasks, shared by replies and the CLI
   summary.js          the bounded task-result turn and the state signature that dedupes it
   summary-queue.js    task-summary-queue.json: summaries history refused, waiting to be reissued
+src/goals/
+  model.js            goal states, legal transitions, evidence rules, duplicate detection, and the append-only reducer
+  store.js            goals.jsonl: validated appends under the goal write lock, short-id resolution, and the audit re-check completion requires
+  format.js           plain-text rendering of goals, criteria, evidence and history
+src/plans/
+  model.js            plan states, content validation, the content hash approval is bound to, and the append-only reducer
+  store.js            plans.jsonl: draft, revision, approval, activation and outcome events under the plan write lock
+  format.js           plain-text rendering of plans, steps, assertions, risk and outcomes
 src/actions/
   registry.js         action registry and the authorization policy
   origins.js          request origins: user | model
@@ -822,6 +845,8 @@ src/actions/
   knowledge-actions.js the knowledge actions: add, retract, resolve, list, search
   experience-actions.js the experience, feedback and adaptation actions
   prediction-actions.js the prediction ledger actions: three user-only writes and four reads, each with an independent re-read verify
+  goal-actions.js     five user-origin goal writes: add, update, evidence, complete, link
+  plan-actions.js     five user-origin plan writes: add, revise, approve, cancel, supersede
   world-actions.js    the user-only `world.state` read: projection, audit-minimal result, independent re-read verify
 src/verify/
   verifier.js         separate verifier: decides whether a postcondition holds
@@ -1037,8 +1062,11 @@ contribution of the bounded expectation section ([Batch AE](#batch-ae-prediction
 | 44. Lock ownership and recovery, budget by budget | `lock-ownership-and-recovery.test.js` (17 tests across all six lock namespaces: every shape a corrupt claim can have, each protocol's measured wait next to its exported budget, a foreign live pid refused on liveness and later taken over, the two release paths that report lost ownership only after the record is durable, a staging file another process left behind, and recovery held simultaneously over every namespace) |
 | 45. A failed audit append cannot leave a verified-success claim standing | `append-audit-failure-semantics.test.js` (15 tests over the six-stage order - side effect, audit append, finalization, capture, prediction evaluation, disclosure - including `recorded: false`, the `audit_integrity_failed` downgrade, capture refused for want of a record, and the duplicate side effect a retry produces because nothing rolls the write back) |
 | 46. Every completion path finalizes the same way | `finalization-path-audit.test.js` (11 tests on the paths Batch AB and AF-15 left unwalked: prediction operations verified and still never captured; an error-bearing success refusing automatic capture while the manual path works; the duplicate-finalization guard on all four controller-audited paths; and what each path returns compared field by field with what `operations.jsonl` holds) |
-| 47. A reply never authorizes itself (AF-20) | `model-self-authorization.test.js` (17 tests, each against a fixed stub reply and the real parser, planner, registry, executor, verifiers, four belief stores and audit log - so nothing here is evidence about what a real model would say: a response proposing the three prediction writes is denied at every step and stores nothing; an adaptation cannot approve itself and the candidate stays a candidate; none of the fourteen write actions runs at model origin while the identical input writes at user origin; a plan whose steps are user-only writes is rejected, a plan reporting its own status or verdict is refused as malformed, a plan naming a nonexistent action is refused; a write step in a model-origin plan waits for the user and no reply approves it; provenance cannot be forged - a supplied `origin`/`updateMode` is refused before the store opens, each store derives its own, a store refuses a non-user origin even for a caller that skipped the registry, an experience can only cite an operation really in the audit log, and a model-origin write cannot be registered at all; verification is computed, never claimed - no shape of reply produces a `success_verified` operation, a reply cannot name the request it answers or the session it belongs to, and a reply whose proposals were all denied captures no experience) |
+| 47. A reply never authorizes itself (AF-20) | `model-self-authorization.test.js` (17 tests, each against a fixed stub reply and the real parser, planner, registry, executor, verifiers, four belief stores and audit log - so nothing here is evidence about what a real model would say: a response proposing the three prediction writes is denied at every step and stores nothing; an adaptation cannot approve itself and the candidate stays a candidate; none of the twenty-four write actions runs at model origin while the identical input writes at user origin; a plan whose steps are user-only writes is rejected, a plan reporting its own status or verdict is refused as malformed, a plan naming a nonexistent action is refused; a write step in a model-origin plan waits for the user and no reply approves it; provenance cannot be forged - a supplied `origin`/`updateMode` is refused before the store opens, each store derives its own, a store refuses a non-user origin even for a caller that skipped the registry, an experience can only cite an operation really in the audit log, and a model-origin write cannot be registered at all; verification is computed, never claimed - no shape of reply produces a `success_verified` operation, a reply cannot name the request it answers or the session it belongs to, and a reply whose proposals were all denied captures no experience) |
 | 48. Prediction, evaluation and adaptation stay separate authorities (AF-21) | `prediction-adaptation-boundary.test.js` (14 tests asserted against the persisted files rather than a rendered string: recording an expectation appends to the prediction ledger and nothing else, cannot cite an experience that does not exist, and is reported as standing on nothing until an outcome is recorded; a matched verdict changes no experience, no adaptation and no authorization and grants the model no permission it did not already lack; a contradicted verdict leaves every earlier record byte-identical; a second evaluation of one expectation is refused and rewrites nothing, and evaluating a superseded expectation records nothing; a replacement retires the earlier expectation without removing it and a withdrawal keeps the expectation and its reason; neither a matched nor a contradicted verdict moves an adaptation candidate, deriving again does not approve what it already derived, an unapproved candidate is never retrieved as a rule in effect, and only an explicit user decision makes a rule active) |
+| 49. A goal and its plan are records, and a completed plan completes no goal | `goal-system.test.js` (10 tests: lifecycle and illegal transitions, normalized duplicates, dependency ordering, audit-backed evidence, reopening a completed goal, stopping reasons, model-origin denial, credential refusal, damaged-log truthfulness, append-only byte preservation); `executive-control.test.js` A, B, C, E (goal-linked plan runs and completes only the plan; an unavailable capability cannot be approved or started; a partial run reconciles without replay; contradicting evidence blocks goal completion without rewriting the plan) |
+| 50. Executive authorization survives a hostile origin and a richer configuration | `executive-control.test.js` F (a model origin cannot create, approve, start, or reconcile a plan; a forged activation event is rejected by replay; activation re-checks the live registry, so an approval from a richer configuration does not carry over; approval is bound to exact content, and a write plan needs more than an approval) |
+| 51. Executive context and recovery are bounded, labelled, and read-only | `executive-control.test.js` G (assertion classification; the executive prompt section is gated, capped at eight lines, labelled intent rather than evidence; a tight budget drops it and announces the loss; the real request path receives the recorded state), the recovery test (every store keeps its exact bytes), `executive-cli.test.js` (4 real CLI lifecycle tests), and `executive-interruption.test.js` D (a real child process killed inside a plan step is reported uncertain, never re-run, and reconcile blocks the plan at the user's explicit command) |
 
 Running one suite, which is what most review work needs:
 
@@ -3327,13 +3355,16 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 34 registered actions declare both `validate()` and `verify()`, so the
+- **Verification.** All 44 registered actions declare both `validate()` and `verify()`, so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
 
-"Cognitive state" below means what APEX believes: `memory.jsonl`, `knowledge.jsonl`,
-`experiences.jsonl`, `predictions.jsonl`. The task log, the conversation log and the audit log record
-what happened; changing them is not a change of belief. **Class** is the registry's own `permission`.
+"Cognitive state" below means persistent state the application records: the belief stores
+(`memory.jsonl`, `knowledge.jsonl`, `experiences.jsonl`, `predictions.jsonl`) and, since Batch AG,
+the executive stores `goals.jsonl` and `plans.jsonl`. The executive records are intentions, not
+beliefs - a goal or a plan says what the user asked for and what was proposed, never what is true.
+The task log, the conversation log and the audit log record what happened; changing them is not a
+change of belief. **Class** is the registry's own `permission`.
 **Origins** is the registry's `origins` list. **Plan-time** is what a plan may contain, measured through
 `checkSteps()` and the planning prompt, which now consult one predicate. **"nothing (measured)"** means
 the action ran to `success_verified` in an isolated data directory and no store file changed size.
@@ -3363,6 +3394,12 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `calc.evaluate` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `world.state` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
 | `filesystem.list`, `filesystem.read` | user | read | never offered to a model plan | nothing (measured) | no (filesystem) | no |
+| `goal.add`, `goal.update`, `goal.evidence`, `goal.complete`, `goal.link` | user | write | never in a plan | `goals.jsonl` (and `operations.jsonl`; completion re-checks the audit log) | no (executive) | yes |
+| `goal.list`, `goal.show` | user | read | - | nothing (measured) | no (read) | no |
+| `plan.add`, `plan.revise`, `plan.approve`, `plan.cancel`, `plan.supersede` | user | write | never in a plan | `plans.jsonl` (linking also updates `goals.jsonl`) | no (executive) | yes |
+| `plan.list`, `plan.show`, `plan.validate` | user | read | - | nothing (measured) | no (read) | no |
+| `plan.activate`, `plan.reconcile` | user | not a registered action | - | `plans.jsonl`, `tasks.jsonl`, `operations.jsonl` when a plan is activated | no (executive) | through the created task only |
+| `recover` | user | not a registered action | - | `operations.jsonl` + a conversation turn; reads the stores and changes nothing | no (read) | no |
 | `model.answer` | user request; anything it proposes runs as `model` | not a registered action | its proposals are checked step by step | `conversation.jsonl` + `operations.jsonl` | no (model-words) | no |
 | `task.plan` | user | not a registered action | - | `tasks.jsonl` + `operations.jsonl` | no (task) | no |
 | `task.run` | user | not a registered action | - | `tasks.jsonl` per step, each step's own store, a conversation summary, `operations.jsonl` | no (task) | through its steps only |
@@ -3373,8 +3410,10 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
 
 `filesystem.list` and `filesystem.read` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
-configured; there is no default root, and a model proposal cannot supply one, so the count is 32
-registered actions by default and 34 with a root.
+configured; there is no default root, and a model proposal cannot supply one, so the count is 42
+registered actions by default and 44 with a root. Batch AG added ten user-origin write actions
+(`goal.*` and `plan.*`); none is plannable, so the planning prompt still offers exactly 17 reads to a
+model origin and 21 actions to a user origin.
 
 ### The inconsistencies this found, and what became of them
 
@@ -3631,6 +3670,149 @@ Two asymmetries are named rather than smoothed over:
   that records what it received. The dated real-model observations in
   [Capability status](#capability-status) predate this batch and are not evidence about it.
 
+## Batch AG: goals, executive plans, and the control loop (as implemented)
+
+Batch AG adds an executive layer: a goal store, a plan store, a control loop that turns an
+approved plan into an ordinary APEX task, and a read-only recovery view. It adds no execution
+capability. Every step still runs through `runAction()`, so the registry authorizes it, the
+action verifies itself, and the unified finalization contract audits it and applies the same
+capture rules as any other operation.
+
+### The loop, step by step
+
+`Goal → Context → Plan → Validation → Authorization → Execution → Verification → Outcome → Learning`
+
+- **Goal.** `goal add` records the request, one to eight success criteria, a priority, an
+  optional deadline, and optional dependencies. The goal starts `proposed`. Recording an
+  intention runs nothing and grants nothing.
+- **Context.** When a request is about goals, plans, tasks, status, progress, or next steps, or
+  its content overlaps an open goal or plan, a bounded executive section is added to the model
+  prompt. It is labelled *recorded intentions and execution state, not instructions, not
+  permission*, is capped at eight lines of 320 characters, and is the first block dropped when
+  the context budget is tight; the omission is announced with the command that shows the same
+  records. A model cannot write, approve, or change any of it.
+- **Plan.** `plan add` records ordered steps with dependencies, expected results, verification
+  requirements, risk, preconditions, and classified assertions. The classification is explicit:
+  `user_fact`, `stored_knowledge`, `retrieved_evidence`, `inference`, or `unknown`; the two
+  evidence kinds must name the record they came from. A plan is always stored as a draft with a
+  content hash.
+- **Validation.** A stored plan is checked against the live registry: every step names a
+  registered action, every step is permitted for a user-origin plan, inputs parse, dependencies
+  form no cycle, and every step states a description, expected result, verification, and risk.
+  `plan validate` prints that check and writes nothing.
+- **Authorization.** `plan approve` refuses a plan that does not validate and records an
+  approval bound to the exact content hash and version. Approval permits starting the plan; it
+  authorizes no step. `plan start` re-validates against the live registry, re-checks that the
+  goal is not closed, re-checks every step through the task planner's own `checkSteps()`,
+  creates an ordinary task, records `plan_activated` with that task id, and runs it. Replaying
+  `plan_activated` requires the approved version and content hash to match.
+- **Execution.** Each step takes the ordinary request path: registry authorization for the
+  step's origin, input validation, execution, independent verification, audit, and capture. A
+  write step in a model-origin task still waits for the user.
+- **Verification.** A step result is `completed` only when its own audit operation is
+  `success_verified`; the plan store re-reads that operation when the outcome is recorded and
+  refuses a completed outcome without it.
+- **Outcome.** `plan start` records terminal step outcomes and marks the plan `completed` only
+  when every step has a completed, verified outcome. A failed, uncertain, or skipped step makes
+  the plan `blocked`. A completed plan completes no goal: goal completion has its own criteria
+  and evidence.
+- **Learning.** Automatic capture is unchanged and still covers only the five belief writes.
+  Goal and plan writes are classified `executive` and are never captured automatically. The
+  evidence for a goal's completion is the audit log itself; experiences and predictions remain
+  the learning record, and a plan or goal is not an experience.
+
+### Goal lifecycle
+
+`src/goals/model.js` owns the states and the transition table. A transition outside the table
+is refused and the event is not appended. The path is `proposed → accepted → active → blocked →
+completed`, with `failed`, `cancelled`, `abandoned`, and `superseded` as stopping states. A
+completed goal is reopened only by contradicting evidence that states `reopen`, and it returns
+to `blocked` with its whole history intact. Every stopping state needs a recorded reason, and
+`superseded` must name a live replacement goal. A goal becomes `active` only when all of its
+dependencies are completed. Recording a second open goal with the same normalized request is
+refused as a duplicate.
+
+Completion is checked twice. The reducer refuses `completed` unless every criterion is
+satisfied by supporting evidence; the store re-reads each cited operation before appending and
+refuses anything that is not a live `success_verified` record with no errors. The completed
+goal keeps a criterion-to-operation snapshot, and `goal complete` verifies that snapshot again
+after the fact.
+
+### Plan lifecycle
+
+`draft → approved → active → completed`, with `failed`, `blocked`, `cancelled`, and
+`superseded`. A revision is a new version with a required reason; it starts as a draft, inherits
+no approval, and must be approved again. Activation is a separate event that names the task it
+created, so a plan cannot claim to have run without a task record. Plan outcomes are accepted
+only for steps the task log records as terminal, and a completed outcome is re-checked against
+the audit log. The plan store never rewrites an existing final outcome; reconciling twice is a
+truthful no-op.
+
+### The authorization invariant, in three parts
+
+The batch's operating rule has three separate clauses, each enforced at a different layer:
+
+1. **A plan is not permission to execute.** Approval records that the user accepted these exact
+   steps. Starting the plan still validates it against the live registry, and every step is
+   authorized again when the task runs it.
+2. **A model suggestion is not permission to execute.** All ten goal and plan write actions are
+   `origins: ['user']` and `plannable: false`. A model-origin plan cannot contain them, a reply
+   that proposes them is denied step by step, and the registry refuses the origin before their
+   input is read.
+3. **A goal is not blanket permission.** A link is a stored reference (`goal link`); it changes
+   no authorization. Goal criteria are evidence, not capabilities, and `goal complete` runs
+   nothing and completes no task.
+
+### Recovery and reconciliation
+
+`recover` is read-only. It reads the goal, plan, and task logs; reports interrupted, uncertain,
+resumable, and blocked work; names the command that would resolve each item; and exits 1 when
+anything needs attention. It never resumes, retries, approves, reconciles, or cancels.
+
+`task resume` never re-runs a step whose outcome is uncertain. The step is resolved from its own
+audit record; with no record it stays uncertain. A step interrupted after it started but before
+its audit line keeps the operation id allocated before execution, which is how a reader can see
+that no audit record exists for it. `plan reconcile` is the explicit, separately authorized
+command that copies terminal task outcomes onto the plan. It records only outcomes the plan does
+not already hold and never executes a step.
+
+### Failure semantics
+
+- Input a validator rejects is `input_rejected`. A refusal inside execution - an illegal
+  transition, a duplicate goal, unmet completion evidence, an approval whose content hash no
+  longer matches - is `execution failed`, and the CLI exits 1.
+- A plan naming an unavailable capability is stored as a draft whose validation fails. Approval
+  and start refuse it, and the draft remains readable.
+- A damaged goal or plan log is reported as damaged or degraded by `recover`, and no writer
+  appends onto a corrupt log. A damaged log is never presented as empty.
+- A blocked plan can be reconciled after the obstacle is resolved; the new terminal outcome is
+  recorded and the plan may then complete.
+
+### What the AG tests establish
+
+`tests/goal-system.test.js` (10 tests) covers the goal lifecycle, illegal transitions,
+normalized duplicates, dependency ordering, audit-backed evidence, reopening, stopping reasons,
+model-origin denial, credential refusal, damaged-log truthfulness, and byte-level append-only
+preservation. `tests/executive-control.test.js` (13 tests) covers scenarios A (a goal-linked
+plan runs and completes the plan, not the goal), B (an unavailable capability cannot be
+approved or started), C (a partial run and a truthful no-op reconcile), E (contradicting
+evidence blocks goal completion without rewriting the completed plan), F (model-origin attacks,
+a forged activation event, a richer-configuration approval, and content-hash binding), and G
+(assertion classification, bounded executive context, budget omission, and real-path context
+assembly), plus a byte-for-byte read-only recovery check. `tests/executive-interruption.test.js`
+covers scenario D with a real child process killed inside a plan step: the uncertain step is
+never re-run, the plan is blocked by reconcile at the user's explicit command, and every store
+is unchanged by the read-only recovery inspection. `tests/executive-cli.test.js` (4 tests)
+drives the real CLI through the goal and plan lifecycles, an unavailable-capability draft, and
+usage errors.
+
+**Limitations.** These are deterministic tests on one platform; no model was consulted, and no
+sentence here is evidence about model reasoning. The executive layer plans only what the user
+authored: it does not generate goals, choose plans, or act autonomously. A goal's completion
+evidence is the audit log, which is parse-checked but not cryptographically anchored. The plan
+content hash binds an approval to content; it is not a signature and does not prove who
+approved.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 
@@ -3727,6 +3909,13 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    that recorded it), and an outcome is never classified automatically - the user runs
    `prediction evaluate`, which judges against records that already exist and writes nothing
    when the evidence does not establish anything.
+   Batch AG advanced the *executive* half of this stage's title and none of its expectation
+   clause: a goal and an executive plan are durable records, an approved plan is re-validated
+   against the live registry and run as an ordinary task, and terminal task outcomes are
+   recorded against the plan. The loop is `Goal → Context → Plan → Validation → Authorization
+   → Execution → Verification → Outcome → Learning`, but the last arrow is still only the
+   existing capture path - no prediction verdict and no plan outcome changes a later plan, a
+   plan is never inferred from a goal, and a completed plan completes no goal.
 7. **Neural-runtime integration.** Only through the contract described in
    [Neural integration boundary](#neural-integration-boundary-proposal-not-implemented):
    proposals in, authority out. Depends on 6, because a proposer needs an evaluation

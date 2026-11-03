@@ -15,6 +15,10 @@ export const Outcome = Object.freeze({
   PLAN_CREATED: 'plan_created', // a validated deterministic task plan was stored
   PLAN_PROPOSED: 'plan_proposed', // a validated model plan was stored; waits for user approval
   PLAN_REJECTED: 'plan_rejected', // a plan failed validation; nothing was stored
+  PLAN_STORED: 'plan_stored', // an executive plan was recorded, revised, approved, or closed
+  GOAL_CREATED: 'goal_created', // a goal was recorded; nothing has run
+  GOAL_UPDATED: 'goal_updated', // a goal's status, evidence, or links changed
+  GOAL_COMPLETED: 'goal_completed', // every criterion has verified supporting evidence
   TASK_PAUSED: 'task_paused', // stopped for an explicit user decision
   TASK_CANCELLED: 'task_cancelled',
 });

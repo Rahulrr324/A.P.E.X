@@ -96,6 +96,32 @@ const MODEL_WRITE_ATTEMPTS = [
   ['prediction.record', { capability: 'memory.add', expectation: 'success', subject: 'the model expects success', inDays: 7 }],
   ['prediction.evaluate', { target: 'no-such-prediction' }],
   ['prediction.invalidate', { target: 'no-such-prediction', reason: 'the model withdrew it' }],
+  ['goal.add', { request: 'the model decided this', criteria: ['it is done'] }],
+  ['goal.update', { target: 'no-such-goal', status: 'cancelled', reason: 'the model decided' }],
+  ['goal.evidence', {
+    target: 'no-such-goal', criterion: 'c1', kind: 'supports',
+    operationId: '00000000-0000-4000-8000-000000000000',
+  }],
+  ['goal.complete', { target: 'no-such-goal' }],
+  ['goal.link', { target: 'no-such-goal', planId: 'no-such-plan' }],
+  ['plan.add', {
+    outcome: 'the model decided this',
+    steps: [{
+      id: 's1', description: 'a step', action: 'memory.list', input: {}, dependsOn: [],
+      expectedResult: 'the memory list', verification: 'the list appears', risk: 'low',
+    }],
+  }],
+  ['plan.revise', {
+    target: 'no-such-plan', outcome: 'the model revised this',
+    steps: [{
+      id: 's1', description: 'a step', action: 'memory.list', input: {}, dependsOn: [],
+      expectedResult: 'the memory list', verification: 'the list appears', risk: 'low',
+    }],
+    reason: 'the model decided',
+  }],
+  ['plan.approve', { target: 'no-such-plan' }],
+  ['plan.cancel', { target: 'no-such-plan', reason: 'the model decided' }],
+  ['plan.supersede', { target: 'no-such-plan', by: 'no-such-other-plan', reason: 'the model decided' }],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.
@@ -181,9 +207,9 @@ describe('AF-20: a reply cannot create what only the user may create', () => {
     assert.equal((await app.experience.adaptationDetail(candidate.id)).decisionState, 'approved');
   });
 
-  test('none of the fourteen write actions runs at model origin, and the same input writes at user origin', async () => {
+  test('none of the twenty-four write actions runs at model origin, and the same input writes at user origin', async () => {
     const { app, dataDir } = appFor('unused');
-    assert.equal(MODEL_WRITE_ATTEMPTS.length, 14, 'the sweep covers every registered write action');
+    assert.equal(MODEL_WRITE_ATTEMPTS.length, 24, 'the sweep covers every registered write action');
     const names = app.registry.list().filter((d) => d.permission === 'write').map((d) => d.name).sort();
     assert.deepEqual(names, MODEL_WRITE_ATTEMPTS.map(([n]) => n).sort(), 'the attempt list is the registry, not a guess');
 
