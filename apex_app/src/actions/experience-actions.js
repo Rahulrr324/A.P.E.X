@@ -13,7 +13,7 @@
 // experience is a bounded pointer to an audited event and its feedback is the user's own words
 // about APEX's behaviour, so neither has a private variant to hide from a model-origin read.
 import { ValidationError } from '../errors.js';
-import { CONTROL_CHARS, shortId } from '../util.js';
+import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 import {
@@ -138,7 +138,7 @@ function expectObject(input, allowedKeys) {
     throw new ValidationError('input must be an object');
   }
   for (const key of Object.keys(input)) {
-    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${singleLine(key, 40)}"`);
   }
   return input;
 }

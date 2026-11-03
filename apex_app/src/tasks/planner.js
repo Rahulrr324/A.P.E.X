@@ -83,6 +83,23 @@ export function planFromText(goal, registry) {
 // Checks step structure, dependencies, actions, authorization, and inputs. Returns
 // normalised steps (with permission and validated input) and problems. Authorization
 // is asked of the registry: the planner never grants anything itself.
+//
+// The per-action, per-origin part of that policy is `planRefusal()` below, so that the
+// prompt and the check cannot drift apart.
+export function planRefusal(registry, def, origin) {
+  if (def.plannable === false) return `action ${def.name} cannot be part of a plan`;
+  // A model may propose a read. A model-proposed write is allowed into the plan
+  // only as a step that waits for the user's approval; it never runs as the model.
+  const auth = origin === 'user' || def.permission === 'write'
+    ? registry.authorize(def.name, 'user')
+    : registry.authorize(def.name, 'model');
+  if (auth.decision !== 'allow') return `action ${def.name} is not permitted in this plan (${auth.reason})`;
+  // memory.add always stores its content as a user fact, and a plan approval does not show the
+  // content that the model wrote, so an approved step would relabel model text as the user's own.
+  if (origin === 'model' && def.name === 'memory.add') return 'a model-proposed memory write cannot be stored as a user fact';
+  return null;
+}
+
 export function checkSteps(steps, registry, origin) {
   const problems = [...dependencyProblems(steps)];
   const normalised = [];
@@ -99,21 +116,9 @@ export function checkSteps(steps, registry, origin) {
       problems.push(`${label}: unknown action "${singleLine(s.action)}"`);
       continue;
     }
-    if (def.plannable === false) {
-      problems.push(`${label}: action ${singleLine(s.action)} cannot be part of a plan`);
-      continue;
-    }
-    // A model may propose a read. A model-proposed write is allowed into the plan
-    // only as a step that waits for the user's approval; it never runs as the model.
-    const auth = origin === 'user' || def.permission === 'write'
-      ? registry.authorize(s.action, 'user')
-      : registry.authorize(s.action, 'model');
-    if (auth.decision !== 'allow') {
-      problems.push(`${label}: action ${singleLine(s.action)} is not permitted in this plan (${auth.reason})`);
-      continue;
-    }
-    if (origin === 'model' && s.action === 'memory.add') {
-      problems.push(`${label}: a model-proposed memory write cannot be stored as a user fact`);
+    const refusal = planRefusal(registry, def, origin);
+    if (refusal !== null) {
+      problems.push(`${label}: ${refusal}`);
       continue;
     }
     let input;
@@ -184,13 +189,14 @@ export function parseModelPlan(text) {
 // that the caller already filtered for relevance and privacy are passed in.
 //
 // The action list must agree with the policy that checkSteps() applies, otherwise the
-// model is invited to use actions that are then always refused. For the model origin
-// that means write actions (they wait for user approval) and read actions the model
-// may request. User-only actions, such as filesystem inspection, are not offered.
+// model is invited to use actions that are then always refused. Both sides consult
+// planRefusal(), so the list is exactly the set of actions that could survive a check -
+// for the model origin that means read actions the model may request, and any write
+// action that would enter the plan as a step awaiting approval. User-only actions, such
+// as filesystem inspection, are not offered.
 export function planningPrompt({ goal, registry, memoryLines, origin = 'model' }) {
   const actions = registry.list()
-    .filter((d) => d.plannable !== false)
-    .filter((d) => d.permission === 'write' || d.origins.includes(origin))
+    .filter((d) => planRefusal(registry, d, origin) === null)
     .map((d) => `- ${d.name} (${d.permission}): ${d.description} Input: ${d.inputHint ?? '{}'}`)
     .join('\n');
   const system = [

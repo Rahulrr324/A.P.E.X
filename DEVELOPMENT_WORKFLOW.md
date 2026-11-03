@@ -90,7 +90,17 @@ inventing a sync path.
   hunks.
 - A dev server or test run in one tool can collide with another (ports, temp files,
   the data directory). The test suite already isolates itself in `apex-test-*`
-  temporary directories and never touches `~/.apex`.
+  temporary directories and never touches `~/.apex`. That isolation is enforced, not
+  conventional: the harness sets `APEX_DATA_ISOLATED=1`, which makes APEX refuse to
+  start unless `APEX_DATA_DIR` names a directory inside the OS temporary directory and
+  not that root itself, and `createApp` re-checks it so a programmatic caller fails at
+  construction instead of writing. Run any ad-hoc command the same way - an explicit
+  `APEX_DATA_DIR` under the temp folder, or unset it and accept that the run targets
+  your real store. Benchmarks are isolated the same way and refuse to delete anything
+  they did not create.
+- Run one benchmark at a time and never alongside a test run: both are timing
+  measurements on a shared machine, and overlapping them invalidates the numbers
+  rather than just the tests.
 
 ## Current milestone: Implementation 002
 

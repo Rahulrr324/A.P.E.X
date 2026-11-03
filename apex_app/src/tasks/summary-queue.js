@@ -22,14 +22,15 @@ import path from 'node:path';
 import { StoreError } from '../errors.js';
 import { TASK_SIGNATURE_RE, prepareTurnText } from '../memory/conversation-store.js';
 import { MAX_TASK_SUMMARY_CHARS } from './summary.js';
-import { inspectLock, recoverLock, TAKEOVER_EPOCHS } from './lock-recovery.js';
+import { inspectLock, recoverLock, identifiedPid, TAKEOVER_EPOCHS } from './lock-recovery.js';
 
 export const SUMMARY_QUEUE_SCHEMA = 1;
 // How long an update waits for another process's in-progress update. The critical
 // section is one small read and one small rename, so a wait this long means the holder
 // is stuck or gone; refusing then is honest, and the caller discloses the missed reissue.
-const LOCK_WAIT_MS = 2000;
-const LOCK_RETRY_MS = 10;
+// Exported so a test can pin the budget the same way the writer lock's is pinned.
+export const LOCK_WAIT_MS = 2000;
+export const LOCK_RETRY_MS = 10;
 // Past this size history has refused summaries across many task states. A new intent is
 // then refused and disclosed rather than displacing an older one.
 export const MAX_QUEUED_SUMMARIES = 32;
@@ -190,13 +191,13 @@ export class SummaryQueue {
           }
           if (tookOver) continue;
           if (Date.now() >= deadline) {
-            throw new StoreError(`cannot update ${this.label}: it is in use by process ${election.pid ?? holder?.pid ?? 'unknown'}; nothing was changed`, 'LOCKED');
+            throw new StoreError(`cannot update ${this.label}: it is in use by process ${election.pid ?? identifiedPid(holder?.pid) ?? 'unknown'}; nothing was changed`, 'LOCKED');
           }
           await sleep(LOCK_RETRY_MS);
           continue;
         }
         if (Date.now() >= deadline) {
-          throw new StoreError(`cannot update ${this.label}: it is in use by process ${holder?.pid ?? 'unknown'}; nothing was changed`, 'LOCKED');
+          throw new StoreError(`cannot update ${this.label}: it is in use by process ${identifiedPid(holder?.pid) ?? 'unknown'}; nothing was changed`, 'LOCKED');
         }
         await sleep(LOCK_RETRY_MS);
       }

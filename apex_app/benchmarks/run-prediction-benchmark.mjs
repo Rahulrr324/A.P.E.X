@@ -616,6 +616,12 @@ async function phaseContention(opts) {
     const before = await storeOn(copy).status();
     const env = {
       ...process.env,
+      // The store each writer races into is named twice, in the argument and in the
+      // environment, and isolation is requested so the two can never disagree about a real
+      // user's directory: a writer that resolved the environment instead of its argument
+      // would stop at startup rather than append to `~/.apex` during a measurement.
+      APEX_DATA_DIR: copy,
+      APEX_DATA_ISOLATED: '1',
       APEX_RACERS: String(writers),
       APEX_NOW: CLOCK().toISOString(),
       APEX_WAIT_MS: '10000',

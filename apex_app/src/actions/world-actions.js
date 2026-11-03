@@ -3,6 +3,7 @@
 // It is deliberately not offered to the model origin: the projection can include private
 // memory content, and a model may not ask the system to read that back.
 import { ValidationError } from '../errors.js';
+import { singleLine } from '../util.js';
 import { ORIGIN_USER } from './origins.js';
 import { buildWorldState, renderWorldState, MAX_WORLD_LIMIT, MAX_WORLD_CONFLICT_MEMBERS } from '../world/world-state.js';
 
@@ -11,7 +12,7 @@ function expectObject(input, allowedKeys) {
     throw new ValidationError('input must be an object');
   }
   for (const key of Object.keys(input)) {
-    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${singleLine(key, 40)}"`);
   }
   return input;
 }

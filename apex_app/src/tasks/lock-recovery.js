@@ -46,6 +46,15 @@ export function processAlive(pid) {
   }
 }
 
+// The process number a refusal or a report may name. A claim body is untrusted text: a holder
+// field of `0`, `1.5` or `"x"` identifies no process, so naming it would send an operator to look
+// for a process that cannot exist. Callers print `null` as "unknown", which is what the writer
+// lock already reports, and the refusal decision is unchanged - it never depends on this.
+export function identifiedPid(value) {
+  const pid = Number(value);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
 function claimKey(raw) {
   return createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
 }

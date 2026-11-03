@@ -1,10 +1,11 @@
 // Configuration comes only from environment variables. Nothing is read from the
 // repository, nothing is downloaded, and no network access happens at startup.
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ValidationError } from './errors.js';
 import { resolveRoot } from './filesystem/path.js';
-import { CONTROL_CHARS } from './util.js';
+import { CONTROL_CHARS, singleLine } from './util.js';
 import { CAPTURE_MODES, CAPTURE_OFF } from './experience/capture.js';
 
 export const DEFAULT_MODEL_TIMEOUT_MS = 30000;
@@ -17,6 +18,80 @@ export function defaultDataDir() {
   return path.join(os.homedir(), '.apex', 'local-alpha');
 }
 
+// Isolated execution. A test, benchmark, or diagnostic can ask for it, and asking means the
+// same thing every time: the data directory must have been named explicitly and must be inside
+// the OS temporary directory, so the real user store cannot be reached even if a variable is
+// missing or a value is inherited from a developer's shell. Unset or `0` is normal user
+// operation, which is what a person running APEX on their own data expects. A value that is
+// neither is a startup error rather than a silent downgrade to normal operation.
+export function isolationRequested(env = process.env) {
+  const raw = (env.APEX_DATA_ISOLATED || '').trim();
+  if (raw === '' || raw === '0') return false;
+  if (raw === '1') return true;
+  throw new ValidationError(
+    `APEX_DATA_ISOLATED must be exactly 1 or 0, not ${singleLine(raw, 40)}; 1 isolates the run to a temporary data directory, 0 or unset is normal user operation`,
+    'INVALID_CONFIG',
+  );
+}
+
+// The path as the filesystem would report it, for a directory that does not exist yet: only the
+// part that exists can be resolved, so the tail a run has not created is re-joined afterwards.
+// This is what makes the isolation check about the real location rather than about a string -
+// a link that leaves the temporary directory does not pass, and a short-name or case-differing
+// spelling of the same temporary directory does.
+function resolvedLocation(dir) {
+  let existing = path.resolve(dir);
+  const pending = [];
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) break;
+    pending.unshift(path.basename(existing));
+    existing = parent;
+  }
+  let real;
+  try {
+    real = fs.realpathSync(existing);
+  } catch {
+    // An ancestor that exists but cannot be resolved is still a location the run was not
+    // shown to be inside the temporary directory, so the caller's check must be able to fail.
+    real = existing;
+  }
+  return pending.length > 0 ? path.join(real, ...pending) : real;
+}
+
+export function tempRoot() {
+  try {
+    return fs.realpathSync(os.tmpdir());
+  } catch {
+    throw new ValidationError(
+      'isolated execution needs a usable OS temporary directory, and the one this process reports could not be resolved',
+      'INVALID_CONFIG',
+    );
+  }
+}
+
+// Windows treats two spellings that differ only in case as the same location, and the same
+// temporary directory can be spelled with a different casing than os.tmpdir() reports, so
+// containment is compared the way that filesystem compares it. Elsewhere the spelling is the
+// location.
+function isInsideRoot(real, root) {
+  const a = process.platform === 'win32' ? real.toLowerCase() : real;
+  const b = process.platform === 'win32' ? root.toLowerCase() : root;
+  return a !== b && a.startsWith(`${b}${path.sep}`);
+}
+
+export function assertIsolatedDataDir(dataDir) {
+  const root = tempRoot();
+  const real = resolvedLocation(dataDir);
+  if (!isInsideRoot(real, root)) {
+    throw new ValidationError(
+      `APEX_DATA_ISOLATED=1 requires a data directory inside the OS temporary directory (${root}) that is not the temporary root itself; "${dataDir}" is neither. Normal operation, including a persistent store of your own choosing, requires APEX_DATA_ISOLATED unset or 0`,
+      'INVALID_CONFIG',
+    );
+  }
+  return real;
+}
+
 function intEnv(env, name, fallback, min, max) {
   const raw = (env[name] || '').trim();
   if (!raw) return fallback;
@@ -27,8 +102,21 @@ function intEnv(env, name, fallback, min, max) {
 }
 
 export function loadConfig(env = process.env) {
+  const isolated = isolationRequested(env);
   const rawDir = (env.APEX_DATA_DIR || '').trim();
   const dataDir = rawDir ? path.resolve(rawDir) : defaultDataDir();
+  if (isolated) {
+    // An unset variable is refused by name rather than resolved first: a test that redirects
+    // HOME and USERPROFILE puts the *default* directory inside the temporary root, so the
+    // containment check alone would accept the very fallback isolation exists to prevent.
+    if (!rawDir) {
+      throw new ValidationError(
+        'APEX_DATA_ISOLATED=1 requires an explicit APEX_DATA_DIR; refusing to run isolated against the default home data directory',
+        'INVALID_CONFIG',
+      );
+    }
+    assertIsolatedDataDir(dataDir);
+  }
 
   // "openai" = any OpenAI-compatible chat server (llama.cpp's llama-server, or
   // Ollama's /v1 layer). "ollama" = Ollama's native API, with better errors.
@@ -87,6 +175,11 @@ export function loadConfig(env = process.env) {
 
   return {
     dataDir,
+    // Which one of the two locations this is: a run that wrote where nothing told it to
+    // should be able to say so. The CLI's default-store notice and the isolation refusal both
+    // turn on this distinction, and it is recorded here rather than re-derived from `env`.
+    dataDirIsDefault: !rawDir,
+    isolated,
     model: {
       url: modelUrl,
       provider,

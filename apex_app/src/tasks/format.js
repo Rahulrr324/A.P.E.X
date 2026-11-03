@@ -1,5 +1,14 @@
 // Plain-text rendering of tasks, shared by the controller's replies and the CLI.
 import { shortId, singleLine, truncate } from '../util.js';
+import { containsSecret, SECRET_OMITTED } from '../security/secrets.js';
+
+// A task log written before the write-boundary mask existed can hold a credential in a goal or a
+// step input. Printing a match is refused the way storing one is: the value is replaced, not shown.
+// Text with no match is printed exactly as recorded.
+function storedText(value) {
+  const text = String(value ?? '');
+  return containsSecret(text) ? SECRET_OMITTED : text;
+}
 import { progressOf, TaskStatus, StepStatus, MAX_DESCRIPTION_CHARS } from './model.js';
 
 const CLI = 'node bin/apex.js';
@@ -32,7 +41,7 @@ export function renderTask(task) {
   const origin = task.origin === 'model' ? 'model proposal' : 'your request';
   const lines = [
     `Task ${shortId(task.id)}  status: ${task.status}  origin: ${origin}  planner: ${task.planner}`,
-    `Goal: ${task.goal}`,
+    `Goal: ${storedText(task.goal)}`,
     `Progress: ${completed} of ${total} step(s) completed`,
     'Steps:',
   ];
@@ -40,8 +49,8 @@ export function renderTask(task) {
     // Descriptions are validated on the way in, but a task stored by an older build can
     // still hold a line break; it is rendered as one line here so it cannot imitate a
     // task record such as a verified step line.
-    lines.push(`  ${i + 1}. [${s.status}] ${s.id}  ${singleLine(s.description, MAX_DESCRIPTION_CHARS)}`);
-    const detail = [s.action, s.summary].filter(Boolean).join(' - ');
+    lines.push(`  ${i + 1}. [${s.status}] ${s.id}  ${singleLine(storedText(s.description), MAX_DESCRIPTION_CHARS)}`);
+    const detail = storedText([s.action, s.summary].filter(Boolean).join(' - '));
     if (detail) lines.push(`       ${detail}`);
   });
   lines.push(`Next: ${nextHint(task)}`);
@@ -53,7 +62,7 @@ export function renderTaskList(tasks) {
   return tasks
     .map((t) => {
       const { completed, total } = progressOf(t);
-      return `${shortId(t.id)}  ${t.status.padEnd(9)}  ${completed}/${total} steps  ${t.goal}`;
+      return `${shortId(t.id)}  ${t.status.padEnd(9)}  ${completed}/${total} steps  ${storedText(t.goal)}`;
     })
     .join('\n');
 }

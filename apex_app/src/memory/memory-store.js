@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from './jsonl-store.js';
 import { WriterLock } from './writer-lock.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS, STOPWORDS, shortId } from '../util.js';
+import { CONTROL_CHARS, STOPWORDS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 
 export const MEMORY_SCHEMA = 1;
@@ -48,8 +48,8 @@ export function validateContent(content) {
 }
 
 function validateKindSource(kind, source) {
-  if (!KINDS.has(kind)) throw new ValidationError(`unknown memory kind: ${String(kind)}`);
-  if (!SOURCES.has(source)) throw new ValidationError(`unknown memory source: ${String(source)}`);
+  if (!KINDS.has(kind)) throw new ValidationError(`unknown memory kind: ${singleLine(kind, 40)}`);
+  if (!SOURCES.has(source)) throw new ValidationError(`unknown memory source: ${singleLine(source, 40)}`);
   if ((kind === 'model_conclusion') !== (source === 'model')) {
     throw new ValidationError('model_conclusion must come from the model, and only the model may produce it');
   }
@@ -77,7 +77,7 @@ function finalizeProvenance({ source, provenance = {} }) {
   }
 
   if (source !== 'user') {
-    throw new ValidationError(`unsupported source: ${String(source)}`);
+    throw new ValidationError(`unsupported source: ${singleLine(source, 40)}`);
   }
 
   const origin = base.origin ?? 'user_request';
@@ -355,7 +355,7 @@ export class MemoryStore {
   async add({ content, kind = 'user_fact', source = 'user', sensitivity = 'normal', provenance = {} } = {}) {
     const text = validateContent(content);
     validateKindSource(kind, source);
-    if (!SENSITIVITIES.has(sensitivity)) throw new ValidationError(`unknown sensitivity: ${String(sensitivity)}`);
+    if (!SENSITIVITIES.has(sensitivity)) throw new ValidationError(`unknown sensitivity: ${singleLine(sensitivity, 40)}`);
     // The provenance is derived from the request alone, so it is normalised before coordination is
     // sought: an unauthorized or malformed request must not occupy the lock.
     const normalizedProvenance = finalizeProvenance({ source, provenance });

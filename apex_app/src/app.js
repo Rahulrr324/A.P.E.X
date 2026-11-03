@@ -16,6 +16,8 @@ import { SessionState } from './session.js';
 import { APP_EXPANSION, APP_NAME, APP_STAGE, APP_VERSION } from './identity.js';
 import {
   loadConfig,
+  assertIsolatedDataDir,
+  isolationRequested,
   DEFAULT_FILESYSTEM_MAX_READ_BYTES,
   FILESYSTEM_LIST_DEFAULT_LIMIT,
   FILESYSTEM_LIST_MAX_LIMIT,
@@ -45,6 +47,11 @@ export function createApp({
   experienceCapture = CAPTURE_OFF,
 } = {}) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new Error('dataDir is required');
+  // Isolation is checked here as well as in loadConfig because this is the one place every
+  // writer passes. A test or benchmark that builds an app programmatically with a real
+  // directory fails at construction instead of writing into it, so the guarantee does not
+  // depend on remembering to resolve configuration through the env layer first.
+  if (isolationRequested(process.env)) assertIsolatedDataDir(dataDir);
   const clock = now ?? (() => new Date());
   const memory = new MemoryStore(path.join(dataDir, 'memory.jsonl'), { now: clock });
   const conversation = new ConversationStore(path.join(dataDir, 'conversation.jsonl'), { now: clock });

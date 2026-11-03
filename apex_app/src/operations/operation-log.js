@@ -4,8 +4,9 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { StoreError } from '../errors.js';
-import { OPERATION_SCHEMA, OUTCOME_VALUES } from '../outcomes.js';
-import { containsSecret, redactSecrets } from '../security/secrets.js';
+import { OPERATION_SCHEMA, OUTCOME_VALUES, Outcome } from '../outcomes.js';
+import { findSecrets, redactSecrets, maskSecretLeaves, maskSecretLeaf, containsSecret, SECRET_OMITTED } from '../security/secrets.js';
+
 import { shortId } from '../util.js';
 
 const MAX_HEALTH_SAMPLES = 20;
@@ -18,15 +19,117 @@ function validateOperation(op) {
   return null;
 }
 
-// The audit record is evidence, and its output field can quote untrusted model text. A
-// credential-like substring is removed at the write boundary and the record says so, so a
-// later reader can tell the stored text is minimized rather than verbatim. Everything that
-// identifies the event - status, capability, ids, retrieval, errors, timing - is unchanged.
-// Detection is heuristic; see security/secrets.js for the patterns and their limits.
-function minimizeOutput(op) {
-  if (typeof op.output !== 'string' || op.output.length === 0) return op;
-  if (!containsSecret(op.output)) return op;
-  return { ...op, output: redactSecrets(op.output), outputMinimized: true };
+// The audit record is evidence, and its text fields can quote untrusted model or user input. The
+// whole record, not one field, passes through the credential mask at this write boundary: every
+// string leaf is tested by content, so a value that arrived in a field no one declared still cannot
+// reach disk unfiltered. Detection is heuristic; see security/secrets.js for the patterns and their
+// limits. Everything that identifies the event - status, capability, ids, retrieval, errors, timing -
+// is unchanged, and the caller's own object is never rewritten by persistence.
+//
+// `output` keeps its own rule because it is the model's answer as the user saw it: prose stays and
+// only the credential-like substring is removed. A private key is the exception - its pattern names
+// only the header, so removing the header would leave the key body on disk and the whole field is
+// omitted instead.
+function minimizeOutputField(op) {
+  if (typeof op.output !== 'string' || op.output.length === 0) return null;
+  const kinds = findSecrets(op.output);
+  if (kinds.length === 0) return null;
+  if (kinds.includes('private-key')) return { output: SECRET_OMITTED };
+  const redacted = redactSecrets(op.output);
+  if (redacted === op.output) return null;
+  return { output: redacted };
+}
+
+// A record's fields are read one at a time, and any of them can be a value this build cannot read:
+// a getter that throws, a Proxy that refuses. The shell is the last boundary, so it never lets such
+// a read take the whole record with it - an unreadable field becomes absent metadata.
+function peek(object, key) {
+  try {
+    return object?.[key];
+  } catch {
+    return undefined;
+  }
+}
+
+export function minimizeOperation(operation) {
+  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
+    // There is no metadata to keep, so there is no safe body to fall back to. Fail closed: the
+    // caller reports the audit failure, and a line no reader can validate is worse than no line.
+    throw new StoreError('audit record is not an object; nothing was written to the audit log');
+  }
+  try {
+    const { ...record } = operation;
+    const minimized = minimizeOutputField(operation);
+    if (minimized) {
+      record.output = minimized.output;
+      record.outputMinimized = true;
+    }
+    // The masked copy, not the shallow one, is what reaches the log: masking a leaf means replacing
+    // its whole subtree, so the filtered value only exists in the object the walk returned.
+    // `output` is skipped only when this function has already filtered it - a non-string output is
+    // still a field that can carry a credential, and skipping it unasked would be a hole.
+    const masked = maskSecretLeaves(record, { skipTopLevel: minimized ? ['output'] : [] });
+    if (masked.masked > 0) masked.value.secretsMasked = true;
+    if (masked.boundReached) masked.value.auditMaskBoundReached = true;
+    return masked.value;
+  } catch {
+    return auditShell(operation);
+  }
+}
+
+// A record whose body could not be minimized is still an event that happened. The shell keeps the
+// structural facts that identify it and drops every text-bearing field, so the fallback can never
+// serialize the input it just failed to filter. The markers say what was lost.
+const AUDIT_SHELL_OMITTED = '[omitted: audit minimization failed]';
+const AUDIT_SHELL_FIELDS = Object.freeze([
+  'schema', 'app', 'stage', 'id', 'requestedAt', 'finishedAt', 'origin', 'capability', 'status',
+  'decision', 'backend', 'model',
+]);
+
+// Only scalars of a bounded length survive, so a hostile or unexpected metadata field cannot
+// smuggle text into the record the shell was written to avoid.
+function shellField(key, value) {
+  if (key === 'schema') return Number.isInteger(value) ? value : OPERATION_SCHEMA;
+  if (key === 'status') return OUTCOME_VALUES.has(value) ? value : Outcome.AUDIT_INTEGRITY_FAILED;
+  if (key === 'id') return typeof value === 'string' && value.length > 0 && value.length <= 200 ? value : '[id unavailable]';
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string' || value.length === 0 || value.length > 200) return null;
+  return maskSecretLeaf(key, value);
+}
+
+function auditShell(op) {
+  const shell = { auditMinimizationFailed: true };
+  try {
+    for (const key of AUDIT_SHELL_FIELDS) shell[key] = shellField(key, peek(op, key));
+    shell.request = AUDIT_SHELL_OMITTED;
+    shell.output = AUDIT_SHELL_OMITTED;
+    shell.prompt = AUDIT_SHELL_OMITTED;
+    shell.retrievalCount = Array.isArray(peek(op, 'retrieval')) ? peek(op, 'retrieval').length : 0;
+    shell.stepCount = Array.isArray(peek(op, 'steps')) ? peek(op, 'steps').length : 0;
+    // A task step is identified by its task and step ids; keeping that linkage means a shell is
+    // still findable as evidence that the step ran, rather than reading as a missing record.
+    const task = peek(op, 'task');
+    if (task && typeof task === 'object') {
+      const ids = ['id', 'stepId']
+        .map((key) => {
+          const value = peek(task, key);
+          return typeof value === 'string' && value.length <= 200 ? maskSecretLeaf(key, value) : null;
+        });
+      if (ids.some((value) => value !== null)) shell.task = { id: ids[0], stepId: ids[1] };
+    }
+    shell.errors = [{
+      stage: 'audit',
+      code: 'MINIMIZATION_FAILED',
+      message: 'the audit record could not be minimized safely; its body is not persisted',
+    }];
+    return shell;
+  } catch {
+    // Even the bounded shell could not be built - the input is not a readable object. Failing
+    // closed is the audit-integrity contract: no line, and the caller discloses the failure.
+    throw new StoreError('audit record could not be minimized or reduced to a shell; nothing was written to the audit log');
+  }
 }
 
 export class OperationLog {
@@ -36,7 +139,7 @@ export class OperationLog {
   }
 
   async append(operation) {
-    await this.store.append(minimizeOutput(operation));
+    await this.store.append(minimizeOperation(operation));
   }
 
   async list({ limit = 10 } = {}) {
@@ -195,6 +298,36 @@ export class OperationLog {
   }
 }
 
+// A record written before the audit write boundary masked every field can still hold a credential in
+// its stored bytes, and historical records are never rewritten. So the leakage is reported instead of
+// quietly left out of the picture: this counts the readable records that contain credential-shaped
+// text and names nothing but the short operation id. No field name, value, or matched substring is
+// returned, because the pattern that matched describes the secret. Bounded because a read-only report
+// must not become a full-history scan the user cannot stop, and `partial` says when the bound was hit.
+export const MAX_CREDENTIAL_SCAN_RECORDS = 20000;
+
+export function scanCredentialShapedRecords(records, { max = MAX_CREDENTIAL_SCAN_RECORDS, sampleLimit = MAX_HEALTH_SAMPLES } = {}) {
+  const result = { matched: 0, scanned: 0, partial: false, samples: [] };
+  for (const record of records ?? []) {
+    if (result.scanned >= max) {
+      result.partial = true;
+      break;
+    }
+    result.scanned += 1;
+    let text;
+    try {
+      text = JSON.stringify(record);
+    } catch {
+      continue;
+    }
+    if (!containsSecret(text)) continue;
+    result.matched += 1;
+    const id = typeof record?.id === 'string' ? record.id : null;
+    if (id && result.samples.length < sampleLimit) result.samples.push(shortId(id));
+  }
+  return result;
+}
+
 export function summarizeAuditHealth(records, corrupt = [], { path = null, detail = null } = {}) {
   if (!Array.isArray(records)) {
     return {
@@ -208,6 +341,7 @@ export function summarizeAuditHealth(records, corrupt = [], { path = null, detai
       corrupt: [],
       outcomes: null,
       anomalies: { count: null, samples: [], truncated: false },
+      credentials: null,
       integrity: { mode: 'parse-only', hashChain: false, signature: false, externalAnchor: false },
       attention: true,
     };
@@ -241,6 +375,12 @@ export function summarizeAuditHealth(records, corrupt = [], { path = null, detai
     }
   }
 
+  // A security finding about stored bytes, kept beside the damage counts rather than folded into
+  // them: a credential in an old record says nothing about whether the log can be read. It does
+  // raise `attention`, because that field's contract is "this report needs the user", and a value
+  // that is on disk for anyone who can read the file needs them even when every line parses.
+  const credentials = scanCredentialShapedRecords(records);
+
   return {
     path,
     state: corrupt.length > 0 ? 'damaged' : 'ok',
@@ -256,8 +396,9 @@ export function summarizeAuditHealth(records, corrupt = [], { path = null, detai
     })),
     outcomes,
     anomalies: { count: anomalyCount, samples, truncated: anomalyCount > samples.length },
+    credentials,
     // Stated explicitly so a reader cannot mistake a clean parse for tamper evidence.
     integrity: { mode: 'parse-only', hashChain: false, signature: false, externalAnchor: false },
-    attention: corrupt.length > 0 || anomalyCount > 0,
+    attention: corrupt.length > 0 || anomalyCount > 0 || credentials.matched > 0,
   };
 }

@@ -16,7 +16,7 @@ import { APP_NAME, APP_STAGE } from '../identity.js';
 import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, selectPromptMemory, systemPrompt, adaptationLine, adaptationOmittedNote, MAX_CONTEXT_CHARS, predictionPromptRelevant } from './context.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
-import { containsSecret } from '../security/secrets.js';
+import { containsSecret, maskSecretLeaves, redactSecrets, SECRET_OMITTED } from '../security/secrets.js';
 import { planFromText, redactGoal, splitGoal, checkSteps, parseModelPlan, planningPrompt } from '../tasks/planner.js';
 import { TaskRunner } from './task-runner.js';
 import { TaskStatus, StepStatus } from '../tasks/model.js';
@@ -88,8 +88,6 @@ function renderShown(hits) {
     .map((h) => `  [${h.record.id.slice(0, 8)}] ${h.record.kind === 'model_conclusion' ? 'model conclusion (unverified)' : 'user fact'}: ${truncate(h.record.content, MEMORY_SHOWN_CHARS)}`)
     .join('\n');
 }
-
-const AUDIT_OMITTED_SECRET = '[omitted: contained a password, key, or token]';
 
 function knowledgeAddRequest(subject, relationship, object, supersedes = []) {
   const values = [subject, relationship, object];
@@ -184,7 +182,7 @@ function stringLeaves(value, depth = 0) {
 
 function maskStringLeaves(value, depth = 0) {
   if (depth > AUDIT_LEAF_DEPTH) return '[truncated]';
-  if (typeof value === 'string') return AUDIT_OMITTED_SECRET;
+  if (typeof value === 'string') return SECRET_OMITTED;
   if (Array.isArray(value)) return value.map((entry) => maskStringLeaves(entry, depth + 1));
   if (value && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, maskStringLeaves(entry, depth + 1)]));
@@ -195,7 +193,8 @@ function maskStringLeaves(value, depth = 0) {
 // The audit input is derived from the raw request before validation, so a refused
 // credential-like value must be replaced here rather than copied into the audit log.
 // For an action with declared fields only those fields are kept; unexpected fields are
-// marked and their values discarded.
+// marked and their values discarded. Both paths end in the shared persistence mask, so a
+// credential that arrived in a field nobody declared is still not written out.
 function auditInputFor(name, rawInput) {
   const fields = AUDIT_TEXT_FIELDS[name];
   if (fields && rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
@@ -216,9 +215,9 @@ function auditInputFor(name, rawInput) {
       out[key] = !secret
         ? value
         : typeof value === 'string'
-          ? AUDIT_OMITTED_SECRET
+          ? SECRET_OMITTED
           : Array.isArray(value)
-            ? value.map((entry) => (typeof entry === 'string' ? AUDIT_OMITTED_SECRET : entry))
+            ? value.map((entry) => (typeof entry === 'string' ? SECRET_OMITTED : entry))
             : (fields.objects ?? []).includes(key) && value && typeof value === 'object'
               ? maskStringLeaves(value)
               : value;
@@ -226,9 +225,9 @@ function auditInputFor(name, rawInput) {
     for (const key of Object.keys(rawInput)) {
       if (!fields.allowed.includes(key)) out[key] = '[unexpected field omitted]';
     }
-    return out;
+    return maskSecretLeaves(out).value;
   }
-  return redact(rawInput);
+  return maskSecretLeaves(redact(rawInput)).value;
 }
 
 // A private memory write must not share a request with other parts. The other parts
@@ -728,6 +727,16 @@ export class CognitiveController {
       for (const sample of health.anomalies.samples) lines.push(`    - ${sample}`);
       if (health.corruptLines > 0) {
         lines.push('  Inspection:     incomplete: counts cover readable records only; corrupt lines could change every count.');
+      }
+      // A credential-shaped value inside an already-stored record is reported as what it is: an
+      // existing security finding about bytes that are on disk. It is not folded into the damage
+      // counts, and no field name or matched text is printed, because the match describes the secret.
+      const creds = health.credentials;
+      if (creds && creds.matched > 0) {
+        lines.push(`  Credential-shaped: ${creds.matched} record(s) hold text that looks like a password, key, or token${creds.partial ? ` (counted over the first ${creds.scanned} records; the scan bound was reached)` : ''}`);
+        for (const id of creds.samples) lines.push(`    - operation [${id}]`);
+        if (creds.matched > creds.samples.length) lines.push(`    - ${creds.matched - creds.samples.length} more such record(s) not shown`);
+        lines.push('    - written before the audit write boundary masked every field; historical records are never rewritten, so APEX will not edit or delete these lines for you');
       }
     }
     lines.push('  Integrity:      parse-only: records are checked structurally. There is no hash chain, signature, or external anchor, so a clean parse does not prove authenticity and deliberate editing cannot be detected.');
@@ -1746,18 +1755,20 @@ export class CognitiveController {
     // composition root and cannot be supplied by a model proposal, so the boundary cannot be
     // expanded from model output.
 
-    // Execution.
+    // Execution. A rejection or failure is reported to the terminal as well as to the audit record,
+    // so the reason is filtered here: the step says what went wrong without quoting back a value
+    // that looked like a credential. Ordinary message wording is unchanged by this filter.
     const exec = await executeAction(def, ctx, rawInput);
     if (exec.status === 'rejected') {
       step.execution = { status: 'rejected', error: exec.error };
       step.outcome = Outcome.INPUT_REJECTED;
-      step.summary = `input rejected: ${exec.error.message}`;
+      step.summary = `input rejected: ${redactSecrets(exec.error.message)}`;
       return step;
     }
     if (exec.status === 'failed') {
       step.execution = { status: 'failed', error: exec.error };
       step.outcome = Outcome.EXECUTION_FAILED;
-      step.summary = `execution failed: ${exec.error.message}`;
+      step.summary = `execution failed: ${redactSecrets(exec.error.message)}`;
       return step;
     }
     step.execution = { status: 'ok' };
@@ -1772,10 +1783,10 @@ export class CognitiveController {
       step.summary = `${exec.result.summary} (verified)`;
       step.display = display ?? exec.result.summary;
     } else if (v.outcome === Outcome.VERIFICATION_FAILED) {
-      step.summary = `result NOT confirmed: ${v.detail}`;
+      step.summary = `result NOT confirmed: ${redactSecrets(v.detail)}`;
       step.display = step.summary;
     } else {
-      step.summary = `executed; verification unavailable: ${v.detail}`;
+      step.summary = `executed; verification unavailable: ${redactSecrets(v.detail)}`;
       step.display = step.summary;
     }
     return step;
@@ -1848,8 +1859,11 @@ export class CognitiveController {
 
   // A refusal is a result, not a crash: the reason is shown and nothing changes.
   async #refused(op, err, status = Outcome.INPUT_REJECTED, notice = '') {
-    if (err instanceof ValidationError) return this.#finishTaskOp(op, status, `${err.message}${notice}`);
-    if (err instanceof StoreError) return this.#finishTaskOp(op, Outcome.EXECUTION_FAILED, `${this.#taskStoreFailure(err)}${notice}`);
+    // The reason is quoted back to the terminal as well as into the audit record, so it is filtered
+    // here too: a refusal says which field was refused and why, never repeats the value that made
+    // it refuse. The message wording is unchanged for anything that holds no credential shape.
+    if (err instanceof ValidationError) return this.#finishTaskOp(op, status, `${redactSecrets(err.message)}${notice}`);
+    if (err instanceof StoreError) return this.#finishTaskOp(op, Outcome.EXECUTION_FAILED, `${redactSecrets(this.#taskStoreFailure(err))}${notice}`);
     throw err;
   }
 

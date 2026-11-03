@@ -30,6 +30,17 @@ implemented neural–cognitive bridge. `stark/` remains separate experimental re
 `apex_app/` does not import it. Do not read a passing test suite or a milestone number
 as evidence that the broader APEX vision is complete.
 
+**Security and integrity posture.** `apex_app/` states in writing what its credential masking covers,
+what it deliberately does not cover, what a damaged store does, and what its lock protocols refuse to
+promise:
+[Batch AF: what stops a credential, what survives damage, and what none of it claims](apex_app/README.md#batch-af-what-stops-a-credential-what-survives-damage-and-what-none-of-it-claims).
+Two statements from that section hold everywhere in this repository: the masking is a pattern heuristic
+over what APEX **persists and prints**, so it does not protect the request that leaves for a model
+endpoint you configured, and no passing test suite is evidence that anything is secure or that an action
+ran exactly once. Model output remains untrusted input, and it is never authorization. Historical
+`operations.jsonl` lines are never rewritten: read them as holding what was typed, and treat their
+repair as an operator decision made outside the application.
+
 The recorded states remain **G7 FAIL / M0 FAIL (NOT ACCEPTED) / M1 LOCKED**.
 `stark/reports/M0_FINAL_REPORT_v2.4.md` §Q7 explicitly forbids starting M1 before
 M0 acceptance. A development exception needs an explicit owner decision; a passing

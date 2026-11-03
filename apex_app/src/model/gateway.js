@@ -443,9 +443,9 @@ export class OllamaBackend extends HttpBackend {
     }
     const wanted = this.model.includes(':') ? this.model : `${this.model}:latest`;
     if (!listed.names.some((n) => n === this.model || n === wanted)) {
-      return { available: false, reachable: true, detail: `model "${this.model}" is not installed on this Ollama server; configure APEX_MODEL_NAME to a model this server lists` };
+      return { available: false, reachable: true, detail: `model "${safeModelName(this.model)}" is not installed on this Ollama server; configure APEX_MODEL_NAME to a model this server lists` };
     }
-    return { available: true, modelListed: true, detail: `model "${this.model}" installed at ${this.origin}` };
+    return { available: true, modelListed: true, detail: `model "${safeModelName(this.model)}" installed at ${this.origin}` };
   }
 
   async complete({ system, prompt, timeoutMs }) {

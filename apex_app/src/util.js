@@ -1,4 +1,5 @@
 // Small shared helpers.
+import { redactSecrets } from './security/secrets.js';
 
 // Control characters other than tab and newline.
 export const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
@@ -30,9 +31,14 @@ export function truncate(text, max) {
 // Renders an untrusted name or key so it can be embedded in APEX's own one-line
 // sentence without becoming a line of its own. Used for action names, step ids,
 // input field names, and anything else an APEX message quotes back.
+// A field name is attacker-chosen text, so a credential can arrive in one: the value is redacted
+// before it is shortened, exactly as the diagnostics printer does it, so a refusal cannot quote
+// back the beginning of the secret it is refusing.
 export function singleLine(value, max = 80) {
   return truncate(
-    String(value ?? '').replace(SINGLE_LINE_FORBIDDEN_ALL, ' ').replace(/\s+/g, ' ').trim(),
+    redactSecrets(
+      String(value ?? '').replace(SINGLE_LINE_FORBIDDEN_ALL, ' ').replace(/\s+/g, ' ').trim(),
+    ),
     max,
   );
 }

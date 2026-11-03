@@ -12,6 +12,7 @@ import { MAX_QUEUED_SUMMARIES } from './tasks/summary-queue.js';
 import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
 import { CONTROL_CHARS, shortId, truncate } from './util.js';
 import { redactSecrets } from './security/secrets.js';
+import { scanCredentialShapedRecords } from './operations/operation-log.js';
 import { captureSettingPhrase } from './experience/capture.js';
 
 export const State = Object.freeze({
@@ -638,6 +639,14 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
     if (hasCorrupt || hasInvalid) auditState = State.CORRUPT;
     else if (auditFileExists === false) auditState = State.MISSING;
     else auditState = State.OK;
+    // A credential-shaped value in a record that is already on disk is a security finding about
+    // stored bytes, not parse damage: it is reported in its own field and changes neither the
+    // audit state nor the corrupt-line count. Only the count is printed - a matched pattern
+    // describes the secret, so naming it would be half a disclosure.
+    const auditCredentials = scanCredentialShapedRecords(auditInspect.records);
+    const auditFindings = auditCredentials.matched > 0
+      ? [`${path.basename(app.operations.filePath)}: ${auditCredentials.matched} operation record(s) hold text that looks like a password, key, or token${auditCredentials.partial ? ` (counted over the first ${auditCredentials.scanned} records)` : ''}; they were written before the audit write boundary masked every field, and historical records are not rewritten`]
+      : [];
     const outcomeCounts = {};
     for (const op of auditInspect.records) {
       outcomeCounts[op.status] = (outcomeCounts[op.status] ?? 0) + 1;
@@ -656,9 +665,12 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
       corruptLines: auditInspect.corrupt.length,
       outcomes: outcomeCounts,
       integrity: { mode: 'parse-only', hashChain: false, signature: false, externalAnchor: false },
+      credentialShapedRecords: auditCredentials.matched,
       problems: auditProblems,
+      findings: auditFindings,
     };
     confirmed.push(...auditProblems);
+    confirmed.push(...auditFindings);
   } else {
     subsystems.audit = {
       key: 'audit',
@@ -1006,6 +1018,9 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   if (byKey('audit').state === State.CORRUPT) {
     recovery.push('Audit: no supported repair command exists. Preserve operations.jsonl; "apex history" skips damaged lines and new operations are still appended, so the audit trail remains incomplete.');
   }
+  if ((byKey('audit').credentialShapedRecords ?? 0) > 0) {
+    recovery.push(`Audit credential exposure: ${byKey('audit').credentialShapedRecords} operation record(s) hold text that looks like a password, key, or token; they were written before the audit write boundary masked every field. APEX does not rewrite or delete operations.jsonl. Treat any value that is still live as disclosed and rotate it where it was issued; if you decide to remove the bytes yourself, keep a copy of the log first, because editing the audit trail makes it no longer the record of what ran.`);
+  }
   if (byKey('predictions').state === State.CORRUPT) {
     recovery.push('Predictions: no supported repair command exists. Preserve predictions.jsonl and do not append to it by hand; the prediction reads and writes are unavailable until it is repaired, and "apex prediction health" names the damaged lines. Expectations are never recreated or inferred from the readable lines.');
   }
@@ -1067,6 +1082,10 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   return {
     app: { name: APP_NAME, expansion: APP_EXPANSION, stage: APP_STAGE, version: APP_VERSION },
     dataDir: app.dataDir,
+    // How this run came to be writing there is part of the report, not an inference the reader
+    // is left to make: the fallback location and an isolated run both look like a plain path.
+    dataDirIsDefault: app.config?.dataDirIsDefault === true,
+    isolated: app.config?.isolated === true,
     subsystems,
     integrity: { confirmed, suspicions, unchecked },
     taskState: { uncertainSteps, awaitingApproval, pausedTasks, runningTasks },
@@ -1081,10 +1100,20 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
   };
 }
 
+// Which store a run is on, in the run's own words. A fallback location and an isolated run
+// both look like an ordinary path, so the report says which one it is instead of leaving the
+// reader to remember how the environment was set.
+export function dataDirLabel(diag) {
+  const base = `Data directory: ${safeText(diag.dataDir)}`;
+  if (diag.isolated) return `${base} (isolated execution: APEX_DATA_ISOLATED=1)`;
+  if (diag.dataDirIsDefault) return `${base} (default location: APEX_DATA_DIR is not set)`;
+  return base;
+}
+
 export function renderDiagnostics(diag) {
   const lines = [];
   lines.push(`${diag.app.name} ${diag.app.stage} ${diag.app.version} (${diag.app.expansion}) - diagnostics`);
-  lines.push(`Data directory: ${safeText(diag.dataDir)}`);
+  lines.push(dataDirLabel(diag));
   // Not a defect and not a claim: APEX neither inspects nor changes a Git remote, so the
   // report must not be read as evidence about synchronization.
   lines.push('Remote synchronization: not checked (APEX does not inspect or modify a Git remote; this report covers the local data directory only)');

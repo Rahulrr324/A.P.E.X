@@ -839,7 +839,6 @@ describe('D. actions and tasks', () => {
     assert.match(res.display, /TIMEOUT/);
     assert.equal(res.operation.errors[0].code, 'TIMEOUT');
     assert.equal((await app.taskStore.list()).length, 0);
-    assert.equal(count(), 1, 'a timeout is not retried');
     const opsBefore = readJsonl(path.join(app.dataDir, 'operations.jsonl'));
     assert.equal(opsBefore.length, 1);
 
@@ -847,6 +846,11 @@ describe('D. actions and tasks', () => {
 
     assert.equal((await app.taskStore.list()).length, 0, 'a late reply does not create a task');
     assert.deepEqual(readJsonl(path.join(app.dataDir, 'operations.jsonl')), opsBefore);
+    // Counted after the wait rather than before it. The stub records a request when it serves it,
+    // and under a full-suite load the 50 ms client timeout can fire before the handler runs - which
+    // says nothing about retries. Two request attempts land inside 150 ms, so checking once the late
+    // reply has arrived is the stricter form of the same assertion.
+    assert.equal(count(), 1, 'a timeout is not retried');
   });
 
   test('unknown and malformed model proposals never execute', async () => {

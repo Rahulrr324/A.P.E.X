@@ -1,5 +1,44 @@
 # Bounded benchmarks
 
+## Isolation, safety and how to run these
+
+A benchmark is code that writes. What keeps it away from a real store, per script, measured in
+`tests/data-dir-isolation.test.js` and the isolation checks in each harness:
+
+- **Every script writes only under the OS temporary directory**, in a fresh `apex-bench-*` directory it
+  creates for the run and removes afterwards. `--keep` is the only opt-out, and it says where it left
+  the files.
+- `run-model-benchmark.mjs` uses a fresh temporary directory **even when `APEX_DATA_DIR` is already
+  set**, and gives each sample its own store: the operator's data directory is never what a benchmark
+  appends to. Its children are handed `APEX_DATA_ISOLATED=1`.
+- `run-world-state-benchmark.mjs` deletes `APEX_DATA_DIR` from the environment it passes to a child and
+  sets `APEX_DATA_ISOLATED=1`, so a child that tried to reach a real directory fails at construction
+  instead of writing to it.
+- `run-prediction-benchmark.mjs` sets `APEX_DATA_ISOLATED=1` for the real child processes that race the
+  prediction lock, and builds its in-process apps on `mkdtemp` directories.
+- `run-experience-benchmark.mjs` passes an explicit `dataDir` from `fs.mkdtempSync()` to `createApp`,
+  and its cleanup **refuses** to remove a directory that is not under the temp root and not prefixed
+  `apex-bench-` - so a mistake in the harness cannot turn a benchmark run into a delete.
+- Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
+  reporting, not a cleanup task.
+
+To check it yourself rather than trusting this text, hash your real store before and after
+(`Get-FileHash -Algorithm SHA256 $env:USERPROFILE\.apex\local-alpha\*` on Windows,
+`sha256sum ~/.apex/local-alpha/*` on POSIX) and compare. `apex status` also prints which data directory
+a run is using, and prints a `Data:` notice when `APEX_DATA_DIR` is not set at all.
+
+Two operating rules:
+
+1. **One benchmark at a time, and never alongside `npm test`.** These are timing measurements on a
+   shared machine; a concurrency-sensitive suite running next to a benchmark produces numbers that
+   describe neither. The same applies to comparing runs: an in-run A/B comparison is evidence, a
+   cross-run comparison is a dated observation about two moments.
+2. **A prompt is sent, not just stored.** `run-model-benchmark.mjs` sends its prompt text to whatever
+   endpoint it is pointed at. APEX's credential masking protects what is *persisted and printed*, not
+   the request that leaves the process, so never put a real credential in a benchmark fixture or a
+   prompt, and never point the script at an endpoint you did not choose to receive that text. The
+   fixtures in these scripts are synthetic prose for exactly that reason.
+
 ## Model-endpoint benchmark (live, opt-in)
 
 `run-model-benchmark.mjs` measures the ordinary APEX path (controller, gateway, audit,

@@ -911,7 +911,12 @@ function resultsOf(out) {
 // One child writer. `held` resolves when that child announces it owns the lock, so a
 // holder/contender pair is ordered by observation and not by a sleep that might be too short.
 function startChild(args, { racers = 1, waitMs = null } = {}) {
-  const env = { ...process.env };
+  // The benchmark writes into one temporary store per cell, and the child is told which by
+  // argument. Its environment is deliberately not the developer's: APEX_DATA_DIR is removed and
+  // isolation is requested, so a child that ever resolves a data directory from the environment
+  // fails at startup instead of appending to a real store while the measurement runs.
+  const env = { ...process.env, APEX_DATA_ISOLATED: '1' };
+  delete env.APEX_DATA_DIR;
   if (racers > 1) env.APEX_RACERS = String(racers);
   if (waitMs) env.APEX_WAIT_MS = String(waitMs);
   const child = spawn(process.execPath, [CHILD_WRITER, ...args], { env, windowsHide: true });

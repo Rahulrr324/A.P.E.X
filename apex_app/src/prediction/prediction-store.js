@@ -30,7 +30,7 @@ import { randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { WriterLock } from '../memory/writer-lock.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { shortId } from '../util.js';
+import { shortId, singleLine } from '../util.js';
 import { isScopableCapability } from '../experience/experience-store.js';
 import { MAX_TEMPORAL_EVENTS, PATTERN_KINDS, parseInstant } from '../experience/temporal.js';
 import {
@@ -444,7 +444,7 @@ export class PredictionStore {
     }
     for (const key of Object.keys(e)) {
       if (!['supportingExperienceIds', 'contradictingExperienceIds', 'feedbackIds', 'patternKinds'].includes(key)) {
-        throw new ValidationError(`cited evidence has an unknown field ${key}`);
+        throw new ValidationError(`cited evidence has an unknown field ${singleLine(key, 40)}`);
       }
     }
     const label = validateTextField(subject, 'subject', { max: MAX_SUBJECT_CHARS });
@@ -463,7 +463,7 @@ export class PredictionStore {
     }
     for (const kind of patternKinds) {
       if (!PATTERN_KINDS.includes(kind)) {
-        throw new ValidationError(`cited pattern kind ${String(kind).slice(0, 40)} is not one the temporal engine can produce`);
+        throw new ValidationError(`cited pattern kind ${singleLine(kind, 40)} is not one the temporal engine can produce`);
       }
     }
     const shared = supporting.filter((id) => contradicting.includes(id));

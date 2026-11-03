@@ -17,7 +17,7 @@
 // already exists in the audit and experience logs, so a model-origin read sees the same record set a
 // user-origin read sees.
 import { ValidationError } from '../errors.js';
-import { CONTROL_CHARS, shortId } from '../util.js';
+import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 import { PATTERN_KINDS, parseInstant } from '../experience/temporal.js';
@@ -168,7 +168,7 @@ function evidenceInput(value) {
   }
   for (const key of Object.keys(value)) {
     if (!['supportingExperienceIds', 'contradictingExperienceIds', 'feedbackIds', 'patternKinds'].includes(key)) {
-      throw new ValidationError(`evidence has an unknown field "${key}"; cite supportingExperienceIds, contradictingExperienceIds, feedbackIds, or patternKinds`);
+      throw new ValidationError(`evidence has an unknown field "${singleLine(key, 40)}"; cite supportingExperienceIds, contradictingExperienceIds, feedbackIds, or patternKinds`);
     }
   }
   const kinds = value.patternKinds === undefined || value.patternKinds === null
@@ -176,7 +176,7 @@ function evidenceInput(value) {
     : Array.isArray(value.patternKinds) ? value.patternKinds.map((kind) => recordRef(kind, 'patternKinds')) : (() => { throw new ValidationError('patternKinds must be a list'); })();
   for (const kind of kinds) {
     if (!PATTERN_KINDS.includes(kind)) {
-      throw new ValidationError(`"${kind.slice(0, 40)}" is not a pattern kind the temporal engine can produce`);
+      throw new ValidationError(`"${singleLine(kind, 40)}" is not a pattern kind the temporal engine can produce`);
     }
   }
   return {
@@ -192,7 +192,7 @@ function expectObject(input, allowedKeys) {
     throw new ValidationError('input must be an object');
   }
   for (const key of Object.keys(input)) {
-    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+    if (!allowedKeys.includes(key)) throw new ValidationError(`unexpected input field "${singleLine(key, 40)}"`);
   }
   return input;
 }

@@ -129,8 +129,14 @@ export class ConversationStore {
       .slice(-limit);
   }
 
+  // A count of one session's turns. It follows the rule the replay readers already state above:
+  // a damaged log is refused, not reported as a smaller history. Without that, a caller would get
+  // a number that silently excludes whatever the damaged lines held.
   async countForSession(sessionId) {
-    const { records } = await this.log.load();
+    const { records, corrupt } = await this.log.load();
+    if (corrupt.length > 0) {
+      throw new StoreError(`conversation store contains ${corrupt.length} corrupt line(s); refusing to count an incomplete history`);
+    }
     return records.filter((t) => t.sessionId === sessionId).length;
   }
 

@@ -123,6 +123,54 @@ by the command that needs them. A mistyped command creates nothing. These are pl
 JSON Lines files you can read and back up. The application never deletes or rewrites
 the append-only ones.
 
+### How a run decides where its data lives
+
+There is one rule, and it is worth stating exactly because it is the difference between
+a run touching your store and a run touching nothing.
+
+1. **`APEX_DATA_DIR` wins.** Its value is trimmed and resolved to an absolute path. A
+   relative value is resolved against the working directory of the process, so the same
+   command can land in different places depending on where it was run from.
+2. **An unset or blank value means the home default:** `~/.apex/local-alpha`
+   (`%USERPROFILE%\.apex\local-alpha` on Windows). A variable set to empty or whitespace
+   is treated as unset, which is the one way a run reaches a real user directory without
+   being told to. Nothing else in the application reads the home directory.
+3. **There is no CLI override and no config file.** A `--data-dir` flag is an unknown
+   option and the command exits 2. Environment is the only mechanism, which is also why
+   a child process inherits a run's data directory only through the environment its
+   parent gave it.
+4. **Nothing is created at startup.** The directory is made lazily, by the first write
+   that needs it - a store append, a session pointer, a queue save, a writer lock - so
+   `status`, `diagnose`, the health commands, `world`, `history`, `queue` and
+   `repair locks` create no files at all, and a run that is refused before it can write
+   leaves the directory untouched.
+5. **A path is not validated in normal operation.** An unwritable or nonsensical
+   `APEX_DATA_DIR` is accepted at startup and surfaces as an I/O failure at the write
+   that needed it, which the CLI reports rather than hides: exit 3 when the audit record
+   itself could not be written, exit 1 when the requested action did not complete.
+
+So APEX can touch a real user data directory in exactly two situations: `APEX_DATA_DIR`
+is set to it, or `APEX_DATA_DIR` is unset or blank and the run falls back to the home
+default. When a run is on the fallback and is not isolated, it says so once on stderr -
+`Data: this run uses the default data directory (…); APEX_DATA_DIR is not set` - and
+`status` and `diagnose` label the line they print.
+
+**Isolated execution** closes the second situation for anything that must not reach your
+store. `APEX_DATA_ISOLATED=1` means: refuse to start unless `APEX_DATA_DIR` names a
+directory inside the OS temporary directory and is not that directory's own root. The
+check runs in `loadConfig` and again in `createApp`, so a test or benchmark that builds
+an app programmatically fails at construction instead of writing. A value that is
+neither `1` nor `0` (surrounding whitespace tolerated, since padding can never turn a
+`1` into a normal run) is a startup error, not a silent return to normal operation; the
+same is true of `APEX_DATA_ISOLATED=1` with no `APEX_DATA_DIR`, because a test that
+redirects `HOME` would otherwise put the *default* directory inside the temporary root
+and pass a containment check alone. `APEX_DATA_ISOLATED` unset or `0` is normal user
+operation, and a persistent store of your own choosing outside the temporary directory
+stays available. The test harness sets `APEX_DATA_ISOLATED=1` for every CLI invocation
+through `tests/helpers.js` `cleanEnv()`, and the benchmark children are given their data
+directory explicitly. `tests/data-dir-isolation.test.js` pins each of these behaviours against
+real child processes and a pinned synthetic home.
+
 ### Configuration and preflight
 
 Configuration comes only from environment variables; there is no config file.
@@ -132,6 +180,7 @@ exits 2, names the setting, and reports that no data was read or changed.
 | Variable | Accepted values | Default |
 |---|---|---|
 | `APEX_DATA_DIR` | any directory path | `~/.apex/local-alpha` |
+| `APEX_DATA_ISOLATED` | `1` (require a data directory inside the OS temporary directory) or `0` | unset - normal user operation |
 | `APEX_MODEL_URL` | loopback `http(s)` URL; remote only with `APEX_ALLOW_REMOTE_MODEL=1` | none (no model) |
 | `APEX_MODEL_PROVIDER` | `openai`, `ollama` | `openai` |
 | `APEX_MODEL_NAME` | model name; Ollama requires it when a URL is set | `local` (OpenAI-compatible only) |
@@ -171,6 +220,34 @@ pointer is valid on a fresh install; if conversation turns are already stored,
 diagnostics reports it as a suspicion, because a new session will not replay them.
 Tests assert that `status` and `diagnose` leave every file in the data directory
 byte-for-byte and mtime-for-mtime unchanged (`diagnostics.test.js`).
+
+What Batch AF added to that report, and what its tests now pin (`security-end-to-end.test.js`,
+`corruption-recovery-boundaries.test.js`, `audit-secret-redaction.test.js`):
+
+- **A damaged log is reported as an incomplete inspection, never as a clean one.** `diagnose` prints
+  `Audit: corrupt (N readable operation(s), M corrupt line(s), K inconsistent record(s))` and names the
+  line and what it looks like (`final line without a newline: consistent with an interrupted append; the
+  bytes are preserved and new records start on a new line`), then states that `no supported repair
+  command exists`. `audit health` says `damaged - M corrupt line(s); inspection incomplete`, warns that
+  `corrupt lines could change every count`, and discloses that the check `writes no audit record and
+  displays no request or output body`. `status` prints the count with its gap:
+  `Operation records: N (corrupt lines skipped: M)`.
+- **A stored credential is exposure, not damage.** `audit health` and `diagnose` count records whose
+  text still looks like a password, key or token, name them by operation id, print no value, and give
+  the only remediation that still exists (`rotate it where it was issued`) alongside `APEX does not
+  rewrite or delete operations.jsonl`. Such a log still reads as `Audit: ok` on the damage axis; the
+  command exits 1 because there is something to act on.
+- **Evidence that cannot be read is labelled, not assumed.** `history` prints that the list is
+  incomplete because some records cannot be read, adds `A missing record does not prove an action did
+  not execute`, and exits 0 - a partial read is still a read. `diagnose` states that `matching operation
+  identifiers do not prove exactly-once execution` and that task step links `were checked only against
+  readable audit records`.
+- **A blocked store says what is blocked.** Damage in `memory.jsonl` is reported as `memory reads,
+  search, and corrections are blocked`, with `Preserve memory.jsonl and repair the damaged line outside
+  APEX`, while an unaffected store keeps working and is still reported as healthy.
+
+Every line above is a *report*: none of them deletes, rewrites, re-masks or reorders anything, and the
+suites re-hash the directory afterwards to prove it.
 
 ## Commands
 
@@ -769,9 +846,12 @@ src/filesystem/
   actions.js          bounded, read-only listing and reading
 src/session.js        conversation session id (persists until `new`)
 src/security/
-  secrets.js          credential-like text detection and redaction (no dependencies)
+  secrets.js          credential-like text detection (five pattern families), the bounded persistence
+                      mask over values, field names and keys, and the print-side redaction the readers
+                      use (no dependencies)
 src/operations/
-  operation-log.js    audit records
+  operation-log.js    audit records: the one write boundary every record passes through, where the mask
+                      runs, `output` is minimized, and an unfilterable body becomes a marked shell
 src/model/
   gateway.js          Model Gateway: replaceable backend; NoBackend; OpenAI-compatible and Ollama adapters
 ```
@@ -851,6 +931,28 @@ logged as `remember [content omitted: N chars]`, and action results show
 `output`, so **a model answer can repeat memory content**. That is a known
 limitation.
 
+Separately from that minimization, every audit record passes through whole-record
+masking at `OperationLog.append`: any string that looks like a password, key or token
+is replaced with `[omitted: contained a password, key, or token]` wherever it sits -
+in a value, in a field name, in an object key, at any nesting the walk reaches - and
+the record is marked `secretsMasked: true`. The walk is bounded (depth 8, 4,000 nodes);
+a record that reaches the bound says so with `auditMaskBoundReached: true` instead of
+stopping quietly, and a record whose body cannot be filtered at all is written as a
+bounded metadata shell marked `auditMinimizationFailed: true`. A record minimized this
+way is not verbatim evidence, and the mask is a pattern heuristic, not a guarantee.
+Records written before Batch AF are left exactly as they are and reported by `audit
+health` and `diagnose`; nothing rewrites history.
+
+Two consequences of that composition are worth stating plainly, because they are what a reader finds
+on disk (`tests/security-end-to-end.test.js`): the **conversation turn keeps the same masked form as
+the audit `request`** - a stored fact leaves `remember [content omitted: N chars]` in
+`conversation.jsonl` as its user turn, so the sentence survives only as the extracted content in
+`memory.jsonl`, and a refused credential leaves the omission marker in both files; and a refused
+`task plan` keeps `request: null` rather than a masked copy of the goal, because the goal is only
+assigned to the record after the check that rejected it. The consolidated statement of what the
+redaction covers, what it does not, and what a damaged or historical log holds is in
+[Batch AF: what stops a credential, what survives damage, and what none of it claims](#batch-af-what-stops-a-credential-what-survives-damage-and-what-none-of-it-claims).
+
 ## Tests
 
 ```bash
@@ -929,6 +1031,43 @@ contribution of the bounded expectation section ([Batch AE](#batch-ae-prediction
 | 40. Two processes cannot each decide one store's next state | `store-write-concurrency.test.js` (18 scenarios, all with real child processes and assertions on the authoritative records and lifecycle states rather than exit codes: distinct memory and knowledge adds, one conflict group, corrections, supersessions, retractions and resolutions raced two at a time so exactly one decision is recorded and the loser returns a truthful refusal; a live holder is waited for within its budget, an expired budget refuses with the store byte-identical, and the default budget is disclosed so a stuck holder cannot hang a command; a process killed while holding the claim is taken over by the next write, an unreadable claim is reported as in use by an unknown process and never removed, and recovery of sixteen abandoned tokens removes tokens only; an append that writes nothing and a claim that cannot be removed are both refused with the store left parseable; a corrupt store is discovered under the claim and refused; a warm instance cannot decide from state another process has already changed; five writers per store together, three repeated stress rounds, and read-only commands that take no lock and never disturb a live holder; plus `diagnose` and `repair locks` for both new lock files, and the authorization review - an unauthorized request is refused before any coordination, a model-proposed plan cannot reach the write lock, private content stays out of the audit on a coordinated write, and post-append ownership loss (`LOCK_LOST`, the record exists) stays distinguishable from a pre-write refusal (`LOCKED`, nothing was written)) |
 
 | 41. What the model is told about the whole store, not only what retrieval showed | `world-context.test.js` (16 scenarios through the assembled application with a recording test double: a clean store adds no section; an unverified model conclusion and an evidence-less claim reach the model as their own disclosures; a private counterpart marks the record that was shown while its content stays out of the prompt; a conflicting record outside the retrieval boundary, and a disagreement larger than the prompt's knowledge cap, are both reported by the projection; a recorded user decision is stated as a decision and not as an open conflict; superseded and retracted records are counted as history; a damaged store is disclosed as damage and an unreadable projection is disclosed as unavailable without blocking the answer; the system prompt states the section's boundary; deterministic requests touch neither the model nor the projection; reading the projection writes nothing to either store; a model cannot obtain the projection or erase the disclosure with confident prose; and a tight budget sheds retrieved records before trimming the summary, then drops the summary before stored knowledge while the user-facing notice stays) |
+
+| 42. The whole route, checked against the bytes it leaves behind | `security-end-to-end.test.js` (15 tests in 6 scenarios, every one driving the real `main()` from `src/cli.js` in a temporary data directory and reading the files back with `fs`: all four synthetic credential shapes refused on the memory route and byte-searched in **every** file under the directory including subdirectories; the knowledge, prediction and task routes refusing the same shape while `operations.jsonl` is the only file created; a stored fact told identically by `memory.jsonl`, `operations.jsonl` and both `conversation.jsonl` turns; a two-step plan told identically by `tasks.jsonl` transitions and its `task.plan`/`task.step`/`task.run` records; usage errors exiting 2 with zero bytes changed against store-validated rejections exiting 1 with their own record; a request rejected before any capability is chosen; the same text refused from a model origin and stored from a user origin; a torn audit line preserved, reported, never echoed, and unable to close the log; a damaged fact store blocking that store alone; experience capture armed through `APEX_EXPERIENCE_CAPTURE` alone, where a refusal creates no `experiences.jsonl` at all and the next verified success captures one; the twelve reads that write nothing and the three that record themselves). It configures no model in any case, so it is not evidence about model behaviour) |
+| 43. Damage is reported, never repaired, and never presented as an empty store | `corruption-recovery-boundaries.test.js` (8 tests: every persistent store in one directory damaged at once, then each user-facing surface asked what it says about each store, then the directory re-hashed to prove that reading, diagnosing, refusing and running lock recovery changed no byte of evidence) |
+| 44. Lock ownership and recovery, budget by budget | `lock-ownership-and-recovery.test.js` (17 tests across all six lock namespaces: every shape a corrupt claim can have, each protocol's measured wait next to its exported budget, a foreign live pid refused on liveness and later taken over, the two release paths that report lost ownership only after the record is durable, a staging file another process left behind, and recovery held simultaneously over every namespace) |
+| 45. A failed audit append cannot leave a verified-success claim standing | `append-audit-failure-semantics.test.js` (15 tests over the six-stage order - side effect, audit append, finalization, capture, prediction evaluation, disclosure - including `recorded: false`, the `audit_integrity_failed` downgrade, capture refused for want of a record, and the duplicate side effect a retry produces because nothing rolls the write back) |
+| 46. Every completion path finalizes the same way | `finalization-path-audit.test.js` (11 tests on the paths Batch AB and AF-15 left unwalked: prediction operations verified and still never captured; an error-bearing success refusing automatic capture while the manual path works; the duplicate-finalization guard on all four controller-audited paths; and what each path returns compared field by field with what `operations.jsonl` holds) |
+| 47. A reply never authorizes itself (AF-20) | `model-self-authorization.test.js` (17 tests, each against a fixed stub reply and the real parser, planner, registry, executor, verifiers, four belief stores and audit log - so nothing here is evidence about what a real model would say: a response proposing the three prediction writes is denied at every step and stores nothing; an adaptation cannot approve itself and the candidate stays a candidate; none of the fourteen write actions runs at model origin while the identical input writes at user origin; a plan whose steps are user-only writes is rejected, a plan reporting its own status or verdict is refused as malformed, a plan naming a nonexistent action is refused; a write step in a model-origin plan waits for the user and no reply approves it; provenance cannot be forged - a supplied `origin`/`updateMode` is refused before the store opens, each store derives its own, a store refuses a non-user origin even for a caller that skipped the registry, an experience can only cite an operation really in the audit log, and a model-origin write cannot be registered at all; verification is computed, never claimed - no shape of reply produces a `success_verified` operation, a reply cannot name the request it answers or the session it belongs to, and a reply whose proposals were all denied captures no experience) |
+| 48. Prediction, evaluation and adaptation stay separate authorities (AF-21) | `prediction-adaptation-boundary.test.js` (14 tests asserted against the persisted files rather than a rendered string: recording an expectation appends to the prediction ledger and nothing else, cannot cite an experience that does not exist, and is reported as standing on nothing until an outcome is recorded; a matched verdict changes no experience, no adaptation and no authorization and grants the model no permission it did not already lack; a contradicted verdict leaves every earlier record byte-identical; a second evaluation of one expectation is refused and rewrites nothing, and evaluating a superseded expectation records nothing; a replacement retires the earlier expectation without removing it and a withdrawal keeps the expectation and its reason; neither a matched nor a contradicted verdict moves an adaptation candidate, deriving again does not approve what it already derived, an unapproved candidate is never retrieved as a rule in effect, and only an explicit user decision makes a rule active) |
+
+Running one suite, which is what most review work needs:
+
+```bash
+cd apex_app
+node --test tests/security-end-to-end.test.js
+node --test tests/audit-secret-redaction.test.js tests/data-dir-isolation.test.js
+node --test tests/model-self-authorization.test.js tests/prediction-adaptation-boundary.test.js
+node --test tests/corruption-recovery-boundaries.test.js tests/lock-ownership-and-recovery.test.js \
+  tests/append-audit-failure-semantics.test.js tests/cross-process-stress.test.js
+```
+
+The first two lines are the Batch AF security suites that run in-process plus spawn CLI children; the
+third is the authorization-boundary pair, which is stub-backed and needs no endpoint; the fourth is the
+integrity set, and of those `tests/cross-process-stress.test.js` and `tests/lock-ownership-and-recovery.test.js`
+spawn the most real processes and are the slowest and most timing-sensitive - run them alone if a shared
+machine makes one flaky.
+
+On Windows, redirect to a file rather than piping the runner into `grep` or `tee`: the test runner
+writes as it goes and a closed pipe makes it fail with `EPIPE` for a reason that has nothing to do with
+the code under test (`node --test tests/cli.test.js > run.txt 2>&1`). Concurrency and cross-process
+suites spawn real `node` children and are timing-sensitive on a loaded machine; if one fails, re-run it
+alone before attributing anything, and never judge a store or authorization change from a single run of
+`npm test`.
+
+What a green run does not mean: `npm test` runs no model, so a pass says nothing about model answers or
+latency; the suites assert against temporary directories they create and remove, so a pass says nothing
+about a store you already have; and a pass is not a security property - see
+[Batch AF: what stops a credential, what survives damage, and what none of it claims](#batch-af-what-stops-a-credential-what-survives-damage-and-what-none-of-it-claims).
 
 Other critical paths: store unavailable (`memory.test.js`, `cli.test.js` exit codes),
 damaged data lines (`memory.test.js`), tampered content detection, configuration
@@ -1050,20 +1189,35 @@ questions that must change nothing).
   5,000). No persisted index is added, and no horizon read is silently bounded, because a count that
   omits part of the log is a false number rather than a cheap one. The stated threshold for revisiting
   that is in [Batch AE - Measured](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented).
-- **A refused credential-like value still reaches the audit log on the experience and adaptation
-  commands.** The prediction surface was fixed in Batch AE: an input field map in `controller.js`
-  masks every string of a refused action input before it is audited. The same defect is **demonstrated
-  and unrepaired** for the three earlier write commands, because they fall through to the generic
-  `redact()`, which omits only a field named `content`:
-  `experience record <op-id> --subject "api_key=<secret>"`, `feedback record <exp-id> --assessment
-  incorrect --guidance "api_key=<secret>"`, and `adaptation approve <id> --reason "token=<secret>"`
-  each refuse the value - nothing is stored in the experience log - and each still writes it verbatim
-  into `operations.jsonl`, confirmed on this machine on 2026-11-02 in a temporary data directory. The
-  fix is to extend the declared field map to those actions and give them the same regression test; it
-  is a change to Batch Z's audit path, so it was not widened into this batch. Treat
-  `operations.jsonl` as containing what was typed, and delete the file only knowing that history is
-  lost. `prediction record`, `prediction invalidate`, the `knowledge` commands and `memory` writes are
-  the surfaces where the masking is in place and tested.
+- **A credential-shaped value that a command refused used to reach the audit log.** Batch AF-01
+  reproduced the three cases this section reported as unrepaired - `experience record --subject`,
+  `feedback record --guidance`, `adaptation approve --reason` - and Batch AF-02..AF-07 closed them
+  at the one place every audit record passes through: `OperationLog.append` masks the whole record
+  before it is written, recursively over values, field names and object keys, so a field no command
+  declared cannot bypass it. The three cases are now tested end to end through the real CLI
+  (`tests/audit-secret-redaction.test.js`), along with the task log, the readers that print an old
+  log, and the disclosure that a log written before the mask still holds its values.
+  What remains is a boundary, not a gap: the mask is a heuristic over patterns, redaction happens
+  at the persistence and print boundaries rather than inside a caller that asked for the record,
+  and **historical `operations.jsonl` lines are never rewritten** - `audit health` and `diagnose`
+  report them as a finding. Treat `operations.jsonl` as containing what was typed until Batch AF,
+  and delete the file only knowing that history is lost.
+- **The user-only guarantee for `memory.add` is enforced in the registry, not in the store.**
+  `KnowledgeStore`, `ExperienceStore` and `PredictionStore` each refuse a non-user origin inside the
+  store, and `MemoryStore.correct()` does too, but `MemoryStore.add()` validates content, kind,
+  sensitivity and provenance and then writes. Nothing currently reachable can drive it that way -
+  `memory.add` declares `origins: [user]`, `authorize()` denies every other origin, a model plan is
+  refused the action at `checkSteps()`, and `tests/security-end-to-end.test.js` measures the refusal
+  against the store's bytes - but a future caller that reached the store directly would write a
+  `user_fact` no user authorized. Stated here rather than changed silently, because the fix is a
+  contract change to a store a dozen suites call without naming an origin. See
+  [Authorization boundaries](#authorization-boundaries).
+- **A green `npm test` is not a security property and not exactly-once execution.** The Batch AF
+  suites are deterministic tests against temporary directories on one platform; they pin behaviour and
+  disclosure wording, they run no model, and they do not constitute an audit. The consolidated
+  statement of what is protected, what is disclosed and what remains unclaimed is
+  [Batch AF: what stops a credential, what survives damage, and what none of it claims](#batch-af-what-stops-a-credential-what-survives-damage-and-what-none-of-it-claims).
+
 - **Read cost grows with the whole store, not with the window.** Each read loads every
   record and runs the integrity scan before it takes its 100-record projection. Batch U
   removed duplicate reads and made an unchanged repeat read skip parsing, so at 20,000
@@ -1355,10 +1509,14 @@ explicit entity relationships, built alongside personal memory:
 - **Single-user, local only.** No authentication, encryption, or sync. Anyone with
   read access to the data directory can read the memory.
 - **Audit content:** the `request` and model `output` fields contain your text. Memory-write
-  payloads and credential-like requests are not stored, and a credential-like substring in a
-  model answer is replaced with `[redacted-secret]` before the record is written; that record
-  is marked `outputMinimized: true` so the stored text is not mistaken for verbatim evidence.
-  Detection is heuristic, so a differently formatted secret can still be stored. The audit
+  payloads are not stored. Credential-like text is masked across the whole record before it is
+  written - values, field names and object keys alike - so a credential carried in a command that
+  was refused is stored as `[omitted: contained a password, key, or token]` rather than verbatim; a
+  filtered `output` is marked `outputMinimized: true` and a mask anywhere marks `secretsMasked: true`,
+  so the stored text is not mistaken for verbatim evidence. Detection is heuristic and the walk is
+  bounded, so a differently formatted or deeply carried secret can still be stored, and the audit
+  records written before Batch AF keep whatever they were given: `audit health` and `diagnose` report
+  those as a finding rather than rewriting them. The audit
   records memory ids and prompt sizes, not the memory text sent to the model. A model's own
   answer is recorded as output, and it could repeat memory.
 - **Conversation history** is replayed as summaries and text, limited to
@@ -3059,6 +3217,419 @@ withdraw on one ledger, a live holder, a writer killed holding the lock and one 
 an unreadable claim, a corrupt line, a reused id, a reader running alongside writers, reads that take
 no lock, and the lock's `diagnose` / `repair locks` recovery. `tests/fixtures/prediction-writer-child.mjs`
 is the child process the concurrency suite runs.
+
+## Batch AF: cross-store integrity audit (as measured)
+
+AF-14 inspected every persistent file the application owns, AF-15 tested what happens when an append
+or an audit write fails, and AF-18 ran several real processes against all of them at once. This section
+is the inventory those three produced: who owns each file, what may write to it, how a line is
+validated, and what coordination protects it. It is a description of the code as it is, not a claim
+that the design is gap-free - the bypasses are listed, because a list without them would read as one.
+
+### The nine files, and what each one is owned by
+
+| File | Owner module | What may write it | Coordination | Per-line validation |
+| --- | --- | --- | --- | --- |
+| `memory.jsonl` | `src/memory/memory-store.js` | `memory.add`, `memory.correct`, `memory.save_conclusion` | `WriterLock`, waits up to 10 000 ms | `validateMemoryRecord`; `contentSha256` is recomputed by the independent verifier and on read-back |
+| `knowledge.jsonl` | `src/knowledge/knowledge-store.js` | `knowledge.add`, `knowledge.retract`, `knowledge.resolve` | `WriterLock`, 10 000 ms | `validateKnowledgeRecord` (claim, retraction and resolution kinds each have their own shape) |
+| `experiences.jsonl` | `src/experience/experience-store.js` | `experience.record`, `feedback.record`, `adaptation.derive/decide/retire`, and bounded automatic capture | `WriterLock`, 10 000 ms | `validateExperienceRecord`; every read recomputes the record's evidence hash against `operations.jsonl` |
+| `predictions.jsonl` | `src/prediction/prediction-store.js` | `prediction.record`, `prediction.evaluate`, `prediction.invalidate` | `WriterLock`, 10 000 ms | `validatePredictionRecord`; citations are re-resolved against `experiences.jsonl` on read |
+| `tasks.jsonl` | `src/tasks/store.js` | a task transition: created, step result, approval, completion, interruption | its own protocol (see below) | `validateEventShape`. It is an event log: the current task is reconstructed by reads, never stored as one line |
+| `task-summary-queue.json` | `src/tasks/summary-queue.js` | a writer whose conversation append failed, and the reader that later delivers it | its own lock, 2 000 ms wait | JSON, not JSONL; holds only unsaved turn summaries - never task state or audit evidence |
+| `conversation.jsonl` | `src/memory/conversation-store.js` | each completed request turn and delivered task summary | none: an unlocked append | `validateTurn`, and no parse cache, so a reader reparses the log it bounds |
+| `operations.jsonl` | `src/operations/operation-log.js` | `finalizeOperation`, once per operation, whatever the outcome was | none: an unlocked append | `validateOperation`, secret-redacted, and no parse cache |
+| `session.json` | `src/session.js` | first use (create-once) and `apex new` (atomic replace) | none needed for one small file, replaced atomically | a readable file without a `sessionId` is corrupt, not fresh; corrupt is never treated as missing |
+
+Four of these keep a parse cache and three do not, which is a read-cost difference only: every write
+path still reads the whole authoritative log under its lock before appending.
+
+The write boundary is the same for all nine. A store's mutating method is reached only through a named
+controller command, which runs the action through the registry, so the origin check, the authorization
+decision, the independent verifier and the audit append are one path. A model origin cannot reach any
+of these writes: the write actions declare `origins: [ORIGIN_USER]`, and the record-of-experience and
+record-of-prediction actions are additionally `plannable: false`, so a plan cannot name them at all.
+Nothing in the application writes outside `APEX_DATA_DIR`, and the filesystem actions are read-only
+inspection of a root that only the composition root selects.
+
+### Three coordination protocols, six lock namespaces
+
+1. **`WriterLock`** (`src/memory/writer-lock.js`) protects `memory`, `knowledge`, `experiences` and
+   `predictions`. A claim is published create-once (a hard link of a synced temp file, falling back to
+   an exclusive create), the whole read-modify-append runs inside it, and a writer that cannot take it
+   within `WRITE_LOCK_WAIT_MS` (10 000 ms, 10 ms backoff capped at 250 ms) is refused with code
+   `LOCKED` and a message that ends "nothing was written" - true, because the claim is taken before any
+   byte of the record is written. A claim whose `pid` is dead is taken over through an election with
+   `TAKEOVER_EPOCHS` (16) abandoned attempts before the store tells the user to run `apex repair locks`.
+2. **The task lock** (`src/tasks/store.js`) does not wait. It makes three publication attempts and then
+   refuses with "tasks are in use by process N; try again when it finishes", because a queued task run
+   would be a second process stepping through the same plan. Recovery reuses the same
+   `src/tasks/lock-recovery.js` election as the writer lock, and reports an unparseable holder through
+   `identifiedPid`, so a damaged claim is named as unknown instead of inventing a pid.
+3. **The summary-queue lock** (`src/tasks/summary-queue.js`) waits 2 000 ms. Its release is asymmetric
+   with the other two on purpose: the deferred summary stays in the file until a later request delivers
+   it, whereas a lock and its tokens are always removed by the process that made them.
+
+`apex repair locks` is the one deliberate exception to "only a store writes a store": it may remove
+abandoned takeover tokens, and it never removes a claim or a record. It inspects read-only first, and a
+recovery that decides to act publishes its own exclusive `*.lock.recover` guard (pid, nonce, timestamp)
+so two recoverers cannot run at once - the guard is removed by the process that made it, and a second
+recovery either refuses while that pid is live or tells the operator to inspect the unfinished guard
+file. The AF-18 residue assertion counts such a file: it treats anything in the data directory that is
+not one of the nine stores as left behind.
+
+### Paths that bypass a store or writer-lock contract, named plainly
+
+- **The audit log has no lock and no unique index.** `operations.jsonl` accepts an append from any
+  process. A line is not torn, because an append is one write of a complete newline-terminated record,
+  and AF-18 measured 30-plus concurrent audit lines across four processes with no unparseable line and
+  no repeated identifier - but nothing stops two processes writing the same content twice, and nothing
+  reorders a line that arrives late.
+- **`conversation.jsonl`** is the same unlocked append, for the same reason: a turn is one record that
+  no decision depends on.
+- **A store append happens before its audit append.** AF-15 observed this from inside a failing audit
+  append: the record is on disk and the audit line is not. The disclosure is the contract -
+  `finalizeOperation` returns `{recorded, recordError, captureNotice}`, the CLI prints
+  `Audit: NOT RECORDED (...)` with exit code 3, and no code path rewrites a `success_verified` status
+  to hide the gap. What the store cannot do is undo the write, so the same request retried runs the
+  action again: there is no exactly-once execution here, and AF-15 measured a duplicate side effect
+  rather than assuming one.
+- **`session.json` replacement is last-write-wins.** Creating the first session is create-once and the
+  loser adopts the winner's id, but `apex new` renames over the file. Two concurrent `apex new` calls
+  leave one pointer and two ids; history is never lost, only which conversation is current.
+- **Reads take no lock.** A reader can observe a store between two appends, so read paths bound what
+  they read and describe what they saw - they do not claim a snapshot consistent with a write that is
+  still in flight.
+
+### What the AF-18 multi-process runs showed
+
+`tests/cross-process-stress.test.js` (5 tests in 4 suites) and its fixture
+`tests/fixtures/cross-store-writer-child.mjs` run the production controller from separate `node`
+processes released together by a file barrier, then read the files back. Measured in that suite:
+four processes writing all five stores produce exactly the records they reported, with no repeated
+identifier in any store, no unparseable or unterminated line, and no lock, token or temp file left
+behind; eight processes correcting one claim produce exactly one replacement, because the loser re-reads
+under the lock and is refused with "that claim was already corrected"; a live holder makes three
+concurrent requests refuse, each printing the holder's pid and "nothing was written" with a non-zero
+exit while the store gains no record, and the next process after the holder is killed recovers the
+abandoned claim and writes. Task-lock contention is real and visible: a plan that is stored may be
+followed by a run refusal that names the holder, which is why the fixture reports a line for every
+label it was asked to attempt.
+
+The suite does not show that a lost audit record is impossible, and it is not a benchmark. It pins the
+structural guarantees - presence, uniqueness, parseability, and an honest disclosure when either fails.
+
+## Batch AF: capability authorization inventory (as registered)
+
+AF-19 asked for every registered action, with what each one is allowed to do. Two things are uniform
+across the whole set, so they are stated once instead of per row:
+
+- **Audit.** Every route that can end an operation writes one `operations.jsonl` line whatever its
+  outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
+  unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
+  unavailable each still produced their audit line and their conversation turn.
+- **Verification.** All 34 registered actions declare both `validate()` and `verify()`, so the
+  independent verifier runs on every one - including the reads, which are verified against a fresh
+  re-read rather than trusted from the first result. Registration refuses an action that omits either.
+
+"Cognitive state" below means what APEX believes: `memory.jsonl`, `knowledge.jsonl`,
+`experiences.jsonl`, `predictions.jsonl`. The task log, the conversation log and the audit log record
+what happened; changing them is not a change of belief. **Class** is the registry's own `permission`.
+**Origins** is the registry's `origins` list. **Plan-time** is what a plan may contain, measured through
+`checkSteps()` and the planning prompt, which now consult one predicate. **"nothing (measured)"** means
+the action ran to `success_verified` in an isolated data directory and no store file changed size.
+
+| Capability | Origins | Class | Plan-time | What it writes | Auto-capture | Cognitive state |
+| --- | --- | --- | --- | --- | --- | --- |
+| `memory.add` | user | write | refused in a model plan, allowed in a user plan | `memory.jsonl` | yes | yes |
+| `memory.correct` | user | write | never in a plan | `memory.jsonl` | yes | yes |
+| `memory.save_conclusion` | user | write | never in a plan | `memory.jsonl` (a `model_conclusion`) | no (model-words) | yes |
+| `memory.list`, `memory.search` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `knowledge.add` | user | write | never in a plan | `knowledge.jsonl` | yes | yes |
+| `knowledge.retract` | user | write | never in a plan | `knowledge.jsonl` | yes | yes |
+| `knowledge.resolve` | user | write | never in a plan | `knowledge.jsonl` | yes | yes |
+| `knowledge.list`, `knowledge.search` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `experience.record` | user | write | never in a plan | `experiences.jsonl` | no (self-bookkeeping) | yes |
+| `feedback.record` | user | write | never in a plan | `experiences.jsonl` | no (self-bookkeeping) | yes |
+| `adaptation.derive` | user | write | never in a plan | `experiences.jsonl`, or nothing when no group qualifies | no (self-bookkeeping) | yes |
+| `adaptation.decide` | user | write | never in a plan | `experiences.jsonl` (one decision line) | no (self-bookkeeping) | yes |
+| `adaptation.retire` | user | write | never in a plan | `experiences.jsonl` | no (self-bookkeeping) | yes |
+| `adaptation.list` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `experience.list`, `experience.show`, `experience.timeline`, `experience.trends`, `experience.patterns`, `experience.compare` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `prediction.record` | user | write | never in a plan | `predictions.jsonl` | no (expectation) | yes |
+| `prediction.evaluate` | user | write | never in a plan | `predictions.jsonl`, or nothing when no outcome has resolved yet (measured: verified, nothing written) | no (expectation) | yes |
+| `prediction.invalidate` | user | write | never in a plan | `predictions.jsonl` | no (expectation) | yes |
+| `prediction.list`, `prediction.show`, `prediction.history`, `prediction.summary` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `app.status` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `calc.evaluate` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `world.state` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
+| `filesystem.list`, `filesystem.read` | user | read | never offered to a model plan | nothing (measured) | no (filesystem) | no |
+| `model.answer` | user request; anything it proposes runs as `model` | not a registered action | its proposals are checked step by step | `conversation.jsonl` + `operations.jsonl` | no (model-words) | no |
+| `task.plan` | user | not a registered action | - | `tasks.jsonl` + `operations.jsonl` | no (task) | no |
+| `task.run` | user | not a registered action | - | `tasks.jsonl` per step, each step's own store, a conversation summary, `operations.jsonl` | no (task) | through its steps only |
+| `task.approve` | user | not a registered action | - | `tasks.jsonl` (one transition) | no (task) | no |
+| `task.retry`, `task.cancel` | user | not a registered action | - | `tasks.jsonl` | no (task) | no |
+| `task.explain` | user | not a registered action | - | `operations.jsonl` + a conversation turn | no (task) | no |
+| `task.step` | the origin the step runs under | audit label, not an action | - | one audit line per step | no (task) | no |
+| `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
+
+`filesystem.list` and `filesystem.read` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
+configured; there is no default root, and a model proposal cannot supply one, so the count is 32
+registered actions by default and 34 with a root.
+
+### The inconsistencies this found, and what became of them
+
+- **Fixed: the planning prompt offered an action the plan checker always refused.** `memory.add` is the
+  one write action left plannable, and `checkSteps()` refuses it for a model origin because its content
+  would then be stored as a user fact the user never authored - the same reason `knowledge.add` is
+  unplannable. But the prompt built its own list from a copy of those rules, so it still printed
+  `- memory.add (write)`, and a model that used the action it was shown had its whole plan rejected
+  ("nothing was stored"). Both sides now call one `planRefusal()` predicate, so the prompt is exactly
+  the set of actions that could survive a check: measured, 17 read actions for a model origin and 21 for
+  a user origin. `tests/capability-inventory.test.js` pins both sets and re-derives the offer rule from
+  `checkSteps()` rather than from the prompt.
+- **Kept, and named: `memory.add` is the only write action that may be plannable.** Making it
+  `plannable: false` would be the tidier inventory, but the plan-time refusal it replaced is pinned by
+  three suites in its own words, and the per-step approval machinery it exercises (`task approve --step`,
+  `AWAITING_APPROVAL`) is reachable only through a plannable write action. The asymmetry is therefore
+  deliberate and is asserted as such: the inventory test requires every write action to be either
+  unplannable or refused for a model origin, so no write can enter a model's plan at all.
+- **Not a defect, but easy to misread:** `adaptation.derive` and `prediction.evaluate` can end a
+  `success_verified` operation having written nothing, and say so in the step summary ("nothing written").
+  A verified operation is not the same as a changed store.
+- **Cosmetic:** `memory.save_conclusion` is the only action with no `inputHint`. It cannot reach a plan
+  at all, and the prompt renders `Input: {}` only for the actions it offers, so nothing is misdescribed -
+  but the inventory test now requires a hint for every action that *is* offered, which is the case that
+  matters.
+
+## Batch AF: what stops a credential, what survives damage, and what none of it claims
+
+Batch AF was not a capability batch. The question throughout was what is allowed to reach the disk,
+what APEX says when a write is refused, and what a reader may claim about bytes it could not parse.
+Every statement below names the test file that measured it, and each of those files asserts against
+files on disk in a temporary data directory - not against a mock's record of a call. Nothing here is a
+security audit, and no sentence below should be read as a claim that APEX is secure: the credential
+rules are a pattern heuristic over common formats, and the evidence behind the isolation, concurrency
+and integrity statements is a deterministic test suite on one platform (Windows 11, NTFS, the Node
+version reported by `npm test`), not an adversarial review.
+
+### Secret redaction: where credential-shaped text is stopped
+
+Detection lives in one module, `src/security/secrets.js` - five pattern families (private-key headers,
+cloud access keys, `sk-` API tokens, bearer tokens, `password: x` assignments) plus a field-name rule -
+and every writer and printer calls that one rule set. In the order the route meets them:
+
+1. **Refusal, before the store is opened.** A field that is about to be persisted is checked with
+   `containsSecret()`, and a match rejects the input: `memory.add`, `knowledge.add` (any of subject,
+   relationship, object), `prediction.record` (subject), `experience.record` (subject),
+   `feedback.record` (guidance) and `adaptation approve` (its reason, audited under the capability
+   `adaptation.approve`) all refuse with
+   `status: input_rejected` (`plan_rejected` for a task goal), exit 1, a disclosure that names the
+   field, and the value itself nowhere in the output. Measured end to end through the real CLI in
+   `tests/audit-secret-redaction.test.js` (the three leaks Batch AF-01 reproduced) and
+   `tests/security-end-to-end.test.js` (all four shapes on the memory route, then the knowledge,
+   prediction and task routes in one directory: three refusals, three audit records, and
+   `operations.jsonl` the *only* file any of them created).
+2. **The audit `request` field.** A request holding a credential is recorded as
+   `[request omitted: contained a password, key, or token]`; a benign memory write is recorded as
+   `remember [content omitted: N chars]`, so the audit keeps the shape of the sentence rather than its
+   personal payload; a memory write mixed with other requests is recorded as an omission with a length;
+   a refused `task plan` keeps `request: null`, because the goal is only assigned after the check that
+   rejected it (all four measured in `tests/security-end-to-end.test.js`).
+3. **The whole record, at the one write boundary.** `OperationLog.append` masks recursively over values,
+   field names and object keys before anything is serialized, so a field no command declared cannot
+   bypass it. A string leaf that matches a pattern, or whose field name alone reads like a credential,
+   becomes `[omitted: contained a password, key, or token]` and the record carries
+   `secretsMasked: true`. The walk is bounded (depth 8, 4,000 nodes, circular references detected) and
+   a bound that stopped the walk is recorded as `auditMaskBoundReached: true` instead of failing
+   quietly; a body that cannot be filtered at all is written as a bounded metadata shell marked
+   `auditMinimizationFailed: true`, which keeps the linkage (task id, step id, capability, counts) so
+   the event remains findable. `tests/audit-secret-redaction.test.js` pins all of this, including that
+   masking an already-masked record changes nothing and that ordinary text - `mapping`, `monkey`, a
+   sentence containing the word `key` - is left byte-for-byte readable.
+4. **`output` keeps its prose.** The model-answer field has its own rule: the matched substring is
+   removed and the record is marked `outputMinimized: true`, rather than the whole answer being
+   dropped. A private-key header loses its entire body, because the value-level rule replaces the whole
+   string - a match does not bound a value.
+5. **The task log is behind the same boundary.** A model-proposed step input carrying a credential is
+   masked before `tasks.jsonl` is written; a clean plan is written unchanged.
+6. **Readers do not reprint what they find.** `history`, `diagnose` and the health commands redact a
+   credential-shaped value they read out of an existing log, and rewrite nothing while doing it.
+
+**Where redaction stops - the documented boundary, not a gap to be closed quietly.** A request is still
+answered, so its text - including a credential the user typed - is sent to whatever endpoint the user
+configured, and the model's answer is still shown in the terminal. Detection protects what is
+persisted and what diagnostics print. `tests/audit-secret-redaction.test.js` measures this directly:
+one request reaches the stub endpoint carrying the typed text, while the audit line on disk holds
+`[request omitted` and not the value. Redaction is also not an access control: a caller inside the
+process that asks a store for a record gets the record, and anyone who can read `operations.jsonl`
+sees its bytes.
+
+### Historical audit records: what they hold, and what will never happen to them
+
+Records written before Batch AF are left exactly as they are. Nothing rewrites, re-masks, reorders or
+deletes `operations.jsonl`, because an audit log whose earlier lines can be edited by the program that
+writes it is not evidence. So: **treat a `operations.jsonl` written before Batch AF as containing what
+was typed**, including any credential-shaped value, until you have decided otherwise yourself.
+
+What APEX does instead is report it, without echoing it (`tests/audit-secret-redaction.test.js`):
+- `audit health` exits 1 with the log still described as `ok - fully inspected` and `Corrupt lines: 0`,
+  because a stored credential is exposure, not parse damage; it counts
+  `Credential-shaped: N record(s)`, names the operations by id, and states that APEX will
+  `never rewrite` them.
+- `diagnose` exits 1, keeps `Audit: ok`, prints `Audit credential exposure` with
+  `1 operation record(s) hold text that looks like a password, key, or token`, and gives the only
+  remediation that still exists - rotate the credential where it was issued - alongside
+  `APEX does not rewrite or delete operations.jsonl`.
+- A new append into such a log is masked and the historical line stays byte-identical; `health()`
+  counts only the old line, because a record the boundary masked is not counted as exposed.
+- Deleting the file is a user decision, and the cost of it is stated in the same place: the history it
+  holds is lost.
+
+### Data-directory safety
+
+See [How a run decides where its data lives](#how-a-run-decides-where-its-data-lives) for the rule and
+the isolation flag. Batch AF measured the consequences that rule is for, in
+`tests/data-dir-isolation.test.js` (real child processes, a pinned synthetic home) and
+`tests/security-end-to-end.test.js` (byte-level before/after snapshots of the whole directory):
+
+- A usage or configuration error exits 2 and changes **no byte** in the data directory - not even a
+  `session.json` or a lock file. A mistyped command creates nothing.
+- Twelve read-only commands left the directory byte-identical, printed nothing on stderr and exited 0:
+  `memory health`, `knowledge health`, `knowledge show`, `knowledge history`, `experience health`,
+  `prediction health`, `audit health`, `world`, `history`, `status`, `diagnose`, `task show`. Three
+  reads are *not* in that class, because they are operations: `experience list`, `knowledge list`,
+  `prediction list` - each adds exactly one `success_verified` record, changes `operations.jsonl` and
+  nothing else, and says so in its own output (`Audit: recorded in operations.jsonl`).
+- A refused operation creates only an audit record. A refused credential-shaped write does not even
+  create the store it refused to write.
+- Isolation is enforced at two places (`loadConfig` and `createApp`) so a programmatic caller cannot
+  reach a real home directory by omission, and the harness sets `APEX_DATA_ISOLATED=1` for every CLI
+  invocation through `tests/helpers.js` `cleanEnv()`, which also strips every `APEX_*` variable so an
+  inherited environment cannot redirect a test's writes.
+
+### Store corruption behaviour
+
+The rule Batch AF-17 pinned across every persistent file at once (`tests/corruption-recovery-boundaries.test.js`)
+is that **a damaged store is never presented as an empty store**, and that recovery is always explicit:
+no command deletes, rewrites, moves or repairs evidence it could not read. What that means in practice,
+measured in `tests/security-end-to-end.test.js` against a deliberately torn line:
+
+- Damage is preserved, byte for byte. Every reader was run over the damaged log and the file was
+  re-read afterwards: unchanged, in all cases.
+- A reader reports the gap rather than inventing around it. `history` exits 0 - a partial read is still
+  a read - and prints `(1 corrupt audit line(s) skipped)`, `cannot be read, so this list is incomplete`
+  and `A missing record does not prove an action did not execute`. `audit health`, `status` and
+  `diagnose` exit 1: inspection of a damaged store cannot yield a clean bill.
+- Nothing echoes the damaged bytes. The torn fragment in the fixture contains a credential-shaped
+  string; no reader printed it on stdout or stderr, and the only copy on disk stayed the one the test
+  wrote.
+- An unterminated final line is named as what it is: `line 2: invalid JSON (final line without a
+  newline: consistent with an interrupted append; the bytes are preserved and new records start on a
+  new line)`. That is not only wording - the append path checks the last byte and starts on a fresh
+  line, so a later operation is written, readable, and does not merge into the damage: three physical
+  lines, two readable records, the damaged one still unusable.
+- An unreadable record cannot become evidence. Referencing its operation id for an experience is
+  refused: `is not in the audit log; an experience can only reference an event that was actually
+  recorded`.
+- Damage is confined to the file it landed in. A torn `memory.jsonl` makes memory *writes* refuse
+  (`execution_failed`, `memory store contains 1 corrupt line(s); refusing incomplete write`, `Nothing in
+  that store was changed`, the damaged bytes untouched) while an unrelated `knowledge add` still
+  succeeds on the same data directory.
+- There is no repair command, and the diagnostics say so: `no supported repair command exists. Preserve
+  operations.jsonl`, and for a fact store `Preserve memory.jsonl and repair the damaged line outside
+  APEX`. `repair locks` touches lock artifacts only, never a store's records.
+- Links that depend on unreadable evidence are labelled as partial: `task step -> operation links were
+  checked only against readable audit records`.
+
+### Concurrency boundaries
+
+The inventory of the three protocols, six lock namespaces and the unlocked append paths is in
+[Batch AF: cross-store integrity audit](#batch-af-cross-store-integrity-audit-as-measured);
+[Batch W](#batch-w-cross-process-write-coordination-as-implemented) holds the measured overhead.
+Batch AF's contribution was to pin what those boundaries *do not* promise, with real child processes in
+`tests/lock-ownership-and-recovery.test.js` (17 tests), `tests/cross-process-stress.test.js` and
+`tests/append-audit-failure-semantics.test.js` (15 tests):
+
+- A coordinated write is not queued. `LOCKED` means the wait budget expired and **nothing was written**,
+  so it is always safe to retry; `LOCK_LOST` means the record is already on disk and ownership was lost
+  on release, so it is **not** safe to retry. The two are different outcomes with different words, and
+  the suites pin both.
+- Two locks are not one transaction. A command that writes two stores holds the claims independently,
+  and an operation spanning a store append, an audit append and a conversation turn can be partly
+  recorded if the process dies between writes.
+- The budgets themselves are pinned so a later change cannot quietly loosen a timeout or an ownership
+  check to make a test pass: the exported wait per protocol, the task lock's bounded publication
+  attempts, the 16 takeover epochs, the recovery guard, and the behaviour of a corrupt claim (reported
+  as held by an unknown process, never removed).
+- Liveness is a check of a recorded process number, not of process identity. A recycled number makes a
+  dead holder's claim look live; APEX then refuses both the write and `repair locks`, and leaves the
+  directory blocked until an operator resolves it by hand. That is the safe direction, and it is a real
+  operational limit, not a solved problem.
+
+### Authorization boundaries
+
+`src/actions/registry.js` is the only place permission is decided, and Batch AF re-measured its shape
+through the real CLI (`tests/security-end-to-end.test.js`): a write action presented to the registry
+with any origin other than `user` is denied - `UNKNOWN_ORIGIN`, `UNKNOWN_ACTION`,
+`ORIGIN_NOT_PERMITTED`, or `WRITE_REQUIRES_USER_APPROVAL` - and a denied step records
+`{ decision: 'deny', reason }` with `execution: { status: 'not_run' }`, so the audit says plainly that
+nothing ran. The same text on the same store is allowed for a user origin: measured, `remember that the
+vault code is 4411` from a model origin is refused with nothing stored and no experience captured, while
+the identical request through `apex ask` stores the fact. A refusal is still an audited operation
+(`recorded: true`, `decision: refuse_or_block`), because "nothing happened" is a fact worth a record.
+
+The boundary was then attacked rather than only described. `tests/model-self-authorization.test.js`
+(AF-20, 17 tests) drives eight attempt families through the real parser, planner, registry, executor,
+verifiers, four belief stores and audit log, each against a fixed stub reply: a reply proposing the
+user-only writes, a plan that smuggles them as steps, a plan that reports its own status or verdict, an
+action that does not exist, a write step that tries to approve itself, an input carrying its own
+`provenance`, a proposal carrying its own `authorization`, and a reply that asserts it was verified.
+Every one is refused, and none of them is evidence about a real model - the replies are test doubles, and
+the suite says so in its own header. `tests/prediction-adaptation-boundary.test.js` (AF-21, 14 tests)
+pins the adjacent question: an expectation records nothing outside the prediction ledger, a verdict on
+records grants no permission, and no matched or contradicted outcome moves an adaptation candidate - only
+an explicit user decision does. Both assert against the files that end up on disk, because a rendered
+string can be reworded and an append-only log cannot.
+
+Two asymmetries are named rather than smoothed over:
+
+- **`MemoryStore.add()` does not re-check the operation origin.** `KnowledgeStore.add/retract/resolve`,
+  `ExperienceStore` and `PredictionStore` all refuse a non-user origin inside the store, and
+  `MemoryStore.correct()` does too, but `add()` (`src/memory/memory-store.js`) validates content, kind,
+  sensitivity and provenance and then writes. Today that is safe by construction: `memory.add` declares
+  `origins: [user]`, `authorize()` denies anything else, a model plan is refused the action at
+  `checkSteps()`, and `tests/security-end-to-end.test.js` measures the refusal. It is still the one
+  write path whose user-only guarantee lives in the registry instead of the store, so a future caller
+  that reached the store directly would write a `user_fact` nobody user-authorized. Batch AF documents
+  this rather than silently adding a check at the end of a hardening batch, because the fix is a
+  contract change to a store that a dozen existing suites drive without naming an origin - it should
+  land with a test that names it.
+- **A plan is a proposal, and its record claims nothing about execution.** `task.plan` is written with
+  `decision: propose_action` and `steps: []`; each step gets its own `task.step` record under the origin
+  the step ran on, and `task.run` closes the operation. Measured in `tests/security-end-to-end.test.js`:
+  a two-step plan (a calculation and a memory write) produced exactly `['task.plan', 'task.step',
+  'task.step', 'task.run']`, the step records matched one-to-one against the transitions in
+  `tasks.jsonl` by `operationId` and outcome, and `memory.jsonl` gained its record only when the run
+  executed the write - planning alone stored nothing. A `task run` naming something that matches no task
+  is refused as `input_rejected` ("no task matches"), which is a refusal, not a silent no-op.
+
+### What none of this claims
+
+- **Not exactly-once execution.** The store append happens before the audit append, an audit failure
+  never rolls the write back, and a retried request runs the action again. `tests/append-audit-failure-semantics.test.js`
+  measured a duplicate side effect rather than assuming one away; the disclosure is the contract
+  (`Audit: NOT RECORDED (...)`, exit 3), and `diagnose` states that `matching operation identifiers do
+  not prove exactly-once execution`.
+- **Not "content stays out of the log".** A model answer is stored in `output` (truncated, and masked
+  where it matches a pattern), and it can repeat memory content. That is a known limitation, not a new
+  one.
+- **Not a guarantee against an unusual credential format.** Five pattern families plus a field-name
+  rule, bounded depth and node count. `tests/audit-secret-redaction.test.js` pins what the mask catches
+  and what it lets through as readable text.
+- **Not real-model evidence.** No test in `npm test` runs a real model, and nothing in Batch AF was
+  measured against one: the credential boundary at the model call was exercised against a local stub
+  that records what it received. The dated real-model observations in
+  [Capability status](#capability-status) predate this batch and are not evidence about it.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 

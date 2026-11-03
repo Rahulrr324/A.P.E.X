@@ -140,15 +140,23 @@ describe('task execution: filesystem steps', () => {
     // User-only actions are not offered, so a model is not invited to propose them.
     assert.ok(!system.includes('- filesystem.list ('), 'filesystem.list must not be offered to a model');
     assert.ok(!system.includes('- filesystem.read ('), 'filesystem.read must not be offered to a model');
-    // Write actions stay, because a model-proposed write waits for explicit approval.
-    assert.match(system, /- memory\.add \(write\)/);
+    // memory.add is not offered to a model. checkSteps() always refuses a model-proposed memory
+    // write, because its content would then be stored as a user fact the user never authored, and
+    // the approval view does not show that content - so an offer here could only ever be rejected.
+    assert.ok(!system.includes('- memory.add ('), 'memory.add must not be offered to a model');
 
-    // Invariant: every action is offered if and only if a model-origin plan could use it.
+    // Invariant: every action is offered if and only if a model-origin plan could use it. The
+    // usable side is asked of checkSteps() itself rather than of a copy of its rules, so a prompt
+    // that drifts from the plan-time policy fails here instead of inviting an always-refused step.
+    const POLICY_REFUSALS = ['cannot be part of a plan', 'is not permitted in this plan', 'cannot be stored as a user fact'];
     for (const def of app.registry.list()) {
       const offered = system.includes(`- ${def.name} (`);
-      const usable = def.plannable !== false
-        && (def.permission === 'write' || app.registry.authorize(def.name, 'model').decision === 'allow');
-      assert.equal(offered, usable, `${def.name}: offered=${offered}, usable at model origin=${usable}`);
+      const checked = checkSteps(
+        [{ id: 's1', description: 'a step', action: def.name, input: {}, dependsOn: [] }],
+        app.registry, 'model',
+      );
+      const usable = !checked.problems.some((p) => POLICY_REFUSALS.some((refusal) => p.includes(refusal)));
+      assert.equal(offered, usable, `${def.name}: offered=${offered}, usable at model origin=${usable} (${checked.problems.join(' | ')})`);
     }
 
     // The user-origin variant still lists them, so a future user planning path keeps them.

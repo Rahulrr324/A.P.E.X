@@ -8,9 +8,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
+import { singleLine } from '../util.js';
 import { StoreError, ValidationError } from '../errors.js';
 import { TASK_SCHEMA, reduceEvents, validateEventShape } from './model.js';
-import { inspectLock, recoverLock, TAKEOVER_EPOCHS } from './lock-recovery.js';
+import { maskSecretLeaves } from '../security/secrets.js';
+import { inspectLock, recoverLock, identifiedPid, TAKEOVER_EPOCHS } from './lock-recovery.js';
 
 
 // Liveness, not identity: this asks whether *some* process currently has this number. A
@@ -109,10 +111,10 @@ export class TaskStore {
     if (q.length === 0) throw new ValidationError('a task id is required');
     const { tasks } = await this.load();
     if (tasks.has(q)) return tasks.get(q);
-    if (q.length < 4) throw new ValidationError(`task id "${q}" is too short; use at least 4 characters`);
+    if (q.length < 4) throw new ValidationError(`task id "${singleLine(q, 40)}" is too short; use at least 4 characters`);
     const matches = [...tasks.values()].filter((t) => t.id.startsWith(q));
-    if (matches.length === 0) throw new ValidationError(`no task matches "${q}"`);
-    if (matches.length > 1) throw new ValidationError(`"${q}" matches ${matches.length} tasks; use a longer id`);
+    if (matches.length === 0) throw new ValidationError(`no task matches "${singleLine(q, 40)}"`);
+    if (matches.length > 1) throw new ValidationError(`"${singleLine(q, 40)}" matches ${matches.length} tasks; use a longer id`);
     return matches[0];
   }
 
@@ -208,7 +210,7 @@ export class TaskStore {
             }
             continue;
           }
-          throw new StoreError(`tasks are in use by process ${holder?.pid ?? 'unknown'}; try again when it finishes`, 'LOCKED');
+          throw new StoreError(`tasks are in use by process ${identifiedPid(holder?.pid) ?? 'unknown'}; try again when it finishes`, 'LOCKED');
         }
       }
     } finally {
@@ -328,13 +330,20 @@ export class TaskStore {
 
   // Validates by replay, then appends. Refused events are never written, and a
   // damaged log is not extended: its state cannot be trusted as a base.
+  // A task log is audit evidence, and a model-proposed step input is unvalidated text until the
+  // step runs, so the shared mask runs here before the event is replayed and appended. What the log
+  // holds and what the replayed state holds are then the same bytes, which keeps an approval's
+  // input hash matching the step it names. A masked input fails its own action validation when the
+  // step runs: a credential is not a plan argument, and it is not stored as one either.
   async #append(event) {
+    const masked = maskSecretLeaves(event);
+    const safe = masked.masked > 0 ? { ...masked.value, secretsMasked: true } : masked.value;
     const { records } = await this.#readComplete();
-    const { problems } = reduceEvents([...records, event]);
+    const { problems } = reduceEvents([...records, safe]);
     const refused = problems.find((p) => p.index === records.length);
     if (refused) throw new ValidationError(`refused: ${refused.reason}`, 'ILLEGAL_TRANSITION');
-    await this.log.append(event);
-    return event;
+    await this.log.append(safe);
+    return safe;
   }
 
   #base(type, taskId) {

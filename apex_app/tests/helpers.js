@@ -29,12 +29,18 @@ export function cleanup(dir) {
 
 // Environment for child processes: APEX_* settings are removed so a developer's
 // own configuration cannot leak into tests. Callers add what they need.
+//
+// Isolation is part of the harness rather than a per-test choice, so every child APEX process
+// must name a data directory inside the OS temporary directory. A test that forgets
+// APEX_DATA_DIR then exits 2 at configuration instead of falling back to ~/.apex and writing
+// real audit records into the developer's store. A test that needs the unisolated behaviour
+// says so on purpose with APEX_DATA_ISOLATED: '0'.
 export function cleanEnv(extra = {}) {
   const env = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (!k.startsWith('APEX_')) env[k] = v;
   }
-  return { ...env, ...extra };
+  return { ...env, APEX_DATA_ISOLATED: '1', ...extra };
 }
 
 export function runCli(args, env) {

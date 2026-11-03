@@ -10,11 +10,12 @@ import { APP_EXPANSION, APP_NAME, APP_STAGE, APP_VERSION } from './identity.js';
 import { Outcome } from './outcomes.js';
 import { Decision } from './controller/decision.js';
 import { ValidationError, StoreError } from './errors.js';
+import { redactSecrets } from './security/secrets.js';
 import { shortId } from './util.js';
 import { TaskStatus } from './tasks/model.js';
 import { MAX_QUEUED_SUMMARIES } from './tasks/summary-queue.js';
 import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
-import { State, collectDiagnostics, renderDiagnostics, safeText } from './diagnostics.js';
+import { State, collectDiagnostics, dataDirLabel, renderDiagnostics, safeText } from './diagnostics.js';
 import { MAX_WORLD_LIMIT } from './world/world-state.js';
 
 export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION})
@@ -175,6 +176,11 @@ absolute directory. Paths are relative to it; it cannot be changed by a request.
 
 Environment:
   APEX_DATA_DIR            data directory (default: ~/.apex/local-alpha)
+  APEX_DATA_ISOLATED       1: refuse to start unless APEX_DATA_DIR names a directory inside the OS
+                           temporary directory. A test, benchmark, or diagnostic runs with this set
+                           cannot reach a real user store; a missing or mistyped value is a startup
+                           error, never a silent return to normal operation. Unset or 0 is normal
+                           operation, and any store you chose stays available.
   APEX_FILESYSTEM_ROOT     absolute directory APEX may inspect (unset: no filesystem access)
   APEX_FILESYSTEM_MAX_READ_BYTES  maximum file size for a read (default: 1048576)
   APEX_MODEL_URL           endpoint URL of a model server you have configured (unset: no model)
@@ -272,7 +278,7 @@ function describeStepLine(step) {
   const exec = `execution ${step.execution?.status ?? 'not_run'}`;
   const ver = `verification ${step.verification?.outcome ?? 'not_run'}`;
   const name = step.action ?? '(unparsed)';
-  return `  - ${name} [origin ${step.origin}]: ${auth}; ${exec}; ${ver}\n    ${step.summary}`;
+  return `  - ${name} [origin ${step.origin}]: ${auth}; ${exec}; ${ver}\n    ${redactSecrets(String(step.summary ?? ''))}`;
 }
 
 export function formatResult(res) {
@@ -583,6 +589,15 @@ export async function main(argv, {
     return 2;
   }
 
+  // Which store this run is on, stated once, whenever its location came from the fallback rather
+  // than from the operator. Every command below can reach that store - the writing families
+  // through their records, the reading ones through the audit line an audited read appends - so
+  // the line is about the run rather than about one command. `status` and `diagnose` name the
+  // directory in their own output and are left out to avoid saying it twice.
+  if (app.config?.dataDirIsDefault === true && app.config?.isolated !== true && command !== 'status' && command !== 'diagnose') {
+    err(`Data: this run uses the default data directory (${safeText(app.dataDir)}); APEX_DATA_DIR is not set. Set it to keep your store where you chose it.`);
+  }
+
   try {
     if (command === 'status') {
       const { flags, rest } = parseFlags(args, ['model']);
@@ -590,7 +605,7 @@ export async function main(argv, {
       const diag = await collectDiagnostics(app, { checkModel: Boolean(flags.model) });
       const { session, conversation, memory, experience, predictions, audit, queue, model, filesystem } = diag.subsystems;
       out(`${APP_NAME} ${APP_STAGE} ${APP_VERSION} (${APP_EXPANSION})`);
-      out(`Data directory: ${safeText(diag.dataDir)}`);
+      out(dataDirLabel(diag));
       out(sessionLine(session));
       const skipped = (s) => (s.state !== State.UNAVAILABLE && s.corruptLines > 0
         ? ` (corrupt lines skipped: ${s.corruptLines})`
@@ -1055,7 +1070,9 @@ export async function main(argv, {
       const { records, corrupt } = listed;
       if (records.length === 0) out('No operations recorded yet.');
       for (const op of records) {
-        out(`${op.requestedAt}  ${op.id}  ${op.status}  ${op.capability}  ${op.request ?? ''}`);
+        // A record written before the audit mask existed can still hold a credential, so the
+        // reader redacts what it prints. Nothing on disk is rewritten.
+        out(`${op.requestedAt}  ${op.id}  ${op.status}  ${op.capability}  ${redactSecrets(String(op.request ?? ''))}`);
       }
       if (corrupt) {
         out(`(${corrupt} corrupt audit line(s) skipped)`);

@@ -175,8 +175,12 @@ async function main() {
   // instead of producing a plan that cannot run.
   let config = null;
   let model = null;
+  // A live run is a writer, so it resolves configuration as an isolated run pointed at its own
+  // temporary directory: the operator's APEX_DATA_DIR is never what a benchmark appends to, and
+  // a broken isolation request stops the run rather than quietly becoming a normal one.
+  const benchEnv = tempDir ? { ...process.env, APEX_DATA_DIR: tempDir, APEX_DATA_ISOLATED: '1' } : process.env;
   try {
-    config = loadConfig(process.env);
+    config = loadConfig(benchEnv);
     model = {
       name: config.model.name,
       provider: config.model.provider,
@@ -234,7 +238,7 @@ async function main() {
     const sampleDir = path.join(dataDir, `sample-${i}`);
     let app;
     try {
-      app = createAppFromEnv({ ...process.env, APEX_DATA_DIR: sampleDir });
+      app = createAppFromEnv({ ...benchEnv, APEX_DATA_DIR: sampleDir });
     } catch (err) {
       result.samples.push({ sample: i, wallMs: null, status: null, classification: 'configuration_error', error: err.code ?? null });
       break;
