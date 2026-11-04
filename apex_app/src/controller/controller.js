@@ -15,6 +15,9 @@ import { CONTROL_CHARS, redact, round3, shortId, truncate } from '../util.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
 import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, selectPromptMemory, systemPrompt, adaptationLine, adaptationOmittedNote, MAX_CONTEXT_CHARS, predictionPromptRelevant } from './context.js';
 import { buildWorldModelContext } from '../world/context.js';
+import { computeConflicts } from '../world/conflicts.js';
+import { analyzeRequest, analysisAudit, validateModelOutput } from '../cognition/engine.js';
+import { structuredDisclosureNotice } from '../cognition/response.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret, maskSecretLeaves, redactSecrets, SECRET_OMITTED } from '../security/secrets.js';
@@ -3802,14 +3805,87 @@ export class CognitiveController {
     // claims. A damaged or unreadable log is disclosed as unavailable, never as an empty model.
     let worldModelContext = null;
     let worldModelUnavailable = false;
+    let worldModelState = null;
+    let worldModelConflicts = [];
     if (this.worldModel) {
       try {
-        const state = await this.worldModel.state();
-        worldModelContext = buildWorldModelContext(state, { request, now: this.now() });
+        worldModelState = await this.worldModel.state();
+        // One conflict derivation serves both the bounded World Model prompt view and the cognitive
+        // analysis. Computing it twice could let the two sections disagree about the same store.
+        worldModelConflicts = computeConflicts(worldModelState, { now: this.now() });
+        worldModelContext = buildWorldModelContext(worldModelState, { request, now: this.now(), conflicts: worldModelConflicts });
       } catch (err) {
         op.errors.push({ stage: 'worldModel', code: err.code || 'STORE_ERROR', message: err.message });
         worldModelUnavailable = true;
       }
+    }
+    // The cognitive layer runs over the records this path already retrieved. Passing them as seeds is
+    // not an optimization detail: it makes the analysis describe the same records the prompt holds,
+    // instead of a second read that could differ. A failure here is disclosed and does not block the
+    // answer; an empty analysis is never rendered as "nothing applies".
+    let cognition = null;
+    let cognitionUnavailable = false;
+    try {
+      cognition = await analyzeRequest({
+        request,
+        requestId: op.id,
+        now: this.now(),
+        turns,
+        stores: {
+          memory: this.memory,
+          knowledge: this.knowledge,
+          experience: this.experience,
+          predictions: this.predictions,
+          goals: this.goals,
+          plans: this.plans,
+          tasks: this.taskStore,
+        },
+        seeds: {
+          memoryHits: relevant,
+          knowledge,
+          adaptations,
+          temporal,
+          predictions,
+          executive,
+          worldState: worldModelState,
+          turns,
+          knowledgeUnavailable,
+          adaptationsUnavailable,
+          temporalUnavailable,
+          predictionsUnavailable,
+          executiveUnavailable,
+          worldStateUnavailable: worldModelUnavailable,
+        },
+        worldConflicts: worldModelConflicts,
+        continuationLoader: () => this.continuationReport({}),
+      });
+      if (cognition?.available !== true) {
+        cognitionUnavailable = true;
+        op.errors.push({
+          stage: 'cognition',
+          code: cognition?.error?.code ?? 'COGNITION_ERROR',
+          message: cognition?.error?.message ?? 'the cognitive analysis did not complete',
+        });
+      }
+    } catch (err) {
+      op.errors.push({ stage: 'cognition', code: err.code || 'COGNITION_ERROR', message: err.message });
+      cognitionUnavailable = true;
+    }
+    // A deterministic clarification is asked before the model is called, so no model can answer past
+    // an ambiguity or imply that it resolved one. This is the same outcome the controller uses for a
+    // missing topic, and it records the question as a question turn.
+    if (cognition?.available && cognition.deliberation?.clarification?.needed) {
+      const question = cognition.deliberation.clarification.question;
+      op.cognition = analysisAudit(cognition);
+      return {
+        status: Outcome.CLARIFICATION_REQUIRED,
+        answer: question,
+        modelText: null,
+        hasText: false,
+        backend: null,
+        error: null,
+        annotation: '',
+      };
     }
     const built = buildPrompt({
       request,
@@ -3831,6 +3907,8 @@ export class CognitiveController {
       executiveUnavailable,
       worldModel: worldModelContext,
       worldModelUnavailable,
+      cognition: cognition?.brief ?? null,
+      cognitionUnavailable,
       maxChars: this.maxContextChars,
     });
     const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });
@@ -3925,6 +4003,22 @@ export class CognitiveController {
     } else if (worldModelUnavailable) {
       op.prompt.worldModel = { included: false, unavailable: true };
     }
+    // The cognitive contribution is counts, labels, and ids only: the brief's text and the stored
+    // claim text stay out of the audit record. The full bounded trace is recorded separately below.
+    if (cognition?.available) {
+      op.prompt.cognition = {
+        included: built.cognitionIncluded,
+        lines: built.cognitionLines,
+        linesTotal: built.cognitionLinesTotal,
+        intent: cognition.understanding.intent,
+        decision: cognition.deliberation.decision,
+        evidence: cognition.retrieval.counts.total,
+      };
+      op.cognition = analysisAudit(cognition);
+    } else if (cognitionUnavailable) {
+      op.prompt.cognition = { included: false, unavailable: true };
+      op.cognition = { available: false };
+    }
 
     // A conflict stays visible even if the model ignores the in-context markers.
     const includedMemory = new Set(built.memoryIds);
@@ -4002,7 +4096,40 @@ export class CognitiveController {
       ? `[The backend reported ${(res.timings.loadMs / 1000).toFixed(1)} s of model load time for this answer.]`
       : '';
 
-    const parsed = parseModelOutput(res.text);
+    // A structured cognitive response is validated against this request's evidence before anything in
+    // it is used. A malformed or over-claiming structure is rejected whole and reported; the prose
+    // outside it is still the model's answer and remains unverified. The structured answer, when
+    // accepted, replaces the prose as the answer text because it is the same model making the same
+    // claim in a checked shape.
+    const cognitionCheck = cognition?.available ? validateModelOutput(res.text, cognition) : null;
+    if (cognitionCheck) {
+      op.cognition = { ...(op.cognition ?? { available: false }), model: cognitionCheck.audit };
+      if (cognitionCheck.error) {
+        op.steps.push({
+          action: null,
+          origin: 'model',
+          input: null,
+          authorization: null,
+          execution: { status: 'not_run' },
+          verification: { outcome: 'not_run', detail: null },
+          outcome: Outcome.INPUT_REJECTED,
+          summary: `malformed structured cognition response rejected: ${cognitionCheck.error?.code ?? 'INVALID_STRUCTURE'}`,
+          result: null,
+        });
+      }
+    }
+    const modelBody = cognitionCheck?.found
+      ? `${cognitionCheck.text}\n${cognitionCheck.structure?.answer ?? ''}`.trim()
+      : res.text;
+    const parsed = parseModelOutput(modelBody);
+
+    let answer = cognitionCheck?.structure?.answer || parsed.text || '(the model returned no answer text)';
+    let modelText = cognitionCheck?.structure?.answer || parsed.text;
+    const cognitionNotice = cognitionCheck?.structure
+      ? structuredDisclosureNotice(cognitionCheck.structure)
+      : cognitionCheck?.error
+        ? '[APEX rejected a structured model response that did not validate; nothing in it was used, and the wording above is unverified.]'
+        : '';
     for (const bad of parsed.malformed) {
       op.steps.push({
         action: null,
@@ -4024,7 +4151,6 @@ export class CognitiveController {
       op.steps.push(await this.runAction(p.action, p.input, 'model', op.id));
     }
 
-    let answer = parsed.text || '(the model returned no answer text)';
     if (res.truncated) {
       answer += res.truncatedBy === 'output-size-limit'
         ? '\n\n[The answer was cut off at APEX\'s output-size limit.]'
@@ -4045,12 +4171,12 @@ export class CognitiveController {
       // The text the model actually produced, without APEX notices. Conversation
       // turns and a user-approved saved conclusion use this, so a notice can never be
       // replayed later as if the model had said it.
-      modelText: parsed.text,
+      modelText,
       display: displayExtras ? `${answerText}\n\n${displayExtras}` : undefined,
-      hasText: parsed.text.length > 0,
+      hasText: modelText.length > 0,
       backend: res.backend,
       error: null,
-      annotation,
+      annotation: [annotation, cognitionNotice].filter(Boolean).join('\n\n'),
       proposalOverflow: overflow,
     };
   }

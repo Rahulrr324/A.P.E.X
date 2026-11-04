@@ -19,7 +19,11 @@ preserved for provenance.
   holds as belief and what contradicts what: `apex world` is a **read-only projection**
   of the memory and knowledge stores, not the persistent World Model. The World Model is a
   separate append-only store (`world-model.jsonl`) of entities, facts, relationships, events,
-  and evidence the user records; neither projection nor model output can write it. It answers
+  and evidence the user records; neither projection nor model output can write it. A deterministic
+  cognition layer reads those records, labels claims and contradictions, classifies uncertainty,
+  asks a clarifying question before any model call, and validates any structured model response
+  against the evidence it was actually given; it adds no model, no store, and no authorization.
+  It answers
   deterministic requests with no model and sends
   everything else to a local model backend **you** configure; without one it reports
   `model_unavailable` and generates nothing. Its model-path tests use local stand-in

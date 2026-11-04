@@ -43,6 +43,7 @@ from a milestone number or a passing build.
 | `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
 | Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
 | World Model, entity memory and evidence graph | Implemented as an append-only `world-model.jsonl` of user-origin records: stable entity ids with aliases and lifecycle, subject-predicate-object facts with typed values, relationships with directionality and inverse reads, events that keep happened-at, learned-at, and stored-at apart, evidence references to existing stores (never copies), retraction and supersession as later records, conservative contradiction detection that keeps both sides, deterministic identity candidates, and explicit user confirm/reject/merge/unmerge. Reads reduce the log at read time; nothing is overwritten, and a model cannot write a record. | `world-model-core.test.js` (17 tests), `world-model-scenarios.test.js` (15 end-to-end scenarios A-O, including real CLI runs and real child processes). See [Batch AI](#batch-ai-world-model-entity-memory-and-evidence-graph-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
+| Integrated cognitive reasoning layer | Implemented as a deterministic, read-only coordinator in `src/cognition/` over the stores APEX already has: request understanding and intent classification, bounded evidence retrieval with provenance and empty/unavailable/damaged distinctions, claim extraction with symmetric contradictions, a thirteen-step deliberation, qualitative uncertainty, clarification before any model call, a bounded grounding brief, and validation of model-authored structures. No stage calls a model, writes a store, grants authorization, or invents an answer. The model receives the brief as data and its reply is parsed as untrusted input; a citation it did not retrieve, a claim of execution, or a forged structure is rejected whole. | `cognition-understanding.test.js` (18 tests), `cognition-reasoning.test.js` (24 tests), `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through the real controller with a synthetic capture backend). See [Batch AJ](#batch-aj-integrated-cognitive-reasoning-deliberation-and-grounded-responses-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | General planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
 
 The model path depends entirely on a backend you configure yourself. Without one,
@@ -1020,6 +1021,10 @@ cost against the memory and knowledge stores at matched record counts
 model: it measures the prediction ledger's reads against both axes (ledger size and experience-log
 size), its writes in parts, real child-process contention on the prediction lock, and the context
 contribution of the bounded expectation section ([Batch AE](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented)).
+`benchmarks/run-cognition-benchmark.mjs` is outside the suite too and needs no model and no endpoint:
+it measures the cognition stage timings across three store sizes, the brief's contribution to a real
+prompt, and the structured-response validator, using the applied `createApp` path
+([Benchmarks](#benchmarks)).
 
 | Acceptance test | Where |
 |---|---|
@@ -1079,6 +1084,7 @@ contribution of the bounded expectation section ([Batch AE](#batch-ae-prediction
 | 49. A goal and its plan are records, and a completed plan completes no goal | `goal-system.test.js` (10 tests: lifecycle and illegal transitions, normalized duplicates, dependency ordering, audit-backed evidence, reopening a completed goal, stopping reasons, model-origin denial, credential refusal, damaged-log truthfulness, append-only byte preservation); `executive-control.test.js` A, B, C, E (goal-linked plan runs and completes only the plan; an unavailable capability cannot be approved or started; a partial run reconciles without replay; contradicting evidence blocks goal completion without rewriting the plan) |
 | 50. Executive authorization survives a hostile origin and a richer configuration | `executive-control.test.js` F (a model origin cannot create, approve, start, or reconcile a plan; a forged activation event is rejected by replay; activation re-checks the live registry, so an approval from a richer configuration does not carry over; approval is bound to exact content, and a write plan needs more than an approval) |
 | 51. Executive context and recovery are bounded, labelled, and read-only | `executive-control.test.js` G (assertion classification; the executive prompt section is gated, capped at eight lines, labelled intent rather than evidence; a tight budget drops it and announces the loss; the real request path receives the recorded state), the recovery test (every store keeps its exact bytes), `executive-cli.test.js` (4 real CLI lifecycle tests), and `executive-interruption.test.js` D (a real child process killed inside a plan step is reported uncertain, never re-run, and reconcile blocks the plan at the user's explicit command) |
+| 52. Integrated cognitive reasoning runs through the real request path and invents no evidence (AJ) | `cognition-understanding.test.js` (18 tests: intent and referent classification, evidence identity, claim labelling, contradiction symmetry, uncertainty categories, clarification before any model call, and the brief's bounded content); `cognition-reasoning.test.js` (24 tests: deliberation over supported, partial, conflicting historical and unknown evidence, inference and assumption kept distinct from support, recommendations, no confidence percentages, and deterministic trace steps); `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through `controller.handle` with a capturing backend: grounded answer, unsupported question, contradiction, clarification, bounded retrieval, prompt size, trace, and audit; the backend is a stub, so no claim is made about a real model's behaviour) |
 
 Running one suite, which is what most review work needs:
 
@@ -1087,15 +1093,18 @@ cd apex_app
 node --test tests/security-end-to-end.test.js
 node --test tests/audit-secret-redaction.test.js tests/data-dir-isolation.test.js
 node --test tests/model-self-authorization.test.js tests/prediction-adaptation-boundary.test.js
+node --test tests/cognition-understanding.test.js tests/cognition-reasoning.test.js \
+  tests/cognition-scenarios.test.js
 node --test tests/corruption-recovery-boundaries.test.js tests/lock-ownership-and-recovery.test.js \
   tests/append-audit-failure-semantics.test.js tests/cross-process-stress.test.js
 ```
 
 The first two lines are the Batch AF security suites that run in-process plus spawn CLI children; the
 third is the authorization-boundary pair, which is stub-backed and needs no endpoint; the fourth is the
-integrity set, and of those `tests/cross-process-stress.test.js` and `tests/lock-ownership-and-recovery.test.js`
-spawn the most real processes and are the slowest and most timing-sensitive - run them alone if a shared
-machine makes one flaky.
+cognition set, whose model-path scenarios use a capturing stub backend and so make no claim about a
+real model; the fifth is the integrity set, and of those `tests/cross-process-stress.test.js` and
+`tests/lock-ownership-and-recovery.test.js` spawn the most real processes and are the slowest and most
+timing-sensitive - run them alone if a shared machine makes one flaky.
 
 On Windows, redirect to a file rather than piping the runner into `grep` or `tee`: the test runner
 writes as it goes and a closed pipe makes it fail with `EPIPE` for a reason that has nothing to do with
@@ -1728,6 +1737,13 @@ each store size, the derived-state operations on the same fixtures, cumulative a
 twice on one seed with the incremental state on and off, the store-layer work timed inside a single
 public write, and the cost of a write refused by a damaged store) and `--full` adds the 1,000-append
 workloads. See `benchmarks/README.md` for the invocation, the columns, and the interpretation limits.
+
+`benchmarks/run-cognition-benchmark.mjs` measures the Batch AJ layer with no model and no endpoint: the
+cognition stage timings at three memory/knowledge sizes, the grounding brief's contribution to a real
+prompt at a fixed budget, and the structured-response validator against accepted, invented-citation and
+malformed replies. Its measured values are in
+[Batch AJ](#batch-aj-integrated-cognitive-reasoning-deliberation-and-grounded-responses-as-implemented)
+and its invocation in `benchmarks/README.md`.
 
 Observed on one Windows 11 machine (Node 26.4.0, 12 logical CPUs, 24 GiB reported memory,
 warm page cache, one 100-record window of memory sharing a single clause subject). The four
@@ -4253,6 +4269,137 @@ or optimally ordered. The continuation ranking is a fixed, evidence-weighted heu
 planner or a scheduler, and it never executes. Plan history and validity are derived from the
 append-only logs at read time; there is no separate index. Cross-store consistency is detected
 and reported, not repaired automatically.
+
+## Batch AJ: integrated cognitive reasoning, deliberation and grounded responses (as implemented)
+
+Batch AJ adds one layer that reads the stores APEX already has and decides what the records
+support, what they do not, and what must be disclosed. It is deterministic and read-only. It
+does not add a store, a model, a planner, or a permission path, and it does not turn a model
+answer into a verified fact.
+
+**Where it lives.** `src/cognition/` contains one module per stage:
+
+| Module | Responsibility |
+|---|---|
+| `vocabulary.js` | Fixed labels: schema version, intents, evidence sources, source status, claim kinds, uncertainty categories, decision kinds, missing-information codes, disclosures, and the numeric bounds shared by every stage. |
+| `request.js` | Request understanding: intent classification, entity/goal/plan/task references, time range, ambiguity detection, unsupported-capability detection, and missing-information codes. Intent describes the request and never grants authorization. |
+| `evidence.js` | Bounded retrieval from memory, knowledge, experience/feedback, adaptations, temporal summary, prediction ledger, World Model, goals/plans/tasks, conversation turns, and the request itself; reduces each record to one evidence shape carrying provenance, validity, status, and relationships. Per-source and total bounds are counted, and an omitted record is reported as omitted. |
+| `claims.js` | Claim extraction from evidence, claim kinds, material/non-material separation, duplicate reduction, and a contradiction map that records both sides of a disagreement. |
+| `deliberation.js` | Thirteen ordered deterministic steps: question, subquestions, scope, supporting and contradicting claims, interpretations, assumptions, uncertainty, clarification, conclusion, recommendation, validation, decision, disclosures. |
+| `response.js` | Grounding-brief construction under line and character bounds, structured-response schema validation, plain-answer validation, and disclosure wording. |
+| `protocol.js` | Extraction, size bound, JSON parse, and whole-structure rejection for an optional `COGNITION` line in model output. |
+| `trace.js` | Bounded audit trace: stage names, counts, evidence ids, conflicts, validation results. It never records chain-of-thought, request text, stored content, or model text. |
+| `engine.js` | Runs the stages in order, exposes per-stage timings, and validates model output against the analysis that produced the prompt. |
+
+**What a request can mean.** The classifier distinguishes a general question, a stored-information
+question, a World Model question, a historical question, a comparison, an explanation, goal
+creation, goal progress, planning, plan review, next step, task execution, clarification,
+feedback, an unsupported capability, and an ambiguous request. Classification is a description,
+not permission: every analysis result and every structured model response carries no authority,
+and every action still passes the action registry and authorization layer.
+
+**Evidence and claims.** Retrieval is bounded per source and in total. Every evidence item keeps
+the record id it came from, the source, the claim text, observation and validity times, provenance,
+status, and any supporting or contradicting links. Three outcomes are kept distinct: a source
+that was read and had nothing, a source that could not be read (unavailable), and a source that
+failed integrity checks (damaged). Only the first supports "nothing is recorded". Claims are
+labelled supported, contradicted, historical, unknown, inferred, assumed, expectation, or
+observation as appropriate; a derived view is never labelled an observation.
+
+**Contradictions are symmetric.** A stored disagreement is never resolved by recency, source rank,
+repetition, or model preference. Every side is kept, each side is cited, and the conclusion is
+`conflicting` with a disclosure. The World Model's conflict groups are reused rather than
+recomputed by a text heuristic.
+
+**Uncertainty is qualitative, not a score.** The categories are unknown, unverifiable, conflicting,
+outdated, weakly supported, inferred, assumed, supported but incomplete, and strongly supported
+(the last only when two independent source subsystems record compatible claims about the same
+subject). There is no confidence percentage anywhere, and a prediction's ledger status is never
+treated as factual confidence.
+
+**Clarification and assumptions.** An ambiguous reference, a missing topic, a goal without a
+success criterion, or an unsupported capability is decided deterministically. A needed
+clarification is returned before the model is called, so no model can answer past an ambiguity
+and imply it resolved one. Assumptions are named where a conclusion depends on them; nothing is
+invented to fill a gap.
+
+**The model protocol.** The model's prose is still the answer and remains unverified. It may append
+one line beginning with `COGNITION` carrying a JSON object with a decision, a short answer,
+bounded claims, uncertainty, disclosures, missing information, and optionally a recommendation.
+That line is parsed as untrusted input and validated against this request's evidence ids and
+deterministic analysis. At most one line is accepted; a second, malformed, oversized, non-object,
+unknown-kind, over-certain, or invented-citation structure is rejected whole and the fact of the
+rejection is disclosed. Validation never executes the recommendation, never writes a record, never
+approves a plan or adaptation, and never marks evidence verified. The model cannot authorize an
+action, create an authoritative record, or claim that one of its suggestions ran.
+
+**Executive integration.** Goal, plan, task, and World Model records are read when the request is
+about them, with blockers, plan validity, the next eligible step, missing criteria, and the
+proposal pathway stated. A recommendation is just a recommendation: it is reported as unexecuted,
+it carries no permission, and any resulting action still needs the existing approval and
+authorization workflow. Task execution requests are classified and routed, not run, by this layer.
+
+**Context budgeting.** The grounding brief is a derived section in the model prompt. It gives up
+its room before any retrieved record, after the World Model and executive sections. When the
+budget empties it, the prompt says it was omitted, rather than leaving silence. Recalled memory
+trimmed by the same budget now carries its own note inside the memory section; an emptied memory
+section says how many records were omitted instead of saying none were found. Each derived
+section that is emptied has its own notice, and notices are dropped before records when they
+cannot all fit.
+
+**Retrieved content is data.** Instruction-like text inside memory, knowledge, World Model
+records, or conversation turns is not followed. The prompt labels each section as data, and the
+analysis, the validation, and the authorization layer never treat a record as a rule. A stored
+instruction cannot cause a write, an approval, or a task run.
+
+**Scenarios A-O.** `tests/cognition-scenarios.test.js` drives the ordinary controller path with a
+synthetic capture backend (no inference) and pins fifteen behaviours: a cited stored fact is
+accepted and shown as unverified; a stored disagreement stays unresolved; a historical as-of
+question reports outdated currency; an ambiguous entity asks before any model call; a comparison
+links both referents; a next-step question reads goals and runs nothing; a structured
+recommendation is marked unexecuted; a proposed plan is denied before validation; a malformed or
+over-reaching structure never reaches the user as JSON; an authoritative claim and a proposed
+write change no store; an unreadable knowledge store is disclosed and the answer proceeds; a
+large request is bounded with the omission stated; repeated experiences are described as recorded
+order, not cause; the trace keeps evidence ids but no stored or model content; and a deterministic
+action still verifies while a model answer creates no stored record.
+
+**Measured** (Node v26.4.0, Windows x64, 12 logical CPUs, `--repeats 5`, synthetic fixtures written
+through the stores' own validated paths; model-free, no network):
+
+| Measurement | 20 records | 200 records | 800 records |
+|---|---|---|---|
+| World state read + conflict derivation | 0.92 ms | 0.78 ms | 1.38 ms |
+| Analysis total (standalone, re-reads memory and knowledge) | 9.12 ms | 37.06 ms | 325.15 ms |
+| Request understanding | 0.27 ms | 0.26 ms | 0.16 ms |
+| Retrieval and evidence normalization | 7.98 ms | 36.01 ms | 324.48 ms |
+| Claim extraction | 0.20 ms | 0.15 ms | 0.17 ms |
+| Deliberation | 0.22 ms | 0.15 ms | 0.11 ms |
+| Grounding brief | 0.10 ms | 0.05 ms | 0.04 ms |
+
+The analysis is bounded at 36 evidence records (6 per source), so its own stages do not grow with
+the store; the growth shown is the memory and knowledge search inside retrieval. On the controller
+path those two records sets are passed in as seeds, so the analysis does not read them a second
+time. Prompt assembly with the brief measured 0.58 ms median at 800 memory and 800 knowledge
+records; in an 8000-character measurement budget the brief added 741 characters (11 lines of 19,
+1335 characters total, 8 omitted), while at the default 6000-character budget it was trimmed
+first; in that fixture the remaining room was spent on records, so the brief's own omission
+notice did not fit either - the records it would have described were still present, and the
+operation record still carries the analysis. That is the designed order: a notice is attached
+only where it does not displace a record that answers the question. Model-output validation
+measured 0.12 ms for an accepted structure, 0.08 ms for an
+invented citation, and 0.02 ms for malformed JSON. These are single-machine observations, not a
+latency target. `benchmarks/run-cognition-benchmark.mjs` reproduces them.
+
+**What this does not claim.** It is not human-like reasoning, general intelligence, consciousness,
+autonomous learning, or a complete neural architecture. The conclusions are bounded rule
+application over stored records; the prose answer is still generated by whatever model the user
+configured, and validation checks grounding and structure, not truth or wisdom. The layer cannot
+prove that a statement is true, only that it is supported, contradicted, outdated, inferred, or
+unknown with respect to the records it read. There is no chain-of-thought capture and no attempt
+to model one. The roadmap's stage 4 is advanced on the request path, not closed: explicit
+confidence on stored beliefs, retrieval that is cheaper than a full store scan, and contradiction
+handling beyond the World Model's own conflict semantics remain open.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 

@@ -373,6 +373,9 @@ test('projection in context - a tight budget trims the projection before it shed
   // meta-context, so it trims first. Shedding records first was tried and it displaced the
   // user's own fact in an existing budget case (knowledge.test.js "an incidental match does
   // not displace the user's own facts in the prompt") - the regression this order fixes.
+  // The deterministic cognition brief also occupies this budget. It trims after the projection
+  // and before any record, so these budgets sit above the pre-cognition ladder; the ordering
+  // assertions below are the contract, the numbers are the measurement for this fixture.
   // Each budget is measured in a fresh process on a fresh copy of the same stores, so the
   // requests above cannot change what this budget has to hold.
   const atBudget = async (maxChars) => {
@@ -389,8 +392,8 @@ test('projection in context - a tight budget trims the projection before it shed
     return { res, prompt: runCap.state.prompts[0], world: res.operation.prompt.world };
   };
 
-  const partial = await atBudget(1700);
-  assert.ok(partial.prompt.length <= 1700, `the prompt stays inside its budget (${partial.prompt.length})`);
+  const partial = await atBudget(3400);
+  assert.ok(partial.prompt.length <= 3400, `the prompt stays inside its budget (${partial.prompt.length})`);
   assert.equal(partial.world.lines > 0 && partial.world.lines < total, true,
     `the summary is trimmed from the end, detail first (${partial.world.lines}/${total})`);
   assert.equal(partial.res.operation.prompt.memoryIds.length, 12, 'no record was shed to make room for the summary');
@@ -398,14 +401,14 @@ test('projection in context - a tight budget trims the projection before it shed
 
   // Trimmed to nothing, the budget is spent on records; the notice that says so appears only
   // while it fits without evicting one.
-  const noticed = await atBudget(1500);
+  const noticed = await atBudget(3000);
   assert.equal(noticed.world.included, false);
   assert.equal(noticed.res.operation.prompt.memoryIds.length, 12, 'every record survives the whole summary being gone');
   assert.match(noticed.prompt, /APEX STORE-WIDE PROJECTION: omitted from this context to keep it within its size budget/,
     'the omission is stated, not left as silence');
 
-  const gone = await atBudget(1400);
-  assert.ok(gone.prompt.length <= 1400, `the prompt stays inside its budget (${gone.prompt.length})`);
+  const gone = await atBudget(2800);
+  assert.ok(gone.prompt.length <= 2800, `the prompt stays inside its budget (${gone.prompt.length})`);
   assert.equal(gone.res.operation.prompt.memoryIds.length, 12, 'the records are still whole with no summary at all');
   assert.equal(gone.world.included, false);
   assert.equal(gone.world.lines, 0);

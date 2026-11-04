@@ -19,6 +19,8 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
 - `run-experience-benchmark.mjs` passes an explicit `dataDir` from `fs.mkdtempSync()` to `createApp`,
   and its cleanup **refuses** to remove a directory that is not under the temp root and not prefixed
   `apex-bench-` - so a mistake in the harness cannot turn a benchmark run into a delete.
+- `run-cognition-benchmark.mjs` builds every app on a `mkdtemp` directory prefixed `apex-bench-cog-`
+  and uses the same refusing cleanup. It starts no child process and constructs no backend.
 - Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
   reporting, not a cleanup task.
 
@@ -618,3 +620,58 @@ reduced state 24.5 ms.
 - No model is contacted anywhere in this file, and nothing here shows that a recorded fact is true
   or that an answer improves. It measures what the World Model costs to read, write, race, and
   carry into a prompt.
+
+## Cognition benchmark
+
+`run-cognition-benchmark.mjs` measures the deterministic cognition layer added by Batch AJ. It is
+model-free: no backend is constructed, `analyzeRequest` only reads stores, and the validation
+samples are literal strings.
+
+```sh
+node benchmarks/run-cognition-benchmark.mjs [--repeats R] [--phase stages|context|validation|all] [--keep]
+```
+
+The fixture seeds memory and knowledge records through their stores' own validated write paths at
+20, 200 and 800 records each, plus one World Model entity with two disagreeing facts and one event,
+so claim extraction and deliberation have real work. Nothing is written outside a fresh temporary
+data directory.
+
+### What it reports
+
+Measured on Node v26.4.0, Windows x64, 12 logical CPU(s), `--repeats 5`:
+
+| Measurement | 20 records | 200 records | 800 records |
+|---|---|---|---|
+| World state read + conflict derivation | 0.92 ms | 0.78 ms | 1.38 ms |
+| Analysis total (standalone) | 9.12 ms | 37.06 ms | 325.15 ms |
+| Request understanding | 0.27 ms | 0.26 ms | 0.16 ms |
+| Retrieval and evidence normalization | 7.98 ms | 36.01 ms | 324.48 ms |
+| Claim extraction | 0.20 ms | 0.15 ms | 0.17 ms |
+| Deliberation | 0.22 ms | 0.15 ms | 0.11 ms |
+| Grounding brief | 0.10 ms | 0.05 ms | 0.04 ms |
+
+Context: at 800 memory and 800 knowledge records, 20 hits each reach the prompt. The brief carries
+11 of 19 lines and 1,335 characters (8 omitted by its own bound); in an 8,000-character
+measurement budget it adds 741 characters, and `buildPrompt()` takes 0.58 ms median over five
+samples. At the default 6,000-character budget the brief is trimmed first; in this fixture the
+remaining room went to records, so the brief's omission notice did not fit either. The records it
+would have described were still present, and the operation record still carries the analysis.
+
+Validation: an accepted structured response validates in 0.12 ms median, an invented evidence id
+is rejected as `INVALID_STRUCTURE` in 0.08 ms, and malformed JSON is rejected as `MALFORMED_JSON`
+in 0.02 ms.
+
+### Interpretation limits
+
+- Medians over five samples in one process on one machine, warm page cache. Differences of a few
+  milliseconds are noise, and absolute milliseconds move with machine load.
+- The `stages` phase is the standalone analysis, which reads memory and knowledge itself. The
+  controller passes its already-retrieved records as seeds, so on the model path those two reads
+  do not happen twice; the seeded path is exercised by `tests/cognition-scenarios.test.js`.
+- The analysis is bounded at 36 evidence records (6 per source), so its own stages stay flat while
+  the store grows. The retrieval growth shown is the memory and knowledge search inside it, which
+  existed before this layer and is not changed by it.
+- The fixture's two disagreeing World Model facts give the contradiction map real work on every
+  row. A clean store would be cheaper.
+- No model is contacted anywhere, and nothing here measures answer quality, reasoning quality, or
+  human-like cognition. It measures what the deterministic stages cost to run.
