@@ -390,7 +390,9 @@ describe('controller: model path and model-originated proposals', () => {
     s.behavior.reply = 'This should never be used.';
     const app = appWith({ model: s });
     app.memory.search = async () => { throw new StoreError('memory unavailable'); };
-    const res = await app.controller.handle('what should I do next?');
+    // A request that must reach the model, so the retrieval failure is the thing under test: a
+    // question answered from APEX's own records never calls memory.search and would pass by accident.
+    const res = await app.controller.handle('what do you think of my goals so far?');
     assert.equal(res.status, Outcome.EXECUTION_FAILED);
     assert.match(res.output, /Memory retrieval failed/);
     assert.match(res.output, /did not generate an answer/);

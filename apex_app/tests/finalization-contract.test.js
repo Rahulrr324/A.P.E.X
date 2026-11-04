@@ -74,6 +74,8 @@ const NON_REGISTRY_CAPABILITIES = Object.freeze([
   'proposal.create',
   'plan.list', 'plan.show', 'plan.validate', 'plan.activate', 'plan.reconcile',
   'recover',
+  // The outer operation each executive-bridge request produces in a conversation.
+  'executive.status', 'executive.prepare', 'executive.approve', 'executive.execute', 'executive.clarify',
 ]);
 
 describe('AB-1 the capability inventory is complete, exclusive, and source-backed', () => {

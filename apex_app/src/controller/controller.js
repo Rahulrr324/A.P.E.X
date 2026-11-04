@@ -17,7 +17,7 @@ import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, sel
 import { buildWorldModelContext } from '../world/context.js';
 import { computeConflicts } from '../world/conflicts.js';
 import { analyzeRequest, analysisAudit, validateModelOutput } from '../cognition/engine.js';
-import { structuredDisclosureNotice } from '../cognition/response.js';
+import { structuredDisclosureNotice, actionClaimNotice } from '../cognition/response.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret, maskSecretLeaves, redactSecrets, SECRET_OMITTED } from '../security/secrets.js';
@@ -44,10 +44,19 @@ import { buildWorldState, renderWorldState } from '../world/world-state.js';
 import { autoCaptureDecision, captureSettingPhrase, CAPTURE_OFF } from '../experience/capture.js';
 import { CAPTURE_AUTOMATIC } from '../experience/experience-store.js';
 import { finalizeOperation } from './finalization.js';
+import { executiveSignal, synthesizePlan } from '../executive/mapping.js';
+import { buildPreview, previewHeadline } from '../executive/preview.js';
+import { describeExecutiveStatus } from '../executive/status.js';
+import { classifyRecovery, renderRecovery } from '../executive/recovery.js';
+import { RequestMode, StatusQuestion } from '../executive/vocabulary.js';
 
 export const MAX_REQUEST_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 4000;
 const MEMORY_SHOWN_CHARS = 1000;
+// Shown after a run that did not end clean, next to its recovery reading. The runner's rule is
+// stated in the conversation as well as in the record, because a reader deciding what to do next has
+// to know that nothing will repeat on its own.
+const REPEATED_RUN_NOTE = 'APEX will not retry or resume any of this on its own: a step whose outcome was not established stays as it is recorded until you resolve it from its own audit record.';
 // A reported load time below this is ordinary server overhead, not a cold start worth
 // mentioning. The number is display-only and never becomes part of the model's turn.
 const LOAD_NOTICE_MS = 1000;
@@ -465,7 +474,25 @@ export class CognitiveController {
       // 2. Determine the capability.
       op.capability = routed.capability;
 
-      if (routed.kind === 'task_question') {
+      // Precedence, stated where the choice is made. A request the deterministic router already sent
+      // to a registered action keeps that action - "remember that the next steps are..." is a memory
+      // write, not a request to plan. A request that names one task belongs to the task log, which
+      // holds that task's steps and its own operation records, and `task explain` answers it from
+      // them. Any other request is read first for what it asks APEX to do with its own records -
+      // prepare a plan, approve one, start one, or say what the records show about the work that is
+      // open - because a portfolio question names no single task, and its answer has to come from
+      // the plan, goal and continuation logs rather than from a model's description of them. A
+      // request this mapping does not recognise returns null here and keeps the path it had, and so
+      // does the one question the task log answers better than a portfolio view does: what needs
+      // approving, when this conversation has one task in view and that task is holding a step.
+      const namesOneTask = routed.kind === 'task_question' && (routed.taskIds?.length ?? 0) > 0;
+      const bridge = routed.kind === 'action' || namesOneTask
+        ? null : await this.#executiveBridge(op, sid, request, routed);
+      if (bridge) {
+        status = bridge.status;
+        output = bridge.output;
+        displayText = bridge.display;
+      } else if (routed.kind === 'task_question') {
         // 3-6, but for a read of the task log: no action, no model, no state change.
         const answer = await this.#explainTaskRequest(op, sid, routed);
         status = answer.status;
@@ -2034,6 +2061,329 @@ export class CognitiveController {
     return { plan, display: renderPlan(plan) };
   }
 
+  // ---- executive bridge -------------------------------------------------------
+  // The path from the user's own words to APEX's own records: read what was asked, map it onto
+  // registered capabilities, record a plan, show exactly what running it would do, and - only after
+  // the user's own approval - run it through the existing TaskRunner.
+  //
+  // This section adds no store, no registry, no second authorization rule and no second runner.
+  // Every write below is one registry action executed on this operation and re-read by that action's
+  // own verifier; every run is `planActivate`, the same path `node bin/apex.js plan start` takes; and
+  // every status line is read from the goal, plan, task, and continuation records. No model is
+  // consulted anywhere on this path, and no recommendation becomes permission here: the registry
+  // decides each step again at the moment it runs.
+  //
+  // Only the requests this mapping recognises in the user's own words are taken. Everything else -
+  // every ordinary question, and any request over the bound in executive/mapping.js - keeps the path
+  // it had before, because recording a plan is a write and a write needs the user to have asked for
+  // it. See the README "executive bridge" section for what is and is not demonstrated.
+
+  #executiveAvailable() {
+    return Boolean(this.plans && this.tasks && this.taskStore && this.registry);
+  }
+
+  // Inside handle(): the executive reading of one request, or null when the request is not one.
+  // The outer operation keeps its own audit record either way; a mode that runs a registry action
+  // pushes that step onto this operation, so the audit shows the authorization and the independent
+  // verification behind what the answer claims.
+  async #executiveBridge(op, sid, request, routed) {
+    if (op.origin !== 'user' || !this.#executiveAvailable()) return null;
+    let signal = null;
+    try {
+      signal = executiveSignal(request, { plansAvailable: true });
+    } catch {
+      // A mapping that cannot decide is not a reason to change what a request does.
+      return null;
+    }
+    if (!signal) return null;
+    // One decline. A step held for approval is a fact about a single task, and the task log states it
+    // with that step's action, why it waits, and the exact command to approve it. Where this
+    // conversation has one task in view and that task holds such a step, the task log answers and this
+    // bridge keeps out of its way. With no task in view the bridge answers, because the task log would
+    // then reply by asking which task while the user has already said what they want to know.
+    if (signal.question === StatusQuestion.APPROVAL && (await this.#heldStepInTaskInView(op, sid, routed))) return null;
+    op.capability = `executive.${signal.mode}`;
+    switch (signal.mode) {
+      case RequestMode.PREPARE:
+        return this.#executivePrepare(op, sid, signal);
+      case RequestMode.APPROVE:
+        return this.#executiveApprove(op, sid, signal);
+      case RequestMode.EXECUTE:
+        return this.#executiveExecute(op, sid, signal);
+      case RequestMode.STATUS:
+        return this.#executiveStatus(op, signal);
+      default:
+        return this.#executiveClarify(op, sid, signal);
+    }
+  }
+
+  // Read-only: does the one task this conversation holds have a step waiting for the user's approval?
+  // The referent is selected by the same helper the task log uses, so this never picks a task the task
+  // log would not have picked. Any failure here answers "no", which leaves the request on the path it
+  // had before, and the path that reads the records reports the failure in its own words.
+  async #heldStepInTaskInView(op, sid, routed) {
+    const referent = selectTaskReferent({
+      ids: routed?.taskIds ?? [],
+      recency: Boolean(routed?.recency),
+      discussed: discussedTaskIds(await this.#recentTurns(sid, op)),
+    });
+    if (!referent.id) return false;
+    try {
+      const task = referent.kind === 'named-id'
+        ? await this.taskStore.resolve(referent.id)
+        : await this.taskStore.get(referent.id);
+      return (task?.steps ?? []).some((s) => s.status === StepStatus.AWAITING_APPROVAL);
+    } catch {
+      return false;
+    }
+  }
+
+  async #executivePrepare(op, sid, signal) {
+    const synth = synthesizePlan({
+      request: signal.request,
+      workText: signal.workText,
+      registry: this.registry,
+      now: this.now(),
+    });
+    if (!synth.ok) {
+      // Nothing was recorded. A part of a request no registered capability can take is left named as
+      // an unknown; it is never filled in with an invented action, and the rest is never stored as a
+      // plan that silently omits it.
+      const lines = ['No plan was recorded, and nothing has run.', ''];
+      if (synth.reason === 'policy-refused') {
+        lines.push('The registered policies refuse this combination:');
+        for (const p of synth.problems.slice(0, 8)) lines.push(`  - ${truncate(p, 200)}`);
+        if (synth.problems.length > 8) lines.push(`  - ... and ${synth.problems.length - 8} more`);
+      } else {
+        lines.push(`Parts of the request that no registered capability can take (${synth.unmapped.length}):`);
+        for (const u of synth.unmapped.slice(0, 8)) lines.push(`  - "${truncate(u.text, 120)}" - ${u.reason}`);
+        if (synth.unmapped.length > 8) lines.push(`  - ... and ${synth.unmapped.length - 8} more`);
+      }
+      lines.push('', 'Nothing was recorded, so there is no plan waiting for approval and nothing is queued to run.');
+      const display = lines.join('\n');
+      await this.#recordTurns(op, sid, op.request, [
+        { origin: TURN_ORIGINS.QUESTION, text: display, verified: false },
+      ], { subject: 'answer' });
+      return { status: Outcome.PLAN_REJECTED, output: display, display };
+    }
+
+    const step = await this.runAction('plan.add', {
+      goal: null,
+      goalId: synth.content.goalId,
+      outcome: synth.content.outcome,
+      steps: synth.content.steps,
+      preconditions: synth.content.preconditions,
+      assertions: synth.content.assertions,
+      estimatedSeconds: synth.content.estimatedSeconds,
+      reason: synth.content.reason,
+    }, 'user', op.id);
+    op.steps.push(step);
+    if (step.outcome !== Outcome.SUCCESS_VERIFIED) {
+      // The plan store, not this bridge, states why its own write did not stand. Whether anything
+      // was stored is stated by that outcome and not guessed at.
+      const text = step.display ?? step.summary;
+      return { status: step.outcome, output: step.summary, display: text };
+    }
+
+    const planId = step.result?.data?.planId ?? null;
+    let plan = null;
+    const notes = [];
+    try {
+      plan = planId ? await this.plans.get(planId) : null;
+    } catch (err) {
+      notes.push(`The recorded plan could not be read back for this preview (${redactSecrets(err.message)}).`);
+    }
+    if (!plan) {
+      const text = `${step.summary}\nIts preview could not be built${notes.length ? `: ${notes.join(' ')}` : ', because the stored plan was not readable.'}`;
+      await this.#recordTurns(op, sid, op.request, [
+        { origin: TURN_ORIGINS.ACTION, text: step.summary, verified: true },
+      ], { subject: 'answer' });
+      return { status: step.outcome, output: step.summary, display: text };
+    }
+
+    const view = await this.#executivePreview(plan, synth.unmapped);
+    const headline = previewHeadline(plan, {
+      state: `recorded as ${plan.status}`,
+      note: 'waiting for your approval; approval is a separate act, and approval starts nothing',
+    });
+    const conversation = [
+      '',
+      'In this conversation you can say, in words:',
+      `  approve plan ${shortId(plan.id)}`,
+      `  start plan ${shortId(plan.id)}`,
+      'Each of those is a separate request, and each is authorized by the action registry when it runs.',
+    ].join('\n');
+    const display = `${headline}\n\n${view.display}${conversation}`;
+    await this.#recordTurns(op, sid, op.request, [
+      { origin: TURN_ORIGINS.ACTION, text: `${headline} Nothing has run.`, verified: true },
+    ], { subject: 'answer' });
+    return { status: Outcome.PLAN_STORED, output: `${headline}${view.truncated ? ' (the preview shown here is bounded; the full plan is in the record)' : ''}`, display };
+  }
+
+  async #executiveApprove(op, sid, signal) {
+    const step = await this.runAction('plan.approve', { target: signal.ref }, 'user', op.id);
+    op.steps.push(step);
+    if (step.outcome !== Outcome.SUCCESS_VERIFIED) {
+      const text = step.display ?? step.summary;
+      await this.#recordTurns(op, sid, op.request, [
+        { origin: TURN_ORIGINS.NOTICE, text, verified: false },
+      ], { subject: 'answer' });
+      return { status: step.outcome, output: step.summary, display: text };
+    }
+    // Read the approved record back and show it again with the hash the approval bound to, so what
+    // the user approved is checkable against what is stored rather than against this answer's words.
+    let plan = null;
+    try {
+      plan = await this.plans.resolve(signal.ref);
+    } catch (err) {
+      plan = null;
+      const text = `${step.summary}\nThe approved plan could not be read back for this view (${redactSecrets(err.message)}). Nothing has run.`;
+      return { status: step.outcome, output: step.summary, display: text };
+    }
+    if (!plan) {
+      const text = `${step.summary}\nThe approved plan was not found in the plan log, so its preview cannot be shown. Nothing has run.`;
+      return { status: step.outcome, output: step.summary, display: text };
+    }
+    const view = await this.#executivePreview(plan, []);
+    const display = [
+      `Approved: plan ${shortId(plan.id)} v${plan.version} (${plan.steps.length} step(s)) - the approval is recorded against the content hash shown below.`,
+      '',
+      'Approval authorizes nothing by itself. Each step is authorized again by the registry when it runs, and starting the plan is your own separate act:',
+      `  start plan ${shortId(plan.id)}`,
+      '  or: node bin/apex.js plan start ' + shortId(plan.id),
+      '',
+      view.display,
+    ].join('\n');
+    await this.#recordTurns(op, sid, op.request, [
+      { origin: TURN_ORIGINS.ACTION, text: `${step.summary} Nothing has run.`, verified: true },
+    ], { subject: 'answer' });
+    return { status: Outcome.PLAN_STORED, output: `${step.summary} Approval bound to plan ${shortId(plan.id)} v${plan.version}. Nothing has run.`, display };
+  }
+
+  async #executiveExecute(op, sid, signal) {
+    // The run itself is the existing activation: one task, dependency-ordered steps, per-step
+    // authorization and verification, and one operation record per step. It writes its own audit
+    // record and its own task-result turn, so this operation records the request it carried and
+    // repeats no step.
+    let result;
+    try {
+      result = await this.planActivate(signal.ref, { mode: 'run' });
+    } catch (err) {
+      // Activation reports its own refusals and rejections as outcomes; anything that reaches here is
+      // a failure it could not classify - a store or lock failure, or an error mid-run. Whether any
+      // step ran cannot be established from here, so this is reported as an outcome that could not be
+      // verified rather than as a run that did not happen: the audit for the task itself is the
+      // record, and `recover` and `task explain <id> recovery` read it.
+      const text = [
+        `Starting plan ${shortId(signal.ref)} stopped with an error APEX could not classify: ${redactSecrets(err.message)}.`,
+        '',
+        'Whether any step ran is not established by this message. It is established by the records:',
+        '  node bin/apex.js recover',
+        '  node bin/apex.js task list',
+        '  node bin/apex.js task explain <task-id> recovery',
+        'APEX will not run any of it again on its own.',
+      ].join('\n');
+      await this.#recordTurns(op, sid, op.request, [
+        { origin: TURN_ORIGINS.NOTICE, text, verified: false },
+      ], { subject: 'answer' });
+      return { status: Outcome.VERIFICATION_UNAVAILABLE, output: text, display: text };
+    }
+    let reading = null;
+    const clean = result.status === Outcome.SUCCESS_VERIFIED
+      && (result.task?.steps ?? []).every((s) => s.status === StepStatus.COMPLETED);
+    if (result.task && !clean) {
+      let plan = null;
+      try {
+        plan = result.task.planId ? await this.plans.get(result.task.planId) : null;
+      } catch {
+        plan = null;
+      }
+      reading = await this.#recoveryReading(result.task, plan);
+    }
+    const display = [result.display, reading].filter(Boolean).join('\n\n');
+    return {
+      status: result.status,
+      output: result.output ?? display,
+      display: reading ? `${display}\n\n${REPEATED_RUN_NOTE}` : display,
+    };
+  }
+
+  async #executiveStatus(op, signal) {
+    // One read of each record log, and the ranking is the same one `work` and `next` print.
+    const report = await this.continuationReport();
+    const answer = describeExecutiveStatus({
+      question: signal.question,
+      goals: report.goals,
+      plans: report.plans,
+      tasks: report.tasks,
+      candidates: report.candidates,
+      problems: report.problems,
+    });
+    return { status: Outcome.SUCCESS_VERIFIED, output: answer.display, display: answer.display };
+  }
+
+  async #executiveClarify(op, sid, signal) {
+    const text = signal.reason === 'approval-needs-a-plan'
+      ? 'Which plan do you mean? Name it, for example: approve plan <id>. APEX will not approve the most recent plan it can find, because approving the wrong record is worse than asking. List them with: node bin/apex.js plan list'
+      : 'What would you like APEX to do? Name the plan or the work, and APEX will record a plan you can review before anything runs.';
+    await this.#recordTurns(op, sid, op.request, [
+      { origin: TURN_ORIGINS.QUESTION, text, verified: false },
+    ], { subject: 'answer' });
+    return { status: Outcome.CLARIFICATION_REQUIRED, output: text, display: text };
+  }
+
+  // The view the user approves, built from the stored plan: its steps and dependencies, the live
+  // registry's own answers for each, the side effects and permissions involved, the parts of the
+  // request nothing could take, and the content hash an approval binds to. Nothing here runs.
+  async #executivePreview(plan, unmapped = []) {
+    // `plan validate` already builds the live context this view needs - goal, evidence, audit and
+    // registry state - and reads nothing but those. Reusing it keeps the preview and the CLI check
+    // from drifting apart; a fourth copy of that context would let the two disagree about whether a
+    // plan is valid at the moment the user approves it.
+    let validation = null;
+    let validity = null;
+    try {
+      const checked = await this.validateStoredPlan(plan.id);
+      validation = checked.validation;
+      validity = checked.validity;
+    } catch (err) {
+      // The write stands on its own; it is the live check that could not be completed. The preview
+      // reports that as an unverified claim rather than showing a check that was not performed.
+      validity = { ok: false, problems: [`live validity could not be checked: ${redactSecrets(err.message)}`], checks: [] };
+    }
+    return buildPreview({ plan, registry: this.registry, unmapped, validation, validity });
+  }
+
+  // What the records establish about a run that did not end clean, and what they do not. Evidence is
+  // read one record at a time, and only for a step the task log still records as running - the one
+  // status an operation record can settle. A completed step is reported from the task log alone, and
+  // the recovery reading says so rather than implying a check that was not done. Nothing here
+  // resumes, retries, approves, or changes any state.
+  async #recoveryReading(task, plan = null) {
+    const operations = [];
+    let auditReadable = true;
+    let corrupt = 0;
+    for (const step of task.steps ?? []) {
+      if (step.status !== StepStatus.RUNNING) continue;
+      if (typeof step.operationId !== 'string' || step.operationId.length === 0) continue;
+      try {
+        const found = await this.operations.findById(step.operationId);
+        corrupt += found.corrupt;
+        if (found.found) operations.push(found.record);
+      } catch {
+        auditReadable = false;
+      }
+    }
+    return renderRecovery(classifyRecovery({
+      task,
+      plan,
+      operations,
+      auditReadable,
+      registry: this.registry,
+      corrupt,
+    }));
+  }
+
   // ---- world model ------------------------------------------------------------
   // The world model records what the user supplied: entities, facts, relationships, events, and
   // the lifecycle records that retract or supersede them. Every command here is user origin and
@@ -3112,7 +3462,10 @@ export class CognitiveController {
       ].join('\n');
     }
     const attention = problems.length > 0 || report.candidates.length > 0;
-    return { ...report, problems, attention, display };
+    // The three record lists are returned as well as the ranking, because an executive status answer
+    // needs the same records this ranking was built from. Returning them here keeps that answer at
+    // one read per store instead of opening each log a second time.
+    return { ...report, goals, plans, tasks, problems, attention, display };
   }
 
   // ---- tasks ------------------------------------------------------------------
@@ -4164,7 +4517,14 @@ export class CognitiveController {
     // The model's own conclusion has no independent check, so it is reported
     // honestly as verification_unavailable, never as verified.
     const answerText = answer + knowledgeNotice;
-    const displayExtras = [loadNotice, historyNotice].filter(Boolean).join('\n\n');
+    // A plain model answer that says an action ran is display-corrected from this request's own step
+    // records. Like the load notice it never enters the model's turn, so the correction cannot be
+    // replayed later as something the model said; the audit already holds the finding either way.
+    const actionClaim = cognitionCheck && cognitionCheck.found === false && cognitionCheck.structure === null
+      && cognitionCheck.validation?.claimsAction === true
+      ? actionClaimNotice(op.steps.filter((s) => s.action && s.execution?.status === 'ok').map((s) => s.action))
+      : '';
+    const displayExtras = [loadNotice, historyNotice, actionClaim].filter(Boolean).join('\n\n');
     return {
       status: Outcome.VERIFICATION_UNAVAILABLE,
       answer: answerText,

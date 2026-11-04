@@ -21,6 +21,10 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   `apex-bench-` - so a mistake in the harness cannot turn a benchmark run into a delete.
 - `run-cognition-benchmark.mjs` builds every app on a `mkdtemp` directory prefixed `apex-bench-cog-`
   and uses the same refusing cleanup. It starts no child process and constructs no backend.
+- `run-executive-bridge-benchmark.mjs` builds every app on a `mkdtemp` directory prefixed
+  `apex-bench-akx-` with the same refusing cleanup, and gives **every sample its own fresh copy of its
+  row fixture**, so no measurement can be taken on a store a previous measurement enlarged. It starts
+  no child process and constructs no backend: every application is built with `NoBackend`.
 - Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
   reporting, not a cleanup task.
 
@@ -675,3 +679,144 @@ in 0.02 ms.
   row. A clean store would be cheaper.
 - No model is contacted anywhere, and nothing here measures answer quality, reasoning quality, or
   human-like cognition. It measures what the deterministic stages cost to run.
+
+## Executive bridge benchmark
+
+`run-executive-bridge-benchmark.mjs` measures the Batch AK executive bridge: the request path
+User request → understanding → proposal → validation → authorization → execution → verification →
+audit → outcome. It is model-free in the strongest sense available: every application it builds uses
+`NoBackend`, so a request that needed a model stops at `model_unavailable`, no network is contacted,
+no service is started, and nothing is downloaded. What is timed is APEX's own work.
+
+### Procedure
+
+```bash
+cd apex_app
+node benchmarks/run-executive-bridge-benchmark.mjs --repeats 5 --rows 1,10,50,150 --phase all
+node benchmarks/run-executive-bridge-benchmark.mjs --repeats 3 --phase run
+```
+
+1. `--repeats` is 1-25 (default 3). `--rows` is a comma-separated list of fixture sizes, each
+   0-400 (default `1,10,50,150`); `--phase` selects one of `preview`, `authorization`, `run`,
+   `status`, `recovery`, `finalize`, or `all`. `--keep` leaves the temporary directories in place and
+   prints where. Nothing outside the OS temp folder is written.
+2. The growth axis is **historical executive work, not plan length**: `MAX_PLAN_STEPS` is 8, so the
+   largest plan this file can measure has 8 steps, and the rows vary how much executive history each
+   request must read past. Each row holds that many goal/plan/task bundles; a bundle is produced by
+   really running prepare → approve → start in a throwaway directory and collecting the exact lines
+   that run wrote, so every fixture record is one a real request produced (~16 record lines per
+   bundle, across `goals`, `plans`, `tasks`, `operations` and `memory`).
+3. Seeding is reported apart from every measurement, because it costs whole-store reads: 150 bundles
+   took 100.7 s. `--rows` accepts 400 but this file has only been run to 150, so 400 is unmeasured
+   and the seeding time extrapolates to several minutes.
+4. Every sample writes its own fresh copy of the row fixture into its own directory and builds a new
+   application per phase, so no sample measures a store a previous sample enlarged. The phases inside
+   one sample do share that sample's fixture, so a later phase reads the row fixture plus the few
+   records the earlier phases wrote; the printed per-request record deltas bound that addition, and
+   it is the same addition at every row, so it does not create the growth the rows show. The two
+   write columns of `finalize` are excepted: each gets its own copy, because a store's first write
+   builds the incremental state a second write reuses.
+
+### What it reports
+
+Alongside every millisecond figure the script prints **the records each call appended, per log**. A
+latency number says how long a request took; those lines say what it did, which is the part a timing
+figure cannot show and the part any optimization would have to change.
+
+- **preview**: request-to-preview as a whole, then the bridge's own computation in parts on one plan
+  (intent signal, plan synthesis, view build, approval binding hash - each with no store read), plus
+  the live plan-validity read, and the bridge's own computation as a share of the request.
+- **authorization**: `plan.approve` at the action layer, the approval *answer* (the same approval plus
+  the read-back view that prints the binding), a clarification refusal, and a draft that cannot be
+  started.
+- **run**: multi-step orchestration through the existing `TaskRunner` - a 1-step plan and the
+  maximum-size 8-step plan on the same bytes, per-step cost, and the **marginal** cost of a step
+  (the difference between the two plans over the 7 steps the longer one has more of), each with its
+  record delta.
+- **status**: the status answer, the bare continuation record read behind it, the two reads the bridge
+  performs before it defers an approval question to the task log, and what each appended - which is
+  how a read-only request is told apart from an executing one.
+- **recovery**: the read-only sweep, the same sweep after a failed run, and the reconcile that records
+  that run's outcomes against the plan. The failed run comes from a labelled benchmark double that
+  throws (`bench.fail`), so it is not evidence about a real action.
+- **finalize**: one verified write at five depths - the bare store append, the authorized action step,
+  then the whole request with capture off, with capture armed, and with capture off again. The three
+  request columns are the same ordinary `remember that the AK benchmark request fact for row N holds`
+  (`memory.add`) words handed to `handle()` on copies of the same bytes, so they measure the finalization
+  contract a bridge step ends on rather than an `executive.*` operation; the armed figure is compared
+  with two same-condition figures and the third prints the drift of the run itself rather than the capture.
+- growth from the smallest row to the largest for every headline column, and process RSS and heap at
+  the end of the run.
+
+### Measured
+
+All medians below are from `--repeats 5 --rows 1,10,50,150 --phase all` on one Windows 11 machine
+(Node v26.4.0, x64, 12 logical CPUs, 24 GiB reported, warm page cache), in a run that excluded any
+other benchmark or test. Fixture bytes: 11,126 / 111,271 / 556,751 / 1,671,012. Read the growth
+across rows and the composition of an operation; a single figure here is an indication, not a
+specification.
+
+| ms (1 / 10 / 50 / 150 bundles) | 1 | 10 | 50 | 150 | 1→150 |
+|---|---|---|---|---|---|
+| request → preview | 115.69 | 117.21 | 155.16 | 248.78 | 2.15x |
+| live plan validity read | 4.82 | 4.97 | 13.49 | 25.15 | 5.21x |
+| bridge's own computation (pure sum) | 0.44 | 0.58 | 0.36 | 0.35 | flat |
+| `plan.approve` (action layer) | 67.22 | 60.82 | 87.70 | 108.79 | 1.62x |
+| approval answer (with read-back view) | 97.61 | 112.81 | 162.66 | 199.55 | 2.04x |
+| clarification refusal | 43.69 | 37.99 | 46.96 | 40.61 | flat |
+| 1-step plan run | 397.30 | 464.86 | 547.61 | 662.40 | 1.67x |
+| 8-step plan run | 1200.69 | 1234.42 | 1434.40 | 1822.48 | 1.52x |
+| per step (8-step) | 150.09 | 154.30 | 179.30 | 227.81 | 1.52x |
+| marginal cost of a step | 114.77 | 109.94 | 126.68 | 165.73 | - |
+| status answer | 32.23 | 32.95 | 49.53 | 71.07 | 2.20x |
+| continuation record read | 12.40 | 15.32 | 25.48 | 45.86 | 3.70x |
+| recovery sweep (read-only) | 16.38 | 16.46 | 23.86 | 43.24 | 2.64x |
+| reconcile after a failed run | 35.71 | 36.31 | 64.46 | 96.77 | 2.71x |
+| store append (one record) | 37.78 | 50.34 | 42.02 | 38.13 | 1.01x |
+| authorized action step (one write) | 46.81 | 56.76 | 52.43 | 50.66 | 1.08x |
+| request, capture off / armed / off again | 129.56 / 155.62 / 121.93 | 103.03 / 187.07 / 111.64 | 139.17 / 214.49 / 132.71 | 106.07 / 192.10 / 140.92 | - |
+
+Capture overhead within one run, on the same bytes: `armed - off` was 26.06 / 84.04 / 75.32 / 86.03 ms,
+while the same-condition control drifted -7.63 / +8.60 / -6.46 / +34.86 ms, and `armed - off(second)`
+was 33.69 / 75.44 / 81.78 / 51.17 ms. The armed request appended exactly one extra record
+(`experiences+1`); its other writes were identical to the unarmed one's.
+
+What each path appends, identical across all rows and all five samples: a prepare writes
+`plans+1 operations+1 conversation+2`; a status question writes `operations+1` and the bare record read
+behind it writes **nothing**; a 1-step run writes `plans+3 tasks+5 operations+2 memory+1
+conversation+1` and an 8-step run `plans+3 tasks+19 operations+9 memory+8 conversation+1`. The
+status read at 150 bundles saw 156 plans and 152 tasks. Every run reported `8/8 completed, outcome
+success_verified`; the recovery sweep after the labelled failing run reported
+`execution_failed, steps ["completed","failed"]` and reconciled to `plan_stored`.
+
+**Conclusion against indexes and caches.** 150x more executive history buys 1.5-2.2x on the request
+paths, 3.7-5.2x on the two whole-store read columns, and 1.01-1.08x on a single write - while the
+bridge's own computation stays at 0.35-0.58 ms, or 0.1-0.5% of a request, at every size. A fixed
+per-operation cost dominates: the coordinated write and the whole-store validated read that Batch V
+already measured and left alone, not bridge logic. **No derived index and no cache is justified by
+these figures, and none was added.** The lines to re-measure if this path ever needs one are the live
+plan validity read (5.21x, steepest), the status continuation record read (3.70x), the approval answer
+(2.04x) and the per-step orchestration cost (227.81 ms/step at 150 bundles). Revisit the question only
+when a request-to-preview at 150 bundles passes about one second, when the validity read passes about
+100 ms at that row, or when a store passes roughly 10,000 executive records / 7 MiB - an order of
+magnitude beyond the 2,400 records and 1.67 MiB ceiling measured here.
+
+### Interpretation limits
+
+- The worst measured case is an 8-step plan: 1.82 s median, 2.33 s across the min-max spread, on a
+  1.67 MiB fixture. That is the whole plan, not a request; each step is one authorized, executed,
+  verified and audited `memory.add`.
+- Medians over five samples in one process on one machine. Differences of a few milliseconds,
+  including negative ones in the capture-drift lines, are noise; the armed/off pair is the evidence
+  and any figure from a different run is a dated observation.
+- RSS 182.8 MiB and heap 24.6 MiB at the end of the run are the benchmark process's own footprint
+  including the seeded fixture it held while writing 150 bundles. They are not a claim about the
+  steady-state footprint of a request, and no per-request memory figure is measured here.
+- The fixture is one `memory.add` step per bundle and one fixed clock, which is the shape the plan and
+  task logs grow fastest in; a real install spreads its steps over more capabilities and its records
+  over more varied text.
+- This measures what the executive path costs to run. It is not evidence that a plan the bridge
+  recorded was a good plan, that a verified step is correct in the world, or that any model would have
+  chosen these steps: no model was contacted, no inference was run, and no inference was simulated.
+
+This script is not part of `npm test` and no test depends on it.

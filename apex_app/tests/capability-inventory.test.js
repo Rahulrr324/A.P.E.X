@@ -62,6 +62,8 @@ const NON_ACTION_CAPABILITIES = [
   'proposal.create',
   'plan.list', 'plan.show', 'plan.validate', 'plan.activate', 'plan.reconcile',
   'recover',
+  // The outer operation each executive-bridge request produces in a conversation.
+  'executive.status', 'executive.prepare', 'executive.approve', 'executive.execute', 'executive.clarify',
 ];
 
 // The refusal kinds that are about policy rather than about a malformed argument.

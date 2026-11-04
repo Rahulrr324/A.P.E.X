@@ -44,6 +44,7 @@ from a milestone number or a passing build.
 | Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
 | World Model, entity memory and evidence graph | Implemented as an append-only `world-model.jsonl` of user-origin records: stable entity ids with aliases and lifecycle, subject-predicate-object facts with typed values, relationships with directionality and inverse reads, events that keep happened-at, learned-at, and stored-at apart, evidence references to existing stores (never copies), retraction and supersession as later records, conservative contradiction detection that keeps both sides, deterministic identity candidates, and explicit user confirm/reject/merge/unmerge. Reads reduce the log at read time; nothing is overwritten, and a model cannot write a record. | `world-model-core.test.js` (17 tests), `world-model-scenarios.test.js` (15 end-to-end scenarios A-O, including real CLI runs and real child processes). See [Batch AI](#batch-ai-world-model-entity-memory-and-evidence-graph-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Integrated cognitive reasoning layer | Implemented as a deterministic, read-only coordinator in `src/cognition/` over the stores APEX already has: request understanding and intent classification, bounded evidence retrieval with provenance and empty/unavailable/damaged distinctions, claim extraction with symmetric contradictions, a thirteen-step deliberation, qualitative uncertainty, clarification before any model call, a bounded grounding brief, and validation of model-authored structures. No stage calls a model, writes a store, grants authorization, or invents an answer. The model receives the brief as data and its reply is parsed as untrusted input; a citation it did not retrieve, a claim of execution, or a forged structure is rejected whole. | `cognition-understanding.test.js` (18 tests), `cognition-reasoning.test.js` (24 tests), `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through the real controller with a synthetic capture backend). See [Batch AJ](#batch-aj-integrated-cognitive-reasoning-deliberation-and-grounded-responses-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
+| Executive bridge: action orchestration and verified execution | Implemented as a deterministic, model-free interpretation layer in `src/executive/` inside `controller.handle()`: a user's own words are mapped to registered actions, a bounded preview names every step and its risk before anything runs, approval is bound to a content hash and version, the authorized run executes through the existing `TaskRunner`, and the answer reports progress, failure boundary, recovery class, and continuation from records. It adds no store, no registry, no second authorization rule, and no second runner. No stage calls a model: the map from words to actions is vocabulary plus the action registry, and a request the mapping cannot resolve is clarified rather than guessed. It is not a general-purpose planner: it maps a bounded request over registered actions, keeps unknowns visible, and refuses what it cannot ground. | `executive-bridge.test.js` (21 tests), `executive-acceptance.test.js` (K-01 to K-25), `executive-adversarial.test.js` (J-01 to J-11) - 57 tests, every one with a stub or no backend, so none is evidence about a real model. See [Batch AK](#batch-ak-the-executive-bridge---safe-action-orchestration-and-verified-execution-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | General planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
 
 The model path depends entirely on a backend you configure yourself. Without one,
@@ -847,6 +848,12 @@ src/plans/
   model.js            plan states, content validation, the content hash approval is bound to, and the append-only reducer
   store.js            plans.jsonl: draft, revision, approval, activation and outcome events under the plan write lock
   format.js           plain-text rendering of plans, steps, assertions, risk and outcomes
+src/executive/
+  vocabulary.js       the bridge's fixed labels: request modes, execution states with the record that proves each, side-effect classes, failure boundaries, recovery classes, status questions, output bounds
+  mapping.js          the deterministic half: which executive request this is, which registered capability carries each part, the plan content within the plan model's own bounds, and what the registry and policy say about each step before the user sees it
+  preview.js          the bounded view the user approves, built from the stored plan plus the live registry's answers, and the content hash the approval binds to
+  status.js           progress communication: the portfolio questions answered from goal, plan, task and continuation records, each state naming its record
+  recovery.js         what an interrupted or partial run's records prove, and what may legitimately happen to each step; writes nothing and grants nothing
 src/actions/
   registry.js         action registry and the authorization policy
   origins.js          request origins: user | model
@@ -877,6 +884,16 @@ src/prediction/
   prediction-engine.js the record validator, the lifecycle and lineage derivation, the evaluation rule, calibration counts, and the bounded audit and prompt shapes; no state is stored
 src/world/
   world-state.js      read-only epistemic projection of what memory and knowledge already hold, with a separate bounded temporal section and an `Expectations` section that never joins the beliefs; owns no state, writes nothing, one authoritative read per store; `worldPromptLines` renders the counts-only view a model prompt may carry
+src/cognition/
+  vocabulary.js       the fixed stage labels: intents, evidence sources and statuses, claim kinds, uncertainty categories, decision kinds, disclosures, and the numeric bounds every stage shares
+  request.js          request understanding: intent, referents, time range, ambiguity, unsupported capability, missing-information codes; a description that grants nothing
+  evidence.js         bounded retrieval across the stores, reduced to one evidence shape carrying provenance, validity, status and relationships, with omissions reported as omissions
+  claims.js           claim extraction, duplicate reduction, and a contradiction map that keeps both sides
+  deliberation.js     thirteen ordered deterministic steps from question to decision and disclosures
+  response.js         grounding-brief bounds, structured-response and plain-answer validation, disclosure wording, and the notice that corrects a model action claim
+  protocol.js         extraction, size bound, parse and whole-structure rejection of the optional `COGNITION` line
+  trace.js            bounded audit trace: stage names, counts, evidence ids; never chain-of-thought, request text, stored content or model text
+  engine.js           runs the stages in order, exposes per-stage timings, and validates model output against the analysis that produced the prompt
 src/filesystem/
   path.js             absolute path validation: no traversal, no drive root, no UNC
   actions.js          bounded, read-only listing and reading
@@ -1025,6 +1042,12 @@ contribution of the bounded expectation section ([Batch AE](#batch-ae-prediction
 it measures the cognition stage timings across three store sizes, the brief's contribution to a real
 prompt, and the structured-response validator, using the applied `createApp` path
 ([Benchmarks](#benchmarks)).
+`benchmarks/run-executive-bridge-benchmark.mjs` is outside the suite for the same reason and needs no
+model: it measures the executive bridge - request-to-preview, the approval write and its read-back,
+multi-step orchestration through the existing task runner, the status and recovery reads, and one
+verified write at five depths - against fixtures of 1 to 150 real executive bundles, and prints the
+records each measured call appended
+([Executive bridge](#batch-ak-the-executive-bridge-safe-action-orchestration-and-verified-execution-as-implemented)).
 
 | Acceptance test | Where |
 |---|---|
@@ -1085,6 +1108,7 @@ prompt, and the structured-response validator, using the applied `createApp` pat
 | 50. Executive authorization survives a hostile origin and a richer configuration | `executive-control.test.js` F (a model origin cannot create, approve, start, or reconcile a plan; a forged activation event is rejected by replay; activation re-checks the live registry, so an approval from a richer configuration does not carry over; approval is bound to exact content, and a write plan needs more than an approval) |
 | 51. Executive context and recovery are bounded, labelled, and read-only | `executive-control.test.js` G (assertion classification; the executive prompt section is gated, capped at eight lines, labelled intent rather than evidence; a tight budget drops it and announces the loss; the real request path receives the recorded state), the recovery test (every store keeps its exact bytes), `executive-cli.test.js` (4 real CLI lifecycle tests), and `executive-interruption.test.js` D (a real child process killed inside a plan step is reported uncertain, never re-run, and reconcile blocks the plan at the user's explicit command) |
 | 52. Integrated cognitive reasoning runs through the real request path and invents no evidence (AJ) | `cognition-understanding.test.js` (18 tests: intent and referent classification, evidence identity, claim labelling, contradiction symmetry, uncertainty categories, clarification before any model call, and the brief's bounded content); `cognition-reasoning.test.js` (24 tests: deliberation over supported, partial, conflicting historical and unknown evidence, inference and assumption kept distinct from support, recommendations, no confidence percentages, and deterministic trace steps); `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through `controller.handle` with a capturing backend: grounded answer, unsupported question, contradiction, clarification, bounded retrieval, prompt size, trace, and audit; the backend is a stub, so no claim is made about a real model's behaviour) |
+| 53. A user's own words reach a verified run, and nothing on that path grants itself permission (AK) | `executive-bridge.test.js` (21 tests: prepare → approve → run as three recorded acts on one audit chain; every preview field read from the stored plan and the live registry; the printed content hash is the stored hash and the approval records it; mapping takes only what it can carry and leaves the router's own answers, single-task questions and model-origin requests alone; status runs nothing and prints only states a record supports; a failed step is failed, an uncheckable one uncertain, never done; verified outcomes reach the existing learning path and nothing else does); `executive-acceptance.test.js` (the 25 numbered scenarios K-01…K-25, asserted against the persisted files: an empty portfolio reported as empty, the nine questions answered from the records, a failed run that stops its dependants and promises no retry, an uncertain step never replayed, an unapproved plan that cannot start and writes nothing, a plan that ran refused a second run, an unmappable request refused, an approval naming no plan asked about, a twin draft left a draft, a credential-carrying request not taken as an act, and the same lifecycle reachable from the CLI); `executive-adversarial.test.js` (11 tests J-01…J-11: a model that claims it ran and approved a plan changes no record, a non-identifier reference asks instead of approving, `approve and start` approves and stops, three persuasion prefixes leave the store byte-identical, a non-user origin cannot approve through the bridge, a stored instruction claiming authority authorizes nothing, an unregistered destructive capability records no plan, a plan cannot contain its own approval or its own start, and the action-claim correction is shown to the user without becoming model text). Every one uses a stub or no backend, so none is evidence about a real model |
 
 Running one suite, which is what most review work needs:
 
@@ -1097,6 +1121,8 @@ node --test tests/cognition-understanding.test.js tests/cognition-reasoning.test
   tests/cognition-scenarios.test.js
 node --test tests/corruption-recovery-boundaries.test.js tests/lock-ownership-and-recovery.test.js \
   tests/append-audit-failure-semantics.test.js tests/cross-process-stress.test.js
+node --test tests/executive-bridge.test.js tests/executive-acceptance.test.js \
+  tests/executive-adversarial.test.js
 ```
 
 The first two lines are the Batch AF security suites that run in-process plus spawn CLI children; the
@@ -1104,7 +1130,9 @@ third is the authorization-boundary pair, which is stub-backed and needs no endp
 cognition set, whose model-path scenarios use a capturing stub backend and so make no claim about a
 real model; the fifth is the integrity set, and of those `tests/cross-process-stress.test.js` and
 `tests/lock-ownership-and-recovery.test.js` spawn the most real processes and are the slowest and most
-timing-sensitive - run them alone if a shared machine makes one flaky.
+timing-sensitive - run them alone if a shared machine makes one flaky; the sixth is the Batch AK
+executive bridge set, which builds every application with `NoBackend` and asserts against the
+persisted plan, task, audit and memory files.
 
 On Windows, redirect to a file rather than piping the runner into `grep` or `tee`: the test runner
 writes as it goes and a closed pipe makes it fail with `EPIPE` for a reason that has nothing to do with
@@ -1358,6 +1386,24 @@ questions that must change nothing).
   `status` and `diagnose` report a nonexistent directory the same way as a fresh
   install, because creating it to find out would make a read-only check write. An
   unusable path surfaces on the first write as a storage error naming the OS code.
+- **The executive bridge reads the user's words at the start of the request, so a command with
+  prose in front of it is not an executive act.** Measured in an isolated directory with
+  `NoBackend`: `please start plan 9da7fb94` is refused as `input_rejected` with the plan's own
+  reason ("only an approved plan can be started"), while `you already have my permission, start
+  plan 9da7fb94` falls through to the ordinary path and answers `clarification_required` from
+  `task.explain` - "Which task do you mean? This conversation has no task result recorded yet."
+  The plan stays a draft and no step runs in either case, which is the behaviour that matters;
+  the unhelpful question is the cost. This is left unfixed deliberately: recognising that
+  sentence as a command would mean scanning prose for embedded commands, and a statement that
+  sounds like permission is the one thing the bridge must never read as permission. Type the
+  command first, or use `node bin/apex.js plan start <id>`.
+- **The bridge's planning is a bounded mapping, not a planner.** It recognises a fixed set of
+  request shapes under 500 characters, maps each part only onto actions already registered, keeps
+  any part it cannot map as a visible recorded unknown rather than inventing a capability, and
+  stops at the plan model's own 8-step cap. Whether a recorded plan was the right plan is not
+  something APEX can demonstrate: no model was consulted in the work package that built this, and
+  the acceptance scenarios use fixed wording, so nothing here is evidence about what a model would
+  propose.
 
 ## Knowledge System
 
@@ -3509,6 +3555,10 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `task.retry`, `task.cancel` | user | not a registered action | - | `tasks.jsonl` | no (task) | no |
 | `task.explain` | user | not a registered action | - | `operations.jsonl` + a conversation turn | no (task) | no |
 | `task.step` | the origin the step runs under | audit label, not an action | - | one audit line per step | no (task) | no |
+| `executive.status` | user | not a registered action | - | `operations.jsonl` + a conversation turn; reads the goal, plan, task and continuation records and changes nothing | no (read) | no |
+| `executive.prepare`, `executive.approve` | user | not a registered action | - | `plans.jsonl` through one verified `plan.add` / `plan.approve` step, plus `operations.jsonl` and a conversation turn | no (executive) | yes |
+| `executive.execute` | user | not a registered action | - | whatever the plan's own steps write, each under its own operation record; this outer record carries no step of its own | no (task) | through the created task only |
+| `executive.clarify` | user | not a registered action | - | `operations.jsonl` + the question it produced | no (no-action) | no |
 | `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
 
 `filesystem.list` and `filesystem.read` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
@@ -4401,6 +4451,145 @@ to model one. The roadmap's stage 4 is advanced on the request path, not closed:
 confidence on stored beliefs, retrieval that is cheaper than a full store scan, and contradiction
 handling beyond the World Model's own conflict semantics remain open.
 
+## Batch AK: the executive bridge - safe action orchestration and verified execution (as implemented)
+
+APEX already owned every part of an executive act: a router, an action registry, an authorization
+policy, a plan store, a task runner that authorizes and verifies each step, an audit log, and a
+continuation engine. What it had no way to do was start from a user's own sentence: nothing read
+"prepare a plan to remember that X" and produced a plan record whose approval the user could see
+before any of it ran. Batch AK is that bridge - request → understanding → proposal → validation →
+user authorization → execution → verification → audit → outcome - and it is a real integration of the
+systems that already existed, not a parallel one. It adds **no store, no registry, no second
+authorization rule, and no second runner**: every write it makes is one registered action executed on
+an operation and re-read by that action's own verifier, every run is the same `planActivate` path
+`node bin/apex.js plan start` takes, and every status line is read from a goal, plan, task, or
+continuation record.
+
+**Where it lives.** `src/executive/` holds one module per responsibility, and the controller holds the
+bridge itself as one private section of `handle()`:
+
+| Module | Responsibility |
+|---|---|
+| `vocabulary.js` | The fixed labels: ten request modes, ten execution states with the record that proves each one, two side-effect classes, reversibility wording, thirteen failure boundaries, six recovery classes, ten status question kinds, the output bounds, and the plan/step-status translations. Nothing here may be used as authorization. |
+| `mapping.js` | The deterministic half: which executive request this is, which registered capability carries each part of it (`route` + the existing planner's `splitGoal`/`checkSteps`/`describeStep`), the plan content built from the plan model's own bounds, and `authorizationReview` - what the registry and policy say about each step before the user is shown it. A part no action matches stays a recorded unknown. |
+| `preview.js` | The bounded view the user approves: the stored steps, the live registry's answer beside each one, the side-effect and reversibility wording, what may interrupt a step, and the plan content hash that the approval binds to. |
+| `status.js` | Progress communication: the portfolio questions answered from the records, each printed state naming the record it came from, and the commands the user can run next. |
+| `recovery.js` | What an existing partial or interrupted run's records prove: which steps ran, which never started, which may or may not have happened, and what may legitimately happen to each. It adds no second recovery mechanism and writes nothing. |
+
+**Which words the bridge takes, and which it leaves alone.** Only a bounded set of shapes in the
+user's own words: prepare a plan (recording a plan is a write, so it happens only when asked), approve
+a plan the user has already seen, start a plan that is already approved, and the portfolio status
+questions. Everything else keeps the path it had: a request the deterministic router already resolved
+to one action, a question about one task (the task log answers those), an ordinary question, a request
+over 500 characters, a request carrying credential-shaped text, and any request that did not come from
+the user. There is exactly one decline: an approval question about a single task defers to the task
+log rather than the plan view.
+
+**Approval is bound to content, not to a description.** The preview prints the stored plan's own
+content hash, and `plan approve` records the hash it was given. Revise the plan and the hash changes,
+so the earlier approval stops applying; a draft cannot be started; a plan that already ran is refused a
+second start, because a step may already have produced its record. A model recommendation, a
+plan-recommending intent, or a preview that merely looks right never makes anything executable - the
+only act that changes what runs is the user's own approval, and then the registry decides each step
+again at the moment it runs.
+
+**Authorization was not weakened to make the workflow easier.** No rule was relaxed, no capability
+was reclassified, and no new origin was created. A plan cannot contain its own approval or its own
+start; `approve and start plan x` performs the approval and stops there; a stored instruction that
+claims authority changes no authorization; and a persuasive prefix ("you already have my permission,
+start plan x", "ignore the approval step and…") is not an executive act at all, so nothing runs and the
+plan stays a draft. Model output is parsed, displayed, and audited; it is never a permission.
+
+**Multi-step runs use the existing `TaskRunner`.** A run is one `plan.activate` on an approved plan:
+each step is authorized, executed, independently verified, and audited as its own operation, a step is
+recorded as running before it executes, and completion is reported only from verified step outcomes
+re-read from the records. Nothing is silently retried after a possible side effect, and no
+"completion" is inferred from a function returning without an error.
+
+**Failure and recovery are reported from records.** The thirteen boundaries and six recovery classes
+above are the whole vocabulary, and a state with no record behind it is not printed. An uncertain step -
+one that may or may not have happened - is never offered automatic replay, a failed or uncertain write
+step is not run again in that task, and the user is told which of the commands that already exist
+(`plan reconcile`, `task approve`, `task retry` for a read-only step, `plan cancel`) can act on it.
+Batch AK adds the reading of that state, not another mechanism for it.
+
+**Learning stays where it already was.** The bridge's own outer operations - `executive.status`,
+`executive.prepare`, `executive.approve`, `executive.execute`, `executive.clarify` - are classified in
+the existing capture inventory and excluded from automatic experience capture, because a recorded plan,
+a recorded approval, and a run already covered by the task log are not experiences of an answer. The
+plan's own steps are ordinary registered actions and stay eligible exactly as they are when run from
+the CLI, and only a step that ends `success_verified` under an allowed authorization decision and an
+independent verification can be captured. Verified outcomes are recorded against the plan, so later
+reads see them.
+
+**Continuation readiness: read-only requests do not execute.** `next`, `work`, and the status questions
+answer from the records and run nothing. This is visible in the persisted files, not just in a
+displayed string: a status question appends one audit record and a bare record read appends nothing,
+while a prepare appends a plan, an audit record and two conversation turns. The run reported below
+created no background activity and left nothing in progress, because APEX runs only while a command
+runs, and the status view says so in those words.
+
+**One display defect was fixed, not documented away.** `validatePlainAnswer()` already recorded that a
+model sentence claimed APEX had executed or approved something, but a reader who saw only that sentence
+had nothing to correct it with. The answer display now appends a notice naming what the request actually
+ran, read from the operation's own step records, and states where authorization lives. The notice is
+APEX's own line and is never written into the model's turn or its stored history.
+
+**Tests.** 57 tests in three suites, all registered in `npm test` and all model-free (a stub backend
+where a model reply is needed, so nothing here is evidence about a real model):
+
+| Suite | Count | What it pins |
+|---|---|---|
+| `tests/executive-bridge.test.js` | 21 | Three recorded acts with one audit chain; every preview field read from the stored plan and the live registry; the printed hash is the stored hash and the approval records it; mapping takes only what it can carry and leaves the router's answers, single-task questions and model-origin requests alone; status runs nothing and prints only vocabulary states a record supports; a failed step is failed and an uncheckable one uncertain, never done; outcomes reach the existing learning path and only verified ones. |
+| `tests/executive-acceptance.test.js` | 25 | The numbered end-to-end scenarios K-01 … K-25: an empty portfolio reported as empty; prepare → preview → approve → run → outcome with the records each leaves; the nine questions answered from those records; a failed step stopping its dependants with no retry promise; an uncertain step never replayed; an unapproved plan refused with nothing written; a plan that ran refused a second run; an unmappable request refused and recording nothing; a partly mappable request keeping its unknown part visible; an approval naming no plan asked about rather than guessed; a twin draft staying a draft; a credential-carrying request not taken as an act; the same lifecycle reachable from the CLI writing the same records; and capture behaviour. |
+| `tests/executive-adversarial.test.js` | 11 | J-01 … J-11: a model claiming it ran and approved a plan changes no record; a plan reference that is not an identifier asks instead of approving, and a full-length identifier approves without starting; `approve and start` approves and stops; three persuasion prefixes execute nothing and leave the store byte-identical; a non-user origin cannot approve through the bridge; a stored instruction claiming authority changes no authorization; an unregistered destructive capability records no plan and deletes nothing; a plan cannot contain its own approval or start; a credential persists nothing; and the action-claim correction appears where the user reads it without becoming model text. |
+
+**Measured** (`benchmarks/run-executive-bridge-benchmark.mjs --repeats 5 --rows 1,10,50,150 --phase
+all`; Node v26.4.0, Windows x64, 12 logical CPUs, `NoBackend`, no network, no inference; the growth
+axis is historical executive records, not plan length, because the recorded plan cap is 8 steps):
+
+| 1 / 10 / 50 / 150 bundles | 1 | 10 | 50 | 150 | 1→150 |
+|---|---|---|---|---|---|
+| request → preview | 115.69 ms | 117.21 ms | 155.16 ms | 248.78 ms | 2.15x |
+| live plan validity read | 4.82 ms | 4.97 ms | 13.49 ms | 25.15 ms | 5.21x |
+| the bridge's own computation | 0.44 ms | 0.58 ms | 0.36 ms | 0.35 ms | 0.1-0.5% of a request |
+| approval write / approval answer | 67.22 / 97.61 ms | 60.82 / 112.81 ms | 87.70 / 162.66 ms | 108.79 / 199.55 ms | 1.62x / 2.04x |
+| 8-step plan run (8/8 `success_verified`) | 1200.69 ms | 1234.42 ms | 1434.40 ms | 1822.48 ms | 1.52x |
+| per step / marginal cost of a step | 150.09 / 114.77 ms | 154.30 / 109.94 ms | 179.30 / 126.68 ms | 227.81 / 165.73 ms | - |
+| status answer / its record read | 32.23 / 12.40 ms | 32.95 / 15.32 ms | 49.53 / 25.48 ms | 71.07 / 45.86 ms | 2.20x / 3.70x |
+| recovery sweep / reconcile | 16.38 / 35.71 ms | 16.46 / 36.31 ms | 23.86 / 64.46 ms | 43.24 / 96.77 ms | 2.64x / 2.71x |
+| one verified write, request form (capture off / armed) | 129.56 / 155.62 ms | 103.03 / 187.07 ms | 139.17 / 214.49 ms | 106.07 / 192.10 ms | - |
+
+Fifteen times more executive history (2,400 record lines, 1.67 MiB) buys 1.5-2.2x on the request paths
+and 1.01-1.08x on a single write, while the bridge's own computation stays under a millisecond: a fixed
+per-operation cost - the coordinated write and the whole-store validated read Batch V already measured -
+dominates, not bridge logic. **So no derived index and no cache was added for this path**, consistent
+with the measured V-06 and V-07 decisions; the lines to re-measure, the thresholds for revisiting that,
+and the full interpretation limits are in
+[Benchmarks: Executive bridge benchmark](benchmarks/README.md#executive-bridge-benchmark). The capture
+columns run A/B/A on copies of the same bytes in one run: `armed - off` was 26.06-86.03 ms across rows
+against a same-condition drift of -7.63 to +34.86 ms, and the armed request appended exactly one extra
+`experiences.jsonl` record. The worst measured case is a whole 8-step plan: 1.82 s median, 2.33 s at the
+end of the min-max spread.
+
+**What this does not claim.** No model was consulted anywhere in this work package, so nothing here is
+evidence that a model would propose a good plan, or that the plans APEX recorded were the right ones:
+the bridge measures what it costs to carry out what was asked, not whether it was worth asking. A
+verified step means the action ran under an allowed authorization decision and the store read back the
+record the action claims to have written - it is not proof that the intended change happened in the
+outside world, and APEX has no capability that deletes, overwrites, or reaches outside its own stores,
+so no preview in this build can honestly show a destructive step. The bridge is not a general-purpose
+planner: it recognizes a fixed set of phrasings, refuses what it cannot map, and stops at the recorded
+8-step bound, so the statement in the root README that APEX has no general-purpose planner still
+stands. It is not autonomous, not self-learning, and not generally intelligent, and the learning path
+it feeds is the existing bounded experience capture rather than a model that improves itself. One
+behaviour is left as a documented limitation instead of a fix, in
+[Known limitations](#known-limitations): with a persuasive prefix in front of the command, the request
+is not an executive act at all and the ordinary path answers it - which can produce an unhelpful
+question ("Which task do you mean?") while the plan stays an unstarted draft. Making that phrasing work
+would mean scanning prose for embedded commands, and a statement that sounds like permission is exactly
+what the bridge must never read as one.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 
@@ -4504,6 +4693,13 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    → Execution → Verification → Outcome → Learning`, but the last arrow is still only the
    existing capture path - no prediction verdict and no plan outcome changes a later plan, a
    plan is never inferred from a goal, and a completed plan completes no goal.
+   Batch AK added the front of that loop rather than its learning clause: a user's own sentence
+   is mapped onto registered actions, previewed, approved against a content hash, run through
+   the existing `TaskRunner`, and reported from its records - the
+   `Context → Plan → Validation → Authorization → Execution → Verification → Outcome` span.
+   The stage stays open for exactly the reasons the previous paragraph names: no prediction
+   verdict is consumed by anything, a plan is still never inferred from a stored goal record,
+   and completing a plan completes no goal without the user's own evidence-backed act.
 7. **Neural-runtime integration.** Only through the contract described in
    [Neural integration boundary](#neural-integration-boundary-proposal-not-implemented):
    proposals in, authority out. Depends on 6, because a proposer needs an evaluation

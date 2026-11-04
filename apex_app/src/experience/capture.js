@@ -151,6 +151,15 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'task.cancel': 'task',
   'task.explain': 'task',
   'task.step': 'task',
+  // The outer operation of the executive bridge (the words a user types in a conversation: "prepare
+  // a plan to…", "approve plan x", "start plan x", "what is pending"). Each of these ends an operation
+  // of its own, and each is classified by what that operation does: a status read, a plan record, a
+  // run whose real outcomes are in the task log, or a request that ran nothing.
+  'executive.status': 'read',
+  'executive.prepare': 'executive',
+  'executive.approve': 'executive',
+  'executive.execute': 'task',
+  'executive.clarify': 'no-action',
   'filesystem.list': 'filesystem',
   'filesystem.read': 'filesystem',
   none: 'no-action',

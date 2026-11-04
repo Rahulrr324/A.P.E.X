@@ -175,10 +175,22 @@ export function validatePlainAnswer(text, analysis) {
       if (!evidenceById.has(id)) problems.push(`the answer cites ${id}, which is not in this retrieval`);
     }
   }
-  if (EXECUTION_CLAIM.test(body)) {
+  const claimsAction = EXECUTION_CLAIM.test(body);
+  if (claimsAction) {
     problems.push('the answer says APEX executed or approved something; the reasoning layer cannot verify an execution');
   }
-  return { ok: problems.length === 0, problems };
+  return { ok: problems.length === 0, problems, claimsAction };
+}
+
+// The detector above records an audit finding, but a reader who sees only the model's sentence has
+// nothing to correct it with. This line therefore states what the request itself ran, from the
+// operation's own step records, and names where authorization actually lives. `ran` is empty for the
+// common case: an action claim with no action behind it.
+export function actionClaimNotice(ran) {
+  const list = Array.isArray(ran) && ran.length > 0 ? [...new Set(ran)].join(', ') : 'nothing';
+  return `[APEX check: the wording above says an action was run or approved. What this request actually ran: ${list}. `
+    + 'A model answer cannot approve, start or execute anything; the plan and task records are the authority, '
+    + 'so read them before acting on that sentence.]';
 }
 
 const ROOT_KEYS = new Set(['schema', 'decision', 'answer', 'claims', 'uncertainty', 'disclosures', 'missing', 'recommendation']);

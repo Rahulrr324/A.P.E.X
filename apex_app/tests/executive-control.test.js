@@ -595,7 +595,9 @@ test('context assembly reaches the real request path with the recorded executive
     await startGoal(app, goalId);
     await addPlan(app, { goalId, steps: [memoryStep('s1', [], 'c1', 'context')] });
 
-    const res = await app.controller.handle('what is the status of my goal and plan progress?');
+    // A request the executive bridge does not take: the answer comes from a model, and the model
+    // must be given the recorded state rather than asked to guess it.
+    const res = await app.controller.handle('how should I approach the index correction?');
     assert.equal(stub.requests.length, 1, 'the request took the model path exactly once');
     const sent = stub.requests[0].messages.map((m) => m.content).join('\n');
     assert.match(sent, /APEX GOAL AND PLAN STATE/);
