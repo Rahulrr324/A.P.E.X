@@ -11,6 +11,7 @@ import { STEP_ID_RE } from '../tasks/model.js';
 import { ORIGIN_USER } from './origins.js';
 import {
   ASSERTION_KINDS,
+  WORLD_ASSERTION_KINDS,
   MAX_ESTIMATE_SECONDS,
   MAX_PLAN_OUTCOME_CHARS,
   MAX_PRECONDITIONS,
@@ -108,13 +109,19 @@ function parseContent(input) {
   const cleanAssertions = assertions.map((a, i) => {
     if (!a || typeof a !== 'object' || Array.isArray(a)) throw new ValidationError(`assertion ${i + 1} is not an object`);
     for (const key of Object.keys(a)) {
-      if (!['kind', 'text', 'ref'].includes(key)) throw new ValidationError(`assertion ${i + 1}: unexpected field "${singleLine(key, 40)}"`);
+      if (!['kind', 'text', 'ref', 'expected'].includes(key)) throw new ValidationError(`assertion ${i + 1}: unexpected field "${singleLine(key, 40)}"`);
     }
     if (!ASSERTION_KINDS.includes(a.kind)) throw new ValidationError(`assertion ${i + 1}: kind must be one of: ${ASSERTION_KINDS.join(', ')}`);
+    if (a.expected !== undefined && a.expected !== null && !WORLD_ASSERTION_KINDS.includes(a.kind)) {
+      throw new ValidationError(`assertion ${i + 1}: only a world_fact or world_entity assertion can carry an expected value`);
+    }
     return {
       kind: a.kind,
       text: textField(a.text, `assertion ${i + 1}`, MAX_ASSERTION_CHARS),
       ref: a.ref === undefined || a.ref === null ? null : textField(a.ref, `assertion ${i + 1} reference`, 64),
+      ...(a.expected === undefined || a.expected === null
+        ? {}
+        : { expected: textField(a.expected, `assertion ${i + 1} expected value`, MAX_ASSERTION_CHARS) }),
     };
   });
   let resources = { estimatedSeconds: null };
@@ -149,7 +156,7 @@ export function planActions(store) {
     {
       name: 'plan.add',
       description: 'Record an executive plan for a goal: ordered steps with dependencies, expected results, verification requirements, risk, preconditions, and classified assumptions. A plan is a proposal, not permission. Write: user origin only.',
-      inputHint: '{"goal":"optional goal id","outcome":"intended outcome","steps":[{"id":"s1","description":"...","action":"memory.add","input":{},"dependsOn":[],"expectedResult":"...","verification":"...","criterion":"optional c1","risk":"low|medium|high","estimateSeconds":10}],"preconditions":[],"assertions":[{"kind":"user_fact|stored_knowledge|retrieved_evidence|inference|unknown","text":"...","ref":"optional record id"}],"estimatedSeconds":30,"reason":"optional"}',
+      inputHint: '{"goal":"optional goal id","outcome":"intended outcome","steps":[{"id":"s1","description":"...","action":"memory.add","input":{},"dependsOn":[],"expectedResult":"...","verification":"...","criterion":"optional c1","risk":"low|medium|high","estimateSeconds":10}],"preconditions":[],"assertions":[{"kind":"user_fact|stored_knowledge|retrieved_evidence|world_fact|world_entity|inference|unknown","text":"...","ref":"record id","expected":"optional live value to compare"}],"estimatedSeconds":30,"reason":"optional"}',
       permission: 'write',
       origins: [ORIGIN_USER],
       plannable: false,

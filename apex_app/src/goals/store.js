@@ -297,10 +297,10 @@ export class GoalStore {
     });
   }
 
-  async link(ref, { planId = null, taskId = null } = {}) {
+  async link(ref, { planId = null, taskId = null, entityId = null, worldEventId = null } = {}) {
     return this.#mutate((goals) => {
       const goal = this.#pick(goals, ref);
-      return { ...this.#base('goal_linked', goal.id), planId, taskId };
+      return { ...this.#base('goal_linked', goal.id), planId, taskId, entityId, worldEventId };
     });
   }
 

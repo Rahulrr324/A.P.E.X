@@ -29,6 +29,23 @@ Usage:
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js memory health         store-wide record, provenance, and corruption counts (read-only)
   node bin/apex.js world [--limit N]     stored beliefs, contradictions, decisions, and unknowns (read-only)
+  node bin/apex.js world entity add --category <category> <name> [--alias <name>]... [--external <scheme:id>]... [--description <text>] [--observed-at <iso>]
+  node bin/apex.js world entity list|show|find <name>|alias <entity> --alias <name>|retire <entity> --reason <text>
+  node bin/apex.js world entity merge <source> <survivor> --reason <text>   explicit, reversible identity merge
+  node bin/apex.js world entity unmerge <merge-id> --reason <text>
+  node bin/apex.js world identity candidates <entity>|pair <a> <b>|decision <a> <b>|decide|confirm|reject <a> <b> --reason <text>
+  node bin/apex.js world fact add --subject <entity> --predicate <name> (--object-entity <entity> | --object-value <value>) [--valid-from <iso>] [--valid-until <iso>] [--observed-at <iso>] [--confidence <0-1> --confidence-basis <text>] [--supersedes <id[,id...]>]
+  node bin/apex.js world fact list <entity> [--as-of <iso>] [--current-only] [--include-retracted] [--include-superseded]
+  node bin/apex.js world attribute list <entity> [--as-of <iso>]
+  node bin/apex.js world relationship add --subject <entity> --type <relationship> --object <entity> [--direction directed|symmetric] [--property <k=v>]... [--valid-from <iso>]
+  node bin/apex.js world relationship list <entity> [--type <type>] [--direction both|out|in] [--as-of <iso>]
+  node bin/apex.js world event add --type <event-type> --participant <entity>... [--affected <entity>]... [--occurred-at <iso>] [--observed-at <iso>] [--property <k=v>]...
+  node bin/apex.js world event list <entity> [--at <iso>] [--limit N]
+  node bin/apex.js world statement retract|supersede <id> --target-type fact|relationship|event --reason <text> [--by <replacement-id>]
+  node bin/apex.js world statement history <id> --target-type fact|relationship|event    (read-only)
+  node bin/apex.js world history <entity>|related <entity> [--depth N] [--limit N]|evidence <entity>|conflicts [<entity>]   (read-only)
+  node bin/apex.js world changes --from <iso> --to <iso>|state-at --at <iso>|inspect|health|lock   (read-only)
+  node bin/apex.js world entity|fact|relationship|event|statement writes are user-origin only; a model cannot write the world model
   node bin/apex.js history [--limit N]
   node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]
   node bin/apex.js knowledge retract <id> [--reason <text>]
@@ -65,7 +82,7 @@ Usage:
   node bin/apex.js goal revise <id> --criterion <text>... --reason <text> [--request <text>] [--priority N] [--deadline <iso>]
   node bin/apex.js goal evidence <id> --criterion <c1> --kind supports|contradicts [--operation <audit-id>] [--detail <text>] [--reopen]
   node bin/apex.js goal complete <id> [--reason <text>]
-  node bin/apex.js goal link <id> (--plan <id> | --task <id>)
+  node bin/apex.js goal link <id> (--plan <id> | --task <id> | --entity <world-entity-id> | --world-event <world-event-id>)
   node bin/apex.js plan add --outcome <text> --step <json>... [--goal <id>] [--precondition <text>]... [--assertion <json>]... [--estimate N] [--reason <text>]
   node bin/apex.js plan list [--limit N]
   node bin/apex.js plan show <id>
@@ -99,7 +116,7 @@ Usage:
   node bin/apex.js task cancel <id>
   node bin/apex.js queue                 deferred task summaries and their state (read-only)
   node bin/apex.js audit health          operation-log integrity and outcome counts (read-only)
-  node bin/apex.js repair locks          inspect task, queue, memory, knowledge, experience and prediction write locks; remove only abandoned takeover tokens
+  node bin/apex.js repair locks          inspect task, queue, memory, knowledge, experience, prediction and world model write locks; remove only abandoned takeover tokens
   node bin/apex.js help
 
 Exit codes:
@@ -264,12 +281,14 @@ const TASK_EXPLAIN_VIEWS = {
   recovery: 'recovery',
 };
 
-function parseFlags(args, allowed) {
+function parseFlags(args, allowed, repeat = []) {
   const flags = {};
   const rest = [];
   // Options that may be repeated. Each occurrence adds one value, so a goal can name
-  // several criteria and a plan several steps without inventing a separator.
-  const repeatable = new Set(['criterion', 'step', 'precondition', 'assertion', 'depends-on']);
+  // several criteria and a plan several steps without inventing a separator. `evidence`
+  // is repeatable only where the command says so: the World Model cites several records,
+  // while `knowledge add --evidence` is one text field.
+  const repeatable = new Set(['criterion', 'step', 'precondition', 'assertion', 'depends-on', 'alias', 'external', 'participant', 'affected', 'property', ...repeat]);
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
     if (a.startsWith('--') && a !== '--') {
@@ -290,10 +309,15 @@ function parseFlags(args, allowed) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--days needs a whole number', 'USAGE');
         flags.days = Number(v);
         i += 1;
-      } else if (name === 'priority' || name === 'estimate') {
+      } else if (name === 'priority' || name === 'estimate' || name === 'depth') {
         const v = args[i + 1];
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError(`--${name} needs a whole number`, 'USAGE');
         flags[name] = Number(v);
+        i += 1;
+      } else if (name === 'confidence') {
+        const v = args[i + 1];
+        if (v === undefined || !/^(?:0|1|0?\.\d+)$/.test(v)) throw new ValidationError('--confidence needs a number from 0 to 1', 'USAGE');
+        flags.confidence = Number(v);
         i += 1;
       } else if (name === 'min-support') {
         const v = args[i + 1];
@@ -308,7 +332,7 @@ function parseFlags(args, allowed) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--in-days needs a whole number of days', 'USAGE');
         flags['in-days'] = Number(v);
         i += 1;
-      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by'].includes(name)) {
+      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -351,6 +375,86 @@ function jsonObjects(values, label) {
     }
     return parsed;
   });
+}
+
+// World model command-line values. Each helper only assembles what was typed; the action
+// validates it again, so a malformed flag is refused twice rather than trusted here.
+
+// Evidence defaults to the user's own statement, because the command itself is a user-origin
+// record. A stored record is named as `<sourceType>:<id>` and is checked against its own store.
+function worldEvidence(flags) {
+  const relation = flags['evidence-relation'] ?? 'supports';
+  const values = flags.evidence ?? ['user'];
+  return values.map((value) => {
+    const text = String(value).trim();
+    if (text === 'user') return { relation, sourceType: 'user', sourceId: 'user' };
+    const at = text.indexOf(':');
+    if (at < 1 || at === text.length - 1) {
+      throw new ValidationError('--evidence must be "user" or <memory|knowledge|experience|task|operation|prediction>:<id>', 'USAGE');
+    }
+    return { relation, sourceType: text.slice(0, at), sourceId: text.slice(at + 1) };
+  });
+}
+
+function worldExternal(values) {
+  return (values ?? []).map((value) => {
+    const at = String(value).indexOf(':');
+    if (at < 1 || at === String(value).length - 1) {
+      throw new ValidationError('--external must be <scheme>:<value>', 'USAGE');
+    }
+    return { scheme: String(value).slice(0, at), value: String(value).slice(at + 1) };
+  });
+}
+
+function worldProperties(values) {
+  const properties = {};
+  for (const value of values ?? []) {
+    const text = String(value);
+    const at = text.indexOf('=');
+    if (at < 1) throw new ValidationError('--property must be <key>=<value>', 'USAGE');
+    const key = text.slice(0, at);
+    if (Object.hasOwn(properties, key)) throw new ValidationError(`--property names "${key}" twice`, 'USAGE');
+    properties[key] = text.slice(at + 1);
+  }
+  return Object.keys(properties).length > 0 ? properties : null;
+}
+
+function worldObject(flags) {
+  const value = flags['object-value'];
+  const entity = flags['object-entity'];
+  if (value !== undefined && entity !== undefined) {
+    throw new ValidationError('give either --object-entity or --object-value, not both', 'USAGE');
+  }
+  if (entity !== undefined) return { kind: 'entity', entityId: entity };
+  if (value === undefined) throw new ValidationError('a fact needs --object-entity or --object-value', 'USAGE');
+  const valueType = flags['value-type'] ?? 'string';
+  let typed = value;
+  if (valueType === 'number') {
+    typed = Number(value);
+    if (!Number.isFinite(typed)) throw new ValidationError('--object-value is not a number', 'USAGE');
+  } else if (valueType === 'boolean') {
+    if (value !== 'true' && value !== 'false') throw new ValidationError('--object-value must be true or false for a boolean', 'USAGE');
+    typed = value === 'true';
+  }
+  const object = { kind: 'scalar', valueType, value: typed };
+  if (flags.unit !== undefined) object.unit = flags.unit;
+  if (flags.language !== undefined) object.language = flags.language;
+  return object;
+}
+
+function worldConfidence(flags) {
+  if (flags.confidence === undefined) {
+    if (flags['confidence-basis'] !== undefined) throw new ValidationError('--confidence-basis requires --confidence', 'USAGE');
+    return null;
+  }
+  if (flags['confidence-basis'] === undefined) {
+    throw new ValidationError('--confidence requires --confidence-basis: a number without a stated basis is not recorded', 'USAGE');
+  }
+  return { value: flags.confidence, basis: flags['confidence-basis'] };
+}
+
+function worldQuote(words) {
+  return words.join(' ').trim();
 }
 
 function describeStepLine(step) {
@@ -590,6 +694,7 @@ async function repairLocks({ app, out, err }) {
     { label: 'Knowledge lock', store: app.knowledge },
     { label: 'Experience lock', store: app.experience },
     { label: 'Prediction lock', store: app.predictions },
+    { label: 'World model lock', store: app.worldModel },
   ];
   let failed = 0;
   for (const target of targets) {
@@ -725,6 +830,12 @@ export async function main(argv, {
       // completing does not complete either one.
       out(`Goals: ${goals.state === State.UNAVAILABLE ? 'unavailable' : `${goals.count} record(s), ${goals.open} open`}${skipped(goals)}`);
       out(`Plans: ${plans.state === State.UNAVAILABLE ? 'unavailable' : `${plans.count} record(s), ${plans.open} open`}${skipped(plans)}`);
+      // The World Model is a separate append-only store. A damaged log is reported as such,
+      // never as an empty world. Run "world inspect" for the detail behind these counts.
+      const wm = await app.worldModel.status();
+      out(`World model: ${wm.available
+        ? `${wm.records} record(s), ${wm.counts?.entities ?? 0} entity(ies), ${wm.counts?.facts ?? 0} fact(s), ${wm.counts?.relationships ?? 0} relationship(s), ${wm.counts?.events ?? 0} event(s)${wm.complete ? '' : '; damaged'}`
+        : `unavailable (${safeText(wm.detail)})`}`);
       out(`Deferred task summaries: ${queue.count === null ? queue.state : `${queue.count}/${queue.max}${queue.full ? ' (full)' : ''}`}`);
       if (diag.locks?.task?.state === State.CORRUPT || diag.locks?.queue?.state === State.CORRUPT) {
         out('Locks: abandoned takeover tokens require recovery; run "node bin/apex.js repair locks".');
@@ -1173,16 +1284,426 @@ export async function main(argv, {
     }
 
     if (command === 'world') {
-      const { flags, rest } = parseFlags(args, ['limit']);
-      rejectUnexpected(rest, 'world [--limit N]');
-      if (flags.limit !== undefined && (flags.limit < 1 || flags.limit > MAX_WORLD_LIMIT)) {
-        err(`usage: world [--limit N]  (N is 1-${MAX_WORLD_LIMIT})`);
-        return 2;
+      // Bare `world` keeps its original meaning: the read-only projection of stored beliefs,
+      // contradictions, decisions, and unknowns. Everything after a subcommand records or reads
+      // the separately stored World Model; neither route writes to memory, knowledge, or experience.
+      if (args.length === 0 || String(args[0]).startsWith('-')) {
+        const { flags, rest } = parseFlags(args, ['limit']);
+        rejectUnexpected(rest, 'world [--limit N]');
+        if (flags.limit !== undefined && (flags.limit < 1 || flags.limit > MAX_WORLD_LIMIT)) {
+          err(`usage: world [--limit N]  (N is 1-${MAX_WORLD_LIMIT})`);
+          return 2;
+        }
+        // A direct, unaudited read, like `memory health`: it writes nothing.
+        const res = await app.controller.worldState({ limit: flags.limit });
+        out(res.display);
+        return res.world?.attention ? 1 : 0;
       }
-      // A direct, unaudited read, like `memory health`: it writes nothing.
-      const res = await app.controller.worldState({ limit: flags.limit });
-      out(res.display);
-      return res.world?.attention ? 1 : 0;
+
+      const [sub, ...rest] = args;
+      const request = `world ${sub}`;
+      const read = async (action, input) => emit(await app.controller.worldRead(action, input, request));
+      const write = async (action, input) => emit(await app.controller.worldWrite(action, input, request));
+
+      if (sub === 'entity') {
+        const [verb, ...tail] = rest;
+        if (verb === 'add') {
+          const { flags, rest: words } = parseFlags(tail, [
+            'category', 'name', 'alias', 'description', 'external', 'observed-at',
+            'evidence', 'evidence-relation',
+          ], ['evidence']);
+          const spoken = worldQuote(words);
+          if (spoken !== '' && flags.name !== undefined) {
+            throw new ValidationError('usage: world entity add gives the name once, positionally or with --name', 'USAGE');
+          }
+          const name = flags.name ?? spoken;
+          if (!name) throw new ValidationError('usage: world entity add --category <category> <name>', 'USAGE');
+          if (!flags.category) throw new ValidationError('usage: world entity add needs --category', 'USAGE');
+          return await write('world.entity.add', {
+            category: flags.category,
+            name,
+            aliases: flags.alias ?? [],
+            description: flags.description ?? null,
+            externalIds: worldExternal(flags.external),
+            observedAt: flags['observed-at'] ?? null,
+            evidence: worldEvidence(flags),
+          });
+        }
+        if (verb === 'list') {
+          const { flags, rest: extra } = parseFlags(tail, ['limit', 'include-merged', 'include-retired']);
+          rejectUnexpected(extra, 'world entity list [--limit N] [--include-merged] [--include-retired]');
+          return await read('world.entity.list', {
+            limit: flags.limit ?? 20,
+            includeMerged: Boolean(flags['include-merged']),
+            includeRetired: Boolean(flags['include-retired']),
+          });
+        }
+        if (verb === 'show') {
+          const { flags, rest: refs } = parseFlags(tail, [
+            'as-of', 'at', 'limit', 'current-only', 'include-retracted', 'include-superseded',
+          ]);
+          if (refs.length !== 1) throw new ValidationError('usage: world entity show <entity> [--as-of <iso>]', 'USAGE');
+          return await read('world.entity.show', {
+            target: refs[0],
+            asOf: flags['as-of'] ?? null,
+            at: flags.at ?? null,
+            currentOnly: Boolean(flags['current-only']),
+            includeRetracted: Boolean(flags['include-retracted']),
+            includeSuperseded: Boolean(flags['include-superseded']),
+            limit: flags.limit ?? null,
+          });
+        }
+        if (verb === 'find') {
+          const { rest: words } = parseFlags(tail, []);
+          const text = worldQuote(words);
+          if (text === '') throw new ValidationError('usage: world entity find <name or alias>', 'USAGE');
+          return await read('world.entity.find', { text });
+        }
+        if (verb === 'alias') {
+          const { flags, rest: refs } = parseFlags(tail, ['alias', 'evidence', 'evidence-relation'], ['evidence']);
+          if (refs.length !== 1 || !flags.alias) {
+            throw new ValidationError('usage: world entity alias <entity> --alias <another name>', 'USAGE');
+          }
+          return await write('world.entity.alias', {
+            target: refs[0],
+            alias: flags.alias,
+            evidence: worldEvidence(flags),
+          });
+        }
+        if (verb === 'retire') {
+          const { flags, rest: refs } = parseFlags(tail, ['reason', 'evidence', 'evidence-relation'], ['evidence']);
+          if (refs.length !== 1 || !flags.reason) {
+            throw new ValidationError('usage: world entity retire <entity> --reason <text>', 'USAGE');
+          }
+          return await write('world.entity.retire', {
+            target: refs[0], reason: flags.reason, evidence: worldEvidence(flags),
+          });
+        }
+        if (verb === 'merge') {
+          const { flags, rest: refs } = parseFlags(tail, ['reason', 'merge', 'evidence', 'evidence-relation'], ['evidence']);
+          if (refs.length !== 2 || !flags.reason) {
+            throw new ValidationError('usage: world entity merge <source> <survivor> --reason <text>', 'USAGE');
+          }
+          return await write('world.entity.merge', {
+            from: refs[0], to: refs[1], reason: flags.reason, mergeId: flags.merge ?? null, evidence: worldEvidence(flags),
+          });
+        }
+        if (verb === 'unmerge') {
+          const { flags, rest: refs } = parseFlags(tail, ['reason', 'evidence', 'evidence-relation'], ['evidence']);
+          if (refs.length !== 1 || !flags.reason) {
+            throw new ValidationError('usage: world entity unmerge <merge-id> --reason <text>', 'USAGE');
+          }
+          return await write('world.entity.unmerge', {
+            merge: refs[0], reason: flags.reason, evidence: worldEvidence(flags),
+          });
+        }
+        if (verb === 'candidates') {
+          const { flags, rest: refs } = parseFlags(tail, ['limit', 'include-rejected']);
+          if (refs.length !== 1) throw new ValidationError('usage: world entity candidates <entity> [--limit N] [--include-rejected]', 'USAGE');
+          return await read('world.identity.candidates', {
+            target: refs[0], limit: flags.limit ?? 20, includeRejected: Boolean(flags['include-rejected']),
+          });
+        }
+        if (verb === 'pair') {
+          const { rest: refs } = parseFlags(tail, []);
+          if (refs.length !== 2) throw new ValidationError('usage: world entity pair <left> <right>', 'USAGE');
+          return await read('world.pair', { left: refs[0], right: refs[1] });
+        }
+        if (verb === 'decision') {
+          const { rest: refs } = parseFlags(tail, []);
+          if (refs.length !== 2) throw new ValidationError('usage: world entity decision <left> <right>', 'USAGE');
+          return await read('world.identity.decision', { left: refs[0], right: refs[1] });
+        }
+        if (verb === 'decide') {
+          const { flags, rest: refs } = parseFlags(tail, ['decision', 'reason', 'evidence', 'evidence-relation'], ['evidence']);
+          if (refs.length !== 2 || !flags.decision || !flags.reason) {
+            throw new ValidationError('usage: world entity decide <left> <right> --decision confirmed|rejected --reason <text>', 'USAGE');
+          }
+          return await write('world.identity.decide', {
+            left: refs[0], right: refs[1], decision: flags.decision, reason: flags.reason, evidence: worldEvidence(flags),
+          });
+        }
+        throw new ValidationError('usage: world entity add|list|show|find|alias|retire|merge|unmerge|candidates|pair|decision|decide', 'USAGE');
+      }
+
+      if (sub === 'identity') {
+        const [verb, ...tail] = rest;
+        if (verb === 'candidates') {
+          const { flags, rest: refs } = parseFlags(tail, ['limit', 'include-rejected']);
+          if (refs.length !== 1) throw new ValidationError('usage: world identity candidates <entity>', 'USAGE');
+          return await read('world.identity.candidates', {
+            target: refs[0], limit: flags.limit ?? 20, includeRejected: Boolean(flags['include-rejected']),
+          });
+        }
+        if (verb === 'pair') {
+          const { rest: refs } = parseFlags(tail, []);
+          if (refs.length !== 2) throw new ValidationError('usage: world identity pair <left> <right>', 'USAGE');
+          return await read('world.pair', { left: refs[0], right: refs[1] });
+        }
+        if (verb === 'decision') {
+          const { rest: refs } = parseFlags(tail, []);
+          if (refs.length !== 2) throw new ValidationError('usage: world identity decision <left> <right>', 'USAGE');
+          return await read('world.identity.decision', { left: refs[0], right: refs[1] });
+        }
+        if (verb === 'decide' || verb === 'confirm' || verb === 'reject') {
+          const { flags, rest: refs } = parseFlags(tail, ['decision', 'reason', 'evidence', 'evidence-relation'], ['evidence']);
+          if (refs.length !== 2 || !flags.reason) {
+            throw new ValidationError(`usage: world identity ${verb} <left> <right> --reason <text>`, 'USAGE');
+          }
+          const decision = verb === 'decide' ? flags.decision : (verb === 'confirm' ? 'confirmed' : 'rejected');
+          if (verb === 'decide' && !decision) {
+            throw new ValidationError('usage: world identity decide <left> <right> --decision confirmed|rejected --reason <text>', 'USAGE');
+          }
+          return await write('world.identity.decide', {
+            left: refs[0], right: refs[1], decision, reason: flags.reason, evidence: worldEvidence(flags),
+          });
+        }
+        throw new ValidationError('usage: world identity candidates|pair|decision|decide|confirm|reject', 'USAGE');
+      }
+
+      if (sub === 'fact') {
+        const [verb, ...tail] = rest;
+        if (verb === 'add') {
+          const { flags, rest: extra } = parseFlags(tail, [
+            'subject', 'predicate', 'object-entity', 'object-value', 'value-type', 'unit', 'language',
+            'valid-from', 'valid-until', 'observed-at', 'confidence', 'confidence-basis', 'supersedes',
+            'evidence', 'evidence-relation',
+          ], ['evidence']);
+          rejectUnexpected(extra, 'world fact add --subject <entity> --predicate <name> (--object-entity <entity> | --object-value <value>)');
+          if (!flags.subject || !flags.predicate) {
+            throw new ValidationError('usage: world fact add --subject <entity> --predicate <name> (--object-entity <entity> | --object-value <value>)', 'USAGE');
+          }
+          return await write('world.fact.add', {
+            subject: flags.subject,
+            predicate: flags.predicate,
+            object: worldObject(flags),
+            validFrom: flags['valid-from'] ?? null,
+            validUntil: flags['valid-until'] ?? null,
+            observedAt: flags['observed-at'] ?? null,
+            confidence: worldConfidence(flags),
+            supersedes: idList(flags.supersedes),
+            evidence: worldEvidence(flags),
+          });
+        }
+        if (verb === 'list') {
+          const { flags, rest: refs } = parseFlags(tail, [
+            'as-of', 'at', 'limit', 'current-only', 'include-retracted', 'include-superseded',
+          ]);
+          if (refs.length !== 1) throw new ValidationError('usage: world fact list <entity>', 'USAGE');
+          return await read('world.facts', {
+            target: refs[0],
+            asOf: flags['as-of'] ?? null,
+            at: flags.at ?? null,
+            currentOnly: Boolean(flags['current-only']),
+            includeRetracted: Boolean(flags['include-retracted']),
+            includeSuperseded: Boolean(flags['include-superseded']),
+            limit: flags.limit ?? null,
+          });
+        }
+        throw new ValidationError('usage: world fact add|list', 'USAGE');
+      }
+
+      if (sub === 'attribute' || sub === 'attributes') {
+        const verb = sub === 'attribute' ? rest[0] : 'list';
+        const tail = sub === 'attribute' ? rest.slice(1) : rest;
+        if (verb !== 'list') throw new ValidationError('usage: world attribute list <entity>', 'USAGE');
+        const { flags, rest: refs } = parseFlags(tail, ['as-of', 'at']);
+        if (refs.length !== 1) throw new ValidationError('usage: world attribute list <entity>', 'USAGE');
+        return await read('world.attributes', {
+          target: refs[0], asOf: flags['as-of'] ?? null, at: flags.at ?? null,
+        });
+      }
+
+      if (sub === 'relationship') {
+        const [verb, ...tail] = rest;
+        if (verb === 'add') {
+          const { flags, rest: extra } = parseFlags(tail, [
+            'subject', 'type', 'relation', 'object', 'direction', 'property',
+            'valid-from', 'valid-until', 'observed-at', 'supersedes', 'evidence', 'evidence-relation',
+          ], ['evidence']);
+          rejectUnexpected(extra, 'world relationship add --subject <entity> --type <type> --object <entity>');
+          const relation = flags.type ?? flags.relation;
+          if (!flags.subject || !relation || !flags.object) {
+            throw new ValidationError('usage: world relationship add --subject <entity> --type <type> --object <entity>', 'USAGE');
+          }
+          return await write('world.relationship.add', {
+            subject: flags.subject,
+            relation,
+            object: flags.object,
+            directionality: flags.direction ?? null,
+            properties: worldProperties(flags.property),
+            validFrom: flags['valid-from'] ?? null,
+            validUntil: flags['valid-until'] ?? null,
+            observedAt: flags['observed-at'] ?? null,
+            supersedes: idList(flags.supersedes),
+            evidence: worldEvidence(flags),
+          });
+        }
+        if (verb === 'list') {
+          const { flags, rest: refs } = parseFlags(tail, [
+            'type', 'direction', 'as-of', 'at', 'limit', 'current-only', 'include-retracted', 'include-superseded',
+          ]);
+          if (refs.length !== 1) throw new ValidationError('usage: world relationship list <entity>', 'USAGE');
+          return await read('world.relationships', {
+            target: refs[0],
+            direction: flags.direction ?? 'both',
+            predicate: flags.type ?? null,
+            asOf: flags['as-of'] ?? null,
+            at: flags.at ?? null,
+            currentOnly: Boolean(flags['current-only']),
+            includeRetracted: Boolean(flags['include-retracted']),
+            includeSuperseded: Boolean(flags['include-superseded']),
+            limit: flags.limit ?? null,
+          });
+        }
+        throw new ValidationError('usage: world relationship add|list', 'USAGE');
+      }
+
+      if (sub === 'event') {
+        const [verb, ...tail] = rest;
+        if (verb === 'add') {
+          const { flags, rest: extra } = parseFlags(tail, [
+            'type', 'participant', 'affected', 'occurred-at', 'observed-at', 'property',
+            'evidence', 'evidence-relation',
+          ], ['evidence']);
+          rejectUnexpected(extra, 'world event add --type <event-type> --participant <entity>');
+          if (!flags.type || !(flags.participant ?? []).length) {
+            throw new ValidationError('usage: world event add --type <event-type> --participant <entity>', 'USAGE');
+          }
+          return await write('world.event.add', {
+            eventType: flags.type,
+            participants: flags.participant,
+            affected: flags.affected ?? [],
+            occurredAt: flags['occurred-at'] ?? null,
+            observedAt: flags['observed-at'] ?? null,
+            properties: worldProperties(flags.property),
+            evidence: worldEvidence(flags),
+          });
+        }
+        if (verb === 'list') {
+          const { flags, rest: refs } = parseFlags(tail, ['at', 'limit', 'include-retracted', 'include-superseded']);
+          if (refs.length !== 1) throw new ValidationError('usage: world event list <entity>', 'USAGE');
+          return await read('world.events', {
+            target: refs[0],
+            at: flags.at ?? null,
+            includeRetracted: Boolean(flags['include-retracted']),
+            includeSuperseded: Boolean(flags['include-superseded']),
+            limit: flags.limit ?? null,
+          });
+        }
+        throw new ValidationError('usage: world event add|list', 'USAGE');
+      }
+
+      if (sub === 'statement') {
+        const [verb, ...tail] = rest;
+        if (verb === 'retract' || verb === 'supersede') {
+          const { flags, rest: refs } = parseFlags(tail, [
+            'target-type', 'by', 'reason', 'evidence', 'evidence-relation',
+          ], ['evidence']);
+          if (refs.length !== 1 || !flags['target-type'] || !flags.reason) {
+            throw new ValidationError(`usage: world statement ${verb} <id> --target-type fact|relationship|event --reason <text>`, 'USAGE');
+          }
+          const input = {
+            targetType: flags['target-type'], target: refs[0], reason: flags.reason, evidence: worldEvidence(flags),
+          };
+          if (verb === 'retract') return await write('world.statement.retract', input);
+          if (!flags.by) {
+            throw new ValidationError('usage: world statement supersede <id> --target-type <kind> --by <replacement-id> --reason <text>', 'USAGE');
+          }
+          return await write('world.statement.supersede', { ...input, by: flags.by });
+        }
+        if (verb === 'history') {
+          const { flags, rest: refs } = parseFlags(tail, ['target-type']);
+          if (refs.length !== 1 || !flags['target-type']) {
+            throw new ValidationError('usage: world statement history <id> --target-type fact|relationship|event', 'USAGE');
+          }
+          return await read('world.statement.history', { targetType: flags['target-type'], target: refs[0] });
+        }
+        throw new ValidationError('usage: world statement retract|supersede|history', 'USAGE');
+      }
+
+      if (sub === 'conflicts') {
+        const { flags, rest: refs } = parseFlags(rest, ['at']);
+        if (refs.length > 1) throw new ValidationError('usage: world conflicts [<entity>] [--at <iso>]', 'USAGE');
+        return await read('world.conflicts', { target: refs[0] ?? null, at: flags.at ?? null });
+      }
+
+      if (sub === 'related') {
+        const { flags, rest: refs } = parseFlags(rest, ['depth', 'limit', 'as-of', 'type']);
+        if (refs.length !== 1) throw new ValidationError('usage: world related <entity> [--depth N] [--limit N]', 'USAGE');
+        return await read('world.related', {
+          target: refs[0],
+          depth: flags.depth ?? 1,
+          limit: flags.limit ?? 20,
+          asOf: flags['as-of'] ?? null,
+          predicate: flags.type ?? null,
+        });
+      }
+
+      if (sub === 'history') {
+        const { rest: refs } = parseFlags(rest, []);
+        if (refs.length !== 1) throw new ValidationError('usage: world history <entity>', 'USAGE');
+        return await read('world.history', { target: refs[0] });
+      }
+
+      if (sub === 'evidence') {
+        const { flags, rest: refs } = parseFlags(rest, ['target-type']);
+        if (flags['target-type']) {
+          if (refs.length !== 1) throw new ValidationError('usage: world evidence <id> --target-type fact|relationship|event', 'USAGE');
+          return await read('world.evidence', { targetType: flags['target-type'], targetId: refs[0] });
+        }
+        if (refs.length !== 1) throw new ValidationError('usage: world evidence <entity>', 'USAGE');
+        return await read('world.evidence', { target: refs[0] });
+      }
+
+      if (sub === 'changes') {
+        const { flags, rest: extra } = parseFlags(rest, ['from', 'to']);
+        rejectUnexpected(extra, 'world changes --from <iso> --to <iso>');
+        if (!flags.from || !flags.to) throw new ValidationError('usage: world changes --from <iso> --to <iso>', 'USAGE');
+        return await read('world.changes', { from: flags.from, to: flags.to });
+      }
+
+      if (sub === 'state-at' || sub === 'state') {
+        const { flags, rest: extra } = parseFlags(rest, ['at']);
+        if (extra.length > 1) throw new ValidationError('usage: world state-at --at <iso>', 'USAGE');
+        const at = flags.at ?? extra[0];
+        if (!at) throw new ValidationError('usage: world state-at --at <iso>', 'USAGE');
+        return await read('world.state_at', { at });
+      }
+
+      if (sub === 'inspect') {
+        rejectUnexpected(parseFlags(rest, []).rest, 'world inspect');
+        const res = await app.controller.worldRead('world.inspect', {}, 'world inspect');
+        out(res.display ?? res.output ?? '(none)');
+        if (res.recorded === false) err('Audit: NOT RECORDED');
+        else if (res.operation) out(`Audit: recorded in operations.jsonl (${res.operation.id})`);
+        const data = res.operation?.steps?.at(-1)?.result?.data ?? {};
+        return data.complete === true ? 0 : 1;
+      }
+
+      if (sub === 'health' || sub === 'status') {
+        rejectUnexpected(parseFlags(rest, []).rest, `world ${sub}`);
+        const res = await app.controller.worldRead('world.status', {}, `world ${sub}`);
+        out(res.display ?? res.output ?? '(none)');
+        if (res.recorded === false) err('Audit: NOT RECORDED');
+        else if (res.operation) out(`Audit: recorded in operations.jsonl (${res.operation.id})`);
+        const data = res.operation?.steps?.at(-1)?.result?.data ?? {};
+        return data.available === true && data.complete === true ? 0 : 1;
+      }
+
+      if (sub === 'lock') {
+        rejectUnexpected(parseFlags(rest, []).rest, 'world lock');
+        const report = await app.worldModel.lockReport();
+        if (!report.present) {
+          out('World model lock: no lock file (no write is in progress)');
+          return 0;
+        }
+        out(`World model lock: ${holderText(report)}; takeover tokens ${report.tokens.total} recorded (${report.tokens.current} for this claim: ${report.tokens.dead} dead, ${report.tokens.live} live, ${report.tokens.unknown} unidentified)`);
+        out('This view is read-only; it never waits for or takes the lock.');
+        return 0;
+      }
+
+      throw new ValidationError('usage: world [--limit N] | world entity|identity|fact|attribute|relationship|event|statement|conflicts|related|history|evidence|changes|state-at|inspect|health|lock ...', 'USAGE');
     }
 
     if (command === 'goal') {
@@ -1277,14 +1798,16 @@ export async function main(argv, {
         }));
       }
       if (sub === 'link') {
-        const { flags, rest: ids } = parseFlags(rest, ['plan', 'task']);
+        const { flags, rest: ids } = parseFlags(rest, ['plan', 'task', 'entity', 'world-event']);
         if (ids.length !== 1) {
-          throw new ValidationError('usage: goal link <id> (--plan <id> | --task <id>)', 'USAGE');
+          throw new ValidationError('usage: goal link <id> (--plan <id> | --task <id> | --entity <id> | --world-event <id>)', 'USAGE');
         }
         return emit(await app.controller.goalLink({
           target: ids[0],
           planId: flags.plan ?? null,
           taskId: flags.task ?? null,
+          entityId: flags.entity ?? null,
+          worldEventId: flags['world-event'] ?? null,
         }));
       }
       err('usage: goal add|revise|list|show|update|evidence|complete|link');

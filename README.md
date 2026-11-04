@@ -17,16 +17,18 @@ preserved for provenance.
   store, independent verification, audit records, crash recovery, and a bounded task
   planner. It can also state, from the records alone and with no model, what it currently
   holds as belief and what contradicts what: `apex world` is a **read-only projection**
-  of the memory and knowledge stores, not a world model — it persists nothing, decides
-  nothing, and calls nothing. It answers deterministic requests with no model and sends
+  of the memory and knowledge stores, not the persistent World Model. The World Model is a
+  separate append-only store (`world-model.jsonl`) of entities, facts, relationships, events,
+  and evidence the user records; neither projection nor model output can write it. It answers
+  deterministic requests with no model and sends
   everything else to a local model backend **you** configure; without one it reports
   `model_unavailable` and generates nothing. Its model-path tests use local stand-in
   servers, and the only real-model observations are the dated ones recorded in its README
   (the most recent bounded local run is dated 2026-10-31).
 
-**APEX Local Alpha is a vertical slice, not the whole system.** There is still no World
-Model, no general-purpose planner, no persistent learning, no voice, no UI, and no
-implemented neural–cognitive bridge. `stark/` remains separate experimental research;
+**APEX Local Alpha is a vertical slice, not the whole system.** It has a persistent World
+Model, but there is still no general-purpose planner, no persistent learning, no voice, no UI,
+and no implemented neural–cognitive bridge. `stark/` remains separate experimental research;
 `apex_app/` does not import it. Do not read a passing test suite or a milestone number
 as evidence that the broader APEX vision is complete.
 

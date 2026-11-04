@@ -9,6 +9,8 @@ import { ActionRegistry } from './actions/registry.js';
 import { builtinActions } from './actions/builtin.js';
 import { knowledgeActions } from './actions/knowledge-actions.js';
 import { worldActions } from './actions/world-actions.js';
+import { worldModelActions } from './actions/world-model-actions.js';
+import { WorldModelStore } from './world/store.js';
 import { Verifier } from './verify/verifier.js';
 import { CognitiveController } from './controller/controller.js';
 import { createGateway, ModelGateway, NoBackend } from './model/gateway.js';
@@ -86,6 +88,80 @@ export function createApp({
   // it cannot approve, activate, or execute anything, and it is not a source of authority.
   const proposals = new ProposalStore(path.join(dataDir, 'proposals.jsonl'), { now: clock, idFactory });
 
+  // The World Model is a separate append-only record of entities, facts, relationships, and events.
+  // Every evidence reference is checked against the store that owns the cited record, so each
+  // adapter answers only what its own log can justify: whether the record exists, whether it is
+  // still current, and how it was produced. A damaged source store throws, which the world store
+  // turns into a refusal - an unreadable source is never "no such evidence".
+  const worldModel = new WorldModelStore(path.join(dataDir, 'world-model.jsonl'), {
+    now: clock,
+    idFactory,
+    sources: {
+      memory: async (id) => {
+        const rows = await memory.list({ limit: Number.MAX_SAFE_INTEGER });
+        const record = rows.find((row) => row.id === id);
+        if (!record) return { found: false };
+        return {
+          found: true,
+          active: record.status !== 'superseded',
+          state: record.status,
+          classification: record.source === 'model' ? 'model_generated' : 'user_statement',
+        };
+      },
+      knowledge: async (id) => {
+        const history = await knowledge.history(id);
+        if (!history?.record) return { found: false };
+        const record = history.record;
+        return {
+          found: true,
+          active: record.active === true,
+          state: record.lifecycleState ?? record.status,
+          classification: record.provenance?.origin === 'model_proposed' ? 'model_generated' : 'recorded_claim',
+        };
+      },
+      experience: async (id) => {
+        const record = await experience.get(id);
+        if (!record) return { found: false };
+        return {
+          found: true,
+          active: record.active === true,
+          state: record.superseded ? 'superseded' : 'active',
+          classification: 'verified_record',
+        };
+      },
+      task: async (id) => {
+        const task = await taskStore.get(id);
+        if (!task) return { found: false };
+        return {
+          found: true,
+          active: task.status !== 'cancelled',
+          state: task.status,
+          classification: task.status === 'completed' || task.status === 'failed' ? 'recorded_outcome' : 'recorded_claim',
+        };
+      },
+      operation: async (id) => {
+        const result = await operations.findById(id);
+        if (!result.found) return { found: false };
+        return {
+          found: true,
+          active: true,
+          state: result.record?.status ?? null,
+          classification: 'verified_record',
+        };
+      },
+      prediction: async (id) => {
+        const projection = await predictions.detail(id);
+        if (!projection) return { found: false };
+        return {
+          found: true,
+          active: projection.retired !== true && projection.invalidation === null,
+          state: projection.status,
+          classification: 'recorded_expectation',
+        };
+      },
+    },
+  });
+
   // Filesystem inspection exists only when a root is configured. The root is resolved
   // and validated here, once, and captured by the action closures: no request, model
   // proposal, or task step can change it. A configured-but-invalid root is a startup
@@ -100,7 +176,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...worldActions(), ...extraActions, ...fsActions]) registry.register(def);
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is
   // reported as absent; a damaged state still raises (it must not look empty).
@@ -113,6 +189,9 @@ export function createApp({
     const g = await goals.status();
     const pl = await plans.status();
     const pr = await proposals.status();
+    // The world model reports damage instead of throwing from this read, so a damaged log is
+    // displayed as unavailable-with-detail and never counted as an empty world.
+    const wm = await worldModel.status();
     const current = await session.peek();
     if (current.status === 'corrupt') {
       throw new StoreError(`${current.detail}; run "apex new" to start a new session`);
@@ -153,6 +232,18 @@ export function createApp({
       proposalRecords: pr.records,
       proposalCount: pr.proposals,
       corruptProposalLines: pr.corrupt,
+      // The world model is a record of claims, not verified world state. A count says what is
+      // stored; conflictGroups says how many disagreements are stored unresolved.
+      worldModelAvailable: wm.available,
+      worldModelComplete: wm.complete,
+      worldModelRecords: wm.counts === null ? null : wm.records,
+      worldModelEntities: wm.counts?.entities ?? null,
+      worldModelFacts: wm.counts?.facts ?? null,
+      worldModelRelationships: wm.counts?.relationships ?? null,
+      worldModelEvents: wm.counts?.events ?? null,
+      worldModelConflictGroups: wm.counts?.conflictGroups ?? null,
+      corruptWorldModelLines: wm.counts === null ? null : wm.corrupt.length,
+      worldModelDetail: wm.detail ?? null,
       sessionId: current.state?.sessionId ?? null,
       model: gateway.describe(),
       filesystemRoot: rootForContext,
@@ -181,6 +272,7 @@ export function createApp({
     goals,
     plans,
     proposals,
+    worldModel,
   });
   return {
     controller,
@@ -202,6 +294,7 @@ export function createApp({
     goals,
     plans,
     proposals,
+    worldModel,
   };
 }
 

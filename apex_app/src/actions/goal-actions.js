@@ -55,6 +55,13 @@ function recordRef(value, name) {
   return ref;
 }
 
+function linkTargetLabel({ planId, taskId, entityId, worldEventId }) {
+  if (planId) return `plan ${shortId(planId)}`;
+  if (taskId) return `task ${shortId(taskId)}`;
+  if (entityId) return `world entity ${shortId(entityId)}`;
+  return `world event ${shortId(worldEventId)}`;
+}
+
 function expectObject(input, allowedKeys) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
     throw new ValidationError('input must be an object');
@@ -375,35 +382,80 @@ export function goalActions(store) {
 
     {
       name: 'goal.link',
-      description: 'Link a plan or a task to a goal. The link is a reference only: it grants neither the plan nor the task any authority. Write: user origin only.',
-      inputHint: '{"target":"goal id","planId":"optional plan id","taskId":"optional task id"}',
+      description: 'Link a plan, a task, a world entity, or a world event to a goal. The link is a reference only: it grants no authority and changes no completion rule. Write: user origin only.',
+      inputHint: '{"target":"goal id","planId":"optional plan id","taskId":"optional task id","entityId":"optional world entity id","worldEventId":"optional world event id"}',
       permission: 'write',
       origins: [ORIGIN_USER],
       plannable: false,
       validate(input) {
-        const o = expectObject(input, ['target', 'planId', 'taskId']);
+        const o = expectObject(input, ['target', 'planId', 'taskId', 'entityId', 'worldEventId']);
         const planId = o.planId === undefined || o.planId === null ? null : recordRef(o.planId, 'planId');
         const taskId = o.taskId === undefined || o.taskId === null ? null : recordRef(o.taskId, 'taskId');
-        if (planId === null && taskId === null) throw new ValidationError('a link must name a plan or a task');
-        return { target: recordRef(o.target, 'target'), planId, taskId };
+        const entityId = o.entityId === undefined || o.entityId === null ? null : recordRef(o.entityId, 'entityId');
+        const worldEventId = o.worldEventId === undefined || o.worldEventId === null ? null : recordRef(o.worldEventId, 'worldEventId');
+        if (planId === null && taskId === null && entityId === null && worldEventId === null) {
+          throw new ValidationError('a link must name a plan, a task, a world entity, or a world event');
+        }
+        return { target: recordRef(o.target, 'target'), planId, taskId, entityId, worldEventId };
       },
-      async execute(_ctx, { target, planId, taskId }) {
-        const { goal } = await store.link(target, { planId, taskId });
+      async execute(ctx, { target, planId, taskId, entityId, worldEventId }) {
+        // A world reference is recorded as the stable record id, so a short or merged reference
+        // still names the same entity after an identity merge. The reference grants no authority.
+        let linkedEntityId = entityId;
+        if (entityId !== null) {
+          if (!ctx.worldModel || typeof ctx.worldModel.showEntity !== 'function') {
+            throw new ValidationError('the world model is unavailable, so a world entity reference cannot be checked');
+          }
+          const view = await ctx.worldModel.showEntity(entityId);
+          if (!view.entity) throw new ValidationError(`world entity "${singleLine(entityId, 64)}" cannot be linked: ${singleLine(view.problem ?? 'not found', 120)}`);
+          if (view.entity.status !== 'active') {
+            throw new ValidationError(`world entity ${shortId(view.entity.id)} is ${view.entity.status}; a retired entity cannot receive a new link`);
+          }
+          linkedEntityId = view.entity.id;
+        }
+        let linkedEventId = worldEventId;
+        if (worldEventId !== null) {
+          if (!ctx.worldModel || typeof ctx.worldModel.state !== 'function') {
+            throw new ValidationError('the world model is unavailable, so a world event reference cannot be checked');
+          }
+          const state = await ctx.worldModel.state();
+          if (!state.events.has(worldEventId)) {
+            throw new ValidationError(`world event "${singleLine(worldEventId, 64)}" does not exist`);
+          }
+        }
+        const { goal } = await store.link(target, { planId, taskId, entityId: linkedEntityId, worldEventId: linkedEventId });
+        const label = linkTargetLabel({ planId, taskId, entityId: linkedEntityId, worldEventId: linkedEventId });
         return {
-          summary: `linked ${planId ? `plan ${shortId(planId)}` : `task ${shortId(taskId)}`} to goal ${shortId(goal.id)}`,
-          data: { goalId: goal.id, planId, taskId, planIds: [...goal.planIds], taskIds: [...goal.taskIds] },
+          summary: `linked ${label} to goal ${shortId(goal.id)}`,
+          data: {
+            goalId: goal.id,
+            planId,
+            taskId,
+            entityId: linkedEntityId,
+            worldEventId: linkedEventId,
+            planIds: [...goal.planIds],
+            taskIds: [...goal.taskIds],
+            entityIds: [...goal.entityIds],
+            worldEventIds: [...goal.worldEventIds],
+          },
           display: [
-            `Linked ${planId ? `plan ${shortId(planId)}` : `task ${shortId(taskId)}`} to goal ${shortId(goal.id)}.`,
-            'A link records a reference; it does not authorize execution.',
+            `Linked ${label} to goal ${shortId(goal.id)}.`,
+            'A link records a reference; it does not authorize execution or prove a fact.',
           ].join('\n'),
         };
       },
-      async verify(_ctx, { planId, taskId }, result) {
+      async verify(_ctx, _input, result) {
+        const { planId, taskId, entityId, worldEventId } = result.data;
         const goal = await store.get(result.data.goalId);
         if (!goal) return { ok: false, detail: 'the linked goal cannot be read back' };
         if (planId !== null && !goal.planIds.includes(planId)) return { ok: false, detail: 'the plan link is not recorded on the goal' };
         if (taskId !== null && !goal.taskIds.includes(taskId)) return { ok: false, detail: 'the task link is not recorded on the goal' };
-        return { ok: true, detail: `link confirmed on the goal; ${goal.planIds.length} plan(s) and ${goal.taskIds.length} task(s) referenced` };
+        if (entityId !== null && !goal.entityIds.includes(entityId)) return { ok: false, detail: 'the world entity link is not recorded on the goal' };
+        if (worldEventId !== null && !goal.worldEventIds.includes(worldEventId)) return { ok: false, detail: 'the world event link is not recorded on the goal' };
+        return {
+          ok: true,
+          detail: `link confirmed on the goal; ${goal.planIds.length} plan(s), ${goal.taskIds.length} task(s), ${goal.entityIds.length} world entit(ies), and ${goal.worldEventIds.length} world event(s) referenced`,
+        };
       },
     },
   ];

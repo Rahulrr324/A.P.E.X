@@ -28,10 +28,15 @@ export const CRITERION_ID_RE = /^c[1-9][0-9]?$/;
 
 export const RISK_LEVELS = Object.freeze(['low', 'medium', 'high']);
 export const RISK_ORDER = Object.freeze({ low: 0, medium: 1, high: 2 });
-// The epistemic classes a plan may record. `stored_knowledge` and `retrieved_evidence` must name
-// the record they came from; `user_fact` is the user's own statement as recorded here; an
-// inference or an unknown is never presented as established fact.
-export const ASSERTION_KINDS = Object.freeze(['user_fact', 'stored_knowledge', 'retrieved_evidence', 'inference', 'unknown']);
+// The epistemic classes a plan may record. `stored_knowledge`, `retrieved_evidence`, `world_fact`
+// and `world_entity` must name the record they came from; `user_fact` is the user's own statement
+// as recorded here; an inference or an unknown is never presented as established fact.
+export const ASSERTION_KINDS = Object.freeze([
+  'user_fact', 'stored_knowledge', 'retrieved_evidence', 'world_fact', 'world_entity', 'inference', 'unknown',
+]);
+// Assertions that name a record whose live state can be re-checked. A world assertion may also
+// carry an expected value; a change is reported against the plan, and never applied to the world.
+export const WORLD_ASSERTION_KINDS = Object.freeze(['world_fact', 'world_entity']);
 
 export const PlanStatus = Object.freeze({
   DRAFT: 'draft',
@@ -89,6 +94,14 @@ export function planProgress(plan) {
   };
 }
 
+function assertionContent(a) {
+  const content = { kind: a.kind, text: a.text, ref: a.ref ?? null };
+  // Included only when recorded, so plans written before world expected values existed keep
+  // exactly the bytes, and therefore the hashes, they had before.
+  if (a.expected !== undefined && a.expected !== null) content.expected = a.expected;
+  return content;
+}
+
 // The exact bytes approval is bound to. Status, approvals, activations, and outcomes are
 // deliberately excluded: they are records about the plan, not the plan the user approved.
 // The goal revision is included when one is recorded, so a plan approved against one wording
@@ -112,7 +125,7 @@ export function planContent(plan) {
       estimate: s.estimate ?? { seconds: null },
     })),
     preconditions: [...plan.preconditions],
-    assertions: plan.assertions.map((a) => ({ kind: a.kind, text: a.text, ref: a.ref ?? null })),
+    assertions: plan.assertions.map(assertionContent),
     resources: { estimatedSeconds: plan.resources?.estimatedSeconds ?? null },
   };
 }
@@ -171,9 +184,16 @@ function assertionProblems(a, i, problems) {
   }
   if (!ASSERTION_KINDS.includes(a.kind)) problems.push(`${label} kind must be one of: ${ASSERTION_KINDS.join(', ')}`);
   if (!plainText(a.text, MAX_ASSERTION_CHARS)) problems.push(`${label} needs plain text`);
-  const needsRef = a.kind === 'stored_knowledge' || a.kind === 'retrieved_evidence';
+  const needsRef = a.kind === 'stored_knowledge' || a.kind === 'retrieved_evidence'
+    || WORLD_ASSERTION_KINDS.includes(a.kind);
   if (needsRef && !plainText(a.ref, 64)) problems.push(`${label} of kind ${a.kind} must name the record it came from`);
   if (!needsRef && a.ref !== undefined && a.ref !== null && !plainText(a.ref, 64)) problems.push(`${label} reference is malformed`);
+  // Only a world assertion has a live value to compare against; on any other kind an expected
+  // value would claim a check this plan cannot perform.
+  if (a.expected !== undefined && a.expected !== null) {
+    if (!WORLD_ASSERTION_KINDS.includes(a.kind)) problems.push(`${label} of kind ${a.kind} cannot carry an expected value`);
+    else if (!plainText(a.expected, MAX_ASSERTION_CHARS)) problems.push(`${label} expected value must be plain text of at most ${MAX_ASSERTION_CHARS} characters`);
+  }
 }
 
 export function validatePlanContent(content) {
@@ -317,7 +337,7 @@ function newPlan(e) {
       estimate: { seconds: s.estimate?.seconds ?? null },
     })),
     preconditions: [...e.preconditions],
-    assertions: e.assertions.map((a) => ({ kind: a.kind, text: a.text, ref: a.ref ?? null })),
+    assertions: e.assertions.map(assertionContent),
     resources: { estimatedSeconds: e.resources?.estimatedSeconds ?? null },
     history: [{ version: 1, kind: 'created', at: e.at, reason: e.reason }],
     approval: null,
@@ -349,7 +369,7 @@ function applyContent(plan, e) {
     estimate: { seconds: s.estimate?.seconds ?? null },
   }));
   plan.preconditions = [...e.preconditions];
-  plan.assertions = e.assertions.map((a) => ({ kind: a.kind, text: a.text, ref: a.ref ?? null }));
+  plan.assertions = e.assertions.map(assertionContent);
   plan.resources = { estimatedSeconds: e.resources?.estimatedSeconds ?? null };
 }
 

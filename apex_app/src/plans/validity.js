@@ -8,7 +8,7 @@
 // recorded operation no longer verifies.
 //
 // It reads only. Nothing here approves, revises, activates, or executes a plan.
-import { planContentHash, planProgress } from './model.js';
+import { WORLD_ASSERTION_KINDS, planContentHash, planProgress } from './model.js';
 
 const TERMINAL_GOAL = new Set(['completed', 'failed', 'cancelled', 'abandoned', 'superseded']);
 
@@ -44,6 +44,7 @@ export async function assessPlanValidity(plan, {
   knowledge = null,
   memory = null,
   experience = null,
+  worldModel = null,
   taskStore = null,
   now = new Date(),
   forActivation = false,
@@ -124,7 +125,33 @@ export async function assessPlanValidity(plan, {
   }
 
   const assertionProblems = [];
+  const worldProblems = [];
   for (const assertion of plan.assertions ?? []) {
+    if (WORLD_ASSERTION_KINDS.includes(assertion.kind)) {
+      if (!assertion.ref) {
+        worldProblems.push(`an assertion of kind ${assertion.kind} does not name its record`);
+        continue;
+      }
+      if (!worldModel || typeof worldModel.checkStatement !== 'function') {
+        worldProblems.push(`the world model is not available, so ${assertion.kind} ${assertion.ref} cannot be checked`);
+        continue;
+      }
+      let status;
+      try {
+        status = await worldModel.checkStatement({
+          targetType: assertion.kind === 'world_fact' ? 'fact' : 'entity',
+          targetId: assertion.ref,
+          expected: assertion.expected ?? null,
+        });
+      } catch (err) {
+        worldProblems.push(`the world model could not be read (${err?.code ?? 'store error'}), so ${assertion.kind} ${assertion.ref} cannot be checked`);
+        continue;
+      }
+      if (!status.ok) {
+        worldProblems.push(`the world ${assertion.kind === 'world_fact' ? 'fact' : 'entity'} ${assertion.ref} no longer supports the plan (${status.state}): ${status.detail}`);
+      }
+      continue;
+    }
     if (!['stored_knowledge', 'retrieved_evidence'].includes(assertion.kind)) continue;
     if (!assertion.ref) {
       assertionProblems.push(`an assertion of kind ${assertion.kind} does not name its record`);
@@ -137,8 +164,10 @@ export async function assessPlanValidity(plan, {
       assertionProblems.push(`the record ${assertion.ref} no longer resolves`);
     }
   }
-  checks.push(check('assertions', assertionProblems.length === 0, assertionProblems.length === 0 ? 'every referenced record still resolves' : assertionProblems.join('; ')));
+  const allAssertionProblems = [...assertionProblems, ...worldProblems];
+  checks.push(check('assertions', allAssertionProblems.length === 0, allAssertionProblems.length === 0 ? 'every referenced record still resolves and every cited world value still holds' : allAssertionProblems.join('; ')));
   problems.push(...assertionProblems.map((p) => `evidence ${p}`));
+  problems.push(...worldProblems.map((p) => `world assertion ${p}`));
 
   const progress = planProgress(plan);
   const staleOutcomes = [];

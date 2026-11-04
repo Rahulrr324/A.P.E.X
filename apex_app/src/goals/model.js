@@ -168,10 +168,11 @@ export function validateEventShape(e) {
   }
 
   if (e.type === 'goal_linked') {
-    const planOk = e.planId === undefined || e.planId === null || (typeof e.planId === 'string' && e.planId.length > 0 && e.planId.length <= 64);
-    const taskOk = e.taskId === undefined || e.taskId === null || (typeof e.taskId === 'string' && e.taskId.length > 0 && e.taskId.length <= 64);
-    if (!planOk || !taskOk) return 'bad link';
-    if ((e.planId ?? null) === null && (e.taskId ?? null) === null) return 'a link must name a plan or a task';
+    const ok = (v) => v === undefined || v === null || (typeof v === 'string' && v.length > 0 && v.length <= 64);
+    if (![e.planId, e.taskId, e.entityId, e.worldEventId].every(ok)) return 'bad link';
+    if ([e.planId, e.taskId, e.entityId, e.worldEventId].every((v) => (v ?? null) === null)) {
+      return 'a link must name a plan, a task, a world entity, or a world event';
+    }
     return null;
   }
 
@@ -250,6 +251,8 @@ export function applyEvent(goals, e) {
       completion: null,
       planIds: [],
       taskIds: [],
+      entityIds: [],
+      worldEventIds: [],
       createdAt: e.at,
       updatedAt: e.at,
     };
@@ -381,6 +384,14 @@ export function applyEvent(goals, e) {
       if (goal.taskIds.includes(e.taskId)) return 'the task is already linked to this goal';
       goal.taskIds.push(e.taskId);
     }
+    if (e.entityId) {
+      if (goal.entityIds.includes(e.entityId)) return 'the world entity is already linked to this goal';
+      goal.entityIds.push(e.entityId);
+    }
+    if (e.worldEventId) {
+      if (goal.worldEventIds.includes(e.worldEventId)) return 'the world event is already linked to this goal';
+      goal.worldEventIds.push(e.worldEventId);
+    }
     goal.updatedAt = at;
     return null;
   }
@@ -412,6 +423,8 @@ export function goalSummary(goal) {
     progress: p,
     plans: goal.planIds.length,
     tasks: goal.taskIds.length,
+    entities: goal.entityIds.length,
+    worldEvents: goal.worldEventIds.length,
     createdAt: goal.createdAt,
     updatedAt: goal.updatedAt,
   };

@@ -53,6 +53,10 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // answers "what happened", not "what was intended", and a plan's steps are not events: capturing
   // either would put intentions into the log the pattern and adaptation reads draw from.
   executive: 'it records a goal, a plan, or evidence about them; these are intentions and their classified support, not events that happened, and they must not enter the experience log the pattern and adaptation reads draw from',
+  // The world model already stores every claim with its evidence, validity, and provenance, and its
+  // own append-only log is the record of the assertion. Capturing a world write would put a second
+  // account of the same claim into the experience log the pattern and adaptation reads draw from.
+  'world-model': 'it reads or writes the world model, whose records already carry their own evidence, validity, and provenance; an experience of one would copy that claim into the log the pattern and adaptation reads draw from',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
@@ -62,6 +66,36 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'app.status': 'read',
   'calc.evaluate': 'read',
   'world.state': 'read',
+  'world.state_at': 'read',
+  'world.entity.list': 'read',
+  'world.entity.show': 'read',
+  'world.entity.find': 'read',
+  'world.facts': 'read',
+  'world.attributes': 'read',
+  'world.relationships': 'read',
+  'world.events': 'read',
+  'world.conflicts': 'read',
+  'world.related': 'read',
+  'world.history': 'read',
+  'world.statement.history': 'read',
+  'world.identity.candidates': 'read',
+  'world.identity.decision': 'read',
+  'world.pair': 'read',
+  'world.evidence': 'read',
+  'world.changes': 'read',
+  'world.inspect': 'read',
+  'world.status': 'read',
+  'world.entity.add': 'world-model',
+  'world.entity.alias': 'world-model',
+  'world.entity.retire': 'world-model',
+  'world.entity.merge': 'world-model',
+  'world.entity.unmerge': 'world-model',
+  'world.identity.decide': 'world-model',
+  'world.fact.add': 'world-model',
+  'world.relationship.add': 'world-model',
+  'world.event.add': 'world-model',
+  'world.statement.retract': 'world-model',
+  'world.statement.supersede': 'world-model',
   'memory.search': 'read',
   'memory.list': 'read',
   'knowledge.list': 'read',

@@ -8,9 +8,11 @@ implementation of one workflow:
             -> a model -> authorize -> execute -> verify independently
             -> record -> restart -> still there
 
-It is not the whole of APEX. It has no world model (it has a read-only
-[projection](#world-state-the-read-only-epistemic-projection) of what memory and knowledge
-already store), no general-purpose planner (only
+It is not the whole of APEX. It has a persistent, append-only
+[World Model](#batch-ai-world-model-entity-memory-and-evidence-graph-as-implemented) of entities,
+facts, relationships, events, observations, and evidence the user records, and a separate read-only
+[projection](#world-state-the-read-only-epistemic-projection) of what memory and knowledge already
+store. It has no general-purpose planner (only
 the bounded task planner described below), no persistent learning, no voice and no UI,
 and its model path depends entirely on a backend you configure yourself. The C++
 spiking-neuron research under `stark/` is a separate experiment, not a runtime this
@@ -40,7 +42,8 @@ from a milestone number or a passing build.
 | Executive proposal layer | Implemented as an append-only `proposals.jsonl` store plus a user-only decision surface: `propose`, `proposal list/show/accept/reject/invalidate`. A configured model may produce a structured proposal of one of five kinds; it is stored as model-origin with its evidence references, assumptions, unknowns, risk, invalidation conditions, and live validation result. It cannot create, complete, approve, activate, execute, or change any record until a separate user-origin acceptance revalidates it and applies it through the ordinary goal or plan store. `advice` applies nothing, and a proposal is never a user record. | `executive-continuation.test.js`, `executive-reliability.test.js`, `capability-inventory.test.js`. No proposal test calls a real model: responses are deterministic synthetic text. See [Batch AH](#batch-ah-executive-reliability-live-validity-proposals-and-continuation-as-implemented). |
 | `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
 | Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
-| World model, general planner, persistent learning, voice, UI | **Not implemented.** A world model would hold entities, events, time, and causal state of its own; the projection above only re-reads the stores - memory, knowledge, the experience log, and the prediction ledger - and reports what they already contain, keeping an expectation in a section of its own rather than among the beliefs. The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [World state](#world-state-the-read-only-epistemic-projection), [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
+| World Model, entity memory and evidence graph | Implemented as an append-only `world-model.jsonl` of user-origin records: stable entity ids with aliases and lifecycle, subject-predicate-object facts with typed values, relationships with directionality and inverse reads, events that keep happened-at, learned-at, and stored-at apart, evidence references to existing stores (never copies), retraction and supersession as later records, conservative contradiction detection that keeps both sides, deterministic identity candidates, and explicit user confirm/reject/merge/unmerge. Reads reduce the log at read time; nothing is overwritten, and a model cannot write a record. | `world-model-core.test.js` (17 tests), `world-model-scenarios.test.js` (15 end-to-end scenarios A-O, including real CLI runs and real child processes). See [Batch AI](#batch-ai-world-model-entity-memory-and-evidence-graph-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
+| General planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
 
 The model path depends entirely on a backend you configure yourself. Without one,
 APEX answers deterministic requests and reports `model_unavailable` for everything
@@ -1644,8 +1647,10 @@ The output separates four things that a normal assistant tends to blend together
 
 ### What it does not do
 
-- It is **not a world model.** There are no entities, events, time intervals, or causal
-  links of its own; it re-reads records that already exist.
+- The `world` command **is not the World Model.** It re-reads memory and knowledge records that
+  already exist. The [World Model](#batch-ai-world-model-entity-memory-and-evidence-graph-as-implemented)
+  is a separate append-only store in `world-model.jsonl` that records the entities, facts,
+  relationships, events, and evidence the user asserts; `world` neither reads nor writes it.
 - It resolves nothing, chooses nothing, and converts no inference into a fact.
 - Memory contradiction detection is the same narrow heuristic the memory store already uses
   ("subject is/are value" clauses), so it can miss contradictions and can group records a
@@ -1831,6 +1836,73 @@ is smaller than the difference it should be read against. The fixture is deliber
 for disclosure - 40 conflict groups is far more disagreement than a normal store holds - so the size
 figure is a ceiling, not a typical request. The probe itself was a temporary script outside the
 repository and is not part of `npm test`.
+
+**Batch AI: the persistent World Model.** `benchmarks/run-world-model-benchmark.mjs --repeats 3`
+measures the World Model store with synthetic logs that the store's own validator accepted while
+the fixture was produced. It runs no model, downloads nothing, and is not part of `npm test`. It
+has five phases: `reads` (nine read paths at 100, 250, 500, 1,000, and 2,000 entities), `analysis`
+(related, conflicts, identity candidates, history, changes, prior-belief state, and context
+assembly), `writes` (append, lock, entity, fact, relationship, event, retraction, and the same
+operations through the action layer), `contention` (1, 2, and 4 real child processes writing
+through the store), and `context` (what the prompt section adds and which requests pay).
+
+Measured on one Windows 11 machine (Node v24.18.0, 12 logical CPUs, warm page cache), three
+repeats per cell, medians in milliseconds. Each read is one call on a fresh store instance, so it
+pays the whole load, validation, and reduction a real reader pays.
+
+| Entities | Record lines | Bytes | load | status | list | show | find | facts | attributes | relationships | events |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 100 | 562 | 249,430 | 14.4 | 15.0 | 12.8 | 15.4 | 12.1 | 12.8 | 13.7 | 14.2 | 13.4 |
+| 250 | 1,406 | 624,309 | 33.0 | 31.0 | 30.5 | 32.1 | 27.4 | 32.3 | 31.6 | 31.8 | 32.4 |
+| 500 | 2,810 | 1,247,992 | 56.1 | 64.6 | 59.5 | 69.2 | 58.1 | 62.3 | 61.3 | 71.3 | 65.6 |
+| 1,000 | 5,619 | 2,495,785 | 212.7 | 241.0 | 203.5 | 242.4 | 210.9 | 236.1 | 227.0 | 228.7 | 240.2 |
+| 2,000 | 11,239 | 4,993,059 | 436.6 | 481.2 | 420.7 | 502.1 | 428.4 | 468.6 | 477.2 | 462.5 | 496.7 |
+
+| Entities | related | conflicts | identity | history | changes | state-at | context build |
+|---|---|---|---|---|---|---|---|
+| 100 | 23.5 | 23.7 | 30.9 | 26.7 | 32.2 | 29.1 | 6.0 |
+| 250 | 51.9 | 53.4 | 66.7 | 54.7 | 69.5 | 63.7 | 7.6 |
+| 500 | 100.3 | 102.1 | 129.9 | 112.4 | 143.3 | 127.9 | 20.9 |
+| 1,000 | 228.3 | 243.3 | 255.1 | 229.5 | 313.9 | 279.3 | 27.4 |
+| 2,000 | 440.3 | 451.6 | 504.9 | 427.9 | 577.6 | 532.7 | 65.3 |
+
+Writes at 1,000 entities (5,619 lines; median / min / max ms):
+
+| Operation | Median | Min | Max |
+|---|---|---|---|
+| append (store layer) | 18.1 | 13.5 | 30.2 |
+| lock acquisition | 25.0 | 24.7 | 27.4 |
+| create entity | 337.2 | 316.5 | 385.5 |
+| assert fact | 342.2 | 333.8 | 355.3 |
+| assert relationship | 356.9 | 346.7 | 392.0 |
+| record event | 338.0 | 324.0 | 377.8 |
+| retract statement | 341.1 | 340.1 | 349.2 |
+| create entity (action layer) | 563.2 | 555.2 | 613.9 |
+| assert fact (action layer) | 600.5 | 591.6 | 604.2 |
+
+A public write re-reads and revalidates the whole log inside the lock, which is why a one-line
+append costs hundreds of milliseconds at this size: the cost is the integrity check and the
+reduction, not the append. Several writers on one log stay correct: with 1 / 2 / 4 real child
+processes the benchmark accepted 3/3, 6/6, and 12/12 writes in 0.54 s, 0.92 s, and 1.82 s
+respectively, created exactly as many new entities as accepted attempts on every row, and left 0
+refusals, 0 corrupt lines, and 0 lock residue.
+
+The context section is bounded independently of log size: a named entity produced 9 lines and
+1,163 characters (13 further entries omitted by the local budget), an overview request 8 lines and
+615 characters naming 33 disagreement groups, and an unrelated request 0 lines. On the benchmark's
+6,000-character prompt budget the named section adds 1,632 characters (27.2%); the overview form
+adds 1,084 characters on its base, and the unavailable notice adds 171. `store.state()` on the
+2,000-entity fixture took 223.6 ms median (220.4-232.9), and `buildWorldModelContext` on the
+already-reduced state 24.5 ms - the section itself performs no store read.
+
+**Decision: no derived index was added.** Read cost grows roughly linearly with record count, and
+a write pays the same whole-log validation and reduction by design. An index built from the same
+records could remove part of the read reduction, but it would not remove the validation that
+makes a write safe, and it would introduce a second structure that can disagree with the log - the
+failure this store's design avoids. At the measured scale (2,000 entities and 11,239 records:
+about 0.42-0.50 s per read and 0.34-0.60 s per write) that trade was not justified. If a workload
+grows well beyond this, the decision should be revisited with measurements on that workload, not
+with a guess.
 
 ## Authoritative state and derived state
 
@@ -3364,7 +3436,8 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 48 registered actions declare both `validate()` and `verify()`, so the
+- **Verification.** All 76 registered actions declare both `validate()` and `verify()` - 78 with a
+  filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
 
@@ -3402,6 +3475,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `app.status` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `calc.evaluate` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `world.state` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
+| `world.entity.add`, `world.entity.alias`, `world.entity.retire`, `world.entity.merge`, `world.entity.unmerge`, `world.identity.decide`, `world.fact.add`, `world.relationship.add`, `world.event.add`, `world.statement.retract`, `world.statement.supersede` | user | write | never in a plan | `world-model.jsonl` (append-only; each record names its evidence) | no (world-model) | yes |
+| `world.entity.list`, `world.entity.show`, `world.entity.find`, `world.facts`, `world.attributes`, `world.relationships`, `world.events`, `world.conflicts`, `world.related`, `world.history`, `world.statement.history`, `world.identity.candidates`, `world.identity.decision`, `world.pair`, `world.evidence`, `world.changes`, `world.state_at`, `world.inspect`, `world.status` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
 | `filesystem.list`, `filesystem.read` | user | read | never offered to a model plan | nothing (measured) | no (filesystem) | no |
 | `goal.add`, `goal.revise`, `goal.update`, `goal.evidence`, `goal.complete`, `goal.link` | user | write | never in a plan | `goals.jsonl` (and `operations.jsonl`; a revision resets criterion evidence, completion re-checks the audit log) | no (executive) | yes |
 | `goal.list`, `goal.show` | user | read | - | nothing (measured) | no (read) | no |
@@ -3421,11 +3496,12 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
 
 `filesystem.list` and `filesystem.read` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
-configured; there is no default root, and a model proposal cannot supply one, so the count is 46
-registered actions by default and 48 with a root. Batch AG added ten user-origin write actions
+configured; there is no default root, and a model proposal cannot supply one, so the count is 76
+registered actions by default and 78 with a root. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
-actions); none is plannable, so the planning prompt still offers exactly 17 reads to a model origin
-and 21 actions to a user origin.
+actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads). None of the
+World Model actions is plannable, so the planning prompt still offers exactly 17 reads to a model
+origin and 40 actions to a user origin with a root configured (38 without one).
 
 ### The inconsistencies this found, and what became of them
 
@@ -3681,6 +3757,233 @@ Two asymmetries are named rather than smoothed over:
   measured against one: the credential boundary at the model call was exercised against a local stub
   that records what it received. The dated real-model observations in
   [Capability status](#capability-status) predate this batch and are not evidence about it.
+
+## Batch AI: World Model, entity memory and evidence graph (as implemented)
+
+Batch AI adds a persistent World Model: an append-only record of the entities the user has
+described, the facts, relationships, and events they have asserted about those entities, the
+evidence each assertion cites, and the identity decisions they have taken. It is a separate store
+from the read-only `world` projection. `world` derives a counts-first view from memory, knowledge,
+experience, prediction, and task records at read time and persists nothing; the World Model keeps
+its own log, `world-model.jsonl`, and the projection neither reads nor writes it.
+
+The subsystem lives in `src/world/`:
+
+| File | Responsibility |
+|---|---|
+| `vocabulary.js` | controlled names: entity categories and statuses, fact predicates with cardinality, relationship types with inverse names and symmetry, evidence relations and source types, statement statuses |
+| `model.js` | record schema (`schema: 1`), validation of every record type, the pure reducer, canonical ids, normalisation, interval and status helpers |
+| `store.js` | the append-only log, evidence validation through supplied adapters, `WriterLock` coordination, reduction at read time, fail-closed reads, `inspect` and lock recovery |
+| `query.js` | bounded read projections: entity lists and views, facts, attributes, relationships, events, evidence, history, as-of and prior-belief state, changes, related traversal, statement checks |
+| `conflicts.js` | conservative contradiction groups for single-valued predicates and relationships, and statement status |
+| `resolution.js` | deterministic identity candidates, exclusion of rejected pairs, and the reasons a pair is listed |
+| `context.js` | the bounded, relevance-gated section included in a model-path prompt |
+| `format.js` | line-oriented rendering for the CLI and actions |
+
+There is no graph database, no external service, no new dependency, and no second memory or
+knowledge implementation. Evidence points at records in the stores that already exist.
+
+### The log is the whole truth
+
+Every write appends one JSON object with `schema: 1`, an `eventId`, a `type`, `at` (stored
+time), and `origin: "user"`. The eleven record types are `entity_created`,
+`entity_alias_added`, `entity_retired`, `entity_merged`, `entity_merge_undone`, `fact_asserted`,
+`relationship_asserted`, `event_recorded`, `statement_retracted`, `statement_superseded`, and
+`identity_decision`. `validateWorldRecord` checks shape, bounds, timestamps, references, and
+vocabulary on the way in; the reducer applies the same validation again and records a problem
+instead of guessing when a line cannot be applied.
+
+Reads reduce the log at read time. There is no cached mutable state file to drift from the log
+and no in-place edit: a retraction, a supersession, a merge, and an unmerge are later records.
+`world inspect` reports the line count, the corrupt lines, and the records the reducer could not
+apply. A normal read of a log containing either is refused with a `StoreError` that names the
+count - the application reports an incomplete world rather than an empty one. Writes take the
+same `WriterLock` protocol as the other stores (`world lock` reports it, `repair locks` includes
+it), and an append re-reads and revalidates the log inside the lock before adding its line.
+
+### Identity is a record, not a guess
+
+An entity has a stable id chosen by the user or generated, a category from the controlled list,
+a name, up to 16 aliases, up to 8 external identifiers, an optional description, an observed-at
+time, evidence, and a lifecycle status: `active`, `merged`, or `retired`. A name shared by two
+entities is reported as ambiguous by `world.entity.show`; a lookup returns every match and never
+resolves by position. `world.entity.find` matches a normalized exact name or alias and says which
+one matched.
+
+A merge is an explicit `world.entity.merge` that names source and survivor, a reason, and
+evidence. It is refused unless the pair has a recorded identity confirmation or a shared trusted
+external identifier - a similar name is never a merge basis. The source becomes `merged` and
+resolves to the survivor for reads; the merge record, both entity records, and every historical
+reference remain stored. `world.entity.unmerge` appends a compensating record, and the original
+merge stays visible in history. A retired entity stays readable, and `goal.link` refuses to add a
+new link to one; no statement it already holds is rewritten or removed. No read rewrites an id,
+and no merge deletes a record.
+
+### Facts, attributes, relationships, and events
+
+A fact is a subject entity, a predicate, and an object that is either an entity reference or a
+typed scalar (`string`, `number`, `boolean`, or `datetime`) with an optional unit and language.
+It can carry a validity interval (`validFrom`, `validUntil`), an observation time, a stated
+confidence (`value` plus `basis`, stored only when supplied), superseded fact ids, and 1-8
+evidence references. A missing `validFrom` means validity is unknown; it is never treated as
+current. Predicates in the controlled vocabulary declare `single` or `multi` cardinality; an
+unknown predicate is accepted as multi-valued and is never used on its own to declare a
+contradiction. `world.attributes` is the current-value view over the same facts.
+
+A relationship is a directed or symmetric edge between two entities, with an optional property
+map, validity, and evidence. An entity cannot point at itself. A known relationship type declares
+its inverse (`employed_by`/`employs`, `located_in`/`contains`, and so on); the inverse is
+presented by a query and never stored a second time, so reading either endpoint shows the edge
+once per direction and no duplicate record exists to disagree with itself.
+
+An event keeps three times apart: `occurredAt` is when it happened, `observedAt` is when it was
+learned, and the record's `at` is when it was stored. A late event is accepted and sorted by
+`occurredAt`; a null `occurredAt` is unknown, not now. An event names up to 16 participants,
+affected entities, properties, and evidence, and is subject to the same retraction and
+supersession records as facts and relationships.
+
+### Evidence is a reference, not a copy
+
+Every assertion requires at least one evidence reference: a relation (`supports`, `contradicts`,
+`qualifies`, `supersedes`, `retracts`), a source type (`user`, `memory`, `knowledge`,
+`experience`, `task`, `operation`, `prediction`), a source id, and an optional note. The store
+resolves the id through an adapter supplied by the composition root and requires that the record
+exists, is current, and matches the classification the caller states. A missing adapter is a
+configuration error and a lookup failure is a store error; neither is ever read as "no evidence".
+A `user` reference must name the user, not another record. A prediction is an expectation, so it
+can only qualify context; it cannot be cited as evidence for or against a fact. Model output has
+no source type and therefore cannot be cited as a world-model record. Because the reference is an
+id into the existing store, retracting or superseding the cited record is visible to later reads
+without copying its text into the world model.
+
+### Time
+
+`parseInstant` normalises every stored instant: a date-only value is midnight UTC, and a
+date-time must carry an explicit `Z` or `±hh:mm` zone. A local-time string is refused rather than
+parsed differently on two machines, so a stored instant does not depend on the reader's time zone.
+Three questions are kept separate:
+
+- **What was valid then** - `asOf` filters facts and relationships by their validity interval.
+- **What did APEX know then** - `world.state_at` replays only records whose stored `at` is at or
+  before the cutoff. A later retraction, supersession, or merge is absent, which is the point.
+- **What changed** - `world.changes` reports statements that became valid, stopped being valid,
+  were recorded, were withdrawn, or were merged inside a window; a statement whose interval
+  merely surrounds the window is not a change. Events report occurrence and learning separately.
+
+`world.history` and `world.statement.history` show the records behind one entity or one
+statement in stored order.
+
+### Contradictions are disclosed, never resolved
+
+Contradiction detection is deliberately conservative. A group exists only when two assertions
+with a `single`-valued fact predicate (`has_status`, `has_name`, `located_in`, `manufactured_by`,
+`owned_by`, `date_of_birth`) or relationship type (`employed_by`, `located_in`, `manufactured_by`,
+`owned_by`) have different values and their valid-time intervals overlap. Both sides require a
+known `validFrom`; a missing interval cannot establish an overlap. Both sides stay in the store
+and in the view, no source is ranked, and no side is selected. `world.conflicts` names each group;
+the context section states that the disagreement is unresolved.
+
+Statement status is computed from records in a fixed precedence: missing, retracted, superseded,
+validity unknown, conflicting, historical, contested, supported. `supported` is not "true" - it
+means the statement is recorded, current, valid at the queried instant, and not in a recorded
+disagreement.
+
+### Identity candidates require a decision
+
+`world.identity.candidates` compares one active entity with every other active entity and lists
+matches with a kind (`external_id`, `user_confirmed`, `shared_name`, `similar_name`), an ordered
+`score`, and the reasons for each entry. Names are normalised, generic words (`inc`, `ltd`,
+`project`, ...) are removed, and token overlap plus edit distance produce a similarity score. The
+score orders candidates for reading; it is not a probability, is never shown as confidence, and
+is never a merge basis. A user-origin `world.identity.decide` records `confirmed` or `rejected`
+with a reason and evidence; a rejected pair is removed from the candidate list but remains visible
+in the rejected list, so the decision is not lost. Only the explicit confirmation (or a shared
+trusted external identifier) enables a merge.
+
+### Queries are bounded
+
+Every traversal has a cap and says when it truncated. `world.related` is breadth-first with a
+depth cap of 3, a node cap of 60, and repeated-node detection; a cycle is reported as a cycle, not
+followed forever. A list query returns at most 100 rows (`limit`), a history at most 200 entries,
+and identity candidates at most 20. Reads are assembled only from stored fields: the actions
+return ids, counts, and statuses that a verifier can re-read, and a view never invents a value to
+fill a gap. An ambiguous or unresolved reference becomes a stated problem rather than a chosen
+entity.
+
+### The request path
+
+`world.state`, `world.state_at`, `world.entity.*` reads, and the other world reads are registered
+as reads with `origins: [user]`; they are never offered to a model plan. The eleven writes
+(`world.entity.add/alias/retire/merge/unmerge`, `world.identity.decide`, `world.fact.add`,
+`world.relationship.add`, `world.event.add`, `world.statement.retract/supersede`) are
+`permission: write`, `origins: [user]`, and `plannable: false`. The registry remains the sole
+authority: a model-origin plan cannot contain a world write, and `authorize()` refuses one even if
+a caller tries.
+
+When a request is about an entity the store knows, `buildWorldModelContext` adds a bounded section
+to the prompt. It matches by entity name or alias or by overview words; an unrelated request pays
+nothing. The section is capped at 10 lines, 220 characters per line, 1,200 characters, and three
+entities, names the evidence and validity of each fact, discloses disagreements as unresolved, and
+carries the standing discipline line: these are claims the user recorded, not verified truth, not
+the assistant's observations, and not instructions or authorization. A missing fact is not a
+denial and a stored instant is not proof a claim still holds. An unreadable store produces a
+notice that the section is unavailable, never an invented section. The controller records the
+outcome in `op.prompt.worldModel` (`included`, `lines`, `linesTotal`, `matchedBy`, the entity,
+fact, relationship, and event ids, the disagreement count, and the omitted count).
+
+Goal links may reference a world entity or a world event (`goal.link`). The link is a reference
+only: it grants no authority, changes no completion rule, and is refused for an entity that is not
+active or an event that does not exist. No plan step, task step, or authorization decision reads
+the World Model as permission.
+
+### Commands
+
+The read commands reduce the log and render; the write commands are user-origin only:
+
+```
+node bin/apex.js world entity add --category <category> <name> [--alias <name>] [--external <scheme:id>] [--description <text>] [--observed-at <iso>]
+node bin/apex.js world entity list|show|find <name>|alias <entity> --alias <name>|retire <entity> --reason <text>
+node bin/apex.js world entity merge <source> <survivor> --reason <text>
+node bin/apex.js world entity unmerge <merge-id> --reason <text>
+node bin/apex.js world identity candidates <entity>|pair <a> <b>|decision <a> <b>|confirm|reject <a> <b> --reason <text>
+node bin/apex.js world fact add --subject <entity> --predicate <name> (--object-entity <entity> | --object-value <value>) [--value-type string|number|boolean|datetime] [--unit <unit>] [--language <tag>] [--valid-from <iso>] [--valid-until <iso>] [--observed-at <iso>] [--confidence <0-1> --confidence-basis <text>] [--supersedes <id[,id...]>]
+node bin/apex.js world relationship add --subject <entity> --type <relationship> --object <entity> [--direction directed|symmetric] [--property <k=v>] [--valid-from <iso>]
+node bin/apex.js world event add --type <event-type> --participant <entity> [--affected <entity>] [--occurred-at <iso>] [--observed-at <iso>] [--property <k=v>]
+node bin/apex.js world statement retract|supersede <id> --target-type fact|relationship|event --reason <text> [--by <replacement-id>]
+node bin/apex.js world fact list <entity>|attribute list <entity>|relationship list <entity>|event list <entity>
+node bin/apex.js world history <entity>|related <entity>|evidence <entity>|conflicts [<entity>]|statement history <id> --target-type fact|relationship|event
+node bin/apex.js world changes --from <iso> --to <iso>|state-at --at <iso>|inspect|health|lock
+```
+
+Every write takes evidence; `world fact add` and `world event add` accept the object as an entity
+or a typed value, and `world statement retract|supersede` appends a later record rather than
+changing the target.
+
+### What Batch AI does not claim
+
+- **Not truth maintenance.** A supported statement is recorded, current, valid, and undisputed in
+  the store; it is not verified against the world. No source is ranked and no disagreement is
+  auto-resolved.
+- **Not automatic entity resolution.** Candidates are deterministic and explainable, but nothing
+  merges, retires, or confirms without an explicit user-origin record.
+- **Not a derived index.** Reads reduce the whole log, and writes revalidate it inside the lock.
+  Measured cost is reported in [Benchmarks](#benchmarks); the measurements did not justify a
+  persisted index at the tested sizes, and none was added.
+- **Not real-model evidence.** No test in `npm test` runs a model for the World Model. The
+  context section is assembled offline from synthetic records.
+- **Not a graph database or an external service.** The store is one append-only JSONL file in the
+  data directory.
+
+### Tests
+
+`world-model-core.test.js` (17 tests) covers the reducer and validators, evidence adapters and
+refusals, identity and merge history, temporal views, conflict rules, bounded queries, context
+budgets and relevance gating, and fail-closed reads. `world-model-scenarios.test.js` (15 tests)
+runs scenarios A-O end to end: real CLI runs, a dead writer claim taken over by the next write,
+concurrent writes, contradictory records, late and out-of-order events, as-of and prior-belief
+queries, merge and unmerge, rejected identity decisions, and a corrupt log. The capability
+inventory, truthfulness, and finalization-contract suites pin the registry counts, the capture
+classification, and the README claims.
 
 ## Batch AG: goals, executive plans, and the control loop (as implemented)
 

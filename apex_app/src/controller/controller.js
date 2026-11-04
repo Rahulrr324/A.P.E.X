@@ -14,6 +14,7 @@ import { executeAction } from '../actions/executor.js';
 import { CONTROL_CHARS, redact, round3, shortId, truncate } from '../util.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
 import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, selectPromptMemory, systemPrompt, adaptationLine, adaptationOmittedNote, MAX_CONTEXT_CHARS, predictionPromptRelevant } from './context.js';
+import { buildWorldModelContext } from '../world/context.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret, maskSecretLeaves, redactSecrets, SECRET_OMITTED } from '../security/secrets.js';
@@ -293,6 +294,7 @@ export class CognitiveController {
     goals = null,
     plans = null,
     proposals = null,
+    worldModel = null,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -330,6 +332,10 @@ export class CognitiveController {
     // Proposals are model suggestions held separately from goals and plans. The store can only
     // record a suggestion and a user decision about it; it cannot approve, activate, or run anything.
     this.proposals = proposals;
+    // The World Model holds user-recorded entities, facts, relationships, and events. It contributes
+    // a bounded, relevance-gated view to the prompt; nothing it holds is permission, and every write
+    // to it is a separate user-origin action.
+    this.worldModel = worldModel;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -1802,6 +1808,7 @@ export class CognitiveController {
       goals: this.goals,
       plans: this.plans,
       operations: this.operations,
+      worldModel: this.worldModel,
       registry: this.registry,
       taskStore: this.taskStore,
     };
@@ -1934,12 +1941,12 @@ export class CognitiveController {
     });
   }
 
-  async goalLink({ target, planId = null, taskId = null } = {}) {
+  async goalLink({ target, planId = null, taskId = null, entityId = null, worldEventId = null } = {}) {
     return this.#executiveMutation({
       capability: 'goal.link',
       request: `goal link ${truncate(String(target ?? ''), 40)}`,
       action: 'goal.link',
-      input: { target, planId, taskId },
+      input: { target, planId, taskId, entityId, worldEventId },
       failMessage: 'The link may have been recorded, but its audit record could not be written.',
       status: Outcome.GOAL_UPDATED,
     });
@@ -2022,6 +2029,34 @@ export class CognitiveController {
     this.#requirePlans();
     const plan = await this.plans.resolve(ref);
     return { plan, display: renderPlan(plan) };
+  }
+
+  // ---- world model ------------------------------------------------------------
+  // The world model records what the user supplied: entities, facts, relationships, events, and
+  // the lifecycle records that retract or supersede them. Every command here is user origin and
+  // goes through the registry like any other action; the model neither writes nor reads it.
+  // A read and a write use the same audit shape so a stored claim can always be traced to the
+  // command that recorded it.
+
+  #worldOp(capability, request = capability) {
+    if (!this.worldModel) throw new ValidationError('the world model is not available in this configuration');
+    return this.#newOp({ capability, origin: 'user', request });
+  }
+
+  async worldRead(action, input = {}, request = action) {
+    const op = this.#worldOp(action, request);
+    const step = await this.runAction(action, input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async worldWrite(action, input = {}, request = action) {
+    const op = this.#worldOp(action, request);
+    const step = await this.runAction(action, input, 'user', op.id);
+    return this.#finishCommandOp(
+      op,
+      step,
+      'The world record may have been written, but its audit record could not be written; it is not reported as verified success.',
+    );
   }
 
   // ---- proposals --------------------------------------------------------------
@@ -2416,6 +2451,7 @@ export class CognitiveController {
       knowledge: this.knowledge,
       memory: this.memory,
       experience: this.experience,
+      worldModel: this.worldModel,
       taskStore: this.taskStore,
       now: this.now(),
     });
@@ -2491,6 +2527,7 @@ export class CognitiveController {
         knowledge: this.knowledge,
         memory: this.memory,
         experience: this.experience,
+        worldModel: this.worldModel,
         taskStore: this.taskStore,
         now: this.now(),
         forActivation: true,
@@ -3048,6 +3085,7 @@ export class CognitiveController {
           knowledge: this.knowledge,
           memory: this.memory,
           experience: this.experience,
+          worldModel: this.worldModel,
           taskStore: this.taskStore,
           now: this.now(),
         }));
@@ -3760,6 +3798,19 @@ export class CognitiveController {
         executiveUnavailable = true;
       }
     }
+    // The World Model contributes a bounded, relevance-gated view of stored entities and their
+    // claims. A damaged or unreadable log is disclosed as unavailable, never as an empty model.
+    let worldModelContext = null;
+    let worldModelUnavailable = false;
+    if (this.worldModel) {
+      try {
+        const state = await this.worldModel.state();
+        worldModelContext = buildWorldModelContext(state, { request, now: this.now() });
+      } catch (err) {
+        op.errors.push({ stage: 'worldModel', code: err.code || 'STORE_ERROR', message: err.message });
+        worldModelUnavailable = true;
+      }
+    }
     const built = buildPrompt({
       request,
       memoryHits: relevant,
@@ -3778,6 +3829,8 @@ export class CognitiveController {
       predictionsUnavailable,
       executive,
       executiveUnavailable,
+      worldModel: worldModelContext,
+      worldModelUnavailable,
       maxChars: this.maxContextChars,
     });
     const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });
@@ -3852,6 +3905,25 @@ export class CognitiveController {
       };
     } else if (executiveUnavailable) {
       op.prompt.executive = { included: false, unavailable: true };
+    }
+    // The World Model contribution is recorded as ids and counts, never the stored names or values,
+    // so the audit says what was sent without copying the user's records into it. An irrelevant
+    // request records nothing: "not read for this request" and "read and empty" are different.
+    if (worldModelContext?.available && worldModelContext.relevant) {
+      op.prompt.worldModel = {
+        included: built.worldModelIncluded,
+        lines: built.worldModelLines,
+        linesTotal: built.worldModelLinesTotal,
+        matchedBy: worldModelContext.matchedBy,
+        entityIds: worldModelContext.entityIds,
+        factIds: worldModelContext.factIds,
+        relationshipIds: worldModelContext.relationshipIds,
+        eventIds: worldModelContext.eventIds,
+        conflicts: worldModelContext.conflicts,
+        omitted: worldModelContext.omitted,
+      };
+    } else if (worldModelUnavailable) {
+      op.prompt.worldModel = { included: false, unavailable: true };
     }
 
     // A conflict stays visible even if the model ignores the in-context markers.

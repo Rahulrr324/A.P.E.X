@@ -518,3 +518,103 @@ node benchmarks/run-prediction-benchmark.mjs --repeats 7 --phase reads
   improves an answer. It measures what the ledger costs to read, write, race and carry.
 
 This script is not part of `npm test` and no test depends on it.
+
+## World Model benchmark
+
+`benchmarks/run-world-model-benchmark.mjs [--repeats R] [--phase reads|analysis|writes|contention|context] [--keep]`
+measures the persistent World Model (`world-model.jsonl`, `src/world/`) with synthetic logs in a
+fresh temporary data directory. It runs no inference, is built with `NoBackend`, contacts no
+service, and is not part of `npm test`.
+
+### Procedure
+
+- Every fixture line is produced in the store's own validated record shape and checked with
+  `validateWorldRecord` as it is written, so a line no reader would accept cannot become a fast
+  number. Fixtures are deterministic: fixed ids, fixed instants, fixed order. The fixture is
+  written as lines rather than through the write paths, so seeding cost stays out of the read
+  phases while every read still validates and reduces the whole log.
+- `reads` runs the nine read paths (`load`, `status`, `listEntities`, `showEntity`, `findEntities`,
+  `factsFor`, `attributesFor`, `relationshipsFor`, `eventsFor`) at 100, 250, 500, 1,000, and 2,000
+  entities. Each cell is one call on a fresh `WorldModelStore`, so it pays the load, validation,
+  and reduction a real reader pays.
+- `analysis` measures traversal (`related`), contradiction analysis, identity candidates, entity
+  history, `changes`, prior-belief reconstruction (`stateAt`), and `buildWorldModelContext` on the
+  already-reduced state. The context column is the section assembly only; it performs no store
+  read.
+- `writes` times one append in parts: the raw JSONL append with no read and no lock (printed to
+  bound the store-level write, not offered as an operation APEX performs), uncontended lock
+  acquisition, entity/fact/relationship/event/retraction writes, and the same writes through the
+  authorized action layer with its audit record and independent re-read. The fixture has 1,000
+  entities and 5,619 record lines; a "records after" total makes a refusal visible as a count that
+  did not move.
+- `contention` starts 1, 2, and 4 **real child processes**
+  (`tests/fixtures/world-writer-child.mjs`) creating entities in one log from a shared start, each
+  timing its own attempt. The run prints wall time, accepted attempts out of sent, records after,
+  new entities, median/min/max, refusals, corrupt lines, lock residue, and asserts that the number
+  of new `e-w*` entities equals the accepted attempts on every row.
+- `context` prints the bounded section's lines and characters, the entries the local budget omitted,
+  the number of disagreement groups named, the base prompt length and the section's share of the
+  6,000-character budget, the overview form's contribution, the cost of the unavailable notice, and
+  a forced-section control on an unrelated request. It also times `store.state()` on the fixture
+  and `buildWorldModelContext` on the reduced state.
+
+### What it reports
+
+All medians below are from `--repeats 3` on one Windows 11 machine (Node v24.18.0, 12 logical
+CPUs, warm page cache). Readings move with machine load; read the growth across rows, not one cell.
+
+| Entities | Lines | Bytes | load | status | list | show | find | facts | attributes | relationships | events |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 100 | 562 | 249,430 | 14.4 | 15.0 | 12.8 | 15.4 | 12.1 | 12.8 | 13.7 | 14.2 | 13.4 |
+| 250 | 1,406 | 624,309 | 33.0 | 31.0 | 30.5 | 32.1 | 27.4 | 32.3 | 31.6 | 31.8 | 32.4 |
+| 500 | 2,810 | 1,247,992 | 56.1 | 64.6 | 59.5 | 69.2 | 58.1 | 62.3 | 61.3 | 71.3 | 65.6 |
+| 1,000 | 5,619 | 2,495,785 | 212.7 | 241.0 | 203.5 | 242.4 | 210.9 | 236.1 | 227.0 | 228.7 | 240.2 |
+| 2,000 | 11,239 | 4,993,059 | 436.6 | 481.2 | 420.7 | 502.1 | 428.4 | 468.6 | 477.2 | 462.5 | 496.7 |
+
+| Entities | related | conflicts | identity | history | changes | state-at | context build |
+|---|---|---|---|---|---|---|---|
+| 100 | 23.5 | 23.7 | 30.9 | 26.7 | 32.2 | 29.1 | 6.0 |
+| 250 | 51.9 | 53.4 | 66.7 | 54.7 | 69.5 | 63.7 | 7.6 |
+| 500 | 100.3 | 102.1 | 129.9 | 112.4 | 143.3 | 127.9 | 20.9 |
+| 1,000 | 228.3 | 243.3 | 255.1 | 229.5 | 313.9 | 279.3 | 27.4 |
+| 2,000 | 440.3 | 451.6 | 504.9 | 427.9 | 577.6 | 532.7 | 65.3 |
+
+Writes at 1,000 entities (median / min / max ms): append 18.1 / 13.5 / 30.2, lock 25.0 / 24.7 /
+27.4, create entity 337.2 / 316.5 / 385.5, assert fact 342.2 / 333.8 / 355.3, assert relationship
+356.9 / 346.7 / 392.0, record event 338.0 / 324.0 / 377.8, retract 341.1 / 340.1 / 349.2, create
+entity through the action layer 563.2 / 555.2 / 613.9, assert fact through the action layer 600.5 /
+591.6 / 604.2. A public write re-reads and revalidates the whole log inside the lock, so the
+one-line append is not the cost; the integrity pass and the reduction are.
+
+Contention: 1 writer completed 3/3 accepted attempts in 540.7 ms (median attempt 106.0, max 116.0);
+2 writers completed 6/6 in 919.8 ms (median 103.0, max 485.0); 4 writers completed 12/12 in
+1,817.7 ms (median 112.0, max 1,330.0). Every row left 0 refusals, 0 corrupt lines, 0 lock residue,
+and exactly as many new entities as accepted attempts.
+
+Context: a named entity produced 9 lines and 1,163 characters (13 entries omitted by the local
+budget), an overview request 8 lines and 615 characters naming 33 disagreement groups, and an
+unrelated request 0 lines. The named section adds 1,632 characters on the 6,000-character budget
+(27.2%); the overview form adds 1,084 on its base, the unavailable notice 171. `store.state()` on
+the 2,000-entity fixture took 223.6 ms median (220.4-232.9) and `buildWorldModelContext` on the
+reduced state 24.5 ms.
+
+### Interpretation limits
+
+- Medians over three samples in one process on one machine, warm page cache, with nothing else
+  deliberately excluded. Differences of a few milliseconds are noise, and absolute milliseconds
+  move by up to about 2x with machine load. Read the growth across rows and the composition of an
+  operation.
+- The reads are called directly on `WorldModelStore`, not through `runAction`. They exercise the
+  same store reads the actions call, but they do not include the action wrapper, its audit record,
+  or its verifier; the action-layer write rows show that difference on the write side.
+- The fixture's facts include deliberately overlapping single-valued values, so the contradiction
+  analysis in the `analysis` phase has real work on every row. A clean log would be cheaper.
+- The contention wall column includes Node start-up for each child (several hundred milliseconds),
+  while the attempt columns come from inside each writer and exclude it. The run prints both and
+  never subtracts one from the other.
+- No derived index exists and none is measured. These figures are the cost of the current
+  whole-log validation and reduction, which is why the main README's decision against adding an
+  index cites them rather than a guess.
+- No model is contacted anywhere in this file, and nothing here shows that a recorded fact is true
+  or that an answer improves. It measures what the World Model costs to read, write, race, and
+  carry into a prompt.

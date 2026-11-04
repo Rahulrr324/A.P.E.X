@@ -67,7 +67,8 @@ const readJsonl = (file) => (fs.existsSync(file)
   : []);
 
 const STORE_FILES = ['memory.jsonl', 'conversation.jsonl', 'operations.jsonl', 'session.json',
-  'tasks.jsonl', 'task-summary-queue.json', 'knowledge.jsonl', 'experiences.jsonl', 'predictions.jsonl'];
+  'tasks.jsonl', 'task-summary-queue.json', 'knowledge.jsonl', 'experiences.jsonl', 'predictions.jsonl',
+  'world-model.jsonl'];
 function sizes(dir) {
   return Object.fromEntries(STORE_FILES.map((f) => {
     const p = path.join(dir, f);
@@ -126,6 +127,20 @@ const MODEL_WRITE_ATTEMPTS = [
   ['proposal.accept', { target: 'no-such-proposal', reason: 'the model approved its own proposal' }],
   ['proposal.reject', { target: 'no-such-proposal', reason: 'the model rejected it' }],
   ['proposal.invalidate', { target: 'no-such-proposal', reason: 'the model invalidated it' }],
+  // The world model records what the user asserted; a reply may quote it but may not write it.
+  ['world.entity.add', { category: 'project', name: 'the model made this entity' }],
+  ['world.entity.alias', { target: 'e-model', alias: 'another model name' }],
+  ['world.entity.retire', { target: 'e-model', reason: 'the model retired it' }],
+  ['world.entity.merge', { from: 'e-model', to: 'e-other', reason: 'the model declared them the same' }],
+  ['world.entity.unmerge', { merge: 'm-model', reason: 'the model undid it' }],
+  ['world.fact.add', {
+    subject: 'e-model', predicate: 'has_status', object: { kind: 'scalar', valueType: 'string', value: 'active' },
+  }],
+  ['world.relationship.add', { subject: 'e-model', relation: 'part_of', object: 'e-other' }],
+  ['world.event.add', { eventType: 'deployed', participants: ['e-model'], occurredAt: '2024-01-01' }],
+  ['world.statement.retract', { targetType: 'fact', target: 'f-model', reason: 'the model withdrew it' }],
+  ['world.statement.supersede', { targetType: 'fact', target: 'f-model', by: 'f-other', reason: 'the model replaced it' }],
+  ['world.identity.decide', { left: 'e-model', right: 'e-other', decision: 'confirmed', reason: 'the model decided' }],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.
@@ -211,9 +226,9 @@ describe('AF-20: a reply cannot create what only the user may create', () => {
     assert.equal((await app.experience.adaptationDetail(candidate.id)).decisionState, 'approved');
   });
 
-  test('none of the twenty-eight write actions runs at model origin, and the same input writes at user origin', async () => {
+  test('none of the thirty-nine write actions runs at model origin, and the same input writes at user origin', async () => {
     const { app, dataDir } = appFor('unused');
-    assert.equal(MODEL_WRITE_ATTEMPTS.length, 28, 'the sweep covers every registered write action');
+    assert.equal(MODEL_WRITE_ATTEMPTS.length, 39, 'the sweep covers every registered write action');
     const names = app.registry.list().filter((d) => d.permission === 'write').map((d) => d.name).sort();
     assert.deepEqual(names, MODEL_WRITE_ATTEMPTS.map(([n]) => n).sort(), 'the attempt list is the registry, not a guess');
 

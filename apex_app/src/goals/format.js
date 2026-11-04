@@ -71,6 +71,12 @@ export function renderGoal(goal) {
   }
   lines.push(`Plans: ${goal.planIds.length ? goal.planIds.map(shortId).join(', ') : 'none linked'}`);
   lines.push(`Tasks: ${goal.taskIds.length ? goal.taskIds.map(shortId).join(', ') : 'none linked'}`);
+  if ((goal.entityIds?.length ?? 0) > 0) {
+    lines.push(`World entities: ${goal.entityIds.map(shortId).join(', ')}`);
+  }
+  if ((goal.worldEventIds?.length ?? 0) > 0) {
+    lines.push(`World events: ${goal.worldEventIds.map(shortId).join(', ')}`);
+  }
   lines.push('History:');
   for (const h of goal.statusHistory) {
     lines.push(`  ${h.from ?? '(recorded)'} -> ${h.to}  ${String(h.at).slice(0, 19)}${h.reason ? `  ${storedText(h.reason)}` : ''}`);

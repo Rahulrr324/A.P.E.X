@@ -101,7 +101,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 46, 'the default registry has 46 actions');
+    assert.equal(plain.registry.list().length, 76, 'the default registry has 76 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -132,7 +132,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 28, 'the inventory counts twenty-eight write actions');
+    assert.equal(writes.length, 39, 'the inventory counts thirty-nine write actions');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -163,13 +163,24 @@ describe('AF-19: the registry is the inventory', () => {
     const pr = await c.runAction('prediction.record', {
       capability: 'gate.open', expectation: 'success', subject: 'the gate opens on time', inDays: 7,
     }, 'user', 'seed4');
+    const WE = [{ relation: 'supports', sourceType: 'user', sourceId: 'user' }];
+    const we = await c.runAction('world.entity.add', {
+      id: 'e-probe', category: 'product', name: 'Probe entity', evidence: WE,
+    }, 'user', 'seed5');
+    const wf = await c.runAction('world.fact.add', {
+      id: 'f-probe', subject: 'e-probe', predicate: 'described_as',
+      object: { kind: 'scalar', valueType: 'string', value: 'seeded probe' },
+      validFrom: '2026-01-01', evidence: WE,
+    }, 'user', 'seed6');
     assert.equal(seeded.outcome, 'success_verified');
     assert.equal(kn.outcome, 'success_verified');
     assert.equal(ex.outcome, 'success_verified');
     assert.equal(pr.outcome, 'success_verified');
+    assert.equal(we.outcome, 'success_verified');
+    assert.equal(wf.outcome, 'success_verified');
     const afterSeeds = sizes(dir);
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 20, 'the inventory counts twenty read actions with a root configured');
+    assert.equal(reads.length, 39, 'the inventory counts thirty-nine read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -181,6 +192,21 @@ describe('AF-19: the registry is the inventory', () => {
         'prediction.history': { target: pr.result.data.id },
         'filesystem.list': { path: '.' },
         'filesystem.read': { path: 'session.json' },
+        'world.entity.show': { target: 'e-probe' },
+        'world.entity.find': { text: 'Probe entity' },
+        'world.facts': { target: 'e-probe' },
+        'world.attributes': { target: 'e-probe' },
+        'world.relationships': { target: 'e-probe' },
+        'world.events': { target: 'e-probe' },
+        'world.related': { target: 'e-probe' },
+        'world.history': { target: 'e-probe' },
+        'world.statement.history': { targetType: 'fact', target: 'f-probe' },
+        'world.identity.candidates': { target: 'e-probe' },
+        'world.identity.decision': { left: 'e-probe', right: 'e-probe' },
+        'world.pair': { left: 'e-probe', right: 'e-probe' },
+        'world.evidence': { target: 'e-probe' },
+        'world.changes': { from: '2020-01-01', to: '2030-01-01' },
+        'world.state_at': { at: '2030-01-01T00:00:00.000Z' },
       }[def.name] ?? {};
       const step = await c.runAction(def.name, input, 'user', `rd${def.name.replace(/[^A-Za-z0-9]/g, '')}`);
       assert.ok(['success_verified', 'verification_unavailable'].includes(step.outcome),
@@ -327,7 +353,9 @@ describe('AF-19: the planning prompt and the plan checker agree', () => {
       }
     }
     const user = offeredNames(planningPrompt({ goal: 'anything', registry: app.registry, memoryLines: [], origin: 'user' }).system);
-    assert.equal(user.length, 21, 'a user-origin prompt offers the twenty-one plannable actions');
+    assert.equal(user.length, 40, 'a user-origin prompt offers the forty plannable actions with a root');
     assert.ok(user.includes('memory.add'), 'a user plan may still contain memory.add');
+    assert.ok(user.includes('world.entity.show'), 'a user plan may read the World Model');
+    assert.ok(!user.includes('world.fact.add'), 'a World Model write is never plannable');
   });
 });
