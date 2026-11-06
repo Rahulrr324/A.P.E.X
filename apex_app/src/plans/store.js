@@ -19,7 +19,9 @@ import { containsSecret, maskSecretLeaves } from '../security/secrets.js';
 import {
   PLAN_SCHEMA,
   PlanStatus,
+  MAX_CANDIDATES_PER_GOAL,
   isOpenPlan,
+  plansForGoal,
   planContent,
   planContentHash,
   planProgress,
@@ -34,6 +36,23 @@ function assertNoSecret(value, name) {
   if (containsSecret(String(value ?? ''))) {
     throw new ValidationError(`${name} looks like a password, key, or token; it was not stored`, 'SECRET_REFUSED');
   }
+}
+
+// How much of a goal's candidate room is taken, as the store's own bounds state it. A goal with no
+// reference holds nothing: an unbound plan is nobody's candidate, so no goal may count it.
+function goalOccupancy(plans, goalId) {
+  const id = goalId ?? null;
+  if (id === null) {
+    return { goalId: null, drafts: [], live: [], maxDrafts: MAX_CANDIDATES_PER_GOAL, draftsRemaining: MAX_CANDIDATES_PER_GOAL };
+  }
+  const { drafts, live } = plansForGoal(plans, id);
+  return {
+    goalId: id,
+    drafts: drafts.map((p) => p.id),
+    live: live.map((p) => ({ id: p.id, status: p.status })),
+    maxDrafts: MAX_CANDIDATES_PER_GOAL,
+    draftsRemaining: Math.max(0, MAX_CANDIDATES_PER_GOAL - drafts.length),
+  };
 }
 
 export class PlanStore {
@@ -123,7 +142,9 @@ export class PlanStore {
       const refused = next.problems.find((p) => p.index === records.length);
       if (refused) throw new ValidationError(`refused: ${refused.reason}`, 'ILLEGAL_TRANSITION');
       await this.log.append(safe);
-      return { event: safe, plan: next.plans.get(event.planId) };
+      // The reduced map is returned with the plan so a caller that needs the goal's other plans
+      // (the candidate occupancy) does not have to parse the log a second time.
+      return { event: safe, plan: next.plans.get(event.planId), plans: next.plans };
     });
   }
 
@@ -156,6 +177,16 @@ export class PlanStore {
         problems.push(`${label}: action ${s.action} cannot be part of a plan`);
         continue;
       }
+      // Reversibility is a claim about what the step does, and the registry's own permission class
+      // can contradict it: a write is not read-only, and a read changes nothing to be irreversible.
+      // `unknown`, and `reversible` on a write, are both left standing - the first because APEX may
+      // genuinely not know, the second because undoing a record it wrote is within reach.
+      if (s.reversibility === 'read_only' && def.permission === 'write') {
+        problems.push(`${label}: ${s.action} is a write, so the step cannot be recorded as read_only`);
+      }
+      if (s.reversibility === 'not_reversible' && def.permission !== 'write') {
+        problems.push(`${label}: ${s.action} changes no record, so the step cannot be recorded as not_reversible`);
+      }
       const auth = this.registry.authorize(def.name, 'user');
       if (auth.decision !== 'allow') problems.push(`${label}: action ${s.action} is not permitted (${auth.reason})`);
       if (def.permission === 'write' && s.risk === 'low') {
@@ -164,10 +195,17 @@ export class PlanStore {
       if (def.permission === 'write' && typeof def.verify !== 'function') {
         problems.push(`${label}: a write step has no independent verifier, so its result could not be verified`);
       }
+      let normalised = null;
       try {
-        def.validate(s.input ?? {});
+        normalised = def.validate(s.input ?? {});
       } catch (err) {
         problems.push(`${label}: ${err?.message ?? String(err)}`);
+      }
+      // The task layer refuses a private memory write because its content must never reach a task
+      // log, so a plan that needs one can never run. Saying so here keeps the user from approving a
+      // step that cannot be executed, and keeps this check in agreement with `checkSteps`.
+      if (def.name === 'memory.add' && normalised?.sensitivity === 'private') {
+        problems.push(`${label}: a private memory write cannot be part of a plan; remember it on its own`);
       }
       if (Number.isInteger(s.estimate?.seconds)) {
         estimatedSeconds = (estimatedSeconds ?? 0) + s.estimate.seconds;
@@ -236,7 +274,9 @@ export class PlanStore {
         linkError = err?.code ?? 'LINK_FAILED';
       }
     }
-    return { ...result, linkError };
+    // What else the goal now holds, from the same replay that produced the plan: a caller recording
+    // a second approach needs to say how many there are and whether one is already authorized.
+    return { ...result, linkError, candidates: goalOccupancy(result.plans, goalId) };
   }
 
   async revise(ref, { outcome, steps, preconditions = [], assertions = [], resources = null, reason }) {
@@ -273,6 +313,8 @@ export class PlanStore {
       if (!validation.ok) {
         throw new ValidationError(`plan cannot be approved: ${validation.problems.join('; ')}`, 'PLAN_INVALID');
       }
+      // The one-live-plan-per-goal bound is not checked here: the reducer applies it, so a replay
+      // of any log - hand-written or not - is held to the same rule as this call is.
       return {
         ...this.#base('plan_approved', plan.id),
         version: plan.version,
@@ -372,6 +414,74 @@ export class PlanStore {
         by: by ?? null,
       };
     });
+  }
+
+  // Read-only: how many candidate drafts one goal holds, which of them are live, and how many more
+  // drafts the store will accept for it. Presented from the same bounds the reducer enforces.
+  async candidateState(goalId) {
+    const { plans } = await this.load();
+    return goalOccupancy(plans, goalId);
+  }
+
+  // Records an outcome assessment against the plan: what happened, as distinct from what the plan
+  // set out to do. Every finding must cite an audit operation, and each cited operation must be in
+  // the log - an assessment is not allowed to assert an outcome with no record behind it. The
+  // assessment carries the version and content hash it was written against, so a later revision
+  // shows it as a statement about older content rather than silently re-approving it.
+  //
+  // It changes nothing about the plan: not its status, not its approval, not its updatedAt.
+  async assessPlan(ref, { verdict, summary, findings }) {
+    assertNoSecret(summary, 'the assessment summary');
+    for (const f of findings ?? []) {
+      assertNoSecret(f?.statement, 'an assessment finding');
+      for (const r of f?.records ?? []) assertNoSecret(r, 'a cited record id');
+    }
+    if (!this.operations) {
+      throw new ValidationError(
+        'the audit log is not available, so an assessment cannot cite the operations its findings rest on',
+        'EVIDENCE_NOT_VERIFIED',
+      );
+    }
+    return this.#mutate(async (plans) => {
+      const plan = this.#pick(plans, ref);
+      if (!plan.activation) throw new ValidationError('the plan has not been started, so there is no outcome to assess');
+      const cited = [...new Set((findings ?? []).flatMap((f) => f.operations ?? []))];
+      if (cited.length === 0) throw new ValidationError('an assessment needs at least one finding that cites an operation');
+      for (const id of cited) {
+        const found = await this.operations.findById(id);
+        if (!found.found) {
+          throw new ValidationError(`operation ${shortId(id)} is not in the audit log, so a finding cannot cite it`, 'EVIDENCE_NOT_VERIFIED');
+        }
+      }
+      return {
+        ...this.#base('plan_assessment', plan.id),
+        origin: 'user',
+        planVersion: plan.version,
+        contentHash: planContentHash(plan),
+        verdict,
+        summary,
+        findings: findings.map((f) => ({
+          aspect: f.aspect,
+          statement: f.statement,
+          operations: [...(f.operations ?? [])],
+          ...(f.records?.length ? { records: [...f.records] } : {}),
+        })),
+      };
+    });
+  }
+
+  // Read-only: the assessments recorded against one plan, oldest first, each marked with whether it
+  // still describes the plan's current content. A revision never erases an earlier conclusion; it
+  // makes that conclusion a statement about an older version, and `stale` says so.
+  async assessments(ref) {
+    const { plans } = await this.load();
+    const plan = this.#pick(plans, ref);
+    const current = planContentHash(plan);
+    return (plan.assessments ?? []).map((a) => ({
+      ...a,
+      stale: a.planVersion !== plan.version || a.contentHash !== current,
+      currentVersion: plan.version,
+    }));
   }
 
   // Read-only: every recorded version of a plan, in order, with the content each version

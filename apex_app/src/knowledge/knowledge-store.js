@@ -59,6 +59,11 @@ const MODEL_PROVENANCE_ORIGIN = 'model_proposed';
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const OPERATION_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 
+// How many claims one audited operation is reported to have established. A normal write establishes
+// one; a bulk or superseding write can establish several. The bound keeps a reader's output finite,
+// and `byOperation` reports the number it matched so a truncation is visible rather than silent.
+const MAX_RECORDS_BY_OPERATION = 10;
+
 // ---- field validators -------------------------------------------------------
 
 function validateTextField(value, name, { required = true, max = MAX_FIELD_CHARS } = {}) {
@@ -522,6 +527,30 @@ export class KnowledgeStore {
   async list({ limit = 20 } = {}) {
     const records = await this.#loadComplete();
     return knowledgeWindow(records, limit);
+  }
+
+  // Which claims one audited operation established. Every claim carries `provenance.operationId`,
+  // so a reader that has an audit id can ask the store what that operation wrote - the direction an
+  // evidence check needs when it asks whether a piece of proof still stands, since the operation
+  // itself can never change its past but a claim it wrote can be retracted or superseded later.
+  // Lifecycle-annotated exactly like `findByPrefix`, bounded, and the bound is reported rather than
+  // applied silently. No new index: every read here already parses the file once.
+  async byOperation(operationId, { limit = MAX_RECORDS_BY_OPERATION } = {}) {
+    if (typeof operationId !== 'string' || operationId.length === 0) {
+      return { matched: 0, truncated: false, records: [] };
+    }
+    const records = await this.#loadComplete();
+    const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
+    const supersededByMap = buildSupersededByMap(claims);
+    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+    const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
+    const matches = claims.filter((r) => r.provenance?.operationId === operationId);
+    const shown = matches.slice(0, Math.max(1, limit));
+    return {
+      matched: matches.length,
+      truncated: matches.length > shown.length,
+      records: shown.map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex)),
+    };
   }
 
   // One authoritative read for the world-state projection: the store-wide lifecycle summary

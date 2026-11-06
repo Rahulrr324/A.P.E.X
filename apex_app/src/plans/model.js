@@ -23,11 +23,29 @@ export const MAX_EXPECTED_CHARS = 200;
 export const MAX_VERIFICATION_CHARS = 200;
 export const MAX_STEP_INPUT_CHARS = 4000;
 export const MAX_ESTIMATE_SECONDS = 86400;
+export const MAX_RECOVERY_CHARS = 200;
+// How many candidate drafts one goal may hold at once, and how many of its plans may be live at
+// once. Drafts are alternatives the user has not approved, so several are useful and a bound keeps
+// the comparison readable. A live plan is one the user has authorized: approving a second plan for
+// the same goal while one is authorized would put two intentions in charge of it, so the store
+// allows one and the transition has to be made explicitly (supersede, then approve).
+export const MAX_CANDIDATES_PER_GOAL = 3;
+export const MAX_LIVE_PLANS_PER_GOAL = 1;
+// How far an outcome assessment may go: the seven questions it answers, the six verdicts it may
+// reach, and the bounds on what one assessment may cite. The six verdicts are deliberately not a
+// probability, a score, or a percentage - they are the states APEX can distinguish honestly.
+export const MAX_FINDINGS = 7;
+export const MAX_ASSESSMENT_SUMMARY_CHARS = 300;
+export const MAX_CITED_IDS = 8;
 export const PLAN_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 export const CRITERION_ID_RE = /^c[1-9][0-9]?$/;
 
 export const RISK_LEVELS = Object.freeze(['low', 'medium', 'high']);
 export const RISK_ORDER = Object.freeze({ low: 0, medium: 1, high: 2 });
+// What a step does to the records or the world, as far as the registry's own permission class can
+// say. `unknown` is available because a step may be reversible for a reason the registry does not
+// model, and guessing would be false precision.
+export const REVERSIBILITY_LEVELS = Object.freeze(['read_only', 'reversible', 'not_reversible', 'unknown']);
 // The epistemic classes a plan may record. `stored_knowledge`, `retrieved_evidence`, `world_fact`
 // and `world_entity` must name the record they came from; `user_fact` is the user's own statement
 // as recorded here; an inference or an unknown is never presented as established fact.
@@ -37,6 +55,39 @@ export const ASSERTION_KINDS = Object.freeze([
 // Assertions that name a record whose live state can be re-checked. A world assertion may also
 // carry an expected value; a change is reported against the plan, and never applied to the world.
 export const WORLD_ASSERTION_KINDS = Object.freeze(['world_fact', 'world_entity']);
+
+// The seven questions an outcome assessment answers. They are the separation the milestone asks
+// for: that a step ran is not that its expected output exists, which is not that its verification
+// condition was satisfied, which is not that the goal's criterion is met.
+export const ASSESSMENT_ASPECTS = Object.freeze([
+  'step_completion',
+  'expected_output',
+  'verification',
+  'goal_criteria',
+  'evidence_state',
+  'durability',
+  'external_confirmation',
+]);
+
+// The verdicts an assessment may reach about what a plan achieved. `awaiting_confirmation` is not a
+// failure: it is APEX reporting that the settling evidence lies outside its records. No verdict here
+// is a probability, a score, or a percentage.
+export const ASSESSMENT_VERDICTS = Object.freeze([
+  'successful',
+  'partial',
+  'failed',
+  'blocked',
+  'uncertain',
+  'awaiting_confirmation',
+]);
+
+// A verdict may only be recorded with the question that bears on it answered: `successful` claims
+// the goal's criteria were met, and `awaiting_confirmation` claims something is still outside
+// APEX's records. Without the rule, either verdict is a word with no finding behind it.
+export const VERDICT_REQUIRED_ASPECT = Object.freeze({
+  successful: 'goal_criteria',
+  awaiting_confirmation: 'external_confirmation',
+});
 
 export const PlanStatus = Object.freeze({
   DRAFT: 'draft',
@@ -72,6 +123,24 @@ export function isOpenPlan(status) {
     || status === PlanStatus.ACTIVE || status === PlanStatus.BLOCKED;
 }
 
+// Approved, running, or blocked while running: a plan the user has authorized. A blocked plan still
+// holds the slot because the user can put it back into action, so a second authorized plan for the
+// same goal would mean two live intentions. Drafts are not live - they authorize nothing.
+export function isLivePlan(status) {
+  return status === PlanStatus.APPROVED || status === PlanStatus.ACTIVE || status === PlanStatus.BLOCKED;
+}
+
+// The plans one goal holds, split the way the store's bounds are stated. Used by the reducer, the
+// store's reads, and the candidate presentation, so no two of them count differently.
+export function plansForGoal(plans, goalId) {
+  const forGoal = [...plans.values()].filter((p) => p.goalId === goalId);
+  return {
+    all: forGoal,
+    drafts: forGoal.filter((p) => p.status === PlanStatus.DRAFT),
+    live: forGoal.filter((p) => isLivePlan(p.status)),
+  };
+}
+
 export function planRisk(steps) {
   let worst = 'low';
   for (const s of steps ?? []) {
@@ -102,6 +171,27 @@ function assertionContent(a) {
   return content;
 }
 
+// A step as the plan holds it. The two fields added for candidate planning - how far the step can
+// be undone, and what to do if it fails - are present only when recorded, so a plan written before
+// them hashes exactly as it did. `stableStringify` sorts keys, so this one mapping serves both the
+// stored record and the bytes approval is bound to.
+function stepRecord(s) {
+  return {
+    id: s.id,
+    description: s.description,
+    action: s.action,
+    input: s.input ?? {},
+    dependsOn: [...s.dependsOn],
+    expectedResult: s.expectedResult,
+    verification: s.verification,
+    criterionId: s.criterionId ?? null,
+    risk: s.risk,
+    estimate: { seconds: s.estimate?.seconds ?? null },
+    ...(s.reversibility !== undefined && s.reversibility !== null ? { reversibility: s.reversibility } : {}),
+    ...(s.recovery !== undefined && s.recovery !== null ? { recovery: s.recovery } : {}),
+  };
+}
+
 // The exact bytes approval is bound to. Status, approvals, activations, and outcomes are
 // deliberately excluded: they are records about the plan, not the plan the user approved.
 // The goal revision is included when one is recorded, so a plan approved against one wording
@@ -112,18 +202,7 @@ export function planContent(plan) {
     goalId: plan.goalId ?? null,
     ...(plan.goalRevision != null ? { goalRevision: plan.goalRevision } : {}),
     outcome: plan.outcome,
-    steps: plan.steps.map((s) => ({
-      id: s.id,
-      description: s.description,
-      action: s.action,
-      input: s.input ?? {},
-      dependsOn: [...s.dependsOn],
-      expectedResult: s.expectedResult,
-      verification: s.verification,
-      criterionId: s.criterionId ?? null,
-      risk: s.risk,
-      estimate: s.estimate ?? { seconds: null },
-    })),
+    steps: plan.steps.map(stepRecord),
     preconditions: [...plan.preconditions],
     assertions: plan.assertions.map(assertionContent),
     resources: { estimatedSeconds: plan.resources?.estimatedSeconds ?? null },
@@ -164,6 +243,12 @@ function stepProblems(s, i, problems) {
     problems.push(`${label} criterion must be an id such as c1`);
   }
   if (!RISK_LEVELS.includes(s.risk)) problems.push(`${label} risk must be low, medium, or high`);
+  if (s.reversibility !== undefined && s.reversibility !== null && !REVERSIBILITY_LEVELS.includes(s.reversibility)) {
+    problems.push(`${label} reversibility must be one of: ${REVERSIBILITY_LEVELS.join(', ')}`);
+  }
+  if (s.recovery !== undefined && s.recovery !== null && !plainText(s.recovery, MAX_RECOVERY_CHARS)) {
+    problems.push(`${label} recovery must be plain text of at most ${MAX_RECOVERY_CHARS} characters`);
+  }
   if (s.estimate !== undefined && s.estimate !== null) {
     if (typeof s.estimate !== 'object' || Array.isArray(s.estimate)) {
       problems.push(`${label} estimate must be an object`);
@@ -194,6 +279,63 @@ function assertionProblems(a, i, problems) {
     if (!WORLD_ASSERTION_KINDS.includes(a.kind)) problems.push(`${label} of kind ${a.kind} cannot carry an expected value`);
     else if (!plainText(a.expected, MAX_ASSERTION_CHARS)) problems.push(`${label} expected value must be plain text of at most ${MAX_ASSERTION_CHARS} characters`);
   }
+}
+
+// An outcome assessment cites the records it looked at. `operations` names audit records, which is
+// what makes a finding evidence rather than an assertion: a finding that cites nothing is refused.
+function citedIdsProblems(value, name, problems, { required = false } = {}) {
+  if (value === undefined || value === null) {
+    if (required) problems.push(`${name} cites no operation, so its finding has no evidence behind it`);
+    return;
+  }
+  if (!Array.isArray(value)) {
+    problems.push(`${name} must be a list of record ids`);
+    return;
+  }
+  if (required && value.length === 0) {
+    problems.push(`${name} cites no operation, so its finding has no evidence behind it`);
+  }
+  if (value.length > MAX_CITED_IDS) problems.push(`${name} may cite at most ${MAX_CITED_IDS} ids`);
+  for (const id of value) {
+    if (typeof id !== 'string' || id.trim().length === 0 || id.length > 64 || /[\u0000-\u001f\u007f]/.test(id)) {
+      problems.push(`${name} cites something that is not a plain record id`);
+    }
+  }
+}
+
+// The shape of one recorded outcome assessment. Which questions were answered is checked here;
+// whether the answers are supported by the records they cite is checked when it is written, because
+// that needs the audit log and this module is pure.
+export function assessmentProblems(e) {
+  const problems = [];
+  if (e.origin !== 'user') problems.push('unknown origin');
+  if (!Number.isInteger(e.planVersion) || e.planVersion < 1) problems.push('an assessment must name the plan version it assessed');
+  if (typeof e.contentHash !== 'string' || e.contentHash.length !== 64) problems.push('an assessment must name the plan content it assessed');
+  if (!ASSESSMENT_VERDICTS.includes(e.verdict)) problems.push(`verdict must be one of: ${ASSESSMENT_VERDICTS.join(', ')}`);
+  if (!plainText(e.summary, MAX_ASSESSMENT_SUMMARY_CHARS)) {
+    problems.push(`an assessment needs a plain summary of 1 to ${MAX_ASSESSMENT_SUMMARY_CHARS} characters`);
+  }
+  if (!Array.isArray(e.findings) || e.findings.length === 0) return problems.length > 0 ? problems : ['an assessment needs at least one finding'];
+  if (e.findings.length > MAX_FINDINGS) problems.push(`an assessment may answer at most ${MAX_FINDINGS} question(s)`);
+  const answered = new Set();
+  e.findings.forEach((f, i) => {
+    const label = `finding ${i + 1}`;
+    if (!f || typeof f !== 'object' || Array.isArray(f)) {
+      problems.push(`${label} is not an object`);
+      return;
+    }
+    if (!ASSESSMENT_ASPECTS.includes(f.aspect)) problems.push(`${label} aspect must be one of: ${ASSESSMENT_ASPECTS.join(', ')}`);
+    else if (answered.has(f.aspect)) problems.push(`${label} answers ${f.aspect} twice; an assessment answers each question once`);
+    else answered.add(f.aspect);
+    if (!plainText(f.statement, MAX_ASSERTION_CHARS)) problems.push(`${label} needs a plain statement of what was found`);
+    citedIdsProblems(f.operations, `${label} operations`, problems, { required: true });
+    citedIdsProblems(f.records, `${label} records`, problems);
+  });
+  const required = VERDICT_REQUIRED_ASPECT[e.verdict];
+  if (required && !answered.has(required)) {
+    problems.push(`a ${e.verdict} assessment must answer ${required}, because that is what the verdict claims`);
+  }
+  return problems;
 }
 
 export function validatePlanContent(content) {
@@ -310,6 +452,11 @@ export function validateEventShape(e) {
     return null;
   }
 
+  if (e.type === 'plan_assessment') {
+    const problems = assessmentProblems(e);
+    return problems.length > 0 ? problems[0] : null;
+  }
+
   return 'unknown event type';
 }
 
@@ -324,18 +471,7 @@ function newPlan(e) {
     version: 1,
     status: PlanStatus.DRAFT,
     outcome: e.outcome,
-    steps: e.steps.map((s) => ({
-      id: s.id,
-      description: s.description,
-      action: s.action,
-      input: s.input ?? {},
-      dependsOn: [...s.dependsOn],
-      expectedResult: s.expectedResult,
-      verification: s.verification,
-      criterionId: s.criterionId ?? null,
-      risk: s.risk,
-      estimate: { seconds: s.estimate?.seconds ?? null },
-    })),
+    steps: e.steps.map(stepRecord),
     preconditions: [...e.preconditions],
     assertions: e.assertions.map(assertionContent),
     resources: { estimatedSeconds: e.resources?.estimatedSeconds ?? null },
@@ -344,6 +480,7 @@ function newPlan(e) {
     activation: null,
     validation: null,
     stepResults: {},
+    assessments: [],
     blockedReason: null,
     failureReason: null,
     cancelledReason: null,
@@ -356,21 +493,38 @@ function newPlan(e) {
 function applyContent(plan, e) {
   plan.goalRevision = e.goalRevision ?? null;
   plan.outcome = e.outcome;
-  plan.steps = e.steps.map((s) => ({
-    id: s.id,
-    description: s.description,
-    action: s.action,
-    input: s.input ?? {},
-    dependsOn: [...s.dependsOn],
-    expectedResult: s.expectedResult,
-    verification: s.verification,
-    criterionId: s.criterionId ?? null,
-    risk: s.risk,
-    estimate: { seconds: s.estimate?.seconds ?? null },
-  }));
+  plan.steps = e.steps.map(stepRecord);
   plan.preconditions = [...e.preconditions];
   plan.assertions = e.assertions.map(assertionContent);
   plan.resources = { estimatedSeconds: e.resources?.estimatedSeconds ?? null };
+}
+
+// The live-plan bound, stated once and applied both where the user authorizes a plan and where it
+// is put into action. Checking it again at activation matters for a log that was not written by
+// this store: replay applies the same rule, so an already-approved pair cannot be started either.
+function livePlanProblem(plans, plan) {
+  if (plan.goalId === null) return null;
+  const other = plansForGoal(plans, plan.goalId).live.filter((p) => p.id !== plan.id);
+  if (other.length < MAX_LIVE_PLANS_PER_GOAL) return null;
+  return `goal ${singleLine(plan.goalId, 40)} already has a live plan (${other.map((p) => `${singleLine(p.id, 40)} is ${p.status}`).join(', ')}); supersede or cancel it before authorizing another`;
+}
+
+// One recorded outcome assessment, as the plan holds it. It cites the audit operations behind each
+// finding; the cited records themselves stay in the audit log, so nothing is copied here.
+function assessmentEntry(e) {
+  return {
+    at: e.at,
+    verdict: e.verdict,
+    summary: e.summary,
+    planVersion: e.planVersion,
+    contentHash: e.contentHash,
+    findings: e.findings.map((f) => ({
+      aspect: f.aspect,
+      statement: f.statement,
+      operations: [...f.operations],
+      records: [...(f.records ?? [])],
+    })),
+  };
 }
 
 export function applyEvent(plans, e) {
@@ -380,8 +534,14 @@ export function applyEvent(plans, e) {
   if (e.type === 'plan_created') {
     if (plans.has(e.planId)) return 'plan id already exists';
     if (e.goalId !== null) {
-      const linked = [...plans.values()].filter((p) => p.goalId === e.goalId && isOpenPlan(p.status));
-      if (linked.length > 0) return `goal ${singleLine(e.goalId, 40)} already has an open plan (${singleLine(linked[0].id, 40)})`;
+      // Comparing approaches needs several drafts for one goal, so drafts are bounded rather than
+      // forbidden. A goal may hold at most MAX_CANDIDATES_PER_GOAL of them at once; the bound is on
+      // the record, not on a caller that read the count first, so a hand-written log replays the
+      // same rule. Approval is where the other bound applies: one live plan per goal.
+      const { drafts } = plansForGoal(plans, e.goalId);
+      if (drafts.length >= MAX_CANDIDATES_PER_GOAL) {
+        return `goal ${singleLine(e.goalId, 40)} already holds ${MAX_CANDIDATES_PER_GOAL} candidate drafts (${drafts.map((p) => singleLine(p.id, 40)).join(', ')}); approve, cancel, or supersede one before recording another`;
+      }
     }
     plans.set(e.planId, newPlan(e));
     return null;
@@ -413,6 +573,11 @@ export function applyEvent(plans, e) {
     if (plan.status !== PlanStatus.DRAFT) return `plan is ${plan.status}; only a draft can be approved`;
     if (e.version !== plan.version) return `approval names version ${e.version}, but the plan is version ${plan.version}`;
     if (e.contentHash !== planContentHash(plan)) return 'approval does not match the current plan content';
+    // The live-plan bound is checked here, at the moment the user authorizes a plan, rather than
+    // when a draft is recorded: recording three approaches authorizes nothing, while authorizing a
+    // second one while another is authorized would give one goal two live intentions.
+    const alreadyLive = livePlanProblem(plans, plan);
+    if (alreadyLive) return alreadyLive;
     plan.status = PlanStatus.APPROVED;
     plan.approval = { at: e.at, version: e.version, contentHash: e.contentHash, validation: e.validation };
     plan.validation = e.validation;
@@ -426,6 +591,8 @@ export function applyEvent(plans, e) {
     if (!plan.approval) return 'the plan has no recorded approval';
     if (e.version !== plan.version) return `activation names version ${e.version}, but the plan is version ${plan.version}`;
     if (e.contentHash !== planContentHash(plan)) return 'activation does not match the current plan content';
+    const alreadyLive = livePlanProblem(plans, plan);
+    if (alreadyLive) return alreadyLive;
     plan.status = PlanStatus.ACTIVE;
     plan.activation = { at: e.at, taskId: e.taskId, version: e.version, contentHash: e.contentHash };
     plan.history.push({ version: e.version, kind: 'activated', at: e.at, reason: `task ${singleLine(e.taskId, 40)} created` });
@@ -461,6 +628,23 @@ export function applyEvent(plans, e) {
     }
     plan.history.push({ version: plan.version, kind: 'outcome', at: e.at, reason: `${e.steps.length} step outcome(s) recorded` });
     plan.updatedAt = e.at;
+    return null;
+  }
+
+  if (e.type === 'plan_assessment') {
+    // An assessment is a record *about* the plan, not part of it: it is absent from `planContent`,
+    // so recording one cannot change what the user approved or invalidate an approval. It is bound
+    // to the version and the bytes it assessed, which is what lets a reader see that an older
+    // conclusion no longer describes the plan after a revision.
+    if (!plan.activation) return 'the plan has no recorded activation, so there is no execution outcome to assess';
+    if (e.planVersion !== plan.version) {
+      return `the assessment names version ${e.planVersion}, but the plan is version ${plan.version}; an assessment describes the plan as it was then`;
+    }
+    if (e.contentHash !== planContentHash(plan)) return 'the assessment does not match the current plan content';
+    const entry = assessmentEntry(e);
+    const prior = (plan.assessments ?? []).find((a) => a.planVersion === entry.planVersion && a.verdict === entry.verdict && a.summary === entry.summary);
+    if (prior) return `that assessment of version ${entry.planVersion} is already recorded at ${prior.at}`;
+    plan.assessments = [...(plan.assessments ?? []), entry];
     return null;
   }
 

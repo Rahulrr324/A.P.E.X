@@ -78,8 +78,10 @@ Usage:
   node bin/apex.js goal add [--criterion <text>]... [--priority N] [--deadline <iso>] [--depends-on <id>]... <request>
   node bin/apex.js goal list [--limit N]
   node bin/apex.js goal show <id>
+  node bin/apex.js goal assess <id>      whether the goal's recorded proof still holds (read-only)
   node bin/apex.js goal update <id> <status> [--reason <text>] [--by <goal-id>]
   node bin/apex.js goal revise <id> --criterion <text>... --reason <text> [--request <text>] [--priority N] [--deadline <iso>]
+  node bin/apex.js goal confirm <id> --criterion <c1> --decision required|suggested|declined --reason <text> [--operation <audit-id>]
   node bin/apex.js goal evidence <id> --criterion <c1> --kind supports|contradicts [--operation <audit-id>] [--detail <text>] [--reopen]
   node bin/apex.js goal complete <id> [--reason <text>]
   node bin/apex.js goal link <id> (--plan <id> | --task <id> | --entity <world-entity-id> | --world-event <world-event-id>)
@@ -89,6 +91,10 @@ Usage:
   node bin/apex.js plan validate <id>     check a stored plan against live state (read-only)
   node bin/apex.js plan history <id>       recorded versions of a plan (read-only)
   node bin/apex.js plan compare <id> [--from N] [--to N]   compare two recorded versions (read-only)
+  node bin/apex.js plan candidates <goal-id> [--work <text>] [--cannot-use <action,action>] [--json]   the approaches this goal supports now, compared gate by gate (read-only)
+  node bin/apex.js plan replan <plan-id> [--reason <text>] [--cannot-use <action,action>] [--json]   revised approaches for a plan that stopped being viable (read-only)
+  node bin/apex.js plan outcome <plan-id> [--json]   what a plan's run established and what it left open (read-only)
+  node bin/apex.js plan assess <plan-id>  record that outcome reading; changes no plan status, approval, or timestamp
   node bin/apex.js plan revise <id> --outcome <text> --step <json>... --reason <text> [--precondition <text>]... [--assertion <json>]... [--estimate N]
   node bin/apex.js plan approve <id>
   node bin/apex.js plan start <id>        create a user-origin task from an approved plan, then run it
@@ -216,12 +222,17 @@ Goal and plan examples (recorded intent; never permission to execute):
   goal update <goal-id> accepted
   goal evidence <goal-id> --criterion c1 --kind supports --operation <audit-id>
   goal complete <goal-id>              refused unless every criterion cites a verified audit record
+  goal assess <goal-id>                live check of the proof a goal cites (read-only)
   plan add --goal <goal-id> --outcome "the corrected claim is stored and read back" \
       --step '{"id":"s1","action":"knowledge.add","description":"store the correction","input":{"subject":"Engine","relationship":"fuel","object":"Electric"},"expectedResult":"the record is stored","verification":"read it back","criterion":"c1"}' \
       --step '{"id":"s2","action":"knowledge.search","description":"read it back","input":{"query":"Engine fuel"},"dependsOn":["s1"],"expectedResult":"the new claim is first","verification":"the search names it","criterion":"c2"}'
   plan validate <plan-id>              live check: approval binding, goal revision, actions, evidence (read-only)
   plan history <plan-id>               every recorded version with its reason (read-only)
   plan compare <plan-id> [--from N] [--to N]   differences between two recorded versions (read-only)
+  plan candidates <goal-id>            the approaches it supports, gate by gate, none recorded (read-only)
+  plan replan <plan-id>                revised approaches; the plan it answers is left as it was (read-only)
+  plan outcome <plan-id>               what the run established, and what only you can confirm (read-only)
+  plan assess <plan-id>                record that reading against the plan; it authorizes nothing
   plan approve <plan-id>               binds approval to this exact content; every step is still authorized again
   plan start <plan-id>                 creates a user-origin task, runs it, and records each step's outcome
   plan reconcile <plan-id>             after an interrupted run, re-reads the task and records outcomes
@@ -332,7 +343,7 @@ function parseFlags(args, allowed, repeat = []) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--in-days needs a whole number of days', 'USAGE');
         flags['in-days'] = Number(v);
         i += 1;
-      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event'].includes(name)) {
+      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -745,8 +756,8 @@ export async function main(argv, {
   const [command, ...args] = argv;
   const out = (s) => stdout.write(`${s}\n`);
   const err = (s) => stderr.write(`${s}\n`);
-  const emit = (res) => {
-    out(res.display ?? res.output ?? '(none)');
+  const emit = (res, asData = null) => {
+    out(asData !== null ? JSON.stringify(asData, null, 2) : (res.display ?? res.output ?? '(none)'));
     if (res.recorded === false) {
       err(`Audit: NOT RECORDED (${res.recordError ?? 'no audit record was written'})`);
       // The result is what this run observed; the evidence trail is incomplete. Repeating
@@ -760,6 +771,12 @@ export async function main(argv, {
     if (session) err(session);
     return exitCodeFor(res);
   };
+
+  // A read answer as data. `--json` replaces only the printed view: the operation, its audit line and
+  // its exit code stay the ones the read already had. What prints is the result the audit record
+  // carries - the same values the answer was built from, before that answer was bounded to fit the
+  // terminal - and a read that returned no result at all falls back to its own printed answer.
+  const emitRead = (res, flags) => emit(res, flags.json ? (res.operation?.steps?.[0]?.result?.data ?? null) : null);
 
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
     out(HELP);
@@ -1745,6 +1762,26 @@ export async function main(argv, {
           reason: flags.reason,
         }));
       }
+      if (sub === 'confirm') {
+        const { flags, rest: ids } = parseFlags(rest, ['criterion', 'decision', 'reason', 'operation']);
+        if (ids.length !== 1) {
+          throw new ValidationError('usage: goal confirm <id> --criterion <c1> --decision required|suggested|declined --reason <text> [--operation <audit-id>]', 'USAGE');
+        }
+        if ((flags.criterion ?? []).length !== 1) {
+          throw new ValidationError('usage: goal confirm needs exactly one --criterion, such as c1', 'USAGE');
+        }
+        if (!flags.decision) {
+          throw new ValidationError('goal confirm needs --decision required, --decision suggested, or --decision declined', 'USAGE');
+        }
+        if (!flags.reason) throw new ValidationError('goal confirm needs --reason <text>; a decision that cannot say why cannot be checked later', 'USAGE');
+        return emit(await app.controller.goalConfirm({
+          target: ids[0],
+          criterion: flags.criterion[0],
+          decision: flags.decision,
+          reason: flags.reason,
+          operationId: flags.operation ?? null,
+        }));
+      }
       if (sub === 'list') {
         const { flags, rest: extra } = parseFlags(rest, ['limit']);
         rejectUnexpected(extra, 'goal list [--limit N]');
@@ -1756,6 +1793,16 @@ export async function main(argv, {
         if (ids.length !== 1) throw new ValidationError('usage: goal show <id>', 'USAGE');
         out((await app.controller.showGoal(ids[0])).display);
         return 0;
+      }
+      if (sub === 'assess') {
+        // A read with no operation record, like `goal show` and `plan validate`: it re-opens the
+        // audit and knowledge records the goal cites and writes nothing. Non-zero when what the
+        // goal claims about its own evidence no longer holds or could not be checked.
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) throw new ValidationError('usage: goal assess <id>', 'USAGE');
+        const res = await app.controller.assessStoredGoal(ids[0]);
+        out(res.display);
+        return res.assessment.ok ? 0 : 1;
       }
       if (sub === 'update') {
         const { flags, rest: words } = parseFlags(rest, ['reason', 'by']);
@@ -1810,7 +1857,7 @@ export async function main(argv, {
           worldEventId: flags['world-event'] ?? null,
         }));
       }
-      err('usage: goal add|revise|list|show|update|evidence|complete|link');
+      err('usage: goal add|revise|confirm|list|show|assess|update|evidence|complete|link');
       return 2;
     }
 
@@ -1873,6 +1920,48 @@ export async function main(argv, {
         out(res.display);
         return res.diff.unchanged ? 0 : 1;
       }
+      if (sub === 'candidates') {
+        // The read the readiness and status answers name. It generates and compares the approaches the
+        // recorded goal supports and writes nothing: a candidate becomes a record only through
+        // `plan add`, and an approval is a further act of the user's own.
+        const { flags, rest: ids } = parseFlags(rest, ['work', 'cannot-use', 'json']);
+        if (ids.length !== 1) {
+          throw new ValidationError('usage: plan candidates <goal-id> [--work <text>] [--cannot-use <action,action>] [--json]', 'USAGE');
+        }
+        return emitRead(await app.controller.planCandidates({
+          goal: ids[0],
+          work: flags.work ?? null,
+          cannotUse: idList(flags['cannot-use']),
+        }), flags);
+      }
+      if (sub === 'replan') {
+        // A read, like `plan candidates`: the plan it answers keeps its bytes, its version and its
+        // approval, and the revision it prints needs its own recording and its own approval. The
+        // reason is what the read answers, so it is stated rather than invented when the user gives
+        // none - the command itself is the request.
+        const { flags, rest: ids } = parseFlags(rest, ['reason', 'cannot-use', 'json']);
+        if (ids.length !== 1) {
+          throw new ValidationError('usage: plan replan <plan-id> [--reason <text>] [--cannot-use <action,action>] [--json]', 'USAGE');
+        }
+        return emitRead(await app.controller.planReplan({
+          plan: ids[0],
+          reason: flags.reason ?? null,
+          cannotUse: idList(flags['cannot-use']),
+        }), flags);
+      }
+      if (sub === 'outcome') {
+        const { flags, rest: ids } = parseFlags(rest, ['json']);
+        if (ids.length !== 1) throw new ValidationError('usage: plan outcome <plan-id> [--json]', 'USAGE');
+        return emitRead(await app.controller.planOutcome({ plan: ids[0] }), flags);
+      }
+      if (sub === 'assess') {
+        // The one command here that records. It writes the verdict the outcome read derives from the
+        // audit log, and no verdict is accepted as input: a plan that ran and verified is not thereby
+        // completed, approved, or closed.
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) throw new ValidationError('usage: plan assess <plan-id>', 'USAGE');
+        return emit(await app.controller.planAssess({ target: ids[0] }));
+      }
       if (sub === 'revise') {
         const { flags, rest: ids } = parseFlags(rest, ['outcome', 'step', 'precondition', 'assertion', 'estimate', 'reason']);
         if (ids.length !== 1) throw new ValidationError('usage: plan revise <id> --outcome <text> --step <json>... --reason <text>', 'USAGE');
@@ -1914,7 +2003,7 @@ export async function main(argv, {
           reason: flags.reason,
         }));
       }
-      err('usage: plan add|list|show|validate|history|compare|revise|approve|start|reconcile|cancel|supersede');
+      err('usage: plan add|list|show|validate|history|compare|candidates|replan|outcome|assess|revise|approve|start|reconcile|cancel|supersede');
       return 2;
     }
 

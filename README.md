@@ -23,6 +23,14 @@ preserved for provenance.
   cognition layer reads those records, labels claims and contradictions, classifies uncertainty,
   asks a clarifying question before any model call, and validates any structured model response
   against the evidence it was actually given; it adds no model, no store, and no authorization.
+  Adaptive planning sits on top of the same records: `apex plan candidates <goal-id>` generates the
+  approaches a recorded goal supports, gates and compares them under a disclosed rule with no score or
+  probability, and prints them as drafts - every step names an action the registry already holds, and
+  recording or approving one is a separate user act. `apex plan outcome <plan-id>` then answers seven
+  separate questions about what a run established and what it left open, citing the audit operation
+  behind each, and `apex plan assess <plan-id>` records that derived verdict without changing the plan's
+  bytes, approval, or any goal's status. Execution success is never reported as real-world success, and
+  none of this grants permission.
   It answers
   deterministic requests with no model and sends
   everything else to a local model backend **you** configure; without one it reports

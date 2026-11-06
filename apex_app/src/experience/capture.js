@@ -123,6 +123,7 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'prediction.invalidate': 'expectation',
   'goal.add': 'executive',
   'goal.revise': 'executive',
+  'goal.confirm': 'executive',
   'goal.update': 'executive',
   'goal.evidence': 'executive',
   'goal.complete': 'executive',
@@ -143,6 +144,17 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'plan.list': 'read',
   'plan.show': 'read',
   'plan.validate': 'read',
+  // A candidate set and a comparison are re-derived from the goal, the plan record and the live
+  // registry whenever they are asked for; capturing one would freeze a comparison of a moment that
+  // no longer holds, and the candidates themselves are intentions, not events.
+  'plan.candidates': 'read',
+  'plan.replan': 'read',
+  // The same reasoning covers the outcome pair: the reading of a plan's records is re-derivable from
+  // those records at any time, and what plan.assess stores is that derived reading, not an event - an
+  // experience of it would say less than the assessment record already says and would put APEX's own
+  // interpretation into the log the pattern and adaptation reads draw from.
+  'plan.outcome': 'read',
+  'plan.assess': 'executive',
   'recover': 'read',
   'task.plan': 'task',
   'task.run': 'task',

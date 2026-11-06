@@ -106,6 +106,12 @@ const MODEL_WRITE_ATTEMPTS = [
   ['goal.complete', { target: 'no-such-goal' }],
   ['goal.link', { target: 'no-such-goal', planId: 'no-such-plan' }],
   ['goal.revise', { target: 'no-such-goal', criteria: ['the model rewrote the goal'], reason: 'the model decided' }],
+  // The decision that turns an inferred criterion into a requirement is the user's, so a reply cannot
+  // make one by naming the criterion it planned against.
+  ['goal.confirm', {
+    target: 'no-such-goal', criterion: 'c1', decision: 'required', reason: 'the model decided',
+    operationId: '00000000-0000-4000-8000-000000000000',
+  }],
   ['plan.add', {
     outcome: 'the model decided this',
     steps: [{
@@ -124,6 +130,9 @@ const MODEL_WRITE_ATTEMPTS = [
   ['plan.approve', { target: 'no-such-plan' }],
   ['plan.cancel', { target: 'no-such-plan', reason: 'the model decided' }],
   ['plan.supersede', { target: 'no-such-plan', by: 'no-such-other-plan', reason: 'the model decided' }],
+  // The verdict on an attempt is APEX's reading of records, but writing it is the user's act: a reply
+  // that assessed its own run would be reporting its own success.
+  ['plan.assess', { target: 'no-such-plan' }],
   ['proposal.accept', { target: 'no-such-proposal', reason: 'the model approved its own proposal' }],
   ['proposal.reject', { target: 'no-such-proposal', reason: 'the model rejected it' }],
   ['proposal.invalidate', { target: 'no-such-proposal', reason: 'the model invalidated it' }],
@@ -226,10 +235,12 @@ describe('AF-20: a reply cannot create what only the user may create', () => {
     assert.equal((await app.experience.adaptationDetail(candidate.id)).decisionState, 'approved');
   });
 
-  test('none of the thirty-nine write actions runs at model origin, and the same input writes at user origin', async () => {
+  test('every registered write action is denied at model origin, and the same input writes at user origin', async () => {
     const { app, dataDir } = appFor('unused');
-    assert.equal(MODEL_WRITE_ATTEMPTS.length, 39, 'the sweep covers every registered write action');
     const names = app.registry.list().filter((d) => d.permission === 'write').map((d) => d.name).sort();
+    // The sweep is the registry's own list, so a write action added by a later batch is denied on the
+    // day it is registered rather than on the day someone remembers to add it here.
+    assert.ok(names.length >= 41, `the registry holds ${names.length} write actions, fewer than the swept inventory`);
     assert.deepEqual(names, MODEL_WRITE_ATTEMPTS.map(([n]) => n).sort(), 'the attempt list is the registry, not a guess');
 
     for (const [name, input] of MODEL_WRITE_ATTEMPTS) {

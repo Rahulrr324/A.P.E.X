@@ -36,7 +36,9 @@ function appWith(dir, filesystemRoot = null) {
 }
 
 const STORE_FILES = ['memory.jsonl', 'conversation.jsonl', 'operations.jsonl', 'session.json',
-  'tasks.jsonl', 'task-summary-queue.json', 'knowledge.jsonl', 'experiences.jsonl', 'predictions.jsonl'];
+  'tasks.jsonl', 'task-summary-queue.json', 'knowledge.jsonl', 'experiences.jsonl', 'predictions.jsonl',
+  // Batch AL added a goal store and a plan store; a classified read must leave them untouched too.
+  'goals.jsonl', 'plans.jsonl'];
 function sizes(dir) {
   return Object.fromEntries(STORE_FILES.map((f) => {
     const p = path.join(dir, f);
@@ -103,7 +105,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 76, 'the default registry has 76 actions');
+    assert.equal(plain.registry.list().length, 81, 'the default registry has 81 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -134,7 +136,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 39, 'the inventory counts thirty-nine write actions');
+    assert.equal(writes.length, 41, 'the inventory counts forty-one write actions');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -174,15 +176,24 @@ describe('AF-19: the registry is the inventory', () => {
       object: { kind: 'scalar', valueType: 'string', value: 'seeded probe' },
       validFrom: '2026-01-01', evidence: WE,
     }, 'user', 'seed6');
+    // The two plan reads need a recorded goal and a recorded plan to answer about. Both are seeded
+    // before the snapshot below, so a read that wrote either store still shows up as a change.
+    const g = await c.runAction('goal.add', { request: 'remember that the gate is open', criteria: ['remember that the gate is open'] }, 'user', 'seed7');
+    const gp = await c.runAction('plan.add', {
+      goal: g.result.data.goalId, outcome: 'the gate state is remembered',
+      steps: [{ id: 's1', description: 'remember the gate', action: 'memory.add', input: { content: 'the gate is open' }, dependsOn: [], expectedResult: 'the fact is stored', verification: 'read it back', risk: 'medium' }],
+    }, 'user', 'seed8');
     assert.equal(seeded.outcome, 'success_verified');
     assert.equal(kn.outcome, 'success_verified');
     assert.equal(ex.outcome, 'success_verified');
     assert.equal(pr.outcome, 'success_verified');
     assert.equal(we.outcome, 'success_verified');
     assert.equal(wf.outcome, 'success_verified');
+    assert.equal(g.outcome, 'success_verified', g.summary);
+    assert.equal(gp.outcome, 'success_verified', gp.summary);
     const afterSeeds = sizes(dir);
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 39, 'the inventory counts thirty-nine read actions with a root configured');
+    assert.equal(reads.length, 42, 'the inventory counts forty-two read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -195,6 +206,9 @@ describe('AF-19: the registry is the inventory', () => {
         'filesystem.list': { path: '.' },
         'filesystem.read': { path: 'session.json' },
         'world.entity.show': { target: 'e-probe' },
+        'plan.candidates': { goal: g.result.data.goalId },
+        'plan.replan': { plan: gp.result.data.planId, reason: 'the inventory probe asks what a revision would take' },
+        'plan.outcome': { plan: gp.result.data.planId },
         'world.entity.find': { text: 'Probe entity' },
         'world.facts': { target: 'e-probe' },
         'world.attributes': { target: 'e-probe' },
@@ -319,13 +333,18 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
 });
 
 describe('AF-19: the planning prompt and the plan checker agree', () => {
-  test('a model-origin prompt offers exactly the seventeen reads it may propose', () => {
+  test('a model-origin prompt offers exactly the twenty reads it may propose', () => {
     const app = appWith(tempDir(), tempDir());
     const { system } = planningPrompt({ goal: 'anything', registry: app.registry, memoryLines: [], origin: 'model' });
     assert.deepEqual(offeredNames(system), [
       'adaptation.list', 'app.status', 'calc.evaluate', 'experience.compare', 'experience.list',
       'experience.patterns', 'experience.show', 'experience.timeline', 'experience.trends',
-      'knowledge.list', 'knowledge.search', 'memory.list', 'memory.search', 'prediction.history',
+      'knowledge.list', 'knowledge.search', 'memory.list', 'memory.search',
+      // Batch AL: each of these three answers only from the recorded goal, the recorded plan and the
+      // live registry, and a proposal that contains one is still a proposal - it authorizes nothing.
+      // The outcome read reports what a plan's records establish; recording an assessment is not among
+      // them, since plan.assess is a user act and is refused for a model origin.
+      'plan.candidates', 'plan.outcome', 'plan.replan', 'prediction.history',
       'prediction.list', 'prediction.show', 'prediction.summary',
     ]);
     // The defect AF-19 found and fixed: this line used to be present while checkSteps() always refused
@@ -355,7 +374,7 @@ describe('AF-19: the planning prompt and the plan checker agree', () => {
       }
     }
     const user = offeredNames(planningPrompt({ goal: 'anything', registry: app.registry, memoryLines: [], origin: 'user' }).system);
-    assert.equal(user.length, 40, 'a user-origin prompt offers the forty plannable actions with a root');
+    assert.equal(user.length, 43, 'a user-origin prompt offers the forty-three plannable actions with a root');
     assert.ok(user.includes('memory.add'), 'a user plan may still contain memory.add');
     assert.ok(user.includes('world.entity.show'), 'a user plan may read the World Model');
     assert.ok(!user.includes('world.fact.add'), 'a World Model write is never plannable');

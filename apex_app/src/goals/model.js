@@ -10,6 +10,15 @@
 // supporting operation against the audit log before the event is appended. Contradicting
 // evidence on a completed goal does not silently rewrite it: the event must say `reopen`, and
 // the goal returns to `blocked` with its whole history intact.
+//
+// Every part of a goal records who put it there. A criterion the system inferred is stored as
+// `suggested`, not as a requirement, because an inference the user never agreed to cannot gate
+// the completion of the user's intention; it becomes a requirement only through its own recorded
+// user decision (`goal_criterion_decision`), and it can be declined the same way. The goal-level
+// decomposition (prerequisites, constraints, resources, time conditions, blockers, unknowns) is
+// stored with the same provenance, and a claim recorded as a verified fact must name the record
+// that verifies it. Nothing here is derived by guessing: an absent field stays absent, and a
+// vague goal is reported as needing clarification by the decomposition view rather than filled in.
 import { singleLine } from '../util.js';
 
 export const GOAL_SCHEMA = 1;
@@ -21,6 +30,57 @@ export const MAX_GOAL_DETAIL_CHARS = 400;
 export const MAX_GOAL_DEPENDENCIES = MAX_CRITERIA;
 export const CRITERION_ID_RE = /^c[1-9][0-9]?$/;
 export const GOAL_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
+
+// The bounded goal-level decomposition. These are the parts of a goal that are not success
+// criteria: what has to hold first, what limits the work, what the work needs, when it matters,
+// what stands in the way, and what is not known. Each list is capped, and each item carries its
+// own provenance, so an inference cannot be printed as a fact the user supplied.
+export const MAX_GOAL_ITEMS = 8;
+export const MAX_GOAL_ITEM_CHARS = 200;
+export const MAX_GOAL_REF_CHARS = 64;
+
+// Where a piece of goal content came from. `user_stated` is the user's own words; `system_inferred`
+// is a conclusion APEX drew from the records it holds; `assumption` is something taken to hold
+// without evidence; `verified_fact` is a statement a record can be named for, and it must name one.
+export const GoalBasis = Object.freeze({
+  USER_STATED: 'user_stated',
+  SYSTEM_INFERRED: 'system_inferred',
+  ASSUMPTION: 'assumption',
+  VERIFIED_FACT: 'verified_fact',
+});
+
+// A criterion is a condition to be met, so "verified fact" is not a basis for one: a fact does not
+// become a requirement the user agreed to by being stated as a criterion.
+export const CRITERION_BASES = Object.freeze([
+  GoalBasis.USER_STATED, GoalBasis.SYSTEM_INFERRED, GoalBasis.ASSUMPTION,
+]);
+export const ITEM_BASES = Object.freeze(Object.values(GoalBasis));
+
+// Whether a criterion gates completion. An inferred or assumed criterion starts as `suggested` and
+// stays there until the user records a decision, so a plan cannot complete a goal against a
+// requirement the user never set. `declined` is a recorded user rejection of an inference: the
+// criterion stays in the log as what was suggested and why, and no longer counts toward progress.
+export const Requirement = Object.freeze({
+  REQUIRED: 'required',
+  SUGGESTED: 'suggested',
+  DECLINED: 'declined',
+});
+
+// The requirements a goal write may record. `declined` is reached only by the user's own recorded
+// decision, so it is not a value a goal creation or revision can put in the log.
+export const REQUIREMENT_PAYLOADS = Object.freeze([Requirement.REQUIRED, Requirement.SUGGESTED]);
+
+// The decisions `goal_criterion_decision` may record. `suggested` is the way back from a decision
+// the user changed; `declined` applies only to a criterion the system put forward.
+export const CRITERION_DECISIONS = Object.freeze([
+  Requirement.REQUIRED, Requirement.SUGGESTED, Requirement.DECLINED,
+]);
+
+export const GOAL_ITEM_FIELDS = Object.freeze([
+  'prerequisites', 'constraints', 'resources', 'timeConditions', 'blockers', 'unknowns',
+]);
+
+const GATING = Requirement.REQUIRED;
 
 export const GoalStatus = Object.freeze({
   PROPOSED: 'proposed', // recorded, waiting for the user to accept it
@@ -70,16 +130,59 @@ export function normalizeRequest(text) {
 
 // A stable description of what a goal needs in order to be complete. Used by the store for its
 // duplicate check and by the renderer for progress; it states counts only, never content.
+//
+// `satisfied`, `contradicted`, `pending`, and `total` count every criterion as they always did.
+// The gating counts answer a different question - what has to be true for this goal to be
+// complete - and are kept separate so an unsatisfied suggestion cannot look like unmet work, and
+// unmet work cannot look like an unsatisfied suggestion.
 export function goalProgress(goal) {
   const criteria = Array.isArray(goal?.criteria) ? goal.criteria : [];
   const satisfied = criteria.filter((c) => c.status === 'satisfied').length;
   const contradicted = criteria.filter((c) => c.status === 'contradicted').length;
+  const gating = criteria.filter((c) => requirementOf(c) === GATING);
+  const gatingSatisfied = gating.filter((c) => c.status === 'satisfied').length;
+  const userStated = criteria.filter((c) => !c.basis || c.basis === GoalBasis.USER_STATED).length;
   return {
     satisfied,
     contradicted,
     pending: criteria.length - satisfied - contradicted,
     total: criteria.length,
+    gating: gating.length,
+    gatingSatisfied,
+    gatingPending: gating.length - gatingSatisfied,
+    suggested: criteria.filter((c) => requirementOf(c) === Requirement.SUGGESTED).length,
+    declined: criteria.filter((c) => requirementOf(c) === Requirement.DECLINED).length,
+    // Inferred or assumed criteria the user has neither accepted nor declined. APEX reports these
+    // as needing a decision; it does not decide them, and it does not treat them as requirements.
+    needsConfirmation: criteria.filter((c) => needsUserDecision(c)).length,
+    userStated,
+    inferred: criteria.length - userStated,
   };
+}
+
+// A criterion that is still an open question for the user: something APEX put forward, recorded as
+// a suggestion, with no decision of the user's own on record. A suggestion the user stated in their
+// own words, or one they have since decided with `goal confirm`, is not an open question - it is
+// their choice about their own goal, and the goal can complete without it.
+export function needsUserDecision(criterion) {
+  return requirementOf(criterion) === Requirement.SUGGESTED
+    && basisOf(criterion) !== GoalBasis.USER_STATED
+    && !criterion?.confirmation;
+}
+
+// The recorded requirement of a criterion. A criterion written before this field existed was
+// written by the user, so `required` is what that record already meant.
+export function requirementOf(criterion) {
+  const value = criterion?.requirement;
+  if (value === Requirement.SUGGESTED || value === Requirement.DECLINED) return value;
+  return GATING;
+}
+
+// The recorded provenance of a criterion, item, or field. An absent basis is the user's own words,
+// because that is the only basis a goal could be written with before provenance existed.
+export function basisOf(entry) {
+  const value = entry?.basis;
+  return CRITERION_BASES.includes(value) || value === GoalBasis.VERIFIED_FACT ? value : GoalBasis.USER_STATED;
 }
 
 function evidenceEntry(e) {
@@ -92,13 +195,92 @@ function evidenceEntry(e) {
 }
 
 function criterionEntry(c, at) {
+  const basis = c.basis ?? GoalBasis.USER_STATED;
+  // The user's own criterion gates completion unless the user says otherwise. Anything the system
+  // put forward gates nothing until the user records a decision about it, so `required` is not
+  // reachable here for a non-user-stated basis - that is what `goal_criterion_decision` is for.
+  const requested = c.requirement === undefined || c.requirement === null
+    ? (basis === GoalBasis.USER_STATED ? GATING : Requirement.SUGGESTED)
+    : c.requirement;
+  const requirement = basis === GoalBasis.USER_STATED ? requested : Requirement.SUGGESTED;
   return {
     id: c.id,
     description: c.description,
+    basis,
+    requirement,
+    ...(c.ref ? { ref: c.ref } : {}),
+    ...(c.requiredEvidence ? { requiredEvidence: c.requiredEvidence } : {}),
+    // The user's decision, when one was recorded, with the act that recorded it. A criterion with
+    // no decision here has never been confirmed by the user; nothing else stands in for one.
+    confirmation: null,
     status: 'pending',
     evidence: [],
     updatedAt: at,
   };
+}
+
+// One goal-level decomposition item, in the shape the log stores. `verified_fact` must name the
+// record it is verified by; the store and the action layer normalise looser input into this.
+export function goalItem(raw, field) {
+  const text = String(raw?.text ?? '').trim();
+  const basis = raw?.basis ?? GoalBasis.USER_STATED;
+  const ref = raw?.ref === undefined || raw?.ref === null ? null : String(raw.ref).trim();
+  return { field, text, basis, ...(ref ? { ref } : {}) };
+}
+
+function itemListProblem(list, field) {
+  if (list === undefined || list === null) return null;
+  if (!Array.isArray(list)) return `${field} must be a list`;
+  if (list.length > MAX_GOAL_ITEMS) return `${field} may hold at most ${MAX_GOAL_ITEMS} items`;
+  for (const item of list) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return `a ${field} item is not an object`;
+    if (typeof item.text !== 'string' || item.text.trim().length === 0) return `a ${field} item has no text`;
+    if (item.text.length > MAX_GOAL_ITEM_CHARS) return `a ${field} item exceeds ${MAX_GOAL_ITEM_CHARS} characters`;
+    if (!ITEM_BASES.includes(item.basis)) return `a ${field} item has an unknown basis`;
+    if (item.ref !== undefined && item.ref !== null
+      && (typeof item.ref !== 'string' || item.ref.trim().length === 0 || item.ref.length > MAX_GOAL_REF_CHARS)) {
+      return `a ${field} item has a bad record reference`;
+    }
+    // A fact is a fact because a record says so. Without a reference the claim is an assumption,
+    // and it is stored as one or refused; "verified" is not a word APEX may apply to itself.
+    if (item.basis === GoalBasis.VERIFIED_FACT && (item.ref === undefined || item.ref === null)) {
+      return `a ${field} item recorded as a verified fact must name the record that verifies it`;
+    }
+  }
+  return null;
+}
+
+function criterionProblem(c) {
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return 'bad criterion';
+  if (typeof c.id !== 'string' || !CRITERION_ID_RE.test(c.id)) return 'bad criterion id';
+  if (typeof c.description !== 'string' || c.description.trim().length === 0 || c.description.length > MAX_CRITERION_CHARS) {
+    return 'bad criterion description';
+  }
+  if (c.basis !== undefined && c.basis !== null && !CRITERION_BASES.includes(c.basis)) return 'bad criterion basis';
+  if (c.requirement !== undefined && c.requirement !== null && !REQUIREMENT_PAYLOADS.includes(c.requirement)) {
+    return 'bad criterion requirement';
+  }
+  if (c.basis && c.basis !== GoalBasis.USER_STATED && c.requirement === GATING) {
+    return 'a criterion the system inferred cannot be recorded as a requirement';
+  }
+  if (c.ref !== undefined && c.ref !== null
+    && (typeof c.ref !== 'string' || c.ref.trim().length === 0 || c.ref.length > MAX_GOAL_REF_CHARS)) {
+    return 'bad criterion reference';
+  }
+  if (c.requiredEvidence !== undefined && c.requiredEvidence !== null
+    && (typeof c.requiredEvidence !== 'string' || c.requiredEvidence.trim().length === 0
+      || c.requiredEvidence.length > MAX_GOAL_ITEM_CHARS)) {
+    return 'bad required-evidence description';
+  }
+  return null;
+}
+
+function itemsOf(event) {
+  const out = {};
+  for (const field of GOAL_ITEM_FIELDS) {
+    if (Array.isArray(event[field])) out[field] = event[field].map((item) => goalItem(item, field));
+  }
+  return out;
 }
 
 // ---- reducer ----------------------------------------------------------------
@@ -118,13 +300,14 @@ export function validateEventShape(e) {
     if (e.criteria.length > MAX_CRITERIA) return `at most ${MAX_CRITERIA} success criteria are allowed`;
     const ids = new Set();
     for (const c of e.criteria) {
-      if (!c || typeof c !== 'object') return 'bad criterion';
-      if (typeof c.id !== 'string' || !CRITERION_ID_RE.test(c.id)) return 'bad criterion id';
+      const problem = criterionProblem(c);
+      if (problem) return problem;
       if (ids.has(c.id)) return 'duplicate criterion id';
       ids.add(c.id);
-      if (typeof c.description !== 'string' || c.description.trim().length === 0 || c.description.length > MAX_CRITERION_CHARS) {
-        return 'bad criterion description';
-      }
+    }
+    for (const field of GOAL_ITEM_FIELDS) {
+      const problem = itemListProblem(e[field], field);
+      if (problem) return problem;
     }
     if (!Number.isInteger(e.priority) || e.priority < 1 || e.priority > 5) return 'bad priority';
     if (e.deadline !== null && (typeof e.deadline !== 'string' || Number.isNaN(Date.parse(e.deadline)))) return 'bad deadline';
@@ -184,13 +367,14 @@ export function validateEventShape(e) {
     if (e.criteria.length > MAX_CRITERIA) return `at most ${MAX_CRITERIA} success criteria are allowed`;
     const ids = new Set();
     for (const c of e.criteria) {
-      if (!c || typeof c !== 'object') return 'bad criterion';
-      if (typeof c.id !== 'string' || !CRITERION_ID_RE.test(c.id)) return 'bad criterion id';
+      const problem = criterionProblem(c);
+      if (problem) return problem;
       if (ids.has(c.id)) return 'duplicate criterion id';
       ids.add(c.id);
-      if (typeof c.description !== 'string' || c.description.trim().length === 0 || c.description.length > MAX_CRITERION_CHARS) {
-        return 'bad criterion description';
-      }
+    }
+    for (const field of GOAL_ITEM_FIELDS) {
+      const problem = itemListProblem(e[field], field);
+      if (problem) return problem;
     }
     if (e.priority !== undefined && (!Number.isInteger(e.priority) || e.priority < 1 || e.priority > 5)) return 'bad priority';
     if (e.deadline !== undefined && e.deadline !== null && (typeof e.deadline !== 'string' || Number.isNaN(Date.parse(e.deadline)))) {
@@ -198,6 +382,18 @@ export function validateEventShape(e) {
     }
     if (typeof e.reason !== 'string' || e.reason.trim().length === 0) return 'a revision needs a reason';
     if (e.reason.length > MAX_GOAL_REASON_CHARS) return 'revision reason too long';
+    return null;
+  }
+
+  if (e.type === 'goal_criterion_decision') {
+    if (typeof e.criterionId !== 'string' || !CRITERION_ID_RE.test(e.criterionId)) return 'bad criterion id';
+    if (!CRITERION_DECISIONS.includes(e.decision)) return 'unknown criterion decision';
+    if (typeof e.reason !== 'string' || e.reason.trim().length === 0) return 'a criterion decision needs a recorded reason';
+    if (e.reason.length > MAX_GOAL_REASON_CHARS) return 'criterion decision reason too long';
+    if (e.operationId !== undefined && e.operationId !== null
+      && (typeof e.operationId !== 'string' || e.operationId.length === 0 || e.operationId.length > 64)) {
+      return 'bad decision operation';
+    }
     return null;
   }
 
@@ -239,6 +435,10 @@ export function applyEvent(goals, e) {
       origin: e.origin,
       request: e.request,
       criteria: e.criteria.map((c) => criterionEntry(c, e.at)),
+      // The decomposition fields the record carries, and nothing else: a field the user did not
+      // state and APEX did not infer is absent, which is what the decomposition view reports as
+      // "not recorded" rather than as an empty answer or an invented one.
+      ...Object.fromEntries(GOAL_ITEM_FIELDS.map((f) => [f, itemsOf(e)[f] ?? []])),
       priority: e.priority,
       deadline: e.deadline ?? null,
       dependsOn: [...e.dependsOn],
@@ -289,12 +489,27 @@ export function applyEvent(goals, e) {
       }
     }
     if (e.to === GoalStatus.COMPLETED) {
-      const unsatisfied = goal.criteria.filter((c) => c.status !== 'satisfied');
+      // An undecided inference is an open question, not a requirement and not a dismissal.
+      // Completion waits for the user's decision either way, which is what keeps an inference APEX
+      // made from being completed past - or completed away - without the user saying anything. A
+      // suggestion the user stated or has since decided is their own choice, and waits for nothing.
+      const undecided = goal.criteria.filter((c) => needsUserDecision(c));
+      if (undecided.length > 0) {
+        const ids = undecided.map((c) => c.id).join(', ');
+        return `goal cannot be completed: ${ids} ${undecided.length === 1 ? 'is' : 'are'} recorded as ${undecided.length === 1 ? 'a suggestion' : 'suggestions'} with no user decision; record goal confirm ${singleLine(goal.id, 40)} ${ids.split(', ')[0]} <required|suggested|declined> --reason <text> first`;
+      }
+      const gatingCriteria = goal.criteria.filter((c) => requirementOf(c) === GATING);
+      // A goal whose every criterion is a suggestion or a dismissal requires nothing, so a
+      // completion record would prove nothing. The user decides what the goal counts as done by.
+      if (gatingCriteria.length === 0) {
+        return `goal cannot be completed: no criterion is recorded as required, so completing it would prove nothing; record goal confirm ${singleLine(goal.id, 40)} <criterion> required --reason <text> or revise the goal`;
+      }
+      const unsatisfied = gatingCriteria.filter((c) => c.status !== 'satisfied');
       if (unsatisfied.length > 0) {
         return `goal cannot be completed: ${unsatisfied.map((c) => c.id).join(', ')} ${unsatisfied.length === 1 ? 'is' : 'are'} not satisfied`;
       }
-      if (goal.criteria.some((c) => !c.evidence.some((ev) => ev.kind === 'supports'))) {
-        return 'goal cannot be completed without supporting evidence for every criterion';
+      if (gatingCriteria.some((c) => !c.evidence.some((ev) => ev.kind === 'supports'))) {
+        return 'goal cannot be completed without supporting evidence for every required criterion';
       }
     }
     const at = e.at;
@@ -304,12 +519,18 @@ export function applyEvent(goals, e) {
     if (e.to === GoalStatus.BLOCKED) goal.blockedReason = e.reason;
     if (e.to === GoalStatus.ACTIVE) goal.blockedReason = null;
     if (e.to === GoalStatus.COMPLETED) {
+      const gatingCriteria = goal.criteria.filter((c) => requirementOf(c) === GATING);
       goal.completion = {
         at,
-        criteria: goal.criteria.map((c) => ({
+        criteria: gatingCriteria.map((c) => ({
           criterionId: c.id,
           operationId: [...c.evidence].reverse().find((ev) => ev.kind === 'supports')?.operationId ?? null,
         })),
+        // What the user took out of the goal, recorded at completion rather than dropped, so a
+        // later reader can see which criteria the completion did NOT prove and who said so.
+        declined: goal.criteria
+          .filter((c) => requirementOf(c) === Requirement.DECLINED)
+          .map((c) => c.id),
       };
       goal.contradiction = null;
       goal.blockedReason = null;
@@ -361,12 +582,47 @@ export function applyEvent(goals, e) {
     // A revision replaces the success criteria, so evidence for the old wording cannot count
     // toward the new one. The old evidence stays in the event log; it is no longer current.
     goal.criteria = e.criteria.map((c) => criterionEntry(c, e.at));
+    // A decomposition field is replaced only when the revision carries that field; an absent field
+    // keeps what the record already holds, because the revision said nothing about it. An empty
+    // list is a statement, and clears the field.
+    const items = itemsOf(e);
+    for (const field of GOAL_ITEM_FIELDS) {
+      if (items[field]) goal[field] = items[field];
+    }
     if (e.priority !== undefined) goal.priority = e.priority;
     if (e.deadline !== undefined) goal.deadline = e.deadline;
     goal.revision = (goal.revision ?? 1) + 1;
     goal.revisionHistory.push({ revision: goal.revision, at: e.at, reason: e.reason });
     goal.completion = null;
     goal.contradiction = null;
+    goal.updatedAt = e.at;
+    return null;
+  }
+
+  if (e.type === 'goal_criterion_decision') {
+    // The decision is about what the goal requires, so it is a change to the goal's criteria and is
+    // accepted only while the goal is open - the same boundary a criteria revision honours. A
+    // completed goal is reopened by contradicting evidence, not by redefining its criteria.
+    if (!isOpenStatus(goal.status)) {
+      return `goal is ${goal.status}; a criterion decision is accepted only while it is open`;
+    }
+    const criterion = goal.criteria.find((c) => c.id === e.criterionId);
+    if (!criterion) return `unknown success criterion ${singleLine(e.criterionId, 40)}`;
+    // The user's own words can be accepted as a requirement or left as a suggestion; they cannot be
+    // declined here, because dropping a stated criterion is a revision with its own record and its
+    // own consequence for the evidence already gathered.
+    if (e.decision === Requirement.DECLINED && basisOf(criterion) === GoalBasis.USER_STATED) {
+      return 'a criterion the user stated cannot be declined; revise the goal to remove it';
+    }
+    if (criterion.confirmation?.decision === e.decision) return 'this decision is already recorded for the criterion';
+    criterion.requirement = e.decision;
+    criterion.confirmation = {
+      decision: e.decision,
+      at: e.at,
+      reason: e.reason,
+      operationId: e.operationId ?? null,
+    };
+    criterion.updatedAt = e.at;
     goal.updatedAt = e.at;
     return null;
   }

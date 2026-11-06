@@ -25,7 +25,7 @@ function keyed(list, key) {
 
 const STEP_FIELDS = [
   'description', 'action', 'input', 'dependsOn', 'expectedResult',
-  'verification', 'criterionId', 'risk', 'estimate',
+  'verification', 'criterionId', 'risk', 'estimate', 'reversibility', 'recovery',
 ];
 
 // The differences a reader needs in order to decide whether to approve the later revision:

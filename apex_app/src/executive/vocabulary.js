@@ -22,6 +22,7 @@ export const RequestMode = Object.freeze({
   RECOMMENDATION: 'recommendation',  // asks what the user should do: advice, no work proposed
   STATUS: 'status',                  // asks what APEX's own records say about open work
   PREPARE: 'prepare',                // asks APEX to record an intended course of action
+  REPLAN: 'replan',                  // asks for a revised approach to a plan already recorded
   APPROVE: 'approve',                // the user authorizes a plan they have already seen
   EXECUTE: 'execute',                // the user starts a plan that is already approved
   APPROVAL_REQUIRED: 'approval_required', // work was asked for that has no approval yet
@@ -66,6 +67,34 @@ export const STATE_EVIDENCE = Object.freeze({
 });
 
 export const STATE_RULE = 'a state is reported only from a recorded plan, task, proposal, or operation; no state is inferred from a model statement or from a request';
+
+// Continuation readiness: the six answers to "can this be taken up now, and if not, what is missing?".
+// A state of a record, not a forecast: `ready to execute` means an approval is on file and the live
+// check still passes against the records it names, not that the run will succeed.
+export const ContinuationReadiness = Object.freeze({
+  READY_TO_EXECUTE: 'ready to execute',
+  READY_FOR_APPROVAL: 'ready for approval',
+  REQUIRES_CLARIFICATION: 'requires clarification',
+  BLOCKED: 'blocked',
+  WAITING_FOR_EVIDENCE: 'waiting for evidence',
+  NOT_FEASIBLE: 'not feasible',
+});
+
+export const READINESS_STATES = Object.freeze(Object.values(ContinuationReadiness));
+
+// The record each readiness state is read from, printed beside the state so the reader can check the
+// claim instead of taking the word for it.
+export const READINESS_BASIS = Object.freeze({
+  [ContinuationReadiness.READY_TO_EXECUTE]: 'a plan recorded as approved, whose live validity check passes against the records it names',
+  [ContinuationReadiness.READY_FOR_APPROVAL]: 'a plan recorded as a draft, or a candidate that passed every gate, whose steps the live registry authorizes',
+  [ContinuationReadiness.REQUIRES_CLARIFICATION]: 'a comparison the disclosed rule cannot separate, a goal whose revision moved after the plan was written, or a goal with no open criterion to plan against',
+  [ContinuationReadiness.BLOCKED]: 'a plan or goal recorded as blocked, an approval that no longer matches the plan bytes, an unmet goal dependency, or a failed step outcome',
+  [ContinuationReadiness.WAITING_FOR_EVIDENCE]: 'a step with no recorded outcome, an evidence citation the stores no longer support, or an outcome verdict of awaiting confirmation',
+  [ContinuationReadiness.NOT_FEASIBLE]: 'a candidate set no registered capability can carry, or a step naming an action the registry does not hold or does not authorize',
+});
+
+export const READINESS_RULE = 'readiness is read from a recorded plan, goal, task, operation, or candidate comparison, and the check it was read from is named beside it. '
+  + 'It is not a forecast that a run will succeed, and no readiness state authorizes a step: the registry decides that again when each step runs.';
 
 // Side-effect classes for a proposed step. APEX has no capability that destroys or overwrites
 // anything outside its own stores, so there is no destructive class to report, and the bridge must
@@ -134,9 +163,39 @@ export const StatusQuestion = Object.freeze({
   CONTINUE: 'continue',
   CANCEL: 'cancel',
   PROGRESS: 'progress',
+  // The three planning questions. Each is answered from records the task log cannot reach: the
+  // candidate set a goal supports, the comparison of it, and what a plan's own execution established.
+  OPTIONS: 'options',                       // what other approaches are on the table, and why
+  OUTCOME: 'outcome',                       // what the records establish about a plan's result
+  READINESS: 'readiness',                   // whether this plan can be taken up now, and what is missing
 });
 
 export const STATUS_QUESTIONS = Object.freeze(Object.values(StatusQuestion));
+
+// Which of the five claim classes a line of an answer belongs to. A reader has to be able to tell
+// what APEX stores from what APEX concluded, so the answer marks its own lines rather than leaving
+// the distinction to be inferred.
+export const ClaimKind = Object.freeze({
+  FACT: 'fact',                             // a field of a record, read back here
+  VERIFIED_OUTCOME: 'verified outcome',     // an operation the audit log holds and the action's verifier re-read
+  ASSUMPTION: 'assumption',                 // recorded as an assumption in the plan's own assertions
+  SUGGESTION: 'suggestion',                 // APEX's reading of the records: never permission
+  PREDICTION: 'prediction',                 // a recorded expectation, not yet resolved either way
+});
+
+export const CLAIM_KINDS = Object.freeze(Object.values(ClaimKind));
+
+// One line per mark, so a view that is bounded line by line still states what each mark means. A
+// legend in one long sentence is the sentence a bounded view drops.
+export const CLAIM_LEGEND = Object.freeze([
+  [ClaimKind.FACT, 'a field read from a named record'],
+  [ClaimKind.VERIFIED_OUTCOME, 'an operation the audit log holds, and the action\'s own verifier re-read'],
+  [ClaimKind.ASSUMPTION, 'recorded as an assumption, not as established'],
+  [ClaimKind.SUGGESTION, 'APEX\'s reading of the records, which grants nothing'],
+  [ClaimKind.PREDICTION, 'a recorded expectation that has resolved neither way'],
+]);
+
+export const CLAIM_NOTE = 'No reasoning steps are shown, because there are none to show: this answer is produced from the records it names, and APEX keeps no hidden deliberation about them.';
 
 // The answer to "can you continue?" has to start from a fact about this architecture, not from a
 // record: APEX runs only while a command is running. Nothing is in progress between commands.

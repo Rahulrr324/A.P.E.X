@@ -8,8 +8,15 @@
 import { shortId, truncate } from '../util.js';
 import { isOpenPlan, planProgress } from '../plans/model.js';
 import { StepStatus } from '../tasks/model.js';
-import { isOpenStatus } from '../goals/model.js';
-import { BOUNDS, ExecutionState, NO_BACKGROUND_NOTE, STATE_EVIDENCE, stateOfPlanStatus } from './vocabulary.js';
+import { goalProgress, isOpenStatus, needsUserDecision } from '../goals/model.js';
+import { STRATEGY_NOTE } from '../plans/candidates.js';
+import {
+  BOUNDS, ClaimKind, CLAIM_KINDS, CLAIM_LEGEND, CLAIM_NOTE, ExecutionState, NO_BACKGROUND_NOTE,
+  READINESS_BASIS, READINESS_STATES, STATE_EVIDENCE, stateOfPlanStatus,
+} from './vocabulary.js';
+import { prioritizationFactors, renderReadiness } from './readiness.js';
+import { renderSelection } from './selection.js';
+import { LEARNING_BOUNDS, LEARNING_NOT_APPLIED, learningStatements } from './learning.js';
 
 function words(text) {
   return truncate(String(text ?? ''), 160);
@@ -144,6 +151,24 @@ function line(text, lines) {
 }
 
 const HEADER = 'Executive status, read from APEX records. Nothing here was run, approved, changed, or cancelled.';
+
+// The view is bounded so one question cannot print a whole portfolio. `label` and `hint` are what a
+// reader is told to run instead, so a cut view sends them to the record list rather than leaving them
+// with a half answer and no way to finish it.
+function boundedView(lines, { label = 'status view', hint = '"node bin/apex.js work" lists the open records in full' } = {}) {
+  const truncated = lines.length > BOUNDS.maxStatusLines;
+  const shown = truncated ? lines.slice(0, BOUNDS.maxStatusLines) : lines;
+  let display = shown.join('\n');
+  const cutByChars = display.length > BOUNDS.maxStatusChars;
+  if (truncated || cutByChars) {
+    // The reason the answer gave way is stated as the bound that actually did it: a view cut at 4000
+    // characters while it still had lines left is not a view that reached 40 lines, and a reader who is
+    // told the wrong reason cannot tell how much of the answer the command still holds.
+    const cut = truncated ? `cut at ${BOUNDS.maxStatusLines} lines` : `cut at ${BOUNDS.maxStatusChars} characters`;
+    display = `${truncate(display, BOUNDS.maxStatusChars)}\n[${label} ${cut}; ${hint}]`;
+  }
+  return { display, lines: shown, truncated: truncated || cutByChars };
+}
 
 // The answer to one status question. `candidates` is the existing continuation ranking, so the
 // recommendation APEX gives in a conversation is the same one `work` and `next` print.
@@ -310,11 +335,313 @@ export function describeExecutiveStatus({
 
   line('', lines);
   line('These states were read from records. APEX has proposed nothing here, approved nothing, started nothing, and completed nothing.', lines);
-  const truncated = lines.length > BOUNDS.maxStatusLines;
-  const shown = truncated ? lines.slice(0, BOUNDS.maxStatusLines) : lines;
-  let display = shown.join('\n');
-  if (truncated || display.length > BOUNDS.maxStatusChars) {
-    display = `${truncate(display, BOUNDS.maxStatusChars)}\n[status view cut at ${BOUNDS.maxStatusLines} lines; "node bin/apex.js work" lists the open records in full]`;
+  const view = boundedView(lines);
+  return { ...view, rows, counts };
+}
+
+// ---- planning answers -------------------------------------------------------
+// The questions the mission loop asks once a plan exists - what else could do this, what did this one
+// establish, can this be taken up now - are answered from the records the audited reads return, and
+// every claim line says which kind of claim it is. A model cannot answer them: it holds no step
+// outcome, no gate result and no comparison. The marks exist because the part of an answer that can be
+// wrong is what APEX concluded from a record, not what it read from one, and a reader has to be able to
+// tell those apart to check the answer. No reasoning steps appear, because there are none to expose:
+// each line names the field or the operation it was read from.
+
+const OPTIONS_HEADER = 'Planning options, answered from APEX records: the goal\'s own criteria, the live action registry, and the disclosed comparison rule.';
+const OUTCOME_HEADER = 'A plan\'s outcome, answered from its recorded step outcomes, the audit operations they cite, the goal\'s criteria, and what the stores still hold.';
+const READINESS_HEADER = 'Continuation readiness, answered from the plan, goal, task and comparison records and the live validity check.';
+
+// One claim line, prefixed with the kind of claim it is. An unlisted kind is a bug in the caller, so
+// it degrades to `fact` rather than printing a label a reader cannot look up.
+function mark(kind, text, limit = 200) {
+  const k = CLAIM_KINDS.includes(kind) ? kind : ClaimKind.FACT;
+  return `[${k}] ${truncate(String(text ?? '').replace(/\s+/g, ' ').trim(), limit)}`;
+}
+
+// A block from one of the other executive renderers, kept line by line so `line()` bounds each part
+// instead of collapsing a whole comparison into one truncated string.
+function block(text, lines) {
+  for (const part of String(text ?? '').split('\n')) line(part, lines);
+}
+
+// The learning disclosure, printed in the shared vocabulary so a record cannot be read as more than the
+// class it belongs to: an open expectation carries `[prediction]`, which the legend defines as resolved
+// neither way, and a decided adaptation or a recorded verdict carries `[fact]`, which is a field of a
+// named record. The block ends by saying what it did not do, because a reader who has just looked at a
+// comparison is entitled to know whether an expectation moved it.
+function learningBlock(learning, lines, reserve = 0) {
+  line('', lines);
+  if (!learning) {
+    line('What the records of past attempts say: no learning read was taken for this answer, so nothing about a past attempt is claimed here.', lines);
+    return;
   }
-  return { display, lines: shown, rows, counts, truncated };
+  const statements = learningStatements(learning).map((s) => mark(s.kind, s.text, 280));
+  const caps = learning.scope?.capabilities ?? [];
+  const note = `  ${LEARNING_NOT_APPLIED}`;
+  // Two tiers of header. The wide one names the capabilities the read was scoped to; the compact one says
+  // only what the note beneath it refers to. Both exist because the view is bounded on characters as well
+  // as lines, and an answer that is inside its line budget can still have no room for a header that names
+  // eight capabilities - an answer whose disclosure is cut mid-sentence discloses nothing.
+  const headerWide = `What the records of past attempts${caps.length ? ` about ${caps.join(', ')}` : ''}, disclosed and applied to nothing:`;
+  const headerCompact = 'Learning read, applied to nothing:';
+  // The block gives way from inside itself. The header and the note are its floor, because an answer that
+  // lost the note leaves a reader to guess whether these records moved the selection, and the cut
+  // `boundedView` applies takes the tail of the answer, which is exactly where that note sits.
+  // `reserve` is how many lines the caller still has to print after this block, so a caller that ran out
+  // of room prints its own trailing lines rather than printing them over the cut marker.
+  const lineRoom = BOUNDS.maxStatusLines - lines.length - reserve;
+  const room = BOUNDS.maxStatusChars - lines.join('\n').length;
+  const header = headerWide.length + note.length + 2 <= room ? headerWide : headerCompact;
+  const charRoom = room - header.length - note.length - 2;
+  const shown = [];
+  let spent = 0;
+  for (const text of statements) {
+    if (shown.length >= LEARNING_BOUNDS.answerStatements || shown.length + 3 > lineRoom) break;
+    if (spent + text.length + 1 > charRoom) break;
+    spent += text.length + 1;
+    shown.push(text);
+  }
+  const more = statements.length - shown.length;
+  const pointer = `  ... and ${more} more statement(s) from the same read; the command's own print shows them with the five separations.`;
+  const pointerFits = more > 0 && shown.length + 4 <= lineRoom && spent + pointer.length + 1 <= charRoom;
+  line(header, lines);
+  for (const text of shown) line(text, lines);
+  if (pointerFits) line(pointer, lines);
+  line(note, lines);
+}
+
+// The claim legend, printed where a view closes. A reader who has not seen this layer's output before
+// cannot look up what `[suggestion]` means, and the mark is the part of the answer that tells them how
+// much of it APEX concluded rather than read.
+function claimNote(lines) {
+  line('', lines);
+  line('What each mark means:', lines);
+  for (const [kind, meaning] of CLAIM_LEGEND) line(`  [${kind}] - ${meaning}`, lines);
+  line(CLAIM_NOTE, lines);
+}
+
+// The body is bounded first and the legend appended after it, so a reader whose answer was cut off can
+// still look up the marks on the lines they did read. `lines` stays the body alone, so the tally of
+// claim kinds counts the answer's claims and not the key that explains them.
+function boundWithLegend(lines, opts = {}) {
+  const view = boundedView(lines, opts);
+  const tail = [];
+  claimNote(tail);
+  return { ...view, display: `${view.display}\n${tail.join('\n')}` };
+}
+
+function kindsShown(lines) {
+  const tally = {};
+  for (const l of lines) {
+    const m = /^\s*\[([^\]]+)\]/.exec(l);
+    if (m && CLAIM_KINDS.includes(m[1])) tally[m[1]] = (tally[m[1]] ?? 0) + 1;
+  }
+  return tally;
+}
+
+// The candidate-set digest is the set of per-candidate digests the read was bound to. Printed as one
+// shortened string it is a fragment of a bracket, which tells a reader nothing, so each member is
+// shortened with its count and can be matched against the digest on the candidate lines beside it.
+function setDigestLabel(value) {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(String(value ?? ''));
+  } catch {
+    parsed = null;
+  }
+  if (Array.isArray(parsed)) {
+    return `${parsed.length} candidate digest(s) [${parsed.map((d) => shortId(d)).join(', ')}]`;
+  }
+  return truncate(String(value ?? 'none recorded'), 72);
+}
+
+function unreadableView(lines, problems, { label, hint, noun }) {
+  line(`${noun} could not be read, so this answer states only what stopped it:`, lines);
+  for (const p of (problems ?? []).slice(0, 6)) line(mark(ClaimKind.FACT, p), lines);
+  if ((problems ?? []).length === 0) line(mark(ClaimKind.FACT, 'no reason was returned, so nothing is claimed about the records.'), lines);
+  return boundWithLegend(lines, { label, hint });
+}
+
+// The options answer: what approaches a goal supports now, what each one takes on and touches, where
+// the disclosed rule put them, and which one a record was made of - with the alternatives kept in view.
+export function describePlanOptions({
+  goal = null, data = null, selection = null, reading = null,
+  operationId = null, recorded = null, problems = [],
+}) {
+  const lines = [OPTIONS_HEADER, ''];
+  if (!data) {
+    const view = unreadableView(lines, problems, {
+      label: 'planning options', hint: '"node bin/apex.js plan candidates <goal-id>" reads them under its own operation', noun: 'The candidate set',
+    });
+    return { ...view, kinds: kindsShown(view.lines) };
+  }
+  const comparison = data.comparison ?? {};
+  line(`Read and audited under operation ${shortId(operationId ?? 'unknown')}. The read changed nothing${recorded ? `, and one draft was recorded from it (${shortId(recorded.id)})` : ', and this answer records nothing'}.`, lines);
+  if (goal) {
+    const p = goalProgress(goal);
+    line(mark(ClaimKind.FACT, `goal ${shortId(goal.id)} is recorded as ${goal.status} at revision ${goal.revision}: ${p.total} criterion(s) on record, ${p.gating} made required by the user (${p.gatingSatisfied} satisfied), ${p.suggested} put forward by APEX, ${p.declined} declined.`), lines);
+    for (const c of (goal.criteria ?? []).filter(needsUserDecision)) {
+      line(mark(ClaimKind.SUGGESTION, `${c.id} ("${c.description}") is a criterion APEX put forward (${c.basis ?? 'from its reading of the records'}); it is not a requirement until you record one, and no plan completes the goal against it.`), lines);
+    }
+  }
+  if (data.planId) {
+    const snap = data.planSnapshot ?? {};
+    line(mark(ClaimKind.FACT, `this is a revision of plan ${shortId(data.planId)}, recorded as v${snap.version ?? '?'} (${snap.status ?? '?'}): that plan and its approval are unchanged by this read, and a revision needs fresh validation and fresh approval.`), lines);
+    for (const f of (data.failedOperations ?? []).slice(0, 4)) {
+      line(mark(ClaimKind.VERIFIED_OUTCOME, `${f.detail}${f.operationId ? ` (operation ${shortId(f.operationId)})` : ' (the step record carries no operation id, so nothing is cited for it)'}`), lines);
+    }
+    if ((data.failedOperations ?? []).length === 0) {
+      line(mark(ClaimKind.FACT, 'the plan record holds no failed or uncertain step outcome, so this revision answers the stated reason and the constraints given, not a recorded failure.'), lines);
+    }
+  }
+  line(mark(ClaimKind.FACT, `${(data.candidates ?? []).length} approach(es) were generated from those records and compared; the candidate set digest is ${setDigestLabel(data.candidateSetDigest)}.`), lines);
+  line('What the approaches mean:', lines);
+  for (const [name, note] of Object.entries(STRATEGY_NOTE)) line(`  ${name} - ${note}`, lines);
+  for (const c of data.candidates ?? []) {
+    line(mark(ClaimKind.FACT, `${c.strategy}: ${c.steps} step(s), ${c.writes} write(s), ${c.risk} risk, digest ${shortId(c.digest)}, settles ${c.criteriaCovered?.length ? c.criteriaCovered.join(', ') : 'no recorded criterion'}; ${c.validation?.ok ? 'its read-only validation passed' : `validation refused: ${(c.validation?.problems ?? []).join('; ')}`}.`), lines);
+  }
+  for (const s of data.skipped ?? []) line(mark(ClaimKind.FACT, `${s.strategy} was not offered at all: ${s.reason}`), lines);
+  for (const c of comparison.excluded ?? []) {
+    line(mark(ClaimKind.FACT, `${c.strategy} was excluded by ${(c.failedGates ?? []).map((g) => `gate ${g.gate}: ${g.detail}`).join('; ')}`), lines);
+  }
+  for (const u of data.unaddressed ?? []) line(mark(ClaimKind.FACT, `no registered capability can carry ${u.criterionId ?? 'a criterion'} ("${u.text}") now, so no approach on the table settles it.`), lines);
+  for (const a of data.assumedFromGoalRequest ?? []) {
+    line(mark(ClaimKind.ASSUMPTION, `${a.criterionId ?? 'a criterion'} ("${a.text}") is planned only from the goal's recorded request, not from its own words: the step offered for it settles nothing by itself.`), lines);
+  }
+  for (const t of comparison.tradeOffs ?? []) line(mark(ClaimKind.FACT, t), lines);
+  for (const t of comparison.ties ?? []) line(mark(ClaimKind.FACT, t), lines);
+  if (comparison.ok === false) line(mark(ClaimKind.FACT, `no candidate could be compared: ${comparison.reason ?? 'no reason given'}.`), lines);
+  line('', lines);
+  line('Selection, which is APEX reading the comparison: it grants nothing, and the recording is a separate write.', lines);
+  if (selection) block(renderSelection(selection), lines);
+  if (reading) {
+    line('', lines);
+    line('Readiness of what the selection left on the table:', lines);
+    block(renderReadiness(reading), lines);
+  }
+  const occ = data.occupancy ?? null;
+  if (occ) {
+    line('', lines);
+    line(mark(ClaimKind.FACT, `as the read reported it: the plan store holds ${occ.drafts?.length ?? 0} draft(s) for this goal of at most ${occ.maxDrafts}, and ${occ.live?.length ?? 0} live plan(s); it would accept ${occ.draftsRemaining} more.`), lines);
+  }
+  if (recorded) {
+    line(mark(ClaimKind.FACT, `recorded draft ${shortId(recorded.id)}: ${recorded.steps} step(s), recorded from the ${recorded.strategy} candidate, whose compared digest is ${shortId(recorded.digest ?? '')}. A draft is a record of an intention, not a run; its own content hash is in the preview below.`), lines);
+    line(`  to approve it: node bin/apex.js plan approve ${shortId(recorded.id)}`, lines);
+  } else if (selection?.ok !== true) {
+    line('  Nothing was recorded, because the rule did not separate one candidate. Naming a priority settles it: say which of the approaches you want and APEX records that one.', lines);
+  }
+  if (data.learning) learningBlock(data.learning, lines);
+  else {
+    line('', lines);
+    line('No prediction appears above: a comparison of recorded candidates holds no expectation about what will happen, and a passed gate is not a probability.', lines);
+  }
+  const view = boundWithLegend(lines, {
+    label: 'planning options',
+    hint: '"node bin/apex.js plan candidates <goal-id>" prints the comparison gate by gate',
+  });
+  return { ...view, kinds: kindsShown(view.lines), goalId: data.goalId ?? null, planId: data.planId ?? null };
+}
+
+// The outcome answer: what the plan's own records establish, which of the seven questions they answer,
+// and what only confirmation outside APEX can settle. The verdict is a reading of records and is
+// reported as one, because the step that verified is a fact about the audit log rather than proof that
+// the intention holds in the world.
+export function describePlanOutcome({
+  data = null, reading = null, operationId = null, problems = [],
+}) {
+  const lines = [OUTCOME_HEADER, ''];
+  if (!data) {
+    const view = unreadableView(lines, problems, {
+      label: 'outcome view', hint: '"node bin/apex.js plan outcome <plan-id>" reads it under its own operation', noun: 'The outcome records',
+    });
+    return { ...view, kinds: kindsShown(view.lines) };
+  }
+  const snap = data.planSnapshot ?? {};
+  line(`Read and audited under operation ${shortId(operationId ?? 'unknown')}. This read recorded nothing: an assessment is written by plan.assess, which is your act.`, lines);
+  line(mark(ClaimKind.FACT, `plan ${shortId(data.planId)} is v${snap.version ?? '?'} (${snap.status ?? '?'}) with content hash ${shortId(snap.contentHash ?? '')} at ${snap.updatedAt ?? 'an unrecorded time'}.`), lines);
+  if (data.assessed !== true) {
+    line(mark(ClaimKind.FACT, `there is no execution outcome to read back: ${data.reason ?? 'no reason given'}.`), lines);
+    line(mark(ClaimKind.FACT, 'no step outcome is recorded against this plan, so no verdict is available and none is guessed.'), lines);
+    if (data.learning) learningBlock(data.learning, lines, 4);
+    line('', lines);
+    line('To settle it: node bin/apex.js plan validate <plan-id> reads whether the plan can still run; "plan outcome" answers again once a step has an outcome on record.', lines);
+    line('', lines);
+    line('Nothing here is a verified outcome, because nothing was verified. That is the honest answer, and it is stated rather than padded.', lines);
+    const view = boundWithLegend(lines, { label: 'outcome view', hint: '"node bin/apex.js plan list" shows the plans this configuration holds' });
+    return { ...view, kinds: kindsShown(view.lines), planId: data.planId ?? null };
+  }
+  line(mark(ClaimKind.VERIFIED_OUTCOME, `${data.verdict}: ${data.basis}`), lines);
+  line(`  the rule that gave that reading, in full: ${truncate(String(data.verdictRule ?? ''), 300)}`, lines);
+  line(mark(ClaimKind.FACT, `the plan record holds ${data.progress?.completed ?? 0} of ${data.progress?.total ?? 0} step outcome(s); task ${shortId(data.taskId ?? '')} is the run they were recorded under; goal ${shortId(data.goalId ?? '')} is recorded as ${data.goalStatus} at revision ${data.goalRevision ?? '?'}.`), lines);
+  for (const a of data.aspects ?? []) {
+    line(mark(ClaimKind.FACT, `${a.aspect}: ${a.answered ? 'answered from the records' : 'not answered, and disclosed as unanswered'} - the question was "${a.question}"`), lines);
+  }
+  for (const f of data.findings ?? []) {
+    const ops = (f.operations ?? []).map(shortId).join(', ');
+    const recs = (f.records ?? []).map(shortId).join(', ');
+    line(mark(f.operations?.length ? ClaimKind.VERIFIED_OUTCOME : ClaimKind.FACT, `${f.aspect}: ${f.statement}${ops ? ` [operation(s) ${ops}]` : ''}${recs ? ` [record(s) ${recs}]` : ''}`), lines);
+  }
+  for (const d of data.dropped ?? []) line(mark(ClaimKind.FACT, `${d.aspect} was dropped rather than answered: ${d.reason}`), lines);
+  for (const a of (data.priorAssessments ?? []).slice(0, 4)) {
+    line(mark(ClaimKind.FACT, `an assessment of this plan is already recorded: ${a.verdict} for v${a.planVersion} at ${a.at}${a.stale ? ' (stale: the plan content has since changed)' : ''}, citing ${a.findings} finding(s).`), lines);
+  }
+  if (reading) {
+    line('', lines);
+    line('Whether this can be taken up now:', lines);
+    block(renderReadiness(reading), lines);
+  }
+  line('', lines);
+  line(data.recordable
+    ? `This reading can be recorded with plan.assess against ${shortId(data.planId)}; recording it changes no status, approval, or timestamp.`
+    : `This reading cannot be recorded: ${data.unrecordableReason}`, lines);
+  line('A step that ran and verified is a fact about the audit log. Whether the intention holds outside APEX\'s records is a different question, and this answer does not settle it.', lines);
+  if (data.learning) learningBlock(data.learning, lines);
+  else {
+    line('', lines);
+    line('No prediction is shown above: this answer reads records that exist, and none of them is an expectation about what will happen next.', lines);
+  }
+  const view = boundWithLegend(lines, {
+    label: 'outcome view',
+    hint: '"node bin/apex.js plan outcome <plan-id> --json" returns every finding and its citations',
+  });
+  return { ...view, kinds: kindsShown(view.lines), planId: data.planId ?? null, verdict: data.verdict ?? null };
+}
+
+// The readiness answer: the six states in use, the one the records support, the factor behind it, and
+// the factors the continuation ranking used. Each names the record it came from, so the reader can
+// check the state instead of taking it on trust.
+export function describeReadiness({
+  reading = null, prioritization = [], problems = [], operationId = null, planRef = null,
+}) {
+  const lines = [READINESS_HEADER, ''];
+  line(`Read and audited under operation ${shortId(operationId ?? 'unknown')}. Nothing here was run, approved, recorded, or cancelled.`, lines);
+  line(`The six states, and the record each one is read from${planRef ? ` (asked about ${shortId(planRef)})` : ''}:`, lines);
+  for (const s of READINESS_STATES) line(`  ${s} - ${READINESS_BASIS[s]}`, lines);
+  for (const p of (problems ?? []).slice(0, 6)) line(mark(ClaimKind.FACT, `reading the records hit a problem, so the answer is partial: ${p}`), lines);
+  line('', lines);
+  if (reading) block(renderReadiness(reading), lines);
+  else line('No readiness reading was available: no plan, goal, or comparison could be read for it.', lines);
+  const ranked = (prioritization ?? []).slice(0, 3);
+  if (ranked.length > 0) {
+    line('', lines);
+    line('What the continuation ranking used, in this order:', lines);
+    for (const [index, candidate] of ranked.entries()) {
+      const pf = prioritizationFactors(candidate);
+      line(`  ${index + 1}. ${candidate.kind} ${shortId(candidate.ref)} - "${words(candidate.title)}" (${candidate.status ?? 'status not recorded'})`, lines);
+      line(`     ranking rule: ${pf.rule}${Number.isInteger(pf.score) ? `; score ${pf.score}` : ''}`, lines);
+      for (const f of pf.factors.slice(0, BOUNDS.maxListedRecords)) line(`     ${mark(ClaimKind.FACT, `${f.factor} [read from: ${f.readFrom}]`)}`, lines);
+      line(`     ${pf.note}`, lines);
+      if (candidate.command) line(`     to take it up: ${candidate.command}`, lines);
+    }
+  } else {
+    line('', lines);
+    line('No open record is ranked, so no prioritization factor is claimed. Nothing is suggested, because nothing is waiting.', lines);
+  }
+  line('', lines);
+  const view = boundWithLegend(lines, {
+    label: 'readiness view',
+    hint: '"node bin/apex.js work" ranks the open records and prints each one\'s readiness',
+  });
+  return { ...view, kinds: kindsShown(view.lines), readiness: reading?.readiness ?? null };
 }

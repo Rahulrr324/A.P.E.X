@@ -26,7 +26,8 @@ import { TaskRunner } from './task-runner.js';
 import { TaskStatus, StepStatus } from '../tasks/model.js';
 import { buildTaskSummary, taskStateSignature } from '../tasks/summary.js';
 import { renderTask, renderTaskList, explainTask } from '../tasks/format.js';
-import { renderGoal, renderGoalList } from '../goals/format.js';
+import { renderAssessment, renderGoal, renderGoalList } from '../goals/format.js';
+import { assessGoal } from '../goals/assess.js';
 import { GoalStatus, goalProgress, isOpenStatus } from '../goals/model.js';
 import { renderPlan, renderPlanList } from '../plans/format.js';
 import { PlanStatus, isOpenPlan, planProgress, validatePlanContent } from '../plans/model.js';
@@ -46,13 +47,25 @@ import { CAPTURE_AUTOMATIC } from '../experience/experience-store.js';
 import { finalizeOperation } from './finalization.js';
 import { executiveSignal, synthesizePlan } from '../executive/mapping.js';
 import { buildPreview, previewHeadline } from '../executive/preview.js';
-import { describeExecutiveStatus } from '../executive/status.js';
+import { describeExecutiveStatus, describePlanOptions, describePlanOutcome, describeReadiness } from '../executive/status.js';
+import { readinessOf } from '../executive/readiness.js';
+import { selectCandidate } from '../executive/selection.js';
+import { candidatesForGoal, revisedCandidates } from '../plans/candidates.js';
+import { evaluateCandidates } from '../plans/evaluation.js';
 import { classifyRecovery, renderRecovery } from '../executive/recovery.js';
 import { RequestMode, StatusQuestion } from '../executive/vocabulary.js';
 
 export const MAX_REQUEST_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 4000;
 const MEMORY_SHOWN_CHARS = 1000;
+// The generator's own refusals, as opposed to a comparison's findings. A preparation that names a goal
+// falls back to the user's own words only for these: they say the goal's records hold nothing for a
+// candidate to be built from, which is a fact about the records, not a finding about approaches.
+const GENERATION_REFUSALS = new Set(['no-open-criteria', 'no-capability', 'no-goal']);
+// The reason a replanning read is answered under when the reader named none. It appears in the read's
+// own first line ("... answering: <reason>"), so `plan replan <id>` with no --reason still says what
+// the revision is a revision of: the command itself is the request.
+const DEFAULT_REPLAN_REASON = 'the user asked for a revised approach to this plan';
 // Shown after a run that did not end clean, next to its recovery reading. The runner's rule is
 // stated in the conversation as well as in the record, because a reader deciding what to do next has
 // to know that nothing will repeat on its own.
@@ -1841,6 +1854,10 @@ export class CognitiveController {
       worldModel: this.worldModel,
       registry: this.registry,
       taskStore: this.taskStore,
+      // The prediction ledger, readable and optional. A plan answer discloses the user's recorded
+      // expectations beside the comparison; it does not authorize one, and a configuration without the
+      // ledger receives a disclosure that says the ledger is absent rather than that it is empty.
+      predictions: this.predictions,
     };
     // The filesystem actions receive the authorized root on ctx.root. It is set only by the
     // composition root and cannot be supplied by a model proposal, so the boundary cannot be
@@ -1916,24 +1933,52 @@ export class CognitiveController {
     });
   }
 
-  async goalAdd({ request, criteria, priority = 3, deadline = null, dependsOn = [] } = {}) {
+  async goalAdd({
+    request, criteria, priority = 3, deadline = null, dependsOn = [],
+    prerequisites = undefined, constraints = undefined, resources = undefined,
+    timeConditions = undefined, blockers = undefined, unknowns = undefined,
+  } = {}) {
     return this.#executiveMutation({
       capability: 'goal.add',
       request: this.#intentSummary('goal', request),
       action: 'goal.add',
-      input: { request, criteria, priority, deadline, dependsOn },
+      input: {
+        request, criteria, priority, deadline, dependsOn,
+        prerequisites, constraints, resources, timeConditions, blockers, unknowns,
+      },
       failMessage: 'The goal may have been stored, but its audit record could not be written.',
       status: Outcome.GOAL_CREATED,
     });
   }
 
-  async goalRevise({ target, request = undefined, criteria, priority = undefined, deadline = undefined, reason } = {}) {
+  async goalRevise({
+    target, request = undefined, criteria, priority = undefined, deadline = undefined, reason,
+    prerequisites = undefined, constraints = undefined, resources = undefined,
+    timeConditions = undefined, blockers = undefined, unknowns = undefined,
+  } = {}) {
     return this.#executiveMutation({
       capability: 'goal.revise',
       request: this.#intentSummary(`goal revise ${truncate(String(target ?? ''), 40)}`, request),
       action: 'goal.revise',
-      input: { target, request, criteria, priority, deadline, reason },
+      input: {
+        target, request, criteria, priority, deadline, reason,
+        prerequisites, constraints, resources, timeConditions, blockers, unknowns,
+      },
       failMessage: 'The goal may have been revised, but its audit record could not be written.',
+      status: Outcome.GOAL_UPDATED,
+    });
+  }
+
+  // The user's own decision about a success criterion. It has its own capability because it is the
+  // only act that turns what APEX inferred into what the user requires, and the only act that takes
+  // a criterion out of the completion rules without revising the goal.
+  async goalConfirm({ target, criterion, decision, reason, operationId = null } = {}) {
+    return this.#executiveMutation({
+      capability: 'goal.confirm',
+      request: `goal confirm ${truncate(String(target ?? ''), 40)} ${truncate(String(criterion ?? ''), 20)} ${truncate(String(decision ?? ''), 20)}`,
+      action: 'goal.confirm',
+      input: { target, criterion, decision, reason, operationId },
+      failMessage: 'The decision may have been recorded, but its audit record could not be written.',
       status: Outcome.GOAL_UPDATED,
     });
   }
@@ -1992,6 +2037,23 @@ export class CognitiveController {
     this.#requireGoals();
     const goal = await this.goals.resolve(ref);
     return { goal, display: renderGoal(goal) };
+  }
+
+  // Read-only: re-opens the audit operations and knowledge records the goal cites and reports
+  // whether what the goal claims about its own evidence still holds. `showGoal` prints the goal
+  // log; this prints what the rest of APEX now says about it - a proof whose record was retracted
+  // afterwards, an operation the audit log does not support, a reference that reads back as
+  // nothing. It writes no event and decides nothing for the user: what is missing is returned as
+  // a question, because a criterion APEX invented would be an inference, not an answer.
+  async assessStoredGoal(ref) {
+    this.#requireGoals();
+    const goal = await this.goals.resolve(ref);
+    const assessment = await assessGoal(goal, {
+      knowledge: this.knowledge ?? null,
+      operations: this.operations ?? null,
+      plans: this.plans ?? null,
+    });
+    return { goal, assessment, display: renderAssessment(goal, assessment) };
   }
 
   async planAdd({ goal = null, goalId = null, outcome, steps, preconditions = [], assertions = [], estimatedSeconds = null, reason = null } = {}) {
@@ -2061,6 +2123,56 @@ export class CognitiveController {
     return { plan, display: renderPlan(plan) };
   }
 
+  // The planning surface the AL answers point at. Each route runs its registered action under its own
+  // audited, user-origin operation, so `plan candidates <goal-id>`, `plan replan <plan-id>` and
+  // `plan outcome <plan-id>` are the commands the readiness and status hints name, and the audit log
+  // holds the action's own independent re-check. The three reads write nothing: candidates are drafts
+  // on screen, a replan leaves the plan it answers byte-identical, and an outcome read is a reading of
+  // records rather than a recorded assessment. `planAssess` is the one that records, and it records
+  // only a verdict the action re-derives from those records.
+  #planningOp(capability, request) {
+    this.#requirePlans();
+    return this.#newOp({ capability, origin: 'user', request });
+  }
+
+  async planCandidates({ goal, work = null, cannotUse = [] } = {}) {
+    this.#requireGoals();
+    const op = this.#planningOp('plan.candidates', `plan candidates ${truncate(String(goal ?? ''), 40)}`);
+    const step = await this.runAction('plan.candidates', { goal, work, cannot_use: cannotUse }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async planReplan({ plan, reason = null, cannotUse = [] } = {}) {
+    this.#requireGoals();
+    const op = this.#planningOp('plan.replan', `plan replan ${truncate(String(plan ?? ''), 40)}`);
+    const step = await this.runAction('plan.replan', {
+      plan,
+      reason: reason ?? DEFAULT_REPLAN_REASON,
+      cannot_use: cannotUse,
+    }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async planOutcome({ plan } = {}) {
+    const op = this.#planningOp('plan.outcome', `plan outcome ${truncate(String(plan ?? ''), 40)}`);
+    const step = await this.runAction('plan.outcome', { plan }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // No PLAN_STORED override here, unlike the plan writes above: `plan_stored` means a plan was
+  // recorded, revised, approved, or closed, and recording an assessment does none of those - the plan
+  // record comes back byte-identical. The operation keeps the action's own verified outcome, and its
+  // capability name says what was written.
+  async planAssess({ target } = {}) {
+    const op = this.#planningOp('plan.assess', `plan assess ${truncate(String(target ?? ''), 40)}`);
+    const step = await this.runAction('plan.assess', { target }, 'user', op.id);
+    return this.#finishCommandOp(
+      op,
+      step,
+      'The assessment may have been recorded, but its audit record could not be written.',
+    );
+  }
+
   // ---- executive bridge -------------------------------------------------------
   // The path from the user's own words to APEX's own records: read what was asked, map it onto
   // registered capabilities, record a plan, show exactly what running it would do, and - only after
@@ -2072,6 +2184,12 @@ export class CognitiveController {
   // every status line is read from the goal, plan, task, and continuation records. No model is
   // consulted anywhere on this path, and no recommendation becomes permission here: the registry
   // decides each step again at the moment it runs.
+  //
+  // The planning routes (candidates, selection, replanning, outcome, readiness) call the same read
+  // actions the CLI calls, so the audit holds the authorization and the independent re-check for each.
+  // Where an answer needs the step bytes a read summarizes by digest, those bytes come from the same
+  // pure generator the read used, and a candidate whose bytes differ from the digest the comparison
+  // was bound to is refused rather than recorded.
   //
   // Only the requests this mapping recognises in the user's own words are taken. Everything else -
   // every ordinary question, and any request over the bound in executive/mapping.js - keeps the path
@@ -2106,12 +2224,14 @@ export class CognitiveController {
     switch (signal.mode) {
       case RequestMode.PREPARE:
         return this.#executivePrepare(op, sid, signal);
+      case RequestMode.REPLAN:
+        return this.#executiveReplan(op, sid, signal);
       case RequestMode.APPROVE:
         return this.#executiveApprove(op, sid, signal);
       case RequestMode.EXECUTE:
         return this.#executiveExecute(op, sid, signal);
       case RequestMode.STATUS:
-        return this.#executiveStatus(op, signal);
+        return this.#executiveStatus(op, sid, signal);
       default:
         return this.#executiveClarify(op, sid, signal);
     }
@@ -2138,11 +2258,38 @@ export class CognitiveController {
     }
   }
 
+  // A preparation request that names a recorded goal is answered by the candidate generator first: the
+  // approaches the goal's own criteria support are compared under the disclosed rule, and the one the
+  // rule separates is recorded. Where the goal's records hold nothing to generate from - no criteria on
+  // record, no criterion a registered capability can carry - the draft is worked up from the user's own
+  // words instead, and the answer says so. Every other refusal stops here: a synthesized draft beside an
+  // unresolved trade-off, or beside candidates the gates excluded, would read as the answer the
+  // comparison did not give.
   async #executivePrepare(op, sid, signal) {
+    if (!signal.goalRef) return this.#executiveSynthesize(op, sid, signal);
+    const found = await this.#goalRecordFor(signal.goalRef);
+    if (!found.ok) return this.#planningClarification(op, sid, found.text);
+    if (!found.goal) {
+      return this.#planningClarification(op, sid, `Goal ${shortId(signal.goalRef)} is not in the goal log, so APEX has no recorded intention to plan against and nothing was recorded. Record one with: node bin/apex.js goal add "<what you want to be true>"`);
+    }
+    const answer = await this.#executiveCandidatePlan(op, sid, {
+      goal: found.goal, via: 'candidates', recording: true, workText: signal.workText,
+    });
+    if (!GENERATION_REFUSALS.has(answer.refusal ?? '')) return answer;
+    return this.#executiveSynthesize(op, sid, signal, [
+      `Goal ${shortId(found.goal.id)} supports no candidate plan the records can compare (${answer.refusal}), so the draft below was worked up from your own words rather than selected from a comparison of approaches. APEX inferred nothing about that goal to make it.`,
+      '',
+    ].join('\n'));
+  }
+
+  // The draft the user's own words support: each part of the request is matched to a registered
+  // capability, and a part nothing can take is left named as an unknown instead of filled in.
+  async #executiveSynthesize(op, sid, signal, lead = null) {
     const synth = synthesizePlan({
       request: signal.request,
       workText: signal.workText,
       registry: this.registry,
+      goalId: signal.goalRef ?? null,
       now: this.now(),
     });
     if (!synth.ok) {
@@ -2154,13 +2301,20 @@ export class CognitiveController {
         lines.push('The registered policies refuse this combination:');
         for (const p of synth.problems.slice(0, 8)) lines.push(`  - ${truncate(p, 200)}`);
         if (synth.problems.length > 8) lines.push(`  - ... and ${synth.problems.length - 8} more`);
+      } else if (synth.unmapped.length === 0) {
+        // Nothing was left to map once the goal reference was taken out, so there is no part of the
+        // request this answer can quote back as unmapped. Printing an empty list under a count would
+        // state a number instead of the reason, so the reason is printed and the way to settle it.
+        lines.push('Nothing in the request names work for APEX to plan: once the goal reference is taken out, no part of the request is left to match against a registered capability.');
+        for (const p of synth.problems.slice(0, 8)) lines.push(`  - ${truncate(p, 200)}`);
+        lines.push('', 'Say what the plan should do beside the goal, for example: prepare a plan to remember that <fact> for goal <goal-id>');
       } else {
         lines.push(`Parts of the request that no registered capability can take (${synth.unmapped.length}):`);
         for (const u of synth.unmapped.slice(0, 8)) lines.push(`  - "${truncate(u.text, 120)}" - ${u.reason}`);
         if (synth.unmapped.length > 8) lines.push(`  - ... and ${synth.unmapped.length - 8} more`);
       }
       lines.push('', 'Nothing was recorded, so there is no plan waiting for approval and nothing is queued to run.');
-      const display = lines.join('\n');
+      const display = `${lead ?? ''}${lines.join('\n')}`;
       await this.#recordTurns(op, sid, op.request, [
         { origin: TURN_ORIGINS.QUESTION, text: display, verified: false },
       ], { subject: 'answer' });
@@ -2185,6 +2339,16 @@ export class CognitiveController {
       return { status: step.outcome, output: step.summary, display: text };
     }
 
+    return this.#executiveDraftView(op, sid, { step, unmapped: synth.unmapped, lead });
+  }
+
+  // The view of a plan that has just been recorded. The stored bytes are read back from the plan log
+  // and shown, so what the user is offered for approval is the record rather than this answer's
+  // reconstruction of it: its steps and dependencies as the live registry sees them, the parts of the
+  // request nothing could take, the content hash an approval binds to, and the two separate words that
+  // approve and start. `note` is the comparison a selected draft came from, printed above its preview;
+  // `turnNote` travels with the summary kept in the conversation history. Nothing here runs.
+  async #executiveDraftView(op, sid, { step, unmapped = [], lead = null, note = null, turnNote = null }) {
     const planId = step.result?.data?.planId ?? null;
     let plan = null;
     const notes = [];
@@ -2194,14 +2358,14 @@ export class CognitiveController {
       notes.push(`The recorded plan could not be read back for this preview (${redactSecrets(err.message)}).`);
     }
     if (!plan) {
-      const text = `${step.summary}\nIts preview could not be built${notes.length ? `: ${notes.join(' ')}` : ', because the stored plan was not readable.'}`;
+      const text = `${lead ?? ''}${step.summary}\nIts preview could not be built${notes.length ? `: ${notes.join(' ')}` : ', because the stored plan was not readable.'}`;
       await this.#recordTurns(op, sid, op.request, [
         { origin: TURN_ORIGINS.ACTION, text: step.summary, verified: true },
       ], { subject: 'answer' });
       return { status: step.outcome, output: step.summary, display: text };
     }
 
-    const view = await this.#executivePreview(plan, synth.unmapped);
+    const view = await this.#executivePreview(plan, unmapped);
     const headline = previewHeadline(plan, {
       state: `recorded as ${plan.status}`,
       note: 'waiting for your approval; approval is a separate act, and approval starts nothing',
@@ -2213,11 +2377,15 @@ export class CognitiveController {
       `  start plan ${shortId(plan.id)}`,
       'Each of those is a separate request, and each is authorized by the action registry when it runs.',
     ].join('\n');
-    const display = `${headline}\n\n${view.display}${conversation}`;
+    const display = [lead, note, `${headline}\n\n${view.display}${conversation}`].filter(Boolean).join('\n\n');
     await this.#recordTurns(op, sid, op.request, [
-      { origin: TURN_ORIGINS.ACTION, text: `${headline} Nothing has run.`, verified: true },
+      { origin: TURN_ORIGINS.ACTION, text: `${headline} Nothing has run.${turnNote ? ` ${turnNote}` : ''}`, verified: true },
     ], { subject: 'answer' });
-    return { status: Outcome.PLAN_STORED, output: `${headline}${view.truncated ? ' (the preview shown here is bounded; the full plan is in the record)' : ''}`, display };
+    return {
+      status: Outcome.PLAN_STORED,
+      output: `${headline}${view.truncated ? ' (the preview shown here is bounded; the full plan is in the record)' : ''}${turnNote ? ` ${turnNote}` : ''}`,
+      display,
+    };
   }
 
   async #executiveApprove(op, sid, signal) {
@@ -2308,9 +2476,12 @@ export class CognitiveController {
     };
   }
 
-  async #executiveStatus(op, signal) {
+  async #executiveStatus(op, sid, signal) {
     // One read of each record log, and the ranking is the same one `work` and `next` print.
     const report = await this.continuationReport();
+    if (signal.question === StatusQuestion.OPTIONS) return this.#executiveOptions(op, sid, signal, report);
+    if (signal.question === StatusQuestion.OUTCOME) return this.#executiveOutcome(op, sid, signal, report);
+    if (signal.question === StatusQuestion.READINESS) return this.#executiveReadiness(op, sid, signal, report);
     const answer = describeExecutiveStatus({
       question: signal.question,
       goals: report.goals,
@@ -2322,10 +2493,399 @@ export class CognitiveController {
     return { status: Outcome.SUCCESS_VERIFIED, output: answer.display, display: answer.display };
   }
 
+  // A record the request named. A reference that cannot be read is answered by saying so and sending
+  // the user to the list, never by falling back to whatever record is nearest in the log: choosing for
+  // the user is not this path's to make, and a wrong referent is worse than a question.
+  async #planRecordFor(ref) {
+    try {
+      return { ok: true, plan: await this.plans.resolve(ref) };
+    } catch (err) {
+      return {
+        ok: false,
+        text: `The plan ${shortId(String(ref))} named in your request could not be read: ${redactSecrets(err.message)}. Nothing was recorded or changed. List them with: node bin/apex.js plan list`,
+      };
+    }
+  }
+
+  async #goalRecordFor(ref) {
+    if (!this.goals) {
+      return { ok: false, text: 'Goal records are not configured in this APEX, so no goal could be read and no approach could be generated against one.' };
+    }
+    try {
+      return { ok: true, goal: await this.goals.resolve(ref) };
+    } catch (err) {
+      return {
+        ok: false,
+        text: `The goal ${shortId(String(ref))} named in your request could not be read: ${redactSecrets(err.message)}. Nothing was recorded. List them with: node bin/apex.js goal list`,
+      };
+    }
+  }
+
+  // A planning question with no resolvable subject is answered by asking which record it is about. The
+  // question is recorded as a question turn, so the user's reply is understood as an answer to it.
+  async #planningClarification(op, sid, text) {
+    await this.#recordTurns(op, sid, op.request, [
+      { origin: TURN_ORIGINS.QUESTION, text, verified: false },
+    ], { subject: 'answer' });
+    return { status: Outcome.CLARIFICATION_REQUIRED, output: text, display: text };
+  }
+
+  // Generate the approaches a recorded goal supports, compare them under the disclosed rule, and -
+  // when the user asked for a plan rather than about one - record the single candidate the comparison
+  // separates. `plan.candidates` and `plan.replan` are the registered reads, so this operation carries
+  // their authorization and their independent re-check. The step bytes are re-derived from the same
+  // pure generator those reads used and bound to the digests the comparison reported: a candidate whose
+  // bytes differ from the ones compared is refused, not recorded. Where the rule separates nothing, the
+  // trade-off is the answer and no draft is written.
+  async #executiveCandidatePlan(op, sid, {
+    goal = null, plan = null, via = 'candidates', recording = false, reason = null, workText = null, as = 'options',
+    prioritization = [],
+  }) {
+    const input = via === 'replan'
+      ? { plan: plan.id, reason: reason ?? DEFAULT_REPLAN_REASON }
+      : { goal: goal.id, ...(workText ? { work: workText } : {}) };
+    const read = await this.runAction(via === 'replan' ? 'plan.replan' : 'plan.candidates', input, 'user', op.id);
+    op.steps.push(read);
+    if (read.outcome !== Outcome.SUCCESS_VERIFIED) {
+      return { status: read.outcome, output: read.summary, display: read.display ?? read.summary, refusal: 'read-did-not-verify' };
+    }
+    const data = read.result?.data ?? null;
+    if (!data || !data.comparison) {
+      return this.#planningStatement(
+        Outcome.VERIFICATION_UNAVAILABLE,
+        'The candidate read returned no comparison, so nothing could be selected and nothing was recorded.',
+      );
+    }
+    // The read answered a goal; an answer built against a different one would be a statement about
+    // bytes nobody compared.
+    const subjectGoal = goal ?? null;
+    if (subjectGoal && data.goalId && subjectGoal.id !== data.goalId) {
+      return this.#planningStatement(
+        Outcome.VERIFICATION_UNAVAILABLE,
+        `The read answered goal ${shortId(data.goalId)}, not ${shortId(subjectGoal.id)}, so this request describes records that have moved. Nothing was recorded.`,
+      );
+    }
+    const target = subjectGoal ?? ((await this.#goalRecordFor(data.goalId)).goal ?? null);
+    if (!target) {
+      return this.#planningStatement(
+        Outcome.VERIFICATION_UNAVAILABLE,
+        'The goal these candidates were generated against could not be read, so its bytes could not be reproduced and nothing was recorded.',
+      );
+    }
+    // The generator and evaluator the read itself used, with the same inputs it used, so the step
+    // content beside this answer is the content the digests were taken over.
+    const evidence = { unavailableActions: [], knownBlockers: [] };
+    const generated = via === 'replan'
+      ? revisedCandidates({
+        goal: target,
+        registry: this.registry,
+        prior: plan,
+        evidence: { unavailableActions: [], knownBlockers: [], failedOperations: data.failedOperations ?? [] },
+        reason: data.reason ?? input.reason,
+      })
+      : candidatesForGoal({ goal: target, registry: this.registry, evidence, workText: data.work ?? workText ?? null });
+    const evaluation = evaluateCandidates({
+      result: generated,
+      goal: target,
+      registry: this.registry,
+      evidence: via === 'replan' ? { unavailableActions: data.refusedActions ?? [], knownBlockers: [] } : evidence,
+    });
+    if ((evaluation.boundTo?.candidateSetDigest ?? null) !== (data.candidateSetDigest ?? null)) {
+      return this.#planningStatement(
+        Outcome.VERIFICATION_UNAVAILABLE,
+        `An independent generation of the same candidates gives different bytes than the read compared, so the goal, the registry, or a constraint moved between them. Nothing was recorded. Run "node bin/apex.js plan ${via === 'replan' ? 'replan' : 'candidates'} ${shortId(via === 'replan' ? plan.id : target.id)}" for the read alone.`,
+      );
+    }
+    const selection = selectCandidate({
+      comparison: data.comparison,
+      candidates: data.candidates ?? [],
+      skipped: data.skipped ?? [],
+      goalId: data.goalId ?? target.id ?? null,
+      planId: data.planId ?? plan?.id ?? null,
+    });
+    const reading = readinessOf({
+      goal: target,
+      comparison: data.comparison,
+      generation: generated.ok === false
+        ? { ok: false, reason: generated.reason, problems: generated.problems }
+        : null,
+    });
+    let write = null;
+    let recorded = null;
+    if (recording && selection.ok === true) {
+      const local = (generated.candidates ?? [])
+        .find((c) => c.strategy === selection.chosen.strategy && c.digest === selection.chosen.digest);
+      if (!local) {
+        return this.#planningStatement(
+          Outcome.VERIFICATION_UNAVAILABLE,
+          `The leading candidate ${selection.chosen.strategy} could not be reproduced from the recorded goal and the live registry, so its bytes were not available to record and nothing was written.`,
+        );
+      }
+      write = await this.runAction('plan.add', {
+        goal: null,
+        goalId: local.content.goalId ?? target.id ?? null,
+        outcome: local.content.outcome,
+        steps: local.content.steps,
+        preconditions: local.content.preconditions,
+        assertions: local.content.assertions,
+        estimatedSeconds: local.content.resources?.estimatedSeconds ?? null,
+        reason: via === 'replan'
+          ? `selected from a revised candidate set for plan ${shortId(plan.id)} v${plan.version}; the earlier plan and its approval are untouched`
+          : `selected from the candidate set goal ${shortId(target.id)} supports, under the disclosed comparison rule`,
+      }, 'user', op.id);
+      op.steps.push(write);
+      if (write.outcome !== Outcome.SUCCESS_VERIFIED) {
+        // The plan store states why its own write did not stand; whether anything was stored is
+        // stated by that outcome and not guessed at.
+        return { status: write.outcome, output: write.summary, display: write.display ?? write.summary, refusal: 'write-did-not-verify' };
+      }
+      recorded = {
+        id: write.result?.data?.planId ?? null,
+        steps: local.content.steps.length,
+        digest: local.digest,
+        strategy: local.strategy,
+      };
+    }
+    const answer = describePlanOptions({
+      goal: target, data, selection, reading, operationId: op.id, recorded, problems: [],
+    });
+    if (as === 'readiness') {
+      // The ranking the same request would print for "what is next" is carried here, because a
+      // readiness answer that named no open record while one exists would be an incomplete reading
+      // presented as a whole one.
+      const ready = describeReadiness({
+        reading, prioritization, problems: [], operationId: op.id, planRef: plan?.id ?? target.id ?? null,
+      });
+      const display = `${answer.display}\n\n${ready.display}`;
+      return { status: Outcome.SUCCESS_VERIFIED, output: display, display };
+    }
+    if (recorded) {
+      // The draft is the one candidate the rule separated, and the alternatives that were compared
+      // against it stay in this same answer rather than being dropped by it.
+      return this.#executiveDraftView(op, sid, {
+        step: write,
+        unmapped: [],
+        note: answer.display,
+        turnNote: `${(data.candidates ?? []).length} approach(es) were compared under the disclosed rule and only the selected one was recorded; ${(selection.alternatives ?? []).length} alternative(s) are reported beside it with the position the rule gave them.`,
+      });
+    }
+    if (recording) {
+      return {
+        status: this.#recordingRefusalFor(selection.reason),
+        output: answer.display,
+        display: answer.display,
+        refusal: selection.reason,
+      };
+    }
+    return { status: Outcome.SUCCESS_VERIFIED, output: answer.display, display: answer.display };
+  }
+
+  // Nothing was recorded, and why, in the outcome the records support: an unresolved trade-off needs
+  // the user's priority, a gated-out candidate set needs different work, and anything else means a
+  // check could not be completed rather than that the request was refused.
+  #recordingRefusalFor(reason) {
+    if (reason === 'unresolved') return Outcome.CLARIFICATION_REQUIRED;
+    if (['every-candidate-gated', 'no-candidates', 'no-open-criteria', 'no-capability', 'no-goal', 'no-prior-plan'].includes(reason)) {
+      return Outcome.PLAN_REJECTED;
+    }
+    return Outcome.VERIFICATION_UNAVAILABLE;
+  }
+
+  #planningStatement(status, text, refusal = null) {
+    return { status, output: text, display: text, refusal };
+  }
+
+  async #executiveReplan(op, sid, signal) {
+    // A revision is a new draft beside the plan it revises. The plan being revised is not touched by
+    // this path at all: no status change, no re-write, no inherited approval, and superseding it stays
+    // a separate user act the user can see the reason for.
+    if (signal.ref) {
+      const found = await this.#planRecordFor(signal.ref);
+      if (!found.ok) return this.#planningClarification(op, sid, found.text);
+      const goal = found.plan.goalId ? (await this.#goalRecordFor(found.plan.goalId)).goal : null;
+      return this.#executiveCandidatePlan(op, sid, {
+        goal,
+        plan: found.plan,
+        via: 'replan',
+        recording: true,
+        reason: `a revised approach was asked for in these words: "${truncate(signal.request, 140)}"`,
+      });
+    }
+    const found = await this.#goalRecordFor(signal.goalRef);
+    if (!found.ok) return this.#planningClarification(op, sid, found.text);
+    return this.#executiveCandidatePlan(op, sid, { goal: found.goal, via: 'candidates', recording: true });
+  }
+
+  async #executiveOptions(op, sid, signal, report) {
+    // A question about approaches is answered by reading, never by recording: the user asked what
+    // there is, not for a draft of one.
+    if (signal.ref) {
+      const found = await this.#planRecordFor(signal.ref);
+      if (!found.ok) return this.#planningClarification(op, sid, found.text);
+      if (!found.plan.goalId) {
+        return this.#planningClarification(op, sid, `Plan ${shortId(found.plan.id)} records no goal, so no approach has an intention to be an alternative to. Name a goal with: node bin/apex.js plan candidates <goal-id>`);
+      }
+      const goal = (await this.#goalRecordFor(found.plan.goalId)).goal ?? null;
+      if (!goal) {
+        return this.#planningStatement(Outcome.VERIFICATION_UNAVAILABLE, `The goal plan ${shortId(found.plan.id)} is bound to could not be read, so its alternatives could not be compared. Nothing was recorded.`);
+      }
+      return this.#executiveCandidatePlan(op, sid, { goal, plan: found.plan, via: 'replan', recording: false });
+    }
+    if (signal.goalRef) {
+      const found = await this.#goalRecordFor(signal.goalRef);
+      if (!found.ok) return this.#planningClarification(op, sid, found.text);
+      return this.#executiveCandidatePlan(op, sid, { goal: found.goal, via: 'candidates', recording: false });
+    }
+    const open = (report.goals ?? []).filter((g) => isOpenStatus(g.status));
+    if (open.length === 0) {
+      return this.#planningStatement(Outcome.SUCCESS_VERIFIED, 'No goal is open in the records, so there is no intention a plan could be an approach to. Nothing was generated, compared, or recorded. Record one with: node bin/apex.js goal add "<what you want to be true>"');
+    }
+    if (open.length > 1) {
+      return this.#planningClarification(op, sid, `${open.length} goals are open and this request names none of them, so choosing one would be guessing: ${open.slice(0, 6).map((g) => shortId(g.id)).join(', ')}. Name the goal, or list them with: node bin/apex.js goal list`);
+    }
+    const answer = await this.#executiveCandidatePlan(op, sid, { goal: open[0], via: 'candidates', recording: false });
+    if (!answer.display || answer.status !== Outcome.SUCCESS_VERIFIED) return answer;
+    const lead = `Answered about ${shortId(open[0].id)}, the only open goal in the records. Name a goal if you meant another.`;
+    return { ...answer, output: `${lead}\n\n${answer.output}`, display: `${lead}\n\n${answer.display}` };
+  }
+
+  async #executiveOutcome(op, sid, signal, report) {
+    let plan = null;
+    let lead = null;
+    if (signal.ref) {
+      const found = await this.#planRecordFor(signal.ref);
+      if (!found.ok) return this.#planningClarification(op, sid, found.text);
+      plan = found.plan;
+    } else {
+      const withOutcomes = (report.plans ?? []).filter((p) => Object.keys(p.stepResults ?? {}).length > 0);
+      const pool = withOutcomes.length > 0 ? withOutcomes : (report.plans ?? []);
+      if (pool.length === 0) {
+        return this.#planningStatement(Outcome.SUCCESS_VERIFIED, 'No plan is recorded, so no execution has an outcome to read back. Nothing has run, and nothing is claimed as done. List them with: node bin/apex.js plan list');
+      }
+      if (pool.length > 1) {
+        return this.#planningClarification(op, sid, `${pool.length} plans are in the records and this request names none of them: ${pool.slice(0, 6).map((p) => shortId(p.id)).join(', ')}. Name the plan whose outcome you mean, or list them with: node bin/apex.js plan list`);
+      }
+      plan = pool[0];
+      lead = `Answered about ${shortId(plan.id)}, the only plan in these records with step outcomes on it. Name a plan if you meant another.`;
+    }
+    const read = await this.runAction('plan.outcome', { plan: plan.id }, 'user', op.id);
+    op.steps.push(read);
+    if (read.outcome !== Outcome.SUCCESS_VERIFIED) {
+      return { status: read.outcome, output: read.summary, display: read.display ?? read.summary };
+    }
+    const data = read.result?.data ?? null;
+    if (!data) {
+      return this.#planningStatement(Outcome.VERIFICATION_UNAVAILABLE, 'The outcome read returned no record to answer from, so nothing is claimed about this plan.');
+    }
+    const assessment = data.assessed === true
+      ? { verdict: data.verdict, basis: data.basis, findings: data.findings }
+      : null;
+    const reading = await this.#planReadiness(plan, assessment);
+    const answer = describePlanOutcome({
+      data, reading, operationId: op.id, problems: report.problems ?? [],
+    });
+    const display = lead ? `${lead}\n\n${answer.display}` : answer.display;
+    return { status: Outcome.SUCCESS_VERIFIED, output: display, display };
+  }
+
+  async #executiveReadiness(op, sid, signal, report) {
+    let plan = null;
+    let lead = null;
+    let goal = null;
+    if (signal.ref) {
+      const found = await this.#planRecordFor(signal.ref);
+      if (!found.ok) return this.#planningClarification(op, sid, found.text);
+      plan = found.plan;
+    } else if (signal.goalRef) {
+      const found = await this.#goalRecordFor(signal.goalRef);
+      if (!found.ok) return this.#planningClarification(op, sid, found.text);
+      goal = found.goal;
+    } else {
+      const top = (report.candidates ?? [])[0];
+      if (top?.kind === 'plan') {
+        const found = await this.#planRecordFor(top.ref);
+        if (found.ok) {
+          plan = found.plan;
+          lead = `Answered about ${shortId(plan.id)}, which the continuation ranking puts first. Name a plan if you meant another.`;
+        }
+      } else if (top?.kind === 'goal') {
+        const found = await this.#goalRecordFor(top.ref);
+        if (found.ok) {
+          goal = found.goal;
+          lead = `Answered about ${shortId(goal.id)}, which the continuation ranking puts first. Name a goal if you meant another.`;
+        }
+      }
+    }
+    if (goal && !plan) {
+      // Whether a goal's work can be taken up now is a question about the approaches it supports, so
+      // the same gated comparison answers it, printed as readiness rather than as options.
+      const answer = await this.#executiveCandidatePlan(op, sid, {
+        goal, via: 'candidates', as: 'readiness', prioritization: report.candidates ?? [],
+      });
+      if (lead && answer.display) return { ...answer, display: `${lead}\n\n${answer.display}`, output: answer.output };
+      return answer;
+    }
+    if (!plan) {
+      const reading = readinessOf({});
+      const answer = describeReadiness({
+        reading, prioritization: report.candidates ?? [], problems: report.problems ?? [], operationId: op.id,
+      });
+      return { status: Outcome.SUCCESS_VERIFIED, output: answer.display, display: answer.display };
+    }
+    let assessment = null;
+    if (Object.keys(plan.stepResults ?? {}).length > 0) {
+      const read = await this.runAction('plan.outcome', { plan: plan.id }, 'user', op.id);
+      op.steps.push(read);
+      const data = read.outcome === Outcome.SUCCESS_VERIFIED ? (read.result?.data ?? null) : null;
+      if (data?.assessed === true) {
+        assessment = { verdict: data.verdict, basis: data.basis, findings: data.findings };
+      } else if (!data) {
+        assessment = null;
+      }
+    }
+    const reading = await this.#planReadiness(plan, assessment);
+    const answer = describeReadiness({
+      reading,
+      prioritization: report.candidates ?? [],
+      problems: report.problems ?? [],
+      operationId: op.id,
+      planRef: plan.id,
+    });
+    const display = lead ? `${lead}\n\n${answer.display}` : answer.display;
+    return { status: Outcome.SUCCESS_VERIFIED, output: display, display };
+  }
+
+  // The readiness of a recorded plan, from the plan itself, its live validity check, the task its
+  // activation names, the goal it is bound to, and - when a caller already has one - the outcome
+  // reading. Each of those is read here rather than assumed, and a record that cannot be read is
+  // reported as unreadable by the reading it feeds.
+  async #planReadiness(plan, assessment = null) {
+    let validity = null;
+    try {
+      validity = (await this.validateStoredPlan(plan.id)).validity;
+    } catch (err) {
+      validity = { ok: false, checks: [], problems: [`live validity could not be checked: ${redactSecrets(err.message)}`] };
+    }
+    let goal = null;
+    if (plan.goalId) goal = (await this.#goalRecordFor(plan.goalId)).goal ?? null;
+    let task = null;
+    const taskId = plan.activation?.taskId ?? null;
+    if (taskId && this.taskStore) {
+      try {
+        task = await this.taskStore.get(taskId);
+      } catch {
+        task = null;
+      }
+    }
+    return readinessOf({ plan, goal, task, validity, assessment });
+  }
+
   async #executiveClarify(op, sid, signal) {
     const text = signal.reason === 'approval-needs-a-plan'
       ? 'Which plan do you mean? Name it, for example: approve plan <id>. APEX will not approve the most recent plan it can find, because approving the wrong record is worse than asking. List them with: node bin/apex.js plan list'
-      : 'What would you like APEX to do? Name the plan or the work, and APEX will record a plan you can review before anything runs.';
+      : signal.reason === 'replan-needs-a-plan'
+        ? 'Which plan should APEX revise? Name it, for example: replan plan <id>. APEX will not revise the most recent plan it can find, because a revision of the wrong record would read as an answer about the right one. List them with: node bin/apex.js plan list'
+        : 'What would you like APEX to do? Name the plan or the work, and APEX will record a plan you can review before anything runs.';
     await this.#recordTurns(op, sid, op.request, [
       { origin: TURN_ORIGINS.QUESTION, text, verified: false },
     ], { subject: 'answer' });

@@ -13,18 +13,28 @@ import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { ORIGIN_USER } from './origins.js';
 import {
+  CRITERION_DECISIONS,
   CRITERION_ID_RE,
   EVIDENCE_KINDS,
+  GOAL_ITEM_FIELDS,
+  GoalBasis,
   GoalStatus,
   MAX_CRITERIA,
   MAX_CRITERION_CHARS,
   MAX_GOAL_DEPENDENCIES,
   MAX_GOAL_DETAIL_CHARS,
+  MAX_GOAL_ITEMS,
+  MAX_GOAL_ITEM_CHARS,
   MAX_GOAL_REASON_CHARS,
   MAX_GOAL_REQUEST_CHARS,
+  Requirement,
+  basisOf,
   goalProgress,
+  needsUserDecision,
+  requirementOf,
 } from '../goals/model.js';
 import { renderGoal } from '../goals/format.js';
+import { EvidenceVerdict, assessGoal } from '../goals/assess.js';
 
 function textField(value, name, max) {
   if (typeof value !== 'string') throw new ValidationError(`${name} must be text`);
@@ -72,10 +82,74 @@ function expectObject(input, allowedKeys) {
   return input;
 }
 
+// A criterion is either the user's own words or an object that says where it came from and what
+// would prove it. The store re-checks the provenance rules (an inference cannot be recorded as a
+// requirement, a declined criterion comes only from goal.confirm), so this screens the shape and
+// the text and leaves one authority for what a criterion may hold.
 function criterionList(value) {
   if (!Array.isArray(value) || value.length === 0) throw new ValidationError('at least one success criterion is required');
   if (value.length > MAX_CRITERIA) throw new ValidationError(`at most ${MAX_CRITERIA} success criteria are allowed`);
-  return value.map((entry, i) => textField(entry, `criterion ${i + 1}`, MAX_CRITERION_CHARS));
+  return value.map((entry, i) => {
+    if (typeof entry === 'string') return textField(entry, `criterion ${i + 1}`, MAX_CRITERION_CHARS);
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new ValidationError(`criterion ${i + 1} must be text or an object`);
+    }
+    for (const key of Object.keys(entry)) {
+      if (!['id', 'description', 'basis', 'requirement', 'ref', 'requiredEvidence'].includes(key)) {
+        throw new ValidationError(`criterion ${i + 1}: unexpected field "${singleLine(key, 40)}"`);
+      }
+    }
+    return { ...entry, description: textField(entry.description, `criterion ${i + 1}`, MAX_CRITERION_CHARS) };
+  });
+}
+
+const criterionText = (entry) => (typeof entry === 'string' ? entry : entry.description);
+const criterionBasis = (entry) => (typeof entry === 'string' ? GoalBasis.USER_STATED : basisOf({ basis: entry.basis }));
+// What the record must end up saying: the user's own criterion gates completion, anything APEX
+// put forward gates nothing until goal.confirm says otherwise.
+const criterionRequirement = (entry) => {
+  if (typeof entry === 'string') return Requirement.REQUIRED;
+  if (entry.requirement !== undefined && entry.requirement !== null) return entry.requirement;
+  return criterionBasis(entry) === GoalBasis.USER_STATED ? Requirement.REQUIRED : Requirement.SUGGESTED;
+};
+
+// One decomposition field. Absent means nothing was said about it; an empty list means the user
+// said there are none. The two are different records and the store keeps them apart.
+function itemsInput(value, name) {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new ValidationError(`${name} must be a list`);
+  if (value.length > MAX_GOAL_ITEMS) throw new ValidationError(`${name} may hold at most ${MAX_GOAL_ITEMS} items`);
+  return value.map((entry, i) => {
+    if (typeof entry === 'string') return textField(entry, `${name} ${i + 1}`, MAX_GOAL_ITEM_CHARS);
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new ValidationError(`${name} ${i + 1} must be text or an object`);
+    }
+    for (const key of Object.keys(entry)) {
+      if (!['text', 'basis', 'ref'].includes(key)) {
+        throw new ValidationError(`${name} ${i + 1}: unexpected field "${singleLine(key, 40)}"`);
+      }
+    }
+    return { ...entry, text: textField(entry.text, `${name} ${i + 1}`, MAX_GOAL_ITEM_CHARS) };
+  });
+}
+
+function decompositionOf(input) {
+  return Object.fromEntries(GOAL_ITEM_FIELDS.map((field) => [field, itemsInput(input[field], field)]));
+}
+
+const itemText = (entry) => (typeof entry === 'string' ? entry : entry.text);
+
+// Compares the decomposition the caller asked for with the record that was written. A field the
+// caller did not send is not compared; a field sent empty must read back empty.
+function decompositionMismatch(stored, requested) {
+  for (const field of GOAL_ITEM_FIELDS) {
+    const want = requested[field];
+    if (want === undefined) continue;
+    const got = stored[field] ?? [];
+    if (got.length !== want.length) return field;
+    if (got.some((item, i) => item.text !== itemText(want[i]))) return field;
+  }
+  return null;
 }
 
 function dependencyList(value) {
@@ -99,15 +173,16 @@ export function goalActions(store) {
   return [
     {
       name: 'goal.add',
-      description: 'Record a goal: the user\'s request, its success criteria, priority, optional deadline, and dependencies. A goal is a record of intent, not permission to act. Write: user origin only.',
-      inputHint: '{"request":"what the user wants","criteria":["at least one success criterion"],"priority":"optional 1-5","deadline":"optional ISO date","dependsOn":["optional goal ids"]}',
+      description: 'Record a goal: the user\'s request, its success criteria, priority, optional deadline, dependencies, and the bounded decomposition (prerequisites, constraints, resources, time conditions, blockers, unknowns). A criterion stated as text is the user\'s own requirement; one recorded as an inference or an assumption is a suggestion until goal.confirm decides it. A goal is a record of intent, not permission to act. Write: user origin only.',
+      inputHint: '{"request":"what the user wants","criteria":["at least one success criterion",{"description":"an inference APEX drew","basis":"system_inferred","requiredEvidence":"what would prove it"}],"priority":"optional 1-5","deadline":"optional ISO date","dependsOn":["optional goal ids"],"prerequisites":[],"constraints":[],"resources":[],"timeConditions":[],"blockers":[],"unknowns":[],"reason":"optional"}',
       permission: 'write',
       origins: [ORIGIN_USER],
       plannable: false,
       validate(input) {
-        const o = expectObject(input, ['request', 'criteria', 'priority', 'deadline', 'dependsOn']);
+        const o = expectObject(input, ['request', 'criteria', 'priority', 'deadline', 'dependsOn', ...GOAL_ITEM_FIELDS]);
         const request = textField(o.request, 'request', MAX_GOAL_REQUEST_CHARS);
         const criteria = criterionList(o.criteria);
+        const decomposition = decompositionOf(o);
         const priority = o.priority === undefined ? 3 : o.priority;
         if (!Number.isInteger(priority) || priority < 1 || priority > 5) {
           throw new ValidationError('priority must be an integer from 1 to 5');
@@ -119,40 +194,52 @@ export function goalActions(store) {
           }
           deadline = o.deadline.trim();
         }
-        return { request, criteria, priority, deadline, dependsOn: dependencyList(o.dependsOn) };
+        return { request, criteria, priority, deadline, dependsOn: dependencyList(o.dependsOn), ...decomposition };
       },
-      async execute(_ctx, { request, criteria, priority, deadline, dependsOn }) {
-        const { goal } = await store.createGoal({ request, criteria, priority, deadline, dependsOn });
+      async execute(_ctx, { request, criteria, priority, deadline, dependsOn, ...decomposition }) {
+        const { goal } = await store.createGoal({ request, criteria, priority, deadline, dependsOn, ...decomposition });
         return {
           summary: `recorded goal ${shortId(goal.id)} with ${goal.criteria.length} success criterion(s)`,
-          data: { goalId: goal.id, status: goal.status, criteria: goal.criteria.map((c) => ({ id: c.id, description: c.description })) },
+          data: {
+            goalId: goal.id,
+            status: goal.status,
+            criteria: goal.criteria.map((c) => ({ id: c.id, description: c.description, basis: c.basis, requirement: c.requirement })),
+          },
           display: `${renderGoal(goal)}\nThis records the intention only. Nothing has run, and the goal grants no permission.`,
         };
       },
-      async verify(_ctx, { request, criteria }, result) {
+      async verify(_ctx, { request, criteria, ...decomposition }, result) {
         const goal = await store.get(result.data.goalId);
         if (!goal) return { ok: false, detail: 'the recorded goal cannot be read back' };
         if (goal.request !== request) return { ok: false, detail: 'stored request differs from the one recorded' };
         if (goal.origin !== 'user') return { ok: false, detail: 'stored goal origin is not the user' };
         if (goal.status !== GoalStatus.PROPOSED) return { ok: false, detail: `the new goal is ${goal.status}, not proposed` };
         if (goal.criteria.length !== criteria.length) return { ok: false, detail: 'stored criterion count differs from the request' };
-        if (goal.criteria.some((c, i) => c.description !== criteria[i])) {
+        if (goal.criteria.some((c, i) => c.description !== criterionText(criteria[i]))) {
           return { ok: false, detail: 'stored criteria differ from the request' };
         }
+        // Provenance is the point of the write: a criterion APEX inferred must not have come back
+        // as a requirement, and one the user stated must not have come back as a suggestion.
+        if (goal.criteria.some((c, i) => c.basis !== criterionBasis(criteria[i]) || c.requirement !== criterionRequirement(criteria[i]))) {
+          return { ok: false, detail: 'stored criterion provenance differs from the request' };
+        }
+        const field = decompositionMismatch(goal, decomposition);
+        if (field) return { ok: false, detail: `stored ${field} differ from the request` };
         return { ok: true, detail: `goal present as proposed with ${goal.criteria.length} criterion(s); nothing has run` };
       },
     },
 
     {
       name: 'goal.revise',
-      description: 'Replace the success criteria of an open goal, optionally its request, priority, or deadline. Evidence for the old criteria stops counting; the revision is recorded, never overwritten. Write: user origin only.',
-      inputHint: '{"target":"goal id","request":"optional revised request","criteria":["new success criteria"],"priority":"optional 1-5","deadline":"optional ISO date or null","reason":"why the goal changed"}',
+      description: 'Replace the success criteria of an open goal, optionally its request, priority, deadline, or any decomposition field. Evidence for the old criteria stops counting; the revision is recorded, never overwritten. A decomposition field that is not sent keeps its record. Write: user origin only.',
+      inputHint: '{"target":"goal id","request":"optional revised request","criteria":["new success criteria"],"priority":"optional 1-5","deadline":"optional ISO date or null","prerequisites":[],"constraints":[],"resources":[],"timeConditions":[],"blockers":[],"unknowns":[],"reason":"why the goal changed"}',
       permission: 'write',
       origins: [ORIGIN_USER],
       plannable: false,
       validate(input) {
-        const o = expectObject(input, ['target', 'request', 'criteria', 'priority', 'deadline', 'reason']);
+        const o = expectObject(input, ['target', 'request', 'criteria', 'priority', 'deadline', 'reason', ...GOAL_ITEM_FIELDS]);
         const criteria = criterionList(o.criteria);
+        const decomposition = decompositionOf(o);
         const reason = textField(o.reason, 'reason', MAX_GOAL_REASON_CHARS);
         const request = o.request === undefined ? undefined : textField(o.request, 'request', MAX_GOAL_REQUEST_CHARS);
         let priority;
@@ -169,11 +256,11 @@ export function goalActions(store) {
           }
           deadline = o.deadline === null ? null : o.deadline.trim();
         }
-        return { target: recordRef(o.target, 'target'), request, criteria, priority, deadline, reason };
+        return { target: recordRef(o.target, 'target'), request, criteria, priority, deadline, reason, ...decomposition };
       },
-      async execute(_ctx, { target, request, criteria, priority, deadline, reason }) {
+      async execute(_ctx, { target, request, criteria, priority, deadline, reason, ...decomposition }) {
         const before = await store.resolve(target);
-        const { goal } = await store.revise(target, { request, criteria, priority, deadline, reason });
+        const { goal } = await store.revise(target, { request, criteria, priority, deadline, reason, ...decomposition });
         return {
           summary: `goal ${shortId(goal.id)} revised to revision ${goal.revision} with ${goal.criteria.length} criterion(s); previous evidence no longer counts`,
           data: {
@@ -181,33 +268,118 @@ export function goalActions(store) {
             previousRevision: before.revision ?? 1,
             revision: goal.revision,
             status: goal.status,
-            criteria: goal.criteria.map((c) => ({ id: c.id, description: c.description, status: c.status })),
+            criteria: goal.criteria.map((c) => ({ id: c.id, description: c.description, basis: c.basis, requirement: c.requirement, status: c.status })),
             reason,
           },
           display: [
             `Goal ${shortId(goal.id)} is now revision ${goal.revision} (was ${before.revision ?? 1}); its criteria were replaced.`,
             ...goal.criteria.map((c) => `  ${c.id} [${c.status}] ${c.description}`),
+            ...GOAL_ITEM_FIELDS.filter((f) => decomposition[f] !== undefined).map((f) => `  ${f}: ${(goal[f] ?? []).length} recorded item(s)`),
             'Earlier criteria and evidence remain in the event log but no longer count toward completion.',
             'A plan approved against the previous goal revision must be revalidated before it can run.',
           ].join('\n'),
         };
       },
-      async verify(_ctx, { request, criteria }, result) {
+      async verify(_ctx, { request, criteria, ...decomposition }, result) {
         const goal = await store.get(result.data.goalId);
         if (!goal) return { ok: false, detail: 'the revised goal cannot be read back' };
         if (goal.revision !== result.data.revision) return { ok: false, detail: 'the stored revision differs from the recorded one' };
         if (goal.criteria.length !== criteria.length) return { ok: false, detail: 'stored criterion count differs from the revision' };
-        if (goal.criteria.some((c, i) => c.description !== criteria[i] || c.status !== 'pending')) {
+        if (goal.criteria.some((c, i) => c.description !== criterionText(criteria[i]) || c.status !== 'pending')) {
           return { ok: false, detail: 'revised criteria are not present and pending' };
         }
+        if (goal.criteria.some((c, i) => c.basis !== criterionBasis(criteria[i]) || c.requirement !== criterionRequirement(criteria[i]))) {
+          return { ok: false, detail: 'stored criterion provenance differs from the revision' };
+        }
+        const field = decompositionMismatch(goal, decomposition);
+        if (field) return { ok: false, detail: `stored ${field} differ from the revision` };
         if (request !== undefined && goal.request !== request) return { ok: false, detail: 'the stored request differs from the revision' };
         return { ok: true, detail: `revision ${goal.revision} confirmed; all criteria are pending and earlier evidence does not count` };
       },
     },
 
     {
+      name: 'goal.confirm',
+      description: 'Record the user\'s decision about one success criterion: required, suggested, or declined. This is the only path by which a criterion APEX inferred becomes a requirement, and the only path by which a criterion stops counting toward completion without revising the goal. A criterion the user stated cannot be declined. Write: user origin only.',
+      inputHint: '{"target":"goal id","criterion":"c1","decision":"required|suggested|declined","reason":"why the decision was made","operationId":"optional audit record id"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target', 'criterion', 'decision', 'reason', 'operationId']);
+        if (typeof o.criterion !== 'string' || !CRITERION_ID_RE.test(o.criterion.trim())) {
+          throw new ValidationError('criterion must be an id such as c1');
+        }
+        const decision = typeof o.decision === 'string' ? o.decision.trim() : '';
+        if (!CRITERION_DECISIONS.includes(decision)) {
+          throw new ValidationError(`decision must be one of: ${CRITERION_DECISIONS.join(', ')}`);
+        }
+        return {
+          target: recordRef(o.target, 'target'),
+          criterionId: o.criterion.trim(),
+          decision,
+          reason: textField(o.reason, 'reason', MAX_GOAL_REASON_CHARS),
+          operationId: o.operationId === undefined || o.operationId === null ? null : recordRef(o.operationId, 'operationId'),
+        };
+      },
+      async execute(_ctx, { target, criterionId, decision, reason, operationId }) {
+        const before = await store.resolve(target);
+        const prior = before.criteria.find((c) => c.id === criterionId)?.confirmation?.decision ?? null;
+        const { goal } = await store.decideCriterion(target, { criterionId, decision, reason, operationId });
+        const criterion = goal.criteria.find((c) => c.id === criterionId);
+        const p = goalProgress(goal);
+        return {
+          summary: `recorded ${decision} for criterion ${criterionId} of goal ${shortId(goal.id)}; ${p.gatingSatisfied} of ${p.gating} required criterion(s) satisfied`,
+          data: {
+            goalId: goal.id,
+            criterionId,
+            decision,
+            previousDecision: prior,
+            requirement: criterion?.requirement ?? null,
+            basis: criterion ? basisOf(criterion) : null,
+            operationId,
+            status: goal.status,
+            progress: p,
+          },
+          display: [
+            `Criterion ${criterionId} of goal ${shortId(goal.id)} is recorded as ${decision}.`,
+            `  basis: ${criterion ? basisOf(criterion) : 'unknown'}; requirement: ${criterion?.requirement ?? 'unknown'}`,
+            `  reason: ${reason}`,
+            operationId ? `  decision operation: ${shortId(operationId)}` : null,
+            prior ? `  it was ${prior} before; the earlier decision stays in the event log` : null,
+            decision === Requirement.REQUIRED
+              ? '  it now gates completion: it needs supporting evidence whose operation is still a verified success.'
+              : null,
+            decision === Requirement.DECLINED
+              ? '  it no longer counts toward completion. The suggestion and this decision both stay in the log.'
+              : null,
+            decision === Requirement.SUGGESTED
+              ? '  it stays a suggestion: it does not gate completion, and the goal can complete without it. Both the suggestion and this decision stay in the log.'
+              : null,
+          ].filter(Boolean).join('\n'),
+        };
+      },
+      async verify(_ctx, { criterionId, decision, reason, operationId }, result) {
+        const goal = await store.get(result.data.goalId);
+        if (!goal) return { ok: false, detail: 'the confirmed goal cannot be read back' };
+        const criterion = goal.criteria.find((c) => c.id === criterionId);
+        if (!criterion) return { ok: false, detail: `criterion ${criterionId} is no longer recorded` };
+        if (criterion.requirement !== decision) return { ok: false, detail: `criterion is ${criterion.requirement}, not ${decision}` };
+        if (criterion.confirmation?.decision !== decision) return { ok: false, detail: 'the criterion carries no confirmation record of this decision' };
+        if (criterion.confirmation?.reason !== reason) return { ok: false, detail: 'the recorded decision reason differs from the request' };
+        if ((criterion.confirmation?.operationId ?? null) !== operationId) {
+          return { ok: false, detail: 'the recorded decision operation differs from the request' };
+        }
+        if (decision === Requirement.DECLINED && basisOf(criterion) === GoalBasis.USER_STATED) {
+          return { ok: false, detail: 'a criterion the user stated was recorded as declined' };
+        }
+        return { ok: true, detail: `decision recorded for ${criterionId}; the criterion's evidence and every earlier decision are preserved` };
+      },
+    },
+
+    {
       name: 'goal.update',
-      description: 'Move a goal through its lifecycle: accepted, active, blocked, failed, cancelled, abandoned, superseded, or completed. Completion is refused unless every criterion has verified supporting evidence. Write: user origin only.',
+      description: 'Move a goal through its lifecycle: accepted, active, blocked, failed, cancelled, abandoned, superseded, or completed. Completion is refused while a criterion still needs your decision, and unless every required criterion has verified supporting evidence. Write: user origin only.',
       inputHint: '{"target":"goal id","status":"accepted|active|blocked|completed|failed|cancelled|abandoned|superseded","reason":"required for stopping states","by":"replacement goal id for superseded"}',
       permission: 'write',
       origins: [ORIGIN_USER],
@@ -253,8 +425,15 @@ export function goalActions(store) {
         }
         if (status === GoalStatus.COMPLETED) {
           const p = goalProgress(goal);
-          if (p.satisfied !== p.total) return { ok: false, detail: 'the goal is marked completed but a criterion is not satisfied' };
+          if (p.needsConfirmation > 0) return { ok: false, detail: 'the goal is marked completed while a criterion still needs your decision' };
+          if (p.gating === 0) return { ok: false, detail: 'the goal is marked completed while no criterion is recorded as required' };
+          if (p.gatingPending !== 0) return { ok: false, detail: 'the goal is marked completed but a required criterion is not satisfied' };
           if (!goal.completion) return { ok: false, detail: 'the goal is completed without a completion-evidence snapshot' };
+          const snapshot = new Set((goal.completion.criteria ?? []).map((c) => c.criterionId));
+          const gatingIds = new Set(goal.criteria.filter((c) => requirementOf(c) === Requirement.REQUIRED).map((c) => c.id));
+          if (snapshot.size !== gatingIds.size || [...gatingIds].some((id) => !snapshot.has(id))) {
+            return { ok: false, detail: 'the completion snapshot does not name every required criterion' };
+          }
         }
         return { ok: true, detail: `goal state confirmed as ${status}; ${goal.statusHistory.length} status record(s) preserved` };
       },
@@ -303,6 +482,9 @@ export function goalActions(store) {
             `  criterion: ${criterion?.status ?? 'unknown'}`,
             `  goal: ${goal.status}`,
             reopen ? '  the completed goal was reopened; its earlier completion record is preserved in the status history' : null,
+            criterion && needsUserDecision(criterion)
+              ? `  ${criterionId} is still a suggestion APEX put forward: your decision is what makes it count or takes it out - goal confirm ${shortId(goal.id)} ${criterionId} required|suggested|declined --reason <text>`
+              : null,
           ].filter(Boolean).join('\n'),
         };
       },
@@ -322,7 +504,7 @@ export function goalActions(store) {
 
     {
       name: 'goal.complete',
-      description: 'Record a goal as completed. Refused unless every criterion is satisfied by an audit operation that is still a verified success. No task result completes a goal by itself. Write: user origin only.',
+      description: 'Record a goal as completed. Refused while an inferred criterion still needs your decision, refused unless every required criterion is satisfied by an audit operation that is still a verified success, and refused when the proof a satisfied criterion cites has since been retracted or superseded. No task result completes a goal by itself. Write: user origin only.',
       inputHint: '{"target":"goal id","reason":"optional text"}',
       permission: 'write',
       origins: [ORIGIN_USER],
@@ -334,13 +516,33 @@ export function goalActions(store) {
           reason: optionalTextField(o.reason, 'reason', MAX_GOAL_REASON_CHARS),
         };
       },
-      async execute(_ctx, { target, reason }) {
+      async execute(ctx, { target, reason }) {
         const before = await store.resolve(target);
         // Completion is reachable only from active or blocked. Saying which step is missing is
         // more useful than "illegal transition"; advancing the lifecycle for the user would
         // record a status change nobody made.
         if (before.status === GoalStatus.PROPOSED || before.status === GoalStatus.ACCEPTED) {
           throw new ValidationError(`goal ${shortId(before.id)} is ${before.status}; ${before.status === GoalStatus.PROPOSED ? 'accept it, then move it to active' : 'move it to active'} before completing it: goal update ${shortId(before.id)} ${before.status === GoalStatus.PROPOSED ? 'accepted' : 'active'}`);
+        }
+        // The criterion statuses in the goal log say what was recorded then. Completion is checked
+        // against what the recorded proof still is: a supporting claim that has since been retracted
+        // or superseded no longer backs the criterion, and completing over it would record a decision
+        // the evidence does not support. `goalProgress` cannot see this, because it reads the goal log
+        // alone; the re-read here opens the knowledge store and the audit log the evidence cites.
+        const assessment = await assessGoal(before, {
+          knowledge: ctx?.knowledge ?? null,
+          operations: ctx?.operations ?? null,
+          plans: ctx?.plans ?? null,
+        });
+        const withdrawn = assessment.criteria.filter((c) => c.requirement === Requirement.REQUIRED
+          && c.status === 'satisfied'
+          && [EvidenceVerdict.STALE, EvidenceVerdict.INVALID, EvidenceVerdict.CONTRADICTED].includes(c.verdict));
+        if (withdrawn.length > 0) {
+          const how = withdrawn.map((c) => `goal evidence ${shortId(before.id)} ${c.id} --operation <id>`).join(' or ');
+          throw new ValidationError(
+            `goal cannot be completed: ${withdrawn.map((c) => `${c.id} cites proof that is ${c.verdict} (${singleLine(c.reason, 160)})`).join('; ')}. Record current evidence for it (${how}) before completing the goal`,
+            'GOAL_EVIDENCE_WITHDRAWN',
+          );
         }
         const { goal } = await store.transition(target, GoalStatus.COMPLETED, { reason });
         return {
@@ -354,6 +556,9 @@ export function goalActions(store) {
           display: [
             `Goal ${shortId(goal.id)} is completed.`,
             ...(goal.completion?.criteria ?? []).map((c) => `  ${c.criterionId}: operation ${shortId(c.operationId)}`),
+            (goal.completion?.declined ?? []).length > 0
+              ? `  not counted because you declined them: ${goal.completion.declined.join(', ')}`
+              : null,
             reason ? `  reason: ${reason}` : null,
             'Completion was checked against the audit log, not asserted.',
           ].filter(Boolean).join('\n'),
@@ -364,6 +569,10 @@ export function goalActions(store) {
         if (!goal) return { ok: false, detail: 'the completed goal cannot be read back' };
         if (goal.status !== GoalStatus.COMPLETED) return { ok: false, detail: `goal is ${goal.status}, not completed` };
         if (!goal.completion) return { ok: false, detail: 'no completion-evidence snapshot is recorded' };
+        const p = goalProgress(goal);
+        if (p.needsConfirmation > 0) return { ok: false, detail: 'the goal is completed while a criterion still needs your decision' };
+        if (p.gating === 0) return { ok: false, detail: 'the goal is completed while no criterion is recorded as required' };
+        if (p.gatingPending !== 0) return { ok: false, detail: 'the goal is completed but a required criterion is not satisfied' };
         if (!ctx.operations) return { ok: false, detail: 'the audit log is unavailable, so completion evidence cannot be re-checked' };
         for (const entry of goal.completion.criteria) {
           if (!entry.operationId) return { ok: false, detail: `criterion ${entry.criterionId} has no supporting operation` };

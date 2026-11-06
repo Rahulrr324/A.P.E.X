@@ -22,14 +22,21 @@ import { containsSecret } from '../security/secrets.js';
 import { maskSecretLeaves } from '../security/secrets.js';
 import {
   GOAL_SCHEMA,
+  GoalBasis,
   GoalStatus,
   MAX_CRITERIA,
   MAX_CRITERION_CHARS,
   MAX_GOAL_DETAIL_CHARS,
+  MAX_GOAL_ITEMS,
+  MAX_GOAL_ITEM_CHARS,
   MAX_GOAL_REQUEST_CHARS,
   MAX_GOAL_REASON_CHARS,
+  MAX_GOAL_REF_CHARS,
+  Requirement,
   isOpenStatus,
+  needsUserDecision,
   reduceEvents,
+  requirementOf,
   validateEventShape,
 } from './model.js';
 
@@ -37,6 +44,113 @@ function assertNoSecret(value, name) {
   if (containsSecret(String(value ?? ''))) {
     throw new ValidationError(`${name} looks like a password, key, or token; it was not stored`, 'SECRET_REFUSED');
   }
+}
+
+function criterionText(value, name) {
+  if (typeof value !== 'string' || value.trim().length === 0) throw new ValidationError(`${name} is empty`);
+  const text = value.trim();
+  if (text.length > MAX_CRITERION_CHARS) throw new ValidationError(`${name} exceeds ${MAX_CRITERION_CHARS} characters`);
+  assertNoSecret(text, name);
+  return text;
+}
+
+// One criterion as the caller stated it. A plain string is the user's own words, which is what a
+// criterion has always meant here; an object may say where it came from and what would prove it.
+// A non-user basis cannot be recorded as a requirement - the reducer enforces that again, and the
+// store does not write a field the log would refuse.
+function criterionPayload(raw, i) {
+  if (typeof raw === 'string') {
+    return { id: `c${i + 1}`, description: criterionText(raw, `criterion ${i + 1}`) };
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ValidationError(`criterion ${i + 1} is not text or an object`);
+  for (const key of Object.keys(raw)) {
+    if (!['id', 'description', 'basis', 'requirement', 'ref', 'requiredEvidence'].includes(key)) {
+      throw new ValidationError(`criterion ${i + 1}: unexpected field "${singleLine(key, 40)}"`);
+    }
+  }
+  if (raw.id !== undefined && raw.id !== null) {
+    throw new ValidationError(`criterion ${i + 1}: ids are assigned by position, so the caller cannot set one`);
+  }
+  const basis = raw.basis === undefined || raw.basis === null ? GoalBasis.USER_STATED : String(raw.basis).trim();
+  if (!Object.values(GoalBasis).includes(basis) || basis === GoalBasis.VERIFIED_FACT) {
+    throw new ValidationError(`criterion ${i + 1}: basis must be one of ${GoalBasis.USER_STATED}, ${GoalBasis.SYSTEM_INFERRED}, ${GoalBasis.ASSUMPTION}`);
+  }
+  const requirement = raw.requirement === undefined || raw.requirement === null
+    ? null
+    : String(raw.requirement).trim();
+  if (requirement !== null && !Object.values(Requirement).includes(requirement)) {
+    throw new ValidationError(`criterion ${i + 1}: requirement must be ${Requirement.REQUIRED} or ${Requirement.SUGGESTED}`);
+  }
+  if (requirement === Requirement.DECLINED) {
+    throw new ValidationError(`criterion ${i + 1}: a declined criterion is recorded by goal confirm, not by writing it into the goal`);
+  }
+  if (basis !== GoalBasis.USER_STATED && requirement === Requirement.REQUIRED) {
+    throw new ValidationError(`criterion ${i + 1}: a criterion the system ${basis === GoalBasis.ASSUMPTION ? 'assumed' : 'inferred'} cannot be recorded as a requirement; the user confirms it separately`);
+  }
+  const entry = {
+    id: `c${i + 1}`,
+    description: criterionText(raw.description, `criterion ${i + 1}`),
+    basis,
+    ...(requirement ? { requirement } : {}),
+  };
+  if (raw.ref !== undefined && raw.ref !== null) {
+    const ref = String(raw.ref).trim();
+    if (ref.length === 0 || ref.length > MAX_GOAL_REF_CHARS) {
+      throw new ValidationError(`criterion ${i + 1}: reference must be between 1 and ${MAX_GOAL_REF_CHARS} characters`);
+    }
+    assertNoSecret(ref, `criterion ${i + 1} reference`);
+    entry.ref = ref;
+  }
+  if (raw.requiredEvidence !== undefined && raw.requiredEvidence !== null) {
+    entry.requiredEvidence = criterionText(raw.requiredEvidence, `criterion ${i + 1} required evidence`);
+  }
+  return entry;
+}
+
+// The decomposition fields a write supplies. A field the caller did not send is left out of the
+// event entirely, which is how the reducer tells "nothing to say about this" from "none".
+function itemsFor(fields) {
+  const out = {};
+  for (const [field, list] of Object.entries(fields)) {
+    const value = itemPayload(list, field);
+    if (value !== undefined) out[field] = value;
+  }
+  return out;
+}
+
+// A goal-level decomposition field, normalised into the shape the log stores. Only the caller's
+// own words default to `user_stated`; anything else must say where it came from, and a claim of a
+// verified fact must name the record it was verified by.
+function itemPayload(list, field) {
+  if (list === undefined || list === null) return undefined;
+  if (!Array.isArray(list)) throw new ValidationError(`${field} must be a list`);
+  if (list.length > MAX_GOAL_ITEMS) throw new ValidationError(`${field} may hold at most ${MAX_GOAL_ITEMS} items`);
+  return list.map((raw, i) => {
+    const name = `${field} ${i + 1}`;
+    const source = typeof raw === 'string' ? { text: raw } : raw;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) throw new ValidationError(`${name} is not text or an object`);
+    for (const key of Object.keys(source)) {
+      if (!['text', 'basis', 'ref'].includes(key)) throw new ValidationError(`${name}: unexpected field "${singleLine(key, 40)}"`);
+    }
+    if (typeof source.text !== 'string' || source.text.trim().length === 0) throw new ValidationError(`${name} is empty`);
+    const text = source.text.trim();
+    if (text.length > MAX_GOAL_ITEM_CHARS) throw new ValidationError(`${name} exceeds ${MAX_GOAL_ITEM_CHARS} characters`);
+    assertNoSecret(text, name);
+    const basis = source.basis === undefined || source.basis === null ? GoalBasis.USER_STATED : String(source.basis).trim();
+    if (!Object.values(GoalBasis).includes(basis)) throw new ValidationError(`${name}: unknown basis "${singleLine(basis, 40)}"`);
+    let ref = null;
+    if (source.ref !== undefined && source.ref !== null) {
+      ref = String(source.ref).trim();
+      if (ref.length === 0 || ref.length > MAX_GOAL_REF_CHARS) {
+        throw new ValidationError(`${name}: reference must be between 1 and ${MAX_GOAL_REF_CHARS} characters`);
+      }
+      assertNoSecret(ref, `${name} reference`);
+    }
+    if (basis === GoalBasis.VERIFIED_FACT && ref === null) {
+      throw new ValidationError(`${name}: a verified fact must name the record that verifies it`);
+    }
+    return { field, text, basis, ...(ref ? { ref } : {}) };
+  });
 }
 
 export class GoalStore {
@@ -134,19 +248,17 @@ export class GoalStore {
     });
   }
 
-  async createGoal({ request, criteria, priority = 3, deadline = null, dependsOn = [], reason = null }) {
+  async createGoal({
+    request, criteria, priority = 3, deadline = null, dependsOn = [], reason = null,
+    prerequisites = null, constraints = null, resources = null, timeConditions = null,
+    blockers = null, unknowns = null,
+  }) {
     assertNoSecret(request, 'the goal');
     if (!Array.isArray(criteria) || criteria.length === 0) throw new ValidationError('at least one success criterion is required');
     if (criteria.length > MAX_CRITERIA) throw new ValidationError(`at most ${MAX_CRITERIA} success criteria are allowed`);
     const goalId = this.idFactory();
     return this.#mutate(() => {
-      const entries = criteria.map((description, i) => {
-        assertNoSecret(description, `criterion ${i + 1}`);
-        const text = String(description).trim();
-        if (text.length === 0) throw new ValidationError(`criterion ${i + 1} is empty`);
-        if (text.length > MAX_CRITERION_CHARS) throw new ValidationError(`criterion ${i + 1} exceeds ${MAX_CRITERION_CHARS} characters`);
-        return { id: `c${i + 1}`, description: text };
-      });
+      const entries = criteria.map((raw, i) => criterionPayload(raw, i));
       if (deadline !== null && (typeof deadline !== 'string' || Number.isNaN(Date.parse(deadline)))) {
         throw new ValidationError('deadline must be an ISO date or time');
       }
@@ -155,6 +267,7 @@ export class GoalStore {
         origin: 'user',
         request: String(request).trim(),
         criteria: entries,
+        ...itemsFor({ prerequisites, constraints, resources, timeConditions, blockers, unknowns }),
         priority,
         deadline,
         dependsOn: [...dependsOn],
@@ -166,8 +279,13 @@ export class GoalStore {
   // Revising replaces the success criteria (and optionally the request, priority, or deadline).
   // It is accepted only while the goal is open; a completed goal must be reopened with
   // contradicting evidence first. Evidence recorded for the old criteria stays in the log but
-  // no longer counts, because the reducer rebuilds the criteria as pending.
-  async revise(ref, { request = undefined, criteria, priority = undefined, deadline = undefined, reason }) {
+  // no longer counts, because the reducer rebuilds the criteria as pending. A decomposition field
+  // the revision does not mention keeps its record; one sent as an empty list clears the field.
+  async revise(ref, {
+    request = undefined, criteria, priority = undefined, deadline = undefined, reason,
+    prerequisites = undefined, constraints = undefined, resources = undefined,
+    timeConditions = undefined, blockers = undefined, unknowns = undefined,
+  }) {
     const text = typeof reason === 'string' ? reason.trim() : '';
     if (text.length === 0) throw new ValidationError('a revision needs a reason');
     if (text.length > MAX_GOAL_REASON_CHARS) throw new ValidationError(`reason exceeds ${MAX_GOAL_REASON_CHARS} characters`);
@@ -183,20 +301,49 @@ export class GoalStore {
       if (!isOpenStatus(goal.status)) {
         throw new ValidationError(`goal is ${goal.status}; its criteria can be revised only while it is proposed, accepted, active, or blocked`);
       }
-      const entries = criteria.map((description, i) => {
-        assertNoSecret(description, `criterion ${i + 1}`);
-        const value = String(description).trim();
-        if (value.length === 0) throw new ValidationError(`criterion ${i + 1} is empty`);
-        if (value.length > MAX_CRITERION_CHARS) throw new ValidationError(`criterion ${i + 1} exceeds ${MAX_CRITERION_CHARS} characters`);
-        return { id: `c${i + 1}`, description: value };
-      });
+      const entries = criteria.map((raw, i) => criterionPayload(raw, i));
       return {
         ...this.#base('goal_revised', goal.id),
         ...(request !== undefined ? { request: String(request).trim() } : {}),
         criteria: entries,
+        ...itemsFor({ prerequisites, constraints, resources, timeConditions, blockers, unknowns }),
         ...(priority !== undefined ? { priority } : {}),
         ...(deadline !== undefined ? { deadline } : {}),
         reason: text,
+      };
+    });
+  }
+
+  // The user's own decision about what a criterion requires. This is the only path by which a
+  // criterion the system inferred becomes a requirement, and the only path by which a criterion
+  // stops counting toward completion without a revision of the whole goal. The reason is required,
+  // because a decision that cannot say why it was made cannot be checked later.
+  async decideCriterion(ref, { criterionId, decision, reason, operationId = null }) {
+    const text = typeof reason === 'string' ? reason.trim() : '';
+    if (text.length === 0) throw new ValidationError('a criterion decision needs a recorded reason');
+    if (text.length > MAX_GOAL_REASON_CHARS) throw new ValidationError(`reason exceeds ${MAX_GOAL_REASON_CHARS} characters`);
+    assertNoSecret(text, 'the reason');
+    if (!Object.values(Requirement).includes(decision)) {
+      throw new ValidationError(`decision must be one of: ${Object.values(Requirement).join(', ')}`);
+    }
+    if (operationId !== null && (typeof operationId !== 'string' || operationId.length === 0 || operationId.length > 64)) {
+      throw new ValidationError('the decision operation reference is not usable');
+    }
+    // A decision that cites an audit record must cite one that exists, or the citation would be a
+    // claim about provenance nothing can confirm. The record's own outcome is not judged: the
+    // decision is the user's, and it stands whichever operation it was made during.
+    if (operationId !== null) await this.#evidenceOperation(operationId);
+    return this.#mutate((goals) => {
+      const goal = this.#pick(goals, ref);
+      if (!goal.criteria.some((c) => c.id === criterionId)) {
+        throw new ValidationError(`no success criterion ${singleLine(criterionId, 40)} in this goal`);
+      }
+      return {
+        ...this.#base('goal_criterion_decision', goal.id),
+        criterionId,
+        decision,
+        reason: text,
+        operationId,
       };
     });
   }
@@ -212,12 +359,24 @@ export class GoalStore {
     return found.record;
   }
 
-  // Every criterion must be satisfied by a support whose operation is still a verified success
-  // in the audit log. This is re-run inside the lock immediately before the completion event is
-  // appended, so completion cannot rest on a stale claim about an operation.
+  // Every criterion the goal requires must be satisfied by a support whose operation is still a
+  // verified success in the audit log, and no criterion may be left waiting for the user's
+  // decision. This is re-run inside the lock immediately before the completion event is appended,
+  // so completion cannot rest on a stale claim about an operation, and the reducer's own gate is
+  // not the only thing standing between a suggestion and a completed goal.
   async #verifyCriteria(goal) {
     const problems = [];
-    for (const criterion of goal.criteria) {
+    const undecided = goal.criteria.filter((c) => needsUserDecision(c));
+    if (undecided.length > 0) {
+      problems.push(`${undecided.map((c) => c.id).join(', ')} ${undecided.length === 1 ? 'is' : 'are'} recorded as ${undecided.length === 1 ? 'a suggestion' : 'suggestions'} with no user decision: goal confirm ${shortId(goal.id)} ${undecided[0].id} required|suggested|declined --reason <text>`);
+    }
+    const required = goal.criteria.filter((c) => requirementOf(c) === Requirement.REQUIRED);
+    if (required.length === 0) {
+      // Completing a goal that requires nothing would prove nothing, so the record that says
+      // "complete" would be a claim with no evidence behind it. The user decides what counts.
+      problems.push(`no criterion is recorded as required, so completing this goal would prove nothing: goal confirm ${shortId(goal.id)} <criterion> required --reason <text>, or revise the goal`);
+    }
+    for (const criterion of required) {
       if (criterion.status !== 'satisfied') {
         problems.push(`${criterion.id} is ${criterion.status}`);
         continue;

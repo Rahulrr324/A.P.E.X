@@ -7,11 +7,13 @@
 import { ValidationError } from '../errors.js';
 import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
-import { STEP_ID_RE } from '../tasks/model.js';
-import { ORIGIN_USER } from './origins.js';
+import { STEP_ID_RE, StepStatus } from '../tasks/model.js';
+import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 import {
   ASSERTION_KINDS,
   WORLD_ASSERTION_KINDS,
+  ASSESSMENT_ASPECTS,
+  MAX_CANDIDATES_PER_GOAL,
   MAX_ESTIMATE_SECONDS,
   MAX_PLAN_OUTCOME_CHARS,
   MAX_PRECONDITIONS,
@@ -20,12 +22,18 @@ import {
   MAX_ASSERTIONS,
   MAX_EXPECTED_CHARS,
   MAX_VERIFICATION_CHARS,
+  MAX_RECOVERY_CHARS,
+  REVERSIBILITY_LEVELS,
   RISK_LEVELS,
   PlanStatus,
   planContentHash,
   validatePlanContent,
 } from '../plans/model.js';
 import { renderPlan } from '../plans/format.js';
+import { candidatesForGoal, revisedCandidates, renderCandidates } from '../plans/candidates.js';
+import { evaluateCandidates, renderEvaluation } from '../plans/evaluation.js';
+import { assessOutcome, renderAssessment, VERDICT_RULE } from '../plans/assessment.js';
+import { learningScope, learningDigest, readLearning, renderLearning } from '../executive/learning.js';
 
 function assertNoSecret(value, name) {
   if (containsSecret(String(value ?? ''))) {
@@ -60,7 +68,7 @@ function expectObject(input, allowedKeys) {
 
 function parseStep(raw, i) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ValidationError(`step ${i + 1} is not an object`);
-  const allowed = ['id', 'description', 'action', 'input', 'dependsOn', 'expectedResult', 'verification', 'criterion', 'criterionId', 'risk', 'estimate', 'estimateSeconds'];
+  const allowed = ['id', 'description', 'action', 'input', 'dependsOn', 'expectedResult', 'verification', 'criterion', 'criterionId', 'risk', 'estimate', 'estimateSeconds', 'reversibility', 'recovery'];
   for (const key of Object.keys(raw)) {
     if (!allowed.includes(key)) throw new ValidationError(`step ${i + 1}: unexpected field "${singleLine(key, 40)}"`);
   }
@@ -72,6 +80,9 @@ function parseStep(raw, i) {
   if (!Array.isArray(raw.dependsOn ?? [])) throw new ValidationError(`step ${i + 1}: dependsOn must be a list`);
   const risk = raw.risk ?? 'medium';
   if (!RISK_LEVELS.includes(risk)) throw new ValidationError(`step ${i + 1}: risk must be low, medium, or high`);
+  if (raw.reversibility !== undefined && raw.reversibility !== null && !REVERSIBILITY_LEVELS.includes(raw.reversibility)) {
+    throw new ValidationError(`step ${i + 1}: reversibility must be one of: ${REVERSIBILITY_LEVELS.join(', ')}`);
+  }
   let seconds = null;
   if (raw.estimateSeconds !== undefined && raw.estimateSeconds !== null) {
     if (!Number.isInteger(raw.estimateSeconds) || raw.estimateSeconds < 0 || raw.estimateSeconds > MAX_ESTIMATE_SECONDS) {
@@ -92,6 +103,14 @@ function parseStep(raw, i) {
     criterionId: raw.criterionId ?? raw.criterion ?? null,
     risk,
     estimate: { seconds },
+    // Recorded only when given, so a step without these fields keeps the bytes it had before
+    // these fields existed, and therefore keeps any approval already bound to them.
+    ...(raw.reversibility === undefined || raw.reversibility === null
+      ? {}
+      : { reversibility: raw.reversibility }),
+    ...(raw.recovery === undefined || raw.recovery === null
+      ? {}
+      : { recovery: textField(raw.recovery, `step ${i + 1} recovery`, MAX_RECOVERY_CHARS) }),
   };
 }
 
@@ -148,6 +167,174 @@ function validationNote(validation) {
   ].join('\n');
 }
 
+// The candidate and replanning routes read; they never write. Both of them need the live registry,
+// because a step APEX cannot check against a registered capability is a step it must not offer.
+function registryFor(ctx) {
+  if (!ctx?.registry || typeof ctx.registry.get !== 'function') {
+    throw new ValidationError(
+      'the action registry is not available to this request, so no capability could be checked and no candidate could be compared',
+    );
+  }
+  return ctx.registry;
+}
+
+async function goalForRead(ctx, ref) {
+  if (!ctx?.goals || typeof ctx.goals.resolve !== 'function') {
+    throw new ValidationError('the goal store is not available to this request, so the goal could not be read');
+  }
+  return ctx.goals.resolve(ref);
+}
+
+// What the records of past attempts say about the capabilities these steps actually name, attached to a
+// read as disclosure. It is kept out of the comparison on purpose: no gate, ranked dimension, score, or
+// candidate digest is computed from it, because a heuristic informed by the user's expectation would
+// present that expectation as a fact about the world. A store this configuration does not have is
+// reported by the read as unavailable rather than as empty, so the absence says which it is.
+async function learningFor(store, ctx, { candidates = [], prior = null, goalId = null, excludePlanId = null }) {
+  return readLearning({
+    predictions: ctx?.predictions ?? null,
+    experience: ctx?.experience ?? null,
+    plans: store,
+    scope: learningScope(candidates, prior),
+    goalId,
+    excludePlanId,
+  });
+}
+
+function cannotUseOf(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new ValidationError('cannot_use must be a list of action names');
+  if (value.length > MAX_PRECONDITIONS) throw new ValidationError(`cannot_use may name at most ${MAX_PRECONDITIONS} actions`);
+  return [...new Set(value.map((n) => textField(n, 'an action in cannot_use', 64)))];
+}
+
+// A name the registry does not hold is refused rather than ignored: an ignored typo would leave the
+// excluded capability in the plan, which is the one thing the constraint was asked to prevent.
+function assertKnownActions(registry, names) {
+  const unknown = names.filter((n) => !registry.get(n));
+  if (unknown.length > 0) {
+    throw new ValidationError(
+      `cannot_use names an action this configuration does not register: ${unknown.join(', ')}`,
+    );
+  }
+  return names;
+}
+
+// The compact form of a comparison, for the audit record: what was included, what was gated out and
+// why, where each candidate landed, and the digests the statement is bound to. The per-candidate
+// bands are long and are printed rather than stored twice.
+function comparisonOf(evaluation) {
+  return {
+    ok: evaluation.ok,
+    reason: evaluation.reason,
+    problems: evaluation.problems ?? [],
+    rule: evaluation.rule,
+    gates: evaluation.gates,
+    rankedDimensions: evaluation.rankedDimensions,
+    disclosedDimensions: evaluation.disclosedDimensions,
+    included: evaluation.included,
+    excluded: evaluation.excluded,
+    front: evaluation.front,
+    behind: evaluation.behind,
+    leading: evaluation.selection?.leading ?? null,
+    basis: evaluation.selection?.basis ?? null,
+    unresolvedTradeOff: evaluation.selection?.unresolvedTradeOff ?? false,
+    tradeOffs: (evaluation.selection?.tradeOffs ?? []).map((t) => t.statement),
+    ties: (evaluation.selection?.ties ?? []).map((t) => t.statement),
+    clarificationNeeded: evaluation.clarificationNeeded,
+    whatWouldSettleIt: evaluation.whatWouldSettleIt,
+    boundTo: evaluation.boundTo,
+    approved: false,
+    executable: false,
+    note: evaluation.note,
+  };
+}
+
+const candidateRows = (rows) => rows.map((c) => ({
+  strategy: c.strategy,
+  digest: c.digest,
+  steps: c.steps,
+  writes: c.writes,
+  risk: c.risk,
+  criteriaCovered: c.criteriaCovered,
+  validation: c.validation,
+}));
+
+function occupancyNote(occupancy) {
+  return [
+    `The plan store holds ${occupancy.drafts.length} draft candidate(s) for this goal of at most ${occupancy.maxDrafts}, and ${occupancy.live.length} live plan(s) (approved, active, or blocked).`,
+    `It would accept ${occupancy.draftsRemaining} more draft(s) for this goal.`,
+    'Recording one is `plan.add`, and a second live plan for the same goal is refused; nothing here has recorded either.',
+  ].join('\n');
+}
+
+// The failures this revision can answer, as the plan's own recorded outcomes name them. A step with no
+// operation id is still refused as a capability, but is not cited as evidence: there is nothing to cite.
+function failedOperationRecords(prior) {
+  return Object.entries(prior.stepResults ?? {})
+    .filter(([, r]) => r?.status === StepStatus.FAILED || r?.status === StepStatus.UNCERTAIN)
+    .map(([stepId, r]) => ({
+      operationId: r.operationId ?? '',
+      detail: singleLine(
+        `${prior.steps.find((s) => s.id === stepId)?.action ?? 'a step'} ${r.status}${r.detail ? `: ${r.detail}` : ''}`,
+        MAX_ASSERTION_CHARS,
+      ),
+    }));
+}
+
+const planSnapshot = (plan) => ({
+  version: plan.version,
+  status: plan.status,
+  contentHash: planContentHash(plan),
+  updatedAt: plan.updatedAt,
+});
+
+// The outcome questions are answered from four records, not one: the plan's own step outcomes, the
+// audit operation each step cites, the goal's criteria with the standing of their evidence, and what
+// the knowledge and memory stores still hold of what the plan wrote. A store this configuration does
+// not have is reported as unreadable by the assessment rather than assumed.
+async function outcomeOf(store, ctx, planRef) {
+  const plan = await store.resolve(planRef);
+  let goal = null;
+  if (plan.goalId && ctx?.goals && typeof ctx.goals.resolve === 'function') {
+    goal = await ctx.goals.resolve(plan.goalId);
+  }
+  const assessment = await assessOutcome(plan, {
+    goal,
+    operations: ctx?.operations ?? null,
+    knowledge: ctx?.knowledge ?? null,
+    memory: ctx?.memory ?? null,
+  });
+  return { plan, assessment };
+}
+
+const findingRows = (findings = []) => findings.map((f) => ({
+  aspect: f.aspect,
+  statement: f.statement,
+  operations: [...f.operations],
+  ...(f.records?.length ? { records: [...f.records] } : {}),
+}));
+
+// Recorded assessments as a reader needs them to judge a new one: what was concluded, against which
+// version, and whether it still describes the plan's current content.
+const assessmentRows = (list = []) => list.map((a) => ({
+  at: a.at,
+  verdict: a.verdict,
+  planVersion: a.planVersion,
+  contentHash: a.contentHash,
+  stale: a.stale === true,
+  summary: a.summary,
+  findings: (a.findings ?? []).length,
+}));
+
+// Two findings are the same finding when they answer the same question from the same operations. The
+// statement itself is prose, so the citation is what a repeat read is compared on.
+const citedShape = (findings = []) => findings
+  .map((f) => `${f.aspect}:${[...(f.operations ?? [])].join('|')}`)
+  .join(',');
+
+const approvalShape = (plan) => `${plan.approval?.version ?? '-'}:${plan.approval?.contentHash ?? '-'}`;
+
 export function planActions(store) {
   if (!store || typeof store.createPlan !== 'function') {
     throw new TypeError('planActions requires a plan store');
@@ -156,7 +343,7 @@ export function planActions(store) {
     {
       name: 'plan.add',
       description: 'Record an executive plan for a goal: ordered steps with dependencies, expected results, verification requirements, risk, preconditions, and classified assumptions. A plan is a proposal, not permission. Write: user origin only.',
-      inputHint: '{"goal":"optional goal id","outcome":"intended outcome","steps":[{"id":"s1","description":"...","action":"memory.add","input":{},"dependsOn":[],"expectedResult":"...","verification":"...","criterion":"optional c1","risk":"low|medium|high","estimateSeconds":10}],"preconditions":[],"assertions":[{"kind":"user_fact|stored_knowledge|retrieved_evidence|world_fact|world_entity|inference|unknown","text":"...","ref":"record id","expected":"optional live value to compare"}],"estimatedSeconds":30,"reason":"optional"}',
+      inputHint: '{"goal":"optional goal id","outcome":"intended outcome","steps":[{"id":"s1","description":"...","action":"memory.add","input":{},"dependsOn":[],"expectedResult":"...","verification":"...","criterion":"optional c1","risk":"low|medium|high","estimateSeconds":10,"reversibility":"read_only|reversible|not_reversible|unknown","recovery":"optional: what to do if this step fails"}],"preconditions":[],"assertions":[{"kind":"user_fact|stored_knowledge|retrieved_evidence|world_fact|world_entity|inference|unknown","text":"...","ref":"record id","expected":"optional live value to compare"}],"estimatedSeconds":30,"reason":"optional"}',
       permission: 'write',
       origins: [ORIGIN_USER],
       plannable: false,
@@ -352,6 +539,434 @@ export function planActions(store) {
         if (plan.status !== PlanStatus.SUPERSEDED) return { ok: false, detail: `plan is ${plan.status}, not superseded` };
         if (plan.supersededBy !== by) return { ok: false, detail: 'the recorded replacement differs from the request' };
         return { ok: true, detail: 'supersession confirmed; both plans remain readable' };
+      },
+    },
+
+    {
+      name: 'plan.candidates',
+      description: 'Generate the candidate plans a recorded goal currently supports and compare them under a disclosed rule: hard gates first, then a Pareto comparison of what each candidate records. Read-only: nothing is recorded, approved, or started, and no step is invented.',
+      inputHint: '{"goal":"goal id","work":"optional: the work these candidates are for","cannot_use":["optional registered action names this generation must not offer"]}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        const o = expectObject(input ?? {}, ['goal', 'goalId', 'work', 'cannot_use']);
+        const goalRef = o.goalId ?? o.goal;
+        if (typeof goalRef !== 'string' || goalRef.trim().length === 0) throw new ValidationError('goal must be a goal id');
+        return {
+          goalRef: goalRef.trim(),
+          work: optionalTextField(o.work, 'work', MAX_PLAN_OUTCOME_CHARS),
+          cannotUse: cannotUseOf(o.cannot_use),
+        };
+      },
+      async execute(ctx, { goalRef, work, cannotUse }) {
+        const registry = registryFor(ctx);
+        assertKnownActions(registry, cannotUse);
+        const goal = await goalForRead(ctx, goalRef);
+        const evidence = { unavailableActions: cannotUse, knownBlockers: [], failedOperations: [] };
+        const generated = candidatesForGoal({ goal, registry, evidence, workText: work });
+        const evaluation = evaluateCandidates({ result: generated, goal, registry, evidence });
+        const occupancy = await store.candidateState(goal.id);
+        const learning = await learningFor(store, ctx, { candidates: generated.candidates, goalId: goal.id });
+        return {
+          summary: `${generated.candidates.length} candidate plan(s) for goal ${shortId(goal.id)}; `
+            + (evaluation.ok
+              ? (evaluation.selection.leading
+                ? `${evaluation.selection.leading} leads under the disclosed rule`
+                : `${evaluation.front.length} remain, not separated by it`)
+              : `none can be compared (${evaluation.reason})`),
+          data: {
+            goalId: goal.id,
+            goalRevision: goal.revision,
+            goalStatus: goal.status,
+            work: work ?? null,
+            cannotUse,
+            occupancy,
+            candidateSetDigest: evaluation.boundTo.candidateSetDigest,
+            candidates: candidateRows(generated.candidates),
+            clarificationNeeded: generated.clarificationNeeded,
+            unaddressed: (generated.unaddressed ?? []).map((u) => ({ criterionId: u.criterionId ?? null, text: u.text })),
+            assumedFromGoalRequest: (generated.assumedFromGoalRequest ?? []).map((a) => ({ criterionId: a.criterionId ?? null, text: a.text })),
+            skipped: generated.skipped ?? [],
+            comparison: comparisonOf(evaluation),
+            learning,
+            recorded: false,
+            approved: false,
+            executable: false,
+          },
+          display: [
+            renderCandidates(generated, { registry }),
+            renderEvaluation(evaluation),
+            occupancyNote(occupancy),
+            renderLearning(learning),
+            'No effort estimate appears above because the audit log holds no per-action duration to average; a number here would be a guess.',
+            'These are drafts on screen. Recording one is plan.add, approving it is plan.approve, and both are user acts.',
+          ].join('\n'),
+        };
+      },
+      async verify(ctx, { goalRef, work, cannotUse }, result) {
+        const registry = registryFor(ctx);
+        const goal = await goalForRead(ctx, goalRef);
+        const evidence = { unavailableActions: cannotUse, knownBlockers: [], failedOperations: [] };
+        const again = candidatesForGoal({ goal, registry, evidence, workText: work });
+        const compared = evaluateCandidates({ result: again, goal, registry, evidence });
+        if (compared.boundTo.candidateSetDigest !== result.data.candidateSetDigest) {
+          return {
+            ok: false,
+            detail: 'an independent generation gives different candidate bytes, so this answer describes a goal, a registry, or a constraint that has since moved',
+          };
+        }
+        const occupancy = await store.candidateState(goal.id);
+        if (occupancy.drafts.join(',') !== result.data.occupancy.drafts.join(',')) {
+          return { ok: false, detail: 'the plan store now holds a different set of drafts for this goal than this read reported' };
+        }
+        const againLearning = await learningFor(store, ctx, { candidates: again.candidates, goalId: goal.id });
+        if (learningDigest(againLearning) !== learningDigest(result.data.learning)) {
+          return { ok: false, detail: 'the learning records disclosed with this comparison no longer read the same: an adaptation was decided, an expectation changed state, or an assessment was recorded while this answer was being read' };
+        }
+        return {
+          ok: true,
+          detail: `${again.candidates.length} candidate(s) reproduce byte for byte from the recorded goal and the live registry; the store holds ${occupancy.drafts.length} draft(s) for this goal, none added by this read; the learning disclosure re-reads to the same records`,
+        };
+      },
+    },
+
+    {
+      name: 'plan.replan',
+      description: 'Generate and compare revised candidates for a recorded plan that has stopped being viable, answering only what the plan record and the audit log hold about its steps. Read-only: the plan being answered is left exactly as it was, and a revision needs fresh validation and fresh approval.',
+      inputHint: '{"plan":"plan id","reason":"why this plan stopped being viable","cannot_use":["optional registered action names this revision must not offer"]}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        const o = expectObject(input, ['plan', 'planId', 'target', 'reason', 'cannot_use']);
+        const planRef = o.plan ?? o.planId ?? o.target;
+        if (typeof planRef !== 'string' || planRef.trim().length === 0) throw new ValidationError('plan must be a plan id');
+        return { planRef: planRef.trim(), reason: textField(o.reason, 'reason', 500), cannotUse: cannotUseOf(o.cannot_use) };
+      },
+      async execute(ctx, { planRef, reason, cannotUse }) {
+        const registry = registryFor(ctx);
+        assertKnownActions(registry, cannotUse);
+        const prior = await store.resolve(planRef);
+        if (!prior.goalId) {
+          throw new ValidationError(`plan ${shortId(prior.id)} records no goal, so a revision has no intention to revise an approach for`);
+        }
+        const goal = await goalForRead(ctx, prior.goalId);
+        const failedOperations = failedOperationRecords(prior);
+        const generated = revisedCandidates({
+          goal,
+          registry,
+          prior,
+          evidence: { unavailableActions: cannotUse, knownBlockers: [], failedOperations },
+          reason,
+        });
+        // What the earlier run refused stays refused while the revision is compared, so a revision that
+        // quietly kept a capability that already failed is gated out rather than ranked.
+        const refused = [...new Set([...cannotUse, ...(generated.revision?.refusedActions ?? [])].map(String))];
+        const evaluation = evaluateCandidates({
+          result: generated,
+          goal,
+          registry,
+          evidence: { unavailableActions: refused, knownBlockers: [] },
+        });
+        const occupancy = await store.candidateState(goal.id);
+        const learning = await learningFor(store, ctx, { candidates: generated.candidates, prior, goalId: goal.id });
+        return {
+          summary: `${generated.candidates.length} revised candidate plan(s) for plan ${shortId(prior.id)} v${prior.version}; `
+            + (evaluation.ok
+              ? (evaluation.selection.leading
+                ? `${evaluation.selection.leading} leads under the disclosed rule`
+                : `${evaluation.front.length} remain, not separated by it`)
+              : `none can be compared (${evaluation.reason})`),
+          data: {
+            planId: prior.id,
+            planSnapshot: planSnapshot(prior),
+            goalId: goal.id,
+            goalRevision: goal.revision,
+            reason,
+            cannotUse,
+            refusedActions: refused,
+            failedOperations,
+            revision: generated.revision ?? null,
+            occupancy,
+            candidateSetDigest: evaluation.boundTo.candidateSetDigest,
+            candidates: candidateRows(generated.candidates),
+            clarificationNeeded: generated.clarificationNeeded,
+            unaddressed: (generated.unaddressed ?? []).map((u) => ({ criterionId: u.criterionId ?? null, text: u.text })),
+            skipped: generated.skipped ?? [],
+            comparison: comparisonOf(evaluation),
+            learning,
+            freshApprovalRequired: generated.revision ? generated.revision.freshApprovalRequired : null,
+            recorded: false,
+            approved: false,
+            executable: false,
+          },
+          display: [
+            `Revised candidates for plan ${shortId(prior.id)} v${prior.version} (${prior.status}), answering: ${reason}`,
+            failedOperations.length
+              ? `Recorded step outcomes it answers: ${failedOperations.map((f) => `${singleLine(f.detail, 120)}${f.operationId ? ` [operation ${shortId(f.operationId)}]` : ' [no operation recorded]'}`).join('; ')}`
+              : 'The plan record holds no failed or uncertain step outcome, so this revision answers the stated reason and the constraints given, not a recorded failure.',
+            renderCandidates(generated, { registry }),
+            renderEvaluation(evaluation),
+            occupancyNote(occupancy),
+            renderLearning(learning),
+            `Plan ${shortId(prior.id)} is unchanged by this read, and its approval binds to its own bytes: none of the candidates above inherits it.`,
+            'A revision is recorded with plan.add and authorized with plan.approve, both user acts, after fresh validation.',
+          ].join('\n'),
+        };
+      },
+      async verify(ctx, { planRef, reason, cannotUse }, result) {
+        const registry = registryFor(ctx);
+        const prior = await store.resolve(planRef);
+        const snapshot = planSnapshot(prior);
+        const recorded = result.data.planSnapshot;
+        if (snapshot.version !== recorded.version || snapshot.contentHash !== recorded.contentHash
+          || snapshot.status !== recorded.status || snapshot.updatedAt !== recorded.updatedAt) {
+          return { ok: false, detail: `the plan being answered changed during the read (v${recorded.version} ${recorded.status} -> v${snapshot.version} ${snapshot.status})` };
+        }
+        if (!prior.goalId) return { ok: false, detail: 'the plan records no goal, so the revision cannot be regenerated' };
+        const goal = await goalForRead(ctx, prior.goalId);
+        const again = revisedCandidates({
+          goal,
+          registry,
+          prior,
+          evidence: { unavailableActions: cannotUse, knownBlockers: [], failedOperations: failedOperationRecords(prior) },
+          reason,
+        });
+        const compared = evaluateCandidates({
+          result: again,
+          goal,
+          registry,
+          evidence: { unavailableActions: [...new Set([...cannotUse, ...(again.revision?.refusedActions ?? [])].map(String))], knownBlockers: [] },
+        });
+        if (compared.boundTo.candidateSetDigest !== result.data.candidateSetDigest) {
+          return { ok: false, detail: 'an independent revision gives different candidate bytes, so this answer describes a plan, goal, or registry that has since moved' };
+        }
+        const occupancy = await store.candidateState(goal.id);
+        if (occupancy.drafts.length !== result.data.occupancy.drafts.length) {
+          return { ok: false, detail: 'the plan store holds a different number of drafts for this goal than this read reported' };
+        }
+        const againLearning = await learningFor(store, ctx, { candidates: again.candidates, prior, goalId: goal.id });
+        if (learningDigest(againLearning) !== learningDigest(result.data.learning)) {
+          return { ok: false, detail: 'the learning records disclosed with this revision no longer read the same: an adaptation was decided, an expectation changed state, or an assessment was recorded while this answer was being read' };
+        }
+        return {
+          ok: true,
+          detail: `plan ${shortId(prior.id)} is still v${snapshot.version} ${snapshot.status} with the same content hash; ${again.candidates.length} revised candidate(s) reproduce byte for byte; the learning disclosure re-reads to the same records; nothing was recorded, approved, or started`,
+        };
+      },
+    },
+
+    {
+      name: 'plan.outcome',
+      description: 'Read what a plan\'s execution established and what it left open, as seven separate questions answered from the audit log, the goal\'s criteria and evidence, and the stores: step outcomes, expected outputs, verifier verdicts, criteria settled, evidence state, durability, and what only confirmation outside APEX can settle. A verdict is a reading of records, not real-world success and not permission. Read-only: nothing is recorded and the plan is left byte-identical.',
+      inputHint: '{"plan":"plan id"}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        const o = expectObject(input ?? {}, ['plan', 'planId', 'target']);
+        const planRef = o.plan ?? o.planId ?? o.target;
+        if (typeof planRef !== 'string' || planRef.trim().length === 0) throw new ValidationError('plan must be a plan id');
+        return { planRef: planRef.trim() };
+      },
+      async execute(ctx, { planRef }) {
+        const { plan, assessment } = await outcomeOf(store, ctx, planRef);
+        const prior = assessment.ok ? await store.assessments(plan.id) : [];
+        // The scope is the plan's own step actions, so the independent re-read below, which is handed the
+        // same plan record, derives the same capabilities and can detect a moved record.
+        const learning = await learningFor(store, ctx, { prior: plan, goalId: plan.goalId ?? null, excludePlanId: plan.id });
+        if (!assessment.ok) {
+          return {
+            summary: `plan ${shortId(plan.id)} v${plan.version} (${plan.status}) has no execution outcome to read back: ${assessment.reason}`,
+            data: {
+              planId: plan.id,
+              planSnapshot: planSnapshot(plan),
+              assessed: false,
+              reason: assessment.reason,
+              goalId: plan.goalId ?? null,
+              recordable: false,
+              priorAssessments: [],
+              learning,
+              recorded: false,
+            },
+            display: [
+              renderAssessment(assessment),
+              `Plan ${shortId(plan.id)} is v${plan.version} (${plan.status}) with ${plan.steps.length} step(s) and ${Object.keys(plan.stepResults ?? {}).length} recorded step outcome(s).`,
+              renderLearning(learning),
+              'Recording an assessment is plan.assess, and it needs an outcome to assess.',
+            ].join('\n'),
+          };
+        }
+        return {
+          summary: `outcome of plan ${shortId(plan.id)} v${plan.version} (${plan.status}): ${assessment.verdict} - ${singleLine(assessment.basis, 140)}`,
+          data: {
+            planId: plan.id,
+            planSnapshot: planSnapshot(plan),
+            assessed: true,
+            taskId: assessment.taskId,
+            goalId: assessment.goalId,
+            goalRevision: assessment.goalRevision,
+            goalStatus: assessment.goalStatus,
+            progress: assessment.progress,
+            verdict: assessment.verdict,
+            verdictRule: VERDICT_RULE,
+            basis: assessment.basis,
+            summary: assessment.summary,
+            aspects: assessment.aspects.map((a) => ({ aspect: a.aspect, question: a.question, answered: a.answered })),
+            findings: findingRows(assessment.findings),
+            dropped: assessment.dropped,
+            auditReads: assessment.auditReads,
+            recordable: assessment.recordable,
+            unrecordableReason: assessment.unrecordableReason,
+            priorAssessments: assessmentRows(prior),
+            learning,
+            note: assessment.note,
+            recorded: false,
+            authorizes: false,
+          },
+          display: [
+            renderAssessment(assessment),
+            prior.length
+              ? `Already recorded against this plan: ${assessmentRows(prior).map((a) => `${a.verdict} for v${a.planVersion}${a.stale ? ' (stale: the plan content has since changed)' : ''}`).join('; ')}`
+              : `No outcome assessment of plan ${shortId(plan.id)} is recorded yet.`,
+            renderLearning(learning),
+            'This read recorded nothing: an assessment is written by plan.assess, which is a user act, and it changes no status, approval, or timestamp.',
+            'A step that ran and verified is a fact about the audit log. Whether the intention holds outside APEX\'s records is not answered here.',
+          ].join('\n'),
+        };
+      },
+      async verify(ctx, { planRef }, result) {
+        const { plan, assessment } = await outcomeOf(store, ctx, planRef);
+        const now = planSnapshot(plan);
+        const then = result.data.planSnapshot;
+        if (now.version !== then.version || now.status !== then.status
+          || now.contentHash !== then.contentHash || now.updatedAt !== then.updatedAt) {
+          return { ok: false, detail: `the plan changed during the read (v${then.version} ${then.status} -> v${now.version} ${now.status})` };
+        }
+        const recorded = assessment.ok ? await store.assessments(plan.id) : [];
+        if (recorded.length !== result.data.priorAssessments.length) {
+          return { ok: false, detail: 'this read left a recorded assessment behind, which a read must not do' };
+        }
+        const againLearning = await learningFor(store, ctx, { prior: plan, goalId: plan.goalId ?? null, excludePlanId: plan.id });
+        if (learningDigest(againLearning) !== learningDigest(result.data.learning)) {
+          return { ok: false, detail: 'the learning records this answer disclosed no longer read the same: an adaptation was decided, an expectation changed state, or an assessment was recorded against another plan for this goal while this answer was being read' };
+        }
+        if (!result.data.assessed) {
+          if (assessment.ok) {
+            return { ok: false, detail: 'the plan now records an execution outcome, so the answer that there was none to read back no longer holds' };
+          }
+          return { ok: true, detail: `plan ${shortId(plan.id)} is unchanged at v${now.version} ${now.status}; it still has no execution outcome to read back, the learning disclosure re-reads to the same records, and nothing was recorded` };
+        }
+        if (!assessment.ok) return { ok: false, detail: 'the plan no longer has an execution outcome to read back' };
+        if (assessment.verdict !== result.data.verdict) {
+          return { ok: false, detail: `an independent read gives ${assessment.verdict}, not the ${result.data.verdict} reported: the records this answer reads have moved` };
+        }
+        if (citedShape(assessment.findings) !== citedShape(result.data.findings)) {
+          return { ok: false, detail: 'the findings this read reported no longer cite the same operations' };
+        }
+        return {
+          ok: true,
+          detail: `plan ${shortId(plan.id)} is still v${now.version} ${now.status} with the same content hash; the ${assessment.verdict} reading reproduces from ${assessment.findings.length} finding(s) citing the same operation(s); the learning disclosure re-reads to the same records; nothing was recorded`,
+        };
+      },
+    },
+
+    {
+      name: 'plan.assess',
+      description: 'Record the outcome assessment APEX derives from a plan\'s recorded step outcomes, the audit operations they cite, the goal\'s criteria and evidence, and what the stores still hold. The verdict is re-derived here and never accepted as input, so an input naming a verdict or findings is refused. Recording writes one assessment event: it changes no plan status, approval, or timestamp, and completes or reopens no goal. Write: user origin only.',
+      inputHint: '{"target":"plan id"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target']);
+        if (typeof o.target !== 'string' || o.target.trim().length === 0) throw new ValidationError('target must be a plan id');
+        return { target: o.target.trim() };
+      },
+      async execute(ctx, { target }) {
+        const { plan, assessment } = await outcomeOf(store, ctx, target);
+        if (!assessment.ok) {
+          throw new ValidationError(`plan ${shortId(plan.id)} has no execution outcome to assess: ${assessment.reason}`);
+        }
+        // Recorded only when every retained finding cites an operation this read actually found and the
+        // question the verdict depends on is among them. An assessment the store would refuse is reported
+        // rather than written, and an answer with no record behind it stays unrecorded.
+        if (!assessment.recordable) {
+          throw new ValidationError(`the derived assessment cannot be recorded: ${assessment.unrecordableReason}`);
+        }
+        const before = planSnapshot(plan);
+        const beforeApproval = approvalShape(plan);
+        const { plan: after } = await store.assessPlan(target, {
+          verdict: assessment.verdict,
+          summary: assessment.summary,
+          findings: assessment.findings,
+        });
+        const afterApproval = approvalShape(after);
+        const list = await store.assessments(after.id);
+        return {
+          summary: `recorded outcome assessment ${assessment.verdict} for plan ${shortId(plan.id)} v${plan.version}`,
+          data: {
+            planId: plan.id,
+            before,
+            after: planSnapshot(after),
+            beforeApproval,
+            afterApproval,
+            verdict: assessment.verdict,
+            summary: assessment.summary,
+            findings: findingRows(assessment.findings),
+            dropped: assessment.dropped,
+            assessments: assessmentRows(list),
+          },
+          display: [
+            `Recorded outcome assessment for plan ${shortId(plan.id)} v${plan.version} (${after.status}).`,
+            `  verdict: ${assessment.verdict} - ${assessment.basis}`,
+            `  findings: ${assessment.findings.length} of ${ASSESSMENT_ASPECTS.length} question(s) answered from records`,
+            assessment.dropped.length
+              ? `  not recorded: ${assessment.dropped.map((d) => `${d.aspect} (${d.reason})`).join('; ')}`
+              : null,
+            `  the plan record is unchanged: v${after.version} ${after.status}, same content hash, ${before.updatedAt === after.updatedAt ? 'same' : 'CHANGED'} timestamp, approval ${beforeApproval === afterApproval ? 'unchanged' : 'CHANGED'}`,
+            `  assessments now on this plan: ${assessmentRows(list).map((a) => `${a.verdict} for v${a.planVersion}${a.stale ? ' (stale)' : ''}`).join('; ')}`,
+            'Recording an assessment completes no goal and reopens none, and authorizes nothing. Whether the intention holds outside these records is the user\'s to confirm.',
+          ].filter(Boolean).join('\n'),
+        };
+      },
+      async verify(_ctx, _input, result) {
+        const plan = await store.get(result.data.planId);
+        if (!plan) return { ok: false, detail: 'the assessed plan cannot be read back' };
+        const now = planSnapshot(plan);
+        const before = result.data.before;
+        if (now.version !== before.version || now.status !== before.status
+          || now.contentHash !== before.contentHash || now.updatedAt !== before.updatedAt) {
+          return {
+            ok: false,
+            detail: `recording an assessment changed the plan record (v${before.version} ${before.status} updatedAt ${before.updatedAt} -> v${now.version} ${now.status} updatedAt ${now.updatedAt})`,
+          };
+        }
+        if (approvalShape(plan) !== result.data.beforeApproval) {
+          return { ok: false, detail: 'recording an assessment changed the plan\'s approval' };
+        }
+        const list = await store.assessments(plan.id);
+        const last = list.at(-1);
+        if (!last) return { ok: false, detail: 'no assessment is recorded on the plan' };
+        if (last.verdict !== result.data.verdict) return { ok: false, detail: `the recorded verdict is ${last.verdict}, not ${result.data.verdict}` };
+        if (last.summary !== result.data.summary) return { ok: false, detail: 'the recorded summary differs from what was derived' };
+        if (last.planVersion !== before.version) return { ok: false, detail: `the assessment names plan version ${last.planVersion}, not ${before.version}` };
+        if (last.contentHash !== before.contentHash) {
+          return { ok: false, detail: 'the assessment is not bound to the plan content it was derived from' };
+        }
+        if (last.stale) return { ok: false, detail: 'the assessment already reads as stale against the plan\'s current content' };
+        const earlier = list.length - 1;
+        if ((last.findings ?? []).length !== result.data.findings.length) {
+          return { ok: false, detail: `the recorded assessment holds ${(last.findings ?? []).length} finding(s), not ${result.data.findings.length}` };
+        }
+        for (const f of last.findings ?? []) {
+          if (!(f.operations ?? []).length) return { ok: false, detail: `the recorded ${f.aspect} finding cites no operation` };
+        }
+        if (citedShape(last.findings) !== citedShape(result.data.findings)) {
+          return { ok: false, detail: 'the recorded findings cite operations other than those the read found' };
+        }
+        return {
+          ok: true,
+          detail: `assessment ${last.verdict} recorded for v${last.planVersion} and bound to its content hash; ${last.findings.length} finding(s), each citing an operation in the audit log; ${earlier} earlier assessment(s) preserved; plan still ${plan.status} with its approval and timestamp unchanged`,
+        };
       },
     },
   ];

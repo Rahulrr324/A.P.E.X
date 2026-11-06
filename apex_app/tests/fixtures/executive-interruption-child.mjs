@@ -1,5 +1,6 @@
 // TEST FIXTURE for the AG interruption scenario: a real APEX process that is terminated while
-// it is inside a plan step. Spawned by tests/executive-interruption.test.js and by nothing else.
+// it is inside a plan step. Spawned by tests/executive-interruption.test.js and by
+// tests/plan-scenarios.test.js scenario 29, and by nothing else.
 //
 //   node executive-interruption-child.mjs <data dir> <side-effect file>
 //

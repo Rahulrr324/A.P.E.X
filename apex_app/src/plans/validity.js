@@ -16,9 +16,26 @@ function check(name, ok, detail) {
   return { check: name, ok, detail };
 }
 
+// Whether a record an assertion cites still supports it. The knowledge store's lifecycle is
+// derived from its own append-only log, so a claim that has since been retracted or superseded is
+// still in the file and still readable - and citing it as support would be citing a claim APEX
+// itself no longer holds. The stored bytes are therefore not the test; the annotated record is.
 async function resolveEvidence(ref, { knowledge, memory, experience }) {
   try {
-    if (knowledge && await knowledge.get(ref)) return { found: true, source: 'knowledge' };
+    if (knowledge) {
+      const view = await knowledge.history(ref);
+      if (view?.record) {
+        if (view.record.active === true) return { found: true, source: 'knowledge' };
+        const by = (view.replacedBy ?? []).map((r) => r.shortId ?? r.id).join(', ');
+        return {
+          found: false,
+          source: 'knowledge',
+          retired: true,
+          state: view.record.lifecycleState ?? 'retired',
+          note: by ? `replaced by ${by}` : view.record.retraction?.reason ?? null,
+        };
+      }
+    }
   } catch (err) {
     return { found: false, unreadable: err };
   }
@@ -160,12 +177,14 @@ export async function assessPlanValidity(plan, {
     const found = await resolveEvidence(assertion.ref, { knowledge, memory, experience });
     if (found.unreadable) {
       assertionProblems.push(`the record ${assertion.ref} could not be read (${found.unreadable?.code ?? 'store error'})`);
+    } else if (found.retired) {
+      assertionProblems.push(`the record ${assertion.ref} is ${found.state}${found.note ? ` (${found.note})` : ''}, so it no longer supports this assertion`);
     } else if (!found.found) {
       assertionProblems.push(`the record ${assertion.ref} no longer resolves`);
     }
   }
   const allAssertionProblems = [...assertionProblems, ...worldProblems];
-  checks.push(check('assertions', allAssertionProblems.length === 0, allAssertionProblems.length === 0 ? 'every referenced record still resolves and every cited world value still holds' : allAssertionProblems.join('; ')));
+  checks.push(check('assertions', allAssertionProblems.length === 0, allAssertionProblems.length === 0 ? 'every referenced record is still in the store and still current, and every cited world value still holds' : allAssertionProblems.join('; ')));
   problems.push(...assertionProblems.map((p) => `evidence ${p}`));
   problems.push(...worldProblems.map((p) => `world assertion ${p}`));
 

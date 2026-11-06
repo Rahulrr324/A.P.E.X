@@ -25,6 +25,12 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   `apex-bench-akx-` with the same refusing cleanup, and gives **every sample its own fresh copy of its
   row fixture**, so no measurement can be taken on a store a previous measurement enlarged. It starts
   no child process and constructs no backend: every application is built with `NoBackend`.
+- `run-planning-benchmark.mjs` builds every fixture on a `mkdtemp` directory prefixed
+  `apex-bench-alx-` and uses the same refusing cleanup. It constructs no backend (`NoBackend` behind a
+  `ModelGateway`), starts no child process, and touches no network. Its `control` phase empties the
+  prediction and experience ledgers **inside the fixture directory it created for that run**, which is
+  why it is the last phase and why it is destructive only to a temporary store.
+
 - Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
   reporting, not a cleanup task.
 
@@ -818,5 +824,117 @@ magnitude beyond the 2,400 records and 1.67 MiB ceiling measured here.
 - This measures what the executive path costs to run. It is not evidence that a plan the bridge
   recorded was a good plan, that a verified step is correct in the world, or that any model would have
   chosen these steps: no model was contacted, no inference was run, and no inference was simulated.
+
+This script is not part of `npm test` and no test depends on it.
+
+## Planning benchmark (Batch AL)
+
+`run-planning-benchmark.mjs` measures the nine adaptive-planning paths Batch AL added: goal
+decomposition with provenance, candidate generation, candidate evaluation, plan validation, goal
+progress derivation, outcome evaluation, replanning, continuation ranking, and the one recorded
+assessment. Like the other scripts here it is model-free in the strongest available sense: every
+application is built with `NoBackend` behind a `ModelGateway`, so no network is contacted, no service
+is started, nothing is downloaded, and no inference is run or simulated. What is timed is APEX's own
+work through the real controller, the real stores, the real action registry and the real verifier.
+
+### Procedure
+
+```bash
+cd apex_app
+node benchmarks/run-planning-benchmark.mjs                          # all three sizes, all phases
+node benchmarks/run-planning-benchmark.mjs --sizes S --repeats 2    # a fast shape check
+node benchmarks/run-planning-benchmark.mjs --sizes L --phase control
+```
+
+1. `--repeats` is 1-25 (default 3). `--sizes` selects any of `S,M,L` (default all three). `--phase`
+   selects `columns`, `attribution`, `control`, or `all`; `--keep` leaves the fixture directories and
+   prints where.
+2. A fixture is a subject goal with two required criteria plus one approved and run plan, then the
+   backlog the reads must scan: `memory.add` and knowledge triples, goals and two-step plans created
+   through the stores' own writes, plans really activated through the existing task runner, predictions
+   recorded through the ledger, and one experience filed against each operation the seeding produced
+   (the store allows one per operation, so the audit log is grown first by audited reads of the
+   experience ledger). Nothing is written into a fixture by hand.
+3. Seeding is reported apart from every measurement and is by far the slowest part of a run: 0.7 s,
+   84.3 s and 199.8 s for S, M and L in the run below, and the same fixture seeded in 75 s in another
+   run on the same machine. Treat seeding figures as machine load, not as a measurement.
+4. An audited read appends one operation record of its own, so the second and third sample of a column
+   are taken on a log one or two records longer than the first. At these sizes that is well under one
+   part in a thousand of `operations.jsonl`, and it is disclosed rather than hidden. The assessment
+   column is taken once per fixture and last, because the store refuses a second assessment of the same
+   plan version.
+5. The `control` phase runs only at the largest selected size: it empties `predictions.jsonl` and
+   `experiences.jsonl` in that fixture and re-takes the three reads. That is the comparison that tells
+   the planning code's own growth apart from the disclosure it prints.
+
+### What it reports
+
+- **columns**: each of the nine paths, as medians with every sample, at each size. `candidate
+  generation` and `candidate evaluation` are the pure functions called directly, so the answer prints
+  the cost of the AL logic itself next to the cost of the audited reads that wrap it.
+- **attribution**: the three reads the learning disclosure makes (`activeAdaptations`,
+  `predictions.calibration`, `plans.list`), each alone, plus `goals.list`, `operations.inspect`, and the
+  raw read-and-parse of the prediction and experience logs - so a claim about where time goes is a
+  measurement and not an inference. It also counts store calls: a census taken across one candidate
+  read and one outcome read shows `plans.list`, `activeAdaptations` and `calibration` twice per read,
+  which is the action's own verification re-deriving what it printed, and `operations.findById` twice
+  per outcome read for the operations its findings cite.
+- **control**: the same goals, plans, tasks and audit log with the two ledgers the disclosure reads
+  emptied.
+
+### Measured
+
+Medians from `node benchmarks/run-planning-benchmark.mjs` (default repeats 3, all phases) on Windows 11,
+Node v26.4.0, x64, in a run with no other benchmark or test active. Fixture contents at L: 2,021 memory
+records, 2,000 knowledge claims, 155 goal events, 235 plan events, 147 task lines, 401 operations, 800
+predictions, 400 experiences - about 2.2 MB of JSONL.
+
+| ms (median S / M / L) | S | M | L |
+|---|---|---|---|
+| goal decomposition (`assessStoredGoal`) | 6.3 | 18.1 | 18.7 |
+| candidate generation (pure) | 3.0 | 4.2 | 0.5 |
+| candidate evaluation (pure) | 1.0 | 0.3 | 0.2 |
+| plan validation (`validateStoredPlan`) | 5.3 | 27.7 | 21.2 |
+| goal progress over every goal | 1.5 | 9.4 | 8.8 |
+| outcome read (`plan.outcome`) | 31.9 | 431.2 | 3,321.5 |
+| replan read (`plan.replan`) | 24.0 | 445.2 | 3,149.3 |
+| candidate read (`plan.candidates`) | 18.2 | 261.1 | 3,243.6 |
+| continuation ranking (`work`/`next`) | 4.5 | 10.1 | 51.1 |
+| recorded assessment (`plan.assess`) | 45.2 | 210.9 | 289.0 * |
+
+\* at L the assessment is taken after the control emptied the two ledgers, so it belongs with the
+control row below, not with the three reads above.
+
+| attribution, ms (S / M / L) | S | M | L |
+|---|---|---|---|
+| the three learning reads together | 3.0 | 184.8 | 1,623.4 |
+| `predictions.calibration` alone | 1.3 | 187.1 | 1,492.9 |
+| `activeAdaptations` alone | 1.7 | 5.5 | 5.1 |
+| `plans.list` alone | 1.6 | 9.7 | 11.0 |
+| `goals.list` alone | 1.4 | 15.6 | 30.0 |
+| both ledgers read and parsed | 0.3 | 8.6 | 15.2 |
+| control: candidate / replan / outcome read with no predictions and no experiences | - | - | 118.8 / 138.8 / 271.5 |
+
+The reading of these numbers is narrow and deliberate: the planning code does not get slower with the
+history it reads - the generator and evaluator stay under a millisecond at L, and decomposition,
+validation, progress and ranking stay between 18 and 52 ms - while each of the three audited planning
+reads does, and the whole of that increase sits in the prediction ledger projection the learning
+disclosure performs twice per read. Emptying those two ledgers returns the same fixture's reads to
+0.1-0.3 s, and the calibration at 800 predictions against 400 experiences costs about the same as those
+three reads, so it is the mechanism, not an incidental.
+
+### Interpretation limits
+
+- Absolute timings on this machine varied up to 2x between two runs of the identical fixture, including
+  the 75 s/200 s seeding difference above. Only comparisons taken inside one run - the control against
+  the reads, the attribution against the total - are treated as findings here.
+- The fixture's predictions and experiences are uniform in capability and window, which is the shape
+  that makes a horizon query scan the whole snapshot; a real ledger spread over capabilities is not
+  measured here and would not necessarily cost the same per record.
+- One subject plan and two-step historical plans are the shape Batch AL's own scenarios use; a goal with
+  eight criteria, or a plan at the eight-step cap, is not what these columns measured.
+- This measures what the planning paths cost to run. It is not evidence that a candidate APEX generated
+  was a good plan, that a recorded verdict describes the world, or that any model would choose these
+  steps: no model was contacted, no inference was run, and no inference was simulated.
 
 This script is not part of `npm test` and no test depends on it.
