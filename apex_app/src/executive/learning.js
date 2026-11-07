@@ -60,9 +60,15 @@ export const LEARNING_BOUNDS = Object.freeze({
   answerStatements: 4,
 });
 
-// Printed beside every block this module produces. The comparison above the block is the part a reader
-// might expect learning to have influenced, so the absence is stated rather than left to be inferred.
+// Printed beside every block this module produces. Batch AL wrote it as a flat absence, because nothing
+// in the read moved anything. Batch AM adds the second sentence, and only where it is true: an approved
+// adaptation whose user recorded a shape is compared, so the flat absence would be a false statement
+// about the answer it is printed under. Which of the two a reader sees is decided by the read itself,
+// from the records that were actually in scope - not by a guess about what guidance might exist.
 export const LEARNING_NOT_APPLIED = 'This read changed nothing above it: no gate, no ranked dimension, no score, and no candidate digest is computed from these records.';
+export const LEARNING_GUIDED = 'This read authorized nothing and gated nothing: no gate, no candidate digest, and no score is computed from these records. '
+  + 'What it did feed is one ranked dimension, approved_adaptation_fit: the records named above carry a shape the user recorded, and each candidate\'s own steps were checked against it. '
+  + 'Nothing else above this line changed, and an expectation, an outcome assessment, or an approved rule with no shape moved nothing at all.';
 
 // The capabilities a set of recorded steps actually names, in the order the steps name them,
 // deduplicated and bounded. A candidate is not asked what it hopes to learn; it is asked what it would
@@ -103,6 +109,37 @@ function readFailure(err) {
 // none is recorded - the distinction is the store's to make and this read only repeats it.
 const NO_ADAPTATIONS = Object.freeze({ rows: [], shown: 0, total: 0, scopeTotal: 0, truncated: false });
 
+// One adaptation row, in the shape both the disclosure and the guidance ledger read. It is exported
+// because the ledger has to see the states the disclosure deliberately hides: an unapproved, rejected,
+// or retired rule is not guidance, and a report that proves it changed nothing has to be able to say
+// which record it looked at and what state it was in.
+export function adaptationRow(a) {
+  return {
+    id: a.id,
+    capability: a.capability,
+    rule: wording(a.rule, LEARNING_BOUNDS.ruleChars) ?? 'no rule text is recorded',
+    method: a.method ?? null,
+    minSupport: a.minSupport ?? null,
+    supportCount: (a.support?.experienceIds ?? []).length,
+    decidedAt: a.decision?.createdAt ?? null,
+    decisionReason: wording(a.decision?.reason, 200),
+    decisionState: a.decisionState ?? null,
+    active: a.active === true,
+    guidance: a.guidance ?? null,
+    guidanceCount: a.guidanceCount ?? 0,
+    // The rule-level disagreement the store derives between two active records in one scope. The count
+    // is the store's own field and stays a count; the comparison needs the partners to withhold an
+    // ordering rather than pick a winner, so they travel beside it instead of being re-derived from a
+    // second read.
+    conflicts: (a.conflicts ?? []).length,
+    conflictsWith: (a.conflicts ?? []).map((c) => ({ id: c.id, capability: c.capability })),
+    supportState: a.supportState ?? null,
+    inactiveReason: a.inactiveReason ?? null,
+    updateMode: a.provenance?.updateMode ?? null,
+    origin: a.provenance?.origin ?? null,
+  };
+}
+
 async function readAdaptations(experience, scope) {
   if (!experience || typeof experience.activeAdaptations !== 'function') {
     return { ...NO_ADAPTATIONS, unavailable: 'no experience store is configured in this build' };
@@ -111,19 +148,7 @@ async function readAdaptations(experience, scope) {
     const read = await experience.activeAdaptations({ limit: LEARNING_BOUNDS.activeRead });
     const inScope = (read.adaptations ?? []).filter((a) => scope.capabilities.includes(a.capability));
     return {
-      rows: inScope.slice(0, LEARNING_BOUNDS.adaptations).map((a) => ({
-        id: a.id,
-        capability: a.capability,
-        rule: wording(a.rule, LEARNING_BOUNDS.ruleChars) ?? 'no rule text is recorded',
-        method: a.method ?? null,
-        minSupport: a.minSupport ?? null,
-        supportCount: (a.support?.experienceIds ?? []).length,
-        decidedAt: a.decision?.createdAt ?? null,
-        decisionReason: wording(a.decision?.reason, 200),
-        updateMode: a.provenance?.updateMode ?? null,
-        origin: a.provenance?.origin ?? null,
-        conflicts: (a.conflicts ?? []).length,
-      })),
+      rows: inScope.slice(0, LEARNING_BOUNDS.adaptations).map(adaptationRow),
       shown: inScope.length,
       total: read.total ?? 0,
       scopeTotal: inScope.length,
@@ -261,20 +286,34 @@ export async function readLearning({
   const unavailable = [adaptations, predictionLedger, assessments]
     .map((r) => r.unavailable)
     .filter(Boolean);
+  // Which of these records could move the comparison the answer is printed under, stated as the rows
+  // themselves say it: approved, still standing, and carrying a shape the user recorded. Everything else
+  // in this read - an expectation, an assessment, a rule nobody shaped - is disclosure.
+  const shaping = adaptations.rows.filter((a) => a.active === true && a.decisionState === 'approved' && a.guidance);
   return {
     schema: LEARNING_SCHEMA,
     rule: LEARNING_RULE,
     separations: LEARNING_SEPARATIONS,
-    note: LEARNING_NOT_APPLIED,
+    note: shaping.length > 0 ? LEARNING_GUIDED : LEARNING_NOT_APPLIED,
     scope,
     adaptations,
     predictions: predictionLedger,
     assessments,
     unavailable,
     // Two claims an answer must be able to make without inference: this read authorized nothing, and
-    // it fed nothing into the comparison it is printed under.
+    // exactly which records it fed into the comparison it is printed under, named rather than implied.
     authorizes: false,
-    influencesSelection: false,
+    influencesSelection: shaping.length > 0,
+    shapingRecords: shaping.map((a) => a.id),
+    inertRecords: adaptations.rows.filter((a) => !shaping.includes(a)).map((a) => a.id),
+    appliedTo: {
+      gates: 'nothing: a gate is a fact about the step and the registry, and no record here can supply one',
+      candidateBytes: 'nothing: no candidate digest is computed from these records',
+      ordering: shaping.length > 0
+        ? `${shaping.length} approved guidance record(s) with a recorded shape, as the comparison's approved_adaptation_fit dimension`
+        : 'nothing: no approved record carries a shape these capabilities name',
+      scores: 'nothing: no score, weight, or probability is computed anywhere in this answer',
+    },
     recordsRead: adaptations.rows.length + predictionLedger.rows.length + assessments.rows.length,
   };
 }
@@ -288,7 +327,14 @@ export function learningDigest(learning) {
   const rate = (r) => (r ? [r.value, r.numerator, r.denominator] : null);
   const shape = {
     scope: learning.scope?.capabilities ?? [],
-    adaptations: (learning.adaptations?.rows ?? []).map((a) => [shortId(a.id), a.capability, a.supportCount]),
+    adaptations: (learning.adaptations?.rows ?? []).map((a) => [
+      shortId(a.id), a.capability, a.supportCount,
+      // The four fields an approved record can move a comparison with, and the state that says whether
+      // it may: a guidance shape that changed is a record that moved, not a wording that changed.
+      a.guidance ? [a.guidance.order, a.guidance.avoid, a.guidance.prefer, a.guidance.maxSteps] : null,
+      a.decisionState ?? null, a.active === true ? 1 : 0,
+      (a.conflictsWith ?? []).map((c) => shortId(c.id)).sort(),
+    ]),
     adaptationTotal: learning.adaptations?.total ?? null,
     predictions: (learning.predictions?.rows ?? []).map((p) => [shortId(p.id), p.capability, p.expectation, p.status, p.expiresAt, p.verdict]),
     predictionCounts: counts(learning.predictions?.totals ?? null),
@@ -408,7 +454,11 @@ export function renderLearning(learning = null) {
   if (!learning) return ['What the records of past attempts say: nothing read, so nothing claimed.'].join('\n');
   const statements = learningStatements(learning);
   const lines = [
-    `What the records of past attempts say about ${learning.scope?.capabilities?.length ?? 0} capability(ies), disclosed and applied to nothing:`,
+    `What the records of past attempts say about ${learning.scope?.capabilities?.length ?? 0} capability(ies), ${
+      learning.influencesSelection
+        ? 'disclosed, and the shape the user recorded on an approved rule is checked against the comparison:'
+        : 'disclosed and applied to nothing:'
+    }`,
     `  rule: ${LEARNING_RULE}`,
   ];
   if (statements.length === 0) lines.push('  - no learning record bears on these capabilities.');
@@ -424,6 +474,6 @@ export function renderLearning(learning = null) {
   }
   lines.push('  What each of these is not:');
   for (const s of LEARNING_SEPARATIONS) lines.push(`    - ${s}`);
-  lines.push(`  ${LEARNING_NOT_APPLIED}`);
+  lines.push(`  ${learning.note ?? LEARNING_NOT_APPLIED}`);
   return lines.join('\n');
 }

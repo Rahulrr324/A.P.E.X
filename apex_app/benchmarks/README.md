@@ -27,9 +27,13 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   no child process and constructs no backend: every application is built with `NoBackend`.
 - `run-planning-benchmark.mjs` builds every fixture on a `mkdtemp` directory prefixed
   `apex-bench-alx-` and uses the same refusing cleanup. It constructs no backend (`NoBackend` behind a
-  `ModelGateway`), starts no child process, and touches no network. Its `control` phase empties the
-  prediction and experience ledgers **inside the fixture directory it created for that run**, which is
-  why it is the last phase and why it is destructive only to a temporary store.
+  `ModelGateway`) and touches no network. Its `recovery` phase is the one place it starts a child: the
+  same `tests/fixtures/continuation-child.mjs` the AM tests stop, spawned with `APEX_DATA_DIR` pointed
+  **at that fixture directory inside the temp root** and `APEX_DATA_ISOLATED=1`, so the interrupted run
+  it leaves behind is a real process in a real temporary store rather than a described one. Its
+  `control` phase empties the prediction and experience ledgers **inside the fixture directory it
+  created for that run**, which is why it is the last phase and why it is destructive only to a
+  temporary store.
 
 - Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
   reporting, not a cleanup task.
@@ -847,8 +851,8 @@ node benchmarks/run-planning-benchmark.mjs --sizes L --phase control
 ```
 
 1. `--repeats` is 1-25 (default 3). `--sizes` selects any of `S,M,L` (default all three). `--phase`
-   selects `columns`, `attribution`, `control`, or `all`; `--keep` leaves the fixture directories and
-   prints where.
+   selects `columns`, `attribution`, `control`, `constraints`, `recovery`, or `all`; `--keep` leaves the
+   fixture directories and prints where. Batch AM added the last two.
 2. A fixture is a subject goal with two required criteria plus one approved and run plan, then the
    backlog the reads must scan: `memory.add` and knowledge triples, goals and two-step plans created
    through the stores' own writes, plans really activated through the existing task runner, predictions
@@ -881,6 +885,21 @@ node benchmarks/run-planning-benchmark.mjs --sizes L --phase control
   per outcome read for the operations its findings cite.
 - **control**: the same goals, plans, tasks and audit log with the two ledgers the disclosure reads
   emptied.
+- **constraints** (Batch AM): one fresh goal whose recorded constraint items are grown through the
+  store's own `goal revise` - none, one full list of 8, then all six lists full at 48 - timed twice, as
+  the `constraintLedger` call alone and as the audited `plan.candidates` read that carries its answer.
+  Each rung prints how many items the ledger answered, how many of them gate work, and how many
+  candidates the gate excluded, so the cost is stated beside what it bought. The texts name registered
+  capabilities on purpose: a constraint can only bear on a step that exists.
+- **recovery** (Batch AM): a **real child process** (`tests/fixtures/continuation-child.mjs`) approves a
+  two-step plan, activates it and stops at the boundary where the task and its steps are recorded and
+  nothing has run - inside the fixture directory this size built. A second process, holding the registry
+  that run used, is then timed on the bytes the first left: `plan continuation` (the nine-state
+  reading), the `work`/`next` ranking that now reads it, the conversational readiness question about
+  that plan, `plan continue` taking the untouched steps up once, the refused second resume of the same
+  run, and the reading and ranking of the now-settled run. Each line prints its samples; the resume is
+  timed once and taken after the reads, because it is the one measurement in this file that changes the
+  records it measures.
 
 ### Measured
 
@@ -922,6 +941,96 @@ reads does, and the whole of that increase sits in the prediction ledger project
 disclosure performs twice per read. Emptying those two ledgers returns the same fixture's reads to
 0.1-0.3 s, and the calibration at 800 predictions against 400 experiences costs about the same as those
 three reads, so it is the mechanism, not an incidental.
+
+### Measured (Batch AM: the same paths after the read fix, plus the two new phases)
+
+Two runs of this script on one Windows 11 machine (Node v26.4.0, x64, 12 logical CPUs), no other
+benchmark or test active in either. **Before** = a copy of the tree taken from `HEAD`
+(`5a3d4947753703e49a79a698191e05d24119f13a`, the Batch AL commit) extracted with `git archive` into a
+temporary directory, so it is the shipped code before Batch AM, not a switched-off mode. **After** = this
+working tree. Fixture contents at L were identical between the two runs: 2,021 memory, 2,000 knowledge,
+155 goal events, 235 plan events, 147 task lines, 401 operations, 800 predictions, 400 experiences, about
+2.2 MB.
+
+The **Before L column is one sample** (`--repeats 1`). The three-sample run of the same command did
+finish, but its scratch output path was reused by the second run before either was read, so only the
+single-sample figures survive. That is a bookkeeping mistake in this session, not a property of the
+measurement. The M column is three samples on both sides, and the AL-era figures committed above (L:
+candidate 3,243.6 / replan 3,149.3 / outcome 3,321.5 ms, calibration 1,492.9 ms) agree with the Before L
+column to within about 8-10%, so the size of the change rests on three independent measurements rather
+than on one.
+
+| ms (median) | Before S | After S | Before M | After M | Before L (1 sample) | After L |
+|---|---|---|---|---|---|---|
+| outcome read (`plan.outcome`) | 27.5 | 26.0 | 435.0 | 183.4 | 3,587.6 | 349.5 |
+| replan read (`plan.replan`) | 19.4 | 25.3 | 300.6 | 112.3 | 3,424.3 | 299.6 |
+| candidate read (`plan.candidates`) | 14.9 | 21.1 | 270.4 | 108.6 | 3,499.1 | 269.4 |
+| the three learning reads | 1.3 | 1.3 | 115.5 | 26.4 | 1,528.3 | 76.9 |
+| `predictions.calibration` | 0.5 | 0.4 | 119.1 | 26.0 | 1,518.2 | 61.7 |
+| continuation ranking (`work`/`next`) | 3.4 | 3.6 | 21.7 | 16.7 | 49.7 | 41.6 |
+| plan validation | 4.5 | 5.3 | 19.4 | 19.1 | 40.2 | 48.7 |
+| goal progress over every goal | 1.0 | 0.9 | 5.4 | 7.1 | 24.9 | 26.9 |
+| recorded assessment (`plan.assess`) | 30.1 | 34.1 | 109.5 | 109.8 | 166.1 | 173.6 |
+| control at L: candidate / replan / outcome | - | - | - | - | 128.4 / 129.9 / 196.9 | 170.5 / 161.5 / 247.9 |
+
+The ratios at L: the three audited planning reads are **10.3x / 11.4x / 13.0x** faster, the learning trio
+**19.9x**, `predictions.calibration` alone **24.6x**. At M the same three reads are 2.4x / 2.7x / 2.5x and
+the calibration 4.6x. What did not move is the part the fix was never about: decomposition, validation,
+progress, ranking and the recorded assessment stay within noise of their Before figures at every size,
+and the control - the same fixture with both ledgers emptied - costs about the same on both sides (0.13-
+0.20 s Before, 0.16-0.25 s After), which is what says the After reads are now close to their own floor
+rather than to a coincidence.
+
+One census line did change, and it is the cost Batch AM added on purpose: a candidate read performs
+`plans.list` twice at HEAD and four times after, an outcome read four times and six. The extra reads are
+the constraint ledger and the guidance ledger, each of which re-reads the plan store so its answer comes
+from records rather than from what the read already held. At L that is about 13-25 ms of `plans.list`
+inside a read that got 3.2 s cheaper.
+
+**Constraint evaluation** (`constraints`, After; the phase does not exist at HEAD). One goal, its recorded
+items grown through `goal revise` to the store's own cap - `MAX_GOAL_ITEMS` is 8 per list and there are
+six lists. The ledger is timed alone and inside the audited candidate read, which prints what the ledger
+answered.
+
+| rung | ledger S | ledger M | ledger L | audited read S / M / L | items answered / gating / excluded, at L |
+|---|---|---|---|---|---|
+| none recorded | 0.0 ms | 0.1 ms | 0.0 ms | 16.9 / 105.6 / 258.7 ms | 0 / 0 / 0 |
+| 8 blockers | 0.4 ms | 0.7 ms | 0.3 ms | 18.7 / 106.0 / 255.3 ms | 8 / 0 / 0 |
+| 48 items, all six lists full | 1.4 ms | 2.0 ms | 1.5 ms | 23.7 / 101.4 / 259.6 ms | 48 / 0 / 0 |
+
+The ledgers cost is the size of the stores its citations are answered from, not the number of items it
+answers: 48 recorded items cost 1.5 ms at L against 0.0 ms for none, and the audited read moves by less
+than the noise between the rungs (258.7 / 255.3 / 259.6 ms). A goals own recorded constraints therefore
+have a hard ceiling in this store - 48 items - and it is cheap. The `gating 0 / excluded 0` columns are
+the fixture speaking honestly: these blockers bear on no step this goals candidates take, so they are
+disclosed and gate nothing. Where a recorded blocker does name a step a candidate takes, the exclusion is
+real, and that is pinned by tests (`plan-constraints.test.js`, `plan-scenarios-am.test.js` scenario 13),
+not measured here; this phase measures cost and prints the answer counts so a cost cannot be read as an
+effect.
+
+**Recovery and resume** (`recovery`, After; the phase does not exist at HEAD). A real child process
+approved a two-step plan, activated it and stopped at the boundary where the task and its steps are
+recorded and nothing has run; a second process read those bytes.
+
+| ms (median of 3) | S | M | L |
+|---|---|---|---|
+| continuation reading (`plan continuation`) | 14.8 | 44.5 | 97.2 |
+| ranking over that reading (`work`/`next`) | 9.7 | 60.5 | 223.6 |
+| readiness question about the interrupted plan | 28.2 | 155.5 | 258.8 |
+| resume once (`plan continue`: 2 steps executed, verified, audited) | 144.2 † | 501.3 † | 692.0 † |
+| the same resume refused, the run now closed | 20.2 | 58.6 | 111.9 |
+| reading of the settled run | 21.3 | 65.4 | 115.5 |
+| ranking after the resume | 3.3 | 14.6 | 48.4 |
+
+† one sample: taking the run up changes the records, so it cannot be repeated on the same bytes.
+
+Every size ended the same way: the resume returned `plan_stored` and left exactly two lines in the
+side-effect file, and the second resume of the same run was refused. The ranking at L is the column
+Batch AM made heavier - 223.6 ms against the `columns` phase 41.6 ms on a fixture holding no interrupted
+run - because each active plan with a task of its own now gets a continuation reading before it can be
+ranked, and the L fixture holds 147 task lines. It is a read, so that cost is paid by the user who asks
+what is next and never by a background process; the refused second resume at 111.9 ms is the same reading
+taken again on a run that is now settled.
 
 ### Interpretation limits
 

@@ -73,6 +73,7 @@ const NON_REGISTRY_CAPABILITIES = Object.freeze([
   'goal.list', 'goal.show',
   'proposal.create',
   'plan.list', 'plan.show', 'plan.validate', 'plan.activate', 'plan.reconcile',
+  'plan.continuation', 'plan.continue',
   'recover',
   // The outer operation each executive-bridge request produces in a conversation.
   'executive.status', 'executive.prepare', 'executive.approve', 'executive.execute', 'executive.clarify',

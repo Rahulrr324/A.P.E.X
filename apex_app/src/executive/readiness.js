@@ -1,4 +1,4 @@
-// Continuation readiness: which of six states a piece of recorded work is actually in, and the
+// Continuation readiness: which of seven states a piece of recorded work is actually in, and the
 // record each state was read from.
 //
 // "Can I take this up now?" has more than one no. A plan can be waiting on an approval the user has
@@ -10,7 +10,7 @@
 // It reads; it decides nothing and authorizes nothing. Every state below is derived from a plan,
 // goal, task, operation, or candidate comparison that already exists, and a situation no record
 // supports is returned with `readiness: null` and the record's own words rather than forced into one
-// of the six. The precedence is fixed and disclosed, because two states can be supported at once: an
+// of the seven. The precedence is fixed and disclosed, because two states can be supported at once: an
 // approved plan whose capability disappeared is both blocked and not feasible, and the honest answer
 // is the one that describes why it cannot run at all.
 import { shortId, singleLine, truncate } from '../util.js';
@@ -22,9 +22,15 @@ import { BOUNDS, ContinuationReadiness, READINESS_BASIS, READINESS_RULE } from '
 
 // The order the states are settled in, most decisive first. `not feasible` outranks everything because
 // it says no capability can carry the work; `ready` states are only reached when nothing outranks them.
+//
+// `ready to continue` sits above `blocked` and `waiting for evidence` for one reason: it is not a claim
+// that the run went well. It is read from the continuation derivation, which already refuses to say it
+// when a capability was refused, a constraint gates the step, an approval moved, or a write's effect
+// cannot be established. Where those hold, the derivation says so and the older states stand.
 const PRECEDENCE = Object.freeze([
   ContinuationReadiness.NOT_FEASIBLE,
   ContinuationReadiness.REQUIRES_CLARIFICATION,
+  ContinuationReadiness.READY_TO_CONTINUE,
   ContinuationReadiness.BLOCKED,
   ContinuationReadiness.WAITING_FOR_EVIDENCE,
   ContinuationReadiness.READY_TO_EXECUTE,
@@ -46,6 +52,7 @@ const CHECK_STATE = Object.freeze({
 // The command the user would run to take the next step, per state. Nothing here runs it.
 const NEXT_COMMAND = Object.freeze({
   [ContinuationReadiness.READY_TO_EXECUTE]: (ref) => `node bin/apex.js plan start ${ref}`,
+  [ContinuationReadiness.READY_TO_CONTINUE]: (ref) => `node bin/apex.js plan continue ${ref}`,
   [ContinuationReadiness.READY_FOR_APPROVAL]: (ref) => `node bin/apex.js plan approve ${ref}`,
   [ContinuationReadiness.REQUIRES_CLARIFICATION]: (ref) => `node bin/apex.js plan candidates ${ref}`,
   [ContinuationReadiness.BLOCKED]: (ref) => `node bin/apex.js plan validate ${ref}`,
@@ -58,6 +65,9 @@ const NEXT_COMMAND = Object.freeze({
 // is worse than no command: the reader runs it, and APEX reports a record it never made.
 const PLAN_LEVEL_STATES = new Set([
   ContinuationReadiness.READY_TO_EXECUTE,
+  // Only a recorded plan with a recorded run can be continuable, so this state is never reached from a
+  // candidate comparison - there is no plan-level ambiguity to guard against.
+  ContinuationReadiness.READY_TO_CONTINUE,
   ContinuationReadiness.READY_FOR_APPROVAL,
   ContinuationReadiness.BLOCKED,
   ContinuationReadiness.WAITING_FOR_EVIDENCE,
@@ -94,7 +104,78 @@ function taskFactors(list, task) {
   }
 }
 
-// The state a closed plan is in: none of the six, because none of them is about work that can be
+// What the continuation reading of a plan's own run adds to its readiness.
+//
+// `continue.safe` is a refusal-by-default claim: the derivation sets it only after the plan bytes, the
+// approval that binds them, the live registry, the goal's recorded constraints, the dependencies and
+// every interrupted step's own audit record have all answered, and it refuses outright when a write's
+// effect cannot be established. So where it holds, the steps still without an outcome are proven
+// never-started rather than missing evidence - which is a different answer from `waiting for evidence`,
+// and the only record that gives it is the reading. Where it does not hold, the reading's own refusals
+// are stated as the states they name.
+function continuationFactors(list, continuation, plan) {
+  if (!continuation) return [];
+  if (continuation.ok !== true) {
+    for (const p of continuation.problems ?? []) {
+      factor(list, `the continuation of this run cannot be read: ${p}`, 'the continuation reading for the plan\'s task');
+    }
+    return [ContinuationReadiness.WAITING_FOR_EVIDENCE];
+  }
+  if (continuation.plan?.id !== plan.id) {
+    factor(list, `the continuation reading handed to this view is of plan ${shortId(continuation.plan?.id ?? '')}, not ${shortId(plan.id)}, so it says nothing about this plan`,
+      'the continuation reading plan field');
+    return [];
+  }
+  const taken = continuation.continue ?? {};
+  const live = continuation.task?.lock?.alive === true;
+  // A step waiting for the user's own confirmation, or one the run itself refuses because a
+  // dependency did not complete, is on record as something the run still waits on. `continue.safe`
+  // says only that some step may be taken up, and it is true of a run that also holds such a step;
+  // calling that state `ready to continue` would hide what is owed, so the older states stand.
+  const held = (taken.awaiting ?? []).length > 0;
+  const gated = (taken.blockedByRun ?? []).length > 0;
+  if (taken.safe === true && !live && !held && !gated) {
+    const runnable = taken.runnable ?? [];
+    factor(list, `its continuation reading says the run stopped with ${runnable.length} step(s) its records prove never started - ${runnable.join(', ')} - and with nothing on record that stops taking them up`,
+      `continuation reading of plan ${shortId(plan.id)}: continue.safe over ${continuation.revalidation?.length ?? 0} revalidation check(s)`);
+    for (const id of taken.neverReplay ?? []) {
+      factor(list, `step ${id} of the same run is on record as never to be replayed, and taking the run up again leaves it as it stands`,
+        'continuation reading continue.neverReplay, which is read from the step\'s own record');
+    }
+    return [ContinuationReadiness.READY_TO_CONTINUE];
+  }
+  const states = [];
+  if (live) {
+    factor(list, 'the continuation reading proves steps of the run untouched, but a live process holds the task lock, so the run is not this read\'s to take up',
+      `continuation reading of plan ${shortId(plan.id)}: task lock ${continuation.task?.lock?.pid ?? 'unknown'}`);
+    states.push(ContinuationReadiness.WAITING_FOR_EVIDENCE);
+  }
+  if (held) {
+    factor(list, `step(s) ${(taken.awaiting ?? []).join(', ')} of the same run wait for a confirmation this read cannot give, so the run is not simply ready`,
+      'continuation reading continue.awaiting, which is read from the step\'s own record');
+    states.push(ContinuationReadiness.WAITING_FOR_EVIDENCE);
+  }
+  if (gated) {
+    factor(list, `step(s) ${(taken.blockedByRun ?? []).join(', ')} of the same run are stopped by a dependency that holds no verified success`,
+      'continuation reading continue.blockedByRun, which is read from the step\'s own record');
+    states.push(ContinuationReadiness.BLOCKED);
+  }
+  if (!taken.safe) {
+    for (const b of continuation.blockers ?? []) {
+      factor(list, `the continuation reading refuses to take the run up: ${b}`, 'the continuation reading revalidation, step by step');
+    }
+    if ((taken.uncertain ?? []).length > 0 || (taken.neverReplay ?? []).length > 0
+      || (taken.running ?? []).length > 0 || (taken.awaiting ?? []).length > 0) {
+      states.push(ContinuationReadiness.WAITING_FOR_EVIDENCE);
+    }
+    if ((taken.requiresUser ?? []).length > 0 || (taken.blockedByRun ?? []).length > 0) {
+      states.push(ContinuationReadiness.BLOCKED);
+    }
+  }
+  return states;
+}
+
+// The state a closed plan is in: none of the seven, because none of them is about work that can be
 // taken up. The record's own words are returned instead.
 function closedPlan(plan, list) {
   const progress = planProgress(plan);
@@ -125,9 +206,9 @@ function validityFactors(list, validity) {
   return states;
 }
 
-// The readiness of a plan the user already has, from its own recorded status, the live check, and the
-// task it was started under.
-function readinessOfPlan({ plan, task = null, validity = null, assessment = null }, list) {
+// The readiness of a plan the user already has, from its own recorded status, the live check, the task
+// it was started under, and the continuation reading of that task's run when one was handed over.
+function readinessOfPlan({ plan, task = null, validity = null, assessment = null, continuation = null }, list) {
   if (!isOpenPlan(plan.status)) return closedPlan(plan, list);
   if (plan.status === 'blocked') {
     factor(list, `the plan is recorded as blocked${plan.blockedReason ? `: ${plan.blockedReason}` : ', with no reason recorded on it'}`,
@@ -136,6 +217,7 @@ function readinessOfPlan({ plan, task = null, validity = null, assessment = null
   }
   const states = validityFactors(list, validity);
   taskFactors(list, task);
+  if (continuation && task) states.push(...continuationFactors(list, continuation, plan));
   if (plan.status === 'active' && task) {
     const failed = (task.steps ?? []).some((s) => s.status === StepStatus.FAILED);
     const unresolved = (task.steps ?? []).some((s) => s.status === StepStatus.UNCERTAIN);
@@ -265,7 +347,7 @@ export function readinessOf(input = {}) {
     return {
       readiness: null,
       basis: list.length > 0
-        ? 'the records describe a situation none of the six readiness states names, so no state is claimed'
+        ? 'the records describe a situation none of the seven readiness states names, so no state is claimed'
         : 'no plan, goal, or candidate comparison was available to read, so readiness cannot be stated',
       factors: list,
       next: null,
@@ -275,7 +357,7 @@ export function readinessOf(input = {}) {
   const planRef = plan ? shortId(plan.id) : (goal ? shortId(goal.id) : '<id>');
   const goalRef = goal ? shortId(goal.id) : '<goal-id>';
   const planLevel = PLAN_LEVEL_STATES.has(readiness);
-  // Four of the six states are read from a plan record, and a candidate comparison can reach "ready
+  // Five of the seven states are read from a plan record, and a candidate comparison can reach "ready
   // for approval" before one exists. Naming `plan approve <goal-id>` would be a command for a record
   // nobody has written, so the read that shows the candidate again is offered, and labelled as a read.
   const candidateOnly = planLevel && !plan;

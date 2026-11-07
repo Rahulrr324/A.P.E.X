@@ -12,6 +12,7 @@
 import { shortId, truncate } from '../util.js';
 import { goalProgress, isOpenStatus } from '../goals/model.js';
 import { isOpenPlan, planProgress, planRisk } from '../plans/model.js';
+import { ContinuationReadiness } from '../executive/vocabulary.js';
 
 // A lower number is treated as more urgent. The recorded priority is used as given; a goal
 // without one is never assigned one.
@@ -25,6 +26,11 @@ const BASE = {
   'approve-step': 90,
   'accept-goal': 85,
   'review-contradiction': 80,
+  // A run the records prove stopped with untouched steps outranks starting an untouched plan: the
+  // steps already paid for are in it, and its approval, registry answer and constraints have just
+  // been re-read once more than any other candidate's. It sits under the three states that settle
+  // what is unknown, because an unknown outcome is settled before more work is added to a run.
+  'continue-plan': 78,
   'start-plan': 75,
   'resume-task': 70,
   'reconcile-plan': 65,
@@ -33,6 +39,18 @@ const BASE = {
   'resolve-blocker': 50,
   'review-failure': 40,
   'review-closed': 20,
+};
+
+// The readiness state each plan action is read from, in the words `executive/readiness.js` uses for
+// the seven. The engine cannot call that module - readiness reads this file's own ordering rule - so
+// the states are named here for the branches that carry the records that support them, and a
+// candidate whose readiness is not one of the seven is returned with `null` rather than a guess.
+const ACTION_READINESS = {
+  'continue-plan': ContinuationReadiness.READY_TO_CONTINUE,
+  'start-plan': ContinuationReadiness.READY_TO_EXECUTE,
+  'review-plan': ContinuationReadiness.READY_FOR_APPROVAL,
+  'reconcile-plan': ContinuationReadiness.WAITING_FOR_EVIDENCE,
+  'resolve-blocker': ContinuationReadiness.BLOCKED,
 };
 
 function priorityWeight(priority) {
@@ -60,6 +78,7 @@ function riskWeight(risk) {
 function candidate({
   kind, ref, title, action, command, status, priority = null, deadline = null,
   risk = null, requiresAuthorization = true, reasons = [], blockers = [], ready = true, now,
+  readiness = null,
 }) {
   const p = priorityWeight(priority);
   const d = deadlineWeight(deadline, now);
@@ -81,6 +100,7 @@ function candidate({
     blockers,
     reasons: [...reasons, p.note, d.note, r.note].filter(Boolean),
     score,
+    readiness: readiness ?? (kind === 'plan' ? ACTION_READINESS[action] ?? null : null),
   };
 }
 
@@ -100,8 +120,15 @@ function unmetDependencies(goal, goalsById) {
 
 // `validityByPlan` maps a plan id to the result of assessPlanValidity. It is optional; without
 // it only the structural checks below are applied.
+//
+// `continuationsByPlan` maps a plan id to the result of `continuationOf` (src/plans/continuation.js).
+// It is optional in the same way, and it is the only source this ranking will accept for the
+// `ready to continue` state: a plan status and a task status cannot show that a step never started,
+// and the reading can. Without a reading the interrupted run is ranked by its task and plan records
+// alone, which is what Batch AL did, and no continuation is claimed.
 export function buildContinuation({
-  goals = [], plans = [], tasks = [], validityByPlan = new Map(), now = new Date(),
+  goals = [], plans = [], tasks = [], validityByPlan = new Map(), continuationsByPlan = new Map(),
+  now = new Date(),
 } = {}) {
   const candidates = [];
   const excluded = [];
@@ -168,14 +195,29 @@ export function buildContinuation({
         now,
       }));
     } else if (task.status === 'pending' || task.status === 'paused') {
-      candidates.push(candidate({
-        kind: 'task', ref: task.id, action: 'resume-task',
-        title: `Resume ${task.status} task ${shortId(task.id)}${planNote ? ` (${planNote})` : ''}`,
-        command: `node bin/apex.js task resume ${shortId(task.id)}`,
-        status: task.status, requiresAuthorization: true,
-        reasons: ['the task is not finished and no step is uncertain'],
-        now,
-      }));
+      // One run, one ranking place. Where the continuation reading of the plan this task runs says
+      // the run may be taken up, that candidate is the one printed: it names `plan continue`, which
+      // re-reads the approval, the registry, the constraints and every interrupted step's own record
+      // before it runs anything, while `task resume` does not. The task is listed as excluded, with
+      // that reason, so the reader can see the other command was not forgotten.
+      const reading = plan ? continuationsByPlan.get(plan.id) ?? null : null;
+      const readingHeld = (reading?.continue?.awaiting ?? []).length > 0
+        || (reading?.continue?.blockedByRun ?? []).length > 0;
+      if (reading?.continue?.safe === true && reading?.task?.lock?.alive !== true && !readingHeld) {
+        excluded.push({
+          kind: 'task', ref: task.id, title: `task ${shortId(task.id)}`,
+          reason: `its run is ranked as the plan's continuation work (plan ${shortId(plan.id)}), which re-validates the approval, the registry and the constraints before anything runs`,
+        });
+      } else {
+        candidates.push(candidate({
+          kind: 'task', ref: task.id, action: 'resume-task',
+          title: `Resume ${task.status} task ${shortId(task.id)}${planNote ? ` (${planNote})` : ''}`,
+          command: `node bin/apex.js task resume ${shortId(task.id)}`,
+          status: task.status, requiresAuthorization: true,
+          reasons: ['the task is not finished and no step is uncertain'],
+          now,
+        }));
+      }
     }
     if (failed.length > 0 || task.status === 'failed') {
       candidates.push(candidate({
@@ -224,6 +266,7 @@ export function buildContinuation({
         ],
         blockers,
         ready: !stale,
+        readiness: stale ? ContinuationReadiness.BLOCKED : ContinuationReadiness.READY_TO_EXECUTE,
       }));
     } else if (plan.status === 'draft') {
       candidates.push(candidate({
@@ -249,6 +292,16 @@ export function buildContinuation({
         now,
       }));
     } else if (plan.status === 'active') {
+      // The continuation reading, when the caller handed one over, is what says whether this run's
+      // untouched steps may be taken up. Nothing below reaches that claim without it, and the two
+      // guards repeat the readiness view's: a live holder of the task lock owns the run, and a step
+      // still waiting on the user or on an unmet dependency is something the run waits on, which is
+      // not the same answer as ready. The ranking and the readiness answer read one rule.
+      const reading = continuationsByPlan.get(plan.id) ?? null;
+      const heldBack = (reading?.continue?.awaiting ?? []).length > 0
+        || (reading?.continue?.blockedByRun ?? []).length > 0;
+      const continuable = reading?.continue?.safe === true
+        && reading?.task?.lock?.alive !== true && !heldBack;
       if (!task) {
         candidates.push(candidate({
           ...base,
@@ -261,6 +314,28 @@ export function buildContinuation({
           ready: false,
           now,
         }));
+      } else if (continuable) {
+        const runnable = reading.continue.runnable ?? [];
+        const neverReplay = reading.continue.neverReplay ?? [];
+        candidates.push(candidate({
+          ...base,
+          action: 'continue-plan',
+          title: `Take up plan ${shortId(plan.id)}: ${runnable.length} step(s) its own records prove never started`,
+          command: `node bin/apex.js plan continue ${shortId(plan.id)}`,
+          requiresAuthorization: true,
+          reasons: [
+            `the run stopped with ${reading.progress.verified} of ${reading.progress.total} step(s) holding a verified outcome and ${runnable.join(', ')} never started`,
+            `the reading re-read the plan bytes, the approval that binds them, the live registry, the goal's recorded constraints and dependencies over ${reading.revalidation.length} check(s), and none of them refused`,
+            ...(neverReplay.length > 0
+              ? [`step(s) ${neverReplay.join(', ')} will not be replayed: their effects cannot be established from their records`]
+              : []),
+            'a step that runs is authorized again by the registry at that moment; this ranking grants nothing',
+          ],
+          blockers: neverReplay.length > 0
+            ? [`${neverReplay.length} step(s) of the same run are held back as never to be replayed`]
+            : [],
+          now,
+        }));
       } else if (task.status === 'completed' && progress.completed !== progress.total) {
         candidates.push(candidate({
           ...base,
@@ -269,13 +344,18 @@ export function buildContinuation({
           command: `node bin/apex.js plan reconcile ${shortId(plan.id)}`,
           requiresAuthorization: true,
           reasons: ['the task finished but the plan has not recorded every terminal outcome'],
-          blockers: [`${progress.completed} of ${progress.total} step outcome(s) recorded`],
+          blockers: [
+            `${progress.completed} of ${progress.total} step outcome(s) recorded`,
+            ...(reading && reading.continue?.safe !== true ? reading.blockers ?? [] : []),
+          ],
           now,
         }));
       } else {
         excluded.push({
           kind: 'plan', ref: plan.id, title: `plan ${shortId(plan.id)}`,
-          reason: `active under task ${shortId(task.id)} (${task.status}); its execution state is the task candidate`,
+          reason: `active under task ${shortId(task.id)} (${task.status})${reading && reading.continue?.safe !== true
+            ? `, and its continuation reading refuses to take the run up: ${(reading.blockers ?? [])[0] ?? 'no reason stated'}`
+            : '; its execution state is the task candidate'}`,
         });
       }
     } else {
@@ -388,7 +468,8 @@ export function buildContinuation({
 
 export function renderContinuation({ candidates, excluded, notes, rule, generatedAt }, { limit = null, top = false } = {}) {
   const lines = ['Continuation recommendation (read-only, nothing is executed)'];
-  lines.push(`Ranking: ${rule}; readiness, deadlines when recorded, risk, dependencies, and existing execution state.`);
+  lines.push(`Ranking: ${rule}; readiness where a record states it, deadlines when recorded, risk, dependencies, and existing execution state.`);
+  lines.push('Readiness is one of seven states read from a record, and the record is named beside it; none of them is permission.');
   if (candidates.length === 0) {
     lines.push(...notes);
     return lines.join('\n');
@@ -398,6 +479,7 @@ export function renderContinuation({ candidates, excluded, notes, rule, generate
   for (const [index, c] of shown.entries()) {
     lines.push(`${index + 1}. ${c.title}`);
     lines.push(`   ${c.kind} ${shortId(c.ref)}  status: ${c.status ?? 'unknown'}  score: ${c.score}${c.ready ? '' : '  NOT READY'}`);
+    if (c.readiness) lines.push(`   readiness: ${c.readiness}`);
     if (c.command) lines.push(`   next: ${c.command}`);
     for (const reason of c.reasons) lines.push(`   why: ${reason}`);
     for (const blocker of c.blockers) lines.push(`   blocker: ${blocker}`);

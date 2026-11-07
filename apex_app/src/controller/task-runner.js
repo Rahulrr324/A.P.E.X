@@ -56,6 +56,22 @@ export class TaskRunner {
     return { blocked: null, step: null };
   }
 
+  // The step a continuation may take up: pending, with every dependency holding a completed
+  // outcome. A step that ran and failed, or ran and cannot be established, is not pending and so is
+  // never chosen here; a step whose dependency is one of those stays pending and is reported as
+  // left behind rather than skipped. This is the selector that makes partial execution resumable
+  // without relaxing anything about a step whose effect is unknown.
+  nextContivableStep(task) {
+    const byId = new Map(task.steps.map((s) => [s.id, s]));
+    for (const id of topologicalOrder(task.steps)) {
+      const s = byId.get(id);
+      if (s.status !== StepStatus.PENDING) continue;
+      const unmet = (s.dependsOn ?? []).filter((d) => byId.get(d)?.status !== StepStatus.COMPLETED);
+      if (unmet.length === 0) return s;
+    }
+    return null;
+  }
+
   async #task(id) {
     const task = await this.store.get(id);
     if (!task) throw new ValidationError(`no task with id ${shortId(id)}`);
@@ -66,9 +82,20 @@ export class TaskRunner {
     return this.store.transition(taskId, { reason, task, steps, approval });
   }
 
-  // Runs (mode 'run', from pending) or resumes (mode 'resume', from paused or after an
-  // interruption) a task. Caller must hold the store lock.
+  // Runs (mode 'run', from pending), resumes (mode 'resume', from paused or after an
+  // interruption), or continues (mode 'continue') a task. Caller must hold the store lock.
+  //
+  // `continue` is Batch AM's continuation of a partially executed plan. It takes up the steps the
+  // records prove never started, in dependency order, and it stops at - without touching - a step
+  // whose outcome is uncertain or already verified as a failure. That is the whole of what the mode
+  // adds: a step that ran and cannot be established stays exactly where its records hold it, a step
+  // that depended on it is not run on the assumption that it did, and the steps that never began are
+  // finished. The state machine is not extended for it: a task that stopped on a failed step is moved
+  // to paused by the same transition a retry already uses, and every step is then written running
+  // before it executes exactly as in a first run, so a second interruption lands on the same records
+  // and is read the same way.
   async run(taskId, { mode }) {
+    const continuing = mode === 'continue';
     const auditGaps = [];
     let recovery = null;
     let task = await this.#task(taskId);
@@ -97,20 +124,33 @@ export class TaskRunner {
     if (task.status === TaskStatus.PROPOSED) refuse(`this is a model proposal and needs your approval first: task approve ${shortId(task.id)}`);
     if (task.status === TaskStatus.COMPLETED) refuse('this task is already completed; nothing to run');
     if (task.status === TaskStatus.CANCELLED) refuse('this task was cancelled');
-    if (task.status === TaskStatus.FAILED) refuse(`this task stopped after a failed step. Retry a read-only step (task retry ${shortId(task.id)} <step>) or cancel it (task cancel ${shortId(task.id)})`);
+    if (task.status === TaskStatus.FAILED && !continuing) refuse(`this task stopped after a failed step. Retry a read-only step (task retry ${shortId(task.id)} <step>) or cancel it (task cancel ${shortId(task.id)})`);
     if (mode === 'run' && task.status !== TaskStatus.PENDING) refuse(`this task is ${task.status}; use: task resume ${shortId(task.id)}`);
     if (mode === 'resume' && task.status !== TaskStatus.PAUSED) refuse(`this task is ${task.status}; use: task run ${shortId(task.id)}`);
 
-    const first = this.nextStep(task);
-    if (first.blocked) {
-      const s = first.blocked;
-      refuse(`step ${s.id} is ${s.status} and was not run again. Retry it only if it is read-only (task retry ${shortId(task.id)} ${s.id}); otherwise cancel the task (task cancel ${shortId(task.id)})`);
-    }
-    if (first.step && first.step.status === StepStatus.AWAITING_APPROVAL) {
-      refuse(`step ${first.step.id} needs your approval: task approve ${shortId(task.id)} --step ${first.step.id}`);
+    if (!continuing) {
+      const first = this.nextStep(task);
+      if (first.blocked) {
+        const s = first.blocked;
+        refuse(`step ${s.id} is ${s.status} and was not run again. Retry it only if it is read-only (task retry ${shortId(task.id)} ${s.id}); otherwise cancel the task (task cancel ${shortId(task.id)})`);
+      }
+      if (first.step && first.step.status === StepStatus.AWAITING_APPROVAL) {
+        refuse(`step ${first.step.id} needs your approval: task approve ${shortId(task.id)} --step ${first.step.id}`);
+      }
     }
 
-    await this.#transition(task.id, mode === 'run' ? 'started' : 'resumed', {
+    // A task that stopped on a failed step is moved to paused before anything is taken up. That is
+    // the transition a retry already makes, so the run that follows starts from a state the log can
+    // replay, and the reason recorded here is the reason a later reader needs: which steps were left
+    // where they were, and which were taken up.
+    if (continuing && task.status === TaskStatus.FAILED) {
+      await this.#transition(task.id, 'taken up again by the user: the steps that never started are continued, the steps that ran are left as their own records hold them', {
+        task: { from: TaskStatus.FAILED, to: TaskStatus.PAUSED },
+      });
+      task = await this.#task(taskId);
+    }
+
+    await this.#transition(task.id, mode === 'run' ? 'started' : (continuing ? 'taken up again' : 'resumed'), {
       task: { from: task.status, to: TaskStatus.RUNNING },
     });
 
@@ -122,7 +162,7 @@ export class TaskRunner {
     try {
       for (;;) {
         task = await this.#task(taskId);
-        const { step: next } = this.nextStep(task);
+        const next = continuing ? this.nextContivableStep(task) : this.nextStep(task).step;
         if (!next) break;
 
         const origin = this.stepOrigin(task, next);
@@ -166,21 +206,35 @@ export class TaskRunner {
 
         const skip = dependentsOf(task.steps, next.id).filter((id) => byId.get(id).status === StepStatus.PENDING);
         await this.#transition(task.id, `${next.id} ${result.step}: ${truncate(step.summary, 200)}`, {
-          task: { from: TaskStatus.RUNNING, to: result.task },
+          // A continuation records the step that stopped and stops taking up that branch; it does
+          // not move the task, because the run is going on with the steps that never began. The task
+          // state is written once, at the end, from what the records then hold. A first run keeps its
+          // own rule and moves the task to the failure state here, exactly as it did before.
+          task: continuing ? null : { from: TaskStatus.RUNNING, to: result.task },
           steps: [
             { id: next.id, from: StepStatus.RUNNING, to: result.step, outcome: step.outcome, summary: truncate(step.summary, 300), operationId },
             ...skip.map((id) => ({ id, from: StepStatus.PENDING, to: StepStatus.SKIPPED, summary: `not run: depends on ${next.id}` })),
           ],
         });
-        break;
+        if (!continuing) break;
       }
 
       task = await this.#task(taskId);
       if (task.status === TaskStatus.RUNNING) {
         const { completed, total } = progressOf(task);
-        await this.#transition(task.id, completed === total ? 'all steps completed' : 'stopped with steps unfinished', {
-          task: { from: TaskStatus.RUNNING, to: completed === total ? TaskStatus.COMPLETED : TaskStatus.FAILED },
-        });
+        const leftBehind = task.steps.filter((s) => s.status === StepStatus.PENDING || s.status === StepStatus.AWAITING_APPROVAL);
+        if (continuing && leftBehind.length > 0) {
+          // Steps remain that this run did not take up, because their own records or a step they
+          // depend on do not establish that they may be. That is neither a completed run nor a
+          // stopped-through-failure run: it is the run paused with what it did written down.
+          await this.#transition(task.id, `continued ${executedSteps.length} step(s); ${leftBehind.length} step(s) were not taken up, because the records do not establish that they may be`, {
+            task: { from: TaskStatus.RUNNING, to: TaskStatus.PAUSED },
+          });
+        } else {
+          await this.#transition(task.id, completed === total ? 'all steps completed' : 'stopped with steps unfinished', {
+            task: { from: TaskStatus.RUNNING, to: completed === total ? TaskStatus.COMPLETED : TaskStatus.FAILED },
+          });
+        }
         task = await this.#task(taskId);
       }
     } catch (err) {
@@ -194,7 +248,18 @@ export class TaskRunner {
     const status = auditGaps.length > 0 && outcome.status === Outcome.SUCCESS_VERIFIED
       ? Outcome.AUDIT_INTEGRITY_FAILED
       : outcome.status;
-    return { ...outcome, status, underlyingStatus: outcome.status, auditGaps, recovery };
+    return {
+      ...outcome,
+      status,
+      underlyingStatus: outcome.status,
+      auditGaps,
+      recovery,
+      // Which steps this run itself executed, in order. A continuation reports it, because the
+      // claim a reader needs after a partial run is not "it resumed" but "these steps ran now, and
+      // these were left where their records hold them".
+      executed: executedSteps.map((e) => e.id),
+      continued: continuing ? executedSteps.map((e) => e.id) : null,
+    };
   }
 
   async #recover(task) {

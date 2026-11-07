@@ -155,17 +155,24 @@ const HEADER = 'Executive status, read from APEX records. Nothing here was run, 
 // The view is bounded so one question cannot print a whole portfolio. `label` and `hint` are what a
 // reader is told to run instead, so a cut view sends them to the record list rather than leaving them
 // with a half answer and no way to finish it.
-function boundedView(lines, { label = 'status view', hint = '"node bin/apex.js work" lists the open records in full' } = {}) {
-  const truncated = lines.length > BOUNDS.maxStatusLines;
-  const shown = truncated ? lines.slice(0, BOUNDS.maxStatusLines) : lines;
+//
+// `maxLines` and `maxChars` default to the shared budgets; a view that carries a fixed inventory it
+// must print whole can ask for the room that inventory needs, so the budget it gives way on is its
+// own and not every other answer's.
+function boundedView(lines, {
+  label = 'status view', hint = '"node bin/apex.js work" lists the open records in full',
+  maxLines = BOUNDS.maxStatusLines, maxChars = BOUNDS.maxStatusChars,
+} = {}) {
+  const truncated = lines.length > maxLines;
+  const shown = truncated ? lines.slice(0, maxLines) : lines;
   let display = shown.join('\n');
-  const cutByChars = display.length > BOUNDS.maxStatusChars;
+  const cutByChars = display.length > maxChars;
   if (truncated || cutByChars) {
     // The reason the answer gave way is stated as the bound that actually did it: a view cut at 4000
     // characters while it still had lines left is not a view that reached 40 lines, and a reader who is
     // told the wrong reason cannot tell how much of the answer the command still holds.
-    const cut = truncated ? `cut at ${BOUNDS.maxStatusLines} lines` : `cut at ${BOUNDS.maxStatusChars} characters`;
-    display = `${truncate(display, BOUNDS.maxStatusChars)}\n[${label} ${cut}; ${hint}]`;
+    const cut = truncated ? `cut at ${maxLines} lines` : `cut at ${maxChars} characters`;
+    display = `${truncate(display, maxChars)}\n[${label} ${cut}; ${hint}]`;
   }
   return { display, lines: shown, truncated: truncated || cutByChars };
 }
@@ -207,6 +214,9 @@ export function describeExecutiveStatus({
         for (const [index, c] of candidates.slice(0, 3).entries()) {
           line(`  ${index + 1}. ${words(c.title)}`, lines);
           line(`     ${c.kind} ${shortId(c.ref)} is ${c.status ?? 'unknown'}; action: ${c.action}${c.ready ? '' : ' (not ready)'}`, lines);
+          // The readiness the ranking read from a record, when a record stated one. A candidate whose
+          // state was never read is printed without it rather than with a guessed state.
+          if (c.readiness) line(`     readiness: ${c.readiness}`, lines);
           if (c.command) line(`     command: ${c.command}`, lines);
           for (const b of c.blockers.slice(0, 3)) line(`     blocker: ${words(b)}`, lines);
           if (c.requiresAuthorization) line('     this needs your own explicit action; APEX will not take it for you', lines);
@@ -378,13 +388,14 @@ function learningBlock(learning, lines, reserve = 0) {
   }
   const statements = learningStatements(learning).map((s) => mark(s.kind, s.text, 280));
   const caps = learning.scope?.capabilities ?? [];
-  const note = `  ${LEARNING_NOT_APPLIED}`;
+  const note = `  ${learning.note ?? LEARNING_NOT_APPLIED}`;
   // Two tiers of header. The wide one names the capabilities the read was scoped to; the compact one says
   // only what the note beneath it refers to. Both exist because the view is bounded on characters as well
   // as lines, and an answer that is inside its line budget can still have no room for a header that names
   // eight capabilities - an answer whose disclosure is cut mid-sentence discloses nothing.
-  const headerWide = `What the records of past attempts${caps.length ? ` about ${caps.join(', ')}` : ''}, disclosed and applied to nothing:`;
-  const headerCompact = 'Learning read, applied to nothing:';
+  const guided = learning.influencesSelection === true;
+  const headerWide = `What the records of past attempts${caps.length ? ` about ${caps.join(', ')}` : ''}, ${guided ? 'disclosed, with the user\'s recorded shape checked against the comparison:' : 'disclosed and applied to nothing:'}`;
+  const headerCompact = guided ? 'Learning read, with a recorded shape in the comparison:' : 'Learning read, applied to nothing:';
   // The block gives way from inside itself. The header and the note are its floor, because an answer that
   // lost the note leaves a reader to guess whether these records moved the selection, and the cut
   // `boundedView` applies takes the tail of the answer, which is exactly where that note sits.
@@ -608,7 +619,7 @@ export function describePlanOutcome({
   return { ...view, kinds: kindsShown(view.lines), planId: data.planId ?? null, verdict: data.verdict ?? null };
 }
 
-// The readiness answer: the six states in use, the one the records support, the factor behind it, and
+// The readiness answer: the seven states in use, the one the records support, the factor behind it, and
 // the factors the continuation ranking used. Each names the record it came from, so the reader can
 // check the state instead of taking it on trust.
 export function describeReadiness({
@@ -616,7 +627,7 @@ export function describeReadiness({
 }) {
   const lines = [READINESS_HEADER, ''];
   line(`Read and audited under operation ${shortId(operationId ?? 'unknown')}. Nothing here was run, approved, recorded, or cancelled.`, lines);
-  line(`The six states, and the record each one is read from${planRef ? ` (asked about ${shortId(planRef)})` : ''}:`, lines);
+  line(`The seven states, and the record each one is read from${planRef ? ` (asked about ${shortId(planRef)})` : ''}:`, lines);
   for (const s of READINESS_STATES) line(`  ${s} - ${READINESS_BASIS[s]}`, lines);
   for (const p of (problems ?? []).slice(0, 6)) line(mark(ClaimKind.FACT, `reading the records hit a problem, so the answer is partial: ${p}`), lines);
   line('', lines);
@@ -642,6 +653,13 @@ export function describeReadiness({
   const view = boundWithLegend(lines, {
     label: 'readiness view',
     hint: '"node bin/apex.js work" ranks the open records and prints each one\'s readiness',
+    // Batch AM added a seventh readiness state, and this view prints the record each state is read
+    // from before it prints the answer. Measured on a draft plan with one ranked record the answer is
+    // 45 lines and 5016 characters: under the shared 40/4000 budget the line that disclaims the score
+    // ("not a probability, an importance, or a permission") is what gets cut, which is the one line
+    // the reader must not lose. The inventory's own room is asked for here rather than added to every
+    // other answer's budget; the view still says when it gives way.
+    maxLines: 46, maxChars: 5200,
   });
   return { ...view, kinds: kindsShown(view.lines), readiness: reading?.readiness ?? null };
 }

@@ -45,7 +45,7 @@ from a milestone number or a passing build.
 | World Model, entity memory and evidence graph | Implemented as an append-only `world-model.jsonl` of user-origin records: stable entity ids with aliases and lifecycle, subject-predicate-object facts with typed values, relationships with directionality and inverse reads, events that keep happened-at, learned-at, and stored-at apart, evidence references to existing stores (never copies), retraction and supersession as later records, conservative contradiction detection that keeps both sides, deterministic identity candidates, and explicit user confirm/reject/merge/unmerge. Reads reduce the log at read time; nothing is overwritten, and a model cannot write a record. | `world-model-core.test.js` (17 tests), `world-model-scenarios.test.js` (15 end-to-end scenarios A-O, including real CLI runs and real child processes). See [Batch AI](#batch-ai-world-model-entity-memory-and-evidence-graph-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Integrated cognitive reasoning layer | Implemented as a deterministic, read-only coordinator in `src/cognition/` over the stores APEX already has: request understanding and intent classification, bounded evidence retrieval with provenance and empty/unavailable/damaged distinctions, claim extraction with symmetric contradictions, a thirteen-step deliberation, qualitative uncertainty, clarification before any model call, a bounded grounding brief, and validation of model-authored structures. No stage calls a model, writes a store, grants authorization, or invents an answer. The model receives the brief as data and its reply is parsed as untrusted input; a citation it did not retrieve, a claim of execution, or a forged structure is rejected whole. | `cognition-understanding.test.js` (18 tests), `cognition-reasoning.test.js` (24 tests), `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through the real controller with a synthetic capture backend). See [Batch AJ](#batch-aj-integrated-cognitive-reasoning-deliberation-and-grounded-responses-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Executive bridge: action orchestration and verified execution | Implemented as a deterministic, model-free interpretation layer in `src/executive/` inside `controller.handle()`: a user's own words are mapped to registered actions, a bounded preview names every step and its risk before anything runs, approval is bound to a content hash and version, the authorized run executes through the existing `TaskRunner`, and the answer reports progress, failure boundary, recovery class, and continuation from records. It adds no store, no registry, no second authorization rule, and no second runner. No stage calls a model: the map from words to actions is vocabulary plus the action registry, and a request the mapping cannot resolve is clarified rather than guessed. It is not a general-purpose planner: it maps a bounded request over registered actions, keeps unknowns visible, and refuses what it cannot ground. | `executive-bridge.test.js` (21 tests), `executive-acceptance.test.js` (K-01 to K-25), `executive-adversarial.test.js` (J-01 to J-11) - 57 tests, every one with a stub or no backend, so none is evidence about a real model. See [Batch AK](#batch-ak-the-executive-bridge---safe-action-orchestration-and-verified-execution-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
-| Adaptive planning, outcome evaluation and goal progression | Implemented as four read paths and one recorded reading over the stores Batch AG to AK already own: the candidate approaches a recorded goal supports (`plan.candidates`), a revision of a plan that stopped being viable (`plan.replan`), what a plan's execution established and left open as seven separate questions (`plan.outcome`), and the assessment derived from those records as the one write (`plan.assess`). Every step a candidate names is a registered action, every candidate is a draft on screen until the user records and approves it, the comparison is a disclosed gate-then-Pareto rule with no score, weight, or probability, and no candidate, comparison, or verdict changes a goal's status or grants permission. It adds no store, no registry, no planner, and no authorization rule. | `plan-generation.test.js`, `plan-candidates.test.js`, `plan-evaluation.test.js`, `plan-assessment.test.js`, `plan-learning.test.js`, `plan-adversarial.test.js` (15 adversarial cases), `plan-scenarios.test.js` (the 30 numbered end-to-end scenarios), `plan-cli.test.js` (9 scenarios through the real `node bin/apex.js`) - and `goal-provenance.test.js`, `goal-assessment.test.js`. See [Batch AL](#batch-al-adaptive-planning-outcome-evaluation-and-goal-progression-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
+| Adaptive planning, outcome evaluation and goal progression | Implemented as four read paths and one recorded reading over the stores Batch AG to AK already own: the candidate approaches a recorded goal supports (`plan.candidates`), a revision of a plan that stopped being viable (`plan.replan`), what a plan's execution established and left open as seven separate questions (`plan.outcome`), and the assessment derived from those records as the one write (`plan.assess`). Every step a candidate names is a registered action, every candidate is a draft on screen until the user records and approves it, the comparison is a disclosed gate-then-Pareto rule with no score, weight, or probability, and no candidate, comparison, or verdict changes a goal's status or grants permission. Batch AM added four things over the same records: the blockers, prerequisites and limits a goal actually has, and which of them are allowed to exclude a candidate (`plan-constraints.test.js`); one disclosed influence of an approved adaptation on selection, which cannot override a gate, a constraint, an approval or a permission (`plan-guidance.test.js`); two more ranked dimensions in the comparison - whether a step's own action can re-check it, and what the plan records say happened the last time that capability ran - with the reason each remaining dimension stays disclosed printed beside it (`plan-dimensions.test.js`); and the continuation pair - `plan.continuation` reads the nine states of a partially executed run from its own records, `plan.continue` takes up only the steps proven never to have started (`plan-continuation.test.js`, with real child processes stopped at eight interruption boundaries); and that reading is now answered where a user looks - continuation readiness grew a seventh state, `ready to continue`, read only from that derivation, and `work`/`next` rank the interrupted run as one `continue-plan` candidate instead of two task and plan entries (`executive-readiness.test.js`). It adds no store, no registry, no planner, and no authorization rule. | `plan-generation.test.js`, `plan-candidates.test.js`, `plan-evaluation.test.js`, `plan-assessment.test.js`, `plan-learning.test.js`, `plan-adversarial.test.js` (15 adversarial cases), `plan-scenarios.test.js` (the 30 numbered end-to-end scenarios), `plan-cli.test.js` (9 scenarios through the real `node bin/apex.js`), `plan-constraints.test.js`, `plan-guidance.test.js`, `plan-dimensions.test.js`, `plan-continuation.test.js`, `learning-read-equivalence.test.js`, `goal-evidence-consistency.test.js`, `executive-readiness.test.js`, `adversarial-batch-am.test.js` (the 16 adversarial cases I-01 to I-16), `plan-scenarios-am.test.js` (the 30 Batch AM acceptance scenarios, 31 tests) - and `goal-provenance.test.js`, `goal-assessment.test.js`. See [Batch AL](#batch-al-adaptive-planning-outcome-evaluation-and-goal-progression-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | General planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
 
 The model path depends entirely on a backend you configure yourself. Without one,
@@ -278,11 +278,11 @@ suites re-hash the directory afterwards to prove it.
 | `prediction health` | Read-only ledger report: kind counts, standing versus superseded expectations, corrupt lines, and anomalies (a replacement that names nothing, a replacement circle, a reused record id), each with bounded samples. Never calls a model, writes no audit record, repairs nothing. Exit 0 only when the ledger was fully inspected and nothing requires attention. |
 | `goal add [--criterion <text>]... [--priority N] [--deadline <iso>] [--depends-on <id>]... <request>` | Records a goal with at least one success criterion. The goal starts `proposed`; nothing runs, and the goal grants no permission. User origin only. |
 | `goal list [--limit N]`, `goal show <id>` | Read-only views of open and closed goals, and of one goal with its criteria, evidence, history, and linked plans/tasks. |
-| `goal assess <id>` | Read-only check of what the goal claims about its own evidence: each recorded support is re-opened in the audit log, and each knowledge record it established is re-checked for retraction or supersession. Reports a proof as standing, withdrawn, unsupported by the audit log, contradicted, or not checkable, and lists only the questions APEX cannot answer for the user. Writes no record, links nothing, completes nothing, and exits 1 when a finding or an unreadable store means the goal's own claims do not hold. |
+| `goal assess <id>` | Read-only check of what the goal claims about its own evidence: each recorded support is re-opened in the audit log, and each knowledge record it established is re-checked for retraction or supersession. Reports a proof as standing, withdrawn, unsupported by the audit log, contradicted, or not checkable, and lists only the questions APEX cannot answer for the user. On a completed goal it also answers whether the recorded completion still holds, and `goal show` prints the same finding (`NOT SETTLED` / `Not re-checked` / `Re-checked`) beside the snapshot it was granted on. Writes no record, links nothing, completes nothing, reopens nothing, and exits 1 when a finding or an unreadable store means the goal's own claims do not hold. |
 | `goal update <id> <status> [--reason <text>] [--by <goal-id>]` | Moves a goal through its lifecycle (`accepted`, `active`, `blocked`, `failed`, `cancelled`, `abandoned`, `superseded`, `completed`). Stopping states need a reason; `superseded` names a live replacement. User origin only. |
 | `goal revise <id> --criterion <text>... --reason <text> [--request <text>] [--priority N] [--deadline <iso>]` | Records a new version of a proposed, accepted, active, or blocked goal. The revision increments the goal revision, resets criterion evidence, and invalidates an approval bound to the older revision until the plan is revised and approved again. User origin only. |
 | `goal evidence <id> --criterion <c1> --kind supports\|contradicts [--operation <audit-id>] [--detail <text>] [--reopen]` | Records evidence for one criterion. Supporting evidence must name a live `success_verified` operation. Contradicting evidence on a completed goal requires `--reopen`, which returns it to `blocked` and preserves the history. User origin only. |
-| `goal complete <id> [--reason <text>]` | Completes a goal only when every criterion is satisfied by evidence that the audit log still confirms. A task result completes no goal by itself. User origin only. |
+| `goal complete <id> [--reason <text>]` | Completes a goal only when every criterion is satisfied by evidence that the audit log still confirms. A task result completes no goal by itself - not a plan run, not a `plan continue`, not a reconcile. User origin only. |
 | `goal link <id> (--plan <id> \| --task <id>)` | Records a reference from a goal to a plan or task. The link does not authorize execution. |
 | `plan add --outcome <text> --step <json>... [--goal <id>] [--precondition <text>]... [--assertion <json>]... [--estimate N] [--reason <text>]` | Records an executive plan as a draft: ordered steps with dependencies, expected results, verification requirements, risk, preconditions, and classified assertions. Nothing runs. User origin only. |
 | `plan list [--limit N]`, `plan show <id>`, `plan validate <id>` | Read-only views: the plan log, one plan with its steps and outcomes, and a validation of a stored plan against the live registry and the live goal, task, and audit state (`validate` exits 1 when it would not pass). |
@@ -294,6 +294,8 @@ suites re-hash the directory afterwards to prove it.
 | `plan approve <id>` | Validates the plan against the live registry and records an approval bound to the exact content hash and version. Approval permits starting the plan; it authorizes no step by itself. |
 | `plan start <id>` (alias `plan activate <id>`) | Re-validates the approved plan, re-checks its goal and steps, creates an ordinary task, and runs it. Every step is authorized separately. |
 | `plan reconcile <id>` | Read-only with respect to execution: copies terminal task-step outcomes onto the plan, re-checks completed outcomes against the audit log, and is a no-op on a second call. It never runs a step. |
+| `plan continuation <id>` | Read-only: the nine-state reading of the run this plan activated - not started, running, verified successful, verified failed, blocked, outcome uncertain, awaiting external confirmation, safe to continue, requires user intervention. Each step names the record its state was read from, the re-reads a continuation must pass (plan bytes, approval binding, step structure, live registry, recorded constraints, plan status, task ownership), what stands in the way, and the command that would act on it. Writes nothing except its own audit line; refuses a plan that was never activated. Exit 1 when the reading could not be verified. |
+| `plan continue <id>` | Takes up the steps the records prove never started, after re-reading everything the derivation reads and under the existing task lock. Replays nothing whose effect cannot be established, reuses the ordinary per-step authorization, audit and finalization contracts, and refuses outright when a moved approval, a revised plan, a refused capability or a recorded constraint stands in the way. The answer carries the before and after readings and which steps ran. Exit 1 when the run it continued did not complete. |
 | `plan cancel <id> --reason <text>`, `plan supersede <id> --by <plan-id> --reason <text>` | Closes a plan record. A task already created from it is not cancelled by these commands. |
 | `recover` | Read-only recovery inspection across goals, plans, and tasks: interrupted work, uncertain steps, records that contradict each other (a missing goal, a stale goal revision, an active plan whose goal closed, a missing activation task, a completed task with unrecorded plan outcomes), resumable items, matters needing the user, and closed work. Never resumes, retries, approves, reconciles, or cancels. Exit 1 when anything needs attention. |
 | `work [--limit N]`, `next` | Read-only, deterministic ranking of the next work from goals, plans, tasks, recovery state, and execution evidence. `next` prints the single top recommendation and why. Neither executes anything, invents a priority, or treats a recommendation as permission. |
@@ -1416,26 +1418,40 @@ questions that must change nothing).
   propose.
 
 - **Batch AL's planning reads cost time proportional to the prediction ledger times the experience
-  log.** Each planning read discloses what past attempts say, and building that disclosure calls
-  `predictions.calibration`, which projects every recorded prediction with its own horizon query over
-  the experience log; the action's independent verification then re-runs the same disclosure, so the
-  cost is paid twice per read. Measured at 800 predictions and 400 experiences: 1,493 ms for the
-  calibration against 15 ms to read and parse both logs, and 3.1-3.3 s for a candidate, replan, or
-  outcome read - which drops to 119-272 ms for the identical fixture once those two ledgers are
-  emptied (`benchmarks/run-planning-benchmark.mjs`). Goal decomposition, plan validation, progress
-  derivation, continuation ranking, and the pure generator and evaluator are unaffected and stay
-  between 0.2 and 52 ms at the same size. The recorded decision is to fix this in the prediction and
-  experience read paths, where the cost is, and not to remove the second read: an audited answer that
-  does not re-derive its own disclosure is the kind of guarantee Batch AB exists to keep. Until then
-  the practical bound is that a planning read stays fast while the prediction ledger is small, and a
-  user who has recorded hundreds of expectations should expect a planning read to take seconds.
+  log; Batch AM fixed the cause and measured the fix.** Each planning read disclosed what past attempts
+  say, and building that disclosure called `predictions.calibration`, which projects every recorded
+  prediction with its own horizon query over the experience log; the action's independent verification
+  then re-runs the same disclosure, so the cost was paid twice per read. The root cause was not the
+  ledger size: `analyzeTemporal` rebuilt the whole log's per-record structures inside every window
+  query - one map pass, one feedback index, and a re-sorted correction list per query - so a query cost
+  time proportional to the log even when it answered with nothing, and calibration ran one such query
+  per prediction. Batch AM prepares those structures once per read of the log and turns a window into a
+  bounded range read over the records that answer it (`experience/temporal.js`, shared by
+  `evidenceIndex`), and gives the ledger a per-prediction index instead of a scan per projection.
+  Measured on the same committed fixture in the same run: 3,243.6 ms to 110.5 ms for a candidate read,
+  3,149.3 to 123.4 for a replan, 3,321.5 to 166.4 for an outcome at the large size; 261.1 to 36.5,
+  445.2 to 42.4 and 431.2 to 68.9 at the medium one; a single window read 2.59/5.33/16.45 ms to
+  0.082/0.170/0.251 ms for 100/400/1,600 experiences, and a capability with no records 13.08 ms to
+  0.096 ms. Nothing was cached across reads, no derived state is persisted, and the second read -
+  `verify()` re-deriving its own disclosure - stayed: an audited answer that does not re-derive its own
+  disclosure is the guarantee Batch AB exists to keep. `learning-read-equivalence.test.js` compares the
+  optimized answer against a record-by-record reference for every window and capability, and against the
+  pre-fix implementation's own output, so the speed is not a difference in what is reported. What is
+  left: an unscoped window read (`capability: null`) is still super-linear - 1.375/34.0/551.8 ms at
+  100/400/1,600 experiences, about twice better than before - because pattern detection legitimately
+  receives the whole window's correction list; it is not on the calibration or planning path.
 - **Batch AL's candidates are generated from a bounded strategy set, and its learning is disclosed,
   not applied.** Three strategies, capped at three drafts per goal; no learned weighting, no score, and
-  no candidate invented from a capability the registry does not hold. A recorded blocker gates nothing,
-  and an approved adaptation changes no ranking: both are reported so the reader can disagree. Whether a
-  recorded plan was the better plan is demonstrated only against the synthetic fixtures in
-  `plan-scenarios.test.js`, with fixed wording and no model consulted, so nothing here is evidence about
-  what a real model would propose.
+  no candidate invented from a capability the registry does not hold. Batch AM closed the blocker half
+  of that sentence: a blocker or an unmet prerequisite the user recorded on the goal now gates -
+  `plans/constraints.js` classifies each record, `constraints_satisfied` is a hard gate in the
+  comparison, a confirmed blocker naming a capability is refused at generation, and approval and
+  activation re-read the same records (`plan-constraints.test.js`). The learning half is closed too: an
+  approved adaptation moves a ranking only where the user recorded a shape for it, and the record that
+  did it is named (`plan-guidance.test.js`). Whether a recorded plan
+  was the better plan is demonstrated only against the synthetic fixtures in `plan-scenarios.test.js`,
+  with fixed wording and no model consulted, so nothing here is evidence about what a real model would
+  propose.
 
 ## Knowledge System
 
@@ -3560,6 +3576,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `adaptation.derive` | user | write | never in a plan | `experiences.jsonl`, or nothing when no group qualifies | no (self-bookkeeping) | yes |
 | `adaptation.decide` | user | write | never in a plan | `experiences.jsonl` (one decision line) | no (self-bookkeeping) | yes |
 | `adaptation.retire` | user | write | never in a plan | `experiences.jsonl` | no (self-bookkeeping) | yes |
+| `adaptation.guide` | user | write | never in a plan | `experiences.jsonl` (one guidance line) | no (self-bookkeeping) | yes |
 | `adaptation.list` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `experience.list`, `experience.show`, `experience.timeline`, `experience.trends`, `experience.patterns`, `experience.compare` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `prediction.record` | user | write | never in a plan | `predictions.jsonl` | no (expectation) | yes |
@@ -3582,6 +3599,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `plan.outcome` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `plan.assess` | user | write | never in a plan | `plans.jsonl` (one `plan_assessment` event; the plan record's own bytes, status, approval and timestamp are unchanged) | no (executive) | yes |
 | `plan.activate`, `plan.reconcile` | user | not a registered action | - | `plans.jsonl`, `tasks.jsonl`, `operations.jsonl` when a plan is activated | no (executive) | through the created task only |
+| `plan.continuation` | user | not a registered action | - | `operations.jsonl` (its own audit line); the plan, task, goal and belief stores are unchanged, measured byte for byte | no (read) | no |
+| `plan.continue` | user | not a registered action | - | `tasks.jsonl` per step it takes up, each step's own store, `plans.jsonl`, `operations.jsonl` | no (executive) | through the steps it takes up only |
 | `recover` | user | not a registered action | - | `operations.jsonl` + a conversation turn; reads the stores and changes nothing | no (read) | no |
 | `model.answer` | user request; anything it proposes runs as `model` | not a registered action | its proposals are checked step by step | `conversation.jsonl` + `operations.jsonl` | no (model-words) | no |
 | `task.plan` | user | not a registered action | - | `tasks.jsonl` + `operations.jsonl` | no (task) | no |
@@ -4159,6 +4178,18 @@ refuses anything that is not a live `success_verified` record with no errors. Th
 goal keeps a criterion-to-operation snapshot, and `goal complete` verifies that snapshot again
 after the fact.
 
+Batch AM added the other half of that rule: a completion is a claim about records that can move
+afterwards, so `goal show` and `goal assess` re-open the snapshot's own operations and knowledge
+claims and report what they find now. A goal whose proof has been retracted, superseded, contradicted,
+or cannot be checked is printed as `NOT SETTLED` with the criterion, the verdict and the operation it
+was granted on - never as settled, and never as unproven when the records simply could not be read
+(`Not re-checked` says that instead). Nothing reopens a goal by itself: APEX appends no transition,
+changes no byte of `goals.jsonl`, and names the user's own command - `goal evidence <id> --criterion
+c1 --kind contradicts --reopen`. Recording contradicting evidence on a closed goal is refused unless
+`--reopen` is stated, and new supporting evidence cannot be added to a closed goal at all, so a
+withdrawn proof is not papered over. A goal that is no longer completed has no completion to check,
+and its earlier completion record stays in the status history.
+
 ### Plan lifecycle
 
 `draft → approved → active → completed`, with `failed`, `blocked`, `cancelled`, and
@@ -4196,6 +4227,92 @@ its audit line keeps the operation id allocated before execution, which is how a
 that no audit record exists for it. `plan reconcile` is the explicit, separately authorized
 command that copies terminal task outcomes onto the plan. It records only outcomes the plan does
 not already hold and never executes a step.
+
+Batch AM added the run-level reading and the one command that acts on it. `plan continuation <id>`
+derives, for every step, which of nine states its own records put it in - not started, running,
+verified successful, verified failed, blocked, outcome uncertain, awaiting external confirmation,
+safe to continue, requires user intervention - and cites the record each state came from. A step
+with no operation link is proven not to have started; a step recorded as running while a live
+process holds the task lock is running, not interrupted; a step recorded as running with an
+allocated id and no audit record for it is outcome uncertain, and is never called failed because
+the process stopped. `plan continue <id>` re-reads the plan bytes, the approval that binds them,
+the step structure, the live registry, the goal's recorded constraints, the plan status and the
+task's ownership, and only then takes up the steps proven never to have begun, under the existing
+task lock, per-step authorization and finalization contracts. A materially revised plan or an
+approval that no longer binds these bytes needs a fresh approval, not a retry of the command.
+
+Eight interruption boundaries are tested with real child processes that stop themselves at each
+one and leave their bytes behind (`tests/plan-continuation.test.js`,
+`tests/fixtures/continuation-child.mjs`). Three of them - lost during execution, after execution
+but before verification, and after verification but before the audit append - leave byte-identical
+records: a step the task log holds as running, its effect in the side-effect file, and no operation
+record. APEX cannot tell those three apart and does not pretend to; all three read as outcome
+uncertain and none is ever produced a second time.
+
+**One defect the adversarial pass found, and fixed rather than documented.** `plan continue` would take
+up the untouched steps of a *cancelled* plan. The derivation re-read the plan bytes, the approval, the
+step structure, the registry, the constraints and the task's ownership, and every one of those passed
+for a closed record: a cancelled plan's steps really were never started, and its approval really did
+bind them. What was missing was the plan's own status, so a command that resumes work resumed work the
+user had ended. The reading now re-reads `plan_open` as one of its checks, names the status it found,
+and refuses; the steps stay described as untouched, because that is what the records prove, and
+`continue.safe` is false beside it. `tests/adversarial-batch-am.test.js` (I-09) pins it from the real
+bytes a stopped process left behind, and the suite's other fifteen cases are the batch's adversarial
+list: injected prose inside an adaptation record, a hand-appended approval line (which reads as damage,
+never as a decision), retired and stale and contradictory guidance, assumed and sentence-shaped
+blockers, a retracted blocker's evidence, a model reply claiming it recorded guidance, a registry that
+moved mid-interruption, replays and concurrent continuations, an outcome citing an operation the audit
+log does not hold, and damaged prediction and experience logs.
+
+Batch AM also put that reading where a user looks for it. Continuation readiness was six states;
+it is now seven, and the seventh, `ready to continue`, is the difference between a run that never
+began and a run that stopped with steps its own records prove were never started
+(`src/executive/vocabulary.js`, `src/executive/readiness.js`). It is read from the continuation
+derivation and from nothing else: a plan status and a task status cannot show that a step never
+started, so where no derivation was read, no continuation is claimed and the older states stand.
+The state is refused - not downgraded silently - while a live process holds the task lock, while a
+step still waits for the user's own confirmation, while a dependency holds no verified success, and
+wherever the derivation itself refuses. The same reading reaches the ranking: `work` and `next`
+print a `continue-plan` candidate whose command is `plan continue <id>`, above the work that has
+never started and below the records that settle what is unknown, and the run is placed once - the
+`task resume` candidate for the same task is listed as excluded, with the reason, because the plan
+command is the one that re-reads the approval, the registry and the constraints before anything
+runs. Both are reads: they write nothing, take no step, start no process, and the command they
+print is the user's to give. `tests/executive-readiness.test.js` (27 tests) pins the seven states
+and the record each is read from, the refusals above, the one-place ranking, the deterministic
+order, and a real interrupted run read by a second process through to the command that takes it up.
+
+The batch's thirty acceptance scenarios are pinned by `tests/plan-scenarios-am.test.js` (31 tests: the
+thirty numbered cases plus one cross-store consistency check), and they read the shipped implementation
+end to end - the goal, plan, task, experience, prediction and audit stores and their transitions, the
+registry and its origin authorization, each actions own validator and independent verifier, candidate
+generation, the gate-and-dimension comparison, the constraint and guidance ledgers, the outcome
+assessment, the continuation derivation, the ranking engine, the task lock and the finalization contract.
+Every run a scenario interrupts is interrupted by a real child process
+(`tests/fixtures/continuation-child.mjs`), and every run a scenario resumes is resumed by a second
+process reading the bytes the first left. No scenario contacts a model: the gateway is the no-backend
+one, or a programmatic stub whose reply is fixed text, and all goal, plan, criterion and history wording
+is synthetic. Two of the answers the scenarios found are worth stating rather than smoothing over:
+
+- `plan reconcile` records the outcomes the task log has *settled*. A write step the interruption froze
+  mid-execution is recorded as running, which is not settled, so reconcile refuses it
+  (`input_rejected: no terminal step outcome`) and the plan stays active; the step is `outcome uncertain`
+  in the continuation reading, which refuses to replay it and names a new plan as the way forward. That
+  is the refusal-by-default rule holding at the boundary a real crash produces, and scenario 18 pins it.
+- A revised plan needs a fresh approval, and after the user gives one, activating it is still refused
+  when the task log holds an earlier task for that plan in a status that says it may have run
+  (`a task <id> already exists for this plan in status failed; it may have run, so a second task is not
+  created`). The moved bytes are taken up by a plan the user records again, not by a second task beside
+  effects the log cannot tell apart. Scenario 20 pins the refusal and the effect count it protects.
+
+Scenario 30 is the regression question itself, and the answer at the end of this batch: `npm test` (123
+test files, the two above included) ran **2,196 tests, 2,194 passed, 0 failed, 2 skipped** in 387.7 s on
+Windows 11, Node v26.4.0, in isolated temporary data directories. The two skips are the POSIX-only checks
+this filesystem cannot perform, and they were skipped in the prior batches runs too. Before Batch AM the
+same script reported 1,929 tests, 1,927 passed, 0 failed and the same 2 skips; the added tests are this
+batch's suites plus the fixtures they use to stop real processes. No test in that list runs a model: the
+gateway in every one of them is either the no-backend one or a programmatic stub whose reply is fixed
+text.
 
 ### Failure semantics
 
@@ -4547,11 +4664,14 @@ re-read from the records. Nothing is silently retried after a possible side effe
 "completion" is inferred from a function returning without an error.
 
 **Failure and recovery are reported from records.** The thirteen boundaries and six recovery classes
-above are the whole vocabulary, and a state with no record behind it is not printed. An uncertain step -
-one that may or may not have happened - is never offered automatic replay, a failed or uncertain write
-step is not run again in that task, and the user is told which of the commands that already exist
-(`plan reconcile`, `task approve`, `task retry` for a read-only step, `plan cancel`) can act on it.
-Batch AK adds the reading of that state, not another mechanism for it.
+above are the vocabulary Batch AK introduced, and a state with no record behind it is not printed. An
+uncertain step - one that may or may not have happened - is never offered automatic replay, a failed or
+uncertain write step is not run again in that task, and the user is told which of the commands that
+already exist (`plan reconcile`, `plan continuation`, `task approve`, `task retry` for a read-only step,
+`plan cancel`) can act on it. Batch AM adds the reading of that state, not another mechanism for it:
+`plan continuation` names nine states per step over those same records, `plan continue` takes up only the
+steps proven never to have started, and eight interruption boundaries of a run are tested with real child
+processes whose records are read back from a second process.
 
 **Learning stays where it already was.** The bridge's own outer operations - `executive.status`,
 `executive.prepare`, `executive.approve`, `executive.execute`, `executive.clarify` - are classified in
@@ -4656,11 +4776,23 @@ re-reads.
   unavailable whenever the audit log holds no per-action duration, rather than estimated. An approach the
   capabilities cannot carry is reported as skipped with the reason; a goal with no open criterion
   generates nothing.
-- **Evaluation and selection** (`src/plans/evaluation.js`, `src/executive/selection.js`). Five hard gates
-  first - a candidate that fails one is excluded and says which - then five ranked dimensions compared as
-  recorded, with six more reported but never ranked. Leading is Pareto: at least as good on every
-  dimension and strictly better on one. Where nothing separates, the trade-off *is* the answer and no
-  draft is recorded. No score, weight, or probability is computed anywhere, because no record supports one.
+- **Evaluation and selection** (`src/plans/evaluation.js`, `src/plans/outcomes.js`, `src/executive/selection.js`).
+  Six hard gates first - a candidate that fails one is excluded and says which - then eight ranked
+  dimensions compared as recorded: `criterion_coverage`, `uncertainty`, `step_risk`, `reversibility`,
+  `resource_requirements`, `verification_quality`, `recorded_outcome_history`, `approved_adaptation_fit`.
+  Six more are reported beside them and never ranked, and each says in its own band why it stays there:
+  what the approach settles is already counted, an assertion's kind is a self-claim, a wrong dependency
+  structure or a refused capability is a gate rather than a drawback, asking for evidence is not a
+  quantity, and a record that stops work has already stopped it at the gate. Batch AM added
+  `verification_quality` (how many steps name an action that carries no independent verifier of its own,
+  read from the live registry rather than from the candidate's claim) and `recorded_outcome_history` (how
+  many of the capabilities this approach uses appear in the plan records as failed or uncertain, read from
+  `src/plans/outcomes.js` and bounded, with the bound disclosed). Both are counts of records: neither is a
+  rate, and "what happened once" is never written as what will happen now. A dimension whose records were
+  not read reports that and separates nothing, because an unread store is not a clean one. Leading is
+  Pareto: at least as good on every dimension and strictly better on one. Where nothing separates, the
+  trade-off *is* the answer and no draft is recorded. No score, weight, or probability is computed
+  anywhere, because no record supports one.
 - **Outcome evaluation** (`src/plans/assessment.js`, `plan.outcome`, `plan.assess`). Seven separate
   questions - step outcomes, expected outputs, verifier verdicts, criteria settled, evidence state,
   durability, and what only confirmation outside APEX can settle - each answered from records and cited to
@@ -4670,9 +4802,12 @@ re-reads.
   bytes, timestamp and approval untouched.
 - **Goal progression and replanning.** Progress is derived from criterion evidence, never from task
   completion, and `goal complete` refuses a goal whose own proof has since been retracted or contradicted
-  (`goal-assessment.test.js`, `goal-provenance.test.js`). A revision regenerates candidates against the
-  plan that failed, keeps the earlier plan and its approval in the log, names the actions that run
-  refused, and requires fresh validation and fresh approval.
+  (`goal-assessment.test.js`, `goal-provenance.test.js`). Batch AM added the read side of the same rule:
+  `goal show` and `goal assess` re-check the completion snapshot, so a goal is not reported as settled
+  once its proof has been withdrawn (`goal-evidence-consistency.test.js`) - and nothing that runs a plan,
+  including `plan continue` and `plan reconcile`, completes or reopens a goal by itself. A revision
+  regenerates candidates against the plan that failed, keeps the earlier plan and its approval in the log,
+  names the actions that run refused, and requires fresh validation and fresh approval.
 - **Outcome-aware learning** (`src/executive/learning.js`). Each planning read discloses what the records
   of past attempts say - an approved adaptation, a recorded expectation, an assessment against another
   plan for the same goal - and states in the same answer that this disclosure changed no gate, no ranked
@@ -4685,10 +4820,23 @@ re-reads.
 
 ### Where the shipped behaviour differs from the brief, stated as the records support it
 
-- A recorded blocker gates nothing: `prerequisites`, `constraints` and `blockers` are stored, displayed,
-  and re-read by `plan validate`, but no candidate is excluded because one is on record.
-- Approved adaptations are disclosed to the reader and applied to no selection, scoring, or step order;
-  `influencesSelection: false` is part of the record set.
+- A recorded blocker and an unmet prerequisite now gate, and Batch AM says which records are allowed to:
+  a blocker the user stated in their own words on the goal, or one naming a record a read found current,
+  excludes the candidates that walk into it (`constraints_satisfied`), and a blocker naming a capability
+  is refused by the generation itself. What APEX inferred, what the user assumed, what a memory line
+  says, and what an operation ended with are reported as suspected; a blocker resting on a retracted or
+  unresolvable record, or recorded on a goal that has since closed, is reported as historical. Neither
+  class gates anything, and every exclusion names its record, the steps it stops, the reason, and what
+  would clear it. Approval and activation re-read the same records (`plan-constraints.test.js`).
+- Approved adaptations are disclosed, and Batch AM made one thing follow from them: a *shape the user
+  recorded* on an approved, active rule (`adaptation guide`, held as an `adaptation_guidance` record) is
+  checked against each candidate's own steps as the ranked dimension `approved_adaptation_fit`, and the
+  record that moved an approach is named by its id beside the position it moved. `influencesSelection`
+  is now a fact about the read rather than a flat absence: it is `true` only when such a record is in
+  scope, and the rule text itself is still only printed, never parsed. An approved rule with no shape, an
+  unapproved, rejected, retired, contradicted or out-of-scope one, and anything a model would have said
+  are inert. Recorded guidance cannot bypass a gate, a constraint, the capability refusal, or approval
+  (`plan-guidance.test.js`).
 - The runner cannot leave a `partial` verdict behind in one process, because a failed step stops the task;
   `partial` is reachable only across a resume, and the suite says so rather than manufacturing it.
 - No confidence value is stored or computed anywhere, and a match rate is withheld until enough scored
@@ -4699,21 +4847,39 @@ re-reads.
 ### Measured
 
 `benchmarks/run-planning-benchmark.mjs` (no backend of any kind, synthetic fixtures, three store sizes)
-reports the nine paths. At the largest fixture - 2,021 memories, 2,000 knowledge claims, 151 goals, 151
-plans, 21 tasks, 401 operations, 800 predictions, 400 experiences, about 2.2 MB of JSONL - goal
-decomposition, plan validation, goal-progress derivation and continuation ranking stay between
-18 and 52 ms, the pure generator and evaluator stay under 1 ms, while the three audited planning reads
-took 3.1-3.3 s. The control that separates them: with the same goals, plans, tasks and audit log but the
-prediction and experience ledgers emptied, the candidate read falls to 119 ms, the replan read to 139 ms
-and the outcome read to 272 ms, and the three learning reads fall from 1,623 ms to 14 ms. The cost is
-therefore not in the planning code: it is `predictions.calibration`, which projects every prediction with
-its own horizon query over the experience log (1,493 ms at 800 predictions × 400 experiences against
-15 ms to read and parse both logs), and each audited read pays it twice because the action's independent
-verification re-runs the disclosure it printed. Absolute timings on this machine varied up to 2× between
-runs of the same fixture, so only the in-run ratios above are claimed. This is documented as a measured
-limitation under [Known limitations](#known-limitations) rather than optimized here, because the fix
-belongs to the prediction and experience read paths, and the alternative - letting verification reuse
-the read's own result - would weaken a guarantee Batch AB made deliberately.
+reports the nine paths. At the largest fixture - 2,021 memories, 2,000 knowledge claims, 155 goal events,
+235 plan events, 147 task lines, 401 operations, 800 predictions, 400 experiences, about 2.2 MB of JSONL -
+goal decomposition, plan validation, goal-progress derivation and continuation ranking sit between 27 and
+49 ms, the pure generator and evaluator stay under 2 ms, and the three audited planning reads took
+**270-350 ms** at the median of three samples. The control that separates the code from the disclosure:
+with the same goals, plans, tasks and audit log but the prediction and experience ledgers emptied, those
+three reads are 161-248 ms and the three learning reads 10.3 ms. So the reads are now within about 60 ms
+of their own floor rather than 3 s above it.
+
+Batch AM measured the same script against a copy of the tree taken from `HEAD` (`5a3d494`, the Batch AL
+commit) extracted with `git archive`, which is the shipped code before this batch and not a switched-off
+mode. Same fixture contents, same machine, nothing else running: the three reads were **3.42-3.59 s**,
+the learning trio 1,528 ms and `predictions.calibration` alone 1,518 ms - a **10.3x / 11.4x / 13.0x**
+improvement on the reads and **24.6x** on the calibration. Those Before figures at the largest size are a
+single sample: the three-sample run of the same command finished but its scratch output path was reused
+before either file was read, so only the single-sample figures survive. The medium-size column is three
+samples on both sides (435.0 / 300.6 / 270.4 ms before against 183.4 / 112.3 / 108.6 after, calibration
+119.1 ms against 26.0), and the AL-era figures committed in
+[`benchmarks/README.md`](benchmarks/README.md) for the same large fixture (3,321.5 / 3,149.3 / 3,243.6 ms,
+calibration 1,492.9 ms) agree with the single Before sample to within about 8-10%. Absolute timings on
+this machine vary up to 2x between runs of an identical fixture, so the ratios above are read together
+with that spread, not against it.
+
+Two costs the batch added, also measured rather than asserted (both in
+[`benchmarks/README.md`](benchmarks/README.md)). A goals recorded constraints, grown through `goal revise`
+to the stores own cap of 48 items across six lists, costs the constraint ledger **1.5 ms** at that size
+against 0.0 ms for none, and moves the audited planning read by less than the noise. And the recovery
+paths over a run a real child process left behind - the continuation reading, the ranking that now reads
+it, the readiness question and the resume itself - are **97 ms / 224 ms / 259 ms / 692 ms** at the largest
+size. The ranking is the column this batch made heavier: with no interrupted run on the fixture it is
+41.6 ms, and with an active plan per task it is 223.6 ms, because each such plan now gets its own
+continuation reading before it can be placed. That is a read the user pays when asking what is next, and
+nothing in it runs in the background.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 
@@ -4786,9 +4952,21 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    experience cannot leave a stale rule in effect, and a retirement is itself a record. Batch
    AA added one bounded automatic path for the *experience* record only, behind one validated
    setting that defaults to off. Batch AB made the ending of every operation - audit record,
-   experience capture, completion - one testable contract instead of four lookalike tails. The
-   second half of the stage's first sentence is still open: no update is driven by a *verified
-   outcome*, because nothing consumes an outcome classification yet. See stage 6.
+   experience capture, completion - one testable contract instead of four lookalike tails. Batch
+   AL put a recorded outcome in front of the next selection, and Batch AM widened what that means:
+   a plans own recorded outcomes and whether each steps own action can re-check it are two of the
+   ranked dimensions of the next comparison (`plan-dimensions.test.js`), and an approved adaptation
+   with a recorded shape can order the candidates that same goal is offered - while a gate, a
+   recorded constraint, an approval and an authorization decision stay outside its reach
+   (`plan-guidance.test.js`, `tests/plan-scenarios-am.test.js` scenarios 8, 11 and 12). So an
+   outcome does change what APEX surfaces next, and still changes nothing it claims is verified:
+   no shape, verdict or feedback record can approve, start, carry or supersede a plan, and the
+   adversarial pass pinned that from the bytes a stored imperative cannot change
+   (`tests/adversarial-batch-am.test.js` I-01 to I-05, I-08, I-14). Retirement, reversal and audit
+   are the same records as before. The stage stays open because a surfaced difference is still not
+   a learned change of *behaviour* in the sense the acceptance line means: no dimension weight is
+   fitted, no ranking is recomputed from results, and the two dimensions Batch AM added are
+   disclosures the user reads, not signals a component optimises against. See stage 6.
 6. **Executive control and outcome evaluation.** Expectations recorded before an action,
    outcomes compared against them, and the controller using that difference to decide the
    next step. Depends on 1 and 5. Acceptance: an operation records an expectation, an
@@ -4825,6 +5003,18 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    The stage stays open for exactly the reasons the previous paragraph names: no prediction
    verdict is consumed by anything, a plan is still never inferred from a stored goal record,
    and completing a plan completes no goal without the user's own evidence-backed act.
+   Batch AM advanced three more clauses of this stage's title and none of its expectation clause.
+   The loop now runs past *execution* in both directions: a run a process left partway is read as
+   nine states from its own records (`plan.continuation`), and only the steps those records prove
+   never started may be taken up (`plan.continue`), while a write whose effect cannot be established
+   is refused and named (`tests/plan-continuation.test.js`, `tests/adversarial-batch-am.test.js`
+   I-09 to I-16). What the next comparison is allowed to consider is now decided by recorded
+   constraints rather than by prose (`plan-constraints.test.js`), and the answer the user gets about
+   *what is next* distinguishes a plan ready to run from a run ready to be taken up again
+   (`executive-readiness.test.js`). A recorded outcome still changes no expectation, no prediction
+   verdict is still read by no planner, controller or gateway, and the two ranked dimensions Batch AL
+   and AM put on the comparison remain disclosures the user reads: no weight is fitted and no
+   ranking is recomputed from results. The stage remains open on the same fourth clause.
 7. **Neural-runtime integration.** Only through the contract described in
    [Neural integration boundary](#neural-integration-boundary-proposal-not-implemented):
    proposals in, authority out. Depends on 6, because a proposer needs an evaluation

@@ -15,9 +15,11 @@
 // text is synthetic, and the clock is fixed at one instant.
 //
 // A scenario is reported as the records support it, not as the batch brief phrased it. Where the two
-// differ - a recorded blocker that gates nothing, a partial run that the shipped runner cannot leave
-// behind in one process, an approved adaptation that is disclosed but not yet applied - the test says
-// what happens and the comment says why, so the distinction is a finding rather than a silence.
+// differ - a partial run that the shipped runner cannot leave behind in one process, an approved
+// adaptation that is disclosed but not yet applied - the test says what happens and the comment says
+// why, so the distinction is a finding rather than a silence. Batch AM closed one of those gaps that
+// Batch AL had measured: a recorded blocker and an unmet prerequisite now gate candidates and
+// approval, which is what scenario 7 answers.
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -435,10 +437,11 @@ describe('AL scenarios 1-8: understanding the goal, decomposing it, generating a
     assert.deepEqual(stepData(reReadable).candidates.map((c) => c.digest), data.candidates.map((c) => c.digest),
       'the same goal and registry reproduce the same bytes');
     assert.deepEqual(changedKeys(before, state(dataDir)), [], 'two candidate reads added no record');
-    // The answer has two halves - the offered candidates and the evaluation of them - and the same
-    // approach is described in both, by the same words. Each offered candidate carries its own
-    // non-executable flag, and the effort and approval limits are stated once for the whole read.
-    assert.equal(lineMatching(cand, /^  required_only: /).length, 2);
+    // The answer has three halves - the offered candidates, the evaluation of them, and the guidance
+    // ledger Batch AM added - and the same approach is described in all three, by the same words. Each
+    // offered candidate carries its own non-executable flag, and the effort and approval limits are
+    // stated once for the whole read.
+    assert.equal(lineMatching(cand, /^  required_only: /).length, 3);
     assert.equal(lineMatching(cand, /^    not approved, not started, not executable$/).length, 2);
     assert.ok(lineMatching(cand, /These are drafts on screen\./).length === 1);
     assert.ok(lineMatching(cand, /No effort estimate appears above/).length === 1,
@@ -514,7 +517,7 @@ describe('AL scenarios 1-8: understanding the goal, decomposing it, generating a
     assert.deepEqual(changedKeys(before, state(dataDir)), [], 'three candidate reads and one refusal changed no record store');
   });
 
-  test('7: a recorded blocker and prerequisite are carried into the candidate, and gate nothing in generation', async () => {
+  test('7: a recorded blocker and prerequisite gate the candidates and the approval, until the user clears the records', async () => {
     const dataDir = dir();
     const app = await appIn(dataDir);
     const goalId = await activeGoal(app, [stated('remember that the AL blocked fact holds')],
@@ -525,24 +528,71 @@ describe('AL scenarios 1-8: understanding the goal, decomposing it, generating a
 
     const cand = await run(app, 'plan.candidates', { goal: goalId }, 'op-al7');
     const data = stepData(cand);
-    // Measured behaviour: an obstacle the goal records is not a capability fact, so it is neither a
-    // hard gate nor a ranked dimension. It is carried as a precondition the plan states, put to the
-    // user as a question, and reported by the continuation read - which is what the next asserts.
-    assert.equal(data.candidates.length, 1, 'generation is not refused for a recorded blocker');
-    assert.equal(data.comparison.front.length, 1);
-    assert.ok(lineMatching(cand, /known_blockers \(reported, not ranked\): 1 blocker\(s\) on record, each stated in the candidate's own preconditions/).length === 1);
-
-    const recorded = await app.controller.planAdd({ goalId, outcome: 'the AL blocked fact is stored', steps: [memStep('s1', 'c1', 'the AL blocked fact')] });
-    assert.equal(recorded.status, Outcome.PLAN_STORED, recorded.output);
-    const planId = dOf(recorded).planId;
-    await app.controller.planApprove({ target: planId });
-    const report = await app.controller.continuationReport();
-    const row = report.candidates.find((c) => c.kind === 'plan' && c.ref === planId);
-    assert.ok(row, 'the approved plan is offered as next work');
-    assert.deepEqual(row.blockers, [], 'its blockers are live validity problems, of which it has none');
+    // Batch AM closed the gap Batch AL measured and documented: an obstacle and a condition the user
+    // recorded on the goal now gate the work that walks into them. The candidate is still generated -
+    // generation and gating are separate answers - and the comparison says which record stopped it,
+    // which steps it stops, why, and what would clear it.
+    assert.equal(data.candidates.length, 1, 'the plan is written, then refused: the refusal is a finding, not a silence');
+    assert.deepEqual(data.comparison.excluded.map((e) => e.strategy), ['required_only']);
+    assert.ok(data.comparison.excluded[0].failedGates.map((g) => g.gate).includes('constraints_satisfied'),
+      'the gates this candidate failed');
+    assert.equal(data.comparison.front.length, 0, 'a candidate stopped by a record is not on the front');
+    assert.equal(data.comparison.reason, 'every-candidate-gated');
+    const classes = data.constraints.constraints.map((c) => c.class).sort();
+    assert.deepEqual(classes, ['confirmed_blocker', 'unresolved_prerequisite'],
+      'the user\'s own blocker is confirmed and the unmet condition is unresolved: neither is a hint');
+    const blocker = data.constraints.constraints.find((c) => c.class === 'confirmed_blocker');
+    assert.match(blocker.why, /the user's own words, recorded as a blocker on goal/);
+    assert.equal(blocker.gates, true);
+    assert.equal(blocker.record.store, 'goal');
+    assert.equal(blocker.record.goalId, goalId);
+    const prerequisite = data.constraints.constraints.find((c) => c.class === 'unresolved_prerequisite');
+    assert.match(prerequisite.resolution, /name the record that settles it/);
+    assert.ok(lineMatching(cand, /confirmed_blocker con-[0-9a-f]{12} \("the AL review is not done"\) stops every step of this approach/).length === 1,
+      cand.output);
     const assessed = await app.controller.assessStoredGoal(goalId);
     assert.ok(assessed.assessment.questions.some((q) => /records a blocker/.test(q)),
-      'the obstacle is put to the user, which is where a blocker belongs');
+      'the obstacle is also put to the user, which is where a blocker belongs');
+
+    // A plan can still be recorded beside a recorded obstacle: recording is not starting. Approval is
+    // where the record has to be answered, because the approval is what makes the steps runnable.
+    const recorded = await app.controller.planAdd({ goalId, outcome: 'the AL blocked fact is stored', steps: [memStep('s1', 'c1', 'the AL blocked fact')] });
+    assert.equal(recorded.status, Outcome.PLAN_STORED, recorded.output);
+    const blockedPlan = dOf(recorded).planId;
+    const refused = await app.controller.planApprove({ target: blockedPlan });
+    assert.equal(refused.status, Outcome.EXECUTION_FAILED, refused.output);
+    assert.match(refused.output, /approval refused: /);
+    assert.match(refused.output, /confirmed_blocker "the AL review is not done"/);
+    assert.match(refused.output, /unresolved_prerequisite "the AL review template exists"/);
+    assert.equal((await app.plans.get(blockedPlan)).status, PlanStatus.DRAFT, 'a refused approval leaves the draft unapproved');
+
+    // Clearing the gate is the user's act on the record, not APEX deciding the obstacle has passed.
+    // The revision moves the goal, so the plan written against the old revision still needs its own
+    // fresh record: this is the second plan, approved after the records cleared.
+    const revised = await app.controller.goalRevise({
+      target: goalId,
+      criteria: [stated('remember that the AL blocked fact holds')],
+      blockers: [],
+      prerequisites: [],
+      reason: 'the review is done and the template exists',
+    });
+    assert.equal(revised.status, Outcome.GOAL_UPDATED, revised.output);
+    const reopened = await run(app, 'plan.candidates', { goal: goalId }, 'op-al7b');
+    const reopenedData = stepData(reopened);
+    assert.deepEqual(reopenedData.constraints.constraints, [], 'nothing is left on the record to stop the work');
+    assert.deepEqual(reopenedData.comparison.excluded, [], 'the same approach is no longer gated');
+    assert.equal(reopenedData.comparison.front.length, 1);
+    const fresh = await app.controller.planAdd({ goalId, outcome: 'the AL blocked fact is stored', steps: [memStep('s1', 'c1', 'the AL blocked fact')] });
+    assert.equal(fresh.status, Outcome.PLAN_STORED, fresh.output);
+    const clearedPlan = dOf(fresh).planId;
+    const approved = await app.controller.planApprove({ target: clearedPlan });
+    assert.equal(approved.status, Outcome.PLAN_STORED, approved.output);
+    assert.equal((await app.plans.get(clearedPlan)).status, PlanStatus.APPROVED,
+      'the same plan clears approval once the records clear, which is what makes the gate a constraint and not a refusal');
+    const report = await app.controller.continuationReport();
+    const row = report.candidates.find((c) => c.kind === 'plan' && c.ref === clearedPlan);
+    assert.ok(row, 'the approved plan is offered as next work');
+    assert.deepEqual(row.blockers, [], 'a plan whose records cleared has no live validity problems');
   });
 
   test('8: candidates that cannot be separated are both kept and the trade-off is left to the user', async () => {

@@ -20,9 +20,12 @@
 // and execution is still the existing task runner. The evaluation is bound to the digests of the
 // candidates it looked at, so a candidate that changed afterwards is disclosed as unassessed rather
 // than quietly compared against stale bytes.
-import { dependencyProblems, stableStringify } from '../tasks/model.js';
-import { singleLine } from '../util.js';
+import { dependencyProblems, stableStringify, StepStatus } from '../tasks/model.js';
+import { shortId, singleLine } from '../util.js';
 import { Requirement, requirementOf } from '../goals/model.js';
+import { constraintFinding, constraintLedger } from './constraints.js';
+import { emptyGuidance } from './guidance.js';
+import { outcomesAudit } from './outcomes.js';
 import {
   MAX_ASSERTIONS, MAX_PLAN_STEPS, MAX_PRECONDITIONS, MAX_PRECONDITION_CHARS, RISK_ORDER,
   validatePlanContent,
@@ -33,17 +36,28 @@ export const EVALUATION_NOTE = 'an evaluation compares what each candidate recor
 // The dimensions the ordering uses, in the order they are named to the reader. Every one of them is
 // a recorded count or a recorded class, not a weight: the list is disclosed so the reader can see
 // exactly what was compared and can disagree with it knowingly.
+//
+// Batch AM added two of them. `verification_quality` is the registry's own fact - which of these
+// steps will be re-checked by an action that carries its own verifier - and `recorded_outcome_history`
+// is the count of steps naming a capability whose recorded outcome the caller actually handed this
+// comparison. Both are counts of records, never a rate, a probability, or a forecast: a capability
+// that failed once is not claimed to fail again, and a capability nobody has run is not claimed to be
+// risky. A dimension whose records were not read reports `value: null` and separates nothing, because
+// an unread store is not an empty one.
 export const RANKED_DIMENSIONS = Object.freeze([
   'criterion_coverage',
   'uncertainty',
   'step_risk',
   'reversibility',
   'resource_requirements',
+  'verification_quality',
+  'recorded_outcome_history',
+  'approved_adaptation_fit',
 ]);
 
 // Dimensions that are reported for every candidate but do not move the ranking, because there is no
 // honest way to trade one against another: they are context for the user's decision, not inputs to a
-// formula.
+// formula. Each names, in its own band, why it stays here.
 export const DISCLOSED_DIMENSIONS = Object.freeze([
   'goal_alignment',
   'evidence_sufficiency',
@@ -53,19 +67,24 @@ export const DISCLOSED_DIMENSIONS = Object.freeze([
   'known_blockers',
 ]);
 
+// Hard facts are gates, not dimensions: a candidate that cannot run is excluded rather than marked
+// down, and no ranked count can outweigh one. The list is what the rule text points at.
 export const GATES = Object.freeze([
   'candidate_validation',
   'dependency_structure',
   'capability_available_now',
+  'constraints_satisfied',
   'plan_bounds',
   'goal_still_open',
 ]);
 
 // The rule, in the words the reader is shown. It is not hidden behind a number.
-export const EVALUATION_RULE = `Hard gates first: a candidate that fails any gate is excluded and names why. `
+export const EVALUATION_RULE = `Hard gates first: a candidate that fails any gate is excluded and names why - `
+  + `${GATES.join(', ')} are facts about whether the work can run at all, and no ranked count outweighs one. `
   + `Then ${RANKED_DIMENSIONS.join(', ')} are compared as recorded, and a candidate ranks above another `
   + `only where it is at least as good on all of them and strictly better on at least one. `
   + `Candidates that lead on different dimensions are both kept and the trade-off is reported as unresolved. `
+  + `A dimension whose records were not read ranks nothing. `
   + `No score, weight, or probability is computed, because none of the records supports one.`;
 
 function openRequiredCriteria(goal) {
@@ -122,6 +141,21 @@ function gateCapabilityAvailable(candidate, { registry, unavailable }) {
     : { passed: false, detail: missing.join('; ') };
 }
 
+// A constraint the goal record establishes and this approach walks into is not a drawback to be
+// marked down: the work is refused until something clears it. The gate re-reads the candidate's own
+// steps, because a precondition line saying a blocker exists is not the same thing as a plan that
+// avoids it - which is precisely what this batch found missing before.
+function gateConstraints(candidate, { constraints }) {
+  const finding = candidateConstraintFinding(candidate, { constraints });
+  return { passed: finding.passed, detail: finding.detail, finding };
+}
+
+// The same finding, computed once per candidate and reused by the gate and the disclosure, so the
+// exclusion and the explanation cannot disagree about what the records say.
+function candidateConstraintFinding(candidate, { constraints }) {
+  return constraintFinding(constraints, { steps: candidate.content.steps, strategy: candidate.strategy });
+}
+
 // The bounds a plan record can hold, re-measured here rather than trusted from the generator: a
 // candidate that could not be stored as a plan could not be approved either, and that is a gate, not
 // a drawback.
@@ -139,13 +173,27 @@ function gatePlanBounds(candidate) {
 
 // A candidate generated against a goal that has since been completed, cancelled or superseded is a
 // statement about an intention that no longer stands. Re-checked against the goal as it is now.
-function gateGoalStillOpen(candidate, { goal }) {
+//
+// A completed goal whose recorded proof has since been withdrawn is a different finding, and the gate
+// says which one it is: the record still closes this generation, and what settles it is the user's own
+// reopen, not a candidate that quietly treats the goal as if it were open. Where nobody re-read the
+// evidence, the gate says that too rather than implying it was checked.
+function gateGoalStillOpen(candidate, { goal, goalEvidence }) {
   if (!goal || !goal.id) return { passed: false, detail: 'no recorded goal is available, so nothing can be checked against it' };
   if (candidate.content.goalId !== goal.id) {
     return { passed: false, detail: `the candidate is for goal ${singleLine(String(candidate.content.goalId ?? 'none'), 24)}, not ${singleLine(goal.id, 24)}` };
   }
   if (['completed', 'failed', 'cancelled', 'superseded', 'abandoned'].includes(goal.status)) {
-    return { passed: false, detail: `the goal is ${goal.status}, so this candidate plans work that is no longer open` };
+    if (goal.status === 'completed' && goalEvidence && goalEvidence.holds === false) {
+      return {
+        passed: false,
+        detail: `the goal is completed on record, ${goalEvidence.detail.replace(/^the goal is recorded as completed, /, '')}; it stays closed until the user reopens it, and no candidate reopens it`,
+      };
+    }
+    const unchecked = goal.status === 'completed' && (!goalEvidence || goalEvidence.holds === null)
+      ? ` (${goalEvidence?.detail ?? 'the completion evidence was not re-read by this comparison'})`
+      : '';
+    return { passed: false, detail: `the goal is ${goal.status}, so this candidate plans work that is no longer open${unchecked}` };
   }
   return { passed: true, detail: `the goal is ${goal.status}, and the candidate is bound to goal revision ${goal.revision}` };
 }
@@ -153,7 +201,6 @@ function gateGoalStillOpen(candidate, { goal }) {
 // ---- ranked dimensions ------------------------------------------------------
 // Each returns the band name plus the recorded facts behind it. `value` is the comparable quantity;
 // a dimension that cannot be compared honestly returns `value: null` and is disclosed, not ranked.
-
 function dimensionCoverage(candidate, { requiredOpen }) {
   if (requiredOpen.length === 0) {
     return { band: 'the goal records no open required criterion, so nothing is compared here', value: null };
@@ -219,6 +266,85 @@ function dimensionResources(candidate) {
   };
 }
 
+// Verification quality is a registry fact, not an opinion about the approach: the step is re-checked
+// only if the action it names carries its own verifier, and the registry is read again here rather
+// than trusted from the candidate. What is compared is the number of steps left *without* one, because
+// counting the verified steps would simply reward a candidate for being long: zero is reachable by the
+// lean approach and the thorough one alike, and only a step whose action cannot check itself is the
+// drawback. The goal's own recorded evidence conditions stay disclosed, because "this criterion asks
+// for evidence" is not a quantity to trade against a count.
+function dimensionVerification(candidate, { registry }) {
+  const lacking = candidate.content.steps
+    .filter((s) => typeof registry.get(s.action)?.verify !== 'function')
+    .map((s) => s.id);
+  return {
+    band: lacking.length === 0
+      ? `no step is left without its action's own verifier (${candidate.steps} step(s), each re-checked independently)`
+      : `${lacking.join(', ')} names an action with no independent verifier, so its completion rests on the action returning`,
+    value: lacking.length,
+    invert: true,
+  };
+}
+
+// What past runs of these very capabilities left on record, as the caller handed it. The quantity is
+// the number of distinct capabilities this approach uses that the records hold a failed or uncertain
+// step outcome for - one record of one past attempt, which says what happened then and nothing about
+// what will happen now. When no outcome records were handed at all the dimension reports that and
+// ranks nothing: an unread record list is not a clean one, and treating it as one would hand a
+// preference to whichever candidate the records simply were not read for.
+function dimensionOutcomeHistory(candidate, { outcomes }) {
+  if (!outcomes || outcomes.read !== true) {
+    return {
+      band: 'no recorded step outcome was handed to this comparison, so what past runs did ranks nothing',
+      value: null,
+    };
+  }
+  const named = new Map((outcomes.records ?? []).filter((r) => r?.capability).map((r) => [r.capability, r]));
+  const hits = candidate.content.steps.filter((s) => named.has(s.action));
+  const bound = outcomes.truncated === true
+    ? '; the read is bounded, so a capability further back in the records is not named here'
+    : '';
+  if (hits.length === 0) {
+    return {
+      band: named.size === 0
+        ? `nothing on the ${outcomes.plans ?? 0} recorded plan(s) for this goal ended failed or uncertain${bound}`
+        : `no step here names ${[...named.keys()].sort().join(', ')}, the capability or capabilities the records hold an outcome for${bound}`,
+      value: 0,
+      invert: true,
+    };
+  }
+  const which = hits.map((s) => {
+    const r = named.get(s.action);
+    return `${s.id} (${s.action}${r.status === StepStatus.UNCERTAIN ? ', uncertain' : ', failed'}${r.operationId ? `, operation ${shortId(r.operationId)}` : ''})`;
+  });
+  return {
+    band: `${which.join(', ')} name a capability the handed records hold a failed or uncertain outcome for - what happened once, not a claim about this run${bound}`,
+    // Distinct capabilities, not steps: a candidate that uses the same troubled capability twice is
+    // exposed to one recorded history, not two, and counting steps would let length decide this.
+    value: new Set(hits.map((s) => s.action)).size,
+    invert: true,
+  };
+}
+
+// The one dimension Batch AM added to the ordering rather than to the disclosure list: what the user's
+// own approved guidance asks of these steps. It is a count of recorded requirements the candidate does
+// not meet, read the low-is-good way, and it is `null` whenever nothing checkable applies - which is the
+// common case, and the case where the comparison must go on ranking the recorded work alone. The rows
+// beside it name which record asked for what, so an influence can be argued with.
+function dimensionGuidance(candidate, { guidance }) {
+  const row = (guidance?.candidates ?? []).find((r) => r.strategy === candidate.strategy) ?? null;
+  if (!row || row.value === null) {
+    return {
+      band: row?.band
+        ?? (guidance && (guidance.applicable ?? []).length > 0
+          ? 'the guidance on record names no requirement this candidate can answer'
+          : 'no approved, applicable guidance record bears on these capabilities'),
+      value: null,
+    };
+  }
+  return { band: row.band, value: row.value, invert: true };
+}
+
 // ---- disclosed dimensions ---------------------------------------------------
 
 function disclosedAlignment(candidate, { requiredOpen, suggestedOpen }) {
@@ -227,7 +353,7 @@ function disclosedAlignment(candidate, { requiredOpen, suggestedOpen }) {
   const parts = [];
   if (leftOut.length > 0) parts.push(`leaves required ${leftOut.join(', ')} out of the approach`);
   if (suggestedLeft.length > 0) parts.push(`leaves the APEX suggestion ${suggestedLeft.join(', ')} out of the approach`);
-  return { band: parts.length ? parts.join('; ') : 'takes on every open criterion its approach covers' };
+  return { band: `${parts.length ? parts.join('; ') : 'takes on every open criterion its approach covers'}; not ranked, because what the approach settles is already counted by criterion_coverage` };
 }
 
 function disclosedEvidence(candidate) {
@@ -238,19 +364,33 @@ function disclosedEvidence(candidate) {
     .filter((a) => ['user_fact', 'stored_knowledge', 'retrieved_evidence', 'world_fact', 'world_entity'].includes(a.kind))
     .map((a) => a.kind);
   return {
-    band: `${established.length} established assertion(s)${established.length ? ` (${[...new Set(established)].join(', ')})` : ''}; ${unsettled} inference or unknown`,
+    band: `${established.length} established assertion(s)${established.length ? ` (${[...new Set(established)].join(', ')})` : ''}; ${unsettled} inference or unknown; `
+      + 'not ranked, because an assertion\'s kind is what the candidate claims about itself, and a count of self-claims would reward the candidate that claims most',
     kinds: Object.fromEntries([...kinds.entries()].sort()),
   };
 }
 
 function disclosedDependencies(candidate) {
   const problems = dependencyProblems(candidate.content.steps);
-  return { band: problems.length === 0 ? 'each step lists the step before it, as the sequential runner works' : problems.join('; ') };
+  return {
+    band: `${problems.length === 0 ? 'each step lists the step before it, as the sequential runner works' : problems.join('; ')}; `
+      + 'not ranked, because a dependency structure that is wrong is a gate and one that is right leaves nothing to compare',
+  };
 }
 
-function disclosedCapabilities(candidate) {
+// The registry answers this, not the candidate: what a step needs is the action it names, and whether
+// that action can check itself is something only the live registry knows. A candidate's own claim about
+// its verifiers is a claim, and printing it as a fact would let an approach describe itself as safer
+// than the registry says it is.
+function disclosedCapabilities(candidate, { registry }) {
+  const parts = candidate.content.steps.map((s) => {
+    const def = registry.get(s.action);
+    const permission = def?.permission ?? 'unregistered';
+    return `${s.action} (${permission}${typeof def?.verify === 'function' ? ', has its own verifier' : ', no verifier'})`;
+  });
   return {
-    band: candidate.capabilities.map((k) => `${k.action} (${k.permission}${k.hasVerifier ? ', has its own verifier' : ', no verifier'})`).join(', '),
+    band: `${parts.join(', ')}; `
+      + 'not ranked, because a capability the registry refuses is a gate, not a drawback, and the verifier count is already ranked',
   };
 }
 
@@ -267,26 +407,39 @@ function disclosedVerification(candidate, { registry, goal }) {
     .map((s) => s.criterionId);
   const missing = wanted.filter((id) => !carried.includes(id));
   return {
-    band: noVerifier.length > 0
+    band: `${noVerifier.length > 0
       ? `no independent verifier for ${noVerifier.join(', ')}`
-      : `every step is re-checked by its own action's verifier${wanted.length ? `; the goal's recorded evidence condition is carried for ${carried.join(', ') || 'no criterion'}${missing.length ? ` and not for ${missing.join(', ')}, which has no step of its own here` : ''}` : ''}`,
+      : `every step is re-checked by its own action's verifier${wanted.length ? `; the goal's recorded evidence condition is carried for ${carried.join(', ') || 'no criterion'}${missing.length ? ` and not for ${missing.join(', ')}, which has no step of its own here` : ''}` : ''}`}; `
+      + 'the verifier count is ranked as verification_quality; the evidence conditions are reported here, because asking for evidence is not a quantity to trade against a count',
   };
 }
 
-// A blocker is whatever the goal record and the handed evidence say it is; this says whether the
-// candidate states what is on record, rather than quietly dropping an obstacle from the plan text.
-function disclosedBlockers(candidate, { goal, evidence }) {
-  const recorded = [
-    ...(goal?.blockers ?? []).map((b) => singleLine(b?.text ?? '', MAX_PRECONDITION_CHARS)),
-    ...(evidence?.knownBlockers ?? []).map((b) => singleLine(String(b), MAX_PRECONDITION_CHARS)),
-  ].filter((t) => t.length > 0);
-  if (recorded.length === 0) return { band: 'no blocker is on record for this goal or this generation' };
-  const stated = candidate.content.preconditions.filter((p) => recorded.some((b) => p.includes(b)));
-  return {
-    band: stated.length === recorded.length
-      ? `${recorded.length} blocker(s) on record, each stated in the candidate's own preconditions`
-      : `${recorded.length} blocker(s) on record, ${stated.length} of them stated in the preconditions`,
-  };
+// What the records say stands in the way, and what any of it does to this approach. The classes are
+// printed because they mean different things: one stops the work, one is evidence about an obstacle,
+// one is an obstacle whose record has gone. A candidate's own precondition text is not trusted here -
+// the ledger and the steps are read again.
+function disclosedBlockers(candidate, { constraints, finding }) {
+  const counts = new Map();
+  for (const c of constraints?.constraints ?? []) counts.set(c.class, (counts.get(c.class) ?? 0) + 1);
+  const on = [...counts.entries()].sort().map(([cls, n]) => `${n} ${cls}`).join(', ');
+  if (!on) {
+    return { band: 'no blocker, prerequisite, dependency, or evidence condition is recorded on this goal for the comparison to answer; nothing here is ranked, because a record that stops work is a gate and one that does not is context' };
+  }
+  const parts = [`${on} on record`];
+  if (finding.blockedBy.length > 0) {
+    parts.push(`this approach is stopped by ${finding.blockedBy.map((b) => `${b.class} ${b.id} at ${b.steps.join(', ')}`).join('; ')}`);
+  } else if (finding.notApplicable.length > 0) {
+    parts.push(`${finding.notApplicable.map((b) => `${b.id} (${b.capability})`).join(', ')} name a capability no step here uses`);
+  } else {
+    parts.push('nothing on the record stops this approach');
+  }
+  const carried = candidate.content.preconditions.filter((p) => (constraints?.constraints ?? [])
+    .some((c) => c.field === 'blockers' || c.field === 'prerequisites' ? p.includes(c.text) : false));
+  const stated = (constraints?.constraints ?? []).filter((c) => c.field === 'blockers' || c.field === 'prerequisites').length;
+  if (stated > 0) {
+    parts.push(`stated in its own preconditions: ${carried.length} of the ${stated} recorded obstacle(s) or condition(s)`);
+  }
+  return { band: `${parts.join('; ')}; reported, not ranked - a record that stops this approach has already stopped it at the gate` };
 }
 
 // ---- comparison -------------------------------------------------------------
@@ -316,6 +469,9 @@ function assess(candidate, context) {
   ranked.step_risk = dimensionRisk(candidate);
   ranked.reversibility = dimensionReversibility(candidate, context);
   ranked.resource_requirements = dimensionResources(candidate);
+  ranked.verification_quality = dimensionVerification(candidate, context);
+  ranked.recorded_outcome_history = dimensionOutcomeHistory(candidate, context);
+  ranked.approved_adaptation_fit = dimensionGuidance(candidate, context);
   const disclosed = {};
   disclosed.goal_alignment = disclosedAlignment(candidate, context);
   disclosed.evidence_sufficiency = disclosedEvidence(candidate, context);
@@ -353,8 +509,11 @@ function dominance(rows) {
 
 // Evaluate a generated candidate set. `result` is what `candidatesForGoal` or `revisedCandidates`
 // returned; `goal` is the goal as it is recorded now, so a stale candidate is caught rather than
-// ranked; `evidence` may name actions this generation must not offer and blockers on record.
-export function evaluateCandidates({ result, goal, registry, evidence = null } = {}) {
+// ranked; `evidence` may name actions this generation must not offer and blockers on record;
+// `constraints` is the ledger of what the records say stands in the way, and is built from the goal
+// when the caller has not handed one; `outcomes` is what the caller read of past runs of these
+// capabilities (`src/plans/outcomes.js`) - `null` says nobody read, which ranks nothing.
+export function evaluateCandidates({ result, goal, registry, evidence = null, constraints = null, guidance = null, outcomes = null, goalEvidence = null } = {}) {
   if (!result || typeof result !== 'object' || !Array.isArray(result.candidates)) {
     return {
       ok: false,
@@ -367,6 +526,7 @@ export function evaluateCandidates({ result, goal, registry, evidence = null } =
       excluded: [],
       front: [],
       behind: [],
+      outcomesRead: outcomesAudit(outcomes),
       whatWouldSettleIt: [],
     };
   }
@@ -382,6 +542,7 @@ export function evaluateCandidates({ result, goal, registry, evidence = null } =
       excluded: [],
       front: [],
       behind: [],
+      outcomesRead: outcomesAudit(outcomes),
       whatWouldSettleIt: [],
     };
   }
@@ -392,12 +553,32 @@ export function evaluateCandidates({ result, goal, registry, evidence = null } =
     requiredOpen: openRequiredCriteria(goal),
     suggestedOpen: openSuggestedCriteria(goal),
     unavailable: new Set((evidence?.unavailableActions ?? []).map(String)),
+    // Built from the goal as it is recorded now, and from the records the caller read about it: an
+    // older ledger would let a cleared obstacle keep refusing work, or a new one let a plan walk into
+    // it. A caller that has read more hands the richer ledger; neither answer is allowed to be silent
+    // about what it could not check.
+    constraints: constraints ?? constraintLedger({ goal, registry, evidence }),
+    // The user's own approved guidance, as shaped records the caller read. Handed in rather than read
+    // here, because the comparison must be reproducible by a reader that cannot open the store - and
+    // when nothing is handed, nothing is claimed: the dimension reports that no guidance was read
+    // instead of treating an unread store as an empty one.
+    guidance: guidance ?? emptyGuidance('no guidance read was handed to this comparison', result.candidates),
+    // What past runs of these capabilities left on record, as the caller read it - the same reasoning
+    // as the guidance above: handed in rather than read here, so any reader can reproduce the ranking,
+    // and an absent read is reported as absent rather than counted as a clean history.
+    outcomes,
+    // Whether a goal the record calls completed still rests on the evidence it was closed against.
+    // Handed in, like the guidance and the outcomes above: the comparison cannot open the knowledge or
+    // audit stores itself, and `goal_still_open` says which of the two answers it was given.
+    goalEvidence,
   };
   const rows = result.candidates.map((candidate) => {
+    const constraintGate = gateConstraints(candidate, context);
     const gates = {
       candidate_validation: gateCandidateValidation(candidate, context),
       dependency_structure: gateDependencyStructure(candidate),
       capability_available_now: gateCapabilityAvailable(candidate, context),
+      constraints_satisfied: constraintGate,
       plan_bounds: gatePlanBounds(candidate),
       goal_still_open: gateGoalStillOpen(candidate, context),
     };
@@ -414,7 +595,8 @@ export function evaluateCandidates({ result, goal, registry, evidence = null } =
       gates,
       failedGates: failed,
       included: failed.length === 0,
-      assessed: assess(candidate, context),
+      constraints: constraintGate.finding,
+      assessed: assess(candidate, { ...context, finding: constraintGate.finding }),
     };
   });
   const included = rows.filter((r) => r.included);
@@ -477,6 +659,22 @@ export function evaluateCandidates({ result, goal, registry, evidence = null } =
     rankedDimensions: RANKED_DIMENSIONS,
     disclosedDimensions: DISCLOSED_DIMENSIONS,
     gates: GATES,
+    constraints: context.constraints,
+    guidance: context.guidance,
+    // Whether the past runs of these capabilities were read at all, and what that read covered. The
+    // audit line carries it so a reader can see that a ranking which used no history did not use a
+    // clean history either.
+    outcomesRead: outcomesAudit(context.outcomes),
+    // The same discipline for a completed goal: what the re-read of its evidence said, or that nobody
+    // re-read it. An audit line is not proof that it was checked unless it can say which happened.
+    goalEvidenceRead: context.goalEvidence ? {
+      completed: context.goalEvidence.completed,
+      checked: context.goalEvidence.checked,
+      holds: context.goalEvidence.holds,
+      withdrawn: context.goalEvidence.withdrawn.map((w) => w.criterionId),
+      unsupported: context.goalEvidence.unsupported.map((u) => u.criterionId),
+      uncheckable: context.goalEvidence.uncheckable.length,
+    } : null,
     candidates: rows,
     included: included.map((r) => r.strategy),
     excluded: excluded.map((r) => ({ strategy: r.strategy, digest: r.digest, failedGates: r.failedGates })),
@@ -511,6 +709,12 @@ export function evaluateCandidates({ result, goal, registry, evidence = null } =
       ...(unresolved && tradeOffs.length > 0 ? ['which of these matters more to the user: settling more of the goal\'s recorded criteria, or recording and risking less'] : []),
       ...(unresolved && tradeOffs.length === 0 ? ['nothing in the records separates these candidates on the ranked dimensions; the choice rests on their text, which a comparison of recorded facts cannot weigh'] : []),
       ...(cannotChoose && rows.length > 0 ? ['what is wrong with each candidate, per gate, is listed above; nothing can be ranked until one of them passes every gate'] : []),
+      // A gating record is the thing to change, so its own resolution is printed as the answer to
+      // "what would settle this" - not a suggestion about the work, but what the record says clears it.
+      ...context.constraints.gating.map((id) => {
+        const c = context.constraints.constraints.find((item) => item.id === id);
+        return `the record that gates work: ${c.class} ${c.id} ("${c.text}") - ${c.resolution}`;
+      }),
       ...(context.requiredOpen.length === 0 ? ['the goal records no open required criterion: which criteria does the user make required?'] : []),
       ...(result.unaddressed?.length ? [`a criterion no registered capability can carry: ${result.unaddressed.map((u) => `${u.criterionId ?? '-'} ("${u.text}")`).join(', ')}`] : []),
       ...(result.assumedFromGoalRequest?.length ? [`a criterion whose own words name no capability: ${result.assumedFromGoalRequest.map((a) => `${a.criterionId ?? '-'} ("${a.text}")`).join(', ')}`] : []),

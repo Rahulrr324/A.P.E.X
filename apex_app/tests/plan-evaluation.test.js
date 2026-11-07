@@ -280,12 +280,28 @@ test('a real candidate set is compared under a disclosed rule, and nothing about
     assert.equal(ranked(only, 'reversibility').band, 'appends 1 record(s); a later record corrects what was written, nothing erases it');
     assert.equal(ranked(only, 'resource_requirements').band, '2 step(s), 1 of them a write; no recorded duration, so no effort estimate');
     assert.deepEqual(ranked(only, 'resource_requirements').value, [1, 2]);
-    assert.equal(disclosed(only, 'goal_alignment').band, 'leaves the APEX suggestion c3 out of the approach');
-    assert.equal(disclosed(only, 'evidence_sufficiency').band, '1 established assertion(s) (user_fact); 2 inference or unknown');
-    assert.equal(disclosed(only, 'dependency_validity').band, 'each step lists the step before it, as the sequential runner works');
-    assert.equal(disclosed(only, 'capability_availability').band, 'memory.add (write, has its own verifier), memory.search (read, has its own verifier)');
-    assert.equal(disclosed(only, 'expected_verification_quality').band, "every step is re-checked by its own action's verifier");
-    assert.equal(disclosed(only, 'known_blockers').band, 'no blocker is on record for this goal or this generation');
+    // The two dimensions Batch AM added to the ordering. Both are counts of records, both reach zero
+    // for these approaches, and the second one is not read at all here - which is reported as not read
+    // rather than as a clean history.
+    assert.equal(ranked(only, 'verification_quality').band, 'no step is left without its action\'s own verifier (2 step(s), each re-checked independently)');
+    assert.equal(ranked(only, 'verification_quality').value, 0);
+    assert.equal(ranked(only, 'verification_quality').invert, true);
+    assert.equal(ranked(only, 'recorded_outcome_history').band,
+      'no recorded step outcome was handed to this comparison, so what past runs did ranks nothing');
+    assert.equal(ranked(only, 'recorded_outcome_history').value, null);
+    assert.deepEqual(evaluation.outcomesRead, { read: false, records: 0, plans: 0, truncated: false, capabilities: [] });
+    assert.equal(disclosed(only, 'goal_alignment').band,
+      'leaves the APEX suggestion c3 out of the approach; not ranked, because what the approach settles is already counted by criterion_coverage');
+    assert.equal(disclosed(only, 'evidence_sufficiency').band,
+      '1 established assertion(s) (user_fact); 2 inference or unknown; not ranked, because an assertion\'s kind is what the candidate claims about itself, and a count of self-claims would reward the candidate that claims most');
+    assert.equal(disclosed(only, 'dependency_validity').band,
+      'each step lists the step before it, as the sequential runner works; not ranked, because a dependency structure that is wrong is a gate and one that is right leaves nothing to compare');
+    assert.equal(disclosed(only, 'capability_availability').band,
+      'memory.add (write, has its own verifier), memory.search (read, has its own verifier); not ranked, because a capability the registry refuses is a gate, not a drawback, and the verifier count is already ranked');
+    assert.equal(disclosed(only, 'expected_verification_quality').band,
+      'every step is re-checked by its own action\'s verifier; the verifier count is ranked as verification_quality; the evidence conditions are reported here, because asking for evidence is not a quantity to trade against a count');
+    assert.equal(disclosed(only, 'known_blockers').band,
+      'no blocker, prerequisite, dependency, or evidence condition is recorded on this goal for the comparison to answer; nothing here is ranked, because a record that stops work is a gate and one that does not is context');
 
     // The two three-step approaches record the same work in a different order, so the rule can put one
     // ahead of the other on nothing - and the shorter plan is ahead on the one dimension that differs.
@@ -361,7 +377,10 @@ test('a capability gate excludes a candidate and names what is wrong; it does no
     assert.deepEqual(failedGateNames(unreg), ['capability_available_now']);
     assert.equal(unreg.gates.capability_available_now.detail, 's2: vault.archive is not registered in this configuration');
     // The excluded row is still described honestly, including that no registered action backs the step.
-    assert.equal(disclosed(unreg, 'expected_verification_quality').band, 'no independent verifier for s2');
+    assert.equal(disclosed(unreg, 'expected_verification_quality').band,
+      'no independent verifier for s2; the verifier count is ranked as verification_quality; the evidence conditions are reported here, because asking for evidence is not a quantity to trade against a count');
+    assert.equal(ranked(unreg, 'verification_quality').band, 's2 names an action with no independent verifier, so its completion rests on the action returning');
+    assert.equal(ranked(unreg, 'verification_quality').value, 1);
 
     // An action that is registered but that a plan may not contain.
     const unplannable = variant(base, (c) => { c.content.steps[0].action = 'memory.correct'; });
@@ -601,16 +620,45 @@ test('the comparison ranks recorded facts, and says so when the records do not r
     });
     const row = rowOf(evaluateCandidates({ result: fxResult([carried]), goal: withEvidence, registry }), 'carries_one_condition');
     assert.equal(disclosed(row, 'expected_verification_quality').band,
-      "every step is re-checked by its own action's verifier; the goal's recorded evidence condition is carried for c1 and not for c2, which has no step of its own here");
-    assert.equal(disclosed(row, 'goal_alignment').band, 'leaves required c2 out of the approach');
+      "every step is re-checked by its own action's verifier; the goal's recorded evidence condition is carried for c1 and not for c2, which has no step of its own here; "
+      + 'the verifier count is ranked as verification_quality; the evidence conditions are reported here, because asking for evidence is not a quantity to trade against a count');
+    assert.equal(disclosed(row, 'goal_alignment').band,
+      'leaves required c2 out of the approach; not ranked, because what the approach settles is already counted by criterion_coverage');
 
-    // Blockers are reported as what is on record and what the candidate itself states.
+    // A blocker the user recorded on the goal is an answer the comparison has to give, not a line of
+    // text to carry along: an obstacle that names nothing stops every approach for that goal until the
+    // record clears it, and the exclusion names the record, the steps, the reason and the resolution.
     const blocked = fxGoal({ blockers: [{ text: 'the archive service is offline' }] });
     const ignoring = fxCandidate(registry, blocked, { strategy: 'ignores_the_blocker', steps: [fxStep('s1', 'memory.add')], covered: ['c1'] });
     const stating = variant(ignoring, (c) => { c.strategy = 'states_the_blocker'; c.content.preconditions = ['the archive service is offline']; });
     const compared = evaluateCandidates({ result: fxResult([ignoring, stating]), goal: blocked, registry });
-    assert.equal(disclosed(rowOf(compared, 'ignores_the_blocker'), 'known_blockers').band, '1 blocker(s) on record, 0 of them stated in the preconditions');
-    assert.equal(disclosed(rowOf(compared, 'states_the_blocker'), 'known_blockers').band, '1 blocker(s) on record, each stated in the candidate\'s own preconditions');
+    assert.deepEqual(compared.excluded.map((e) => e.strategy), ['ignores_the_blocker', 'states_the_blocker'],
+      'a blocker on record stops the work, whether or not the candidate mentions it');
+    assert.deepEqual(compared.excluded[0].failedGates.map((g) => g.gate), ['constraints_satisfied'],
+      'mentioning an obstacle in the preconditions is not the same as avoiding it');
+    assert.match(compared.excluded[0].failedGates[0].detail, /confirmed_blocker con-[0-9a-f]{12} \("the archive service is offline"\) stops every step of this approach/);
+    assert.match(compared.excluded[0].failedGates[0].detail, /the user's own words, recorded as a blocker on goal/);
+    assert.match(compared.excluded[0].failedGates[0].detail, /what would clear it: /);
+    assert.equal(compared.reason, 'every-candidate-gated');
+    assert.equal(compared.front.length, 0, 'nothing that is stopped can be ranked');
+    assert.match(disclosed(rowOf(compared, 'states_the_blocker'), 'known_blockers').band,
+      /^1 confirmed_blocker on record; this approach is stopped by confirmed_blocker con-[0-9a-f]{12} at every step of this approach/);
+
+    // Applicability is part of what a record has to establish. A blocker that names a capability no
+    // step of a plan uses stops that plan not at all, and the disclosure says so in those terms.
+    const bound = fxGoal({ blockers: [{ text: 'memory.search is disabled on this machine' }] });
+    const elsewhere = fxCandidate(registry, bound, { strategy: 'writes_only', steps: [fxStep('s1', 'memory.add')], covered: ['c1'] });
+    const unaffected = evaluateCandidates({ result: fxResult([elsewhere]), goal: bound, registry });
+    assert.deepEqual(unaffected.included, ['writes_only'], 'a blocker naming a capability no step uses does not gate the plan');
+    assert.match(disclosed(rowOf(unaffected, 'writes_only'), 'known_blockers').band,
+      /con-[0-9a-f]{12} \(memory\.search\) name a capability no step here uses/);
+    const here = fxCandidate(registry, bound, {
+      strategy: 'uses_it',
+      steps: [fxStep('s1', 'memory.search', { risk: 'low', reversibility: 'read_only' })],
+      covered: ['c2'],
+    });
+    const gated = evaluateCandidates({ result: fxResult([here]), goal: bound, registry });
+    assert.match(gated.excluded[0].failedGates[0].detail, /stops s1 -/, 'the exclusion names the step the blocker stops');
 
     // An effort estimate appears only where durations were recorded, and is then stated as recorded.
     const measured = variant(ignoring, (c) => {
@@ -665,7 +713,8 @@ test('the comparison ranks recorded facts, and says so when the records do not r
     assert.equal(ranked(rowOf(unclear, 'suggestions_only'), 'criterion_coverage').band, 'the goal records no open required criterion, so nothing is compared here');
     assert.equal(ranked(rowOf(unclear, 'suggestions_only'), 'uncertainty').band, 'no required criterion is left unmatched, unaddressed, or outside the plan bound');
     assert.ok(unclear.whatWouldSettleIt.includes('the goal records no open required criterion: which criteria does the user make required?'));
-    assert.equal(disclosed(rowOf(unclear, 'suggestions_only'), 'goal_alignment').band, 'takes on every open criterion its approach covers');
+    assert.equal(disclosed(rowOf(unclear, 'suggestions_only'), 'goal_alignment').band,
+      'takes on every open criterion its approach covers; not ranked, because what the approach settles is already counted by criterion_coverage');
   } finally {
     cleanup(dir);
   }
@@ -892,7 +941,7 @@ test('the same goal, registry and constraint give the same comparison, and the r
       assert.equal(data.goalRevision, goal.revision);
       assert.equal(data.work, null);
       assert.deepEqual(data.cannotUse, []);
-      assert.match(step.verification.detail, /^3 candidate\(s\) reproduce byte for byte from the recorded goal and the live registry; the store holds 0 draft\(s\) for this goal, none added by this read/);
+      assert.match(step.verification.detail, /^3 candidate\(s\) reproduce byte for byte from the recorded goal, the live registry, and the constraints its records state; the store holds 0 draft\(s\) for this goal, none added by this read/);
       assert.match(step.display, /These are drafts on screen\. Recording one is plan\.add, approving it is plan\.approve, and both are user acts\./);
       assert.match(step.display, /No effort estimate appears above because the audit log holds no per-action duration to average; a number here would be a guess\./);
       assert.match(step.display, /The plan store holds 0 draft candidate\(s\) for this goal of at most 3, and 0 live plan\(s\)/);
@@ -1124,10 +1173,16 @@ test('an evaluation handed a candidate set and no goal or registry refuses rathe
     assert.equal(orphan.reason, 'every-candidate-gated');
     assert.equal(orphan.goalRevision, null);
 
-    // A completed goal is the same refusal, named as its own state.
+    // A closed goal is the same refusal, named as its own state. Batch AM added one distinction inside
+    // it: a completed goal is the only closure that rests on recorded evidence, so when nobody re-read
+    // that evidence the gate says so instead of implying the proof was checked.
     for (const status of ['completed', 'failed', 'superseded']) {
       const closed = evaluateCandidates({ result: fxResult([candidate]), goal: fxGoal({ status }), registry: app.registry });
-      assert.equal(closed.candidates[0].gates.goal_still_open.detail, `the goal is ${status}, so this candidate plans work that is no longer open`);
+      const suffix = status === 'completed'
+        ? ' (the completion evidence was not re-read by this comparison)'
+        : '';
+      assert.equal(closed.candidates[0].gates.goal_still_open.detail,
+        `the goal is ${status}, so this candidate plans work that is no longer open${suffix}`);
     }
 
     // A blocked goal is still open work, so it is not gated - and the band says which state it is in.

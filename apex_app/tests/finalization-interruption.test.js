@@ -98,6 +98,9 @@ describe('AB-5 an operation interrupted before its audit append', () => {
       path: path.join(dir, 'experiences.jsonl'),
       records: 0, experiences: 0, recordedByUser: 0, capturedAutomatically: 0,
       unknownCapture: 0, feedback: 0, adaptations: 0, decisions: 0, retirements: 0,
+      // Batch AM: the shapes a user records on an approved rule are counted here, so a restart that
+      // holds none says so rather than leaving the field out and letting a reader guess.
+      guidance: 0,
       activeAdaptations: 0, corrupt: 0,
     });
 

@@ -27,12 +27,15 @@ import { TaskStatus, StepStatus } from '../tasks/model.js';
 import { buildTaskSummary, taskStateSignature } from '../tasks/summary.js';
 import { renderTask, renderTaskList, explainTask } from '../tasks/format.js';
 import { renderAssessment, renderGoal, renderGoalList } from '../goals/format.js';
-import { assessGoal } from '../goals/assess.js';
+import { assessGoal, completionConsistency } from '../goals/assess.js';
 import { GoalStatus, goalProgress, isOpenStatus } from '../goals/model.js';
 import { renderPlan, renderPlanList } from '../plans/format.js';
 import { PlanStatus, isOpenPlan, planProgress, validatePlanContent } from '../plans/model.js';
 import { assessPlanValidity, renderValidity } from '../plans/validity.js';
+import { constraintLedger, readConstraintRecords } from '../plans/constraints.js';
+import { outcomesForGoal } from '../plans/outcomes.js';
 import { comparePlanVersions, renderComparison } from '../plans/history.js';
+import { continuationAudit, continuationOf, renderContinuation as renderPlanContinuation } from '../plans/continuation.js';
 import { buildContinuation, renderContinuation } from '../continuation/engine.js';
 import { ProposalStatus, PROPOSAL_KINDS, proposalStatus } from '../proposals/model.js';
 import { assessProposal } from '../proposals/apply.js';
@@ -1333,6 +1336,17 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, 'The retirement may have been recorded, but its audit record could not be written; it is not reported as verified success.');
   }
 
+  // The shape the user gave one approved rule. It is its own capability because it is the only act that
+  // lets a recorded adaptation say anything about the order future work is compared in, and it is the
+  // user's own act or it says nothing at all.
+  async adaptationGuide({ target, order = null, avoid = [], prefer = [], maxSteps = null, reason = null } = {}) {
+    const op = this.#experienceOp('adaptation.guide');
+    const step = await this.runAction('adaptation.guide', {
+      target, order, avoid, prefer, maxSteps, reason,
+    }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The guidance shape may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
   async adaptationList({ limit, includeRetired } = {}) {
     const op = this.#experienceOp('adaptation.list');
     const input = { limit: limit ?? 20 };
@@ -2033,10 +2047,23 @@ export class CognitiveController {
     return renderGoalList(limit ? goals.slice(0, limit) : goals);
   }
 
+  // A completed goal is a claim about evidence, and evidence lives in other stores: an operation the
+  // audit log holds, a knowledge record that can be retracted or superseded afterwards. So `goal show`
+  // re-opens what the completion was granted on and prints what it finds - it changes nothing, and the
+  // record it read stays exactly as it was. A goal that is not completed costs no extra read.
   async showGoal(ref) {
     this.#requireGoals();
     const goal = await this.goals.resolve(ref);
-    return { goal, display: renderGoal(goal) };
+    let completion = null;
+    if (goal.status === GoalStatus.COMPLETED) {
+      const assessment = await assessGoal(goal, {
+        knowledge: this.knowledge ?? null,
+        operations: this.operations ?? null,
+        plans: this.plans ?? null,
+      });
+      completion = completionConsistency(goal, assessment);
+    }
+    return { goal, completion, display: renderGoal(goal, { completion }) };
   }
 
   // Read-only: re-opens the audit operations and knowledge records the goal cites and reports
@@ -2053,7 +2080,12 @@ export class CognitiveController {
       operations: this.operations ?? null,
       plans: this.plans ?? null,
     });
-    return { goal, assessment, display: renderAssessment(goal, assessment) };
+    return {
+      goal,
+      assessment,
+      completion: completionConsistency(goal, assessment),
+      display: renderAssessment(goal, assessment),
+    };
   }
 
   async planAdd({ goal = null, goalId = null, outcome, steps, preconditions = [], assertions = [], estimatedSeconds = null, reason = null } = {}) {
@@ -2573,8 +2605,25 @@ export class CognitiveController {
       );
     }
     // The generator and evaluator the read itself used, with the same inputs it used, so the step
-    // content beside this answer is the content the digests were taken over.
-    const evidence = { unavailableActions: [], knownBlockers: [] };
+    // content beside this answer is the content the digests were taken over - including the
+    // constraints, which are re-read here from this controller's own stores rather than copied from
+    // the answer being checked.
+    const evidence = { unavailableActions: [], knownBlockers: [], failedOperations: [] };
+    const { cited: constraintRecords, dependencies: constraintDependencies } = await readConstraintRecords({
+      goal: target,
+      registry: this.registry,
+      goals: this.goals,
+      knowledge: this.knowledge,
+      memory: this.memory,
+      experience: this.experience,
+    });
+    const constraints = constraintLedger({
+      goal: target,
+      registry: this.registry,
+      evidence: via === 'replan' ? { failedOperations: data.failedOperations ?? [] } : evidence,
+      cited: constraintRecords,
+      dependencies: constraintDependencies,
+    });
     const generated = via === 'replan'
       ? revisedCandidates({
         goal: target,
@@ -2582,13 +2631,21 @@ export class CognitiveController {
         prior: plan,
         evidence: { unavailableActions: [], knownBlockers: [], failedOperations: data.failedOperations ?? [] },
         reason: data.reason ?? input.reason,
+        constraints,
       })
-      : candidatesForGoal({ goal: target, registry: this.registry, evidence, workText: data.work ?? workText ?? null });
+      : candidatesForGoal({
+        goal: target, registry: this.registry, evidence, workText: data.work ?? workText ?? null, constraints,
+      });
     const evaluation = evaluateCandidates({
       result: generated,
       goal: target,
       registry: this.registry,
       evidence: via === 'replan' ? { unavailableActions: data.refusedActions ?? [], knownBlockers: [] } : evidence,
+      constraints,
+      // Re-read from this controller's own plan store, the same way the constraints above were: an
+      // independent ranking that did not look at the recorded step outcomes would be ranking against
+      // a history it never read.
+      outcomes: await outcomesForGoal(this.plans, { goalId: target.id ?? null }),
     });
     if ((evaluation.boundTo?.candidateSetDigest ?? null) !== (data.candidateSetDigest ?? null)) {
       return this.#planningStatement(
@@ -2856,14 +2913,16 @@ export class CognitiveController {
   }
 
   // The readiness of a recorded plan, from the plan itself, its live validity check, the task its
-  // activation names, the goal it is bound to, and - when a caller already has one - the outcome
-  // reading. Each of those is read here rather than assumed, and a record that cannot be read is
-  // reported as unreadable by the reading it feeds.
+  // activation names, the goal it is bound to, the continuation reading of that task's run, and - when
+  // a caller already has one - the outcome reading. Each of those is read here rather than assumed, and
+  // a record that cannot be read is reported as unreadable by the reading it feeds.
   async #planReadiness(plan, assessment = null) {
     let validity = null;
+    let validityRead = true;
     try {
       validity = (await this.validateStoredPlan(plan.id)).validity;
     } catch (err) {
+      validityRead = false;
       validity = { ok: false, checks: [], problems: [`live validity could not be checked: ${redactSecrets(err.message)}`] };
     }
     let goal = null;
@@ -2877,7 +2936,28 @@ export class CognitiveController {
         task = null;
       }
     }
-    return readinessOf({ plan, goal, task, validity, assessment });
+    // Only a run that began can be continued, so the reading is asked for when the plan names a task.
+    // `ready to continue` is a claim about steps proven never started, and the continuation derivation
+    // is the only record that makes it. Where the live validity check could not be run the reading is
+    // not built at all: its `continue.safe` folds that check in, and a reading built without it would
+    // say a run may be taken up on an approval, a registry and a goal nobody re-read. Readiness then
+    // states the plan's own records and nothing about taking the run up.
+    let continuation = null;
+    if (task && Array.isArray(task.steps) && validityRead) {
+      const inputs = await this.#continuationInputs(plan, validity);
+      continuation = continuationOf({
+        plan, task,
+        operations: inputs.operations,
+        registry: this.registry,
+        constraints: inputs.constraints,
+        validity,
+        lock: inputs.lock,
+        auditReadable: inputs.auditReadable,
+        goal: inputs.goal ?? goal,
+        now: this.now(),
+      });
+    }
+    return readinessOf({ plan, goal, task, validity, assessment, continuation });
   }
 
   async #executiveClarify(op, sid, signal) {
@@ -3753,6 +3833,333 @@ export class CognitiveController {
     return finish(step);
   }
 
+  // The records a continuation reading needs, gathered with the same bounded reads every other
+  // executive answer uses. A store that cannot be read is reported to the derivation as unreadable,
+  // which keeps an interrupted step unknown; it is never handed on as an empty one.
+  async #continuationInputs(plan, validity = null) {
+    const inputs = { operations: null, auditReadable: true, lock: null, constraints: null, validity: null, goal: null };
+    try {
+      const audit = await this.operations.inspect();
+      inputs.operations = audit.records;
+    } catch {
+      inputs.operations = null;
+      inputs.auditReadable = false;
+    }
+    try {
+      inputs.lock = this.taskStore && typeof this.taskStore.lockState === 'function'
+        ? await this.taskStore.lockState()
+        : null;
+    } catch {
+      inputs.lock = null;
+    }
+    if (plan.goalId && this.goals) {
+      try {
+        inputs.goal = await this.goals.get(plan.goalId);
+      } catch {
+        inputs.goal = null;
+      }
+    }
+    if (inputs.goal) {
+      try {
+        // The same ledger a candidate comparison reads: the goal's own recorded items, plus what a
+        // read of the stores says about the records those items cite. A continuation asks the gates
+        // the same question the comparison asked before the plan was approved, because the approval
+        // bound the bytes and not the world they were written against.
+        const { cited, dependencies } = await readConstraintRecords({
+          goal: inputs.goal,
+          registry: this.registry,
+          goals: this.goals,
+          knowledge: this.knowledge,
+          memory: this.memory,
+          experience: this.experience,
+        });
+        inputs.constraints = constraintLedger({
+          goal: inputs.goal,
+          registry: this.registry,
+          evidence: { unavailableActions: [], knownBlockers: [], failedOperations: [] },
+          cited,
+          dependencies,
+        });
+      } catch {
+        inputs.constraints = null;
+      }
+    }
+    try {
+      inputs.validity = validity ?? await assessPlanValidity(plan, {
+        goals: this.goals,
+        plans: this.plans,
+        operations: this.operations,
+        knowledge: this.knowledge,
+        memory: this.memory,
+        experience: this.experience,
+        worldModel: this.worldModel,
+        taskStore: this.taskStore,
+        now: this.now(),
+        forActivation: false,
+      });
+    } catch {
+      inputs.validity = null;
+    }
+    return inputs;
+  }
+
+  // Read-only: the nine-state reading of a plan's partially executed run, and what may be taken up.
+  // This command writes nothing except its own audit record of having answered.
+  async planContinuation(ref) {
+    const op = this.#newOp({ capability: 'plan.continuation', origin: 'user', request: 'plan continuation' });
+    const refuse = (message) => this.#finishCommandOp(op, {
+      action: 'plan.continuation',
+      origin: 'user',
+      input: {},
+      authorization: { decision: 'allow', reason: 'explicit user command' },
+      execution: { status: 'not_run' },
+      verification: { outcome: Outcome.INPUT_REJECTED, detail: null },
+      outcome: Outcome.INPUT_REJECTED,
+      summary: message,
+      display: message,
+      result: null,
+    }, 'The continuation reading may have been recorded, but its audit record could not be written.', { status: null });
+
+    let plan;
+    try {
+      this.#requirePlans();
+      this.#requireTasks();
+      plan = await this.plans.resolve(ref);
+      op.request = `plan continuation ${shortId(plan.id)}`;
+      if (!plan.activation?.taskId) {
+        return refuse(`plan ${shortId(plan.id)} was never activated, so no run of it was interrupted: ${plan.status === PlanStatus.DRAFT ? 'it has not been approved either' : 'start it with: node bin/apex.js plan start ' + shortId(plan.id)}`);
+      }
+    } catch (err) {
+      if (err instanceof ValidationError || err instanceof StoreError) return refuse(redactSecrets(err.message));
+      throw err;
+    }
+
+    let task;
+    try {
+      task = await this.taskStore.get(plan.activation.taskId);
+    } catch (err) {
+      if (err instanceof StoreError) return refuse(`${redactSecrets(err.message)}; the run it interrupted cannot be read, so nothing is claimed about it`);
+      throw err;
+    }
+    if (!task) return refuse(`the task ${shortId(plan.activation.taskId)} this plan activated is not in the task log, so this plan's run cannot be described`);
+
+    const inputs = await this.#continuationInputs(plan);
+    const continuation = continuationOf({
+      plan, task,
+      operations: inputs.operations,
+      registry: this.registry,
+      constraints: inputs.constraints,
+      validity: inputs.validity,
+      lock: inputs.lock,
+      auditReadable: inputs.auditReadable,
+      goal: inputs.goal,
+      now: this.now(),
+    });
+    const step = {
+      action: 'plan.continuation',
+      origin: 'user',
+      input: { planId: plan.id, taskId: task.id },
+      authorization: { decision: 'allow', reason: 'explicit user command' },
+      execution: { status: 'ok' },
+      verification: {
+        outcome: Outcome.SUCCESS_VERIFIED,
+        detail: `the states were derived from the task log, this plan's own operation records, the plan record, the live registry, and the goal's recorded constraints; the reading ran nothing and wrote nothing beyond this audit record`,
+      },
+      outcome: Outcome.SUCCESS_VERIFIED,
+      summary: `plan ${shortId(plan.id)}: the run is ${continuation.runState}; ${continuation.continue.runnable.length} step(s) may be taken up, ${continuation.continue.neverReplay.length} must not be run again`,
+      display: [renderPlanContinuation(continuation), renderPlan(plan)].join('\n'),
+      result: {
+        summary: `plan ${shortId(plan.id)}: ${continuation.runState}`,
+        data: { continuation, audit: continuationAudit(continuation) },
+      },
+    };
+    return this.#finishCommandOp(op, step, 'The continuation reading may have been recorded, but its audit record could not be written.', { status: null });
+  }
+
+  // Continues an interrupted or partially executed plan: the steps the records prove never started
+  // are taken up, and the steps that ran are left exactly where their own records hold them.
+  //
+  // The order is the guarantee. Everything is re-read first - the plan bytes, the approval that binds
+  // them, the registry, the goal's recorded constraints, the dependencies, the audit log, and the
+  // task lock - and a single failed revalidation refuses the continuation with the record that failed
+  // named. Only then is the run taken up, under the same task-store lock, the same per-step
+  // authorization and the same finalization order an ordinary run uses, and only for the steps the
+  // derivation proved may be taken up. A plan whose bytes or approval moved is not retried harder
+  // here: it needs a fresh approval, which is a different user act on different bytes.
+  async planContinue(ref) {
+    const op = this.#newOp({ capability: 'plan.continue', origin: 'user', request: 'plan continue' });
+    const refuse = (message, extra = null) => this.#finishCommandOp(op, {
+      action: 'plan.continue',
+      origin: 'user',
+      input: {},
+      authorization: { decision: 'allow', reason: 'explicit user command' },
+      execution: { status: 'not_run' },
+      verification: { outcome: Outcome.INPUT_REJECTED, detail: null },
+      outcome: Outcome.INPUT_REJECTED,
+      summary: message,
+      display: [message, extra ? renderPlanContinuation(extra) : null].filter(Boolean).join('\n'),
+      result: null,
+    }, 'The continuation may have run, but its audit record could not be written.', { status: null });
+
+    let plan;
+    let task;
+    try {
+      this.#requirePlans();
+      this.#requireTasks();
+      plan = await this.plans.resolve(ref);
+      op.request = `plan continue ${shortId(plan.id)}`;
+      if (!plan.activation?.taskId) {
+        return refuse(`this plan was never activated, so there is no interrupted run to continue: node bin/apex.js plan start ${shortId(plan.id)}`);
+      }
+      task = await this.taskStore.get(plan.activation.taskId);
+      if (!task) return refuse(`the task ${shortId(plan.activation.taskId)} this plan activated is not in the task log, so this continuation has nothing to take up`);
+    } catch (err) {
+      if (err instanceof ValidationError || err instanceof StoreError) return refuse(redactSecrets(err.message));
+      throw err;
+    }
+
+    const inputs = await this.#continuationInputs(plan);
+    const before = continuationOf({
+      plan, task,
+      operations: inputs.operations,
+      registry: this.registry,
+      constraints: inputs.constraints,
+      validity: inputs.validity,
+      lock: inputs.lock,
+      auditReadable: inputs.auditReadable,
+      goal: inputs.goal,
+      now: this.now(),
+    });
+    if (!before.continue.safe) {
+      const why = before.blockers.length > 0 ? before.blockers.join('; ') : 'no step of this run is established as never having started';
+      return refuse(`nothing was taken up, because the records do not establish that this run may be continued: ${why}`, before);
+    }
+
+    let result;
+    try {
+      result = await this.taskStore.withLock(() => this.tasks.run(task.id, { mode: 'continue' }));
+    } catch (err) {
+      if (err instanceof StoreError && err.executedSteps?.length) {
+        // A task-log write refused after steps ran. The steps that ran are evidence, and what the
+        // plan holds is read back rather than assumed - the same contract every other run has.
+        const current = await this.taskStore.get(err.taskId ?? task.id).catch(() => null);
+        const recorded = await this.#recordPlanOutcomes(plan.id, current);
+        return this.#finishTaskOp(op, Outcome.AUDIT_INTEGRITY_FAILED, [
+          `Plan ${shortId(plan.id)} was continued as task ${shortId(task.id)}, and ${err.executedSteps.length} step(s) ran.`,
+          this.#unrecordedTaskState(err),
+          recorded.error ? ` Plan outcomes were not recorded: ${redactSecrets(recorded.error.message)}.` : '',
+        ].join(''), current);
+      }
+      if (err.recovery) {
+        const current = await this.taskStore.get(err.taskId ?? task.id).catch(() => null);
+        await this.#recordTaskSummary(op, current, { recovery: err.recovery });
+      }
+      if (err instanceof ValidationError || err instanceof StoreError) {
+        return refuse(`the continuation was refused before it ran: ${redactSecrets(err.message)}`, before);
+      }
+      throw err;
+    }
+
+    // The outcomes this run established are recorded against the plan the same way a first run
+    // records them, and the plan's status follows what the records now hold. A continuation that
+    // left steps behind does not complete the plan, and does not call it failed either.
+    const recorded = await this.#recordPlanOutcomes(plan.id, result.task);
+    const notes = [];
+    if (recorded.error) notes.push(`The step outcomes were not recorded against the plan: ${redactSecrets(recorded.error.message)}.`);
+    let fresh = plan;
+    try {
+      fresh = await this.plans.get(plan.id) ?? plan;
+      const progress = planProgress(fresh);
+      if (!recorded.error && result.task.status === TaskStatus.COMPLETED && progress.completed === progress.total) {
+        if (fresh.status !== PlanStatus.COMPLETED) {
+          await this.plans.setStatus(plan.id, PlanStatus.COMPLETED, { reason: 'a continuation took up the steps that had never started, and every step now holds a verified operation' });
+          fresh = await this.plans.get(plan.id);
+          notes.push(`Plan ${shortId(plan.id)} is completed against ${progress.total} verified step outcome(s). No goal is completed by this: goals have their own criteria and evidence.`);
+        }
+      } else if (fresh.status === PlanStatus.ACTIVE) {
+        await this.plans.setStatus(plan.id, PlanStatus.BLOCKED, { reason: 'a continuation ran what the records proved had never started; what remains is held by steps whose own records do not establish that they may be run' });
+        fresh = await this.plans.get(plan.id);
+        notes.push(`Plan ${shortId(plan.id)} is blocked on the steps the continuation left where they were.`);
+      }
+    } catch (err) {
+      if (err instanceof ValidationError || err instanceof StoreError) {
+        notes.push(`The plan status was not updated: ${redactSecrets(err.message)}.`);
+      } else throw err;
+    }
+
+    const afterInputs = await this.#continuationInputs(fresh);
+    const after = continuationOf({
+      plan: fresh, task: result.task,
+      operations: afterInputs.operations,
+      registry: this.registry,
+      constraints: afterInputs.constraints,
+      validity: afterInputs.validity,
+      lock: afterInputs.lock,
+      auditReadable: afterInputs.auditReadable,
+      goal: afterInputs.goal,
+      now: this.now(),
+    });
+    const ran = result.continued ?? [];
+    const gaps = result.auditGaps.length;
+    if (gaps) {
+      op.errors.push({
+        stage: 'audit',
+        code: 'AUDIT_WRITE_FAILED',
+        message: `${gaps} step record(s) were not written to the operation log`,
+        steps: result.auditGaps,
+        underlyingStatus: result.underlyingStatus,
+      });
+    }
+    await this.#recordTaskSummary(op, result.task, { recovery: result.recovery, auditGaps: result.auditGaps });
+    const summary = ran.length === 0
+      ? `continued plan ${shortId(plan.id)}: no step was taken up, and the run stands where the records held it`
+      : `continued plan ${shortId(plan.id)}: ${ran.length} step(s) taken up (${ran.join(', ')}), ${after.continue.neverReplay.length} step(s) not run again`;
+    const step = {
+      action: 'plan.continue',
+      origin: 'user',
+      input: { planId: plan.id, taskId: task.id },
+      authorization: { decision: 'allow', reason: 'explicit user command' },
+      execution: { status: gaps ? 'partial' : 'ok' },
+      verification: {
+        outcome: gaps ? Outcome.AUDIT_INTEGRITY_FAILED : Outcome.SUCCESS_VERIFIED,
+        detail: gaps
+          ? `${gaps} step record(s) this continuation ran were not written to the audit log`
+          : `each step this continuation ran is re-read from its own operation record; the steps it refused to replay are recorded in the state they were found in`,
+      },
+      outcome: gaps ? Outcome.AUDIT_INTEGRITY_FAILED : (result.status === Outcome.SUCCESS_VERIFIED ? Outcome.PLAN_STORED : result.status),
+      summary,
+      display: [
+        summary,
+        renderPlanContinuation(before),
+        renderPlanContinuation(after),
+        ...notes,
+        `APEX runs only when a command runs: this continuation was the command, and no background process took any of this work up.`,
+        `Nothing here approves a plan, completes a goal, or runs a step that its own records did not establish as never started.`,
+      ].filter(Boolean).join('\n'),
+      result: {
+        summary,
+        data: {
+          before: continuationAudit(before),
+          after: continuationAudit(after),
+          ran,
+          auditGaps: result.auditGaps,
+          planStatus: fresh.status,
+          taskStatus: result.task.status,
+        },
+      },
+    };
+    op.steps.push(step);
+    return this.#finishTaskOp(op, step.outcome, step.display, result.task, {
+      before: step.result.data.before,
+      after: step.result.data.after,
+      ran,
+      // The CLI's audit notice reads `auditGaps` as a count, and an empty array is truthy there: a
+      // continuation that wrote every record would print a gap that never happened and exit non-zero.
+      auditGaps: gaps,
+      auditGapSteps: result.auditGaps,
+    });
+  }
+
   // Read-only recovery inspection. It reports what the records establish; it never resumes,
   // retries, approves, reconciles, or changes anything. A store that cannot be read is
   // reported as unavailable or damaged, never as empty.
@@ -3938,6 +4345,108 @@ export class CognitiveController {
     return { display: lines.join('\n'), attention, sections, problems };
   }
 
+  // The continuation readings the ranking is allowed to use, for the plans whose run began and has not
+  // been settled. One read of the audit log, one of the task lock and one constraint ledger per goal
+  // are shared by all of them, because `next` and `work` are reads the user runs to decide what to do
+  // now; opening the same logs once per plan would make this the slowest read APEX has.
+  //
+  // A plan is given a reading only when its own task can still be described: where the task record
+  // cannot be read or has no steps, the ranking says so from the plan and task records instead of
+  // claiming a continuation it never derived.
+  async #continuationReadings(plans, tasks) {
+    const readings = new Map();
+    const tasksById = new Map(tasks.map((t) => [t.id, t]));
+    const settled = new Set([TaskStatus.COMPLETED, TaskStatus.CANCELLED]);
+    const interrupted = plans.filter((p) => p.status === 'active'
+      && p.activation?.taskId
+      && tasksById.has(p.activation.taskId)
+      && !settled.has(tasksById.get(p.activation.taskId).status));
+    if (interrupted.length === 0) return readings;
+
+    let operations = null;
+    let auditReadable = true;
+    try {
+      operations = (await this.operations.inspect()).records;
+    } catch {
+      auditReadable = false;
+    }
+    let lock = null;
+    try {
+      lock = this.taskStore && typeof this.taskStore.lockState === 'function'
+        ? await this.taskStore.lockState()
+        : null;
+    } catch {
+      lock = null;
+    }
+    const ledgerByGoal = new Map();
+    for (const plan of interrupted) {
+      const task = tasksById.get(plan.activation.taskId);
+      if (!Array.isArray(task.steps)) continue;
+      let goal = null;
+      if (plan.goalId && this.goals) {
+        try {
+          goal = await this.goals.get(plan.goalId);
+        } catch {
+          goal = null;
+        }
+        if (goal && !ledgerByGoal.has(goal.id)) {
+          try {
+            const { cited, dependencies } = await readConstraintRecords({
+              goal,
+              registry: this.registry,
+              goals: this.goals,
+              knowledge: this.knowledge,
+              memory: this.memory,
+              experience: this.experience,
+            });
+            ledgerByGoal.set(goal.id, constraintLedger({
+              goal,
+              registry: this.registry,
+              evidence: { unavailableActions: [], knownBlockers: [], failedOperations: [] },
+              cited,
+              dependencies,
+            }));
+          } catch {
+            ledgerByGoal.set(goal.id, null);
+          }
+        }
+      }
+      let validity = null;
+      try {
+        validity = await assessPlanValidity(plan, {
+          goals: this.goals,
+          plans: this.plans,
+          operations: this.operations,
+          knowledge: this.knowledge,
+          memory: this.memory,
+          experience: this.experience,
+          worldModel: this.worldModel,
+          taskStore: this.taskStore,
+          now: this.now(),
+          forActivation: false,
+        });
+      } catch {
+        // A validity check that cannot run cannot be folded into a reading, and a reading without it
+        // would say a run may be taken up on a goal and a registry nobody re-read. The plan is then
+        // ranked as Batch AL ranked it: from its own record.
+        continue;
+      }
+      readings.set(plan.id, continuationOf({
+        plan,
+        task,
+        operations,
+        registry: this.registry,
+        constraints: goal ? ledgerByGoal.get(goal.id) ?? null : null,
+        validity,
+        lock,
+        auditReadable,
+        goal,
+        now: this.now(),
+      }));
+    }
+    return readings;
+  }
+
   // Read-only continuation recommendation. It reads the executive and task records, checks
   // every approved plan against live state, and ranks the work those records describe. It
   // starts nothing: the top recommendation is not permission and every mutating command it
@@ -4011,7 +4520,10 @@ export class CognitiveController {
       }
     }
 
-    const report = buildContinuation({ goals, plans, tasks, validityByPlan, now: this.now() });
+    const report = buildContinuation({
+      goals, plans, tasks, validityByPlan, now: this.now(),
+      continuationsByPlan: await this.#continuationReadings(plans, tasks),
+    });
     let display = renderContinuation(report, { limit, top });
     if (problems.length > 0) {
       display = [

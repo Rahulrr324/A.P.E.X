@@ -42,7 +42,7 @@ import { JsonlStore } from '../memory/jsonl-store.js';
 import { WriterLock } from '../memory/writer-lock.js';
 import { sha256Hex, tokenize } from '../memory/memory-store.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS, shortId } from '../util.js';
+import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { stableStringify } from '../tasks/model.js';
 import { OUTCOME_VALUES } from '../outcomes.js';
@@ -62,6 +62,7 @@ import {
   parseInstant,
   resolveWindow,
   summarizeTemporal,
+  temporalPreparation,
 } from './temporal.js';
 
 export const EXPERIENCE_SCHEMA = 1;
@@ -71,9 +72,23 @@ export const FEEDBACK_KIND = 'feedback';
 export const ADAPTATION_KIND = 'adaptation';
 export const DECISION_KIND = 'adaptation_decision';
 export const RETIREMENT_KIND = 'adaptation_retirement';
+export const GUIDANCE_KIND = 'adaptation_guidance';
 export const RECORD_KINDS = Object.freeze([
-  EXPERIENCE_KIND, FEEDBACK_KIND, ADAPTATION_KIND, DECISION_KIND, RETIREMENT_KIND,
+  EXPERIENCE_KIND, FEEDBACK_KIND, ADAPTATION_KIND, DECISION_KIND, RETIREMENT_KIND, GUIDANCE_KIND,
 ]);
+
+// The vocabulary an approved adaptation's guidance may be expressed in, and nothing else. Batch AM's
+// learning package needs recorded guidance to be able to change the order candidates are compared in,
+// and the only honest way to do that is to compare a candidate's *structure* against a structure the
+// user named. A rule's prose is the user's own words and stays visible forever; it is not parsed here,
+// because a ranking read out of free text would be APEX deciding what the user meant.
+//   - `reads_first`  - the steps that look come before the steps that write
+//   - `writes_first` - the reverse, for guidance about recording something before it is examined
+// `avoid` and `prefer` name capabilities; `maxSteps` bounds how many steps the guidance considers
+// whole. All four are optional: a guidance record that names nothing checks nothing, and says so.
+export const GUIDANCE_ORDERS = Object.freeze(['reads_first', 'writes_first']);
+export const MAX_GUIDANCE_NAMES = 4;
+export const MAX_GUIDANCE_STEPS = 8;
 
 // The feedback vocabulary. Every value is something a user can state about one recorded event;
 // none of them is inferred by APEX.
@@ -120,6 +135,7 @@ const PROVENANCE_BY_KIND = Object.freeze({
   [ADAPTATION_KIND]: { origin: 'deterministic_derivation', updateMode: CANDIDATE_UPDATE_MODE },
   [DECISION_KIND]: { origin: 'user_approval', updateMode: 'user_confirmed' },
   [RETIREMENT_KIND]: { origin: 'user_retirement', updateMode: 'user_confirmed' },
+  [GUIDANCE_KIND]: { origin: 'user_guidance', updateMode: 'user_confirmed' },
 });
 
 // An experience can arrive two ways, and the difference must stay visible forever: the user named
@@ -205,6 +221,17 @@ function validateRefList(values, label, max) {
   if (!Array.isArray(values)) throw new ValidationError(`${label} must be a list of record ids`);
   if (values.length > max) throw new ValidationError(`${label} may name at most ${max} records`);
   return values.map((value) => validateRef(value, label));
+}
+
+// A capability name in a guidance record is an identifier, so it is checked as one: the same shape the
+// derivation accepts for a scope, and nothing else. A reader comparing a candidate against the guidance
+// matches names exactly, so a name that only looks like one - prose, a path, a wildcard - would turn an
+// explicit instruction into a guess about which capability the user meant.
+function validateCapabilityName(value, label) {
+  if (typeof value !== 'string') throw new ValidationError(`${label} must hold capability names`);
+  const name = value.trim();
+  if (!isScopableCapability(name)) throw new ValidationError(`${label} holds "${singleLine(name, 40)}", which is not a capability name`);
+  return name;
 }
 
 function storedIdListProblem(value, name, max) {
@@ -354,6 +381,7 @@ export function validateExperienceRecord(r) {
   if (r.kind === ADAPTATION_KIND) return validateAdaptation(r);
   if (r.kind === DECISION_KIND) return validateDecision(r);
   if (r.kind === RETIREMENT_KIND) return validateRetirement(r);
+  if (r.kind === GUIDANCE_KIND) return validateGuidance(r);
   return 'unknown record kind';
 }
 
@@ -450,6 +478,30 @@ function validateRetirement(r) {
   return validateProvenance(r, RETIREMENT_KIND);
 }
 
+// A guidance record is allowed to name nothing but its own reason, because "I recorded the shape of
+// this guidance" is a real act; what it may not do is name a shape the readers cannot check. So the
+// fields are validated against the fixed vocabulary, not against each other, and an empty one is
+// inert by construction rather than an error.
+function validateGuidance(r) {
+  if (typeof r.id !== 'string' || !ID_RE.test(r.id)) return 'guidance record has missing or invalid id';
+  if (typeof r.targetId !== 'string' || !ID_RE.test(r.targetId)) return 'guidance record has missing or invalid targetId';
+  if (r.order !== null && !GUIDANCE_ORDERS.includes(r.order)) return `order must be one of: ${GUIDANCE_ORDERS.join(', ')}`;
+  for (const field of ['avoid', 'prefer']) {
+    const list = r[field];
+    if (!Array.isArray(list) || list.length > MAX_GUIDANCE_NAMES) return `${field} must be a list of at most ${MAX_GUIDANCE_NAMES} capability names`;
+    if (list.some((name) => typeof name !== 'string' || !CAPABILITY_RE.test(name))) return `${field} holds a name that is not a capability name`;
+    if (new Set(list).size !== list.length) return `${field} names the same capability twice`;
+  }
+  if (r.maxSteps !== null && (!Number.isInteger(r.maxSteps) || r.maxSteps < 1 || r.maxSteps > MAX_GUIDANCE_STEPS)) {
+    return `maxSteps must be null or an integer from 1 to ${MAX_GUIDANCE_STEPS}`;
+  }
+  const reason = optionalStoredTextProblem(r.reason, 'reason', MAX_REASON_CHARS);
+  if (reason) return reason;
+  const created = validateTimestamp(r.createdAt, 'createdAt');
+  if (created) return created;
+  return validateProvenance(r, GUIDANCE_KIND);
+}
+
 // ---- derived state ----------------------------------------------------------
 
 function splitRecords(records) {
@@ -458,14 +510,22 @@ function splitRecords(records) {
   const adaptations = [];
   const decisions = [];
   const retirements = [];
+  const guidance = [];
   for (const record of records) {
     if (record.kind === EXPERIENCE_KIND) experiences.push(record);
     else if (record.kind === FEEDBACK_KIND) feedback.push(record);
     else if (record.kind === ADAPTATION_KIND) adaptations.push(record);
     else if (record.kind === DECISION_KIND) decisions.push(record);
-    else retirements.push(record);
+    else if (record.kind === RETIREMENT_KIND) retirements.push(record);
+    else if (record.kind === GUIDANCE_KIND) guidance.push(record);
+    // A line that is none of the five kinds is damage, and `deriveStore` has reported it that way
+    // since Batch AD: it is counted by `health()` rather than filed under whichever kind happens to
+    // be the last branch, which is what an `else` here would have done to a guidance record's
+    // sibling.
   }
-  return { experiences, feedback, adaptations, decisions, retirements };
+  return {
+    experiences, feedback, adaptations, decisions, retirements, guidance,
+  };
 }
 
 // Every id named by a correction, followed transitively, so a chain retires each of its own earlier
@@ -556,6 +616,22 @@ function summarizeDecision(event) {
   };
 }
 
+// The shape of one guidance record, copied field by field rather than spread: a reader of an adaptation
+// must see the four things the user named and nothing the log did not say, and an absent field is
+// reported as null rather than as an empty list that reads like "avoid nothing in particular".
+function summarizeGuidance(event) {
+  return {
+    id: event.id,
+    order: event.order ?? null,
+    avoid: [...(event.avoid ?? [])],
+    prefer: [...(event.prefer ?? [])],
+    maxSteps: event.maxSteps ?? null,
+    reason: event.reason ?? null,
+    createdAt: event.createdAt,
+    operationId: event.provenance?.operationId ?? null,
+  };
+}
+
 function summarizeRetirement(event) {
   return {
     id: event.id,
@@ -621,10 +697,12 @@ function annotateAdaptations(index, { retiredExperiences, retiredFeedback }) {
   const feedbackById = new Map(index.feedback.map((r) => [r.id, r]));
   const retirementsByTarget = groupBy(index.retirements, (r) => r.targetId);
   const decisionsByTarget = groupBy(index.decisions, (r) => r.targetId);
+  const guidanceByTarget = groupBy(index.guidance ?? [], (g) => g.targetId);
 
   const annotated = index.adaptations.map((record) => {
     const events = decisionsByTarget.get(record.id) ?? [];
     const retirements = retirementsByTarget.get(record.id) ?? [];
+    const guidanceEvents = guidanceByTarget.get(record.id) ?? [];
     const latest = events.length > 0 ? events.at(-1) : null;
     const missingExperiences = record.support.experienceIds.filter((id) => !experiencesById.has(id));
     const missingFeedback = record.support.feedbackIds.filter((id) => !feedbackById.has(id));
@@ -659,6 +737,13 @@ function annotateAdaptations(index, { retiredExperiences, retiredFeedback }) {
       retirement: retirements.length === 1 ? summarizeRetirement(retirements[0]) : null,
       decisions: events.slice(-MAX_SAMPLES).map(summarizeDecision),
       decision: latest ? summarizeDecision(latest) : null,
+      // The shape the user gave this guidance, as the last record of it names it. Store order governs,
+      // as with a decision: a later record restates the shape and every earlier one stays readable. An
+      // adaptation with no guidance record answers questions about its rule text and nothing else, and
+      // no reader may treat the absence as "the user asked for nothing in particular".
+      guidance: guidanceEvents.length > 0 ? summarizeGuidance(guidanceEvents.at(-1)) : null,
+      guidanceCount: guidanceEvents.length,
+      guidanceHistory: guidanceEvents.slice(-MAX_SAMPLES).map(summarizeGuidance),
       supportState: supportIntact ? 'intact' : 'stale',
       supportProblems: [
         ...missingExperiences.map((id) => `supporting experience ${shortId(id)} is not in the store`),
@@ -1084,6 +1169,91 @@ export class ExperienceStore {
     return { record, adaptation };
   }
 
+  // The shape the user gave one approved adaptation, as a record rather than as an implication of its
+  // rule text. Batch AM's learning package needs recorded guidance to be able to change the order
+  // candidates are compared in, and the only honest way to let it is to compare a candidate's structure
+  // against a structure the user named: `reads_first`, `writes_first`, capabilities to avoid or prefer,
+  // and a step bound. Nothing here is a permission - a guidance record can move an approach up a
+  // comparison and can never make a step runnable, authorized, or safe.
+  //
+  // The target must exist and must not be retired. It need not be approved: the state of approval is
+  // derived elsewhere and the influence layer refuses an unapproved adaptation, so a guidance record on
+  // a candidate is inert text beside an inert candidate - which is what the tests for "unapproved
+  // adaptations remain inert" check.
+  async guideAdaptation({
+    target, order = null, avoid = [], prefer = [], maxSteps = null, reason = null, provenance = {}, origin,
+  } = {}) {
+    this.#requireUser(origin, 'recording the shape of an approved adaptation');
+    const ref = validateRef(target, 'adaptation reference');
+    if (order !== null && !GUIDANCE_ORDERS.includes(order)) {
+      throw new ValidationError(`order must be one of: ${GUIDANCE_ORDERS.join(', ')}`);
+    }
+    const names = (value, label) => {
+      if (value === undefined || value === null) return [];
+      if (!Array.isArray(value) || value.length > MAX_GUIDANCE_NAMES) {
+        throw new ValidationError(`${label} must be a list of at most ${MAX_GUIDANCE_NAMES} capability names`);
+      }
+      const list = value.map((name) => validateCapabilityName(name, label));
+      if (new Set(list).size !== list.length) throw new ValidationError(`${label} names the same capability twice`);
+      return list;
+    };
+    const avoided = names(avoid, 'avoid');
+    const preferred = names(prefer, 'prefer');
+    if (maxSteps !== null && (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > MAX_GUIDANCE_STEPS)) {
+      throw new ValidationError(`maxSteps must be null or an integer from 1 to ${MAX_GUIDANCE_STEPS}`);
+    }
+    if (order === null && avoided.length === 0 && preferred.length === 0 && maxSteps === null) {
+      throw new ValidationError('guidance must name at least one shape: an order, a capability to avoid or prefer, or a step bound');
+    }
+    const reasonText = validateTextField(reason, 'reason', { required: false, max: MAX_REASON_CHARS });
+    const recorded = sanitizeProvenance(provenance, GUIDANCE_KIND);
+    return this.writeLock.run(() => this.#guideFromAuthority({
+      ref, order, avoided, preferred, maxSteps, reasonText, recorded,
+    }));
+  }
+
+  async #guideFromAuthority({
+    ref, order, avoided, preferred, maxSteps, reasonText, recorded,
+  }) {
+    const records = await this.#loadComplete({ beforeAppend: true });
+    const { index, adaptations } = deriveStore(records);
+    const adaptation = resolveAdaptationRef(adaptations, ref, 'guidance target');
+    const retiredTargets = new Set(index.retirements.map((r) => r.targetId));
+    if (retiredTargets.has(adaptation.id)) {
+      throw new ValidationError(`adaptation [${shortId(adaptation.id)}] was retired; guidance belongs to a candidate that still stands`);
+    }
+    // A later record restates the shape and the earlier ones stay readable, as with a decision. What
+    // must not happen is two records that agree being appended twice, because that would let a reader
+    // count restatements as support.
+    const existing = (index.guidance ?? []).filter((g) => g.targetId === adaptation.id);
+    const latest = existing.length > 0 ? existing.at(-1) : null;
+    if (latest && stableStringify(summarizeGuidance(latest)) === stableStringify(summarizeGuidance({
+      id: latest.id, order, avoid: avoided, prefer: preferred, maxSteps, reason: reasonText, createdAt: latest.createdAt, provenance: latest.provenance,
+    }))) {
+      throw new ValidationError(`adaptation [${shortId(adaptation.id)}] already carries this guidance`);
+    }
+
+    const id = randomUUID();
+    if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
+    const record = {
+      schema: EXPERIENCE_SCHEMA,
+      kind: GUIDANCE_KIND,
+      id,
+      targetId: adaptation.id,
+      order,
+      avoid: avoided,
+      prefer: preferred,
+      maxSteps,
+      ...(reasonText ? { reason: reasonText } : {}),
+      createdAt: this.now().toISOString(),
+      provenance: recorded,
+    };
+    const problem = validateExperienceRecord(record);
+    if (problem) throw new StoreError(`the recorded guidance failed validation (${problem}); nothing written`);
+    await this.log.append(record);
+    return { record, adaptation, previous: latest ?? null };
+  }
+
   // --- reads -----------------------------------------------------------------
 
   // One authoritative read. `beforeAppend` marks the read a write performs first, which may reuse
@@ -1118,6 +1288,7 @@ export class ExperienceStore {
       adaptations: index.adaptations.length,
       decisions: index.decisions.length,
       retirements: index.retirements.length,
+      guidance: index.guidance.length,
       activeAdaptations: adaptations.filter((a) => a.active).length,
       corrupt: corrupt.length,
     };
@@ -1302,9 +1473,13 @@ export class ExperienceStore {
     const wantedFeedback = indexIdList(feedbackIds, 'feedback ids');
     const source = snapshot ?? await this.#temporalSource();
     const window = resolveWindow({ since, until, now: this.now() });
+    // The same preparation the window read uses, so the id lookups below are read from the one derived
+    // view of the log rather than rebuilt over it. Nothing here is kept between reads: the preparation
+    // lives as long as the snapshot it was built from.
+    const prep = temporalPreparation(source);
     const analysis = analyzeTemporal({ ...source, window, capability, limit });
-    const experienceById = new Map(source.experiences.map((record) => [record.id, record]));
-    const feedbackById = new Map(source.feedback.map((record) => [record.id, record]));
+    const experienceById = prep.experienceById;
+    const feedbackById = prep.feedbackById;
     const resolvedExperiences = [];
     const unresolvedExperienceIds = [];
     for (const id of wantedExperiences) {
@@ -1545,6 +1720,7 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
       adaptations: null,
       decisions: null,
       retirements: null,
+      guidance: null,
       activeExperiences: null,
       supersededExperiences: null,
       recordedByUser: null,
@@ -1665,6 +1841,7 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
     adaptations: index.adaptations.length,
     decisions: index.decisions.length,
     retirements: index.retirements.length,
+    guidance: index.guidance.length,
     activeExperiences: experiences.length - retiredExperiences.size,
     supersededExperiences: retiredExperiences.size,
     recordedByUser: index.experiences.filter((r) => captureOf(r) === CAPTURE_EXPLICIT).length,

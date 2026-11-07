@@ -9,6 +9,7 @@
 //
 // It reads only. Nothing here approves, revises, activates, or executes a plan.
 import { WORLD_ASSERTION_KINDS, planContentHash, planProgress } from './model.js';
+import { planConstraintFinding } from './constraints.js';
 
 const TERMINAL_GOAL = new Set(['completed', 'failed', 'cancelled', 'abandoned', 'superseded']);
 
@@ -138,6 +139,29 @@ export async function assessPlanValidity(plan, {
       }
       checks.push(check('goal-dependencies', unmet.length === 0, unmet.length === 0 ? 'every goal dependency is complete' : unmet.join('; ')));
       problems.push(...unmet.map((u) => `goal dependency ${u}; the goal cannot proceed until it is completed`));
+
+      // The constraints on the goal record, re-read now and checked against the steps this plan
+      // actually takes. A blocker recorded after approval, a prerequisite whose discharging record has
+      // since been retracted, and a dependency that has moved are all answers this plan does not
+      // already carry: the approval bound the bytes, not the world they were written against.
+      const constraintRegistry = plans?.registry ?? null;
+      if (!constraintRegistry) {
+        checks.push(check('constraints', false, 'the action registry is not available here, so a recorded blocker could not be bound to the capability it names'));
+        problems.push('the constraints on the goal could not be revalidated, because the action registry was not reachable; a plan whose obstacle cannot be located is not a plan that cleared it');
+      } else {
+        const { finding } = await planConstraintFinding(plan, {
+          goal,
+          registry: constraintRegistry,
+          goals,
+          knowledge,
+          memory,
+          experience,
+        });
+        checks.push(check('constraints', finding.passed, finding.detail));
+        for (const blocked of finding.blockedBy) {
+          problems.push(`constraint ${blocked.class} "${blocked.text}" stops ${blocked.steps.join(', ')} (record: ${blocked.record.store}${blocked.record.ref ? ` ${blocked.record.ref}` : blocked.record.goalId ? ` goal ${blocked.record.goalId}` : ''}) - what would clear it: ${blocked.resolution}`);
+        }
+      }
     }
   }
 

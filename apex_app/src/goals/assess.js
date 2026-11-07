@@ -14,6 +14,7 @@ import { shortId, singleLine } from '../util.js';
 import {
   GOAL_ITEM_FIELDS,
   GoalBasis,
+  GoalStatus,
   Requirement,
   basisOf,
   goalProgress,
@@ -333,6 +334,89 @@ export async function assessGoal(goal, { knowledge = null, operations = null, pl
     // contradicted, withdrawn, unsupported by the audit log, or impossible to check.
     ok: damaged.length === 0 && uncheckable.length === 0,
   };
+}
+
+// A goal the record marks completed was closed because every required criterion was satisfied against
+// a verified operation. Neither of those records is frozen: the knowledge claim an operation wrote can
+// be retracted or superseded afterwards, and an operation the audit log no longer supports was never a
+// proof. This answers the question a reader has to answer before it calls a closed goal settled - does
+// the evidence that completion was granted on still hold? - and it is a read: it reopens nothing,
+// appends nothing, and never decides on the user's behalf that the goal should stop being completed.
+//
+// `holds: null` is not a soft version of `holds: true`. It means the check could not be made - no
+// assessment was handed, no snapshot was recorded, or a store could not be read - and a reader that
+// cannot tell says so rather than reporting a settled goal.
+export function completionConsistency(goal, assessment = null) {
+  const completed = goal?.status === GoalStatus.COMPLETED;
+  const snapshot = goal?.completion?.criteria ?? [];
+  const out = {
+    completed,
+    checked: false,
+    holds: null,
+    withdrawn: [],
+    unsupported: [],
+    uncheckable: [],
+    detail: null,
+    command: null,
+  };
+  if (!completed) {
+    out.detail = 'the goal is not recorded as completed, so there is no completion evidence to hold or lose';
+    return out;
+  }
+  if (snapshot.length === 0) {
+    out.detail = 'the goal is recorded as completed with no completion-evidence snapshot, so no reader can say what it was closed against';
+    return out;
+  }
+  if (!assessment) {
+    out.detail = 'the records behind this completion were not read, so nothing here says the evidence still holds';
+    return out;
+  }
+  out.checked = true;
+  out.uncheckable = [...(assessment.uncheckable ?? [])];
+  const byId = new Map((assessment.criteria ?? []).map((c) => [c.id, c]));
+  for (const item of snapshot) {
+    const criterion = byId.get(item.criterionId);
+    if (!criterion) {
+      out.unsupported.push({ criterionId: item.criterionId, verdict: null, reason: 'the completion names a criterion the goal no longer holds' });
+      continue;
+    }
+    if (criterion.verdict === EvidenceVerdict.CURRENT) continue;
+    if (criterion.verdict === EvidenceVerdict.STALE || criterion.verdict === EvidenceVerdict.CONTRADICTED) {
+      out.withdrawn.push({
+        criterionId: criterion.id,
+        requirement: criterion.requirement,
+        verdict: criterion.verdict,
+        operationId: item.operationId ?? null,
+        reason: criterion.reason,
+      });
+    } else {
+      out.unsupported.push({
+        criterionId: criterion.id,
+        requirement: criterion.requirement,
+        verdict: criterion.verdict,
+        operationId: item.operationId ?? null,
+        reason: criterion.reason,
+      });
+    }
+  }
+  const required = out.withdrawn.filter((w) => w.requirement === Requirement.REQUIRED);
+  const gating = required.length + out.unsupported.filter((u) => u.requirement === Requirement.REQUIRED).length;
+  out.holds = gating === 0 && out.uncheckable.length === 0;
+  const id = shortId(goal.id);
+  out.command = out.holds ? null
+    : `node bin/apex.js goal evidence ${id} --criterion ${required[0]?.criterionId ?? out.unsupported[0]?.criterionId ?? 'c1'} --kind contradicts --reopen`;
+  const parts = [];
+  if (required.length > 0) {
+    parts.push(`${required.map((w) => `${w.criterionId} (${w.verdict}${w.operationId ? `, operation ${shortId(w.operationId)}` : ''})`).join(', ')}: the proof the goal was closed on no longer stands`);
+  }
+  if (out.unsupported.length > 0) {
+    parts.push(`${out.unsupported.map((u) => `${u.criterionId} (${u.verdict ?? 'unmatched'})`).join(', ')}: the completion names work the records do not support`);
+  }
+  if (out.uncheckable.length > 0) parts.push(`and this could not be checked: ${out.uncheckable.join('; ')}`);
+  out.detail = out.holds
+    ? `all ${snapshot.length} recorded completion criterion(s) still hold against the records they cite`
+    : `the goal is recorded as completed, ${parts.join('; ')}`;
+  return out;
 }
 
 // A one-line statement of what the assessment adds to the goal record, for a caller that needs the

@@ -94,6 +94,7 @@ const MODEL_WRITE_ATTEMPTS = [
   ['adaptation.derive', { minSupport: 1 }],
   ['adaptation.decide', { target: 'no-such-candidate', decision: 'approved' }],
   ['adaptation.retire', { target: 'no-such-adaptation', reason: 'the model retired it' }],
+  ['adaptation.guide', { target: 'no-such-adaptation', order: 'reads_first' }],
   ['prediction.record', { capability: 'memory.add', expectation: 'success', subject: 'the model expects success', inDays: 7 }],
   ['prediction.evaluate', { target: 'no-such-prediction' }],
   ['prediction.invalidate', { target: 'no-such-prediction', reason: 'the model withdrew it' }],
@@ -240,7 +241,7 @@ describe('AF-20: a reply cannot create what only the user may create', () => {
     const names = app.registry.list().filter((d) => d.permission === 'write').map((d) => d.name).sort();
     // The sweep is the registry's own list, so a write action added by a later batch is denied on the
     // day it is registered rather than on the day someone remembers to add it here.
-    assert.ok(names.length >= 41, `the registry holds ${names.length} write actions, fewer than the swept inventory`);
+    assert.ok(names.length >= 42, `the registry holds ${names.length} write actions, fewer than the swept inventory`);
     assert.deepEqual(names, MODEL_WRITE_ATTEMPTS.map(([n]) => n).sort(), 'the attempt list is the registry, not a guess');
 
     for (const [name, input] of MODEL_WRITE_ATTEMPTS) {

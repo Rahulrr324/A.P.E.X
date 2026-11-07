@@ -19,6 +19,9 @@ import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 import {
   ADAPTATION_DECISIONS,
   ASSESSMENTS,
+  GUIDANCE_ORDERS,
+  MAX_GUIDANCE_NAMES,
+  MAX_GUIDANCE_STEPS,
   MAX_REASON_CHARS,
   MAX_RULE_CHARS,
   MAX_SUBJECT_CHARS,
@@ -618,6 +621,125 @@ export function experienceActions(store) {
           return { ok: false, detail: 'a rejected adaptation is still being retrieved as active' };
         }
         return { ok: true, detail: `decision confirmed as the user's own; ${detail.decisions.length} decision(s) readable` };
+      },
+    },
+
+    {
+      name: 'adaptation.guide',
+      description: 'Record the shape the user gave one adaptation: which step order they ask for, which capabilities to avoid or prefer, and how many steps is too many. Only an approved, unretired adaptation whose support stands can move a comparison, and nothing here authorizes, refuses, or starts any work. Write: user origin only.',
+      inputHint: '{"target":"adaptation id","order":"reads_first|writes_first","avoid":["capability"],"prefer":["capability"],"maxSteps":"optional integer","reason":"optional text"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      // The record that lets guidance count in a comparison has to be the user's own act, or an approval
+      // would be enough to let APEX reshape future work by inference. The registry refuses a model
+      // origin, and the store refuses a non-user origin again.
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target', 'order', 'avoid', 'prefer', 'maxSteps', 'reason']);
+        if (o.order !== undefined && o.order !== null && !GUIDANCE_ORDERS.includes(String(o.order).trim())) {
+          throw new ValidationError(`order must be one of: ${GUIDANCE_ORDERS.join(', ')}`);
+        }
+        const list = (value, label) => {
+          if (value === undefined || value === null) return [];
+          if (!Array.isArray(value) || value.length > MAX_GUIDANCE_NAMES) {
+            throw new ValidationError(`${label} must be a list of at most ${MAX_GUIDANCE_NAMES} capability names`);
+          }
+          return value.map((name) => textField(name, `a name in ${label}`, 64));
+        };
+        const avoid = list(o.avoid, 'avoid');
+        const prefer = list(o.prefer, 'prefer');
+        let maxSteps = null;
+        if (o.maxSteps !== undefined && o.maxSteps !== null) {
+          maxSteps = Number(o.maxSteps);
+          if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > MAX_GUIDANCE_STEPS) {
+            throw new ValidationError(`maxSteps must be an integer from 1 to ${MAX_GUIDANCE_STEPS}`);
+          }
+        }
+        if ((o.order ?? null) === null && avoid.length === 0 && prefer.length === 0 && maxSteps === null) {
+          throw new ValidationError('name at least one shape: an order, a capability to avoid or prefer, or a step bound');
+        }
+        return {
+          target: recordRef(o.target, 'target'),
+          order: o.order ?? null,
+          avoid,
+          prefer,
+          maxSteps,
+          reason: optionalTextField(o.reason, 'reason', MAX_REASON_CHARS),
+        };
+      },
+      async execute(ctx, { target, order, avoid, prefer, maxSteps, reason }) {
+        // A name the registry does not hold could never match a step, so the guidance would silently
+        // ask for something no plan can answer: refused, with the names listed, as `cannot_use` does.
+        const registry = ctx?.registry ?? null;
+        if (registry && typeof registry.get === 'function') {
+          const unknown = [...new Set([...avoid, ...prefer])].filter((name) => !registry.get(name));
+          if (unknown.length > 0) {
+            throw new ValidationError(`avoid and prefer must name registered capabilities; not found: ${unknown.join(', ')}`);
+          }
+        }
+        const { record, adaptation, previous } = await store.guideAdaptation({
+          target,
+          order,
+          avoid,
+          prefer,
+          maxSteps,
+          reason,
+          provenance: { operationId: ctx.operationId },
+          origin: ctx.origin,
+        });
+        const shape = [
+          order ? `order ${order}` : null,
+          avoid.length ? `avoid ${avoid.join(', ')}` : null,
+          prefer.length ? `prefer ${prefer.join(', ')}` : null,
+          maxSteps !== null ? `at most ${maxSteps} step(s)` : null,
+        ].filter(Boolean).join(', ');
+        const decided = adaptation.decisionState;
+        return {
+          summary: `recorded guidance shape ${shortId(record.id)} for adaptation ${shortId(adaptation.id)}: ${shape}`,
+          data: {
+            guidanceId: record.id,
+            adaptationId: adaptation.id,
+            capability: adaptation.capability,
+            rule: adaptation.rule,
+            order,
+            avoid,
+            prefer,
+            maxSteps,
+            reason: record.reason ?? null,
+            decisionState: decided,
+            active: adaptation.active === true,
+            previous: previous ? { id: previous.id, order: previous.order ?? null } : null,
+          },
+          display: [
+            `Recorded your guidance ${shortId(record.id)} on adaptation ${shortId(adaptation.id)}: ${shape}.`,
+            `  scope: ${adaptation.capability} | rule: ${adaptation.rule}`,
+            previous ? `  earlier shape: ${previous.order ?? 'none'} (${shortId(previous.id)}) kept as history` : '  this is the first shape recorded on this candidate',
+            decided === 'approved' && adaptation.active === true
+              ? '  This can now move an approach in a comparison of candidates for this scope, as recorded guidance. It grants nothing: a step is still authorized when it runs, and a plan is still approved by you.'
+              : `  It changes nothing yet, because the adaptation it belongs to is ${decided === 'approved' ? 'no longer standing as approved evidence' : decided}: a shape recorded on a candidate the user never approved stays inert.`,
+          ].join('\n'),
+        };
+      },
+      async verify(ctx, { order, avoid, prefer, maxSteps }, result) {
+        const detail = await store.adaptationDetail(result.data.adaptationId);
+        if (!detail) return { ok: false, detail: 'the guided adaptation cannot be read back' };
+        const latest = (detail.guidanceHistory ?? []).at(-1);
+        if (!latest || latest.id !== result.data.guidanceId) {
+          return { ok: false, detail: 'the recorded guidance is not the latest shape on that adaptation' };
+        }
+        if ((latest.order ?? null) !== (order ?? null)
+          || (latest.avoid ?? []).join(',') !== avoid.join(',')
+          || (latest.prefer ?? []).join(',') !== prefer.join(',')
+          || (latest.maxSteps ?? null) !== (maxSteps ?? null)) {
+          return { ok: false, detail: 'the shape read back differs from the shape recorded' };
+        }
+        if (detail.rule !== result.data.rule || detail.capability !== result.data.capability) {
+          return { ok: false, detail: 'the guidance changed the candidate itself; the rule and scope stay as derived' };
+        }
+        if (result.data.decisionState === 'approved' && detail.active !== true) {
+          return { ok: true, detail: `shape recorded; it moves nothing because ${detail.inactiveReason ?? 'its support no longer stands as recorded'}` };
+        }
+        return { ok: true, detail: `shape confirmed as the user's own; ${(detail.guidanceHistory ?? []).length} shape(s) readable` };
       },
     },
 

@@ -286,20 +286,7 @@ function finalizeCounts(counts) {
 
 // One grouping of the same records for one window. Everything a query reports is built from this,
 // so two windows are always aggregated the same way.
-function buildSlice({ experiences, feedbackByExperience, retiredFeedback, position, window, capability }) {
-  const events = experiences.map((experience) => buildEvent(experience, {
-    feedbackByExperience,
-    retiredFeedback,
-    position,
-    window,
-  }));
-  const inScope = capability
-    ? events.filter((event) => event.capability === capability)
-    : events;
-  const dated = inScope.filter((event) => !event.undated && event.inWindow).sort(compareEvents);
-  const undated = inScope.filter((event) => event.undated).sort(compareEvents);
-  const outside = inScope.filter((event) => !event.undated && !event.inWindow);
-
+function aggregate(dated) {
   const groups = new Map();
   for (const event of dated) {
     const key = event.capability ?? 'unscoped';
@@ -330,7 +317,173 @@ function buildSlice({ experiences, feedbackByExperience, retiredFeedback, positi
     return acc;
   }, newCounts()));
 
-  return { dated, undated, outside, byCapability, totals };
+  return { byCapability, totals };
+}
+
+// The whole log, prepared once for one read of it.
+//
+// Every field below is window-independent: the event shape of each record, which capability bucket it
+// belongs to, the order inside that bucket, the two correction indexes, and the id lookups. They used to
+// be rebuilt inside every window query, so a query cost time proportional to the size of the store even
+// when it returned nothing - and the prediction ledger runs one query per recorded prediction, which is
+// how a planning read came to cost predictions x experiences. Preparing once makes a window query a
+// bounded range read over the records that actually answer it.
+//
+// This is not a cache of results and not derived state: it is keyed on the record array it was built
+// from, it is rebuilt whenever that array or the inputs that shape it differ, it is never written to a
+// store, and it cannot outlive the read that made it.
+const PREPARATIONS = new WeakMap();
+const FULL_WINDOW = { sinceMs: Number.MIN_SAFE_INTEGER, untilMs: Number.MAX_SAFE_INTEGER };
+const EMPTY_MS = new Float64Array(0);
+const EMPTY_BUCKET = Object.freeze({ sorted: [], byFile: [], undated: [], ms: EMPTY_MS });
+
+function normalizePosition(experiences, suppliedPosition) {
+  // Order within one timestamp comes from the append-only log. The store passes a position map
+  // covering every record kind; when it does not, experience order stands in for it.
+  const position = suppliedPosition ?? new Map();
+  if (!suppliedPosition) {
+    for (const experience of experiences) position.set(experience.id, position.size);
+  }
+  return position;
+}
+
+function groupFeedback(feedback) {
+  const byExperience = new Map();
+  for (const entry of feedback) {
+    const list = byExperience.get(entry.experienceId) ?? [];
+    list.push(entry);
+    byExperience.set(entry.experienceId, list);
+  }
+  return byExperience;
+}
+
+function lowerBound(ms, value) {
+  let lo = 0;
+  let hi = ms.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (ms[mid] < value) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+function upperBound(ms, value) {
+  let lo = 0;
+  let hi = ms.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (ms[mid] <= value) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+function prepareTemporal({
+  experiences = [],
+  feedback = [],
+  adaptations = [],
+  retiredFeedback = new Set(),
+  position: suppliedPosition = null,
+} = {}) {
+  const position = normalizePosition(experiences, suppliedPosition);
+  const feedbackByExperience = groupFeedback(feedback);
+  const events = experiences.map((experience) => {
+    const event = buildEvent(experience, { feedbackByExperience, retiredFeedback, position, window: FULL_WINDOW });
+    // The instant the bucket order was built over, kept off the enumerable shape: a range search
+    // compares it, and a report must not gain a field the record itself never had.
+    Object.defineProperty(event, 'timeMs', { value: eventTime(experience).ms, enumerable: false });
+    return event;
+  });
+  const buckets = new Map();
+  const all = { sorted: [], byFile: [], undated: [] };
+  const bucketFor = (key) => {
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { sorted: [], byFile: [], undated: [] };
+      buckets.set(key, bucket);
+    }
+    return bucket;
+  };
+  for (const event of events) {
+    const bucket = bucketFor(event.capability);
+    if (event.undated) {
+      bucket.undated.push(event);
+      all.undated.push(event);
+      continue;
+    }
+    bucket.sorted.push(event);
+    bucket.byFile.push(event);
+    all.sorted.push(event);
+    all.byFile.push(event);
+  }
+  for (const bucket of [...buckets.values(), all]) {
+    bucket.sorted.sort(compareEvents);
+    bucket.undated.sort(compareEvents);
+    bucket.ms = Float64Array.from(bucket.sorted.map((event) => event.timeMs));
+  }
+  const corrections = feedbackIndex(experiences, feedback, retiredFeedback, position);
+  const flat = (map) => [...map.values()].flat().sort(compareCorrections);
+  return {
+    // The inputs that shape this structure, apart from the records array it is keyed on. A caller that
+    // supplies no position map gets the position derived from the records, so it is reported as absent
+    // here and rebuilt the same way next time.
+    signature: `${feedback.length}:${retiredFeedback.size ?? retiredFeedback.length ?? 0}:${suppliedPosition ? suppliedPosition.size : 0}:${adaptations.length}`,
+    position,
+    all: { ...all, ms: all.ms ?? EMPTY_MS },
+    buckets,
+    corrections,
+    correctionsAll: { current: flat(corrections.current), corrected: flat(corrections.corrected) },
+    experienceById: new Map(experiences.map((record) => [record.id, record])),
+    feedbackById: new Map(feedback.map((record) => [record.id, record])),
+  };
+}
+
+export function temporalPreparation(source = {}) {
+  const key = Array.isArray(source.experiences) ? source.experiences : null;
+  if (!key) return prepareTemporal(source);
+  const built = PREPARATIONS.get(key);
+  if (built && built.signature === preparedSignature(source)) return built;
+  const prep = prepareTemporal(source);
+  PREPARATIONS.set(key, prep);
+  return prep;
+}
+
+// The inputs that would change a prepared structure, apart from the records themselves. Checked on
+// reuse so a hand-built source cannot read a preparation that describes different feedback, different
+// retirements, or a different log position.
+function preparedSignature(source) {
+  const retired = source.retiredFeedback;
+  const retiredCount = retired ? (retired.size ?? retired.length ?? 0) : 0;
+  const feedback = source.feedback ?? [];
+  const position = source.position;
+  const adaptations = source.adaptations ?? [];
+  return `${feedback.length}:${retiredCount}:${position ? position.size : 0}:${adaptations.length}`;
+}
+
+// One window over a prepared log. `dated` is the range the window selects, in the order the records
+// sort into; `outside` is only materialized for a reader that asks for the records themselves, because
+// every consumer of this answer needs their count and none needs the list.
+function sliceFromPreparation(prep, { window, capability }) {
+  const bucket = capability ? (prep.buckets.get(capability) ?? EMPTY_BUCKET) : prep.all;
+  const lo = lowerBound(bucket.ms, window.sinceMs);
+  const hi = upperBound(bucket.ms, window.untilMs);
+  const dated = hi > lo ? bucket.sorted.slice(lo, hi) : [];
+  const outsideCount = bucket.sorted.length - (hi - lo);
+  const slice = {
+    dated,
+    undated: bucket.undated,
+    outsideCount,
+    ...aggregate(dated),
+  };
+  Object.defineProperty(slice, 'outside', {
+    enumerable: true,
+    configurable: true,
+    get() {
+      return bucket.byFile
+        .filter((event) => event.timeMs !== null && (event.timeMs < window.sinceMs || event.timeMs > window.untilMs))
+        .map((event) => ({ ...event, inWindow: false }));
+    },
+  });
+  return slice;
 }
 
 // The later half against the earlier half of the same ordered sequence. A tie is reported as
@@ -776,20 +929,19 @@ export function buildTemporalView({
   experiences = [],
   feedback = [],
   retiredFeedback = new Set(),
-  position = new Map(),
+  position = null,
   window,
   capability = null,
   limit = MAX_TEMPORAL_EVENTS,
   slice = null,
 } = {}) {
   if (!window) throw new ValidationError('a window is required');
-  const feedbackByExperience = new Map();
-  for (const entry of feedback) {
-    const list = feedbackByExperience.get(entry.experienceId) ?? [];
-    list.push(entry);
-    feedbackByExperience.set(entry.experienceId, list);
-  }
-  const scoped = slice ?? buildSlice({ experiences, feedbackByExperience, retiredFeedback, position, window, capability });
+  // A caller that already grouped the records for this window keeps its grouping; a caller that did
+  // not gets one preparation of the log, which is the same work the previous per-view scan did.
+  const scoped = slice ?? sliceFromPreparation(
+    temporalPreparation({ experiences, feedback, retiredFeedback, position }),
+    { window, capability },
+  );
   const shownEvents = scoped.dated.slice(-Math.max(1, limit));
   const shownUndated = scoped.undated.slice(0, Math.max(1, limit));
   const capabilityWindow = scoped.byCapability.slice(0, MAX_TEMPORAL_CAPABILITIES);
@@ -802,7 +954,7 @@ export function buildTemporalView({
       storedExperiences: experiences.length,
       inWindow: scoped.dated.length,
       shown: shownEvents.length,
-      outsideWindow: scoped.outside.length,
+      outsideWindow: scoped.outsideCount ?? scoped.outside.length,
       undated: scoped.undated.length,
       live: scoped.dated.filter((event) => event.active).length,
       superseded: scoped.dated.filter((event) => event.superseded).length,
@@ -840,35 +992,23 @@ export function analyzeTemporal({
   position: suppliedPosition = null,
 } = {}) {
   if (!window) throw new ValidationError('a window is required');
-  // Order within one timestamp comes from the append-only log. The store passes a position map
-  // covering every record kind; when it does not, experience order stands in for it.
-  const position = suppliedPosition ?? new Map();
-  if (!suppliedPosition) {
-    for (const experience of experiences) position.set(experience.id, position.size);
-  }
-  const feedbackByExperience = new Map();
-  for (const entry of feedback) {
-    const list = feedbackByExperience.get(entry.experienceId) ?? [];
-    list.push(entry);
-    feedbackByExperience.set(entry.experienceId, list);
-  }
-  const slice = buildSlice({ experiences, feedbackByExperience, retiredFeedback, position, window, capability });
+  const prep = temporalPreparation({ experiences, feedback, adaptations, retiredFeedback, position: suppliedPosition });
+  const slice = sliceFromPreparation(prep, { window, capability });
   const view = buildTemporalView({
     experiences,
     feedback,
     retiredFeedback,
-    position,
+    position: prep.position,
     window,
     capability,
     limit,
     slice,
   });
-  const correctionIndex = feedbackIndex(experiences, feedback, retiredFeedback, position);
-  const scopedCorrections = (map) => (capability
-    ? (map.get(capability) ?? [])
-    : [...map.values()].flat().sort(compareCorrections));
-  const allCorrections = scopedCorrections(correctionIndex.current);
-  const correctedCorrections = scopedCorrections(correctionIndex.corrected);
+  const scopedCorrections = (byCapability, flat) => (capability
+    ? (byCapability.get(capability) ?? [])
+    : flat);
+  const allCorrections = scopedCorrections(prep.corrections.current, prep.correctionsAll.current);
+  const correctedCorrections = scopedCorrections(prep.corrections.corrected, prep.correctionsAll.corrected);
   const detection = detectPatterns({
     capability,
     window,
@@ -919,18 +1059,9 @@ export function compareTemporalWindows({
   position: suppliedPosition = null,
 } = {}) {
   if (!windowA || !windowB) throw new ValidationError('two windows are required for a comparison');
-  const position = suppliedPosition ?? new Map();
-  if (!suppliedPosition) {
-    for (const experience of experiences) position.set(experience.id, position.size);
-  }
-  const feedbackByExperience = new Map();
-  for (const entry of feedback) {
-    const list = feedbackByExperience.get(entry.experienceId) ?? [];
-    list.push(entry);
-    feedbackByExperience.set(entry.experienceId, list);
-  }
-  const a = buildSlice({ experiences, feedbackByExperience, retiredFeedback, position, window: windowA, capability });
-  const b = buildSlice({ experiences, feedbackByExperience, retiredFeedback, position, window: windowB, capability });
+  const prep = temporalPreparation({ experiences, feedback, retiredFeedback, position: suppliedPosition });
+  const a = sliceFromPreparation(prep, { window: windowA, capability });
+  const b = sliceFromPreparation(prep, { window: windowB, capability });
   const rows = new Map();
   for (const group of a.byCapability) rows.set(group.capability, { a: group, b: null });
   for (const group of b.byCapability) {

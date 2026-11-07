@@ -546,13 +546,15 @@ test('learning records change no candidate byte, gate, ranked dimension or score
     const goalId = await newGoal(app);
     const before = await run(app, 'plan.candidates', { goal: goalId }, 'op-al09-bare');
     assert.equal(before.outcome, Outcome.SUCCESS_VERIFIED, before.summary);
-    // Everything the comparison is decided by, and nothing the learning block adds to the print.
+    // Everything the comparison is decided by, and nothing the learning block adds to the print. Batch
+    // AM prints a second learning disclosure - the guidance ledger, beside the comparison - so the cut
+    // has to take both blocks out, or a record that ranked nothing would read as a changed decision.
     const snapshot = (step) => JSON.stringify({
       candidateSetDigest: dataOf(step).candidateSetDigest,
       candidates: dataOf(step).candidates,
       comparison: dataOf(step).comparison,
       summary: step.summary,
-      display: (step.display ?? '').split('What the records of past attempts')[0],
+      display: (step.display ?? '').split(/(?=What the records of past attempts|Approved guidance that bears on)/)[0],
     });
     const bytesBefore = snapshot(before);
     // Every store except the audit log, which records a read as an operation by design.

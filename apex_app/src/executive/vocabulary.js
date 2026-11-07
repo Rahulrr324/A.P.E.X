@@ -68,11 +68,12 @@ export const STATE_EVIDENCE = Object.freeze({
 
 export const STATE_RULE = 'a state is reported only from a recorded plan, task, proposal, or operation; no state is inferred from a model statement or from a request';
 
-// Continuation readiness: the six answers to "can this be taken up now, and if not, what is missing?".
+// Continuation readiness: the seven answers to "can this be taken up now, and if not, what is missing?".
 // A state of a record, not a forecast: `ready to execute` means an approval is on file and the live
 // check still passes against the records it names, not that the run will succeed.
 export const ContinuationReadiness = Object.freeze({
   READY_TO_EXECUTE: 'ready to execute',
+  READY_TO_CONTINUE: 'ready to continue',
   READY_FOR_APPROVAL: 'ready for approval',
   REQUIRES_CLARIFICATION: 'requires clarification',
   BLOCKED: 'blocked',
@@ -86,6 +87,10 @@ export const READINESS_STATES = Object.freeze(Object.values(ContinuationReadines
 // claim instead of taking the word for it.
 export const READINESS_BASIS = Object.freeze({
   [ContinuationReadiness.READY_TO_EXECUTE]: 'a plan recorded as approved, whose live validity check passes against the records it names',
+  // Batch AM added this one: the difference between a run that never began and a run that stopped with
+  // steps provably untouched. It is read from the continuation derivation, which names the record each
+  // step's state came from - not from a plan status, and never from the absence of an audit line.
+  [ContinuationReadiness.READY_TO_CONTINUE]: 'a plan whose run was interrupted, whose records prove at least one step never started, and which nothing on record - a moved approval, a refused capability, a recorded constraint, an uncertain write - stops from being taken up again',
   [ContinuationReadiness.READY_FOR_APPROVAL]: 'a plan recorded as a draft, or a candidate that passed every gate, whose steps the live registry authorizes',
   [ContinuationReadiness.REQUIRES_CLARIFICATION]: 'a comparison the disclosed rule cannot separate, a goal whose revision moved after the plan was written, or a goal with no open criterion to plan against',
   [ContinuationReadiness.BLOCKED]: 'a plan or goal recorded as blocked, an approval that no longer matches the plan bytes, an unmet goal dependency, or a failed step outcome',
@@ -149,6 +154,54 @@ export const RecoveryClass = Object.freeze({
 });
 
 export const RECOVERY_NOTE = 'recovery reads the task log and the operation audit: an uncertain step is never retried automatically, and a step whose outcome is not verified is not reported as done';
+
+// The nine states a run can be in, stated per step and rolled up for the run. Batch AL could report
+// six of them: it had no word for a step another live process is running right now, no word for work
+// waiting on a confirmation APEX does not hold, and no word for the one case the user actually asks
+// about - whether the rest of this plan may be taken up. Those three are the difference between a
+// recovery report and a continuation decision, so they are states here rather than sentences there.
+//
+// Every state names the record it is read from, and a state no record supports is not reported: in
+// particular, a process that stopped is never reported as a step that failed, and a step whose audit
+// record is missing is never reported as one that did not happen.
+export const ContinuationState = Object.freeze({
+  NOT_STARTED: 'not started',
+  RUNNING: 'running',
+  VERIFIED_SUCCESSFUL: 'verified successful',
+  VERIFIED_FAILED: 'verified failed',
+  BLOCKED: 'blocked',
+  OUTCOME_UNCERTAIN: 'outcome uncertain',
+  AWAITING_CONFIRMATION: 'awaiting external confirmation',
+  SAFE_TO_CONTINUE: 'safe to continue',
+  REQUIRES_USER: 'requires user intervention',
+});
+
+export const CONTINUATION_STATES = Object.freeze(Object.values(ContinuationState));
+
+// Which record proves which state. A reader is entitled to check the claim, and a state that came
+// from nothing is the one state that must never appear in an answer.
+export const CONTINUATION_EVIDENCE = Object.freeze({
+  [ContinuationState.NOT_STARTED]: 'a task step recorded as pending with no operation link of its own',
+  [ContinuationState.RUNNING]: 'a task step recorded as running while a live process holds the task lock',
+  [ContinuationState.VERIFIED_SUCCESSFUL]: 'the step\'s own operation record ending success_verified, cited by the task log',
+  [ContinuationState.VERIFIED_FAILED]: 'the step\'s own operation record, or its recorded outcome, ending in a failure the audit holds',
+  [ContinuationState.BLOCKED]: 'a step recorded as skipped, or a pending step whose dependency holds a record that is not a verified success',
+  [ContinuationState.OUTCOME_UNCERTAIN]: 'a step recorded as running or uncertain with no operation record that resolves it',
+  [ContinuationState.AWAITING_CONFIRMATION]: 'a step recorded as awaiting_approval, or an assessment whose verdict is awaiting_confirmation',
+  [ContinuationState.SAFE_TO_CONTINUE]: 'a pending step whose every dependency holds a verified success, whose approval still binds the plan bytes, whose capabilities the live registry authorizes, and whose recorded constraints do not stop it',
+  [ContinuationState.REQUIRES_USER]: 'an uncertain write step, a cancelled task, contradictory records, an approval that no longer binds its content, or a status this vocabulary does not know',
+});
+
+// The rule the whole derivation follows, printed with it. Each clause exists because a system that
+// resumes interrupted work can otherwise invent a fact: that a dead process failed, that a missing
+// record means a missing effect, or that a return value proves the world changed.
+export const CONTINUATION_RULE = 'A state is read from a task record, the step\'s own operation record, the plan record, the live registry, and the goal\'s records; nothing is read from a process that stopped.'
+  + ' A step whose side effect may have happened is never continued again by this path, whatever it returned.'
+  + ' A step is safe to continue only when it is proven not to have started, or it is a read that the user has explicitly asked to retry.'
+  + ' The plan, its approval, the registry, the recorded constraints and the dependencies are re-read before any continuation, and a plan whose bytes or constraints moved needs a fresh approval, not a retry of this command.'
+  + ' APEX runs only when a command runs: a state here describes records, and no background process is assumed either way.';
+
+export const CONTINUATION_NOTE = 'this read continues nothing, approves nothing, and runs nothing: it states which steps the records prove may be taken up and which they forbid, and the command that would act on it is a separate user act';
 
 // Status question classes. They are asked of the records, so a model is never the one that says
 // whether a step ran. Each class names the record that answers it.

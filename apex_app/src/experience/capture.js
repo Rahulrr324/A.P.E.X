@@ -118,6 +118,7 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'adaptation.derive': 'self-bookkeeping',
   'adaptation.decide': 'self-bookkeeping',
   'adaptation.retire': 'self-bookkeeping',
+  'adaptation.guide': 'self-bookkeeping',
   'prediction.record': 'expectation',
   'prediction.evaluate': 'expectation',
   'prediction.invalidate': 'expectation',
@@ -141,6 +142,12 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'plan.supersede': 'executive',
   'plan.activate': 'executive',
   'plan.reconcile': 'executive',
+  // The continuation pair is classified the way the rest of the plan surface is. The nine-state
+  // reading re-derives itself from the run records whenever it is asked for, and the command that
+  // takes untouched steps up writes step records and task transitions that the task log already
+  // holds - so neither needs an experience line on top of them.
+  'plan.continuation': 'read',
+  'plan.continue': 'executive',
   'plan.list': 'read',
   'plan.show': 'read',
   'plan.validate': 'read',

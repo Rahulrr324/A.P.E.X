@@ -793,8 +793,13 @@ function wrapCited(items) {
 // One stored prediction, fully projected. `evidenceFor(record)` is a synchronous lookup the caller
 // has already filled by reading the experience log; the engine performs no I/O.
 export function projectPrediction(record, { ledger, evidenceFor, nowMs }) {
-  const invalidation = ledger.invalidations.find((item) => item.predictionId === record.id) ?? null;
-  const evaluation = ledger.evaluations.find((item) => item.predictionId === record.id) ?? null;
+  // The ledger carries first-match indexes over the same records these scans walked, so one projection
+  // of the whole log costs the log, not the log squared. The scan is kept for a caller that hands in a
+  // hand-built ledger without them; both routes take the earliest record that names the prediction.
+  const invalidation = (ledger.invalidationsBy?.get(record.id)
+    ?? ledger.invalidations.find((item) => item.predictionId === record.id)) ?? null;
+  const evaluation = (ledger.evaluationsBy?.get(record.id)
+    ?? ledger.evaluations.find((item) => item.predictionId === record.id)) ?? null;
   const supersededBy = (ledger.replacedBy.get(record.id) ?? [])
     .map((id) => ledger.predictionsById.get(id))
     .filter((item) => item !== undefined)
@@ -854,6 +859,18 @@ export function projectPrediction(record, { ledger, evidenceFor, nowMs }) {
   };
 }
 
+// The earliest record of a kind that names each prediction, which is what a scan with `.find` over the
+// same list returns. Built once per projection so a whole-ledger read costs the log rather than the log
+// multiplied by itself.
+function firstByPrediction(list) {
+  const map = new Map();
+  for (const item of list) {
+    if (item?.predictionId === undefined || item.predictionId === null) continue;
+    if (!map.has(item.predictionId)) map.set(item.predictionId, item);
+  }
+  return map;
+}
+
 // The whole ledger, in horizon order (oldest prediction first). `evidenceFor` is the caller's per
 // prediction read of the experience log.
 export function projectLedger({ records, nowMs, evidenceFor }) {
@@ -869,6 +886,8 @@ export function projectLedger({ records, nowMs, evidenceFor }) {
     predictions,
     invalidations,
     evaluations,
+    invalidationsBy: firstByPrediction(invalidations),
+    evaluationsBy: firstByPrediction(evaluations),
     retiredByReplacement: retired,
     replacedBy,
     replacementCircles: new Set(replacementCircleIds(predictions)),

@@ -34,6 +34,7 @@ import { checkSteps } from '../tasks/planner.js';
 import { stableStringify } from '../tasks/model.js';
 import { singleLine } from '../util.js';
 import { Requirement, basisOf, requirementOf } from '../goals/model.js';
+import { constraintLedger, generationExclusions } from './constraints.js';
 import {
   MAX_ASSERTIONS, MAX_ASSERTION_CHARS, MAX_CANDIDATES_PER_GOAL, MAX_ESTIMATE_SECONDS,
   MAX_EXPECTED_CHARS, MAX_PLAN_OUTCOME_CHARS, MAX_PLAN_STEPS, MAX_PRECONDITION_CHARS,
@@ -132,10 +133,11 @@ function openUnits(goal) {
 // tried first, because a step is only evidence about the criterion it was matched to. If they name
 // no capability, the goal's recorded request is tried - still the user's wording, not something
 // invented here - and any step it yields is marked as derived and settles nothing by itself. A
-// capability this generation was told cannot run is never substituted for: the criterion is reported
-// as unaddressed with that reason instead.
-function resolveUnit(unit, goal, registry, excluded) {
-  const split = (rows) => [rows.filter((m) => !excluded.has(m.action)), rows.filter((m) => excluded.has(m.action))];
+// capability this generation may not offer - because the caller named it, or because a blocker the
+// user recorded on the goal names it - is never substituted for: the criterion is reported as
+// unaddressed with that reason, and the reason says which record the refusal came from.
+function resolveUnit(unit, goal, registry, exclusions) {
+  const split = (rows) => [rows.filter((m) => !exclusions.has(m.action)), rows.filter((m) => exclusions.has(m.action))];
   const own = mapWorkText(unit.description, registry);
   const [ownUsable, ownDropped] = split(own.mapped);
   if (own.mapped.length > 0 && ownDropped.length === 0) {
@@ -152,8 +154,8 @@ function resolveUnit(unit, goal, registry, excluded) {
     if (usable.length === 0) reasons.push(...fallback.unmapped.map((u) => u.reason));
   }
   const refusedActions = dedupe(refused);
-  if (refusedActions.length > 0) {
-    reasons.push(`this generation answers a recorded failure, so ${refusedActions.join(', ')} is not offered again`);
+  for (const action of refusedActions) {
+    reasons.push(exclusions.get(action)?.phrase ?? `this generation answers a recorded failure, so ${action} is not offered again`);
   }
   if (ownUsable.length > 0) {
     // Part of what this criterion asks for is refused, so no step here can be claimed to settle it.
@@ -460,24 +462,54 @@ function outcomeFor(goal, workText) {
 // a record says cannot run now) and `failedOperations` (the failure records this generation answers,
 // each as the audit log holds it: `{operationId, detail}`, or the bare operation id on its own).
 // Nothing here opens a store, so it can only use what it is handed.
-export function candidatesForGoal({ goal, registry, evidence = null, workText = null, max = MAX_CANDIDATES_PER_GOAL }) {
+//
+// `constraints` is the ledger of what the goal record says stands in the way. It is optional: a
+// generation handed none builds one from the goal and the registry, which is the whole of what those
+// two bytes can say. A caller that reads the cited records may hand the richer ledger, and then a
+// blocker confirmed by a current record refuses its capability here as well - which is why every path
+// that has to reproduce these candidate bytes re-reads those records the same way, rather than
+// regenerating from the goal alone and calling a difference a coincidence.
+export function candidatesForGoal({
+  goal, registry, evidence = null, workText = null, max = MAX_CANDIDATES_PER_GOAL, constraints = null,
+}) {
   if (!goal || typeof goal !== 'object' || Array.isArray(goal)) {
     return refusal('no-goal', ['a candidate is generated against a recorded goal, and none was given']);
   }
   if (!registry || typeof registry.get !== 'function') {
     return refusal('no-registry', ['the action registry is not available, so no capability could be checked']);
   }
-  const excluded = new Set((evidence?.unavailableActions ?? []).map((a) => String(a)));
+  const ledger = constraints ?? constraintLedger({ goal, registry, evidence });
+  const exclusions = new Map();
+  for (const action of (evidence?.unavailableActions ?? []).map((a) => String(a))) exclusions.set(action, null);
+  for (const [action, entry] of generationExclusions(ledger)) {
+    // A capability the user named as blocked outranks a handed exclusion: both refuse the same step,
+    // and the blocker is the record that explains why it stays refused.
+    if (!exclusions.has(action)) exclusions.set(action, entry);
+  }
   const { units, met, declined } = openUnits(goal);
+  // The capabilities this generation refused to offer, each with the record that refused it: a reader
+  // who gets no candidate still has to be able to tell a step nobody suggested from one a recorded
+  // obstacle took away.
+  const refusedCapabilities = [...exclusions.keys()].sort().map((action) => ({
+    action,
+    by: exclusions.get(action)?.id ?? 'evidence',
+    reason: exclusions.get(action)?.phrase ?? `this generation answers a recorded failure, so ${action} is not offered again`,
+  }));
   if (units.length === 0) {
     return refusal('no-open-criteria', [
       met.length + declined.length > 0
         ? 'every criterion of this goal is already satisfied or has been declined, so there is nothing to plan'
         : 'the goal records no criteria, so APEX cannot say what a plan would have to settle: the criteria are needed, not guessed',
-    ], { metCriteria: met, declinedCriteria: declined, clarificationNeeded: met.length === 0 && declined.length === 0 });
+    ], {
+      metCriteria: met,
+      declinedCriteria: declined,
+      clarificationNeeded: met.length === 0 && declined.length === 0,
+      constraints: ledger,
+      refusedCapabilities,
+    });
   }
 
-  const resolved = units.map((unit) => resolveUnit(unit, goal, registry, excluded));
+  const resolved = units.map((unit) => resolveUnit(unit, goal, registry, exclusions));
   const unaddressed = resolved.filter((r) => r.problem?.kind === NoCapability)
     .map((r) => ({ criterionId: r.unit.criterionId, text: r.unit.description, reasons: r.problem.reasons }));
   const assumed = resolved.filter((r) => r.problem?.kind === FromGoalRequest)
@@ -485,7 +517,14 @@ export function candidatesForGoal({ goal, registry, evidence = null, workText = 
   if (resolved.every((r) => r.steps.length === 0)) {
     return refusal('no-capability', [
       'no part of this goal can be carried by a registered capability now, so APEX records no candidate rather than inventing steps',
-    ], { unaddressed, assumedFromGoalRequest: assumed, metCriteria: met, declinedCriteria: declined });
+    ], {
+      unaddressed,
+      assumedFromGoalRequest: assumed,
+      metCriteria: met,
+      declinedCriteria: declined,
+      constraints: ledger,
+      refusedCapabilities,
+    });
   }
 
   const outcome = outcomeFor(goal, workText);
@@ -552,6 +591,8 @@ export function candidatesForGoal({ goal, registry, evidence = null, workText = 
       metCriteria: met,
       declinedCriteria: declined,
       skipped,
+      constraints: ledger,
+      refusedCapabilities,
     });
   }
 
@@ -567,6 +608,8 @@ export function candidatesForGoal({ goal, registry, evidence = null, workText = 
     assumedFromGoalRequest: assumed,
     metCriteria: met,
     declinedCriteria: declined,
+    constraints: ledger,
+    refusedCapabilities,
     clarificationNeeded: unaddressed.length > 0 || assumed.length > 0,
     note: CANDIDATE_NOTE,
   };
@@ -579,7 +622,7 @@ export function candidatesForGoal({ goal, registry, evidence = null, workText = 
 // read, never touched - superseding it is the user's recorded act through the existing plan store,
 // and its history stays where it was written. A revision is fresh work: it carries its own content,
 // so an approval bound to the older content approves nothing here.
-export function revisedCandidates({ goal, registry, prior, evidence = {}, reason = null, max = MAX_CANDIDATES_PER_GOAL }) {
+export function revisedCandidates({ goal, registry, prior, evidence = {}, reason = null, max = MAX_CANDIDATES_PER_GOAL, constraints = null }) {
   if (!prior || typeof prior !== 'object' || !Array.isArray(prior.steps)) {
     return refusal('no-prior-plan', ['a revision responds to a recorded plan, and none was given']);
   }
@@ -601,6 +644,7 @@ export function revisedCandidates({ goal, registry, prior, evidence = {}, reason
     registry,
     workText: prior.outcome,
     max,
+    constraints,
     evidence: { ...evidence, unavailableActions: failedActions, lineage },
   });
   if (!result.ok) return result;
@@ -638,6 +682,9 @@ export function renderCandidates(result, { registry = null } = {}) {
       lines.push(`  criterion ${a.criterionId ?? '-'} is matched from the goal, not its own words: ${a.text}`);
     }
     for (const s of result.skipped ?? []) lines.push(`  ${s.strategy}: not offered - ${s.reason}`);
+    for (const r of result.refusedCapabilities ?? []) {
+      lines.push(`  capability refused by the record: ${r.action} - ${r.reason}`);
+    }
     lines.push('APEX does not invent a capability to fill a gap, and does not treat an unrecorded approach as a plan.');
     return lines.join('\n');
   }
@@ -664,6 +711,9 @@ export function renderCandidates(result, { registry = null } = {}) {
     lines.push('    not approved, not started, not executable');
   }
   for (const s of result.skipped ?? []) lines.push(`  ${s.strategy}: not offered - ${s.reason}`);
+  for (const r of result.refusedCapabilities ?? []) {
+    lines.push(`  capability refused by the record: ${r.action} - ${r.reason}`);
+  }
   for (const u of result.unaddressed ?? []) {
     lines.push(`  no capability for criterion ${u.criterionId ?? '-'}: ${u.text}${u.reasons?.length ? ` (${u.reasons.join('; ')})` : ''}`);
   }

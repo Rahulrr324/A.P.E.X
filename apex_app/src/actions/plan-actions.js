@@ -32,8 +32,19 @@ import {
 import { renderPlan } from '../plans/format.js';
 import { candidatesForGoal, revisedCandidates, renderCandidates } from '../plans/candidates.js';
 import { evaluateCandidates, renderEvaluation } from '../plans/evaluation.js';
+import {
+  constraintDigest, constraintLedger, planConstraintFinding, readConstraintRecords, renderConstraints,
+} from '../plans/constraints.js';
+import { emptyGuidance, guidanceDigest, guidanceFrom, renderGuidance } from '../plans/guidance.js';
+import { outcomesAudit, outcomesForGoal } from '../plans/outcomes.js';
+import { assessGoal, completionConsistency } from '../goals/assess.js';
 import { assessOutcome, renderAssessment, VERDICT_RULE } from '../plans/assessment.js';
-import { learningScope, learningDigest, readLearning, renderLearning } from '../executive/learning.js';
+import { learningScope, learningDigest, readLearning, renderLearning, adaptationRow } from '../executive/learning.js';
+
+// How many adaptation records, in any state, one comparison reads for guidance. The store bounds the
+// read; this bounds the answer, and a guidance ledger that had to truncate would say so in its own
+// record list rather than rank on a partial view of the user's approvals.
+const MAX_GUIDANCE_READ = 25;
 
 function assertNoSecret(value, name) {
   if (containsSecret(String(value ?? ''))) {
@@ -201,8 +212,151 @@ async function learningFor(store, ctx, { candidates = [], prior = null, goalId =
   });
 }
 
+// The ledger of what the records say stands in the way of this goal: the goal's own blockers,
+// prerequisites, dependencies, evidence conditions and limits, with the records they cite actually
+// read. A comparison gates on it and prints it, because an obstacle that changed the answer has to be
+// visible in the answer - and a record that could not be read is reported as unread rather than as an
+// absence.
+async function constraintsFor(ctx, registry, goal, evidence) {
+  const { cited, dependencies } = await readConstraintRecords({
+    goal,
+    registry,
+    goals: ctx?.goals ?? null,
+    knowledge: ctx?.knowledge ?? null,
+    memory: ctx?.memory ?? null,
+    experience: ctx?.experience ?? null,
+  });
+  return constraintLedger({ goal, registry, evidence, cited, dependencies });
+}
+
+// Whether a goal the record calls completed still rests on the evidence it was closed against. Read
+// only for a completed goal - every other status has no completion to lose - and handed to the
+// comparison, which cannot open the audit or knowledge stores itself. `holds: null` means the check
+// could not be made, and the gate says so rather than reporting a settled goal.
+async function goalEvidenceFor(store, ctx, goal) {
+  if (goal?.status !== 'completed') return null;
+  const assessment = await assessGoal(goal, {
+    knowledge: ctx?.knowledge ?? null,
+    operations: ctx?.operations ?? null,
+    plans: store,
+  });
+  return completionConsistency(goal, assessment);
+}
+
+// The guidance ledger for one comparison. It reads every adaptation state the store holds for the
+// capabilities these candidates name - not only the active ones the disclosure block shows - because
+// "an unapproved rule changed nothing" is a claim about a specific record, and a read that never looked
+// at that record could not make it. Bounded by the store's own limit, and a store this configuration
+// cannot read is reported as unread rather than as nothing recorded.
+async function guidanceFor(ctx, registry, candidates, { instructionRefusals = [] } = {}) {
+  const scope = learningScope(candidates, null);
+  const store = ctx?.experience;
+  if (!store || typeof store.adaptations !== 'function') {
+    return emptyGuidance('no experience store is configured in this build', candidates);
+  }
+  let rows;
+  try {
+    const all = await store.adaptations({ limit: MAX_GUIDANCE_READ, includeRetired: true });
+    rows = (all ?? []).filter((a) => scope.capabilities.includes(a.capability)).map(adaptationRow);
+  } catch (err) {
+    return emptyGuidance(`the experience log could not be read (${err?.code ?? 'store error'})`, candidates);
+  }
+  return guidanceFrom({ adaptations: rows, candidates, registry, instructionRefusals });
+}
+
+// The audit shape: which record said what, in which class, and whether it was able to stop work. The
+// digest is what an independent re-read is compared against, so a difference means a record moved
+// rather than a sentence was rephrased.
+function constraintAudit(ledger) {
+  return {
+    schema: ledger.schema,
+    goalId: ledger.goalId,
+    goalRevision: ledger.goalRevision,
+    goalStatus: ledger.goalStatus,
+    recordsRead: ledger.recordsRead,
+    constraints: ledger.constraints.map((c) => ({
+      id: c.id,
+      class: c.class,
+      field: c.field,
+      text: c.text,
+      capability: c.capability,
+      gates: c.gates,
+      why: c.why,
+      resolution: c.resolution,
+      record: c.record,
+    })),
+    cleared: ledger.cleared,
+    unavailable: ledger.unavailable,
+    digest: constraintDigest(ledger),
+    note: ledger.note,
+  };
+}
+
+// The revalidation an approval has to pass. An approval binds the plan's bytes and nothing else, so a
+// blocker recorded after the plan was written, a prerequisite whose discharging record has been
+// retracted, and a dependency that has moved are all answers the approval does not carry: they stop the
+// approval here rather than surfacing as a task that failed for a reason the plan could have read.
+async function assertConstraintsCleared(ctx, store, plan) {
+  if (!plan?.goalId) return;
+  const registry = store?.registry ?? null;
+  if (!registry || typeof ctx?.goals?.get !== 'function') return;
+  const goal = await ctx.goals.get(plan.goalId);
+  if (!goal) return;
+  const { finding } = await planConstraintFinding(plan, {
+    goal,
+    registry,
+    goals: ctx.goals,
+    knowledge: ctx?.knowledge ?? null,
+    memory: ctx?.memory ?? null,
+    experience: ctx?.experience ?? null,
+  });
+  if (finding.blockedBy.length === 0) return;
+  throw new ValidationError(
+    `approval refused: ${finding.blockedBy.map((b) => `${b.class} "${b.text}" stops ${b.steps.join(', ')} (recorded on ${b.record.store}${b.record.goalId ? ` ${shortId(b.record.goalId)}` : ''}); what would clear it: ${b.resolution}`).join('; ')}`,
+    'CONSTRAINT_BLOCKED',
+  );
+}
+
+// The audit shape for the guidance ledger: the records, what each was allowed to do, and which fields
+// each candidate met - ids and states only, never the prose, so a difference between two reads means a
+// record moved rather than that a rule was rephrased.
+function guidanceAudit(guidance) {
+  return {
+    schema: guidance.schema,
+    note: guidance.note,
+    applicable: guidance.applicable,
+    influencesSelection: guidance.influencesSelection,
+    inert: guidance.inert.map((i) => ({ id: i.id, state: i.state, why: i.why })),
+    records: guidance.records.map((r) => ({
+      id: r.id,
+      capability: r.capability,
+      rule: r.rule,
+      state: r.state,
+      why: r.why,
+      decisionState: r.decisionState,
+      active: r.active,
+      supportCount: r.supportCount,
+      decidedAt: r.decidedAt,
+      conflicts: r.conflicts,
+      guidance: r.guidance,
+    })),
+    conflicts: guidance.conflicts,
+    candidates: guidance.candidates.map((r) => ({
+      strategy: r.strategy,
+      digest: r.digest,
+      value: r.value,
+      met: r.met,
+      unmet: r.unmet,
+      outranked: r.outranked,
+      notCheckable: r.notCheckable,
+    })),
+    digest: guidance.digest,
+  };
+}
+
 function cannotUseOf(value) {
   if (value === undefined || value === null) return [];
+
   if (!Array.isArray(value)) throw new ValidationError('cannot_use must be a list of action names');
   if (value.length > MAX_PRECONDITIONS) throw new ValidationError(`cannot_use may name at most ${MAX_PRECONDITIONS} actions`);
   return [...new Set(value.map((n) => textField(n, 'an action in cannot_use', 64)))];
@@ -223,6 +377,14 @@ function assertKnownActions(registry, names) {
 // The compact form of a comparison, for the audit record: what was included, what was gated out and
 // why, where each candidate landed, and the digests the statement is bound to. The per-candidate
 // bands are long and are printed rather than stored twice.
+// Only what the ranking actually consumed: whether the outcomes were read at all, how many records
+// reached it, which capabilities they name, and whether the bounded read had to stop short. The count
+// of plan records looked at is printed for the reader, but a new draft with no step outcome recorded
+// changes nobody's band, so refusing a re-read over it would be refusing a question nobody asked.
+const outcomesRankingShape = (audit) => JSON.stringify([
+  audit.read === true, audit.records, audit.truncated === true, [...audit.capabilities].sort(),
+]);
+
 function comparisonOf(evaluation) {
   return {
     ok: evaluation.ok,
@@ -232,6 +394,34 @@ function comparisonOf(evaluation) {
     gates: evaluation.gates,
     rankedDimensions: evaluation.rankedDimensions,
     disclosedDimensions: evaluation.disclosedDimensions,
+    // Which records were able to stop work, how many were only reported, and what could not be
+    // checked: the counts an auditor needs to notice that an answer changed, with the ids of the
+    // gating ones so a refusal can be traced to the record it cites.
+    constraints: evaluation.constraints
+      ? {
+        gating: evaluation.constraints.gating,
+        reported: evaluation.constraints.disclosed.length,
+        satisfied: evaluation.constraints.cleared.length,
+        unestablished: evaluation.constraints.unavailable,
+        digest: constraintDigest(evaluation.constraints),
+      }
+      : null,
+    // What moved the ordering, in the records' own names: which approved guidance shaped it, which
+    // disagreed with itself, and the digest an independent re-read is checked against.
+    guidance: evaluation.guidance
+      ? {
+        applicable: evaluation.guidance.applicable,
+        influencesSelection: evaluation.guidance.influencesSelection,
+        conflicts: (evaluation.guidance.conflicts ?? []).map((c) => c.between),
+        digest: evaluation.guidance.digest,
+      }
+      : null,
+    // Whether this ranking saw what past runs of these capabilities left on record, how many plan
+    // records that read looked at, and whether it had to stop short. A comparison that ranked on no
+    // history says so here, so an unread record list cannot be read as "the records show no failures".
+    outcomes: evaluation.outcomesRead ?? { read: false, records: 0, plans: 0, truncated: false, capabilities: [] },
+    // Whether a completed goal's proof was re-read for this comparison, and what that re-read said.
+    goalEvidence: evaluation.goalEvidenceRead ?? null,
     included: evaluation.included,
     excluded: evaluation.excluded,
     front: evaluation.front,
@@ -450,7 +640,9 @@ export function planActions(store) {
         if (typeof o.target !== 'string' || o.target.trim().length === 0) throw new ValidationError('target must be a plan id');
         return { target: o.target.trim() };
       },
-      async execute(_ctx, { target }) {
+      async execute(ctx, { target }) {
+        const draft = await store.resolve(target);
+        await assertConstraintsCleared(ctx, store, draft);
         const { plan } = await store.approve(target);
         return {
           summary: `approved plan ${shortId(plan.id)} v${plan.version}`,
@@ -563,10 +755,20 @@ export function planActions(store) {
         assertKnownActions(registry, cannotUse);
         const goal = await goalForRead(ctx, goalRef);
         const evidence = { unavailableActions: cannotUse, knownBlockers: [], failedOperations: [] };
-        const generated = candidatesForGoal({ goal, registry, evidence, workText: work });
-        const evaluation = evaluateCandidates({ result: generated, goal, registry, evidence });
-        const occupancy = await store.candidateState(goal.id);
+        const constraints = await constraintsFor(ctx, registry, goal, evidence);
+        const generated = candidatesForGoal({ goal, registry, evidence, workText: work, constraints });
+        // Read after generation, because the capabilities the learning question is scoped to are the ones
+        // the candidates name; before the comparison, because an approved guidance record is one of the
+        // dimensions the comparison ranks on and it has to be on the table when the ranking is taken.
         const learning = await learningFor(store, ctx, { candidates: generated.candidates, goalId: goal.id });
+        const guidance = await guidanceFor(ctx, registry, generated.candidates, { instructionRefusals: cannotUse });
+        // The step outcomes the goal's own plan records hold, read once for the ranking that compares
+        // these candidates against them. An empty list here is a read that found nothing; the audit
+        // line keeps that separate from a store nobody opened.
+        const outcomes = await outcomesForGoal(store, { goalId: goal.id });
+        const goalEvidence = await goalEvidenceFor(store, ctx, goal);
+        const evaluation = evaluateCandidates({ result: generated, goal, registry, evidence, constraints, guidance, outcomes, goalEvidence });
+        const occupancy = await store.candidateState(goal.id);
         return {
           summary: `${generated.candidates.length} candidate plan(s) for goal ${shortId(goal.id)}; `
             + (evaluation.ok
@@ -587,6 +789,9 @@ export function planActions(store) {
             unaddressed: (generated.unaddressed ?? []).map((u) => ({ criterionId: u.criterionId ?? null, text: u.text })),
             assumedFromGoalRequest: (generated.assumedFromGoalRequest ?? []).map((a) => ({ criterionId: a.criterionId ?? null, text: a.text })),
             skipped: generated.skipped ?? [],
+            refusedCapabilities: generated.refusedCapabilities ?? [],
+            constraints: constraintAudit(constraints),
+            guidance: guidanceAudit(guidance),
             comparison: comparisonOf(evaluation),
             learning,
             recorded: false,
@@ -596,6 +801,8 @@ export function planActions(store) {
           display: [
             renderCandidates(generated, { registry }),
             renderEvaluation(evaluation),
+            renderConstraints(constraints),
+            renderGuidance(guidance),
             occupancyNote(occupancy),
             renderLearning(learning),
             'No effort estimate appears above because the audit log holds no per-action duration to average; a number here would be a guess.',
@@ -607,25 +814,49 @@ export function planActions(store) {
         const registry = registryFor(ctx);
         const goal = await goalForRead(ctx, goalRef);
         const evidence = { unavailableActions: cannotUse, knownBlockers: [], failedOperations: [] };
-        const again = candidatesForGoal({ goal, registry, evidence, workText: work });
-        const compared = evaluateCandidates({ result: again, goal, registry, evidence });
+        const constraints = await constraintsFor(ctx, registry, goal, evidence);
+        const again = candidatesForGoal({ goal, registry, evidence, workText: work, constraints });
+        const againLearning = await learningFor(store, ctx, { candidates: again.candidates, goalId: goal.id });
+        const againGuidance = await guidanceFor(ctx, registry, again.candidates, { instructionRefusals: cannotUse });
+        const againOutcomes = await outcomesForGoal(store, { goalId: goal.id });
+        const compared = evaluateCandidates({
+          result: again, goal, registry, evidence, constraints, guidance: againGuidance,
+          outcomes: againOutcomes, goalEvidence: await goalEvidenceFor(store, ctx, goal),
+        });
         if (compared.boundTo.candidateSetDigest !== result.data.candidateSetDigest) {
           return {
             ok: false,
             detail: 'an independent generation gives different candidate bytes, so this answer describes a goal, a registry, or a constraint that has since moved',
           };
         }
+        if (constraintDigest(constraints) !== result.data.constraints.digest) {
+          return {
+            ok: false,
+            detail: 'the constraints that gated these candidates no longer read the same: a blocker, prerequisite, dependency, or a record one of them cites has moved since this answer was read',
+          };
+        }
+        if (againGuidance.digest !== result.data.guidance.digest) {
+          return {
+            ok: false,
+            detail: 'the guidance that ranked these candidates no longer reads the same: an adaptation was approved or retired, a recorded shape changed, or two of the user\'s own records came to disagree while this answer was being read',
+          };
+        }
+        if (outcomesRankingShape(outcomesAudit(againOutcomes)) !== outcomesRankingShape(result.data.comparison.outcomes)) {
+          return {
+            ok: false,
+            detail: 'the recorded step outcomes these candidates were ranked against no longer read the same: a step of one of this goal\'s plans failed, stayed uncertain, or was recorded while this answer was being read',
+          };
+        }
         const occupancy = await store.candidateState(goal.id);
         if (occupancy.drafts.join(',') !== result.data.occupancy.drafts.join(',')) {
           return { ok: false, detail: 'the plan store now holds a different set of drafts for this goal than this read reported' };
         }
-        const againLearning = await learningFor(store, ctx, { candidates: again.candidates, goalId: goal.id });
         if (learningDigest(againLearning) !== learningDigest(result.data.learning)) {
           return { ok: false, detail: 'the learning records disclosed with this comparison no longer read the same: an adaptation was decided, an expectation changed state, or an assessment was recorded while this answer was being read' };
         }
         return {
           ok: true,
-          detail: `${again.candidates.length} candidate(s) reproduce byte for byte from the recorded goal and the live registry; the store holds ${occupancy.drafts.length} draft(s) for this goal, none added by this read; the learning disclosure re-reads to the same records`,
+          detail: `${again.candidates.length} candidate(s) reproduce byte for byte from the recorded goal, the live registry, and the constraints its records state; the store holds ${occupancy.drafts.length} draft(s) for this goal, none added by this read; the learning disclosure re-reads to the same records; the constraint ledger re-reads to the same records; the guidance ledger re-reads to the same records`,
         };
       },
     },
@@ -651,24 +882,36 @@ export function planActions(store) {
         }
         const goal = await goalForRead(ctx, prior.goalId);
         const failedOperations = failedOperationRecords(prior);
+        const constraints = await constraintsFor(ctx, registry, goal, { unavailableActions: cannotUse, knownBlockers: [], failedOperations });
         const generated = revisedCandidates({
           goal,
           registry,
           prior,
           evidence: { unavailableActions: cannotUse, knownBlockers: [], failedOperations },
           reason,
+          constraints,
         });
         // What the earlier run refused stays refused while the revision is compared, so a revision that
         // quietly kept a capability that already failed is gated out rather than ranked.
         const refused = [...new Set([...cannotUse, ...(generated.revision?.refusedActions ?? [])].map(String))];
+        const learning = await learningFor(store, ctx, { candidates: generated.candidates, prior, goalId: goal.id });
+        const guidance = await guidanceFor(ctx, registry, generated.candidates, { instructionRefusals: refused });
+        // The recorded step outcomes this revision's capabilities carry, across every plan record for
+        // this goal - the prior plan's own failures among them. Read here, not copied from the plan
+        // being answered, because a revision has to see what the earlier approaches left behind.
+        const outcomes = await outcomesForGoal(store, { goalId: goal.id });
+        const goalEvidence = await goalEvidenceFor(store, ctx, goal);
         const evaluation = evaluateCandidates({
           result: generated,
           goal,
           registry,
           evidence: { unavailableActions: refused, knownBlockers: [] },
+          constraints,
+          guidance,
+          outcomes,
+          goalEvidence,
         });
         const occupancy = await store.candidateState(goal.id);
-        const learning = await learningFor(store, ctx, { candidates: generated.candidates, prior, goalId: goal.id });
         return {
           summary: `${generated.candidates.length} revised candidate plan(s) for plan ${shortId(prior.id)} v${prior.version}; `
             + (evaluation.ok
@@ -692,6 +935,9 @@ export function planActions(store) {
             clarificationNeeded: generated.clarificationNeeded,
             unaddressed: (generated.unaddressed ?? []).map((u) => ({ criterionId: u.criterionId ?? null, text: u.text })),
             skipped: generated.skipped ?? [],
+            refusedCapabilities: generated.refusedCapabilities ?? [],
+            constraints: constraintAudit(constraints),
+            guidance: guidanceAudit(guidance),
             comparison: comparisonOf(evaluation),
             learning,
             freshApprovalRequired: generated.revision ? generated.revision.freshApprovalRequired : null,
@@ -706,6 +952,8 @@ export function planActions(store) {
               : 'The plan record holds no failed or uncertain step outcome, so this revision answers the stated reason and the constraints given, not a recorded failure.',
             renderCandidates(generated, { registry }),
             renderEvaluation(evaluation),
+            renderConstraints(constraints),
+            renderGuidance(guidance),
             occupancyNote(occupancy),
             renderLearning(learning),
             `Plan ${shortId(prior.id)} is unchanged by this read, and its approval binds to its own bytes: none of the candidates above inherits it.`,
@@ -724,27 +972,54 @@ export function planActions(store) {
         }
         if (!prior.goalId) return { ok: false, detail: 'the plan records no goal, so the revision cannot be regenerated' };
         const goal = await goalForRead(ctx, prior.goalId);
+        const constraints = await constraintsFor(ctx, registry, goal, { unavailableActions: cannotUse, knownBlockers: [], failedOperations: failedOperationRecords(prior) });
         const again = revisedCandidates({
           goal,
           registry,
           prior,
           evidence: { unavailableActions: cannotUse, knownBlockers: [], failedOperations: failedOperationRecords(prior) },
           reason,
+          constraints,
         });
+        const refusedNow = [...new Set([...cannotUse, ...(again.revision?.refusedActions ?? [])].map(String))];
+        const againLearning = await learningFor(store, ctx, { candidates: again.candidates, prior, goalId: goal.id });
+        const againGuidance = await guidanceFor(ctx, registry, again.candidates, { instructionRefusals: refusedNow });
+        const againOutcomes = await outcomesForGoal(store, { goalId: goal.id });
         const compared = evaluateCandidates({
           result: again,
           goal,
           registry,
-          evidence: { unavailableActions: [...new Set([...cannotUse, ...(again.revision?.refusedActions ?? [])].map(String))], knownBlockers: [] },
+          evidence: { unavailableActions: refusedNow, knownBlockers: [] },
+          constraints,
+          guidance: againGuidance,
+          outcomes: againOutcomes,
+          goalEvidence: await goalEvidenceFor(store, ctx, goal),
         });
         if (compared.boundTo.candidateSetDigest !== result.data.candidateSetDigest) {
           return { ok: false, detail: 'an independent revision gives different candidate bytes, so this answer describes a plan, goal, or registry that has since moved' };
+        }
+        if (outcomesRankingShape(outcomesAudit(againOutcomes)) !== outcomesRankingShape(result.data.comparison.outcomes)) {
+          return {
+            ok: false,
+            detail: 'the recorded step outcomes this revision was ranked against no longer read the same: a step of one of this goal\'s plans failed, stayed uncertain, or was recorded since this answer was read',
+          };
+        }
+        if (againGuidance.digest !== result.data.guidance.digest) {
+          return {
+            ok: false,
+            detail: 'the guidance that ranked this revision no longer reads the same: an adaptation was approved or retired, a recorded shape changed, or two of the user\'s own records came to disagree while this answer was being read',
+          };
+        }
+        if (constraintDigest(constraints) !== result.data.constraints.digest) {
+          return {
+            ok: false,
+            detail: 'the constraints that gated this revision no longer read the same: a blocker, prerequisite, dependency, or a record one of them cites has moved since this answer was read',
+          };
         }
         const occupancy = await store.candidateState(goal.id);
         if (occupancy.drafts.length !== result.data.occupancy.drafts.length) {
           return { ok: false, detail: 'the plan store holds a different number of drafts for this goal than this read reported' };
         }
-        const againLearning = await learningFor(store, ctx, { candidates: again.candidates, prior, goalId: goal.id });
         if (learningDigest(againLearning) !== learningDigest(result.data.learning)) {
           return { ok: false, detail: 'the learning records disclosed with this revision no longer read the same: an adaptation was decided, an expectation changed state, or an assessment was recorded while this answer was being read' };
         }

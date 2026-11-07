@@ -36,7 +36,8 @@ function nextHint(goal) {
     case 'blocked':
       return `Resolve the obstacle, then: node bin/apex.js goal update ${id} active --reason "what changed"`;
     case 'completed':
-      return 'Completed against verified evidence. Contradicting evidence can reopen it with: node bin/apex.js goal evidence --reopen';
+      return 'Completed on record: every required criterion was satisfied against a verified operation at the moment it closed. '
+        + `Contradicting evidence can reopen it with: node bin/apex.js goal evidence ${id} --criterion c1 --kind contradicts --reopen`;
     case 'failed':
       return 'Recorded as failed. It can be cancelled, abandoned, or superseded; it cannot be completed.';
     case 'cancelled':
@@ -86,7 +87,7 @@ function decompositionLines(goal) {
   return lines;
 }
 
-export function renderGoal(goal) {
+export function renderGoal(goal, { completion = null } = {}) {
   const p = goalProgress(goal);
   const origin = goal.origin === 'user' ? 'your request' : goal.origin;
   const lines = [
@@ -121,6 +122,19 @@ export function renderGoal(goal) {
     lines.push(`Completion evidence: ${goal.completion.criteria
       .map((c) => `${c.criterionId} -> ${c.operationId ? shortId(c.operationId) : 'none'}`)
       .join(', ')}`);
+  }
+  // The record above says what was proved when the goal closed. A caller that re-opened those records
+  // hands the answer here, and a goal whose proof has since been withdrawn is not shown as settled -
+  // nor is it shown as unproven when the records simply could not be read.
+  if (completion && goal.status === 'completed') {
+    if (completion.holds === false) {
+      lines.push(`NOT SETTLED: ${completion.detail}`);
+      if (completion.command) lines.push(`What the records offer: ${completion.command}`);
+    } else if (completion.holds === null) {
+      lines.push(`Not re-checked: ${completion.detail}`);
+    } else {
+      lines.push(`Re-checked: ${completion.detail}`);
+    }
   }
   lines.push(`Plans: ${goal.planIds.length ? goal.planIds.map(shortId).join(', ') : 'none linked'}`);
   lines.push(`Tasks: ${goal.taskIds.length ? goal.taskIds.map(shortId).join(', ') : 'none linked'}`);

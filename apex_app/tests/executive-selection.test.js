@@ -445,11 +445,12 @@ test('replanning records a revision beside the approved plan and leaves that pla
 });
 
 // ---------------------------------------------------------------------------
-// 4. Continuation readiness: the six states, each naming the record it was read from.
+// 4. Continuation readiness: the seven states, each naming the record it was read from.
 // ---------------------------------------------------------------------------
 
-const SIX_STATES = [
+const SEVEN_STATES = [
   '  ready to execute - a plan recorded as approved, whose live validity check passes against the records it names',
+  `  ready to continue - ${READINESS_BASIS['ready to continue']}`,
   '  ready for approval - a plan recorded as a draft, or a candidate that passed every gate, whose steps the live registry authorizes',
   '  requires clarification - a comparison the disclosed rule cannot separate, a goal whose revision moved after the plan was written, or a goal with no open criterion to plan against',
   '  blocked - a plan or goal recorded as blocked, an approval that no longer matches the plan bytes, an unmet goal dependency, or a failed step outcome',
@@ -461,7 +462,7 @@ function readinessCore(display) {
   says(display, [
     'Continuation readiness, answered from the plan, goal, task and comparison records and the live validity check.',
     'Nothing here was run, approved, recorded, or cancelled.',
-    ...SIX_STATES,
+    ...SEVEN_STATES,
     `  ${READINESS_RULE}`,
   ], 'readiness answer');
 }
@@ -478,7 +479,7 @@ test('a draft reads as ready for approval and names the approval command', async
     const display = res.display;
     readinessCore(display);
     says(display, [
-      `The six states, and the record each one is read from (asked about ${short(draft.id)}):`,
+      `The seven states, and the record each one is read from (asked about ${short(draft.id)}):`,
       'Readiness: ready for approval.',
       `  read as: ${READINESS_BASIS['ready for approval']}`,
       '  - the plan is a draft of 1 step(s) and every live check passed',

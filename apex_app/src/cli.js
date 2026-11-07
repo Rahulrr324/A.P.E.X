@@ -66,6 +66,8 @@ Usage:
   node bin/apex.js adaptation list [--limit N] [--exclude-retired]
   node bin/apex.js adaptation approve <id> [--reason <text>]     your decision; the only way a rule takes effect
   node bin/apex.js adaptation reject <id> [--reason <text>]
+  node bin/apex.js adaptation guide <id> [--order O] [--avoid a,b] [--prefer a,b] [--max-steps N] [--reason <text>]
+                                                            record the shape you meant: what order, what to avoid, how many steps is too many
   node bin/apex.js adaptation retire <id> [--reason <text>]      stop using a rule; its history stays readable
   node bin/apex.js prediction record --capability <name> --expect <kind> --subject <text> (--expires <iso> | --in-days N) [--supports <id[,id...]>] [--contradicts <id[,id...]>] [--feedback <id[,id...]>] [--pattern <kind[,kind...]>] [--replaces <id[,id...]>]
   node bin/apex.js prediction list [--limit N] [--capability <name>] [--status <name>]
@@ -99,6 +101,8 @@ Usage:
   node bin/apex.js plan approve <id>
   node bin/apex.js plan start <id>        create a user-origin task from an approved plan, then run it
   node bin/apex.js plan reconcile <id>    re-read the linked task and record its terminal outcomes
+  node bin/apex.js plan continuation <id>  which steps a stopped run may still take up, and what forbids it (read-only)
+  node bin/apex.js plan continue <id>     take up the steps the records prove never started
   node bin/apex.js plan cancel <id> --reason <text>
   node bin/apex.js plan supersede <id> --by <plan-id> --reason <text>
   node bin/apex.js recover                interrupted, uncertain, resumable, and blocked work (read-only)
@@ -172,6 +176,7 @@ Experience and adaptation examples (what APEX did, what you thought, what to cha
   adaptation derive           repeated feedback becomes a candidate; a candidate does nothing yet
   adaptation list             shows each state: candidate, approved, in effect, rejected, retired, ambiguous
   adaptation approve <id>     your decision; only an approved rule is offered to future answers
+  adaptation guide <id>       say what shape the approved rule asks future work to take
   adaptation retire <id>      stop using a rule without deleting the history of it
   experience health           re-checks every recorded experience against the audit log
   experience timeline --days 7     recorded events in the window, newest first, corrections marked
@@ -236,15 +241,17 @@ Goal and plan examples (recorded intent; never permission to execute):
   plan approve <plan-id>               binds approval to this exact content; every step is still authorized again
   plan start <plan-id>                 creates a user-origin task, runs it, and records each step's outcome
   plan reconcile <plan-id>             after an interrupted run, re-reads the task and records outcomes
+  plan continuation <plan-id>          which steps a stopped run may still take up, and what forbids it (read-only)
+  plan continue <plan-id>              takes up the steps the records prove never started; replays nothing
   recover                              states what was interrupted, what is uncertain, and what can resume
   work                                 ranks the next work from goals, plans, tasks, and execution state
   next                                 states the single top recommendation; nothing is executed
 A goal records what you intend; a plan records how you propose to get there; neither grants any
 action permission. A task completing does not complete a goal: completion needs verified evidence
 for every success criterion. Goal and plan writes are yours alone; a model cannot create, approve,
-start, reconcile, or complete one, and cannot smuggle one into a plan. Starting a plan authorizes
-only the steps it names, each through the same registry authorization as any other action, and an
-interrupted step is reported as uncertain rather than assumed not to have happened.
+start, reconcile, continue, or complete one, and cannot smuggle one into a plan. Starting a plan
+authorizes only the steps it names, each through the same registry authorization as any other action,
+and an interrupted step is reported as uncertain rather than assumed not to have happened.
 
 With a configured model endpoint, any other request is answered from that model,
 using relevant memory and the recent conversation. Without one, APEX says so.
@@ -512,7 +519,7 @@ export function formatResult(res) {
   // user otherwise would invite them to treat a safe retry as dangerous.
   const writeActions = new Set([
     'memory.add', 'memory.correct', 'memory.save_conclusion', 'knowledge.add', 'knowledge.retract', 'knowledge.resolve',
-    'experience.record', 'feedback.record', 'adaptation.derive', 'adaptation.decide', 'adaptation.retire',
+    'experience.record', 'feedback.record', 'adaptation.derive', 'adaptation.decide', 'adaptation.guide', 'adaptation.retire',
     'prediction.record', 'prediction.evaluate', 'prediction.invalidate',
   ]);
   const refusedBeforeWriting = (s) => s.execution?.error?.code === 'LOCKED'
@@ -1124,6 +1131,22 @@ export async function main(argv, {
           reason: flags.reason ?? null,
         }));
       }
+      if (sub === 'guide') {
+        const { flags, rest: ids } = parseFlags(rest, ['order', 'avoid', 'prefer', 'max-steps', 'reason']);
+        if (ids.length !== 1) {
+          err('usage: adaptation guide <adaptation-id> (--order reads_first|writes_first | --avoid a,b | --prefer a,b | --max-steps N) [--reason <text>]');
+          return 2;
+        }
+        const list = (value) => (value === undefined ? [] : String(value).split(',').map((n) => n.trim()).filter((n) => n.length > 0));
+        return emit(await app.controller.adaptationGuide({
+          target: ids[0],
+          order: flags.order ?? null,
+          avoid: list(flags.avoid),
+          prefer: list(flags.prefer),
+          maxSteps: flags['max-steps'] === undefined ? null : flags['max-steps'],
+          reason: flags.reason ?? null,
+        }));
+      }
       if (sub === 'retire') {
         const { flags, rest: ids } = parseFlags(rest, ['reason']);
         if (ids.length !== 1) {
@@ -1132,7 +1155,7 @@ export async function main(argv, {
         }
         return emit(await app.controller.adaptationRetire({ target: ids[0], reason: flags.reason ?? null }));
       }
-      err('usage: adaptation derive|list|approve|reject|retire');
+      err('usage: adaptation derive|list|approve|reject|guide|retire');
       return 2;
     }
 
@@ -1985,6 +2008,16 @@ export async function main(argv, {
         if (ids.length !== 1) throw new ValidationError('usage: plan reconcile <id>', 'USAGE');
         return emit(await app.controller.planReconcile(ids[0]));
       }
+      if (sub === 'continuation') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) throw new ValidationError('usage: plan continuation <id>', 'USAGE');
+        return emit(await app.controller.planContinuation(ids[0]));
+      }
+      if (sub === 'continue') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) throw new ValidationError('usage: plan continue <id>', 'USAGE');
+        return emit(await app.controller.planContinue(ids[0]));
+      }
       if (sub === 'cancel') {
         const { flags, rest: ids } = parseFlags(rest, ['reason']);
         if (ids.length !== 1 || !flags.reason) {
@@ -2003,7 +2036,7 @@ export async function main(argv, {
           reason: flags.reason,
         }));
       }
-      err('usage: plan add|list|show|validate|history|compare|candidates|replan|outcome|assess|revise|approve|start|reconcile|cancel|supersede');
+      err('usage: plan add|list|show|validate|history|compare|candidates|replan|outcome|assess|revise|approve|start|reconcile|continuation|continue|cancel|supersede');
       return 2;
     }
 
