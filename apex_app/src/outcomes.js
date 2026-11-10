@@ -12,6 +12,8 @@ export const Outcome = Object.freeze({
   INPUT_REJECTED: 'input_rejected',
   CLARIFICATION_REQUIRED: 'clarification_required', // the request is missing information needed to proceed
   MODEL_UNAVAILABLE: 'model_unavailable',
+  REQUEST_CANCELLED: 'request_cancelled', // the caller cancelled the request; no answer was accepted and nothing ran
+  DUPLICATE_PROPOSAL: 'duplicate_proposal', // a model proposal repeated an earlier one in the same reply; it did not run twice
   PLAN_CREATED: 'plan_created', // a validated deterministic task plan was stored
   PLAN_PROPOSED: 'plan_proposed', // a validated model plan was stored; waits for user approval
   PLAN_REJECTED: 'plan_rejected', // a plan failed validation; nothing was stored

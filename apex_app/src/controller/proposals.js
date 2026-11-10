@@ -11,6 +11,7 @@
 // dropped whole; an unknown root field is refused rather than ignored, so a later reader cannot
 // mistake a smuggled field for something APEX accepted.
 import { ACTION_NAME_RE } from '../actions/registry.js';
+import { ArtifactKind, validateArtifact } from '../cognition/artifacts.js';
 
 export const PROPOSAL_PREFIX = 'PROPOSE_ACTION';
 export const PROPOSAL_KIND = 'model_action_proposal';
@@ -87,7 +88,7 @@ export function parseModelOutput(text) {
       malformed.push({ reason });
       continue;
     }
-    proposals.push({
+    const typed = {
       type: PROPOSAL_KIND,
       proposalId: `mp:${proposals.length + 1}`,
       action: obj.action,
@@ -95,7 +96,15 @@ export function parseModelOutput(text) {
       origin: 'model',
       trusted: false,
       authority: 'none',
-    });
+    };
+    // The parser's own construction is checked against the artifact contract, so the typed proposal a
+    // later reader receives and the contract it is promised cannot drift apart.
+    const contract = validateArtifact(ArtifactKind.MODEL_PROPOSAL, typed);
+    if (!contract.ok) {
+      malformed.push({ reason: contract.problems[0] });
+      continue;
+    }
+    proposals.push(typed);
   }
   return { text: answerLines.join('\n').trim(), proposals, malformed };
 }

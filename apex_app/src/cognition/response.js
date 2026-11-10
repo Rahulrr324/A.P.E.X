@@ -252,9 +252,12 @@ function validText(value, max) {
 }
 
 // Severity order for a claim that cites more than one record: the weakest cited record decides,
-// because a conclusion cannot be stronger than its weakest premise.
+// because a conclusion cannot be stronger than its weakest premise. A withdrawn or replaced record is
+// weaker than an old one, and both are weaker than a record that merely does not establish the claim.
 const EVIDENCE_STATE_SEVERITY = Object.freeze([
   EvidenceState.CONFLICTING,
+  EvidenceState.RETRACTED,
+  EvidenceState.SUPERSEDED,
   EvidenceState.TEMPORALLY_STALE,
   EvidenceState.UNSUPPORTED,
   EvidenceState.UNVERIFIED,
@@ -281,6 +284,8 @@ const STATE_WITHOUT_EVIDENCE = Object.freeze({
 
 const STATE_PROBLEM = Object.freeze({
   [EvidenceState.CONFLICTING]: 'the cited records disagree and the disagreement is unresolved; present both sides or label it unknown',
+  [EvidenceState.RETRACTED]: 'the cited record was retracted and no longer stands; it cannot support a claim',
+  [EvidenceState.SUPERSEDED]: 'a later record replaced the cited one; cite the current record or label it historical',
   [EvidenceState.TEMPORALLY_STALE]: 'the cited records are not current; label it historical',
   [EvidenceState.UNVERIFIED]: 'the cited records could not be verified; label it inference or unknown',
   [EvidenceState.UNSUPPORTED]: 'the cited records do not establish the statement; label it general_knowledge or unknown',

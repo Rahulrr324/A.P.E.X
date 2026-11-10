@@ -68,7 +68,8 @@ function count(value) {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
-function countsOf(values) {
+// Shared with the executable lifecycle so one stage can never carry two different sanitizations.
+export function sanitizeCounts(values) {
   const out = {};
   for (const [key, value] of Object.entries(values ?? {})) {
     if (!LABEL_RE.test(key)) continue;
@@ -78,7 +79,7 @@ function countsOf(values) {
   return out;
 }
 
-function labelsOf(values) {
+export function sanitizeLabels(values) {
   const out = {};
   for (const [key, value] of Object.entries(values ?? {})) {
     if (!LABEL_RE.test(key) || typeof value !== 'string' || !LABEL_RE.test(value)) continue;
@@ -94,9 +95,30 @@ function stage(order, status, counts = {}, labels = {}) {
     name: definition.name,
     owner: definition.owner,
     status,
-    counts: countsOf(counts),
-    labels: labelsOf(labels),
+    counts: sanitizeCounts(counts),
+    labels: sanitizeLabels(labels),
   };
+}
+
+// A lifecycle is handed in either as the object or as its already-taken snapshot. Only the declared
+// ten stages and their fixed vocabulary are read; nothing else on the object is copied.
+function lifecycleSnapshotOf(lifecycle) {
+  if (!lifecycle || typeof lifecycle !== 'object') return null;
+  const snapshot = typeof lifecycle.snapshot === 'function' ? lifecycle.snapshot() : lifecycle;
+  if (!Array.isArray(snapshot?.stages) || snapshot.stages.length !== CONTRACT_STAGES.length) return null;
+  return snapshot;
+}
+
+const LIFECYCLE_TERMINAL = new Set([
+  StageStatus.RAN, StageStatus.SKIPPED, StageStatus.NOT_REACHED, StageStatus.UNAVAILABLE, StageStatus.FAILED,
+]);
+
+function stagesFromLifecycle(snapshot) {
+  return CONTRACT_STAGES.map((definition) => {
+    const entry = snapshot.stages.find((candidate) => candidate?.order === definition.order);
+    const status = LIFECYCLE_TERMINAL.has(entry?.status) ? entry.status : StageStatus.NOT_REACHED;
+    return stage(definition.order, status, entry?.counts, entry?.labels);
+  });
 }
 
 // The first five stages, read from a completed analysis. An analysis that could not be taken leaves
@@ -231,8 +253,16 @@ function closeNotReached(stages) {
   });
 }
 
-export function buildContract({ requestId = null, analysis = null, proposals = null, steps = null, learning = null } = {}) {
-  const stages = closeNotReached([...cognitiveStages(analysis), ...executiveStages({ proposals, steps, learning })]);
+export function buildContract({
+  requestId = null, analysis = null, proposals = null, steps = null, learning = null, lifecycle = null,
+} = {}) {
+  // When the request actually passed through the executable lifecycle, the contract restates those
+  // recorded transitions instead of re-deriving them from the analysis. The two paths agree on the
+  // vocabulary, and this one cannot show a stage the lifecycle refused to enter.
+  const snapshot = lifecycleSnapshotOf(lifecycle);
+  const stages = snapshot
+    ? closeNotReached(stagesFromLifecycle(snapshot))
+    : closeNotReached([...cognitiveStages(analysis), ...executiveStages({ proposals, steps, learning })]);
   const records = Array.isArray(steps) ? steps : [];
   const executed = records.filter((s) => s.execution?.status === 'ok');
   const unauthorized = executed.filter((s) => s.authorization?.decision !== 'allow');
@@ -252,6 +282,15 @@ export function buildContract({ requestId = null, analysis = null, proposals = n
       detail: unrecorded.length === 0
         ? 'every executed step has an authorization decision on its record'
         : `${unrecorded.length} executed step(s) have no authorization decision recorded`,
+    },
+    {
+      // An attempted transition the lifecycle refused means the caller tried to advance outside the
+      // recorded order. The refusal is kept in the audit; the contract reports that it happened.
+      check: 'lifecycle_transitions_recorded',
+      ok: !snapshot || (Array.isArray(snapshot.rejections) && snapshot.rejections.length === 0),
+      detail: !snapshot || (Array.isArray(snapshot.rejections) && snapshot.rejections.length === 0)
+        ? 'every stage transition passed its recorded entry condition'
+        : `${(snapshot.rejections ?? []).length} stage transition(s) were rejected by the lifecycle`,
     },
   ];
   // "Reached" means the stage actually did its work. A skipped stage (nothing to authorize) or an

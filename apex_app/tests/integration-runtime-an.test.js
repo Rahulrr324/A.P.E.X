@@ -349,6 +349,13 @@ describe('AN-09: the full runtime path through the real controller and stores', 
     assert.deepEqual(stageOf(8).counts, { attempted: 1, ok: 1, rejected: 0, failed: 0 });
     assert.deepEqual(stageOf(9).counts, { checked: 1, verified: 1, failed: 0, unavailable: 0 });
     assert.equal(stageOf(10).status, 'not_reached');
+    // The executable lifecycle behind the contract: the request's own status is the record's status,
+    // no transition was rejected, and whether the append succeeded cannot be inside the record.
+    assert.equal(cognition.lifecycle.authorizes, false);
+    assert.deepEqual(cognition.lifecycle.rejections, []);
+    assert.equal(cognition.lifecycle.finalization.status, Outcome.VERIFICATION_UNAVAILABLE);
+    assert.equal(cognition.lifecycle.finalization.recorded, null);
+    assert.equal(cognition.lifecycle.stages[9].status, 'not_reached');
 
     // Learning: the user records the audited answer as an experience, and the store proves it points at
     // the operation it names.
@@ -582,9 +589,14 @@ describe('AN-09: transport failure', () => {
 
     const contract = cognition.contract;
     const stageOf = (order) => contract.stages.find((entry) => entry.order === order);
-    for (let order = 1; order <= 6; order += 1) assert.equal(stageOf(order).status, 'ran', `stage ${order}`);
+    for (let order = 1; order <= 5; order += 1) assert.equal(stageOf(order).status, 'ran', `stage ${order}`);
+    // The transport failed while the model stage was running: the stage is recorded as failed, not as
+    // a "ran" that observed zero proposals, and every stage that depends on it is not reached.
+    assert.equal(stageOf(6).status, 'failed');
     assert.deepEqual(stageOf(6).counts, { observed: 0, well_formed: 0, malformed: 0, overflow: 0 });
-    assert.equal(stageOf(7).status, 'skipped');
+    // The fixed contract stage has no free-text field; the bounded reason lives in the lifecycle audit.
+    assert.equal(cognition.lifecycle.stages[5].reason, 'model_unavailable');
+    assert.equal(stageOf(7).status, 'not_reached');
     assert.equal(stageOf(8).status, 'not_reached');
     assert.equal(contract.reachedThrough, 6);
 

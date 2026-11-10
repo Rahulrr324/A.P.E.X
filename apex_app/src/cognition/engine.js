@@ -16,6 +16,9 @@ import { CognitionTrace } from './trace.js';
 import { buildGroundingBrief, validatePlainAnswer } from './response.js';
 import { cognitionAudit, validateCognitionModelOutput } from './protocol.js';
 import { buildContract, contractAudit } from './contract.js';
+import { LifecycleStatus, RequestLifecycle, lifecycleAudit } from './lifecycle.js';
+import { validateAnalysisArtifacts } from './artifacts.js';
+import { claimLineageSnapshot } from './lineage.js';
 
 const CONTINUATION_INTENTS = new Set([
   'next_step', 'goal_progress', 'plan_review',
@@ -25,7 +28,7 @@ function millis(start) {
   return Math.round((performance.now() - start) * 1000) / 1000;
 }
 
-function unavailable(requestId, error, timings = {}) {
+function unavailable(requestId, error, timings = {}, lifecycle = null) {
   return {
     schema: COGNITION_SCHEMA,
     available: false,
@@ -38,9 +41,13 @@ function unavailable(requestId, error, timings = {}) {
     brief: null,
     audit: null,
     timings,
-    // A failed analysis still states the contract: the request was received, the cognitive stages
-    // could not be taken, and nothing after stage 5 was reached.
-    contract: buildContract({ requestId, analysis: null }),
+    lifecycle,
+    // A failed analysis still states the contract: the request was received, the stage that failed is
+    // recorded as failed, the dependent cognitive stages could not be taken, and nothing after stage
+    // 5 was reached.
+    contract: lifecycle
+      ? buildContract({ requestId, lifecycle })
+      : buildContract({ requestId, analysis: null }),
   };
 }
 
@@ -56,6 +63,11 @@ export async function analyzeRequest({
 } = {}) {
   const started = performance.now();
   const timings = {};
+  // The request has arrived, so stage 1 is recorded before any work. `stage` names the stage whose
+  // work is currently running; a thrown error is attributed to it instead of to the whole layer.
+  const lifecycle = new RequestLifecycle({ requestId });
+  lifecycle.complete(1, { counts: { received: 1 } });
+  let stage = 2;
   try {
     let mark = performance.now();
     const understanding = understandRequest({
@@ -69,6 +81,18 @@ export async function analyzeRequest({
       requestId,
     });
     timings.request = millis(mark);
+    lifecycle.complete(2, {
+      counts: {
+        entities: understanding.entities.length,
+        goals: understanding.goals.length,
+        plans: understanding.plans.length,
+        tasks: understanding.tasks.length,
+        missing: understanding.missing.length,
+        ambiguities: understanding.ambiguities.length,
+        execution_requested: understanding.executionRequested,
+      },
+    });
+    stage = 3;
     const trace = new CognitionTrace({ requestId, intent: understanding.intent });
     trace.stage('request', {
       counts: {
@@ -93,6 +117,16 @@ export async function analyzeRequest({
       worldConflicts,
     });
     timings.retrieval = millis(mark);
+    lifecycle.complete(3, {
+      counts: {
+        evidence: retrieval.counts.total,
+        sources: retrieval.sources.filter((source) => source.status === 'ok').length,
+        unavailable: retrieval.counts.unavailable.length,
+        damaged: retrieval.counts.damaged.length,
+        dropped: retrieval.counts.dropped,
+      },
+    });
+    stage = 4;
     trace.stage('retrieval', {
       counts: {
         evidence: retrieval.counts.total,
@@ -122,6 +156,16 @@ export async function analyzeRequest({
       conflicts: retrieval.conflicts,
     });
     timings.claims = millis(mark);
+    lifecycle.complete(4, {
+      counts: {
+        total: claimSet.counts.total,
+        material: claimSet.counts.material,
+        contradicted: claimSet.counts.contradicted,
+        historical: claimSet.counts.historical,
+        inference: claimSet.counts.inference,
+      },
+    });
+    stage = 5;
     trace.stage('claims', {
       counts: {
         total: claimSet.counts.total,
@@ -219,6 +263,33 @@ export async function analyzeRequest({
       },
       durationMs: timings.brief,
     });
+    // Every deterministic artifact this request produced is checked against its contract before the
+    // cognitive stage is recorded as complete. An artifact that contradicts itself - a material claim
+    // with no evidence, a conclusion naming a claim that was never extracted - is not presented as a
+    // reading of the records; the stage fails closed and the caller sees an unavailable analysis.
+    const artifacts = validateAnalysisArtifacts({
+      understanding,
+      retrieval,
+      claims: claimSet,
+      deliberation,
+    });
+    if (!artifacts.ok) {
+      const error = new Error(`cognitive artifact contract violated: ${artifacts.problems.slice(0, 3).join('; ')}`);
+      error.code = 'ARTIFACT_INVALID';
+      throw error;
+    }
+    lifecycle.complete(5, {
+      counts: {
+        lines: brief?.lineCount ?? 0,
+        omitted: brief?.omitted ?? 0,
+        claims: deliberation.conclusion.claimIds.length,
+        disclosures: deliberation.disclosures.length,
+      },
+      labels: {
+        decision: deliberation.decision,
+        uncertainty: deliberation.uncertainty?.category ?? null,
+      },
+    });
 
     const analysis = {
       schema: COGNITION_SCHEMA,
@@ -231,15 +302,25 @@ export async function analyzeRequest({
       deliberation,
       continuationLoaded: continuation !== null,
       brief,
+      artifacts,
       audit: trace.toAudit(),
       timings,
+      lifecycle,
     };
-    // The contract records the five cognitive stages only. The caller that runs proposals and
-    // actions rebuilds it with those records, so stage 6 onward is never assumed here.
-    analysis.contract = buildContract({ requestId, analysis });
+    // The contract is now read from the lifecycle the request actually passed through. The caller
+    // that runs proposals and actions continues the same lifecycle object, so stage 6 onward is
+    // recorded by the path that does the work rather than assumed here.
+    analysis.contract = buildContract({ requestId, analysis, lifecycle });
     return analysis;
   } catch (err) {
-    return unavailable(requestId, err, timings);
+    // The stage that threw is recorded as failed and the cognitive stages that depended on it are
+    // recorded as unavailable. The executive stages are left open: this layer cannot know whether the
+    // caller will still ask the model without the cognitive reading, and closing them here would let
+    // the contract deny an execution that really happened. The caller records them from its own
+    // records, or closes them as not reached before it finalizes.
+    lifecycle.fail(stage, { reason: 'stage_error' });
+    if (stage < 5) lifecycle.closeRange(stage + 1, 5, LifecycleStatus.UNAVAILABLE);
+    return unavailable(requestId, err, timings, lifecycle);
   }
 }
 
@@ -295,7 +376,12 @@ export function validateModelOutput(text, analysis) {
 export function analysisAudit(analysis) {
   if (!analysis?.available) {
     return analysis?.available === false
-      ? { available: false, error: analysis.error ?? null, contract: contractAudit(analysis.contract) }
+      ? {
+        available: false,
+        error: analysis.error ?? null,
+        contract: contractAudit(analysis.contract),
+        lifecycle: analysis.lifecycle ? lifecycleAudit(analysis.lifecycle.snapshot()) : null,
+      }
       : null;
   }
   return {
@@ -306,6 +392,9 @@ export function analysisAudit(analysis) {
     uncertainty: analysis.deliberation.uncertainty?.category ?? null,
     conclusion: analysis.deliberation.conclusion.kind,
     claims: analysis.claims.counts,
+    // Bounded lineage of the deterministic claims, so a later read can re-evaluate what this reading
+    // rested on against the stores as they are then. Identifiers, kinds, and states only.
+    lineage: claimLineageSnapshot(analysis.claims),
     evidence: analysis.retrieval.counts,
     sources: analysis.retrieval.sources.map((source) => ({ source: source.source, status: source.status, count: source.count })),
     disclosures: analysis.deliberation.disclosures.slice(0, 16),
@@ -322,6 +411,18 @@ export function analysisAudit(analysis) {
       : null,
     timings: { ...analysis.timings },
     trace: analysis.audit,
+    // Which typed artifacts this reading produced, who owns each, and whether its contract held.
+    // Kinds and bounded counts only: no artifact content.
+    artifacts: analysis.artifacts
+      ? {
+        ok: analysis.artifacts.ok,
+        entries: analysis.artifacts.artifacts.map((entry) => ({
+          kind: entry.kind, owner: entry.owner, ok: entry.ok, count: entry.count,
+        })),
+        problemCount: analysis.artifacts.problems.length,
+      }
+      : null,
     contract: contractAudit(analysis.contract),
+    lifecycle: analysis.lifecycle ? lifecycleAudit(analysis.lifecycle.snapshot()) : null,
   };
 }

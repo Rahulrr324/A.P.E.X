@@ -14,7 +14,8 @@
 import { singleLine, truncate } from '../util.js';
 import * as worldQuery from '../world/query.js';
 import {
-  BOUNDS, ClaimKind, EvidenceSource, SourceStatus, Uncertainty, sourceRank,
+  BOUNDS, ClaimKind, EVIDENCE_VALIDITIES, EvidenceSource, EvidenceValidity, SourceStatus, Uncertainty,
+  sourceRank,
 } from './vocabulary.js';
 
 function provided(seeds, key) {
@@ -99,6 +100,11 @@ function addEvidence(list, counters, item) {
     provenance: item.provenance ?? { origin: null, operationId: null, updateMode: null },
     status: item.status ?? 'recorded',
     current: item.current !== false,
+    // What this read knew about the record's lifecycle. A reader that does not state one gets the
+    // weaker of the two facts it does have: not-current records are historical, not current.
+    validity: EVIDENCE_VALIDITIES.includes(item.validity)
+      ? item.validity
+      : (item.current === false ? EvidenceValidity.HISTORICAL : EvidenceValidity.CURRENT),
     retrievalReason: item.retrievalReason ?? 'match',
     relationships: {
       supports: Array.isArray(item.supports) ? [...new Set(item.supports)].slice(0, 12) : [],
@@ -353,6 +359,13 @@ function readMemory(hits, list, counters, sources) {
     const record = hit?.record ?? hit;
     if (!record || typeof record.id !== 'string') continue;
     if (record.sensitivity === 'private') continue;
+    // Memory has no retraction event; a replaced record is superseded, and the store leaves older
+    // records in place rather than deleting them.
+    const validity = record.status === 'superseded'
+      ? EvidenceValidity.SUPERSEDED
+      : record.status === 'historical'
+        ? EvidenceValidity.HISTORICAL
+        : EvidenceValidity.CURRENT;
     const added = addEvidence(list, counters, {
       evidenceId: evidenceId(EvidenceSource.MEMORY, record.id),
       source: EvidenceSource.MEMORY,
@@ -364,7 +377,8 @@ function readMemory(hits, list, counters, sources) {
       recordedAt: record.createdAt,
       provenance: provenanceOf(record),
       status: record.status === 'superseded' ? ClaimKind.HISTORICAL : 'recorded',
-      current: record.status !== 'superseded',
+      current: record.status !== 'superseded' && record.status !== 'historical',
+      validity,
       retrievalReason: 'memory-search',
       contradicts: (hit?.conflict ?? record.conflict ?? []).map((id) => evidenceId(EvidenceSource.MEMORY, id)),
     });
@@ -384,6 +398,12 @@ function readKnowledge(records, list, counters, sources) {
     if (!item || typeof item.id !== 'string') continue;
     const claim = `${item.subject} ${item.relationship} ${item.object}`;
     const conflictsWith = Array.isArray(item.conflictsWith) ? item.conflictsWith : [];
+    const lifecycle = typeof item.lifecycleState === 'string' ? item.lifecycleState : null;
+    const validity = lifecycle === 'retracted' ? EvidenceValidity.RETRACTED
+      : lifecycle === 'superseded' ? EvidenceValidity.SUPERSEDED
+        : lifecycle === 'historical' ? EvidenceValidity.HISTORICAL
+          : lifecycle === 'ambiguous' ? EvidenceValidity.UNKNOWN
+            : EvidenceValidity.CURRENT;
     const added = addEvidence(list, counters, {
       evidenceId: evidenceId(EvidenceSource.KNOWLEDGE, item.id),
       source: EvidenceSource.KNOWLEDGE,
@@ -395,7 +415,8 @@ function readKnowledge(records, list, counters, sources) {
       recordedAt: item.createdAt,
       provenance: provenanceOf(item),
       status: conflictsWith.length > 0 ? ClaimKind.CONTRADICTED : ClaimKind.SUPPORTED,
-      current: item.lifecycleState !== 'retracted' && item.lifecycleState !== 'historical',
+      current: lifecycle !== 'retracted' && lifecycle !== 'historical' && lifecycle !== 'superseded' && lifecycle !== 'ambiguous',
+      validity,
       retrievalReason: 'knowledge-search',
       contradicts: conflictsWith.map((id) => evidenceId(EvidenceSource.KNOWLEDGE, id)),
     });
@@ -505,7 +526,10 @@ function readExperience(records, list, counters, sources) {
       recordedAt: record.createdAt,
       provenance: provenanceOf(record),
       status: record.outcome === 'success_verified' ? ClaimKind.OBSERVATION : 'recorded',
-      current: record.active !== false,
+      current: record.active !== false && record.superseded !== true,
+      validity: record.superseded === true
+        ? EvidenceValidity.SUPERSEDED
+        : (record.active === false ? EvidenceValidity.HISTORICAL : EvidenceValidity.CURRENT),
       retrievalReason: 'recent-outcome',
     });
     if (added) count += 1;

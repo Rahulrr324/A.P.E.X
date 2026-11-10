@@ -9,6 +9,8 @@
 import { CONTROL_CHARS } from '../util.js';
 import { BOUNDS, EVIDENCE_STATES } from './vocabulary.js';
 import { validateStructuredResponse } from './response.js';
+import { ArtifactKind, validateArtifact } from './artifacts.js';
+import { responseLineageSnapshot } from './lineage.js';
 
 export const COGNITION_PREFIX = 'COGNITION';
 // The line is small by construction: at most a short answer, twelve claims, and a recommendation. A
@@ -106,6 +108,22 @@ export function validateCognitionModelOutput(text, analysis) {
       validation,
     };
   }
+  // The accepted structure is checked once more against the artifact contract that any later reader
+  // relies on. The two checks guard different things: validateStructuredResponse checks the model's
+  // claims against this retrieval, and the artifact contract checks the typed shape itself.
+  const contract = validateArtifact(ArtifactKind.GROUNDED_RESPONSE, validation.value);
+  if (!contract.ok) {
+    return {
+      found: true,
+      text: extracted.text,
+      structure: null,
+      error: {
+        code: 'INVALID_STRUCTURE',
+        message: contract.problems.slice(0, 4).join('; '),
+      },
+      validation: { ...validation, ok: false, problems: contract.problems },
+    };
+  }
   return {
     found: true,
     text: extracted.text,
@@ -138,6 +156,9 @@ export function cognitionAudit(structured, validation, bound = BOUNDS.maxStructu
     missing: Array.isArray(structured.missing) ? [...structured.missing] : [],
     recommendation: Boolean(structured.recommendation),
     recommendationExecuted: structured.recommendation?.executed === true,
+    // What the accepted response cited, bounded to identifiers and states. A later read can compare
+    // it with the stores as they are then; the audit itself is never rewritten.
+    lineage: responseLineageSnapshot(structured),
     repairedDisclosures: Array.isArray(validation?.repaired?.addedDisclosures)
       ? [...validation.repaired.addedDisclosures]
       : [],

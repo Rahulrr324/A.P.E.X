@@ -213,7 +213,7 @@ test('the grounding brief states each evidence state and does not present retrie
   });
   assert.equal(analysis.available, true);
   const brief = buildGroundingBrief(analysis, { forModelAnswer: true });
-  assert.match(brief.text, /Evidence states \(deterministic\): directly_supported \d+, temporally_stale \d+\./);
+  assert.match(brief.text, /Evidence states \(deterministic\): directly_supported \d+, superseded \d+\./);
   assert.match(brief.text, /bounded lexical match over stored records; it is not semantic understanding/);
   assert.match(brief.text, /A statement marked supported may rest only on directly_supported evidence/);
   assert.doesNotMatch(brief.text, /\b\d+(?:\.\d+)?\s?%/, 'the brief carries no confidence percentage');

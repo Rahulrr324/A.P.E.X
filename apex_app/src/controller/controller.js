@@ -19,6 +19,8 @@ import { computeConflicts } from '../world/conflicts.js';
 import { analyzeRequest, analysisAudit, validateModelOutput } from '../cognition/engine.js';
 import { attachBoundary, executionBoundary } from '../cognition/trace.js';
 import { buildContract, contractAudit } from '../cognition/contract.js';
+import { LifecycleStatus, lifecycleAudit } from '../cognition/lifecycle.js';
+import { ArtifactKind, validateArtifact } from '../cognition/artifacts.js';
 import { structuredDisclosureNotice, actionClaimNotice } from '../cognition/response.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
@@ -59,6 +61,7 @@ import { candidatesForGoal, revisedCandidates } from '../plans/candidates.js';
 import { evaluateCandidates } from '../plans/evaluation.js';
 import { classifyRecovery, renderRecovery } from '../executive/recovery.js';
 import { RequestMode, StatusQuestion } from '../executive/vocabulary.js';
+import { GatewayResponseClass } from '../model/gateway.js';
 
 export const MAX_REQUEST_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 4000;
@@ -100,6 +103,27 @@ function stripDisplay(step) {
   const { display, ...rest } = step;
   return rest;
 }
+
+// A bounded, order-insensitive rendering of a proposal's input. It is used only to decide whether two
+// proposals in one reply are the same request, never to compare a proposal with an authorization. The
+// depth limit keeps a deeply nested model object from making the comparison itself expensive.
+function canonicalInput(value, depth = 0) {
+  if (depth > 6) return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalInput(item, depth + 1)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalInput(value[key], depth + 1)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+function proposalKey(action, input) {
+  return `${action}\u0000${canonicalInput(input)}`;
+}
+
+const CANCELLED_MESSAGE =
+  'The request was cancelled by the caller. No answer was produced and no action was run, and nothing was retried.';
+const CANCELLED_AFTER_RESPONSE_MESSAGE =
+  'The request was cancelled by the caller before the model response could be used. The response that arrived afterwards was discarded: no answer was produced and no action was run.';
 
 // The step outcomes a plan can record. A cancelled step is deliberately absent: a plan
 // outcome describes what a step established, and cancellation establishes nothing.
@@ -413,6 +437,9 @@ export class CognitiveController {
     let status;
     let output = null;
     let displayText = null;
+    // The model path's executable lifecycle, kept only long enough to record the outcome and state it
+    // in the audit record. It is never written as a live object and never consulted for authorization.
+    let lifecycle = null;
 
     try {
       request = validateRequest(requestText);
@@ -576,6 +603,7 @@ export class CognitiveController {
           signal,
         }, op, onProgress);
         status = m.status;
+        lifecycle = m.lifecycle ?? null;
         // Any model proposal that did not execute and verify gets a deterministic
         // counter-notice, even if the model's own text claims success. The wording
         // distinguishes a proposal that never ran from one that ran but failed or
@@ -670,6 +698,20 @@ export class CognitiveController {
     op.decision = classifyDecision(op);
     op.output = output ? truncate(output, MAX_OUTPUT_CHARS) : null;
     op.finishedAt = this.now().toISOString();
+    // The request's passage ends here. Any stage the path did not reach is closed explicitly, so a
+    // pending stage cannot be read later as still available; then the final status is claimed through
+    // the lifecycle, which downgrades a success that the recorded stages do not support. The append
+    // result is not part of the record it produces: finalization.recorded stays null here and the
+    // caller receives `recorded` separately.
+    if (lifecycle) {
+      lifecycle.closeRemaining({ fromOrder: 6, status: LifecycleStatus.NOT_REACHED });
+      lifecycle.finalize({ requestedStatus: status });
+      op.cognition = {
+        ...(op.cognition ?? { available: false }),
+        contract: contractAudit(buildContract({ requestId: op.id, lifecycle, steps: op.steps })),
+        lifecycle: lifecycleAudit(lifecycle.snapshot()),
+      };
+    }
 
     const persisted = { ...op, steps: op.steps.map(stripDisplay) };
     const { recorded, recordError, captureNotice } = await finalizeOperation(persisted, {
@@ -5372,11 +5414,17 @@ export class CognitiveController {
       op.errors.push({ stage: 'cognition', code: err.code || 'COGNITION_ERROR', message: err.message });
       cognitionUnavailable = true;
     }
+    // The executable lifecycle the analysis created. The controller continues this same object from
+    // stage 6 onward; it decides nothing and authorizes nothing.
+    const lifecycle = cognition?.lifecycle ?? null;
     // A deterministic clarification is asked before the model is called, so no model can answer past
     // an ambiguity or imply that it resolved one. This is the same outcome the controller uses for a
     // missing topic, and it records the question as a question turn.
     if (cognition?.available && cognition.deliberation?.clarification?.needed) {
       const question = cognition.deliberation.clarification.question;
+      // The request ends at the cognitive decision. The model and executive stages were not reached,
+      // and the record says so instead of leaving them pending.
+      lifecycle?.closeRemaining({ fromOrder: 6, status: LifecycleStatus.NOT_REACHED });
       op.cognition = analysisAudit(cognition);
       return {
         status: Outcome.CLARIFICATION_REQUIRED,
@@ -5386,6 +5434,7 @@ export class CognitiveController {
         backend: null,
         error: null,
         annotation: '',
+        lifecycle,
       };
     }
     const built = buildPrompt({
@@ -5518,7 +5567,10 @@ export class CognitiveController {
       op.cognition = analysisAudit(cognition);
     } else if (cognitionUnavailable) {
       op.prompt.cognition = { included: false, unavailable: true };
-      op.cognition = { available: false };
+      // An unavailable analysis still contributes its bounded error, contract, and lifecycle. Replacing
+      // them with a bare flag would let a later stage's record sit beside no statement of what the
+      // cognitive layer did and where it stopped.
+      op.cognition = analysisAudit(cognition) ?? { available: false };
     }
 
     // A conflict stays visible even if the model ignores the in-context markers.
@@ -5582,6 +5634,51 @@ export class CognitiveController {
       signal,
     });
 
+    // Cancellation is a decision about the request, not an answer. A transport that ignores the abort
+    // can still deliver text; that text is discarded here, before it is parsed, shown, stored, or used
+    // to propose an action. The model stage is recorded as a failure with its own reason, so a delayed
+    // response cannot turn a cancelled request into a successful one.
+    if (signal?.aborted === true) {
+      op.model = {
+        provider: res.provider ?? null,
+        latencyMs: res.latencyMs,
+        class: GatewayResponseClass.CANCELLED,
+        transportClass: res.class ?? null,
+        cancelledAfterResponse: res.ok === true,
+        provenance: res.provenance ?? null,
+      };
+      const boundary = executionBoundary({
+        reached: false,
+        proposals: { observed: 0, wellFormed: 0, malformed: 0, overflow: 0 },
+        steps: [],
+      });
+      lifecycle?.recordModelFailure(res.ok === true ? 'cancelled_after_response' : 'cancelled');
+      op.cognition = {
+        ...(op.cognition ?? { available: false }),
+        contract: contractAudit(lifecycle
+          ? buildContract({ requestId: op.id, lifecycle, steps: [] })
+          : buildContract({
+            requestId: op.id,
+            analysis: cognition?.available ? cognition : null,
+            proposals: { observed: 0, wellFormed: 0, malformed: 0, overflow: 0 },
+            steps: [],
+          })),
+        ...(op.cognition?.trace
+          ? { trace: attachBoundary(op.cognition.trace, boundary) }
+          : { boundary }),
+      };
+      return {
+        status: Outcome.REQUEST_CANCELLED,
+        answer: res.ok === true ? CANCELLED_AFTER_RESPONSE_MESSAGE : CANCELLED_MESSAGE,
+        modelText: null,
+        hasText: false,
+        backend: res.backend ?? null,
+        error: null,
+        annotation: '',
+        lifecycle,
+      };
+    }
+
     if (!res.ok) {
       op.model = {
         provider: res.provider ?? null,
@@ -5589,32 +5686,41 @@ export class CognitiveController {
         class: res.class ?? null,
         provenance: res.provenance ?? null,
       };
-      // The model stage was reached but produced no text, so no proposal was observed. The contract
-      // records that plainly rather than leaving the later stages looking unattempted for another reason.
+      // The model stage was entered but produced no answer. It is recorded as a failure - not as a
+      // "ran" with zero proposals, which would read as an examined reply - and every stage that
+      // depends on it is closed. A caller cancellation is recorded as its own reason and reported as
+      // a cancellation, distinct from a model outage.
+      const cancelled = res.class === GatewayResponseClass.CANCELLED;
       const boundary = executionBoundary({
         reached: false,
         proposals: { observed: 0, wellFormed: 0, malformed: 0, overflow: 0 },
         steps: [],
       });
+      lifecycle?.recordModelFailure(cancelled ? 'cancelled' : 'model_unavailable');
       op.cognition = {
         ...(op.cognition ?? { available: false }),
-        contract: contractAudit(buildContract({
-          requestId: op.id,
-          analysis: cognition?.available ? cognition : null,
-          proposals: { observed: 0, wellFormed: 0, malformed: 0, overflow: 0 },
-          steps: [],
-        })),
+        contract: contractAudit(lifecycle
+          ? buildContract({ requestId: op.id, lifecycle, steps: [] })
+          : buildContract({
+            requestId: op.id,
+            analysis: cognition?.available ? cognition : null,
+            proposals: { observed: 0, wellFormed: 0, malformed: 0, overflow: 0 },
+            steps: [],
+          })),
         ...(op.cognition?.trace
           ? { trace: attachBoundary(op.cognition.trace, boundary) }
           : { boundary }),
       };
       return {
-        status: Outcome.EXECUTION_FAILED,
-        answer: `The model backend did not produce an answer (${res.error.code}: ${res.error.message}). No answer has been generated. ${modelFailureAdvice(res.error.code)}`,
+        status: cancelled ? Outcome.REQUEST_CANCELLED : Outcome.EXECUTION_FAILED,
+        answer: cancelled
+          ? CANCELLED_MESSAGE
+          : `The model backend did not produce an answer (${res.error.code}: ${res.error.message}). No answer has been generated. ${modelFailureAdvice(res.error.code)}`,
         hasText: false,
         backend: res.backend,
-        error: { stage: 'model', code: res.error.code, message: res.error.message },
+        error: cancelled ? null : { stage: 'model', code: res.error.code, message: res.error.message },
         annotation: '',
+        lifecycle,
       };
     }
     op.model = {
@@ -5691,43 +5797,91 @@ export class CognitiveController {
       op.errors.push({ stage: 'proposals', code: 'TOO_MANY', message: `only the first ${MAX_PROPOSALS} of ${parsed.proposals.length} proposals were considered` });
     }
     const actionSteps = [];
+    // A reply that names the same action with the same input twice is one proposal, not two. Only the
+    // first is offered to the registry; the repeat is recorded as a refusal so the audit shows why it
+    // did not run a second time. The set is bounded by MAX_PROPOSALS, the number of proposals that can
+    // reach this loop.
+    const seenProposals = new Set();
     for (const p of parsed.proposals.slice(0, MAX_PROPOSALS)) {
+      const key = proposalKey(p.action, p.input);
+      if (seenProposals.has(key)) {
+        op.steps.push({
+          action: p.action,
+          origin: 'model',
+          input: null,
+          authorization: null,
+          execution: { status: 'not_run' },
+          verification: { outcome: 'not_run', detail: null },
+          outcome: Outcome.DUPLICATE_PROPOSAL,
+          summary: `duplicate proposal not run: ${p.action} was already proposed in this reply with the same input`,
+          result: null,
+        });
+        continue;
+      }
+      seenProposals.add(key);
       // The step names the typed proposal it came from. The type, origin, and absence of authority
       // come from the parser, not from the reply, so the audit cannot show a model-authored claim of
       // permission. The registry decision below is still the only thing that can allow execution.
-      const step = await this.runAction(p.action, p.input, 'model', op.id);
+      // The handoff record is the typed contract for that crossing: it carries no authorization, and
+      // an artifact that claims one is refused before the registry is asked anything.
+      const handoff = {
+        proposalId: p.proposalId,
+        action: p.action,
+        input: p.input,
+        origin: p.origin,
+        trusted: p.trusted,
+        authority: p.authority,
+        authorization: null,
+        executed: false,
+      };
+      const handoffCheck = validateArtifact(ArtifactKind.EXECUTIVE_HANDOFF, handoff);
+      if (!handoffCheck.ok) {
+        op.steps.push({
+          action: p.action,
+          origin: 'model',
+          input: null,
+          authorization: null,
+          execution: { status: 'not_run' },
+          verification: { outcome: 'not_run', detail: null },
+          outcome: Outcome.INPUT_REJECTED,
+          summary: `handoff rejected: ${handoffCheck.problems[0] ?? 'artifact contract violated'}`,
+          result: null,
+        });
+        continue;
+      }
+      const step = await this.runAction(handoff.action, handoff.input, 'model', op.id);
       step.proposalId = `${op.id}/${p.proposalId}`;
       actionSteps.push(step);
       op.steps.push(step);
     }
-    // The request's contract now names what actually happened at stages 6-10, from the step records
-    // themselves: the proposals observed, the registry decisions, the execution results, and the
-    // independent verification. The cognition layer wrote none of those records and cannot. The
-    // boundary record is derived from the same records and restates the decisions; it authorizes
-    // nothing, and a request whose cognitive stage failed keeps the record beside the absence.
+    // The request's lifecycle is advanced through stages 6-9 from the records it actually produced:
+    // the proposals observed, the registry decisions, the execution results, and the independent
+    // verification. The model wrote none of those records and cannot reach this method.
+    const proposalCounts = {
+      observed: parsed.proposals.length + parsed.malformed.length,
+      wellFormed: parsed.proposals.length,
+      malformed: parsed.malformed.length,
+      overflow,
+    };
+    lifecycle?.recordExecution({ proposals: proposalCounts, steps: actionSteps });
+    // The contract restates the same transitions. It is derived from the lifecycle, so a stage the
+    // lifecycle refused to enter cannot appear as having run, and the authorization checks read the
+    // step records themselves rather than the lifecycle's summary of them.
     const boundary = executionBoundary({
-      proposals: {
-        observed: parsed.proposals.length + parsed.malformed.length,
-        wellFormed: parsed.proposals.length,
-        malformed: parsed.malformed.length,
-        overflow,
-      },
+      proposals: proposalCounts,
       steps: actionSteps,
       durationMs: performance.now() - boundaryStarted,
     });
     op.cognition = {
       ...(op.cognition ?? { available: false }),
-      contract: contractAudit(buildContract({
-        requestId: op.id,
-        analysis: cognition?.available ? cognition : null,
-        proposals: {
-          observed: parsed.proposals.length + parsed.malformed.length,
-          wellFormed: parsed.proposals.length,
-          malformed: parsed.malformed.length,
-          overflow,
-        },
-        steps: actionSteps,
-      })),
+      contract: contractAudit(lifecycle
+        ? buildContract({ requestId: op.id, lifecycle, steps: actionSteps })
+        : buildContract({
+          requestId: op.id,
+          analysis: cognition?.available ? cognition : null,
+          proposals: proposalCounts,
+          steps: actionSteps,
+        })),
       ...(op.cognition?.trace
         ? { trace: attachBoundary(op.cognition.trace, boundary) }
         : { boundary }),
@@ -5767,6 +5921,7 @@ export class CognitiveController {
       error: null,
       annotation: [annotation, cognitionNotice].filter(Boolean).join('\n\n'),
       proposalOverflow: overflow,
+      lifecycle,
     };
   }
 }

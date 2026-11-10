@@ -63,6 +63,19 @@ export const SourceStatus = Object.freeze({
 
 // Claim kinds. A claim is a statement copied from a record, or a conclusion the deterministic
 // deliberation drew from copied statements. The layer never turns an inference into a fact.
+// What a reader knows about one evidence record's lifecycle at the moment it was read. It is copied
+// onto the evidence record so a later re-evaluation can tell a withdrawn record from an old one
+// without re-reading the store taxonomy.
+export const EvidenceValidity = Object.freeze({
+  CURRENT: 'current',
+  HISTORICAL: 'historical',
+  SUPERSEDED: 'superseded',
+  RETRACTED: 'retracted',
+  UNKNOWN: 'unknown',
+});
+
+export const EVIDENCE_VALIDITIES = Object.freeze(Object.values(EvidenceValidity));
+
 export const ClaimKind = Object.freeze({
   SUPPORTED: 'supported',
   CONTRADICTED: 'contradicted',
@@ -93,6 +106,11 @@ export const EvidenceState = Object.freeze({
   UNVERIFIED: 'unverified',
   UNSUPPORTED: 'unsupported',
   TEMPORALLY_STALE: 'temporally_stale',
+  // A withdrawn record is not merely old: retraction is a user decision that the claim no longer
+  // stands, and supersession is a replacement. Both are kept distinguishable from staleness so a
+  // reading can say what happened to the record instead of only when it was recorded.
+  RETRACTED: 'retracted',
+  SUPERSEDED: 'superseded',
 });
 
 export const EVIDENCE_STATES = Object.freeze(Object.values(EvidenceState));
@@ -180,6 +198,7 @@ export const BOUNDS = Object.freeze({
   maxTraceEvidence: 64,
   maxTraceNotes: 16,
   maxStructuredClaims: 12,
+  maxLineageRefs: 8,
 });
 
 // Deterministic ordering for sources: user instructions first, then the stores closest to an

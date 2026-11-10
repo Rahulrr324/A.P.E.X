@@ -6,7 +6,7 @@
 // linked claim. A derived view keeps its derived kind, so a pattern cannot be read as an observation
 // and an expectation cannot be read as something that happened.
 import {
-  BOUNDS, ClaimKind, EvidenceSource, EvidenceState,
+  BOUNDS, ClaimKind, EvidenceSource, EvidenceState, EvidenceValidity,
 } from './vocabulary.js';
 
 function claimKindFor(item) {
@@ -53,13 +53,18 @@ function isMaterial(kind) {
 }
 
 // What the evidence behind a claim can carry. Conflict wins over everything else: a contested record
-// is not made current by being recent. Staleness comes next, then the kind's own strength. This is a
-// label, never a score, and it is not a probability that the claim is true.
+// is not made current by being recent. A withdrawn record (retracted) or a replaced one (superseded)
+// is stronger than staleness: the record was not merely old, it no longer stands. Staleness comes
+// next, then the kind's own strength. This is a label, never a score, and it is not a probability
+// that the claim is true.
 export function evidenceStateForClaim(claim) {
   if ((claim.contradicts?.length ?? 0) > 0 || claim.kind === ClaimKind.CONTRADICTED) {
     return EvidenceState.CONFLICTING;
   }
-  if (claim.current === false || claim.kind === ClaimKind.HISTORICAL) {
+  if (claim.validity === EvidenceValidity.RETRACTED) return EvidenceState.RETRACTED;
+  if (claim.validity === EvidenceValidity.SUPERSEDED) return EvidenceState.SUPERSEDED;
+  if (claim.current === false || claim.kind === ClaimKind.HISTORICAL
+    || claim.validity === EvidenceValidity.HISTORICAL) {
     return EvidenceState.TEMPORALLY_STALE;
   }
   switch (claim.kind) {
@@ -90,6 +95,19 @@ export function evidenceStateForClaim(claim) {
 function subjectKey(item) {
   if (item.subject?.entityId) return `entity:${item.subject.entityId}`;
   return `${item.source}:${item.recordId}`;
+}
+
+// A reference list is bounded and filtered by kind: evidence ids and claim ids travel in the same
+// `contradicts` list, and a lineage must say which is which. Duplicates are one link.
+function lineageRefs(values, prefix) {
+  const kept = [];
+  for (const value of Array.isArray(values) ? values : []) {
+    if (typeof value !== 'string' || !value.startsWith(prefix)) continue;
+    if (kept.includes(value)) continue;
+    kept.push(value);
+    if (kept.length >= BOUNDS.maxLineageRefs) break;
+  }
+  return kept;
 }
 
 // Links claims that cite the same conflict group, and claims whose records the source itself marks
@@ -151,6 +169,9 @@ export function extractClaims({ evidence = [], understanding = null, conflicts =
       type: item.type,
       subject: item.subject ?? null,
       current: item.current === true,
+      // The lifecycle this read saw for the record. It is a copy, not a live view: re-evaluation
+      // compares it with a later read instead of silently changing an extracted claim.
+      validity: item.validity ?? (item.current === false ? EvidenceValidity.HISTORICAL : EvidenceValidity.CURRENT),
       material: isMaterial(kind),
       retrievalReason: item.retrievalReason,
       note: null,
@@ -189,6 +210,15 @@ export function extractClaims({ evidence = [], understanding = null, conflicts =
   for (const claim of claims) {
     const key = `${claim.source}\u0000${claim.text.toLowerCase()}`;
     claim.duplicateOf = (byText.get(key) ?? []).filter((id) => id !== claim.claimId);
+    // The bounded lineage is derived last, after conflict links, because linking turns some of the
+    // claim's `contradicts` entries into claim ids. Both sides of a link are kept and neither is
+    // replaced.
+    claim.lineage = {
+      supports: lineageRefs(claim.evidenceIds, 'ev:'),
+      contradicts: lineageRefs(claim.contradicts, 'ev:'),
+      claimLinks: lineageRefs(claim.contradicts, 'cl:'),
+      validity: claim.validity,
+    };
     // Derived last, after conflict links and duplicates, because both can change what the record
     // behind the claim can support.
     claim.evidenceState = evidenceStateForClaim(claim);
