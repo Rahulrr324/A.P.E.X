@@ -4,10 +4,40 @@
 // "input" is always an object of named parameters, and {} when the action takes
 // none. Each proposal is only a request. It is authorized and validated like any
 // other request. Nothing is evaluated.
+//
+// The parsed proposal is a typed value owned by APEX, not the model's object: it always carries
+// origin "model", trusted false, and authority "none", whatever the reply said. A line that tries to
+// assert authorization, provenance, verification, or an execution at the root is malformed and is
+// dropped whole; an unknown root field is refused rather than ignored, so a later reader cannot
+// mistake a smuggled field for something APEX accepted.
 import { ACTION_NAME_RE } from '../actions/registry.js';
 
 export const PROPOSAL_PREFIX = 'PROPOSE_ACTION';
+export const PROPOSAL_KIND = 'model_action_proposal';
 export const MAX_PROPOSALS = 3;
+
+const ROOT_KEYS = new Set(['action', 'input']);
+const AUTHORITY_KEYS = new Set([
+  'authorization', 'authorized', 'authority', 'approval', 'approved', 'permission', 'permissions',
+  'role', 'origin', 'trusted', 'untrusted', 'verified', 'verification', 'verify', 'executed',
+  'execute', 'run', 'activate', 'activated', 'requestId', 'request_id', 'operationId', 'capability',
+  'decision', 'grant', 'grants', 'user', 'owner',
+]);
+
+function printableKey(key) {
+  return /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(key) ? key : 'unprintable field';
+}
+
+function rootKeyViolation(obj) {
+  for (const key of Object.keys(obj)) {
+    if (ROOT_KEYS.has(key)) continue;
+    if (AUTHORITY_KEYS.has(key)) {
+      return `proposal field "${key}" is not allowed; a proposal carries action and input only and cannot assert authorization, verification, or execution`;
+    }
+    return `proposal has an unrecognized field "${printableKey(key)}"; only action and input are accepted`;
+  }
+  return null;
+}
 
 function jsonType(value) {
   if (value === null) return 'null';
@@ -31,7 +61,7 @@ function shapeViolation(obj) {
   if (jsonType(obj.input) !== 'object') {
     return `proposal "input" must be an object of the action's parameters, got ${jsonType(obj.input)}`;
   }
-  return null;
+  return rootKeyViolation(obj);
 }
 
 export function parseModelOutput(text) {
@@ -57,7 +87,15 @@ export function parseModelOutput(text) {
       malformed.push({ reason });
       continue;
     }
-    proposals.push({ action: obj.action, input: obj.input });
+    proposals.push({
+      type: PROPOSAL_KIND,
+      proposalId: `mp:${proposals.length + 1}`,
+      action: obj.action,
+      input: obj.input,
+      origin: 'model',
+      trusted: false,
+      authority: 'none',
+    });
   }
   return { text: answerLines.join('\n').trim(), proposals, malformed };
 }

@@ -185,7 +185,9 @@ test('an unresolved comparison selects nothing, and a leader whose bytes moved i
       ...data.comparison,
       boundTo: {
         ...data.comparison.boundTo,
-        candidateDigests: data.comparison.boundTo.candidateDigests.map((d) => ({ ...d, digest: `f${d.digest.slice(1)}` })),
+        candidateDigests: data.comparison.boundTo.candidateDigests.map((d) => ({
+          ...d, digest: `${d.digest.startsWith('f') ? '0' : 'f'}${d.digest.slice(1)}`,
+        })),
       },
     };
     const changed = selectCandidate({ comparison: tampered, candidates: data.candidates, goalId: separated });

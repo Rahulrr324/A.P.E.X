@@ -7,7 +7,7 @@
 // as a rejected structure rather than silently ignored. The prose outside the line is still the
 // model's answer, and remains unverified.
 import { CONTROL_CHARS } from '../util.js';
-import { BOUNDS } from './vocabulary.js';
+import { BOUNDS, EVIDENCE_STATES } from './vocabulary.js';
 import { validateStructuredResponse } from './response.js';
 
 export const COGNITION_PREFIX = 'COGNITION';
@@ -119,11 +119,20 @@ export function validateCognitionModelOutput(text, analysis) {
 // contains the model's answer text or the evidence content it cited.
 export function cognitionAudit(structured, validation, bound = BOUNDS.maxStructuredClaims) {
   if (!structured) return null;
+  const evidenceStates = {};
+  for (const claim of structured.claims ?? []) {
+    if (typeof claim?.evidenceState === 'string') {
+      evidenceStates[claim.evidenceState] = (evidenceStates[claim.evidenceState] ?? 0) + 1;
+    }
+  }
   return {
     accepted: true,
     decision: structured.decision ?? null,
     claims: Math.min(Array.isArray(structured.claims) ? structured.claims.length : 0, bound),
     citedEvidence: [...new Set((structured.claims ?? []).flatMap((claim) => claim.evidenceIds ?? []))].length,
+    evidenceStates: Object.fromEntries(EVIDENCE_STATES
+      .filter((state) => (evidenceStates[state] ?? 0) > 0)
+      .map((state) => [state, evidenceStates[state]])),
     disclosures: Array.isArray(structured.disclosures) ? [...structured.disclosures] : [],
     uncertainty: structured.uncertainty ?? null,
     missing: Array.isArray(structured.missing) ? [...structured.missing] : [],

@@ -850,18 +850,23 @@ node benchmarks/run-planning-benchmark.mjs --sizes S --repeats 2    # a fast sha
 node benchmarks/run-planning-benchmark.mjs --sizes L --phase control
 ```
 
-1. `--repeats` is 1-25 (default 3). `--sizes` selects any of `S,M,L` (default all three). `--phase`
-   selects `columns`, `attribution`, `control`, `constraints`, `recovery`, or `all`; `--keep` leaves the
-   fixture directories and prints where. Batch AM added the last two.
+1. `--repeats` is 1-25 (default 3). `--sizes` selects any of `S,M,L,XL` (default `S,M,L`; `XL` is
+   opt-in). `--phase` selects `columns`, `attribution`, `control`, `constraints`, `recovery`, `ranking`,
+   or `all`; `--keep` leaves the fixture directories and prints where. Batch AM added `constraints` and
+   `recovery`; Batch AN added `ranking` and `XL`.
 2. A fixture is a subject goal with two required criteria plus one approved and run plan, then the
    backlog the reads must scan: `memory.add` and knowledge triples, goals and two-step plans created
    through the stores' own writes, plans really activated through the existing task runner, predictions
    recorded through the ledger, and one experience filed against each operation the seeding produced
    (the store allows one per operation, so the audit log is grown first by audited reads of the
-   experience ledger). Nothing is written into a fixture by hand.
-3. Seeding is reported apart from every measurement and is by far the slowest part of a run: 0.7 s,
-   84.3 s and 199.8 s for S, M and L in the run below, and the same fixture seeded in 75 s in another
-   run on the same machine. Treat seeding figures as machine load, not as a measurement.
+   experience ledger). Nothing is written into a fixture by hand. Backlog plans reference their goal by
+   the id the store returned; before Batch AN they were created with `undefined` and silently recorded
+   no goal link, which left their activation and validity checks goal-free. `XL` adds 40 runs stopped
+   after activation (plan active, task pending, no step begun) to the 40 that run to completion.
+3. Seeding is reported apart from every measurement and is by far the slowest part of a run: 0.5 s,
+   60 s and 226 s for S, M and L in the Batch AN run below, 356 s for XL, and the same L fixture seeded
+   in 75 s in an earlier run on the same machine. Treat seeding figures as machine load, not as a
+   measurement.
 4. An audited read appends one operation record of its own, so the second and third sample of a column
    are taken on a log one or two records longer than the first. At these sizes that is well under one
    part in a thousand of `operations.jsonl`, and it is disclosed rather than hidden. The assessment
@@ -900,6 +905,13 @@ node benchmarks/run-planning-benchmark.mjs --sizes L --phase control
   run, and the reading and ranking of the now-settled run. Each line prints its samples; the resume is
   timed once and taken after the reads, because it is the one measurement in this file that changes the
   records it measures.
+- **ranking** (Batch AN): one `work`/`next` report, with its store calls counted, then the stages it
+  derives timed separately over the same pre-read records: the five whole-store reads, the audit log
+  read and one record by id, the pre-AN per-plan goal replay, live validity through the store and
+  through one shared snapshot, the constraint ledger per goal, the continuation reading, the readiness
+  reading, the pure candidate ranking, rendering, and the report end to end. The two validity shapes are
+  compared verdict by verdict in the same run. `XL` is the fixture this phase exists for: it holds 40
+  interrupted runs, so the ranking has readings to derive.
 
 ### Measured
 
@@ -1032,6 +1044,49 @@ ranked, and the L fixture holds 147 task lines. It is a read, so that cost is pa
 what is next and never by a background process; the refused second resume at 111.9 ms is the same reading
 taken again on a run that is now settled.
 
+### Measured (Batch AN: continuation ranking over four fixtures)
+
+Two commands on one Windows 11 machine (Node v26.4.0, x64): `--sizes S,M,L` and `--sizes XL`, both
+`--phase ranking --repeats 3`, with no other benchmark or test active. The `XL` fixture is a large
+project with many active plans and tasks: 885 goal events, 645 plan events, 327 task lines, 401 audit
+records, 800 predictions, 400 experiences, and 40 interrupted runs among 80 activated plans - about
+3.6 MB of JSONL. S, M and L hold no interrupted run, so their ranking has no reading to derive; they
+measure the whole-report cost on a project whose plans have all settled.
+
+One `work`/`next` report at every size reads the goal log once (`goals.inspect` 1, `goals.get` 0), the
+plan log once, the task log once, and - when an interrupted run exists - the audit log once and the task
+lock once. No plan re-reads a store after the one goal snapshot.
+
+| ms (median of 3) | S | M | L | XL |
+|---|---|---|---|---|
+| the five whole-store reads | 4.1 | 26.4 | 43.9 | 177.7 |
+| audit log read and parsed | 0.7 | 4.1 | 8.4 | 7.4 |
+| one audit record by id | 0.9 | 3.2 | 4.3 | 4.5 |
+| ranking end to end (`work`/`next`) | 3.3 | 20.3 | 37.6 | 220.2 |
+
+The XL stages, over the same records (medians of 3):
+
+| stage | ms |
+|---|---|
+| goal replay, once per interrupted plan (the pre-AN read shape) | 5,451.8 |
+| live validity through the store, once per ranked plan (with that replay inside) | 5,511.9 |
+| live validity through one shared snapshot | 6.9 |
+| constraint derivation, one ledger per distinct goal | 2.2 |
+| continuation reading | 21.0 |
+| readiness reading | 6.2 |
+| candidate ranking (pure) | 6.5 |
+| render | 0.0 |
+| ranking end to end | 220.2 |
+
+The two validity shapes agreed on every plan's verdict (`ok` and every problem line), so the faster
+shape is not a weaker one. The replay is the mechanism: the goal log holds 885 events and `goals.get`
+replays and reduces all of them, so one call costs about 136 ms here; Batch AM's ranking made that call
+twice per interrupted plan - once for the reading's constraint ledger and once inside live validity -
+which is why the same report cost about 5.1 s on a 300-goal probe before the fix. The report now pays
+one whole-log read and one reduce, then answers every plan from that snapshot. An earlier isolated probe
+of the same change (300 goals, 40 interrupted plans) measured 5,138.9 ms to 117.0 ms; it was taken in a
+different run, so it is context, not a comparable column.
+
 ### Interpretation limits
 
 - Absolute timings on this machine varied up to 2x between two runs of the identical fixture, including
@@ -1045,5 +1100,13 @@ taken again on a run that is now settled.
 - This measures what the planning paths cost to run. It is not evidence that a candidate APEX generated
   was a good plan, that a recorded verdict describes the world, or that any model would choose these
   steps: no model was contacted, no inference was run, and no inference was simulated.
+- The `XL` interrupted runs are stopped by a throwing `tasks.run` at the same boundary the AM recovery
+  child stops at: the records left behind are the plan active, the task pending and no step begun. That
+  is the state a dead process leaves, but the process here is this script's own; the real-child claim is
+  made by the `recovery` phase, not by `ranking`.
+- The Batch AN fixture links backlog plans to the goal id the store returned. Earlier runs of `columns`
+  and `attribution` were taken with that link missing, so their absolute figures are historical; the
+  Batch AN tables above were taken after the correction. As always, only comparisons inside one run are
+  treated as findings.
 
 This script is not part of `npm test` and no test depends on it.

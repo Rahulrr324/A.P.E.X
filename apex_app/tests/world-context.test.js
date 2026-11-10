@@ -401,7 +401,7 @@ test('projection in context - a tight budget trims the projection before it shed
 
   // Trimmed to nothing, the budget is spent on records; the notice that says so appears only
   // while it fits without evicting one.
-  const noticed = await atBudget(3000);
+  const noticed = await atBudget(2900);
   assert.equal(noticed.world.included, false);
   assert.equal(noticed.res.operation.prompt.memoryIds.length, 12, 'every record survives the whole summary being gone');
   assert.match(noticed.prompt, /APEX STORE-WIDE PROJECTION: omitted from this context to keep it within its size budget/,

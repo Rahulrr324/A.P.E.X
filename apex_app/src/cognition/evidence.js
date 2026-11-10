@@ -144,21 +144,29 @@ function readWorld(state, conflictSet, understanding, request, list, counters, s
     // An overview request names no entity. It gets a counted summary, not every record: the layer
     // does not turn a whole-store read into prompt-sized prose.
     const active = [...state.entities.values()].filter((entity) => entity && entity.status === 'active');
-    addEvidence(list, counters, {
-      evidenceId: `ev:${EvidenceSource.WORLD_ENTITY}:overview`,
-      source: EvidenceSource.WORLD_ENTITY,
-      recordId: 'overview',
-      type: 'entity-summary',
-      subject: null,
-      claim: `${active.length} active entity(s); ${state.facts?.size ?? 0} fact(s); ${state.relationships?.size ?? 0} relationship(s); ${state.events?.size ?? 0} event(s)`,
-      observedAt: null,
-      recordedAt: null,
-      provenance: { origin: 'system', operationId: null, updateMode: null },
-      status: 'derived',
-      current: true,
-      retrievalReason: 'world-overview',
-    });
-    setSource(sources, EvidenceSource.WORLD_ENTITY, active.length > 0 ? SourceStatus.OK : SourceStatus.EMPTY, active.length > 0 ? 1 : 0);
+    // A summary of zero records is not evidence. If it were emitted, the claim extractor would label it
+    // directly supported and an empty store could read as a supported answer about the request.
+    const empty = active.length === 0 && (state.facts?.size ?? 0) === 0
+      && (state.relationships?.size ?? 0) === 0 && (state.events?.size ?? 0) === 0;
+    if (empty) {
+      setSource(sources, EvidenceSource.WORLD_ENTITY, SourceStatus.EMPTY, 0);
+    } else {
+      addEvidence(list, counters, {
+        evidenceId: `ev:${EvidenceSource.WORLD_ENTITY}:overview`,
+        source: EvidenceSource.WORLD_ENTITY,
+        recordId: 'overview',
+        type: 'entity-summary',
+        subject: null,
+        claim: `${active.length} active entity(s); ${state.facts?.size ?? 0} fact(s); ${state.relationships?.size ?? 0} relationship(s); ${state.events?.size ?? 0} event(s)`,
+        observedAt: null,
+        recordedAt: null,
+        provenance: { origin: 'system', operationId: null, updateMode: null },
+        status: 'derived',
+        current: true,
+        retrievalReason: 'world-overview',
+      });
+      setSource(sources, EvidenceSource.WORLD_ENTITY, SourceStatus.OK, 1);
+    }
   }
   // An as-of question asks what was valid at that instant. The query layer evaluates statement
   // status at the same instant, so a fact that has since ended is still visible in the past view.
@@ -431,6 +439,17 @@ function readTemporal(summary, list, counters, sources) {
   let count = 0;
   const window = summary.window ?? {};
   const counts = summary.counts ?? {};
+  const patterns = (summary.patterns ?? [])
+    .filter((pattern) => ((pattern.supporting ?? 0) + (pattern.contradicting ?? 0)) > 0)
+    .slice(0, 3);
+  // Zero outcomes and no supported pattern is a summary of nothing. It is dropped only when nothing
+  // else was retrieved either: with other records present the summary is a bounded statement about
+  // the whole store, not a claim standing in for missing evidence.
+  const nothingElseRetrieved = list.every((item) => item.source === EvidenceSource.USER_INSTRUCTION);
+  if ((counts.events ?? 0) === 0 && patterns.length === 0 && nothingElseRetrieved) {
+    setSource(sources, EvidenceSource.TEMPORAL, SourceStatus.EMPTY, 0);
+    return;
+  }
   const added = addEvidence(list, counters, {
     evidenceId: `ev:${EvidenceSource.TEMPORAL}:${window.since ?? 'window'}:${window.until ?? 'window'}`,
     source: EvidenceSource.TEMPORAL,
@@ -446,7 +465,7 @@ function readTemporal(summary, list, counters, sources) {
     retrievalReason: 'temporal-window',
   });
   if (added) count += 1;
-  for (const pattern of (summary.patterns ?? []).slice(0, 3)) {
+  for (const pattern of patterns) {
     const id = `${pattern.kind}:${pattern.capability ?? 'all'}:${pattern.supporting}:${pattern.contradicting}`;
     const patternAdded = addEvidence(list, counters, {
       evidenceId: `ev:${EvidenceSource.TEMPORAL}:pattern:${id}`,

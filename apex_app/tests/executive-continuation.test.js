@@ -4,6 +4,7 @@
 // a real model. No endpoint is contacted and no inference service is started.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createApp } from '../src/app.js';
 import { ModelGateway } from '../src/model/gateway.js';
 import { CAPTURE_OFF } from '../src/experience/capture.js';
@@ -269,6 +270,84 @@ test('a proposal generated from a model is a record only, and stale acceptance i
     assert.equal((await app.controller.showProposal(proposalId)).assessment.status, ProposalStatus.STALE);
     assert.equal((await app.plans.list()).length, 0);
     assert.equal((await app.controller.showGoal(goalId)).goal.planIds.length, 0);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+// An activation interrupted at the same boundary the child fixture uses: the plan is recorded active
+// and its task exists, but the run never begins a step. The patch stands in for a process that stopped
+// between activation and the first step; it is not a model path and executes nothing.
+async function interruptedPlan(app, goalId, { steps = [STEP], outcome = 'the fact is stored' } = {}) {
+  const added = await app.controller.planAdd({ goalId, outcome, steps });
+  const planId = added.operation.steps[0].result.data.planId;
+  assert.equal((await app.controller.planApprove({ target: planId })).status, Outcome.PLAN_STORED);
+  const realRun = app.controller.tasks.run;
+  app.controller.tasks.run = async () => { throw new Error('the process stopped before the run began'); };
+  try {
+    const activation = await app.controller.planActivate(planId);
+    assert.match(activation.display, /is active as task/);
+  } finally {
+    app.controller.tasks.run = realRun;
+  }
+  const plan = (await app.controller.plans.inspect()).plans.find((p) => p.id === planId);
+  assert.equal(plan.status, 'active');
+  const task = (await app.controller.taskStore.inspect()).tasks.find((t) => t.id === plan.activation.taskId);
+  assert.equal(task.status, 'pending');
+  return { planId, taskId: task.id };
+}
+
+test('one ranking read answers every active plan from a single goal-log read', async () => {
+  const dir = makeTempDataDir();
+  try {
+    const app = await appIn(dir);
+    const goalId = await newActiveGoal(app, 'the snapshot goal');
+    const { planId } = await interruptedPlan(app, goalId);
+
+    const before = await app.controller.continuationReport();
+    const offered = before.candidates.find((c) => c.action === 'continue-plan');
+    assert.ok(offered, before.display);
+    assert.equal(offered.ref, planId);
+
+    const goals = app.controller.goals;
+    const realInspect = goals.inspect;
+    let inspects = 0;
+    let getCalls = 0;
+    goals.inspect = async (...args) => { inspects += 1; return realInspect.apply(goals, args); };
+    // A live second read would now see a completed, moved goal. The ranking must judge the plan
+    // against the bytes it already read, not reach back for a newer and different answer.
+    goals.get = async () => { getCalls += 1; return { id: goalId, status: 'completed', revision: 99, dependsOn: [] }; };
+    let after;
+    try {
+      after = await app.controller.continuationReport();
+    } finally {
+      goals.inspect = realInspect;
+      delete goals.get;
+    }
+    assert.deepEqual(after.candidates, before.candidates, 'every plan is judged against the one snapshot');
+    assert.equal(inspects, 1, 'the ranking reads the goal log once, not once per plan');
+    assert.equal(getCalls, 0, 'no plan read reaches back into the store after the snapshot');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('a damaged goal log fails the ranking closed instead of continuing from a partial read', async () => {
+  const dir = makeTempDataDir();
+  try {
+    const app = await appIn(dir);
+    const goalId = await newActiveGoal(app, 'the damaged snapshot goal');
+    const { planId } = await interruptedPlan(app, goalId);
+    fs.appendFileSync(app.controller.goals.filePath, '{"not":"a goal event"}\n');
+
+    const report = await app.controller.continuationReport();
+    assert.ok(report.problems.some((p) => /goal log/.test(p)), 'the damage is reported');
+    assert.match(report.display, /Problems reading records:[\s\S]*goal log/);
+    assert.equal(report.candidates.some((c) => c.action === 'continue-plan'), false,
+      'a snapshot that cannot be trusted authorizes no continuation');
+    const excluded = report.excluded.find((e) => e.ref === planId);
+    assert.ok(excluded, report.display);
+    assert.match(excluded.reason, /refuses to take the run up/);
   } finally {
     cleanup(dir);
   }

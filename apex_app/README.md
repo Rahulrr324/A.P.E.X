@@ -46,6 +46,7 @@ from a milestone number or a passing build.
 | Integrated cognitive reasoning layer | Implemented as a deterministic, read-only coordinator in `src/cognition/` over the stores APEX already has: request understanding and intent classification, bounded evidence retrieval with provenance and empty/unavailable/damaged distinctions, claim extraction with symmetric contradictions, a thirteen-step deliberation, qualitative uncertainty, clarification before any model call, a bounded grounding brief, and validation of model-authored structures. No stage calls a model, writes a store, grants authorization, or invents an answer. The model receives the brief as data and its reply is parsed as untrusted input; a citation it did not retrieve, a claim of execution, or a forged structure is rejected whole. | `cognition-understanding.test.js` (18 tests), `cognition-reasoning.test.js` (24 tests), `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through the real controller with a synthetic capture backend). See [Batch AJ](#batch-aj-integrated-cognitive-reasoning-deliberation-and-grounded-responses-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Executive bridge: action orchestration and verified execution | Implemented as a deterministic, model-free interpretation layer in `src/executive/` inside `controller.handle()`: a user's own words are mapped to registered actions, a bounded preview names every step and its risk before anything runs, approval is bound to a content hash and version, the authorized run executes through the existing `TaskRunner`, and the answer reports progress, failure boundary, recovery class, and continuation from records. It adds no store, no registry, no second authorization rule, and no second runner. No stage calls a model: the map from words to actions is vocabulary plus the action registry, and a request the mapping cannot resolve is clarified rather than guessed. It is not a general-purpose planner: it maps a bounded request over registered actions, keeps unknowns visible, and refuses what it cannot ground. | `executive-bridge.test.js` (21 tests), `executive-acceptance.test.js` (K-01 to K-25), `executive-adversarial.test.js` (J-01 to J-11) - 57 tests, every one with a stub or no backend, so none is evidence about a real model. See [Batch AK](#batch-ak-the-executive-bridge---safe-action-orchestration-and-verified-execution-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Adaptive planning, outcome evaluation and goal progression | Implemented as four read paths and one recorded reading over the stores Batch AG to AK already own: the candidate approaches a recorded goal supports (`plan.candidates`), a revision of a plan that stopped being viable (`plan.replan`), what a plan's execution established and left open as seven separate questions (`plan.outcome`), and the assessment derived from those records as the one write (`plan.assess`). Every step a candidate names is a registered action, every candidate is a draft on screen until the user records and approves it, the comparison is a disclosed gate-then-Pareto rule with no score, weight, or probability, and no candidate, comparison, or verdict changes a goal's status or grants permission. Batch AM added four things over the same records: the blockers, prerequisites and limits a goal actually has, and which of them are allowed to exclude a candidate (`plan-constraints.test.js`); one disclosed influence of an approved adaptation on selection, which cannot override a gate, a constraint, an approval or a permission (`plan-guidance.test.js`); two more ranked dimensions in the comparison - whether a step's own action can re-check it, and what the plan records say happened the last time that capability ran - with the reason each remaining dimension stays disclosed printed beside it (`plan-dimensions.test.js`); and the continuation pair - `plan.continuation` reads the nine states of a partially executed run from its own records, `plan.continue` takes up only the steps proven never to have started (`plan-continuation.test.js`, with real child processes stopped at eight interruption boundaries); and that reading is now answered where a user looks - continuation readiness grew a seventh state, `ready to continue`, read only from that derivation, and `work`/`next` rank the interrupted run as one `continue-plan` candidate instead of two task and plan entries (`executive-readiness.test.js`). It adds no store, no registry, no planner, and no authorization rule. | `plan-generation.test.js`, `plan-candidates.test.js`, `plan-evaluation.test.js`, `plan-assessment.test.js`, `plan-learning.test.js`, `plan-adversarial.test.js` (15 adversarial cases), `plan-scenarios.test.js` (the 30 numbered end-to-end scenarios), `plan-cli.test.js` (9 scenarios through the real `node bin/apex.js`), `plan-constraints.test.js`, `plan-guidance.test.js`, `plan-dimensions.test.js`, `plan-continuation.test.js`, `learning-read-equivalence.test.js`, `goal-evidence-consistency.test.js`, `executive-readiness.test.js`, `adversarial-batch-am.test.js` (the 16 adversarial cases I-01 to I-16), `plan-scenarios-am.test.js` (the 30 Batch AM acceptance scenarios, 31 tests) - and `goal-provenance.test.js`, `goal-assessment.test.js`. See [Batch AL](#batch-al-adaptive-planning-outcome-evaluation-and-goal-progression-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
+| Cognitive runtime contract, gateway boundary and continuation reliability | Implemented as an explicit, tested boundary over the request path that already exists. `src/cognition/contract.js` states the ten stages of one request, which component owns each, what each stage did, two invariants (no step executed without an allow decision, and none without an authorization record), and a fixed authority block in which `action_registry` owns authorization; the audit copy carries counts and fixed labels, never the request, evidence, model text or reasoning. `src/model/gateway.js` classifies every reply as `valid`, `empty`, `refused`, `unavailable`, `malformed`, `context_limit` or `cancelled`, records provenance with `verified:false`, and keeps caller cancellation distinct from timeout. Grounded claims carry one of six evidence states derived from the cited records (the weakest cited record wins), and a model-declared `supported` may rest only on `directly_supported`. A model proposal is a typed value (`mp:N`, `authority:'none'`) with only `action` and `input`; any authority-shaped or unknown root key rejects the line whole. The continuation path re-reads plan, task and validity inside the task lock, reports nine states from its own records, and never replays a step whose effect cannot be established. `src/cognition/trace.js` records bounded counts, fixed labels, refusals, validation and an explicit `authorizes:false`. No store, registry, planner, controller, runner or authorization rule is added. | `cognition-contract.test.js` (11 tests), `cognition-evidence-states.test.js` (5), `cognition-trace.test.js` (9), `proposal-boundary-an.test.js` (3), `continuation-cross-process-an.test.js` (3, real child processes stopped at the eight interruption boundaries), `integration-runtime-an.test.js` (15 end-to-end and adversarial tests through the assembled app). See [Batch AN](#batch-an-cognitive-runtime-contracts-executive-integration-and-continuation-reliability-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | General planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
 
 The model path depends entirely on a backend you configure yourself. Without one,
@@ -854,6 +855,7 @@ src/goals/
 src/plans/
   model.js            plan states, content validation, the content hash approval is bound to, and the append-only reducer
   store.js            plans.jsonl: draft, revision, approval, activation and outcome events under the plan write lock
+  continuation.js     the eight interruption boundaries, the nine continuation states read from plan, task and audit records, and the refusal to replay a step whose effect cannot be established; writes nothing and grants nothing
   format.js           plain-text rendering of plans, steps, assertions, risk and outcomes
 src/executive/
   vocabulary.js       the bridge's fixed labels: request modes, execution states with the record that proves each, side-effect classes, failure boundaries, recovery classes, status questions, output bounds
@@ -899,7 +901,8 @@ src/cognition/
   deliberation.js     thirteen ordered deterministic steps from question to decision and disclosures
   response.js         grounding-brief bounds, structured-response and plain-answer validation, disclosure wording, and the notice that corrects a model action claim
   protocol.js         extraction, size bound, parse and whole-structure rejection of the optional `COGNITION` line
-  trace.js            bounded audit trace: stage names, counts, evidence ids; never chain-of-thought, request text, stored content or model text
+  trace.js            bounded audit trace: stage names, counts, evidence ids, refusal codes, validation results and the execution-boundary decision; never chain-of-thought, request text, stored content or model text; every audit states authorizes:false
+  contract.js         the ten-stage cognitive runtime contract: what each stage did, bounded counts and fixed labels, the invariants that no step executed without an allow decision or without an authorization record, and the fixed authority block (action_registry owns authorization); the audit shape carries no request, evidence, model or reasoning text
   engine.js           runs the stages in order, exposes per-stage timings, and validates model output against the analysis that produced the prompt
 src/filesystem/
   path.js             absolute path validation: no traversal, no drive root, no UNC
@@ -1057,9 +1060,11 @@ records each measured call appended
 ([Executive bridge](#batch-ak-the-executive-bridge-safe-action-orchestration-and-verified-execution-as-implemented)).
 `benchmarks/run-planning-benchmark.mjs` is outside the suite for the same reason and needs no model and
 no endpoint: it measures the nine Batch AL planning paths at three store sizes, attributes what one
-audited planning read spends on each store read, and finishes with the control that empties the
-prediction and experience ledgers on the largest fixture
-([Batch AL](#batch-al-adaptive-planning-outcome-evaluation-and-goal-progression-as-implemented)).
+audited planning read spends on each store read, adds the Batch AM constraint and real-child recovery
+phases, and adds the Batch AN `ranking` phase over a fourth fixture - a large project with many active
+plans and tasks - where one `work`/`next` report is timed stage by stage and the pre-AN per-plan goal
+replay is measured against the one-snapshot read, as Batch AN reports in
+[Benchmarks](#benchmarks).
 
 | Acceptance test | Where |
 |---|---|
@@ -4495,7 +4500,7 @@ answer into a verified fact.
 | `deliberation.js` | Thirteen ordered deterministic steps: question, subquestions, scope, supporting and contradicting claims, interpretations, assumptions, uncertainty, clarification, conclusion, recommendation, validation, decision, disclosures. |
 | `response.js` | Grounding-brief construction under line and character bounds, structured-response schema validation, plain-answer validation, and disclosure wording. |
 | `protocol.js` | Extraction, size bound, JSON parse, and whole-structure rejection for an optional `COGNITION` line in model output. |
-| `trace.js` | Bounded audit trace: stage names, counts, evidence ids, conflicts, validation results. It never records chain-of-thought, request text, stored content, or model text. |
+| `trace.js` | Bounded audit trace: stage names, counts, evidence ids, conflicts, refusal codes, validation results, and the execution-boundary decision derived from the step records (proposals, allow/deny counts, execution and verification, refusal reasons, duration). It never records chain-of-thought, request text, stored content, or model text, and every audit carries `authorizes: false` with the action registry named as the authorization owner. |
 | `engine.js` | Runs the stages in order, exposes per-stage timings, and validates model output against the analysis that produced the prompt. |
 
 **What a request can mean.** The classifier distinguishes a general question, a stored-information
@@ -4880,6 +4885,129 @@ size. The ranking is the column this batch made heavier: with no interrupted run
 41.6 ms, and with an active plan per task it is 223.6 ms, because each such plan now gets its own
 continuation reading before it can be placed. That is a read the user pays when asking what is next, and
 nothing in it runs in the background.
+
+Batch AN measured that ranking cost and removed its cause. The `ranking` phase adds a fourth fixture - a
+large project with many active plans and tasks: 885 goal events, 645 plan events, 327 task lines, 401
+audit records and 40 interrupted runs among 80 activated plans (about 3.6 MB of JSONL). One `work`/`next`
+report there reads each store once (`goals.get` 0), and takes **220 ms** end to end; the same report on
+S / M / L is **3.3 / 20.3 / 37.6 ms**. The pre-AN shape replayed the whole goal log twice per interrupted
+plan (once for the reading's constraint ledger, once inside live validity). Measured in the same run, one
+such replay per plan already costs **5.45 s** and live validity through the store **5.51 s**, against
+**6.9 ms** through one shared snapshot, with identical `ok` and problem lines on every plan. The report
+now takes one goal snapshot per ranking read and answers every plan from it; a damaged or unreadable goal
+log still refuses every continuation rather than reading a partial state. That equivalence and the
+fail-closed behaviour are pinned in `executive-continuation.test.js` (one inspect, zero store `get`, the
+same ranked candidates; a corrupt goal line yields no `continue-plan` candidate).
+
+## Batch AN: cognitive runtime contracts, executive integration and continuation reliability (as implemented)
+
+Batch AJ gave one request a cognitive reading, Batch AK turned a user's words into an authorized run,
+and Batches AL and AM made planning and recovery read from records. Batch AN is the part that writes
+the boundary down and tests it end to end: which component owns each stage of a request, what the
+gateway says came back, what a claim's evidence actually supports, what a model proposal is allowed to
+carry, what survives a real process death, and what a trace may contain. It adds **no store, no
+registry, no planner, no controller, no runner and no authorization rule**: every stage below either
+reads records the existing path already writes or narrows what may cross a boundary that already
+existed.
+
+### What is implemented
+
+- **The ten-stage contract** (`src/cognition/contract.js`). One request is described as `user_request`,
+  `cognitive_interpretation`, `retrieved_evidence`, `grounded_claims`, `proposed_response`,
+  `proposed_actions`, `executive_authorization`, `actual_execution`, `verification` and
+  `learning_and_outcome`, in that order, each with an owner (`user`, `cognitive`, `model`, `executive`)
+  and one of five statuses (`ran`, `skipped`, `not_reached`, `unavailable`, `failed`). The contract is a
+  reading, not a coordinator: it does not move a request, and it cannot carry one past stage 6. Every
+  contract carries the same authority block verbatim - cognitive output grants no authorization,
+  `action_registry` owns authorization, the cognitive layer performs no execution, authorization cannot
+  be skipped, verification is independent, and model output is untrusted - and `buildContract` checks
+  two invariants from the records: no step may execute without an allow decision, and none may execute
+  without an authorization record at all. The audit copy keeps the schema, request id, stages, authority
+  and check results; it drops request text, evidence text, model text and reasoning. On every request the
+  controller assembles, stage 10 is recorded `not_reached`: the contract is built before finalization
+  writes the operation record, so learning is stated as not yet reached rather than guessed.
+- **A gateway boundary that says what came back** (`src/model/gateway.js`). Every reply is classified
+  as `valid`, `empty`, `refused`, `unavailable`, `malformed`, `context_limit` or `cancelled`. Provenance
+  records request id, backend, provider and model with `verified:false`, because APEX has no way to
+  attest that a reply came from the model it asked. A caller's cancellation signal becomes `ABORTED`,
+  distinct from `TIMEOUT`, and automatic retry remains limited to `UNREACHABLE` and `INTERRUPTED`; a
+  refusal, an empty reply or a malformed one is never retried into a different outcome.
+- **Evidence states a model cannot overwrite** (`src/cognition/vocabulary.js`, `claims.js`,
+  `response.js`). A claim carries one of six states - `directly_supported`, `partially_supported`,
+  `conflicting`, `unverified`, `unsupported`, `temporally_stale` - derived from the records it cites.
+  The weakest cited record wins, so one contested citation makes the whole claim contested; a model's
+  claim of `supported` is accepted only when every citation is `directly_supported`. Each claim kind
+  has a fixed set of states it may hold, and the grounding brief prints the deterministic counts beside
+  the records. Retrieval also stopped treating a summary of nothing as evidence: an empty world store
+  and a temporal summary with zero outcomes and no supported pattern now contribute no claim, so an
+  empty store answers `unknown` with the disclosure `no_evidence_found` instead of reading as support.
+- **A typed proposal boundary** (`src/controller/proposals.js`). A model reply may propose only
+  `action` and `input`. The parsed value is stored as `model_action_proposal`, with an id (`mp:N`),
+  `origin:'model'`, `trusted:false` and `authority:'none'`. Any authority-shaped root key
+  (`authorization`, `authorized`, `verified`, `executed` and the like) or any unknown root key rejects
+  the line whole. A proposal reaches execution only by the existing route: a bounded preview names every
+  step and its risk, a user-origin approval is bound to the plan's content hash and version, the run
+  goes through the existing `TaskRunner`, and the independent verifier decides whether the step is
+  verified. When a proposal is not executed, the answer says so rather than being silent.
+- **Cross-process continuation** (`src/plans/continuation.js`). The reading names one of eight
+  interruption boundaries and one of nine states from the plan, task and audit records it re-reads
+  inside the task lock. A command's own lock is reported as held by this command rather than as another
+  process mid-run, and a continuation whose `continue.safe` is false is refused rather than attempted.
+  A step whose effect cannot be established is never produced a second time, and duplicate or
+  concurrent continuations take the run up once.
+- **A bounded cognitive trace** (`src/cognition/trace.js`). The trace holds stages, evidence ids,
+  refusals, boundary, disclosures, validation and decision, with `authorizes:false` at the top level.
+  `executionBoundary` states one of `not_reached`, `no_proposals`, `malformed_only`, `all_denied`,
+  `partially_executed`, `all_executed`, with proposal, authorization, execution and verification counts
+  and the refusal reasons; `attachBoundary` adds it to an existing audit record. Every free-text field
+  is filtered against a fixed label pattern, so prose and reasoning cannot enter the trace even if a
+  caller supplies it. A trace is evidence about what happened; it is not a permission and nothing reads
+  it as one.
+- **Deterministic integration and adversarial coverage.** `integration-runtime-an.test.js` drives the
+  assembled application through the whole path - request, interpretation, retrieval, claims, answer or
+  proposal, authorization, execution, verification, audit and learning - and covers empty evidence,
+  conflicting evidence, stale evidence, malformed cognitive output, model-origin authorization
+  attempts, fabricated tool results, unsupported claims, an unavailable backend, interrupted
+  processing, duplicate requests, invalidated approvals, concurrent operations, audit failures and
+  recovery after process termination. `continuation-cross-process-an.test.js` uses real child
+  processes stopped at the eight interruption boundaries, and `proposal-boundary-an.test.js` pins the
+  typed-proposal refusal on the assembled path. No test contacts a model: every backend is the
+  no-backend one or a programmatic stub whose reply is fixed text.
+
+### Where the shipped behaviour differs from the brief, stated as the records support it
+
+- The contract records stage 10 as `not_reached` on every request today. It could report a learning
+  stage only by reading a finalization record that does not exist yet at the time it is built, and
+  reporting it from a guess would be exactly the kind of claim this batch removes.
+- The contract does not enforce the boundary; the existing executive path already does. The contract's
+  contribution is that the boundary is now stated per request, checked for two invariants, and exposed
+  to tests - not that it adds a second enforcement point.
+- The trace is deliberately not a reasoning log. Free text is dropped, which makes it safe to persist
+  but means a debugging reader sees counts, ids and fixed labels rather than explanations. That is the
+  trade this batch chose: a trace that cannot leak private reasoning is more useful than one that can.
+- Continuation reports what the records prove. A write interrupted mid-execution is `outcome
+  uncertain`, not a success and not a retry, and the way forward is a new plan rather than a replay.
+- All model-backed tests in this batch use a stub or no backend. They establish what APEX does with a
+  reply of a given shape; they are not evidence about a real model's reasoning or reliability.
+
+### Measured
+
+The continuation performance work is in [Benchmarks](#benchmarks) and repeated at the end of the
+[Batch AL](#batch-al-adaptive-planning-outcome-evaluation-and-goal-progression-as-implemented)
+section: on the XL fixture (885 goal events, 645 plan events, 327 task lines, 401 audit records, 40
+interrupted runs among 80 activated plans, about 3.6 MB of JSONL), one `work`/`next` report takes
+**220 ms** and reads the goal log once, against a pre-AN shape that replayed it twice per interrupted
+plan at **5.45 s** per replay. The six new suites hold **46 tests** (11 + 5 + 9 + 3 + 3 + 15). The full
+`npm test` run that closed this batch (129 test files, the six above included) ran **2,249 tests, 2,247
+passed, 0 failed, 2 skipped** in 422.3 s on Windows 11, Node v26.4.0, in isolated temporary data
+directories. The two skips are the POSIX-only checks this filesystem cannot perform. Before Batch AN the
+same script reported 2,196 tests; the added tests are this batch's suites plus seven tests added to
+existing suites. The run needed two test-harness corrections first, both in tests rather than in the
+application: a digest tamper that was a no-op when the hash already began with `f`, and a refusal
+assertion that did not accept the second process's legitimate `nothing was taken up` wording. Each was
+reproduced by repetition, fixed at the assertion, and the affected suites then passed 20/20 and 12/12
+before the clean full run above. No test in that list runs a model: the gateway in every one of them is
+either the no-backend one or a programmatic stub whose reply is fixed text.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 

@@ -1,7 +1,10 @@
 // Model Gateway and configuration: honest behaviour with and without a backend.
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { ModelGateway, NoBackend, OpenAICompatibleBackend, createGateway, parseEndpoint } from '../src/model/gateway.js';
+import {
+  GatewayResponseClass, ModelGateway, NoBackend, OpenAICompatibleBackend, classifyGatewayResult,
+  createGateway, parseEndpoint,
+} from '../src/model/gateway.js';
 import { loadConfig } from '../src/config.js';
 import { ValidationError } from '../src/errors.js';
 import { startStubModel, closedPortUrl } from './helpers.js';
@@ -114,6 +117,77 @@ describe('model gateway', () => {
     assert.equal((await gw.complete({ prompt: 'hi' })).error.code, 'MALFORMED_RESPONSE');
     s.behavior.raw = JSON.stringify({ choices: [] });
     assert.equal((await gw.complete({ prompt: 'hi' })).error.code, 'MALFORMED_RESPONSE');
+  });
+
+  test('every transport outcome has one fixed class, not prose to interpret', () => {
+    const classOf = (error) => classifyGatewayResult(error ? { ok: false, error } : { ok: true });
+    assert.equal(classOf(null), GatewayResponseClass.VALID);
+    assert.equal(classOf({ code: 'NOT_CONFIGURED' }), GatewayResponseClass.UNAVAILABLE);
+    assert.equal(classOf({ code: 'UNREACHABLE' }), GatewayResponseClass.UNAVAILABLE);
+    assert.equal(classOf({ code: 'TIMEOUT' }), GatewayResponseClass.UNAVAILABLE);
+    assert.equal(classOf({ code: 'INTERRUPTED' }), GatewayResponseClass.UNAVAILABLE);
+    assert.equal(classOf({ code: 'EMPTY_RESPONSE' }), GatewayResponseClass.EMPTY);
+    assert.equal(classOf({ code: 'MODEL_REFUSED' }), GatewayResponseClass.REFUSED);
+    assert.equal(classOf({ code: 'CONTEXT_TOO_LARGE' }), GatewayResponseClass.CONTEXT_LIMIT);
+    assert.equal(classOf({ code: 'ABORTED' }), GatewayResponseClass.CANCELLED);
+    for (const code of ['MALFORMED_RESPONSE', 'RESPONSE_TOO_LARGE', 'MODEL_ERROR', 'HTTP_ERROR', 'MODEL_NOT_FOUND']) {
+      assert.equal(classOf({ code }), GatewayResponseClass.MALFORMED, code);
+    }
+  });
+
+  test('a successful answer carries its request id and unverified provenance', async () => {
+    const s = await stub();
+    s.behavior.reply = 'hello';
+    const gw = createGateway({ url: s.url, name: 'stub-model', timeoutMs: 5000, allowRemote: false });
+    const res = await gw.complete({ system: 'sys', prompt: 'hi', requestId: 'op-42' });
+    assert.equal(res.ok, true);
+    assert.equal(res.class, GatewayResponseClass.VALID);
+    assert.equal(res.requestId, 'op-42');
+    assert.deepEqual(res.provenance, {
+      requestId: 'op-42',
+      backend: 'openai-compatible',
+      provider: 'openai',
+      model: 'stub-model',
+      verified: false,
+    });
+  });
+
+  test('a provider refusal is its own class and is never reported as empty or as an answer', async () => {
+    const s = await stub();
+    s.behavior.raw = JSON.stringify({ choices: [{ message: { content: '' }, finish_reason: 'content_filter' }] });
+    const gw = createGateway({ url: s.url, name: 'stub-model', timeoutMs: 5000, allowRemote: false });
+    const res = await gw.complete({ prompt: 'hi', requestId: 'op-43' });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'MODEL_REFUSED');
+    assert.equal(res.class, GatewayResponseClass.REFUSED);
+    assert.equal(res.text, undefined);
+    assert.equal(res.provenance.verified, false);
+  });
+
+  test('a caller-cancelled request is ABORTED and is not retried', async () => {
+    const s = await stub();
+    s.behavior.delayMs = 3000;
+    const gw = createGateway({ url: s.url, name: 'stub-model', timeoutMs: 10000, allowRemote: false });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 50);
+    const started = Date.now();
+    const res = await gw.complete({ prompt: 'hi', requestId: 'op-44', signal: controller.signal });
+    assert.equal(res.ok, false);
+    assert.equal(res.error.code, 'ABORTED');
+    assert.equal(res.class, GatewayResponseClass.CANCELLED);
+    assert.ok(Date.now() - started < 2000, 'cancellation must return promptly, not wait for the timeout');
+    assert.equal(s.requests.length, 1, 'a cancelled request is not retried');
+  });
+
+  test('a request cancelled before it is sent never reaches the endpoint', async () => {
+    const s = await stub();
+    const gw = createGateway({ url: s.url, name: 'stub-model', timeoutMs: 5000, allowRemote: false });
+    const controller = new AbortController();
+    controller.abort();
+    const before = s.requests.length;
+    const res = await gw.complete({ prompt: 'hi', signal: controller.signal });
+    assert.equal(res.error.code, 'ABORTED');
+    assert.equal(s.requests.length, before);
   });
 
   test('an empty prompt is rejected by the gateway', async () => {

@@ -15,6 +15,7 @@ import { deliberate } from './deliberation.js';
 import { CognitionTrace } from './trace.js';
 import { buildGroundingBrief, validatePlainAnswer } from './response.js';
 import { cognitionAudit, validateCognitionModelOutput } from './protocol.js';
+import { buildContract, contractAudit } from './contract.js';
 
 const CONTINUATION_INTENTS = new Set([
   'next_step', 'goal_progress', 'plan_review',
@@ -37,6 +38,9 @@ function unavailable(requestId, error, timings = {}) {
     brief: null,
     audit: null,
     timings,
+    // A failed analysis still states the contract: the request was received, the cognitive stages
+    // could not be taken, and nothing after stage 5 was reached.
+    contract: buildContract({ requestId, analysis: null }),
   };
 }
 
@@ -186,6 +190,13 @@ export async function analyzeRequest({
       decision: deliberation.decision,
       uncertainty: deliberation.uncertainty?.category ?? null,
     });
+    // The reason the layer stopped short, as the bounded missing-information code it already uses.
+    // The clarification wording itself stays in the user-facing answer and out of the trace.
+    if (deliberation.clarification?.needed) {
+      trace.refusal('clarification_required', deliberation.clarification.missing);
+    } else if (deliberation.decision === DecisionKind.REFUSE) {
+      trace.refusal('unsupported_request');
+    }
     for (const code of deliberation.disclosures) trace.disclose(code);
     if (deliberation.decision === DecisionKind.ANSWER) {
       trace.disclose(Disclosure.MODEL_OUTPUT_UNVERIFIED);
@@ -209,7 +220,7 @@ export async function analyzeRequest({
       durationMs: timings.brief,
     });
 
-    return {
+    const analysis = {
       schema: COGNITION_SCHEMA,
       available: true,
       unavailable: false,
@@ -223,6 +234,10 @@ export async function analyzeRequest({
       audit: trace.toAudit(),
       timings,
     };
+    // The contract records the five cognitive stages only. The caller that runs proposals and
+    // actions rebuilds it with those records, so stage 6 onward is never assumed here.
+    analysis.contract = buildContract({ requestId, analysis });
+    return analysis;
   } catch (err) {
     return unavailable(requestId, err, timings);
   }
@@ -280,7 +295,7 @@ export function validateModelOutput(text, analysis) {
 export function analysisAudit(analysis) {
   if (!analysis?.available) {
     return analysis?.available === false
-      ? { available: false, error: analysis.error ?? null }
+      ? { available: false, error: analysis.error ?? null, contract: contractAudit(analysis.contract) }
       : null;
   }
   return {
@@ -307,5 +322,6 @@ export function analysisAudit(analysis) {
       : null,
     timings: { ...analysis.timings },
     trace: analysis.audit,
+    contract: contractAudit(analysis.contract),
   };
 }

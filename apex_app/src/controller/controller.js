@@ -17,6 +17,8 @@ import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, sel
 import { buildWorldModelContext } from '../world/context.js';
 import { computeConflicts } from '../world/conflicts.js';
 import { analyzeRequest, analysisAudit, validateModelOutput } from '../cognition/engine.js';
+import { attachBoundary, executionBoundary } from '../cognition/trace.js';
+import { buildContract, contractAudit } from '../cognition/contract.js';
 import { structuredDisclosureNotice, actionClaimNotice } from '../cognition/response.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
@@ -122,6 +124,10 @@ function modelFailureAdvice(code) {
       return 'The endpoint is reachable but does not serve this model name; no action was proposed or run. Correct APEX_MODEL_NAME before retrying.';
     case 'EMPTY_RESPONSE':
       return 'No answer was generated. A retry is safe, but if the same empty answer repeats, adjust the token budget or model as described above rather than retrying unchanged.';
+    case 'MODEL_REFUSED':
+      return 'The model provider declined to answer this request. No action was proposed or run; rephrasing is the only safe next step, and retrying the same wording is not.';
+    case 'ABORTED':
+      return 'The request was cancelled by the caller. No answer and no action were produced, and nothing was retried.';
     case 'CONTEXT_TOO_LARGE':
       return 'No action was proposed or run; shorten the request rather than retrying it unchanged.';
     case 'TIMEOUT':
@@ -382,7 +388,7 @@ export class CognitiveController {
       .join('\n');
   }
 
-  async handle(requestText, { origin = 'user', saveAnswer = false, sessionId = null, onProgress = null } = {}) {
+  async handle(requestText, { origin = 'user', saveAnswer = false, sessionId = null, onProgress = null, signal = null } = {}) {
     const op = {
       schema: OPERATION_SCHEMA,
       app: APP_NAME,
@@ -565,6 +571,9 @@ export class CognitiveController {
           // If the session or conversation log cannot be read, the prompt must not
           // claim that no earlier messages exist.
           historyUnavailable: op.errors.some((e) => e.stage === 'context' || e.stage === 'session'),
+          // The caller may cancel a model request. Cancellation is reported as its own class and is
+          // never retried, so it cannot be mistaken for a timeout or an outage.
+          signal,
         }, op, onProgress);
         status = m.status;
         // Any model proposal that did not execute and verify gets a deterministic
@@ -3836,8 +3845,8 @@ export class CognitiveController {
   // The records a continuation reading needs, gathered with the same bounded reads every other
   // executive answer uses. A store that cannot be read is reported to the derivation as unreadable,
   // which keeps an interrupted step unknown; it is never handed on as an empty one.
-  async #continuationInputs(plan, validity = null) {
-    const inputs = { operations: null, auditReadable: true, lock: null, constraints: null, validity: null, goal: null };
+  async #continuationInputs(plan, validity = null, lockOverride = undefined) {
+    const inputs = { operations: null, auditReadable: true, lock: lockOverride ?? null, constraints: null, validity: null, goal: null };
     try {
       const audit = await this.operations.inspect();
       inputs.operations = audit.records;
@@ -3845,12 +3854,14 @@ export class CognitiveController {
       inputs.operations = null;
       inputs.auditReadable = false;
     }
-    try {
-      inputs.lock = this.taskStore && typeof this.taskStore.lockState === 'function'
-        ? await this.taskStore.lockState()
-        : null;
-    } catch {
-      inputs.lock = null;
+    if (lockOverride === undefined) {
+      try {
+        inputs.lock = this.taskStore && typeof this.taskStore.lockState === 'function'
+          ? await this.taskStore.lockState()
+          : null;
+      } catch {
+        inputs.lock = null;
+      }
     }
     if (plan.goalId && this.goals) {
       try {
@@ -4018,26 +4029,41 @@ export class CognitiveController {
       throw err;
     }
 
-    const inputs = await this.#continuationInputs(plan);
-    const before = continuationOf({
-      plan, task,
-      operations: inputs.operations,
-      registry: this.registry,
-      constraints: inputs.constraints,
-      validity: inputs.validity,
-      lock: inputs.lock,
-      auditReadable: inputs.auditReadable,
-      goal: inputs.goal,
-      now: this.now(),
-    });
-    if (!before.continue.safe) {
-      const why = before.blockers.length > 0 ? before.blockers.join('; ') : 'no step of this run is established as never having started';
-      return refuse(`nothing was taken up, because the records do not establish that this run may be continued: ${why}`, before);
-    }
-
-    let result;
+    // The derivation and the run have to read one task state. A derivation made before the lock
+    // leaves a window in which another process records a step's outcome; the run would then be taken
+    // up on an answer the records no longer hold, and a step that became uncertain in that window
+    // would not stop the steps beside it. `withLock` refuses a live holder rather than waiting, so
+    // holding it is also the proof that no other process is mid-run. The plan and the task are
+    // re-read here, inside the lock, and the reading is handed an explicit lock view for this
+    // command's own claim, so it is never mistaken for another process's.
+    let before = null;
+    let missingTask = false;
+    let result = null;
     try {
-      result = await this.taskStore.withLock(() => this.tasks.run(task.id, { mode: 'continue' }));
+      result = await this.taskStore.withLock(async () => {
+        plan = (await this.plans.get(plan.id)) ?? plan;
+        task = await this.taskStore.get(task.id);
+        if (!task) {
+          missingTask = true;
+          return null;
+        }
+        const inputs = await this.#continuationInputs(plan, null, {
+          present: true, pid: process.pid, alive: true, heldByThisCommand: true,
+        });
+        before = continuationOf({
+          plan, task,
+          operations: inputs.operations,
+          registry: this.registry,
+          constraints: inputs.constraints,
+          validity: inputs.validity,
+          lock: inputs.lock,
+          auditReadable: inputs.auditReadable,
+          goal: inputs.goal,
+          now: this.now(),
+        });
+        if (!before.continue.safe) return null;
+        return this.tasks.run(task.id, { mode: 'continue' });
+      });
     } catch (err) {
       if (err instanceof StoreError && err.executedSteps?.length) {
         // A task-log write refused after steps ran. The steps that ran are evidence, and what the
@@ -4058,6 +4084,19 @@ export class CognitiveController {
         return refuse(`the continuation was refused before it ran: ${redactSecrets(err.message)}`, before);
       }
       throw err;
+    }
+
+    if (result === null) {
+      if (missingTask) {
+        return refuse(`the task ${shortId(plan.activation.taskId)} this plan activated is not in the task log, so this continuation has nothing to take up`);
+      }
+      // The reading taken under the lock is the one the refusal quotes: a step that became
+      // uncertain, a plan that was cancelled, or an approval that stopped binding while this
+      // command waited for the lock is a fact the user has to see, not a stale answer.
+      const why = before && before.blockers.length > 0
+        ? before.blockers.join('; ')
+        : 'no step of this run is established as never having started';
+      return refuse(`nothing was taken up, because the records do not establish that this run may be continued: ${why}`, before);
     }
 
     // The outcomes this run established are recorded against the plan the same way a first run
@@ -4345,15 +4384,41 @@ export class CognitiveController {
     return { display: lines.join('\n'), attention, sections, problems };
   }
 
+  // The one goal read a ranking already made, presented with the store's own `get` contract. A
+  // snapshot of records is not a weaker answer than a second read of the same log: it is the state
+  // the command is reporting, and using it keeps every plan in one ranking judged against the same
+  // bytes. Damage is not smoothed over - where the read found corrupt lines or events that cannot be
+  // applied, every lookup refuses, exactly as the store's `load()` would, so validity fails closed
+  // instead of reading a partial state as the whole.
+  #goalSnapshot(goals, { readable, damaged }) {
+    const byId = new Map(goals.map((g) => [g.id, g]));
+    if (!readable) {
+      return {
+        get: async () => {
+          throw new StoreError('the goal log could not be read, so no goal state can be confirmed');
+        },
+      };
+    }
+    if (damaged) {
+      return {
+        get: async () => {
+          throw new StoreError('the goal log holds damage, so no goal state can be confirmed from this read');
+        },
+      };
+    }
+    return { get: async (id) => byId.get(id) ?? null };
+  }
+
   // The continuation readings the ranking is allowed to use, for the plans whose run began and has not
-  // been settled. One read of the audit log, one of the task lock and one constraint ledger per goal
-  // are shared by all of them, because `next` and `work` are reads the user runs to decide what to do
-  // now; opening the same logs once per plan would make this the slowest read APEX has.
+  // been settled. One read of the audit log, one of the task lock, one of the goal log (the ranking's
+  // own snapshot, handed in by `continuationReport`) and one constraint ledger per goal are shared by
+  // all of them, because `next` and `work` are reads the user runs to decide what to do now; opening
+  // the same logs once per plan would make this the slowest read APEX has.
   //
   // A plan is given a reading only when its own task can still be described: where the task record
   // cannot be read or has no steps, the ranking says so from the plan and task records instead of
   // claiming a continuation it never derived.
-  async #continuationReadings(plans, tasks) {
+  async #continuationReadings(plans, tasks, goalView) {
     const readings = new Map();
     const tasksById = new Map(tasks.map((t) => [t.id, t]));
     const settled = new Set([TaskStatus.COMPLETED, TaskStatus.CANCELLED]);
@@ -4383,9 +4448,9 @@ export class CognitiveController {
       const task = tasksById.get(plan.activation.taskId);
       if (!Array.isArray(task.steps)) continue;
       let goal = null;
-      if (plan.goalId && this.goals) {
+      if (plan.goalId && goalView) {
         try {
-          goal = await this.goals.get(plan.goalId);
+          goal = await goalView.get(plan.goalId);
         } catch {
           goal = null;
         }
@@ -4394,7 +4459,7 @@ export class CognitiveController {
             const { cited, dependencies } = await readConstraintRecords({
               goal,
               registry: this.registry,
-              goals: this.goals,
+              goals: goalView,
               knowledge: this.knowledge,
               memory: this.memory,
               experience: this.experience,
@@ -4414,7 +4479,7 @@ export class CognitiveController {
       let validity = null;
       try {
         validity = await assessPlanValidity(plan, {
-          goals: this.goals,
+          goals: goalView,
           plans: this.plans,
           operations: this.operations,
           knowledge: this.knowledge,
@@ -4456,15 +4521,19 @@ export class CognitiveController {
     let goals = [];
     let plans = [];
     let tasks = [];
+    let goalsReadable = true;
+    let goalsDamaged = false;
 
     if (this.goals) {
       try {
         const g = await this.goals.inspect();
         goals = g.goals;
-        if (g.corrupt.length > 0 || g.problems.length > 0) {
+        goalsDamaged = g.corrupt.length > 0 || g.problems.length > 0;
+        if (goalsDamaged) {
           problems.push(`goal log: ${g.corrupt.length} corrupt line(s), ${g.problems.length} event(s) that cannot be applied`);
         }
       } catch (err) {
+        goalsReadable = false;
         problems.push(`goal records unavailable: ${redactSecrets(err.message)}`);
       }
     } else {
@@ -4497,11 +4566,18 @@ export class CognitiveController {
       problems.push('task records are not configured');
     }
 
+    // One read of the goal log answers every plan in this ranking. The view below is the same set of
+    // records the ranking reports, so a plan cannot be judged against a goal state that changed
+    // between two reads of the same command, and no plan pays for a second whole-log replay. It still
+    // refuses like the store does: a goal it does not hold is null, and a log this read found damaged
+    // or unreadable throws for every id rather than letting a partial state stand in for the whole.
+    const goalView = this.goals ? this.#goalSnapshot(goals, { readable: goalsReadable, damaged: goalsDamaged }) : null;
+
     const validityByPlan = new Map();
     for (const plan of plans.filter((p) => p.status === PlanStatus.APPROVED)) {
       try {
         validityByPlan.set(plan.id, await assessPlanValidity(plan, {
-          goals: this.goals,
+          goals: goalView,
           plans: this.plans,
           operations: this.operations,
           knowledge: this.knowledge,
@@ -4522,7 +4598,7 @@ export class CognitiveController {
 
     const report = buildContinuation({
       goals, plans, tasks, validityByPlan, now: this.now(),
-      continuationsByPlan: await this.#continuationReadings(plans, tasks),
+      continuationsByPlan: await this.#continuationReadings(plans, tasks, goalView),
     });
     let display = renderContinuation(report, { limit, top });
     if (problems.length > 0) {
@@ -5067,7 +5143,7 @@ export class CognitiveController {
   // Model path. `relevant` is the already-filtered memory that may enter a prompt
   // or be shown directly. Everything retrieved but ineligible (private, secret,
   // superseded) stays out of both the prompt and the direct display.
-  async answerWithModel(request, { relevant, turns, historyUnavailable = false }, op, onProgress = null) {
+  async answerWithModel(request, { relevant, turns, historyUnavailable = false, signal = null }, op, onProgress = null) {
     const retrievalError = op.errors.find((error) => error.stage === 'retrieval');
     if (retrievalError) {
       return {
@@ -5497,10 +5573,41 @@ export class CognitiveController {
       }
     }
 
-    const res = await this.gateway.complete({ system, prompt: built.prompt });
+    // The request id ties this model turn to the operation, and the transport class states which
+    // kind of outcome came back. Neither is used as an authorization decision.
+    const res = await this.gateway.complete({
+      system,
+      prompt: built.prompt,
+      requestId: op.id,
+      signal,
+    });
 
     if (!res.ok) {
-      op.model = { provider: res.provider ?? null, latencyMs: res.latencyMs };
+      op.model = {
+        provider: res.provider ?? null,
+        latencyMs: res.latencyMs,
+        class: res.class ?? null,
+        provenance: res.provenance ?? null,
+      };
+      // The model stage was reached but produced no text, so no proposal was observed. The contract
+      // records that plainly rather than leaving the later stages looking unattempted for another reason.
+      const boundary = executionBoundary({
+        reached: false,
+        proposals: { observed: 0, wellFormed: 0, malformed: 0, overflow: 0 },
+        steps: [],
+      });
+      op.cognition = {
+        ...(op.cognition ?? { available: false }),
+        contract: contractAudit(buildContract({
+          requestId: op.id,
+          analysis: cognition?.available ? cognition : null,
+          proposals: { observed: 0, wellFormed: 0, malformed: 0, overflow: 0 },
+          steps: [],
+        })),
+        ...(op.cognition?.trace
+          ? { trace: attachBoundary(op.cognition.trace, boundary) }
+          : { boundary }),
+      };
       return {
         status: Outcome.EXECUTION_FAILED,
         answer: `The model backend did not produce an answer (${res.error.code}: ${res.error.message}). No answer has been generated. ${modelFailureAdvice(res.error.code)}`,
@@ -5510,7 +5617,14 @@ export class CognitiveController {
         annotation: '',
       };
     }
-    op.model = { name: res.model, provider: res.provider, latencyMs: res.latencyMs, finishReason: res.finishReason };
+    op.model = {
+      name: res.model,
+      provider: res.provider,
+      latencyMs: res.latencyMs,
+      finishReason: res.finishReason,
+      class: res.class ?? null,
+      provenance: res.provenance ?? null,
+    };
     // Numeric backend counters are recorded only when the server reported them, so a
     // missing measurement is visible as absent rather than as a zero.
     if (res.usage) op.model.usage = res.usage;
@@ -5526,6 +5640,10 @@ export class CognitiveController {
     // outside it is still the model's answer and remains unverified. The structured answer, when
     // accepted, replaces the prose as the answer text because it is the same model making the same
     // claim in a checked shape.
+    // Everything from here to the step records is the execution boundary: the model's text is
+    // validated, parsed into typed proposals, and each proposal is authorized and run by the
+    // registry. The duration below measures that path, not the model's own response time.
+    const boundaryStarted = performance.now();
     const cognitionCheck = cognition?.available ? validateModelOutput(res.text, cognition) : null;
     if (cognitionCheck) {
       op.cognition = { ...(op.cognition ?? { available: false }), model: cognitionCheck.audit };
@@ -5572,9 +5690,48 @@ export class CognitiveController {
     if (overflow > 0) {
       op.errors.push({ stage: 'proposals', code: 'TOO_MANY', message: `only the first ${MAX_PROPOSALS} of ${parsed.proposals.length} proposals were considered` });
     }
+    const actionSteps = [];
     for (const p of parsed.proposals.slice(0, MAX_PROPOSALS)) {
-      op.steps.push(await this.runAction(p.action, p.input, 'model', op.id));
+      // The step names the typed proposal it came from. The type, origin, and absence of authority
+      // come from the parser, not from the reply, so the audit cannot show a model-authored claim of
+      // permission. The registry decision below is still the only thing that can allow execution.
+      const step = await this.runAction(p.action, p.input, 'model', op.id);
+      step.proposalId = `${op.id}/${p.proposalId}`;
+      actionSteps.push(step);
+      op.steps.push(step);
     }
+    // The request's contract now names what actually happened at stages 6-10, from the step records
+    // themselves: the proposals observed, the registry decisions, the execution results, and the
+    // independent verification. The cognition layer wrote none of those records and cannot. The
+    // boundary record is derived from the same records and restates the decisions; it authorizes
+    // nothing, and a request whose cognitive stage failed keeps the record beside the absence.
+    const boundary = executionBoundary({
+      proposals: {
+        observed: parsed.proposals.length + parsed.malformed.length,
+        wellFormed: parsed.proposals.length,
+        malformed: parsed.malformed.length,
+        overflow,
+      },
+      steps: actionSteps,
+      durationMs: performance.now() - boundaryStarted,
+    });
+    op.cognition = {
+      ...(op.cognition ?? { available: false }),
+      contract: contractAudit(buildContract({
+        requestId: op.id,
+        analysis: cognition?.available ? cognition : null,
+        proposals: {
+          observed: parsed.proposals.length + parsed.malformed.length,
+          wellFormed: parsed.proposals.length,
+          malformed: parsed.malformed.length,
+          overflow,
+        },
+        steps: actionSteps,
+      })),
+      ...(op.cognition?.trace
+        ? { trace: attachBoundary(op.cognition.trace, boundary) }
+        : { boundary }),
+    };
 
     if (res.truncated) {
       answer += res.truncatedBy === 'output-size-limit'

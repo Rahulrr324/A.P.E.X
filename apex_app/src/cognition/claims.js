@@ -5,7 +5,9 @@
 // resolves a disagreement by recency or repetition, and keeps every side of a conflict as its own
 // linked claim. A derived view keeps its derived kind, so a pattern cannot be read as an observation
 // and an expectation cannot be read as something that happened.
-import { BOUNDS, ClaimKind, EvidenceSource } from './vocabulary.js';
+import {
+  BOUNDS, ClaimKind, EvidenceSource, EvidenceState,
+} from './vocabulary.js';
 
 function claimKindFor(item) {
   switch (item.source) {
@@ -48,6 +50,41 @@ function claimKindFor(item) {
 
 function isMaterial(kind) {
   return ![ClaimKind.STATEMENT, ClaimKind.RULE, ClaimKind.EXPECTATION, ClaimKind.RECOMMENDATION].includes(kind);
+}
+
+// What the evidence behind a claim can carry. Conflict wins over everything else: a contested record
+// is not made current by being recent. Staleness comes next, then the kind's own strength. This is a
+// label, never a score, and it is not a probability that the claim is true.
+export function evidenceStateForClaim(claim) {
+  if ((claim.contradicts?.length ?? 0) > 0 || claim.kind === ClaimKind.CONTRADICTED) {
+    return EvidenceState.CONFLICTING;
+  }
+  if (claim.current === false || claim.kind === ClaimKind.HISTORICAL) {
+    return EvidenceState.TEMPORALLY_STALE;
+  }
+  switch (claim.kind) {
+    case ClaimKind.PARTIALLY_SUPPORTED:
+      return EvidenceState.PARTIALLY_SUPPORTED;
+    case ClaimKind.SUPPORTED:
+    case ClaimKind.OBSERVATION:
+    case ClaimKind.RULE:
+    case ClaimKind.STATEMENT:
+    case ClaimKind.GOAL_STATE:
+    case ClaimKind.PLAN_STATE:
+    case ClaimKind.TASK_STATE:
+      return EvidenceState.DIRECTLY_SUPPORTED;
+    case ClaimKind.INFERENCE:
+    case ClaimKind.ASSUMPTION:
+    case ClaimKind.UNKNOWN:
+      return EvidenceState.UNVERIFIED;
+    case ClaimKind.EXPECTATION:
+    case ClaimKind.RECOMMENDATION:
+      // The record shows that the expectation or recommendation exists. It is not evidence that the
+      // expected outcome happened or that the advice is right, so the claim itself is unsupported.
+      return EvidenceState.UNSUPPORTED;
+    default:
+      return EvidenceState.UNVERIFIED;
+  }
 }
 
 function subjectKey(item) {
@@ -152,6 +189,9 @@ export function extractClaims({ evidence = [], understanding = null, conflicts =
   for (const claim of claims) {
     const key = `${claim.source}\u0000${claim.text.toLowerCase()}`;
     claim.duplicateOf = (byText.get(key) ?? []).filter((id) => id !== claim.claimId);
+    // Derived last, after conflict links and duplicates, because both can change what the record
+    // behind the claim can support.
+    claim.evidenceState = evidenceStateForClaim(claim);
   }
 
   const byId = new Map(claims.map((claim) => [claim.claimId, claim]));
@@ -176,6 +216,10 @@ export function extractClaims({ evidence = [], understanding = null, conflicts =
       inference: claims.filter((claim) => claim.kind === ClaimKind.INFERENCE).length,
       unknown: claims.filter((claim) => claim.kind === ClaimKind.UNKNOWN).length,
       expectation: claims.filter((claim) => claim.kind === ClaimKind.EXPECTATION).length,
+      evidenceStates: Object.fromEntries(Object.values(EvidenceState).map((state) => [
+        state,
+        claims.filter((claim) => claim.evidenceState === state).length,
+      ])),
     },
   };
 }

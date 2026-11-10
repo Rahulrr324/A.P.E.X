@@ -504,14 +504,29 @@ describe('AF-20: verification and status are computed, never claimed', () => {
 
     const res = await app.controller.handle(ASK, { origin: 'user' });
     const [step] = res.operation.steps;
-    assert.equal(step.origin, 'model', 'extra fields on the proposal are dropped, and never change the origin');
-    assert.equal(step.authorization.reason, 'PERMITTED', 'a permitted read stays permitted');
-    assert.equal(step.outcome, Outcome.INPUT_REJECTED, 'but its invented input fields are refused');
-    assert.match(step.summary, /unexpected input field/);
-    assert.equal(step.verification.outcome, 'not_run', 'a refused input has no verification to report');
+    assert.equal(step.action, null, 'a line that carries its own authority is never parsed into an action');
+    assert.equal(step.origin, 'model', 'the origin is APEX\'s, never the proposal\'s');
+    assert.equal(step.authorization, null, 'nothing authorized a malformed line');
+    assert.equal(step.execution.status, 'not_run');
+    assert.equal(step.outcome, Outcome.INPUT_REJECTED, 'the malformed line is refused and made visible');
+    assert.match(step.summary, /malformed proposal rejected/);
+    assert.match(step.summary, /not allowed/);
+    assert.equal(step.verification.outcome, 'not_run');
     assert.equal(res.status, Outcome.VERIFICATION_UNAVAILABLE);
     assert.equal(res.operation.status, Outcome.VERIFICATION_UNAVAILABLE, 'the operation status was not changed by the claim');
     assert.equal(readJsonl(path.join(dataDir, 'operations.jsonl')).at(-1).status, Outcome.VERIFICATION_UNAVAILABLE);
+
+    // With a clean root, the registry and the action's own validator still decide: the root schema is
+    // the line's shape, and the action remains the authority on its input.
+    const { app: cleanApp } = appFor(proposal({ action: 'app.status', input: { status: 'success_verified', verified: true } }));
+    const cleanRes = await cleanApp.controller.handle(ASK, { origin: 'user' });
+    const [cleanStep] = cleanRes.operation.steps;
+    assert.equal(cleanStep.origin, 'model');
+    assert.equal(cleanStep.authorization.reason, 'PERMITTED', 'a permitted read stays permitted');
+    assert.equal(cleanStep.outcome, Outcome.INPUT_REJECTED, 'but its invented input fields are refused');
+    assert.match(cleanStep.summary, /unexpected input field/);
+    assert.equal(cleanStep.verification.outcome, 'not_run', 'a refused input has no verification to report');
+    assert.equal(cleanRes.status, Outcome.VERIFICATION_UNAVAILABLE);
   });
 
   test('no shape of model reply produces a verified-success operation, while a plain verified read does', async () => {

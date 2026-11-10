@@ -24,6 +24,54 @@ const RETRY_DELAY_MS = 300;
 // Failures where no answer reached APEX, so a repeat attempt is safe.
 const RETRYABLE = new Set(['UNREACHABLE', 'INTERRUPTED']);
 
+// The transport outcome is one of these classes, fixed for every backend. The classes keep
+// "nothing answered", "answered with no text", "the provider declined", "the request did not fit",
+// and "the answer text came back" apart, so a caller never has to infer which happened from prose.
+export const GatewayResponseClass = Object.freeze({
+  VALID: 'valid',
+  EMPTY: 'empty',
+  REFUSED: 'refused',
+  UNAVAILABLE: 'unavailable',
+  MALFORMED: 'malformed',
+  CONTEXT_LIMIT: 'context_limit',
+  CANCELLED: 'cancelled',
+});
+
+export function classifyGatewayResult(result) {
+  if (!result || typeof result !== 'object') return null;
+  if (result.ok === true) return GatewayResponseClass.VALID;
+  const code = result.error?.code;
+  switch (code) {
+    case 'ABORTED':
+      return GatewayResponseClass.CANCELLED;
+    case 'EMPTY_RESPONSE':
+      return GatewayResponseClass.EMPTY;
+    case 'MODEL_REFUSED':
+      return GatewayResponseClass.REFUSED;
+    case 'CONTEXT_TOO_LARGE':
+      return GatewayResponseClass.CONTEXT_LIMIT;
+    case 'NOT_CONFIGURED':
+    case 'UNREACHABLE':
+    case 'TIMEOUT':
+    case 'INTERRUPTED':
+      return GatewayResponseClass.UNAVAILABLE;
+    default:
+      return GatewayResponseClass.MALFORMED;
+  }
+}
+
+// A model answer is never verified by the transport. Provenance records which request it belongs
+// to and which backend produced it, and states that no independent check has been made.
+function provenanceOf(backend, provider, model, requestId) {
+  return {
+    requestId: typeof requestId === 'string' ? requestId.slice(0, 100) : null,
+    backend: backend ?? null,
+    provider: provider ?? null,
+    model: typeof model === 'string' ? model : null,
+    verified: false,
+  };
+}
+
 // Backend-reported counters are untrusted input. Only finite, non-negative, bounded
 // numbers are kept; a missing or implausible value is null, never estimated. Ollama
 // reports durations in nanoseconds and APEX exposes whole milliseconds.
@@ -173,9 +221,20 @@ class HttpBackend {
     }
   }
 
-  async #attempt(method, pathname, body, timeoutMs) {
+  // The request's own deadline and the caller's cancellation are separate signals. Whichever fires
+  // first ends the attempt, but only the caller's signal is reported as ABORTED: a timeout is the
+  // gateway's limit, a cancellation is the caller's decision, and they call for different advice.
+  #signalFor(timeoutMs, signal) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const combined = signal && typeof AbortSignal.any === 'function'
+      ? AbortSignal.any([controller.signal, signal])
+      : controller.signal;
+    return { signal: combined, clear: () => clearTimeout(timer), abortedByCaller: () => signal?.aborted === true };
+  }
+
+  async #attempt(method, pathname, body, timeoutMs, signal = null) {
+    const deadline = this.#signalFor(timeoutMs, signal);
     const started = Date.now();
     const elapsed = () => Date.now() - started;
     try {
@@ -183,12 +242,16 @@ class HttpBackend {
       try {
         res = await this.fetchImpl(this.origin + this.basePath + pathname, {
           method,
-          signal: controller.signal,
+          signal: deadline.signal,
           headers: body ? { 'content-type': 'application/json' } : {},
           body: body ? JSON.stringify(body) : undefined,
         });
       } catch (err) {
-        if (err?.name === 'AbortError') return { error: { code: 'TIMEOUT', message: `no response within ${timeoutMs} ms` }, latencyMs: elapsed() };
+        if (err?.name === 'AbortError') {
+          return deadline.abortedByCaller()
+            ? { error: { code: 'ABORTED', message: 'the request was cancelled' }, latencyMs: elapsed() }
+            : { error: { code: 'TIMEOUT', message: `no response within ${timeoutMs} ms` }, latencyMs: elapsed() };
+        }
         const cause = err?.cause?.code || err?.code || 'NETWORK_ERROR';
         return { error: { code: 'UNREACHABLE', message: `could not reach the endpoint (${cause})` }, latencyMs: elapsed() };
       }
@@ -197,7 +260,11 @@ class HttpBackend {
         read = await this.#readBody(res);
       } catch (err) {
         // The connection dropped after the response began, so the answer is incomplete.
-        if (err?.name === 'AbortError') return { error: { code: 'TIMEOUT', message: `no complete response within ${timeoutMs} ms` }, latencyMs: elapsed() };
+        if (err?.name === 'AbortError') {
+          return deadline.abortedByCaller()
+            ? { error: { code: 'ABORTED', message: 'the request was cancelled while its response was being read' }, latencyMs: elapsed() }
+            : { error: { code: 'TIMEOUT', message: `no complete response within ${timeoutMs} ms` }, latencyMs: elapsed() };
+        }
         return { error: { code: 'INTERRUPTED', message: 'the connection was interrupted while reading the response' }, latencyMs: elapsed() };
       }
       if (read.tooLarge) {
@@ -222,16 +289,16 @@ class HttpBackend {
       }
       return { text, latencyMs: elapsed() };
     } finally {
-      clearTimeout(timer);
+      deadline.clear();
     }
   }
 
   // A timeout is never retried: the user would wait for the timeout twice.
-  async request(method, pathname, body, timeoutMs) {
+  async request(method, pathname, body, timeoutMs, signal = null) {
     let total = 0;
     let r;
     for (let attempt = 0; attempt <= this.retries; attempt += 1) {
-      r = await this.#attempt(method, pathname, body, timeoutMs);
+      r = await this.#attempt(method, pathname, body, timeoutMs, signal);
       total += r.latencyMs;
       if (!r.error || !RETRYABLE.has(r.error.code) || attempt === this.retries) break;
       await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
@@ -269,7 +336,12 @@ class HttpBackend {
     }
   }
 
-  finishAnswer({ content, reasoning, finishReason, reportedModel, latencyMs, usage, timings }) {
+  finishAnswer({ content, reasoning, finishReason, reportedModel, latencyMs, usage, timings, refused = false }) {
+    // A provider refusal is not an empty answer and not a failure to reach the model. The refusal
+    // text itself is not quoted: it is untrusted and says nothing APEX can act on.
+    if (refused === true) {
+      return failure(this.name, this.provider, 'MODEL_REFUSED', 'the model provider declined to produce an answer (content filter)', latencyMs);
+    }
     if (typeof content !== 'string') {
       return failure(this.name, this.provider, 'MALFORMED_RESPONSE', 'endpoint response has no message content', latencyMs);
     }
@@ -382,7 +454,7 @@ export class OpenAICompatibleBackend extends HttpBackend {
     };
   }
 
-  async complete({ system, prompt, timeoutMs }) {
+  async complete({ system, prompt, timeoutMs, signal = null }) {
     const body = {
       model: this.model,
       temperature: 0,
@@ -393,7 +465,7 @@ export class OpenAICompatibleBackend extends HttpBackend {
         { role: 'user', content: prompt },
       ],
     };
-    const r = await this.request('POST', '/v1/chat/completions', body, timeoutMs);
+    const r = await this.request('POST', '/v1/chat/completions', body, timeoutMs, signal);
     if (r.error) return this.httpFailure(r);
     const parsed = this.parseJson(r.text, r.latencyMs);
     if (parsed.failure) return parsed.failure;
@@ -412,6 +484,10 @@ export class OpenAICompatibleBackend extends HttpBackend {
         promptTokens: parsed.value?.usage?.prompt_tokens,
         completionTokens: parsed.value?.usage?.completion_tokens,
       },
+      // Either signal is a provider refusal: a refusal message on the choice, or a content-filter
+      // stop reason. A partial content body is not used, because the filter stopped generation.
+      refused: choice?.finish_reason === 'content_filter'
+        || (typeof choice?.message?.refusal === 'string' && choice.message.refusal.trim().length > 0),
     });
   }
 }
@@ -448,7 +524,7 @@ export class OllamaBackend extends HttpBackend {
     return { available: true, modelListed: true, detail: `model "${safeModelName(this.model)}" installed at ${this.origin}` };
   }
 
-  async complete({ system, prompt, timeoutMs }) {
+  async complete({ system, prompt, timeoutMs, signal = null }) {
     const body = {
       model: this.model,
       stream: false,
@@ -465,7 +541,7 @@ export class OllamaBackend extends HttpBackend {
       ],
       options: { temperature: 0, num_predict: this.maxTokens },
     };
-    const r = await this.request('POST', '/api/chat', body, timeoutMs);
+    const r = await this.request('POST', '/api/chat', body, timeoutMs, signal);
     if (r.error) {
       if (r.error.code === 'HTTP_ERROR' && r.error.status === 404 && /not found/i.test(r.error.detail ?? '')) {
         return failure(this.name, this.provider, 'MODEL_NOT_FOUND', `model "${this.model}" is not installed on this Ollama server; configure APEX_MODEL_NAME to a model this server lists`, r.latencyMs);
@@ -531,12 +607,34 @@ export class ModelGateway {
     };
   }
 
-  async complete({ system = '', prompt, timeoutMs } = {}) {
-    if (!this.isConfigured()) return failure(this.backend.name, this.backend.provider, 'NOT_CONFIGURED', 'no inference backend is configured');
+  // Every result, success or failure, carries the request it answers, the transport class, and
+  // provenance that says the text has not been verified. The class is derived here so all backends
+  // agree, including a test backend: the caller never has to read a message to tell an outage from
+  // an empty answer, a refusal, or a request that did not fit the context window.
+  async complete({ system = '', prompt, timeoutMs, requestId = null, signal = null } = {}) {
+    const id = typeof requestId === 'string' ? requestId.slice(0, 100) : null;
+    const wrap = (result) => ({
+      ...result,
+      requestId: id,
+      class: classifyGatewayResult(result),
+      provenance: {
+        ...provenanceOf(result.backend ?? this.backend.name, result.provider ?? this.backend.provider, result.model ?? null, id),
+      },
+    });
+    if (!this.isConfigured()) return wrap(failure(this.backend.name, this.backend.provider, 'NOT_CONFIGURED', 'no inference backend is configured'));
     if (typeof prompt !== 'string' || prompt.trim().length === 0) {
-      return failure(this.backend.name, this.backend.provider, 'INVALID_PROMPT', 'prompt must be non-empty text');
+      return wrap(failure(this.backend.name, this.backend.provider, 'INVALID_PROMPT', 'prompt must be non-empty text'));
     }
-    return this.backend.complete({ system: String(system), prompt, timeoutMs: timeoutMs ?? this.timeoutMs });
+    if (signal?.aborted === true) {
+      return wrap(failure(this.backend.name, this.backend.provider, 'ABORTED', 'the request was cancelled before it was sent'));
+    }
+    const result = await this.backend.complete({
+      system: String(system),
+      prompt,
+      timeoutMs: timeoutMs ?? this.timeoutMs,
+      signal,
+    });
+    return wrap(result);
   }
 }
 

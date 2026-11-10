@@ -83,6 +83,20 @@ export const ClaimKind = Object.freeze({
 
 export const CLAIM_KINDS = Object.freeze(Object.values(ClaimKind));
 
+// The evidence state says what the records behind one claim can actually carry. It is derived from
+// the claim kind, the record's validity, and the conflict links, and it never replaces the claim
+// kind: a supported claim whose record is contested is conflicting evidence, not a verified fact.
+export const EvidenceState = Object.freeze({
+  DIRECTLY_SUPPORTED: 'directly_supported',
+  PARTIALLY_SUPPORTED: 'partially_supported',
+  CONFLICTING: 'conflicting',
+  UNVERIFIED: 'unverified',
+  UNSUPPORTED: 'unsupported',
+  TEMPORALLY_STALE: 'temporally_stale',
+});
+
+export const EVIDENCE_STATES = Object.freeze(Object.values(EvidenceState));
+
 // Uncertainty categories are qualitative and rule-derived. There is deliberately no numeric
 // confidence field anywhere in this layer: a percentage would imply a calibration this system does
 // not have, and a prediction ledger score is never a probability that a stored claim is true.

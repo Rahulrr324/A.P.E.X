@@ -7,6 +7,87 @@
 // identifiers, labels, counts, and validation results only.
 import { BOUNDS } from './vocabulary.js';
 
+// What the executive boundary did with the model's output. Every field is derived from step records
+// the action registry already produced, so the record restates a decision and can never supply one.
+const BOUNDARY_OUTCOMES = new Set([
+  'not_reached', 'no_proposals', 'malformed_only', 'all_denied', 'partially_executed', 'all_executed',
+]);
+
+function boundedNumber(value) {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+// Fixed-token labels only: an authorization reason or a refusal code is APEX-authored, and a value
+// that cannot be printed as one token is dropped rather than copied into the audit.
+function boundedLabel(value, max = 80) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > max) return null;
+  return /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(value) ? value : null;
+}
+
+export function executionBoundary({
+  reached = true, proposals = null, steps = null, durationMs = null,
+} = {}) {
+  const records = Array.isArray(steps) ? steps : [];
+  const proposalCounts = proposals && typeof proposals === 'object'
+    ? {
+      observed: boundedNumber(proposals.observed),
+      wellFormed: boundedNumber(proposals.wellFormed),
+      malformed: boundedNumber(proposals.malformed),
+      overflow: boundedNumber(proposals.overflow),
+    }
+    : null;
+  const decision = (step) => (step && typeof step.authorization === 'object' ? step.authorization.decision : null);
+  const allowed = records.filter((step) => decision(step) === 'allow').length;
+  const denied = records.length - allowed;
+  const status = (step) => (typeof step?.execution?.status === 'string' ? step.execution.status : 'not_run');
+  const verification = (step) => (typeof step?.verification?.outcome === 'string' ? step.verification.outcome : 'not_run');
+  const refusalReasons = [...new Set(records
+    .filter((step) => decision(step) !== 'allow')
+    .map((step) => boundedLabel(step?.authorization?.reason))
+    .filter(Boolean))].slice(0, 3);
+
+  let outcome = 'not_reached';
+  if (reached === true) {
+    if (!proposalCounts || (proposalCounts.wellFormed === 0 && proposalCounts.malformed === 0)) outcome = 'no_proposals';
+    else if (proposalCounts.wellFormed === 0) outcome = 'malformed_only';
+    else if (records.length === 0) outcome = 'no_proposals';
+    else if (allowed === 0) outcome = 'all_denied';
+    else if (denied === 0 && records.every((step) => status(step) === 'ok')) outcome = 'all_executed';
+    else outcome = 'partially_executed';
+  }
+
+  return {
+    reached: reached === true,
+    outcome: BOUNDARY_OUTCOMES.has(outcome) ? outcome : 'partially_executed',
+    proposals: proposalCounts,
+    authorization: { requests: records.length, allowed, denied },
+    execution: {
+      attempted: allowed,
+      ok: records.filter((step) => status(step) === 'ok').length,
+      rejected: records.filter((step) => status(step) === 'rejected').length,
+      failed: records.filter((step) => status(step) === 'failed').length,
+    },
+    verification: {
+      verified: records.filter((step) => verification(step) === 'success_verified').length,
+      failed: records.filter((step) => verification(step) === 'verification_failed').length,
+      unavailable: records.filter((step) => verification(step) === 'verification_unavailable').length,
+    },
+    refusalReasons,
+    durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs * 1000) / 1000) : null,
+    // The two constants a reader of the audit can rely on without reading prose or code.
+    authorizes: false,
+    authorizationOwner: 'action_registry',
+  };
+}
+
+// Adds an already-computed boundary record to an existing trace audit. The trace object itself lives
+// inside the cognitive analysis; the boundary is known only after the executive path has run, so the
+// caller hands its step records back here rather than the trace re-reading anything.
+export function attachBoundary(audit, boundary) {
+  if (!audit || typeof audit !== 'object' || !boundary) return audit ?? null;
+  return { ...audit, boundary, authorizes: false };
+}
+
 function plainCounts(counts) {
   const out = {};
   for (const [key, value] of Object.entries(counts ?? {})) {
@@ -31,9 +112,11 @@ export class CognitionTrace {
   #subquestions = [];
   #conclusions = [];
   #disclosures = new Set();
+  #refusals = [];
   #validation = null;
   #decision = null;
   #uncertainty = null;
+  #boundary = null;
   #timings = {};
 
   constructor({ requestId = null, intent = null } = {}) {
@@ -132,6 +215,27 @@ export class CognitionTrace {
     return this;
   }
 
+  // Why the cognitive layer stopped short of an answer: the clarification it needs, or the decision
+  // not to answer. The code and its bounded detail are fixed labels, never the request or the
+  // question's wording.
+  refusal(code, detail = null) {
+    if (this.#refusals.length >= 4) return this;
+    const entry = boundedLabel(code, 60);
+    if (!entry) return this;
+    const item = { code: entry };
+    const why = boundedLabel(detail, 60);
+    if (why) item.detail = why;
+    this.#refusals.push(item);
+    return this;
+  }
+
+  // The executive boundary's answer, supplied after the steps have run. A trace can describe an
+  // authorization decision; it cannot make one.
+  boundary(options = {}) {
+    this.#boundary = executionBoundary(options);
+    return this;
+  }
+
   validate(ok, problems = []) {
     this.#validation = {
       ok: ok === true,
@@ -165,11 +269,16 @@ export class CognitionTrace {
       subquestions: this.#subquestions.map((entry) => ({ ...entry, evidenceIds: [...entry.evidenceIds] })),
       assumptions: [...this.#assumptions],
       conclusions: this.#conclusions.map((entry) => ({ ...entry, evidenceIds: [...entry.evidenceIds] })),
+      refusals: this.#refusals.map((entry) => ({ ...entry })),
       validation: this.#validation ? { ok: this.#validation.ok, problems: [...this.#validation.problems] } : null,
       decision: this.#decision,
       uncertainty: this.#uncertainty,
       disclosures: [...this.#disclosures],
+      boundary: this.#boundary,
       timings: { ...this.#timings },
+      // A trace is a description of what happened, never a permission. It is stated here so a
+      // consumer cannot read the record and mistake a recorded decision for an authorization.
+      authorizes: false,
       bounds: {
         stages: BOUNDS.maxTraceStages,
         evidence: BOUNDS.maxTraceEvidence,

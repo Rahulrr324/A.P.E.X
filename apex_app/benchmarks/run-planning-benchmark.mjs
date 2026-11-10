@@ -8,11 +8,17 @@
 // recovery paths of a run a real process left behind - the continuation reading, the ranking that now
 // reads it, and the resume - at the same three store sizes.
 //
+// Batch AN added the `ranking` phase and the fourth required fixture, XL: a large project with many
+// active plans and tasks. That phase instruments the store reads one continuation ranking makes and
+// times the stages it derives - constraint ledger, live validity, continuation reading, readiness,
+// candidate ranking, rendering and audit verification - including the pre-AN shape that re-read the
+// whole goal log per plan, so a measured before/after exists alongside the current shape.
+//
 // No inference is run or simulated and no backend is constructed at all: every application here is
 // built with `NoBackend`, and none of the measured paths asks a model. This is not part of `npm test`
 // and no test depends on it.
 //
-//   node benchmarks/run-planning-benchmark.mjs [--sizes S,M,L] [--repeats R] [--phase columns|attribution|control|constraints|recovery|all] [--keep]
+//   node benchmarks/run-planning-benchmark.mjs [--sizes S,M,L,XL] [--repeats R] [--phase columns|attribution|control|constraints|recovery|ranking|all] [--keep]
 //
 // Phases:
 //   columns      the nine measured paths at each size, through the real controller and the real stores.
@@ -27,6 +33,9 @@
 //                interruption boundary inside the fixture; a second process then reads it. Measured:
 //                the continuation reading, the ranking that reads it, the resume, and the refused
 //                second resume. The resume is destructive to that fixture, so it is taken last.
+//   ranking      one executive ranking: the reads it makes, the stages it derives, and the pre-AN
+//                per-plan goal replay against the current one-snapshot read, over interrupted runs.
+//                XL is the fixture for this phase; the other sizes are read at whatever runs they hold.
 //
 // What each sample changes: an audited read appends one operation record of its own, so the second and
 // third sample of a read are measured against a log one or two records longer than the first. At the
@@ -46,7 +55,11 @@ import { Outcome } from '../src/outcomes.js';
 import { goalProgress } from '../src/goals/model.js';
 import { candidatesForGoal } from '../src/plans/candidates.js';
 import { evaluateCandidates } from '../src/plans/evaluation.js';
-import { constraintLedger } from '../src/plans/constraints.js';
+import { constraintLedger, readConstraintRecords } from '../src/plans/constraints.js';
+import { continuationOf } from '../src/plans/continuation.js';
+import { assessPlanValidity } from '../src/plans/validity.js';
+import { buildContinuation, renderContinuation } from '../src/continuation/engine.js';
+import { readinessOf } from '../src/executive/readiness.js';
 
 const NOW = () => new Date('2026-11-05T09:00:00.000Z');
 const DAY = 86_400_000;
@@ -55,12 +68,17 @@ const MAX_REPEATS = 25;
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RECOVERY_CHILD = path.join(APP_ROOT, 'tests', 'fixtures', 'continuation-child.mjs');
 
-// The three fixture sizes. `L` is the size the AL reads were reported at in the README; the growth
-// between S, M and L is what the scaling claim rests on.
+// The fixture sizes. `L` is the size the AL reads were reported at in the README; the growth
+// between S, M and L is what the scaling claim rests on. `XL` is the Batch AN fixture: a large
+// project that also holds many interrupted runs, which is what one ranking has to read. Its
+// `interrupted` runs are stopped after activation by a throwing `tasks.run` - the same record state
+// a process that died at that boundary leaves (plan active, task pending, no step begun) - while the
+// recovery phase uses a real child process for the cross-process claim.
 const SIZES = {
-  S: { memory: 0, knowledge: 0, goals: 1, plans: 1, runs: 1, predictions: 0, experiences: 0 },
-  M: { memory: 600, knowledge: 600, goals: 40, plans: 40, runs: 8, predictions: 200, experiences: 120 },
-  L: { memory: 2000, knowledge: 2000, goals: 150, plans: 150, runs: 20, predictions: 800, experiences: 400 },
+  S: { memory: 0, knowledge: 0, goals: 1, plans: 1, runs: 1, interrupted: 0, predictions: 0, experiences: 0 },
+  M: { memory: 600, knowledge: 600, goals: 40, plans: 40, runs: 8, interrupted: 0, predictions: 200, experiences: 120 },
+  L: { memory: 2000, knowledge: 2000, goals: 150, plans: 150, runs: 20, interrupted: 0, predictions: 800, experiences: 400 },
+  XL: { memory: 2000, knowledge: 2000, goals: 400, plans: 400, runs: 40, interrupted: 40, predictions: 800, experiences: 400 },
 };
 
 const dirs = [];
@@ -177,7 +195,7 @@ async function build(spec, tag) {
     });
     if (i < spec.plans) {
       const p = await app.plans.createPlan({
-        goalId: g.goalId,
+        goalId: g.goal.id,
         outcome: `the ${i}th cache is retired`,
         steps: stepPlan(i + 1),
         reason: 'historical plan for the benchmark',
@@ -185,6 +203,21 @@ async function build(spec, tag) {
       if (i < spec.runs) {
         await app.plans.approve(p.plan.id);
         await app.controller.planActivate(p.plan.id, { mode: 'run' });
+      } else if (i < spec.runs + (spec.interrupted ?? 0)) {
+        await app.plans.approve(p.plan.id);
+        // Stop the run after activation the way a dead process would: the plan is recorded active and
+        // the task exists, but no step begins. `plan continue` would run these steps, so this fixture
+        // must never be resumed inside a measurement.
+        const realRun = app.controller.tasks.run;
+        app.controller.tasks.run = async () => { throw new Error('benchmark fixture: the run stopped after activation'); };
+        try {
+          const stopped = await app.controller.planActivate(p.plan.id, { mode: 'run' });
+          if (stopped.status !== Outcome.INPUT_REJECTED) {
+            throw new Error(`the interrupted fixture was not left paused: ${stopped.status} ${stopped.output}`);
+          }
+        } finally {
+          app.controller.tasks.run = realRun;
+        }
       }
     }
   }
@@ -442,6 +475,190 @@ async function recovery(f, repeats) {
   };
 }
 
+// Batch AN, work package F: what one continuation ranking reads and derives. The ranking reads the
+// goal, plan, task and audit logs once and folds them into a reading per open plan. Before Batch AN it
+// re-read the whole goal log twice per interrupted plan - once for the reading's constraint ledger and
+// once inside live validity - so this phase instruments the report's store reads and times that shape
+// and the current one-snapshot shape over the same records.
+//
+// The stage timings read the stores once outside the timing, then exercise the real derivation
+// functions over those records. Both validity shapes are timed in the same run and their verdicts are
+// compared, so a faster wrong answer cannot pass as an improvement.
+async function rankingWork(f, repeats) {
+  const { app } = f;
+
+  const counts = {};
+  const originals = [];
+  const wrap = (obj, name, label = name) => {
+    if (!obj || typeof obj[name] !== 'function') return;
+    const original = obj[name];
+    originals.push([obj, name, original]);
+    counts[label] = 0;
+    obj[name] = (...args) => { counts[label] += 1; return original.apply(obj, args); };
+  };
+  wrap(app.goals, 'inspect', 'goals.inspect');
+  wrap(app.goals, 'get', 'goals.get');
+  wrap(app.plans, 'inspect', 'plans.inspect');
+  wrap(app.taskStore, 'inspect', 'tasks.inspect');
+  wrap(app.taskStore, 'lockState', 'taskStore.lockState');
+  wrap(app.operations, 'inspect', 'operations.inspect');
+  wrap(app.operations, 'findById', 'operations.findById');
+  wrap(app.knowledge, 'get', 'knowledge.get');
+  wrap(app.memory, 'get', 'memory.get');
+  wrap(app.experience, 'activeAdaptations', 'experience.activeAdaptations');
+
+  await app.controller.continuationReport({ limit: 10 });
+  for (const key of Object.keys(counts)) counts[key] = 0;
+  const report = await timed(() => app.controller.continuationReport({ limit: 10 }), repeats);
+  const readsPerReport = Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, Math.round(v / repeats)]));
+  for (const [obj, name, original] of originals.reverse()) obj[name] = original;
+
+  const goalRead = await app.goals.inspect();
+  const planRead = await app.plans.inspect();
+  const taskRead = await app.taskStore.inspect();
+  const opRead = await app.operations.inspect();
+  const lock = await app.taskStore.lockState();
+  const goals = goalRead.goals;
+  const plans = planRead.plans;
+  const tasks = taskRead.tasks;
+  const operations = opRead.records;
+  const byId = new Map(goals.map((g) => [g.id, g]));
+  const snapshot = { get: async (id) => byId.get(id) ?? null };
+  const tasksById = new Map(tasks.map((t) => [t.id, t]));
+  const interrupted = plans.filter((p) => p.status === 'active' && p.activation?.taskId
+    && tasksById.has(p.activation.taskId)
+    && !['completed', 'cancelled'].includes(tasksById.get(p.activation.taskId).status));
+  const approved = plans.filter((p) => p.status === 'approved');
+  const ranked = [...approved, ...interrupted];
+
+  const judgeWith = (goalsSource) => (plan) => assessPlanValidity(plan, {
+    goals: goalsSource,
+    plans: app.plans,
+    operations: app.operations,
+    knowledge: app.knowledge,
+    memory: app.memory,
+    experience: app.experience,
+    worldModel: app.worldModel,
+    taskStore: app.taskStore,
+    now: NOW(),
+  });
+
+  const reads = await timed(async () => {
+    await app.goals.inspect();
+    await app.plans.inspect();
+    await app.taskStore.inspect();
+    await app.operations.inspect();
+    await app.taskStore.lockState();
+  }, repeats);
+  const auditRead = await timed(() => app.operations.inspect(), repeats);
+  const completed = [...tasksById.values()].filter((t) => t.status === 'completed').pop();
+  const recordedOp = completed?.steps?.map((s) => s.operationId).find(Boolean);
+  const auditVerify = recordedOp ? await timed(() => app.operations.findById(recordedOp), repeats) : null;
+
+  if (interrupted.length === 0) {
+    return { report, readsPerReport, reads, auditRead, auditVerify, interrupted: 0, ranked: ranked.length };
+  }
+
+  const goalReplayPerPlan = await timed(async () => {
+    for (const plan of interrupted) if (plan.goalId) await app.goals.get(plan.goalId);
+  }, repeats);
+
+  const storeValidity = await timed(async () => {
+    const out = new Map();
+    const judge = judgeWith(app.goals);
+    for (const plan of ranked) out.set(plan.id, await judge(plan));
+    return out;
+  }, repeats);
+  const snapshotValidity = await timed(async () => {
+    const out = new Map();
+    const judge = judgeWith(snapshot);
+    for (const plan of ranked) out.set(plan.id, await judge(plan));
+    return out;
+  }, repeats);
+  const verdictShape = (results) => JSON.stringify([...results].map(([id, v]) => [id, v.ok, v.problems]));
+  const sameVerdicts = verdictShape(storeValidity.first) === verdictShape(snapshotValidity.first);
+  const validityByPlan = snapshotValidity.first;
+
+  const buildLedgers = async () => {
+    const ledgers = new Map();
+    for (const plan of interrupted) {
+      const goal = byId.get(plan.goalId);
+      if (!goal || ledgers.has(goal.id)) continue;
+      try {
+        const { cited, dependencies } = await readConstraintRecords({
+          goal,
+          registry: app.registry,
+          goals: snapshot,
+          knowledge: app.knowledge,
+          memory: app.memory,
+          experience: app.experience,
+        });
+        ledgers.set(goal.id, constraintLedger({
+          goal,
+          registry: app.registry,
+          evidence: { unavailableActions: [], knownBlockers: [], failedOperations: [] },
+          cited,
+          dependencies,
+        }));
+      } catch {
+        ledgers.set(goal.id, null);
+      }
+    }
+    return ledgers;
+  };
+  const constraintDerivation = await timed(buildLedgers, repeats);
+  const ledgers = constraintDerivation.first;
+
+  const derive = () => interrupted.map((plan) => continuationOf({
+    plan,
+    task: tasksById.get(plan.activation.taskId),
+    operations,
+    registry: app.registry,
+    constraints: ledgers.get(plan.goalId) ?? null,
+    validity: validityByPlan.get(plan.id),
+    lock,
+    auditReadable: true,
+    goal: byId.get(plan.goalId) ?? null,
+    now: NOW(),
+  }));
+  const derivation = await timed(() => derive().length, repeats);
+  const readings = new Map(derive().map((r) => [r.plan.id, r]));
+
+  const readiness = await timed(() => interrupted.map((plan) => readinessOf({
+    plan,
+    goal: byId.get(plan.goalId) ?? null,
+    task: tasksById.get(plan.activation.taskId),
+    validity: validityByPlan.get(plan.id),
+    continuation: readings.get(plan.id),
+  })), repeats);
+
+  const ranking = await timed(() => buildContinuation({
+    goals, plans, tasks, validityByPlan, continuationsByPlan: readings, now: NOW(),
+  }), repeats);
+  const render = await timed(() => renderContinuation(ranking.first, { limit: 10 }), repeats);
+
+  return {
+    report,
+    readsPerReport,
+    reads,
+    auditRead,
+    auditVerify,
+    goalReplayPerPlan,
+    storeValidity,
+    snapshotValidity,
+    sameVerdicts,
+    constraintDerivation,
+    derivation,
+    readiness,
+    ranking,
+    render,
+    interrupted: interrupted.length,
+    ranked: ranked.length,
+    readings: readings.size,
+    safe: [...readings.values()].filter((r) => r.continue?.safe === true).length,
+  };
+}
+
 function arg(name, fallback) {
   const at = process.argv.indexOf(`--${name}`);
   return at >= 0 && process.argv[at + 1] && !process.argv[at + 1].startsWith('--') ? process.argv[at + 1] : (process.argv.includes(`--${name}`) ? true : fallback);
@@ -515,6 +732,30 @@ try {
         console.log(line('ranking after the resume', r.settledRanking));
         console.log(`  resume outcome ${r.resumeStatus}; the refused second resume ${r.refusalStatus};`
           + ` the side-effect file holds ${r.effects} line(s) for plan ${String(r.planId).slice(0, 8)}`);
+      }
+    }
+    if (phase === 'ranking' || phase === 'all') {
+      const k = await rankingWork(f, repeats);
+      console.log('  --- continuation ranking: reads, derived stages, and the two validity shapes');
+      console.log(`  ${k.ranked} plan(s) ranked, ${k.interrupted} interrupted run(s); one report reads ${JSON.stringify(k.readsPerReport)}`);
+      console.log(line('five whole-store reads', k.reads));
+      console.log(line('audit log read+parse', k.auditRead));
+      if (k.auditVerify) console.log(line('audit record by id', k.auditVerify));
+      if (k.interrupted === 0) {
+        console.log('  no interrupted run at this size: the ranking has no continuation reading to derive');
+        console.log(line('ranking (end to end)', k.report));
+      } else {
+        console.log(line(`goal replay x${k.interrupted} (pre-AN)`, k.goalReplayPerPlan));
+        console.log(line('validity, store per plan', k.storeValidity));
+        console.log(line('validity, one snapshot', k.snapshotValidity));
+        console.log(`  the two validity shapes agree on every plan: ${k.sameVerdicts ? 'yes' : 'NO'}`);
+        console.log(line('constraint derivation', k.constraintDerivation));
+        console.log(line('continuation derivation', k.derivation));
+        console.log(line('readiness derivation', k.readiness));
+        console.log(line('candidate ranking (pure)', k.ranking));
+        console.log(line('render', k.render));
+        console.log(line('ranking (end to end)', k.report));
+        console.log(`  ${k.readings} reading(s); ${k.safe} safe to continue`);
       }
     }
     if ((phase === 'control' || phase === 'all') && size === wanted[wanted.length - 1] && SIZES[size].predictions > 0) {

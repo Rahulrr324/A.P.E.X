@@ -272,7 +272,9 @@ function stepStateOf({ step, task, plan, operations, auditReadable, lock, regist
       // The operation id was allocated before the step executed. Whether that id appears in the
       // audit log is the difference between "the effect happened" and "cannot be told" - and its
       // absence is not proof of the absence of the effect.
-      const live = lock && lock.present && lock.alive === true;
+      // A lock held by the command making this reading is not another process mid-run: the command
+      // acquires the lock before deriving, so the only holder it can see is itself.
+      const live = lock && lock.present && lock.alive === true && lock.heldByThisCommand !== true;
       if (live) {
         return {
           ...base,
@@ -672,7 +674,14 @@ export function continuationOf({
       origin: task.origin ?? null,
       planId: task.planId ?? null,
       steps: task.steps.length,
-      lock: lock ? { present: lock.present === true, alive: lock.alive ?? null, pid: lock.pid ?? null } : null,
+      lock: lock
+        ? {
+          present: lock.present === true,
+          alive: lock.alive ?? null,
+          pid: lock.pid ?? null,
+          ...(lock.heldByThisCommand === true ? { heldByThisCommand: true } : {}),
+        }
+        : null,
       auditReadable,
     },
     runState: rollUp(rows, task, plan),
@@ -781,8 +790,11 @@ export function renderContinuation(continuation, { indent = '', maxSteps = BOUND
     `${indent}  the reading ran nothing, approved nothing, and left the plan's and task's history as it found it.`,
   ];
   if (continuation.task.lock) {
-    lines.push(`${indent}  task lock: ${continuation.task.lock.present
-      ? `held${continuation.task.lock.alive === true ? ' by a live process' : continuation.task.lock.alive === false ? ' by a process that has exited' : ' by a process this read cannot identify'}`
+    const lock = continuation.task.lock;
+    lines.push(`${indent}  task lock: ${lock.present
+      ? lock.heldByThisCommand === true
+        ? 'held by this command'
+        : `held${lock.alive === true ? ' by a live process' : lock.alive === false ? ' by a process that has exited' : ' by a process this read cannot identify'}`
       : 'free'}.`);
   }
   const notable = continuation.steps.filter((s) => s.recordedStatus !== StepStatus.PENDING || s.state !== ContinuationState.SAFE_TO_CONTINUE);
