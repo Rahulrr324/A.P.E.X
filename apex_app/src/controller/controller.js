@@ -60,6 +60,14 @@ import { selectCandidate } from '../executive/selection.js';
 import { candidatesForGoal, revisedCandidates } from '../plans/candidates.js';
 import { evaluateCandidates } from '../plans/evaluation.js';
 import { classifyRecovery, renderRecovery } from '../executive/recovery.js';
+import {
+  buildModelProposalHandoff,
+  completeModelProposalHandoff,
+  buildPlanActivationHandoff,
+  buildTaskRunHandoff,
+  completeTaskHandoff,
+  validateHandoff,
+} from '../executive/handoff.js';
 import { RequestMode, StatusQuestion } from '../executive/vocabulary.js';
 import { GatewayResponseClass } from '../model/gateway.js';
 
@@ -3552,6 +3560,12 @@ export class CognitiveController {
     let plan = null;
     let task = null;
     let linkNotice = null;
+    let activationHandoff = null;
+    const finishHandoff = (current, options = {}) => {
+      if (!activationHandoff || !current) return;
+      const completed = this.#checkedHandoff(op, completeTaskHandoff(activationHandoff, { task: current, ...options }));
+      if (completed) op.handoff = completed;
+    };
     try {
       this.#requirePlans();
       this.#requireTasks();
@@ -3636,6 +3650,21 @@ export class CognitiveController {
           planId: plan.id,
         });
       }
+      // The crossing is recorded from the approved plan and the task it produced, before the
+      // activation and the run. If that provenance cannot be stated, the task is cancelled and
+      // nothing crosses: an execution without a sound handoff record is not started.
+      const preparedHandoff = buildPlanActivationHandoff({ requestId: op.id, plan, goal, task });
+      const preparedCheck = validateHandoff(preparedHandoff, { phase: 'prepared' });
+      if (!preparedCheck.ok) {
+        let cancelNote = '';
+        try {
+          await this.taskStore.withLock(() => this.tasks.cancel(task.id));
+        } catch (cancelErr) {
+          cancelNote = ` The task ${shortId(task.id)} could not be cancelled either (${redactSecrets(cancelErr.message)}); it remains pending and was not run.`;
+        }
+        throw new ValidationError(`the plan cannot be activated: its handoff record is not sound (${preparedCheck.problems[0] ?? 'provenance contract violated'}).${cancelNote}`, 'HANDOFF_INVALID');
+      }
+      activationHandoff = preparedHandoff;
       try {
         await this.plans.activate(plan.id, { taskId: task.id, goal });
       } catch (err) {
@@ -3673,6 +3702,7 @@ export class CognitiveController {
           : await this.taskStore.get(task.id).catch(() => null);
         const recorded = current ? await this.#recordPlanOutcomes(plan.id, current) : { error: null };
         const outcomeNote = recorded.error ? ` Plan outcomes were not recorded: ${redactSecrets(recorded.error.message)}.` : '';
+        finishHandoff(current);
         return this.#finishTaskOp(
           op,
           Outcome.AUDIT_INTEGRITY_FAILED,
@@ -3683,6 +3713,7 @@ export class CognitiveController {
       // Activation is already a recorded fact. A refusal to run must not imply the plan is
       // still inactive or that anything ran.
       const current = await this.taskStore.get(task.id).catch(() => null);
+      finishHandoff(current, { refused: true });
       return this.#finishTaskOp(
         op,
         Outcome.INPUT_REJECTED,
@@ -3739,6 +3770,7 @@ export class CognitiveController {
       linkNotice,
       ...notes,
     ].filter(Boolean).join('\n');
+    finishHandoff(result.task);
     return this.#finishTaskOp(
       op,
       result.status,
@@ -4691,6 +4723,19 @@ export class CognitiveController {
     };
   }
 
+  // A completed handoff is attached only when it agrees with itself. The check cannot authorize
+  // anything; a record that fails it is reported as an operation error rather than persisted as if
+  // the crossing it describes were established.
+  #checkedHandoff(op, handoff) {
+    if (!handoff) return null;
+    const check = validateHandoff(handoff, { phase: 'recorded' });
+    if (!check.ok) {
+      op.errors.push({ stage: 'handoff', code: 'HANDOFF_INVALID', message: check.problems[0] });
+      return null;
+    }
+    return handoff;
+  }
+
   async #finishTaskOp(op, status, display, task = null, extra = {}) {
     op.status = status;
     op.decision = classifyDecision(op);
@@ -4839,10 +4884,25 @@ export class CognitiveController {
 
   async runTask(ref, mode = 'run') {
     const op = this.#newOp({ capability: 'task.run', origin: 'user', request: `task ${mode}` });
+    let found = null;
+    let preparedHandoff = null;
+    const finishHandoff = (current, options = {}) => {
+      if (!preparedHandoff || !current) return;
+      const completed = this.#checkedHandoff(op, completeTaskHandoff(preparedHandoff, { task: current, ...options }));
+      if (completed) op.handoff = completed;
+    };
     try {
       this.#requireTasks();
-      const found = await this.taskStore.resolve(ref);
+      found = await this.taskStore.resolve(ref);
       op.request = `task ${mode} ${shortId(found.id)}`;
+      // The crossing is stated before the runner is asked to run anything. The record names how the
+      // task came to be allowed to run; if it cannot be stated, the refusal below says so and no
+      // step is started.
+      preparedHandoff = buildTaskRunHandoff({ requestId: op.id, task: found });
+      const preparedCheck = validateHandoff(preparedHandoff, { phase: 'prepared' });
+      if (!preparedCheck.ok) {
+        throw new ValidationError(`the task run handoff record is not sound (${preparedCheck.problems[0] ?? 'provenance contract violated'})`, 'HANDOFF_INVALID');
+      }
       const result = await this.taskStore.withLock(() => this.tasks.run(found.id, { mode }));
       const gaps = result.auditGaps.length;
       if (gaps) {
@@ -4859,6 +4919,7 @@ export class CognitiveController {
         : '';
       // Written after the lock is released, from the task state the runner left behind.
       await this.#recordTaskSummary(op, result.task, { recovery: result.recovery, auditGaps: result.auditGaps });
+      finishHandoff(result.task);
       return this.#finishTaskOp(
         op,
         result.status,
@@ -4878,6 +4939,7 @@ export class CognitiveController {
         const message = this.#unrecordedTaskState(err);
         op.errors.push({ stage: 'task', code: 'TASK_LOG_WRITE_FAILED', message: err.message, steps: err.executedSteps.map((s) => s.id) });
         const current = err.taskId ? await this.taskStore.get(err.taskId).catch(() => null) : null;
+        finishHandoff(current);
         return this.#finishTaskOp(op, Outcome.AUDIT_INTEGRITY_FAILED, `${message}${this.#historyGapNotice(op, 'task result')}`, current);
       }
       // A recovery that established evidence before the run was refused is still a fact
@@ -4886,7 +4948,13 @@ export class CognitiveController {
       // summary.
       if (err.recovery) {
         const current = await this.taskStore.get(err.taskId).catch(() => null);
+        finishHandoff(current);
         await this.#recordTaskSummary(op, current, { recovery: err.recovery });
+      } else if (preparedHandoff && found) {
+        // The crossing was refused before anything ran. The record states that refusal instead of
+        // disappearing, so a later reader can see that a handoff was attempted and what stopped it.
+        // Nothing the task ran in an earlier crossing is reported as this crossing's execution.
+        finishHandoff(await this.taskStore.get(found.id).catch(() => found), { refused: true });
       }
       return this.#refused(op, err, Outcome.INPUT_REJECTED, `${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}`);
     }
@@ -5822,9 +5890,11 @@ export class CognitiveController {
       // The step names the typed proposal it came from. The type, origin, and absence of authority
       // come from the parser, not from the reply, so the audit cannot show a model-authored claim of
       // permission. The registry decision below is still the only thing that can allow execution.
-      // The handoff record is the typed contract for that crossing: it carries no authorization, and
-      // an artifact that claims one is refused before the registry is asked anything.
-      const handoff = {
+      // The handoff artifact is the typed contract for that crossing: it carries no authorization,
+      // and an artifact that claims one is refused before the registry is asked anything. The
+      // handoff record built below is the provenance of the same crossing once it has a step index
+      // and an evidence basis; it too authorizes nothing.
+      const artifact = {
         proposalId: p.proposalId,
         action: p.action,
         input: p.input,
@@ -5834,7 +5904,7 @@ export class CognitiveController {
         authorization: null,
         executed: false,
       };
-      const handoffCheck = validateArtifact(ArtifactKind.EXECUTIVE_HANDOFF, handoff);
+      const handoffCheck = validateArtifact(ArtifactKind.EXECUTIVE_HANDOFF, artifact);
       if (!handoffCheck.ok) {
         op.steps.push({
           action: p.action,
@@ -5849,8 +5919,32 @@ export class CognitiveController {
         });
         continue;
       }
-      const step = await this.runAction(handoff.action, handoff.input, 'model', op.id);
+      const stepIndex = op.steps.length;
+      const preparedHandoff = buildModelProposalHandoff({
+        requestId: op.id,
+        proposal: p,
+        stepIndex,
+        evidenceRefs: (op.cognition?.trace?.evidence ?? []).map((item) => item.id),
+      });
+      const preparedCheck = validateHandoff(preparedHandoff, { phase: 'prepared' });
+      if (!preparedCheck.ok) {
+        op.steps.push({
+          action: p.action,
+          origin: 'model',
+          input: null,
+          authorization: null,
+          execution: { status: 'not_run' },
+          verification: { outcome: 'not_run', detail: null },
+          outcome: Outcome.INPUT_REJECTED,
+          summary: `handoff record rejected: ${preparedCheck.problems[0] ?? 'provenance contract violated'}`,
+          result: null,
+        });
+        continue;
+      }
+      const step = await this.runAction(artifact.action, artifact.input, 'model', op.id);
       step.proposalId = `${op.id}/${p.proposalId}`;
+      const completed = this.#checkedHandoff(op, completeModelProposalHandoff(preparedHandoff, { step }));
+      if (completed) step.handoff = completed;
       actionSteps.push(step);
       op.steps.push(step);
     }

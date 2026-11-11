@@ -5009,6 +5009,63 @@ reproduced by repetition, fixed at the assertion, and the affected suites then p
 before the clean full run above. No test in that list runs a model: the gateway in every one of them is
 either the no-backend one or a programmatic stub whose reply is fixed text.
 
+## Batch AO: the executive handoff boundary (as implemented)
+
+A cognitive answer is text about what the records support. It is not a request to act, and it is not
+permission. The crossing from intent into execution happens in exactly three places: a model proposal
+that reaches the action registry, a plan activation, and a task run. Each crossing is stated as one
+bounded handoff record (`src/executive/handoff.js`) attached to the operation that performed it. A
+handoff record **authorizes nothing**: every record and every validation result says
+`authorizes: false`, and the fields below are identities, hashes, and recorded outcomes, never the
+request text, action payload, model prose, or private reasoning.
+
+### Who owns each transition
+
+| Transition | Owning component | Record that establishes it |
+| --- | --- | --- |
+| The model proposes an action | Controller (typed proposal parse), then the action registry | The executed step's `authorization`, `execution`, and `verification`, plus its handoff |
+| The plan is approved | The user, through `plan approve`; the plan store records it | `plan.approval = { at, version, contentHash, validation }` |
+| The plan is activated | The controller, on an approved and still-valid plan | `plan.activation` and the `plan.activate` operation's handoff |
+| A step runs | The task runner, through the controller's action path | One `task.step` operation per executed step, linked from the task record |
+| A result is verified | The independent verifier, not the executing action | The step's `verification.outcome`, then the task and handoff state |
+| The operation is finalized | The operation log's single finalization contract | Whether the operation line was appended; the handoff itself keeps `finalization.recorded: null` |
+
+### What counts as approval
+
+A user-created task is authorized to run by the user's own creation act (`task.createdAt`); a
+model-proposed task is authorized only after the user approves it (`task.approvedAt`). A plan is
+authorized for activation only by an approval whose `version` and `contentHash` still equal the live
+plan's version and content hash. The handoff names that scope (`task_creation`, `task_approval`, or
+`plan_approval`), its time, and the hash it binds. A model cannot create, approve, activate, or
+complete any of these, and a plan approval does not authorize individual steps: the registry decides
+each step again when it runs.
+
+### A stale approval
+
+A revision increments the plan version and clears `plan.approval`, `plan.activation`, and the recorded
+step outcomes; the reducer refuses a revision of an approved plan at all. Replaying such a revision
+through the log applies the same rule. Activation re-reads the live plan and rechecks the approval
+hash, so an approval kept from an older version cannot activate new bytes. A handoff built before the
+revision then fails reference validation on version, hash, or the now-missing approval.
+
+### Uncertain execution and no replay
+
+A step whose action ran but whose verification could not confirm the result is `uncertain` in the task
+log and `uncertain` in the handoff, never a success. A step whose own audit record is missing is
+reported as unrecordable/unknown, not as a failure and not as a success. Later attempts read these
+records and refuse to re-run the step; recovery of an interrupted run is explicit (`task continue`,
+`plan reconcile`) and executes no work in the background. The handoff's `evidence.refs` are the
+`task.step` operation ids that actually exist, bounded to eight with an honest total.
+
+### Diagnostics
+
+A handoff can be validated structurally (`validateHandoff`) and against live records
+(`validateHandoffReferences`); both fail closed and return `authorizes: false`. The record is bounded
+to eleven common keys plus the keys for its kind, ids capped at 80 characters, evidence at eight refs,
+executed steps at 32, and problems at eight. It carries no request, input, or model text, so a
+diagnostic view can be shown without exposing a payload or private reasoning. Its tests use fixed
+stub replies and temporary data directories only; no test in this package contacts a model.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 

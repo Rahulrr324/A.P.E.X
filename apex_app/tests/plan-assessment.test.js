@@ -751,7 +751,9 @@ test('an outcome whose audit record has gone is reported as unrecordable, not wr
     const plan = await app.plans.get(planId);
     const cited = plan.stepResults.s1.operationId;
     const lines = fs.readFileSync(opsFile, 'utf8').split('\n').filter((l) => l.trim().length > 0);
-    const kept = lines.filter((l) => !l.includes(cited));
+    // Remove the step's own record, not every line that cites it: the activation handoff names the
+    // same id as evidence, and the point of this test is the record that is gone, not its citations.
+    const kept = lines.filter((l) => JSON.parse(l).id !== cited);
     assert.equal(kept.length, lines.length - 1, 'the step operation record was not found in the audit log');
     fs.writeFileSync(opsFile, `${kept.join('\n')}\n`);
 
