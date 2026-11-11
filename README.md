@@ -6,12 +6,11 @@ preserved for provenance.
 
 ## What runs today
 
-- C++17 neural research: adaptive-threshold cells, synapses, sparse networks,
-  plasticity, learning and contextual-memory experiments, with regression tests.
-- Phase-1 hardware/measurement programs and append-only experimental record files.
-- Read-only `record_inspector` for bounded structural inspection of those files.
-- Dependency-free developer validation tooling with isolated test state, full
-  command/exit logs and explicit CMake versus direct-compiler results.
+- C++17 neural research under `stark/`: adaptive-threshold cells, synapses, sparse
+  networks, plasticity, learning and contextual-memory experiments, with CMake/CTest
+  regression tests in that tree.
+- Preserved Phase-1 hardware/measurement programs and append-only experimental record
+  files, kept as historical evidence.
 - The runnable **APEX Local Alpha** application in [`apex_app/`](apex_app/README.md):
   a Node.js CLI with a Cognitive Controller, personal memory, an explicit knowledge
   store, independent verification, audit records, crash recovery, and a bounded task
@@ -44,6 +43,10 @@ and no implemented neural–cognitive bridge. `stark/` remains separate experime
 `apex_app/` does not import it. Do not read a passing test suite or a milestone number
 as evidence that the broader APEX vision is complete.
 
+The historical `record_inspector` binary and the Python validation harness named in older
+revisions were developed on research branches and are not present in this checkout. No command
+below asks you to install, download, or build them.
+
 **Security and integrity posture.** `apex_app/` states in writing what its credential masking covers,
 what it deliberately does not cover, what a damaged store does, and what its lock protocols refuse to
 promise:
@@ -60,6 +63,23 @@ The recorded states remain **G7 FAIL / M0 FAIL (NOT ACCEPTED) / M1 LOCKED**.
 M0 acceptance. A development exception needs an explicit owner decision; a passing
 build does not unlock it. This repository's records are not being rewritten.
 
+## Cognitive and executive architecture
+
+[`apex_app/ARCHITECTURE.md`](apex_app/ARCHITECTURE.md) is the consolidated map of the implemented
+cognitive runtime, the executive system, the evidence stores, and the authority boundary. It states
+which guarantees are enforced by code, which are established by tests, and which remain descriptive
+or unimplemented. The short version:
+
+- request interpretation, retrieval, claims, contradiction handling, deliberation, grounded response
+  construction, and model-output validation are deterministic and read-only;
+- model output is a typed proposal, never approval;
+- the action registry is the only authorization owner; every task step is authorized again when it
+  runs;
+- the independent verifier, not the executor, decides whether a result is verified;
+- audit finalization is a separate, fallible step, and a failed append cannot become a success;
+- missing records are unknown, not success; an uncertain effect is never replayed;
+- diagnostics and executive handoffs record observations and always say `authorizes: false`.
+
 ## Build and test (CMake >= 3.15, C++17)
 
 ```sh
@@ -73,38 +93,46 @@ binaries may be under `Release/` for multi-configuration generators. GNU runtime
 link flags are no longer passed to MSVC. Windows validation is **not claimed**
 until actually executed.
 
-Research drivers and diagnostics are excluded from the default `ALL` build, but
-retain their historical target names. Include them with
-`-DSTARK_BUILD_RESEARCH_DRIVERS=ON -DSTARK_BUILD_DIAGNOSTICS=ON`, or explicitly
-build an individual target. Building a research program does not execute it.
+Research drivers and production CLIs are explicit targets in `stark/CMakeLists.txt`
+(for example `profiler_cli` and `run_baseline`). The historical
+`STARK_BUILD_RESEARCH_DRIVERS` / `STARK_BUILD_DIAGNOSTICS` option flags are not present in
+this checkout's CMake configuration, so no command here relies on them. Building a research
+program does not execute it.
 
-## Reproducible developer check (Python >= 3.10)
+## Developer checks in this checkout
 
-```sh
-# Output must be a NEW directory outside this repository.
-python3 tools/validate.py --output /tmp/apex-check-001
-# Without CMake, explicitly request compiler-level checks (not CTest):
-python3 tools/validate.py --engine compiler --output /tmp/apex-check-002
-```
-
-Missing tools produce BLOCKED/nonzero results, not an automatic substitution.
-No dependencies, language models or datasets are downloaded. Details and the
-sanitizer matrix: [tools/README.md](tools/README.md).
-
-## Read-only record inspection
+`apex_app/` is validated with its built-in test runner (Node.js 22 or later, no install step):
 
 ```sh
-/tmp/apex-build/record_inspector /path/to/experimental-records
+cd apex_app
+npm test
 ```
 
-This prints a JSON summary of structural validity, IDs and recorded outcomes.
-Exit 0 means structurally valid input, **not accepted experiments**; 1 means some
-records could not be parsed; 2 means usage, IO or resource-budget failure. It does
-not change a record, run a benchmark, or evaluate an acceptance gate.
+The C++ research tree is validated with CMake/CTest using the commands above. The Python
+validation harness described in historical tooling commits is not present in this checkout,
+so no command here invokes it. Current working agreements for the shared checkout are in
+[`DEVELOPMENT_WORKFLOW.md`](DEVELOPMENT_WORKFLOW.md).
 
-Record writing now refuses duplicate/path-like IDs. Restarting `profiler_cli`
-no longer deterministically reuses the same two IDs. See
-[storage safety](docs/RECORD_STORAGE_SAFETY.md) before using a new filesystem.
+## Historical record tooling
+
+The `record_inspector` binary and its storage-safety document named in older revisions are not
+built or present on `main`. Historical record files remain preserved under `stark/` and `work/`;
+they are evidence, not input to a current benchmark. Record writing in the research tree refuses
+duplicate or path-like IDs (see the target's own source and tests), but this README does not ask
+you to run it.
+
+## Running the assistant
+
+```sh
+cd apex_app
+node bin/apex.js help
+node bin/apex.js status
+```
+
+There is no dependency install and nothing is downloaded. Without a model endpoint the
+application answers deterministic requests and reports `model_unavailable` for model-shaped
+requests; it does not fabricate an answer. Commands, data location, and the optional endpoint you
+configure are documented in the [application README](apex_app/README.md).
 
 ## Historical evidence
 
@@ -114,5 +142,18 @@ binaries are intentionally retained; `.gitignore` only prevents new build output
 from entering the index. Never use this repository as the data directory for a
 future personal assistant without a separately reviewed storage design.
 
-Build details: [docs/BUILD_AND_TEST.md](docs/BUILD_AND_TEST.md).
-Current concrete work/remaining restrictions: [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md).
+C++ build details: `stark/CMakeLists.txt` and `stark/CTestTestfile.cmake`.
+Implemented application capabilities, tests, and limitations:
+[`apex_app/README.md`](apex_app/README.md).
+Consolidated architecture and authority boundary:
+[`apex_app/ARCHITECTURE.md`](apex_app/ARCHITECTURE.md).
+
+## Next recommended milestone
+
+Close the one open arrow in the application roadmap's stage 6 rather than adding more scaffolding:
+make one recorded outcome or prediction verdict change exactly one later, disclosed decision (for
+example, the order of plan candidates), reversibly and with an audit record, without granting any
+component new authority. It is measurable by a before/after comparison over stored records, a
+reversal test, and an adversarial test showing the verdict cannot approve, start, or carry a plan,
+and it requires no model and no new store. This is a recommendation only; nothing in this
+checkout implements it yet.

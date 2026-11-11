@@ -22,6 +22,10 @@ The application is in `apex_app/`, separate from the experimental C++ neural
 research under `stark/`. Nothing here depends on that research. Historical STARK
 identifiers are preserved there and are not used by this application.
 
+The consolidated description of the cognitive runtime, the executive system, the evidence stores,
+and the authority boundary is [`ARCHITECTURE.md`](ARCHITECTURE.md). It states which guarantees are
+enforced by code, which are established by tests, and which remain descriptive or unimplemented.
+
 ## Capability status
 
 This section states what is implemented, by which evidence, and what is not. It is
@@ -5384,6 +5388,57 @@ suites included) ran **2,356 tests, 2,354 passed, 0 failed, 2 skipped** in 490.9
 Node v26.4.0, in isolated temporary data directories. The two skips are the POSIX-only checks this
 filesystem cannot perform. No test in that run contacts a model or opens a socket: every gateway is
 the no-backend one or a programmatic stub with a fixed reply.
+
+## Batch AO (package I): consolidation, documentation audit and release readiness
+
+This package did not add a runtime capability. It consolidated what AO-01 to AO-09 built, checked
+the documentation against the code, corrected statements that no longer matched `main`, and ran the
+final regression.
+
+### What was produced
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): one consolidated architecture document covering the cognitive
+  runtime, the executive system, the evidence and memory stores, diagnostics and evaluation, the
+  authority/trust-boundary map, the capability matrix with the six required statuses, the acceptance
+  and risk register, measured performance, and the known gaps between documentation and code.
+- The root `README.md` was reconciled with the code. It now points at the architecture document, the
+  application README, and `DEVELOPMENT_WORKFLOW.md`.
+
+### Documentation defects corrected
+
+The root README linked to files that are not present on `main`: `docs/BUILD_AND_TEST.md`,
+`docs/IMPLEMENTATION_STATUS.md`, `docs/RECORD_STORAGE_SAFETY.md`, and `tools/README.md`. It also
+described `record_inspector`, `tools/validate.py`, and the `STARK_BUILD_RESEARCH_DRIVERS` /
+`STARK_BUILD_DIAGNOSTICS` CMake options as if they were available here. Git history shows those
+documents and tools were developed on research branches that were never merged into `main`, so the
+commands could not run. The root README now says that plainly and names the checks that do exist:
+CMake/CTest for the C++ tree and `npm test` for the application. No historical file was deleted or
+rewritten to make the links true.
+
+The application README's recorded full-suite duration was also corrected to the final measured run
+below; the test and file counts were already accurate.
+
+### What this package did not change
+
+No application source, test, authorization rule, evidence rule, lock, audit rule, or verification
+rule was changed by AO-10. `stark/` was not modified. No test runs a model or contacts an endpoint.
+The only edits are the new architecture document, the two READMEs, and the recorded measurements.
+
+### Final regression
+
+The complete `npm test` run (139 files) after the documentation changes ran **2,356 tests, 2,354
+passed, 0 failed, 2 skipped** in 483.7 s on Windows 11, Node v26.4.0, in isolated
+temporary data directories. The two skips are the POSIX-only filesystem checks this environment
+cannot perform.
+
+### Recommended next milestone
+
+Close the one open arrow in the roadmap's stage 6 rather than add more scaffolding: make one recorded
+outcome or prediction verdict change exactly one later, disclosed decision (for example, the order of
+plan candidates), reversibly and with an audit record, without granting any component new authority.
+It is measurable by a before/after comparison over stored records, a reversal test, and an
+adversarial test showing the verdict cannot approve, start, or carry a plan. It needs no model and no
+new store. Nothing in this checkout implements it yet.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 
