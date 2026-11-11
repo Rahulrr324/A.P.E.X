@@ -5225,6 +5225,166 @@ temporary data directories. The two skips are the POSIX-only filesystem checks t
 cannot perform. No test in that run contacts a model or opens a socket: every gateway is the
 no-backend one or a programmatic stub with a fixed reply.
 
+## Batch AO (package H): adversarial integration, cross-process reliability, and end-to-end acceptance
+
+This package asked one question of the integrated runtime: does it behave consistently and safely
+when its inputs are invalid, its evidence is corrupted or withdrawn, its processes stop, and two
+writers act at once? The evidence is the tests below, not a design change. No authorization,
+evidence, locking, audit, or verification rule was relaxed to make a case pass, and no acceptance
+path was added beside the real controller, stores, registries, or task runner. Every case writes only
+into a fresh temporary data directory.
+
+### What this package adds
+
+Two suites, eight tests, and one real child fixture:
+
+| File | Tests | What it drives |
+| --- | --- | --- |
+| `tests/acceptance-ao09.test.js` | 7 | The real controller, proposal log, task runner, action registry, and evaluation harness in one process, with fixed synthetic replies |
+| `tests/cross-process-ao09.test.js` | 1 | A real child process killed while it holds the proposal store's write claim |
+| `tests/fixtures/proposal-after-create-child.mjs` | - | Writes one synthetic proposal, holds the real claim, prints READY, then waits to be killed |
+
+The package also closes one observed gap in the request path. A model answer is produced after the
+analysis, and a record the analysis cited can be corrected, retracted, or become unreadable during
+that gap. `recheckEvidence` (`src/cognition/evidence.js`) re-reads only the memory and knowledge
+records the recorded claims cite, using the stores' bounded `getMany`, and `#recheckAnswerEvidence`
+(`src/controller/controller.js`) reports the result as `op.cognition.evidenceRecheck`. That record
+is read-only: it says `authorizes: false`, names the analysis and response phases separately, and
+never rewrites the recorded lineage. A support the current stores can no longer establish is counted
+as weakened, an unreadable record weakens the claim to unverified rather than proving it false, and
+the answer carries a display-only notice when the count is above zero. The request outcome and every
+stored claim lineage are unchanged by the re-check.
+
+The acceptance work also found one defect in the new bounded re-read: `MemoryStore.getMany` returned
+the replaced record's own id in `replacedBy` where `memoryWindow` names the successor that retired
+it. Nothing read that field yet, so no observed behavior changed, but the returned shape contradicted
+the store's own annotation contract. It was fixed at the store boundary, and the memory-correction
+case now asserts that the successor is named. No assertion or expected outcome was loosened to make
+any case pass.
+
+### Scenarios A-R, each with the test that exercises it
+
+"Expected" means both the returned behavior and the persisted state the test reads back.
+
+| ID | Condition injected | Verified behaviour and persisted state | Test | Kind |
+| --- | --- | --- | --- | --- |
+| A | A response-only request; a fixed reply with no proposal | The turn is recorded unverified; no proposal, plan, task, handoff, or execution record is written | `handoff-integrity-ao.test.js` C2; `integration-runtime-an.test.js` main path | Synthetic reply |
+| B | One memory record and one knowledge record answer the question | The answer cites both ids, lineage is recorded, and nothing runs | `cognition-scenarios.test.js` A; `integration-runtime-an.test.js` | Synthetic reply, real stores |
+| C | Two contradictory records | Both stay evidence, the disagreement is disclosed unresolved, and the model cannot mark either supported | `cognition-scenarios.test.js` B; `integration-runtime-an.test.js` conflicting evidence | Synthetic reply, real stores |
+| D | Retrieval returns nothing usable | The answer states that no evidence was found and does not fill the gap from the model; a clarification is asked where the question is ambiguous | `integration-runtime-an.test.js` empty evidence; `cognition-reasoning.test.js` clarification | Synthetic reply, real stores |
+| E | A model proposes a write or a task it may not run | The registry denies the write, or the task waits at `awaiting_approval`; no capability executes | `handoff-integrity-ao.test.js` A2, B9; `model-self-authorization.test.js` | Synthetic reply |
+| F | The user accepts a valid proposal, and later approves a model task | The acceptance is recorded through the ordinary store action; an approved task runs through the registry's own authorization for each step | `acceptance-ao09.test.js` test 1; `executive-acceptance.test.js` K-04, K-05 | Real controller and stores |
+| G | An approved plan runs | Each step has its own `task.step` operation and an independent verification result; the task and plan say verified | `executive-acceptance.test.js` K-05, K-06; `executive-bridge.test.js` | Synthetic actions, real stores |
+| H | A step throws during execution | The failure is reported as failed, dependants do not run, and no success or verified outcome is claimed | `executive-acceptance.test.js` K-13, K-14; `failure-semantics.test.js` | Synthetic actions |
+| I | The user cancels after approval but before execution | No crossing opens, no step runs, and the refusal writes no execution record | `handoff-integrity-ao.test.js` B8; `cognition-lifecycle.test.js` cancellation before send | In-process and real child |
+| J | A step is in flight when the task is cancelled | The in-flight step becomes uncertain, never verified, and is not replayed | `task-lifecycle.test.js` interrupted-task cancellation; `plan-continuation.test.js` real-child boundaries | Real child |
+| K | The same proposal arrives twice and two runs are attempted at once | One effect and one verified handoff; the second crossing is denied and executes nothing | `handoff-integrity-ao.test.js` B1, B4; `integration-runtime-an.test.js` duplicates/concurrent; `executive-reliability.test.js` D | In-process and real child |
+| L | The backend corrects or retracts a cited record inside `complete()` | `evidenceRecheck.available` is true and `authorizes` false; both phases are weakened; the recorded lineage is still `directly_supported`; a notice is printed; the operation stays `verification_unavailable`; no proposal is written | `acceptance-ao09.test.js` tests 4 and 5 | Synthetic reply, real stores |
+| M | The plan is revised after approval | The revision clears the approval; activation is refused and names the stale binding | `plan-adversarial.test.js` modified-after-approval; `plan-continuation.test.js` materially revised plan | Real controller and stores |
+| N | A real process is killed, then a fresh process reads and continues | The interrupted step is uncertain, the fresh process re-runs nothing, and explicit continuation records the uncertainty rather than the step | `plan-continuation.test.js` eight real-child boundaries; `process-recovery.test.js` | Real child |
+| O | A JSONL store is corrupted or truncated | Reads refuse to present damage as empty, writes refuse to extend it, the bytes stay, and status names the damage | `storage-integrity.test.js`; `corruption-recovery-boundaries.test.js`; `acceptance-batch-i.test.js` #4 | Real files |
+| P | The audit append fails after a possible effect | The success is downgraded, exit status is 3, `recorded:false` is disclosed, and no experience is invented | `append-audit-failure-semantics.test.js`; `acceptance-batch-i.test.js` #5 | Fault injection |
+| Q | Model output carries authority-shaped fields, a claimed approval, or a claimed verification | The fields are dropped or refused; a model-origin decision is `ACTION_DENIED`; a declared permission cannot bypass the registry; a claimed verification is corrected; no record is written | `model-self-authorization.test.js`; `proposal-boundary-an.test.js`; `plan-adversarial.test.js`; `acceptance-ao09.test.js` tests 1 and 7 | Synthetic reply |
+| R | A recovery request names an operation whose effect is uncertain | The recovery reads the records, refuses to replay the uncertain write, and produces no second effect | `plan-continuation.test.js` interrupted write; `adversarial-batch-am.test.js` I-12; `executive-interruption.test.js` D | Real child and in-process |
+
+### Adversarial boundaries beyond the A-R walkthrough
+
+| Boundary | What is injected | What the tests establish | Suites |
+| --- | --- | --- | --- |
+| Cognitive lifecycle | Invalid transitions, skipped stages, a failed or unavailable stage, false success | No failed, skipped, cancelled, or unavailable stage is reported as success; a stage the path did not enter is `not_reached` | `cognition-lifecycle`, `cognition-artifacts`, `cognition-trace`, `runtime-diagnostics-ao` |
+| Gateway | Unavailable, timeout, malformed, empty, over-long, reasoning-only, refusal | Each becomes its own outcome with no invented answer and no execution | `gateway`, `gateway-resilience`, `runtime-states`, `integration-runtime-an` |
+| Duplicate and late work | Duplicate request, duplicate proposal, delayed reply, replay | One effect; a late reply is discarded; a decided, expired, or invalidated proposal cannot be accepted again | `handoff-integrity-ao` B1, `integration-runtime-an`, `acceptance-ao09` tests 1-2 |
+| Evidence integrity | Unsupported claim, model-declared support, forged reference, another request's record, duplicate id, missing/corrupt/stale/conflicting record, retraction after the claim | Support is derived from the stores; a forged or foreign reference is rejected; a duplicate id counts once; a retracted record stops counting; absence is not disproof | `cognition-evidence-states`, `cognition-lineage`, `integration-runtime-an`, `plan-adversarial`, `acceptance-ao09` tests 3-5 |
+| Executive authority | Execute from a response, self-approval, forged or reused approval, post-approval edit, operation-id reuse, replay of expired/denied/superseded work, registry bypass, direct runner use, audit failure reported as success | The registry authorizes, the controller executes, the TaskRunner records each step, the independent verifier confirms it, and the audit/finalization line is written; no cognitive artifact, proposal, diagnostic, or handoff grants authority | `model-self-authorization`, `proposal-boundary-an`, `handoff-integrity-ao` A1-A7, `plan-adversarial`, `append-audit-failure-semantics`, `acceptance-ao09` tests 1, 2, 7 |
+| Diagnostics and evaluation | Clock failure, unmeasured duration, skipped stage, recording failure, repeated evaluation | Timing is `null` not zero; the record is bounded and text-free; a recording failure cannot upgrade an outcome; evaluation is deterministic, non-mutating, and has no composite score | `runtime-diagnostics-ao`, `cognition-evaluation`, `acceptance-ao09` test 6 |
+
+### Cross-process interruption, with real child processes
+
+The table names what a fresh process finds, not what a fixture claims a process would have found.
+Each child writes through the real store and is terminated (or stops itself) at its boundary; the
+parent then reads the bytes with a separate process.
+
+| Boundary | Real child fixture | State a fresh process finds | Recovery allowed |
+| --- | --- | --- | --- |
+| Before or inside persistence | `partial-write-child.mjs`, `finalization-child.mjs` | The fragment or the complete record that reached disk; damage is named, never read as empty | Explicit; the uncertain write is not replayed |
+| During cognitive processing / before send | `cancelled-request-child.mjs` | A cancelled request with no answer and no execution | New request only |
+| After proposal creation, holding the store claim | `proposal-after-create-child.mjs` (new) | One `proposal_created`, no decision, one abandoned claim; the next write takes it over | The user's explicit decision; a replay is refused |
+| During execution / after an uncertain effect | `interrupted-run-child.mjs`, `continuation-child.mjs`, `executive-interruption-child.mjs` | The step is `running` or `uncertain`; the effect file is the only evidence of the effect | Explicit continuation; the uncertain step is never re-run |
+| During verification / before finalization / during the audit append | `continuation-child.mjs` (five boundaries), `finalization-child.mjs` (six boundaries) | No record claims the step, or the torn line is residue; neither absence nor damage is treated as success | Explicit; the read names what is unknown |
+| During continuation / two continuations at once | `continuation-cross-process-an`, `plan-continuation` children | One process takes up the work; the other reports none; no step repeats | Explicit; no background recovery |
+
+No background recovery starts in any of these cases. A refused or impossible continuation executes
+nothing and writes nothing, and every accepted recovery is caller-initiated.
+
+Two boundaries in the package's list are not exercised with a killed child: "after approval, before
+plan activation" and "inside authorization". Their critical sections are in-process and leave no
+persisted intermediate state to kill, so their refusal behavior is tested with the real controller
+and stores in-process, and the post-interruption record reading is covered by the persisted-event
+tests above. This is a limit of the evidence, stated rather than implied.
+
+### Concurrency and store integrity
+
+The existing suites already cover lock ownership loss, stale and recycled holders, malformed and
+truncated JSONL, append failures, readback mismatch, cross-store inconsistency, damaged diagnostics,
+and partial finalization: `storage-concurrency`, `store-write-concurrency`, `cross-process-stress`,
+`lock-contention`, `lock-recovery`, `lock-ownership-and-recovery`, `prediction-concurrency`,
+`experience-concurrency`, `executive-reliability`, and `continuation-cross-process-an`. This package
+re-reads those rules rather than relaxing them: the child's abandoned proposal claim is resolved
+through the ordinary takeover election, and the parent's acceptance is the write that proves it.
+A decision is never stolen from a live holder, and an uncertain effect is never silently replayed.
+
+### What these tests do not establish
+
+- No test in this package runs a model. Every reply is a fixed string or a deterministic in-process
+  fixture; no endpoint is contacted, no inference is run, and no local model server is used.
+- The results are behavior of this code on this platform in temporary directories. They do not
+  establish real-world truth, answer quality, or that a real model reasons correctly.
+- In-process fault injection is not the same as a killed process. The boundaries without a real
+  child are named above.
+- A refused proposal decision surfaces as `EXECUTION_FAILED` because the acceptance action throws
+  during `execute()`. The tests assert the refusal and the unchanged log, not a particular label;
+  a refused decision is never a success.
+- The cognitive evaluation harness has no handoff scenario. Handoff has its own suites
+  (`handoff-integrity-ao`, `handoff-hash-binding-ao`, `executive-acceptance`), so no evaluation
+  dimension was invented for this package.
+- Two POSIX-only filesystem checks remain skipped on this Windows machine.
+
+### Measured: package H against the AO-08 tree
+
+The controlled baseline is the committed HEAD tree extracted with `git archive` (it has no
+`recheckEvidence`), and the after tree is this working tree. Each was run with the same benchmark
+script, the same in-process fixture, nine repetitions, sequentially, with no test or benchmark
+running alongside. The benchmark writes only into fresh temporary directories. Median figures:
+
+| Path | AO-08 HEAD | Package H |
+| --- | --- | --- |
+| Answer request total, 0 records | 25.7 ms | 20.3 ms |
+| Answer request total, 20 records | 26.0 ms | 27.0 ms |
+| Answer request total, 200 records | 111.5 ms | 110.1 ms |
+| Answer request total, 800 records | 278.8 ms | 298.0 ms |
+| Answer request total, 2,000 records | 743.0 ms | 726.2 ms |
+| Permitted read proposal (wall) | 90.3 ms | 81.2 ms |
+| Duplicated/denied/malformed proposal (wall) | 97.0 / 85.5 / 83.3 ms | 87.3 / 80.8 / 76.8 ms |
+| Handoff build + check, 1/2/4/8 steps | 0.108 / 0.068 / 0.080 / 0.101 ms | 0.100 / 0.058 / 0.077 / 0.116 ms |
+| Plan activate, 1/8 steps | 371.7 / 694.4 ms | 336.3 / 727.8 ms |
+| Continuation report (`work`/`next`) | 9.8 ms | 10.6 ms |
+| Diagnostics workload, 16 stages | 21.5 us | 22.8 us |
+| Diagnostics record size | 3,334 bytes | 3,334 bytes |
+
+The answer path includes the new read-only re-check because the fixture reply does carry recorded
+lineage. The differences are mixed in sign and mostly within the run-to-run spread this machine
+shows: for context, the committed AO-08 README reports a 652 ms median at 2,000 records, while the
+same HEAD tree measured 743 ms in this session's control run. No repeatable regression is shown on
+any listed path, and no cache, index, or schema change was introduced by this package. The added
+re-check reads at most 128 cited ids through one store load per source and runs only when an answer
+has recorded lineage; a request without one pays nothing.
+
+The full `npm test` run that closed this package (the 139 files named in `package.json`, both new
+suites included) ran **2,356 tests, 2,354 passed, 0 failed, 2 skipped** in 490.9 s on Windows 11,
+Node v26.4.0, in isolated temporary data directories. The two skips are the POSIX-only checks this
+filesystem cannot perform. No test in that run contacts a model or opens a socket: every gateway is
+the no-backend one or a programmatic stub with a fixed reply.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 

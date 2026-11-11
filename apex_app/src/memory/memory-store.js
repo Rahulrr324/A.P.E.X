@@ -444,6 +444,34 @@ export class MemoryStore {
     return records.find((r) => r.id === id) ?? null;
   }
 
+  // A bounded read of specific records, used by the late evidence re-check. One file read answers
+  // every id, so re-checking a response's citations does not read and hash the store once per id.
+  // Each returned record carries the same derived `status` a search hit would: a record that a
+  // later correction replaced is superseded even though the raw line still says otherwise.
+  async getMany(ids) {
+    const wanted = new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id.length > 0));
+    const found = new Map();
+    if (wanted.size === 0) return found;
+    const { records } = await this.log.load();
+    // The successor's id, not the replaced record's own id: the annotation has to agree with
+    // memoryWindow, where a correction names the record that retired the earlier one.
+    const replacedBy = new Map();
+    for (const record of records) {
+      for (const targetId of record.provenance?.replaces ?? []) {
+        if (!wanted.has(targetId)) continue;
+        const ids = replacedBy.get(targetId) ?? [];
+        ids.push(record.id);
+        replacedBy.set(targetId, ids);
+      }
+    }
+    for (const record of records) {
+      if (!wanted.has(record.id)) continue;
+      const successors = replacedBy.get(record.id) ?? [];
+      found.set(record.id, { ...record, replacedBy: successors, status: getRecordStatus(record, [], successors) });
+    }
+    return found;
+  }
+
   async #loadComplete({ operation = 'retrieval', beforeAppend = false } = {}) {
     // A write reads through the incremental validated state, so one append no longer costs the
     // whole store's parse and validation. Nothing about the rule below changes: the records it

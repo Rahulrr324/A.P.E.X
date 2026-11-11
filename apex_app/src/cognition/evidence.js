@@ -920,3 +920,101 @@ export function sourceUncertainty(retrieval) {
   if ((retrieval.counts?.unavailable ?? []).length > 0) return Uncertainty.UNVERIFIABLE;
   return null;
 }
+
+// ---- late re-check ------------------------------------------------------------------------------
+//
+// The analysis runs before the model is asked; the final answer is written later. A record the
+// analysis read can be corrected, retracted, or become unreadable in between. This reads the cited
+// memory and knowledge records again, by id, and returns them in the same shape the retrieval
+// coordinator uses, so reassessClaims can say which of a recorded claim's citations are no longer
+// readable and current. It is read-only and bounded: it never writes, never widens the store read
+// beyond the ids named, and an absent record is reported as missing, not as disproof.
+
+const RECHECK_LIMIT = 128;
+
+function recheckMemoryItem(record) {
+  const validity = record.status === 'superseded'
+    ? EvidenceValidity.SUPERSEDED
+    : record.status === 'historical'
+      ? EvidenceValidity.HISTORICAL
+      : EvidenceValidity.CURRENT;
+  const conflicts = Array.isArray(record.conflict) ? record.conflict : [];
+  return {
+    validity,
+    current: record.status !== 'superseded' && record.status !== 'historical',
+    status: record.status === 'superseded' ? ClaimKind.HISTORICAL : 'recorded',
+    contradicts: conflicts.map((id) => evidenceId(EvidenceSource.MEMORY, id)),
+  };
+}
+
+function recheckKnowledgeItem(item) {
+  const lifecycle = typeof item.lifecycleState === 'string' ? item.lifecycleState : null;
+  const validity = lifecycle === 'retracted' ? EvidenceValidity.RETRACTED
+    : lifecycle === 'superseded' ? EvidenceValidity.SUPERSEDED
+      : lifecycle === 'historical' ? EvidenceValidity.HISTORICAL
+        : lifecycle === 'ambiguous' ? EvidenceValidity.UNKNOWN
+          : EvidenceValidity.CURRENT;
+  const conflicts = Array.isArray(item.conflictsWith) ? item.conflictsWith : [];
+  return {
+    validity,
+    current: lifecycle !== 'retracted' && lifecycle !== 'historical'
+      && lifecycle !== 'superseded' && lifecycle !== 'ambiguous',
+    status: conflicts.length > 0 ? ClaimKind.CONTRADICTED : ClaimKind.SUPPORTED,
+    contradicts: conflicts.map((id) => evidenceId(EvidenceSource.KNOWLEDGE, id)),
+  };
+}
+
+async function readRechecked(store, entries) {
+  if (typeof store?.getMany === 'function') return store.getMany(entries.map((entry) => entry.recordId));
+  const found = new Map();
+  for (const entry of entries) {
+    const record = await store.get(entry.recordId);
+    if (record) found.set(entry.recordId, record);
+  }
+  return found;
+}
+
+export async function recheckEvidence(ids, { memory = null, knowledge = null } = {}) {
+  const wanted = { memory: [], knowledge: [] };
+  const seen = new Set();
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (typeof id !== 'string' || seen.has(id)) continue;
+    const source = id.startsWith('ev:memory:') ? 'memory'
+      : id.startsWith('ev:knowledge:') ? 'knowledge' : null;
+    if (!source) continue;
+    const recordId = id.slice(`ev:${source}:`.length);
+    if (!recordId || wanted[source].length >= RECHECK_LIMIT) continue;
+    seen.add(id);
+    wanted[source].push({ id, recordId });
+  }
+  const byId = new Map();
+  const sources = [];
+  const unavailable = [];
+  const rechecked = [];
+  const stores = { memory, knowledge };
+  const buildItem = { memory: recheckMemoryItem, knowledge: recheckKnowledgeItem };
+  for (const source of ['memory', 'knowledge']) {
+    const entries = wanted[source];
+    if (entries.length === 0) continue;
+    rechecked.push(source);
+    const store = stores[source];
+    if (!store || (typeof store.getMany !== 'function' && typeof store.get !== 'function')) {
+      unavailable.push(source);
+      sources.push({ source, status: SourceStatus.UNAVAILABLE });
+      continue;
+    }
+    try {
+      const records = await readRechecked(store, entries);
+      for (const entry of entries) {
+        const record = records.get(entry.recordId);
+        if (record) byId.set(entry.id, buildItem[source](record));
+      }
+      sources.push({ source, status: SourceStatus.OK });
+    } catch (err) {
+      const status = failureStatus(err);
+      unavailable.push(source);
+      sources.push({ source, status });
+    }
+  }
+  return { byId, sources, unavailable, rechecked };
+}

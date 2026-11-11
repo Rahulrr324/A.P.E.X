@@ -23,6 +23,8 @@ import { LifecycleStatus, lifecycleAudit } from '../cognition/lifecycle.js';
 import { SpanRecorder, buildRuntimeDiagnostics, StageOutcome } from '../cognition/runtime-diagnostics.js';
 import { ArtifactKind, validateArtifact } from '../cognition/artifacts.js';
 import { structuredDisclosureNotice, actionClaimNotice } from '../cognition/response.js';
+import { recheckEvidence } from '../cognition/evidence.js';
+import { reassessClaims } from '../cognition/lineage.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret, maskSecretLeaves, redactSecrets, SECRET_OMITTED } from '../security/secrets.js';
@@ -334,6 +336,31 @@ function isMixedPrivateWrite(request) {
   if (isPrivateWrite(request)) return false;
   const parts = splitGoal(request);
   return parts.length > 1 && parts.some(isPrivateWrite);
+}
+
+// A late re-check can only speak about the sources it re-read. A claim that also cites a world
+// record, an experience, or a goal keeps only its re-readable references here, so a source this
+// check did not read is never reported as missing and a claim with nothing re-readable is left out.
+function recheckableSnapshot(snapshot, rechecked) {
+  if (!snapshot || !Array.isArray(snapshot.claims)) return null;
+  const sources = new Set(rechecked);
+  const sourceOf = (id) => (typeof id === 'string' ? id.split(':')[1] : null);
+  const claims = [];
+  for (const claim of snapshot.claims) {
+    const evidenceIds = (Array.isArray(claim.evidenceIds) ? claim.evidenceIds : [])
+      .filter((id) => sources.has(sourceOf(id)));
+    const contradicts = (Array.isArray(claim.contradicts) ? claim.contradicts : [])
+      .filter((id) => sources.has(sourceOf(id)));
+    if (evidenceIds.length === 0 && contradicts.length === 0) continue;
+    claims.push({ ...claim, evidenceIds, contradicts });
+  }
+  if (claims.length === 0) return null;
+  return {
+    ...snapshot,
+    claimCount: claims.length,
+    truncated: snapshot.truncated === true || claims.length < snapshot.claims.length,
+    claims,
+  };
 }
 
 export class CognitiveController {
@@ -5386,6 +5413,79 @@ export class CognitiveController {
   // Model path. `relevant` is the already-filtered memory that may enter a prompt
   // or be shown directly. Everything retrieved but ineligible (private, secret,
   // superseded) stays out of both the prompt and the direct display.
+  // The analysis and the final answer are separated by the model call, which can be slow. A record
+  // the analysis cited can be corrected, retracted, or become unreadable in that gap. This re-reads
+  // only the memory and knowledge records the recorded claims cite and reports which claims the
+  // current stores can no longer support. It changes no status, no authorization, and no stored
+  // record: the recorded lineage stays as it was and this is a separate observation beside it.
+  async #recheckAnswerEvidence(op, cognitionCheck) {
+    const snapshots = [];
+    if (op.cognition?.lineage) snapshots.push({ phase: 'analysis', snapshot: op.cognition.lineage });
+    if (cognitionCheck?.found && cognitionCheck.audit?.lineage) {
+      snapshots.push({ phase: 'response', snapshot: cognitionCheck.audit.lineage });
+    }
+    if (snapshots.length === 0) return null;
+    const ids = [];
+    for (const { snapshot } of snapshots) {
+      for (const claim of snapshot.claims ?? []) {
+        for (const id of claim.evidenceIds ?? []) ids.push(id);
+      }
+    }
+    if (ids.length === 0) return null;
+    let recheck;
+    try {
+      recheck = await recheckEvidence(ids, { memory: this.memory, knowledge: this.knowledge });
+    } catch (err) {
+      return {
+        schema: 1,
+        available: false,
+        error: typeof err?.code === 'string' ? err.code : 'RECHECK_FAILED',
+        checked: { analysis: 0, response: 0 },
+        recheckedSources: [],
+        unavailable: ['memory', 'knowledge'],
+        changed: 0,
+        weakened: 0,
+        authorizes: false,
+      };
+    }
+    if (recheck.rechecked.length === 0) return null;
+    const phases = {};
+    let changed = 0;
+    let weakened = 0;
+    for (const { phase, snapshot } of snapshots) {
+      const filtered = recheckableSnapshot(snapshot, recheck.rechecked);
+      if (!filtered) {
+        phases[phase] = null;
+        continue;
+      }
+      const assessment = reassessClaims(filtered, {
+        evidenceById: recheck.byId,
+        sources: recheck.sources,
+        unavailable: recheck.unavailable,
+      });
+      phases[phase] = {
+        claims: assessment.counts.total,
+        changed: assessment.counts.changed,
+        weakened: assessment.counts.weakened,
+        byState: assessment.counts.byState,
+      };
+      changed += assessment.counts.changed;
+      weakened += assessment.counts.weakened;
+    }
+    return {
+      schema: 1,
+      available: true,
+      checked: { analysis: phases.analysis?.claims ?? 0, response: phases.response?.claims ?? 0 },
+      recheckedSources: recheck.rechecked,
+      unavailable: recheck.unavailable,
+      changed,
+      weakened,
+      phases,
+      authorizes: false,
+      note: 'read again after the answer was produced; the recorded lineage is not rewritten and an absent record is not disproof',
+    };
+  }
+
   async answerWithModel(request, { relevant, turns, historyUnavailable = false, signal = null }, op, onProgress = null, diagnostics = null) {
     const retrievalError = op.errors.find((error) => error.stage === 'retrieval');
     if (retrievalError) {
@@ -5813,7 +5913,7 @@ export class CognitiveController {
         : includedAdaptations.size > 0
           ? `[APEX included ${includedAdaptations.size} approved adaptation(s) you recorded for this scope: ${adaptations.filter((a) => includedAdaptations.has(a.id)).map((a) => `"${truncate(a.rule, 120)}"`).join('; ')}]${omission}`
           : '';
-    const annotation = [storedNotice, adaptationNotice].filter(Boolean).join('\n\n');
+    let annotation = [storedNotice, adaptationNotice].filter(Boolean).join('\n\n');
 
     // Called once, immediately before the model is asked. It reports only the wait
     // and its limit; the transport is not streaming, so no progress or partial text is
@@ -6171,6 +6271,19 @@ export class CognitiveController {
       && cognitionCheck.validation?.claimsAction === true
       ? actionClaimNotice(op.steps.filter((s) => s.action && s.execution?.status === 'ok').map((s) => s.action))
       : '';
+    // The evidence a recorded claim rested on can change between the analysis and this answer. The
+    // re-check is an observation: it never rewrites the recorded lineage, never changes the outcome,
+    // and a record that is now absent weakens the claim rather than disproving it.
+    const evidenceRecheck = await this.#recheckAnswerEvidence(op, cognitionCheck);
+    if (evidenceRecheck) {
+      op.cognition = { ...(op.cognition ?? { available: false }), evidenceRecheck };
+      if (evidenceRecheck.weakened > 0) {
+        annotation = [
+          annotation,
+          `[Evidence cited by this answer changed while the answer was being produced: ${evidenceRecheck.weakened} claim(s) no longer rest on readable, current records. APEX has not verified the answer against the current stores.]`,
+        ].filter(Boolean).join('\n\n');
+      }
+    }
     const displayExtras = [loadNotice, historyNotice, actionClaim].filter(Boolean).join('\n\n');
     return {
       status: Outcome.VERIFICATION_UNAVAILABLE,

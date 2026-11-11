@@ -486,6 +486,23 @@ export class KnowledgeStore {
     return records.find((r) => r.kind === undefined && r.id === id) ?? null;
   }
 
+  // A bounded read of specific claim records for the late evidence re-check. Lifecycle events are
+  // never returned here; each claim is annotated with the lifecycle state its own log implies, so
+  // a claim retracted or superseded after the answer's analysis is visible as such.
+  async getMany(ids) {
+    const wanted = new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id.length > 0));
+    const found = new Map();
+    if (wanted.size === 0) return found;
+    const records = await this.#loadComplete();
+    const { claims, retractionsByTarget } = splitLifecycle(records);
+    const supersededByMap = buildSupersededByMap(claims);
+    for (const record of claims) {
+      if (!wanted.has(record.id)) continue;
+      found.set(record.id, annotate(record, supersededByMap, new Map(), retractionsByTarget, null));
+    }
+    return found;
+  }
+
   // Reads one lifecycle event (retraction or resolution) by full id. Events are not
   // claims, so this exists separately from get() and never returns a claim.
   async getEvent(id) {
