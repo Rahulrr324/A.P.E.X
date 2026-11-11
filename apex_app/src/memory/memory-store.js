@@ -561,6 +561,14 @@ export class MemoryStore {
     // that can conflict; group members keep the ranked order, so the recorded conflict
     // ids and their order are unchanged.
     const groups = new Map();
+    // Only the returned window exposes conflict ids. A returned record must still list every
+    // partner it conflicts with, but a pair between two records that are both outside the window
+    // produces ids nothing can read. At 2,000 same-subject records that unused work was 2 million
+    // comparisons and most of a 2.6-second search. Skipping those pairs leaves every observed
+    // value unchanged: each window record still receives its partners in the same order.
+    const returnedIds = new Set(
+      unique.slice(0, Math.max(1, limit)).map((item) => item.record.id),
+    );
     for (const item of unique) {
       const text = String(item.record.content).trim();
       const clause = extractConflictClause(text);
@@ -574,6 +582,7 @@ export class MemoryStore {
         for (let j = i + 1; j < group.length; j += 1) {
           const left = group[i];
           const right = group[j];
+          if (!returnedIds.has(left.record.id) && !returnedIds.has(right.record.id)) continue;
           if (left.text === right.text) continue;
           if (replacesRecord(left.record, right.record)) continue;
           if (!claimsConflict(left.clause, right.clause)) continue;

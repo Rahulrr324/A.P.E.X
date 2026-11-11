@@ -1110,3 +1110,65 @@ different run, so it is context, not a comparable column.
   treated as findings.
 
 This script is not part of `npm test` and no test depends on it.
+
+## Cognitive runtime diagnostics benchmark (Batch AO, package G)
+
+`run-cognitive-runtime-benchmark.mjs` measures the request lifecycle and the stage record it now
+produces. It needs no model, no network, and no configured endpoint.
+
+```sh
+node benchmarks/run-cognitive-runtime-benchmark.mjs [--repeats R] [--phase answer|proposal|handoff|executive|diagnostics|all] [--keep]
+```
+
+`--repeats` is 1-25 and defaults to 9. Every phase writes only into a fresh directory under the OS
+temp folder and removes it unless `--keep` is given; the script refuses to remove anything that is
+not one of its own prefixed directories.
+
+### Procedure
+
+- `answer` asks one grounded question through the real controller at 0, 20, 200, 800, and 2,000
+  seeded records. The reply is fixed text from an in-process backend object, so `model_call`,
+  validation, retrieval, claim extraction, and finalization all run their real code.
+- `proposal` sends deterministic replies that propose a permitted read, a duplicated proposal, a
+  denied write, a malformed proposal, an already-cancelled request, and one transport retry. Only the
+  retry row constructs an HTTP backend, and it does so with an injected `fetchImpl` that fails once
+  and answers locally.
+- `handoff` times `buildPlanActivationHandoff`, completion, the recorded-phase check, and live
+  reference validation for 1-, 2-, 4-, and 8-step plans, plus reference validation against 0, 100,
+  and 1,000 extra step-operation entries, and the two component hashes separately.
+- `executive` runs plan add, approve, and activate (run) for a 1-step and an 8-step plan, then the
+  continuation (`work`/`next`) report, reading each figure from the operation's own diagnostics.
+- `diagnostics` times a request-shaped `SpanRecorder` workload in isolation, prints the record's key
+  list and size over 50 replies, and observes `heapUsed` across 100 further requests.
+
+Timings use `performance.now()`. A duration that was not produced is `null` and prints `n/a`, never
+zero. p95 is printed only for at least 20 samples. Warm-up is explicit in the handoff phase (200
+builds before measuring); the other phases report every repetition.
+
+### Measured
+
+The package report's before/after tables were produced with `--repeats 9 --phase all` on the same
+machine and Node version, with no test or other benchmark running. The controlled baseline was HEAD
+plus this package's instrumentation; the only source differences were `memory-store.js` conflict
+pairing and `handoff.js` single-hash binding. Results and the reasoning that ties each figure to its
+file are in the README section "Batch AO (package G): request diagnostics and the performance they
+measured".
+
+### Interpretation limits
+
+- The model is a plain object with a fixed reply. No inference is run, no socket is opened, and no
+  endpoint is named. These numbers describe APEX's own pipeline, not a model.
+- Nine samples support a median and a min/max but not a p95, so none is printed for the main rows.
+- Absolute timings varied up to about 2x between runs of an identical fixture on this machine; only
+  comparisons taken inside one controlled run are treated as findings.
+- The answer phase's request total is the record's own sum of measured work. Work that runs before
+  the recorder's spans (notably the `memory.search` in `handle`) is visible in wall time but not in
+  the stage columns; the conflict-pairing improvement therefore shows in wall and total, not in the
+  retrieval stage.
+- The fixture's records are uniform user facts, which is the shape that makes conflict pairing
+  quadratic. A store whose records rarely share a subject does not pay that cost and would not show
+  the same difference.
+- Memory observation is a single `heapUsed` reading without forced collection; it is not a leak
+  measurement.
+
+This script is not part of `npm test` and no test depends on it.

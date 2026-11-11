@@ -5,9 +5,16 @@
 // resolves a disagreement by recency or repetition, and keeps every side of a conflict as its own
 // linked claim. A derived view keeps its derived kind, so a pattern cannot be read as an observation
 // and an expectation cannot be read as something that happened.
+import { performance } from 'node:perf_hooks';
 import {
   BOUNDS, ClaimKind, EvidenceSource, EvidenceState, EvidenceValidity,
 } from './vocabulary.js';
+
+// Conflict linking is a distinct stage that runs inside claim extraction. The caller may measure it
+// separately; it is a subset of the extraction duration, not a second cost.
+function contradictionMillis(started) {
+  return Math.round((performance.now() - started) * 1000) / 1000;
+}
 
 function claimKindFor(item) {
   switch (item.source) {
@@ -155,7 +162,9 @@ function applyConflictLinks(claims, evidence, conflicts) {
   }
 }
 
-export function extractClaims({ evidence = [], understanding = null, conflicts = [] } = {}) {
+export function extractClaims({
+  evidence = [], understanding = null, conflicts = [], timing = null,
+} = {}) {
   const claims = [];
   for (const item of evidence) {
     if (claims.length >= BOUNDS.maxClaims) break;
@@ -196,7 +205,9 @@ export function extractClaims({ evidence = [], understanding = null, conflicts =
     }
     claims.push(claim);
   }
+  const conflictStarted = typeof timing === 'function' ? performance.now() : null;
   applyConflictLinks(claims, evidence, conflicts);
+  if (conflictStarted !== null) timing('contradictions', contradictionMillis(conflictStarted));
 
   // Duplicate claims from one store are not independent support. They are kept, because a stored
   // duplicate is a real record, but they share a support group so uncertainty cannot count them twice.

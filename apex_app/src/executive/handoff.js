@@ -250,10 +250,10 @@ function planApproval(plan) {
   };
 }
 
-function approvalBindsPlan(plan) {
+function approvalBindsPlan(plan, contentHash) {
   if (!plan?.approval) return false;
   return plan.approval.version === plan.version
-    && plan.approval.contentHash === planContentHash(plan);
+    && plan.approval.contentHash === (contentHash ?? planContentHash(plan));
 }
 
 // A plan activation handoff is built after the plan passed live validation and a task exists for
@@ -267,12 +267,16 @@ export function buildPlanActivationHandoff({ requestId, plan, goal = null, task 
     'user',
     boundedEvidence([]),
   );
+  // The live plan bytes are hashed once. The approval binding and the record's own plan identity
+  // must describe the same bytes, and hashing twice on an 8-step plan was about half of this
+  // function's measured cost.
+  const contentHash = plan ? planContentHash(plan) : null;
   record.plan = {
     id: plan?.id ?? null,
     version: plan?.version ?? null,
-    contentHash: plan ? planContentHash(plan) : null,
+    contentHash,
   };
-  record.approval = approvalBindsPlan(plan) ? planApproval(plan) : null;
+  record.approval = approvalBindsPlan(plan, contentHash) ? planApproval(plan) : null;
   record.goal = goal
     ? { id: goal.id ?? null, revision: goal.revision ?? null, status: goal.status ?? null }
     : null;

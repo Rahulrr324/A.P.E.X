@@ -20,6 +20,7 @@ import { analyzeRequest, analysisAudit, validateModelOutput } from '../cognition
 import { attachBoundary, executionBoundary } from '../cognition/trace.js';
 import { buildContract, contractAudit } from '../cognition/contract.js';
 import { LifecycleStatus, lifecycleAudit } from '../cognition/lifecycle.js';
+import { SpanRecorder, buildRuntimeDiagnostics, StageOutcome } from '../cognition/runtime-diagnostics.js';
 import { ArtifactKind, validateArtifact } from '../cognition/artifacts.js';
 import { structuredDisclosureNotice, actionClaimNotice } from '../cognition/response.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
@@ -405,7 +406,7 @@ export class CognitiveController {
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
-          execute: (name, input, origin, operationId) => this.runAction(name, input, origin, operationId),
+          execute: (name, input, origin, operationId, timing) => this.runAction(name, input, origin, operationId, timing),
           recordOperation: (record) => this.operations.append(record),
           readOperations: async () => (await this.operations.inspect()).records,
           idFactory: this.idFactory,
@@ -441,6 +442,9 @@ export class CognitiveController {
       errors: [],
       finishedAt: null,
     };
+    // One recorder per request. It is passed explicitly down the path and never shared, so two
+    // concurrent requests cannot mix their measurements. Every recorder method is failure-safe.
+    const diagnostics = new SpanRecorder();
     let request = null;
     let status;
     let output = null;
@@ -557,7 +561,7 @@ export class CognitiveController {
         displayText = answer.display;
       } else if (routed.kind === 'action') {
         // 3-6. Authorize, execute, verify, and summarize one deterministic action.
-        const step = await this.runAction(routed.action, routed.input, origin, op.id);
+        const step = await this.runAction(routed.action, routed.input, origin, op.id, diagnostics);
         op.steps.push(step);
         status = step.outcome;
         output = step.summary;
@@ -609,7 +613,7 @@ export class CognitiveController {
           // The caller may cancel a model request. Cancellation is reported as its own class and is
           // never retried, so it cannot be mistaken for a timeout or an outage.
           signal,
-        }, op, onProgress);
+        }, op, onProgress, diagnostics);
         status = m.status;
         lifecycle = m.lifecycle ?? null;
         // Any model proposal that did not execute and verify gets a deterministic
@@ -684,6 +688,7 @@ export class CognitiveController {
             { content: m.modelText, operationId: op.id, backend: m.backend },
             'user',
             op.id,
+            diagnostics,
           );
           op.steps.push(step);
           displayText = `${displayText}\n\n${step.display ?? step.summary}`;
@@ -702,6 +707,10 @@ export class CognitiveController {
       displayText = displayText ? `${displayText}\n\n${notice}` : notice;
     }
 
+    // The finalization span covers assembling the outcome and closing the lifecycle, not the audit
+    // append below: a record cannot contain its own append result, and the append outcome is returned
+    // to the caller separately exactly as before.
+    const finalization = diagnostics.start('finalization');
     op.status = status;
     op.decision = classifyDecision(op);
     op.output = output ? truncate(output, MAX_OUTPUT_CHARS) : null;
@@ -720,8 +729,27 @@ export class CognitiveController {
         lifecycle: lifecycleAudit(lifecycle.snapshot()),
       };
     }
+    diagnostics.end(finalization, { outcome: StageOutcome.RAN });
 
     const persisted = { ...op, steps: op.steps.map(stripDisplay) };
+    // A model request reports no retry count: the transport retries internally and does not expose
+    // the attempts, so the count is stated as unavailable rather than invented as zero. Every other
+    // path sends no model call and therefore had no retry opportunity.
+    op.diagnostics = buildRuntimeDiagnostics({
+      requestId: op.id,
+      operation: persisted,
+      cognition: op.cognition ?? null,
+      spans: diagnostics.snapshot(),
+      status,
+      modelValidation: op.cognition?.model ?? null,
+      cancellation: {
+        requested: status === Outcome.REQUEST_CANCELLED,
+        afterResponse: op.model?.cancelledAfterResponse === true,
+      },
+      retries: op.model != null ? null : 0,
+      totalDurationMs: diagnostics.elapsedTotal(),
+    });
+    persisted.diagnostics = op.diagnostics;
     const { recorded, recordError, captureNotice } = await finalizeOperation(persisted, {
       append: (record) => this.operations.append(record),
       capture: (record, opts) => this.#captureExperience(record, opts),
@@ -1009,7 +1037,12 @@ export class CognitiveController {
     return `Experience: captured automatically as ${shortId(written.record.id)} from ${about}. APEX recorded no assessment of it - feedback is yours alone.`;
   }
 
-  async #finishCommandOp(op, step, failMsg, { status = null } = {}) {
+  // Command operations (knowledge, goals, plans, predictions) never enter the cognitive lifecycle,
+  // so their record says exactly that: only the finalization span is measured and every other stage
+  // is not reached. A caller that did measure earlier work passes its recorder in.
+  async #finishCommandOp(op, step, failMsg, { status = null, diagnostics = null } = {}) {
+    const recorder = diagnostics ?? new SpanRecorder();
+    const finalization = recorder.start('finalization');
     op.steps.push(step);
     // A goal or plan command records the operation's own vocabulary (goals created, plans stored),
     // not a bare success: the audit line then says what happened rather than only that a write passed.
@@ -1017,6 +1050,18 @@ export class CognitiveController {
     op.decision = classifyDecision(op);
     op.output = step.summary ? truncate(step.summary, MAX_OUTPUT_CHARS) : null;
     op.finishedAt = this.now().toISOString();
+    recorder.end(finalization, { outcome: StageOutcome.RAN });
+    op.diagnostics = buildRuntimeDiagnostics({
+      requestId: op.id,
+      operation: op,
+      cognition: op.cognition ?? null,
+      spans: recorder.snapshot(),
+      status: op.status,
+      modelValidation: op.cognition?.model ?? null,
+      cancellation: { requested: op.status === Outcome.REQUEST_CANCELLED },
+      retries: 0,
+      totalDurationMs: recorder.elapsedTotal(),
+    });
     const { recorded, recordError, captureNotice } = await finalizeOperation(op, {
       append: (record) => this.operations.append({ ...record, steps: record.steps.map(stripDisplay) }),
       capture: (record, opts) => this.#captureExperience(record, opts),
@@ -1886,7 +1931,7 @@ export class CognitiveController {
     if (!wrote) await this.#queueSummaryIntent(op, sid, summary);
   }
 
-  async runAction(name, rawInput, origin, operationId) {
+  async runAction(name, rawInput, origin, operationId, timing = null) {
     const step = {
       action: typeof name === 'string' ? name : null,
       origin,
@@ -1901,7 +1946,12 @@ export class CognitiveController {
     };
 
     // Authorization: a request is not authorization.
+    const authSpan = timing?.start('authorization') ?? null;
     const auth = this.registry.authorize(name, origin);
+    timing?.end(authSpan, {
+      outcome: StageOutcome.RAN,
+      counts: auth.decision === 'allow' ? { allowed: 1 } : { denied: 1 },
+    });
     step.authorization = auth;
     if (auth.decision !== 'allow') {
       step.outcome = Outcome.ACTION_DENIED;
@@ -1939,25 +1989,36 @@ export class CognitiveController {
     // Execution. A rejection or failure is reported to the terminal as well as to the audit record,
     // so the reason is filtered here: the step says what went wrong without quoting back a value
     // that looked like a credential. Ordinary message wording is unchanged by this filter.
+    const execSpan = timing?.start('execution') ?? null;
     const exec = await executeAction(def, ctx, rawInput);
     if (exec.status === 'rejected') {
+      timing?.end(execSpan, { outcome: StageOutcome.FAILED, counts: { rejected: 1 } });
       step.execution = { status: 'rejected', error: exec.error };
       step.outcome = Outcome.INPUT_REJECTED;
       step.summary = `input rejected: ${redactSecrets(exec.error.message)}`;
       return step;
     }
     if (exec.status === 'failed') {
+      timing?.end(execSpan, { outcome: StageOutcome.FAILED, counts: { failed: 1 } });
       step.execution = { status: 'failed', error: exec.error };
       step.outcome = Outcome.EXECUTION_FAILED;
       step.summary = `execution failed: ${redactSecrets(exec.error.message)}`;
       return step;
     }
+    timing?.end(execSpan, { outcome: StageOutcome.RAN, counts: { ok: 1 } });
     step.execution = { status: 'ok' };
     const { display, ...resultNoDisplay } = exec.result;
     step.result = redact(resultNoDisplay);
 
     // Verification: separate component, reads evidence independently.
+    const verifySpan = timing?.start('verification') ?? null;
     const v = await this.verifier.check(def, ctx, exec.input, exec.result);
+    timing?.end(verifySpan, {
+      outcome: v.outcome === Outcome.SUCCESS_VERIFIED ? StageOutcome.RAN : StageOutcome.FAILED,
+      counts: v.outcome === Outcome.SUCCESS_VERIFIED
+        ? { verified: 1 }
+        : v.outcome === Outcome.VERIFICATION_UNAVAILABLE ? { unavailable: 1 } : { failed: 1 },
+    });
     step.verification = { outcome: v.outcome, detail: v.detail };
     step.outcome = v.outcome;
     if (v.outcome === Outcome.SUCCESS_VERIFIED) {
@@ -3557,13 +3618,19 @@ export class CognitiveController {
   // as what it is, never as a successful run.
   async planActivate(ref, { mode = 'run' } = {}) {
     const op = this.#newOp({ capability: 'plan.activate', origin: 'user', request: `plan ${mode}` });
+    const diagnostics = new SpanRecorder();
     let plan = null;
     let task = null;
     let linkNotice = null;
     let activationHandoff = null;
     const finishHandoff = (current, options = {}) => {
       if (!activationHandoff || !current) return;
+      const span = diagnostics.start('handoff_preparation');
       const completed = this.#checkedHandoff(op, completeTaskHandoff(activationHandoff, { task: current, ...options }));
+      diagnostics.end(span, {
+        outcome: completed ? StageOutcome.RAN : StageOutcome.FAILED,
+        counts: { completed: completed ? 1 : 0, rejected: completed ? 0 : 1 },
+      });
       if (completed) op.handoff = completed;
     };
     try {
@@ -3578,6 +3645,7 @@ export class CognitiveController {
       // must still resolve, recorded step outcomes must still verify, and a plan that already
       // ran a step may not be started again. None of this is permission; each step is
       // authorized again when it runs.
+      const planSpan = diagnostics.start('plan_validation');
       const validity = await assessPlanValidity(plan, {
         goals: this.goals,
         plans: this.plans,
@@ -3590,23 +3658,30 @@ export class CognitiveController {
         now: this.now(),
         forActivation: true,
       });
+      // The plan's steps have already passed validation, but they are checked again here
+      // through the same code the task planner uses, which also normalises their inputs.
+      const checked = validity.ok
+        ? checkSteps(
+          plan.steps.map((s) => ({
+            id: s.id,
+            description: s.description,
+            action: s.action,
+            input: s.input,
+            dependsOn: s.dependsOn,
+          })),
+          this.registry,
+          'user',
+        )
+        : { problems: [], steps: [] };
+      const planProblems = (validity.ok ? 0 : validity.problems.length) + checked.problems.length;
+      diagnostics.end(planSpan, {
+        outcome: planProblems === 0 ? StageOutcome.RAN : StageOutcome.FAILED,
+        counts: { problems: planProblems },
+      });
       if (!validity.ok) {
         throw new ValidationError(`plan cannot be started: ${validity.problems.join('; ')}`, 'PLAN_INVALID');
       }
       const goal = validity.goal;
-      // The plan's steps have already passed validation, but they are checked again here
-      // through the same code the task planner uses, which also normalises their inputs.
-      const checked = checkSteps(
-        plan.steps.map((s) => ({
-          id: s.id,
-          description: s.description,
-          action: s.action,
-          input: s.input,
-          dependsOn: s.dependsOn,
-        })),
-        this.registry,
-        'user',
-      );
       if (checked.problems.length > 0) {
         throw new ValidationError(`plan cannot be started: ${checked.problems.join('; ')}`, 'PLAN_INVALID');
       }
@@ -3653,8 +3728,13 @@ export class CognitiveController {
       // The crossing is recorded from the approved plan and the task it produced, before the
       // activation and the run. If that provenance cannot be stated, the task is cancelled and
       // nothing crosses: an execution without a sound handoff record is not started.
+      const preparedSpan = diagnostics.start('handoff_preparation');
       const preparedHandoff = buildPlanActivationHandoff({ requestId: op.id, plan, goal, task });
       const preparedCheck = validateHandoff(preparedHandoff, { phase: 'prepared' });
+      diagnostics.end(preparedSpan, {
+        outcome: preparedCheck.ok ? StageOutcome.RAN : StageOutcome.FAILED,
+        counts: { prepared: 1, rejected: preparedCheck.ok ? 0 : 1 },
+      });
       if (!preparedCheck.ok) {
         let cancelNote = '';
         try {
@@ -3687,15 +3767,17 @@ export class CognitiveController {
       }
     } catch (err) {
       if (err instanceof ValidationError || err instanceof StoreError) {
-        return this.#finishTaskOp(op, Outcome.INPUT_REJECTED, redactSecrets(err.message), task);
+        return this.#finishTaskOp(op, Outcome.INPUT_REJECTED, redactSecrets(err.message), task, {}, diagnostics);
       }
       throw err;
     }
 
     let result;
+    const taskSpan = diagnostics.start('task_execution');
     try {
-      result = await this.taskStore.withLock(() => this.tasks.run(task.id, { mode }));
+      result = await this.taskStore.withLock(() => this.tasks.run(task.id, { mode, timing: diagnostics }));
     } catch (err) {
+      diagnostics.end(taskSpan, { outcome: StageOutcome.FAILED, counts: { failed: 1 } });
       if (err instanceof StoreError && err.executedSteps?.length) {
         const current = err.taskId
           ? await this.taskStore.get(err.taskId).catch(() => null)
@@ -3708,6 +3790,8 @@ export class CognitiveController {
           Outcome.AUDIT_INTEGRITY_FAILED,
           `Plan ${shortId(plan.id)} was activated as task ${shortId(task.id)}. ${this.#unrecordedTaskState(err)}${outcomeNote}`,
           current,
+          {},
+          diagnostics,
         );
       }
       // Activation is already a recorded fact. A refusal to run must not imply the plan is
@@ -3719,8 +3803,15 @@ export class CognitiveController {
         Outcome.INPUT_REJECTED,
         `Plan ${shortId(plan.id)} is active as task ${shortId(task.id)}, but the run was refused before it started: ${redactSecrets(err.message)}`,
         current,
+        {},
+        diagnostics,
       );
     }
+
+    diagnostics.end(taskSpan, {
+      outcome: result.status === Outcome.SUCCESS_VERIFIED ? StageOutcome.RAN : StageOutcome.FAILED,
+      counts: { steps: result.task?.steps?.length ?? 0 },
+    });
 
     const recorded = await this.#recordPlanOutcomes(plan.id, result.task);
     const notes = [];
@@ -3784,6 +3875,7 @@ export class CognitiveController {
         planStatus,
         linkNotice: linkNotice ?? null,
       },
+      diagnostics,
     );
   }
 
@@ -4736,12 +4828,30 @@ export class CognitiveController {
     return handoff;
   }
 
-  async #finishTaskOp(op, status, display, task = null, extra = {}) {
+  async #finishTaskOp(op, status, display, task = null, extra = {}, diagnostics = null) {
+    // As in the request path, the span covers outcome assembly and lifecycle-equivalent state, and
+    // ends before the audit append. The append outcome is returned separately, never inside the
+    // record it produces.
+    const finalization = diagnostics?.start('finalization') ?? null;
     op.status = status;
     op.decision = classifyDecision(op);
     op.output = truncate(display ?? '', MAX_OUTPUT_CHARS);
     op.finishedAt = this.now().toISOString();
     if (task) op.task = { id: task.id, status: task.status };
+    diagnostics?.end(finalization, { outcome: StageOutcome.RAN });
+    if (diagnostics) {
+      op.diagnostics = buildRuntimeDiagnostics({
+        requestId: op.id,
+        operation: op,
+        cognition: op.cognition ?? null,
+        spans: diagnostics.snapshot(),
+        status,
+        modelValidation: op.cognition?.model ?? null,
+        cancellation: { requested: status === Outcome.REQUEST_CANCELLED },
+        retries: 0,
+        totalDurationMs: diagnostics.elapsedTotal(),
+      });
+    }
     // Capture is attempted here for the same reason as everywhere else - one contract - and is
     // refused by eligibility: task.* is outside the capture subset, and a task operation covers
     // several steps whose outcomes the task log already records separately.
@@ -4884,11 +4994,17 @@ export class CognitiveController {
 
   async runTask(ref, mode = 'run') {
     const op = this.#newOp({ capability: 'task.run', origin: 'user', request: `task ${mode}` });
+    const diagnostics = new SpanRecorder();
     let found = null;
     let preparedHandoff = null;
     const finishHandoff = (current, options = {}) => {
       if (!preparedHandoff || !current) return;
+      const span = diagnostics.start('handoff_preparation');
       const completed = this.#checkedHandoff(op, completeTaskHandoff(preparedHandoff, { task: current, ...options }));
+      diagnostics.end(span, {
+        outcome: completed ? StageOutcome.RAN : StageOutcome.FAILED,
+        counts: { completed: completed ? 1 : 0, rejected: completed ? 0 : 1 },
+      });
       if (completed) op.handoff = completed;
     };
     try {
@@ -4898,12 +5014,28 @@ export class CognitiveController {
       // The crossing is stated before the runner is asked to run anything. The record names how the
       // task came to be allowed to run; if it cannot be stated, the refusal below says so and no
       // step is started.
+      const preparedSpan = diagnostics.start('handoff_preparation');
       preparedHandoff = buildTaskRunHandoff({ requestId: op.id, task: found });
       const preparedCheck = validateHandoff(preparedHandoff, { phase: 'prepared' });
+      diagnostics.end(preparedSpan, {
+        outcome: preparedCheck.ok ? StageOutcome.RAN : StageOutcome.FAILED,
+        counts: { prepared: 1, rejected: preparedCheck.ok ? 0 : 1 },
+      });
       if (!preparedCheck.ok) {
         throw new ValidationError(`the task run handoff record is not sound (${preparedCheck.problems[0] ?? 'provenance contract violated'})`, 'HANDOFF_INVALID');
       }
-      const result = await this.taskStore.withLock(() => this.tasks.run(found.id, { mode }));
+      const taskSpan = diagnostics.start('task_execution');
+      let result;
+      try {
+        result = await this.taskStore.withLock(() => this.tasks.run(found.id, { mode, timing: diagnostics }));
+      } catch (err) {
+        diagnostics.end(taskSpan, { outcome: StageOutcome.FAILED, counts: { failed: 1 } });
+        throw err;
+      }
+      diagnostics.end(taskSpan, {
+        outcome: result.status === Outcome.SUCCESS_VERIFIED ? StageOutcome.RAN : StageOutcome.FAILED,
+        counts: { steps: result.task?.steps?.length ?? 0 },
+      });
       const gaps = result.auditGaps.length;
       if (gaps) {
         op.errors.push({
@@ -4931,6 +5063,7 @@ export class CognitiveController {
           underlyingStatus: result.underlyingStatus,
           recovery: result.recovery ?? null,
         },
+        diagnostics,
       );
     } catch (err) {
       // A task-log write that refused after a step ran is not an execution failure. The
@@ -4940,7 +5073,7 @@ export class CognitiveController {
         op.errors.push({ stage: 'task', code: 'TASK_LOG_WRITE_FAILED', message: err.message, steps: err.executedSteps.map((s) => s.id) });
         const current = err.taskId ? await this.taskStore.get(err.taskId).catch(() => null) : null;
         finishHandoff(current);
-        return this.#finishTaskOp(op, Outcome.AUDIT_INTEGRITY_FAILED, `${message}${this.#historyGapNotice(op, 'task result')}`, current);
+        return this.#finishTaskOp(op, Outcome.AUDIT_INTEGRITY_FAILED, `${message}${this.#historyGapNotice(op, 'task result')}`, current, {}, diagnostics);
       }
       // A recovery that established evidence before the run was refused is still a fact
       // about this task, so it is recorded once. Nothing here re-runs a step: the refusal
@@ -5253,7 +5386,7 @@ export class CognitiveController {
   // Model path. `relevant` is the already-filtered memory that may enter a prompt
   // or be shown directly. Everything retrieved but ineligible (private, secret,
   // superseded) stays out of both the prompt and the direct display.
-  async answerWithModel(request, { relevant, turns, historyUnavailable = false, signal = null }, op, onProgress = null) {
+  async answerWithModel(request, { relevant, turns, historyUnavailable = false, signal = null }, op, onProgress = null, diagnostics = null) {
     const retrievalError = op.errors.find((error) => error.stage === 'retrieval');
     if (retrievalError) {
       return {
@@ -5695,12 +5828,19 @@ export class CognitiveController {
 
     // The request id ties this model turn to the operation, and the transport class states which
     // kind of outcome came back. Neither is used as an authorization decision.
+    const modelSpan = diagnostics?.start('model_call') ?? null;
     const res = await this.gateway.complete({
       system,
       prompt: built.prompt,
       requestId: op.id,
       signal,
     });
+    diagnostics?.end(modelSpan, res.ok === true
+      ? { outcome: StageOutcome.RAN, counts: {} }
+      : {
+        outcome: StageOutcome.FAILED,
+        counts: res.class === GatewayResponseClass.CANCELLED ? { cancelled: 1 } : { errors: 1 },
+      });
 
     // Cancellation is a decision about the request, not an answer. A transport that ignores the abort
     // can still deliver text; that text is discarded here, before it is parsed, shown, stored, or used
@@ -5818,7 +5958,15 @@ export class CognitiveController {
     // validated, parsed into typed proposals, and each proposal is authorized and run by the
     // registry. The duration below measures that path, not the model's own response time.
     const boundaryStarted = performance.now();
+    // Only a path that performs model-output validation records the stage. A request with no
+    // cognitive analysis does not claim a validation ran; the stage stays not reached.
+    const validationSpan = cognition?.available ? (diagnostics?.start('model_output_validation') ?? null) : null;
     const cognitionCheck = cognition?.available ? validateModelOutput(res.text, cognition) : null;
+    if (cognition?.available) {
+      diagnostics?.end(validationSpan, cognitionCheck?.error
+        ? { outcome: StageOutcome.FAILED, counts: { rejected: 1 } }
+        : { outcome: StageOutcome.RAN, counts: { accepted: cognitionCheck?.found ? 1 : 0 } });
+    }
     if (cognitionCheck) {
       op.cognition = { ...(op.cognition ?? { available: false }), model: cognitionCheck.audit };
       if (cognitionCheck.error) {
@@ -5838,6 +5986,9 @@ export class CognitiveController {
     const modelBody = cognitionCheck?.found
       ? `${cognitionCheck.text}\n${cognitionCheck.structure?.answer ?? ''}`.trim()
       : res.text;
+    // Parsing and validating the reply's proposals is measured apart from executing them: the loop
+    // below also runs actions, which belong to the authorization/execution/verification stages.
+    const proposalSpan = diagnostics?.start('proposal_validation') ?? null;
     const parsed = parseModelOutput(modelBody);
 
     let answer = cognitionCheck?.structure?.answer || parsed.text || '(the model returned no answer text)';
@@ -5861,6 +6012,10 @@ export class CognitiveController {
       });
     }
     const overflow = Math.max(0, parsed.proposals.length - MAX_PROPOSALS);
+    diagnostics?.end(proposalSpan, {
+      outcome: StageOutcome.RAN,
+      counts: { proposals: parsed.proposals.length, malformed: parsed.malformed.length, overflow },
+    });
     if (overflow > 0) {
       op.errors.push({ stage: 'proposals', code: 'TOO_MANY', message: `only the first ${MAX_PROPOSALS} of ${parsed.proposals.length} proposals were considered` });
     }
@@ -5873,6 +6028,7 @@ export class CognitiveController {
     for (const p of parsed.proposals.slice(0, MAX_PROPOSALS)) {
       const key = proposalKey(p.action, p.input);
       if (seenProposals.has(key)) {
+        diagnostics?.mark('proposal_validation', { outcome: StageOutcome.RAN, counts: { duplicates: 1 } });
         op.steps.push({
           action: p.action,
           origin: 'model',
@@ -5905,6 +6061,10 @@ export class CognitiveController {
         executed: false,
       };
       const handoffCheck = validateArtifact(ArtifactKind.EXECUTIVE_HANDOFF, artifact);
+      diagnostics?.mark('proposal_validation', {
+        outcome: handoffCheck.ok ? StageOutcome.RAN : StageOutcome.FAILED,
+        counts: { validated: 1, rejected: handoffCheck.ok ? 0 : 1 },
+      });
       if (!handoffCheck.ok) {
         op.steps.push({
           action: p.action,
@@ -5920,6 +6080,7 @@ export class CognitiveController {
         continue;
       }
       const stepIndex = op.steps.length;
+      const preparedSpan = diagnostics?.start('handoff_preparation') ?? null;
       const preparedHandoff = buildModelProposalHandoff({
         requestId: op.id,
         proposal: p,
@@ -5927,6 +6088,10 @@ export class CognitiveController {
         evidenceRefs: (op.cognition?.trace?.evidence ?? []).map((item) => item.id),
       });
       const preparedCheck = validateHandoff(preparedHandoff, { phase: 'prepared' });
+      diagnostics?.end(preparedSpan, {
+        outcome: preparedCheck.ok ? StageOutcome.RAN : StageOutcome.FAILED,
+        counts: { prepared: 1, rejected: preparedCheck.ok ? 0 : 1 },
+      });
       if (!preparedCheck.ok) {
         op.steps.push({
           action: p.action,
@@ -5941,9 +6106,14 @@ export class CognitiveController {
         });
         continue;
       }
-      const step = await this.runAction(artifact.action, artifact.input, 'model', op.id);
+      const step = await this.runAction(artifact.action, artifact.input, 'model', op.id, diagnostics);
       step.proposalId = `${op.id}/${p.proposalId}`;
+      const completedSpan = diagnostics?.start('handoff_preparation') ?? null;
       const completed = this.#checkedHandoff(op, completeModelProposalHandoff(preparedHandoff, { step }));
+      diagnostics?.end(completedSpan, {
+        outcome: completed ? StageOutcome.RAN : StageOutcome.FAILED,
+        counts: { completed: completed ? 1 : 0, rejected: completed ? 0 : 1 },
+      });
       if (completed) step.handoff = completed;
       actionSteps.push(step);
       op.steps.push(step);

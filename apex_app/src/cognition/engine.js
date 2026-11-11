@@ -154,6 +154,9 @@ export async function analyzeRequest({
       evidence: retrieval.evidence,
       understanding,
       conflicts: retrieval.conflicts,
+      // The conflict link is measured separately but is part of `timings.claims`; the diagnostics
+      // record labels it as an overlapping sub-stage rather than a second cost.
+      timing: (name, ms) => { timings[name] = ms; },
     });
     timings.claims = millis(mark);
     lifecycle.complete(4, {

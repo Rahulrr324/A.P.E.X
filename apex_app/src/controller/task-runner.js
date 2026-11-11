@@ -94,7 +94,7 @@ export class TaskRunner {
   // to paused by the same transition a retry already uses, and every step is then written running
   // before it executes exactly as in a first run, so a second interruption lands on the same records
   // and is read the same way.
-  async run(taskId, { mode }) {
+  async run(taskId, { mode, timing = null }) {
     const continuing = mode === 'continue';
     const auditGaps = [];
     let recovery = null;
@@ -191,7 +191,10 @@ export class TaskRunner {
           steps: [{ id: next.id, from: StepStatus.PENDING, to: StepStatus.RUNNING, operationId }],
         });
 
-        const step = await this.execute(next.action, next.input, origin, operationId);
+        // The per-request recorder is forwarded so the step's authorization, execution, and
+        // verification are measured under the same request. It is an observer: the runner never
+        // reads it to decide anything.
+        const step = await this.execute(next.action, next.input, origin, operationId, timing);
         const audited = await this.#audit(task, next, step, operationId, origin);
         if (!audited) auditGaps.push(next.id);
         executedSteps.push({ id: next.id, action: next.action, outcome: step.outcome, operationId, auditRecorded: audited });

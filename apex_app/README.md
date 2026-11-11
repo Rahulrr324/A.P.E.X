@@ -1065,6 +1065,12 @@ phases, and adds the Batch AN `ranking` phase over a fourth fixture - a large pr
 plans and tasks - where one `work`/`next` report is timed stage by stage and the pre-AN per-plan goal
 replay is measured against the one-snapshot read, as Batch AN reports in
 [Benchmarks](#benchmarks).
+`benchmarks/run-cognitive-runtime-benchmark.mjs` is outside the suite for the same reason and needs no
+model: it measures one grounded request at five evidence contexts, the proposal paths (permitted,
+duplicated, denied, malformed, cancelled, retried), handoff build and live validation at 1-8 steps, the
+plan add/approve/activate path and the continuation report, and the diagnostics recorder itself. It
+uses an in-process fixture backend and writes only into temporary directories
+([Benchmarks](#benchmarks)).
 
 | Acceptance test | Where |
 |---|---|
@@ -5065,6 +5071,159 @@ to eleven common keys plus the keys for its kind, ids capped at 80 characters, e
 executed steps at 32, and problems at eight. It carries no request, input, or model text, so a
 diagnostic view can be shown without exposing a payload or private reasoning. Its tests use fixed
 stub replies and temporary data directories only; no test in this package contacts a model.
+
+## Batch AO (package G): request diagnostics and the performance they measured
+
+Every request now carries a bounded diagnostics record on its operation line, built by
+`src/cognition/runtime-diagnostics.js` from a per-request `SpanRecorder` and the lifecycle that
+already ran. It states what this process did: which named stages were reached, each stage's outcome
+and monotonic duration, the counts and validation results it produced, a flat cognitive summary, the
+executive handoff counts, cancellation, a failure category, and whether a transport retry happened.
+It never stores the request, prompt, evidence text, model reply, action payload, or private
+reasoning, and it does not capture a chain of thought.
+
+### The stage record
+
+The record fixes sixteen stage ids, so a caller cannot grow it by inventing one: request
+interpretation, evidence retrieval, claim extraction, contradiction detection, deliberation, grounded
+response, model call, model-output validation, proposal validation, handoff preparation, plan
+validation, authorization, execution, verification, task execution, and finalization preparation.
+Each entry has:
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `ran`, `failed`, `skipped`, `unavailable`, or `not_reached`. A stage the path did not enter is `not_reached`; a stage the path deliberately skipped is `skipped` |
+| `durationMs` | Monotonic elapsed milliseconds, rounded to three decimals, or `null` when no duration was measured |
+| `counts` | At most ten integer counters produced by that stage, never text |
+
+`null` is not zero. A skipped stage, a stage whose clock threw, and a stage entered but never ended
+all report `null`, while a stage that ran and produced no items reports `0`. If the same stage is
+ended twice, the worst outcome wins in the order `failed` > `unavailable` > `skipped` > `ran`.
+`contradiction detection` is labelled as overlapping `claim extraction` because it runs inside that
+stage; its duration is part of the extraction duration, not a second cost. `task execution` overlaps
+the authorization, execution, and verification of the steps it runs.
+
+### The record, and what it cannot do
+
+The record is bounded: at most twenty stages, ten count keys per stage, a 60-character token rule
+for status labels, a 100-character request id, a day-clamped total duration, and a fixed
+key set `schema, requestId, available, status, totalMs, measuredStages, stages, cognitive, executive,
+cancellation, failure, retries, clock, bounds, authorizes`. Its observed size is about 3.3 KB per
+answer (3,297-3,335 bytes over 50 replies in the benchmark below).
+
+Two failure behaviours matter. A clock that throws, or returns a value that moves backwards, does
+not lose the stage: the outcome is kept, the duration is `null`, and `clock.fault` says the clock
+failed. If building the record throws at all, the record becomes `available: false`, names
+`error: 'diagnostics_unavailable'`, and still says `authorizes: false`; the operation's own status,
+answer, and audit line are untouched. The record is built only after every stage that decides the
+outcome has finished, and it is attached to the operation line that is then appended, so it cannot
+change an outcome or a verification result.
+
+`authorizes` is always `false`. Nothing in the lifecycle, action registry, executor, verifier, plan
+store, or task store reads a diagnostics record to decide anything; it is an observation attached to
+a record that was already decided. Cancellation and a timeout are distinguishable without reading
+prose: a cancelled request reports `failure.category: 'cancellation'` with code
+`request_cancelled`, while a backend timeout reports `failure.category: 'execution'` with the
+gateway's own code and stage. A retry count is `{ available: false, count: null }` unless the
+transport actually reported attempts; it is never inferred as zero.
+
+What the record cannot establish: it does not verify an answer, it does not score a claim, it does
+not prove a stage's work was correct, and it says nothing about a model's own latency when the model
+is a local fixture. It is a description of this process's execution, not a security audit and not
+an evaluation of answer quality.
+
+### Measured: two avoidable bottlenecks
+
+Both changes were selected from benchmark evidence, and both were checked for behaviour
+equivalence before being kept. The comparison trees were identical apart from the two source files:
+the controlled baseline was HEAD plus this package's instrumentation, and the after tree was the
+working tree. Each was run with the same script, the same fixtures, nine repetitions, sequentially,
+with no test or benchmark running alongside.
+
+**Memory conflict pairing.** `MemoryStore.search` paired every same-subject record with every other
+one to record `conflictsWith` ids, but only the returned window exposes those ids. At 2,000
+same-subject records that was about two million comparisons for pairs no caller could read. The
+search now skips a pair when neither record is in the returned window; window records still receive
+every partner, in the same ranked order. The saving appears in the whole-request table below, not in
+the stage table, because this search runs in `handle` before `analyzeRequest` starts its own
+instrumented retrieval.
+
+**Plan-activation handoff hashing.** `buildPlanActivationHandoff` computed `planContentHash(plan)`
+twice - once for the record's plan identity and once inside `approvalBindsPlan`. It now hashes the
+live bytes once and binds the approval to that same value. The record is byte-identical for the same
+plan; a changed plan, a moved version, or a tampered approval hash still produces `approval: null`,
+`decision: 'deny'`, and `APPROVAL_NOT_BOUND_TO_PLAN`, and live reference validation still re-hashes
+the live plan.
+
+### Measured: one grounded question at five evidence contexts
+
+Fixture: one question, `what is the status of the lighthouse project?`, answered by a deterministic
+in-process backend, at 0, 20, 200, 800, and 2,000 seeded records. Median of 9 samples per row. The
+request total is the record's own `totalMs` (sum of measured work), and wall is the caller-observed
+time.
+
+| records | request total before | after | wall before | after |
+| --- | --- | --- | --- | --- |
+| 0 | 22.4 ms | 20.3 ms | 30.9 ms | 27.5 ms |
+| 20 | 26.4 ms | 22.3 ms | 34.3 ms | 28.9 ms |
+| 200 | 138.9 ms | 112.2 ms | 153.1 ms | 127.0 ms |
+| 800 | 769.6 ms | 320.0 ms | 781.3 ms | 331.6 ms |
+| 2,000 | 3,129.3 ms | 652.4 ms | 3,141.9 ms | 667.1 ms |
+
+The other stage medians barely moved - for example, the instrumented evidence-retrieval span at
+2,000 records read 10.7 ms before and 9.1 ms after - which is the expected shape when the removed
+work happened outside that span. The 800- and 2,000-record rows are the ones the conflict-pairing
+change addresses; the small rows are dominated by fixed request cost.
+
+### Measured: handoff build and check, isolated
+
+A dedicated microbenchmark built a real approved plan, registered a read-only action, activated the
+plan once, then ran seven timed rounds of repeated `buildPlanActivationHandoff` plus a prepared-phase
+structural check, after 200 warm-up builds. Median microseconds per build-and-check:
+
+| plan steps | before | after |
+| --- | --- | --- |
+| 1 | 38.0 us | 24.9 us |
+| 2 | 47.2 us | 29.4 us |
+| 4 | 72.6 us | 41.7 us |
+| 8 | 118.2 us | 66.4 us |
+
+A second run of the same probe at 8 steps measured 145.7 us before and 63.7 us after; that spread
+between runs of one size is why the before/after pairs above were each taken inside one run and are
+not compared across runs. In the end-to-end executive phase the handoff span is a fraction of a
+millisecond inside a 387-651 ms plan activation, so its improvement does not move that row; the row
+is reported unchanged. Reference validation against a step-operation history of 0, 100, and 1,000
+extra entries read 0.12, 0.10, and 0.31 ms in the same harness and is not claimed to improve.
+
+### Measured: diagnostics overhead
+
+One request-shaped workload of sixteen stages with eight measured, repeated 20,000 times per sample
+over five samples, cost a median 20.7 us per workload in isolation (20.0 us min, 23.1 us max; the
+same harness read 21.9 us in the control run, so the two figures are one measurement repeated, not a
+change). The record itself is about 3.3 KB. `heapUsed` moved from 22.3 to 22.9 MiB over 100 further
+requests without forcing garbage collection, which is an observation, not a leak measurement.
+
+### Interpreted correctly
+
+These are synthetic fixtures. They say what this process costs to run these paths; they do not
+measure a real model's latency, token rate, or answer quality, and no inference was run. p95 is not
+reported because nine samples cannot support it. Absolute timings on this machine varied up to about
+2x between runs of an identical fixture, so only comparisons taken inside one controlled run are
+treated as findings. The full request path, the plan-activation path, and the diagnostics record were
+also compared between the uninstrumented HEAD tree and the instrumented working tree over nine
+scenarios - grounded answer with an executed proposal, memory write, clarification, timeout,
+cancellation, denied proposal, contradiction, two-step plan run, and a failed step. After replacing
+ids, hashes, timestamps, durations, and the diagnostics record itself, the two normalized outputs
+were byte-identical, including the persisted audit lines, the task and plan records, claim counts,
+evidence states, authorization decisions, and verification outcomes.
+
+The package's three new suites hold 34 tests (`runtime-diagnostics-ao.test.js` 22,
+`memory-conflict-window-ao.test.js` 6, `handoff-hash-binding-ao.test.js` 6). The full `npm test` run
+that closed this package (the 137 files named in `package.json`, those three included) ran **2,348
+tests, 2,346 passed, 0 failed, 2 skipped** in 447.7 s on Windows 11, Node v26.4.0, in isolated
+temporary data directories. The two skips are the POSIX-only filesystem checks this environment
+cannot perform. No test in that run contacts a model or opens a socket: every gateway is the
+no-backend one or a programmatic stub with a fixed reply.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 
