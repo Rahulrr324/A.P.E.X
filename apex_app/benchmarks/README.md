@@ -42,6 +42,12 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   its partial (analysis / store read / derivation) timings and its complete request timings are printed
   separately and never added together.
 
+- `run-effectiveness-benchmark.mjs` builds every fixture on a `mkdtemp` directory prefixed
+  `apex-bench-effectiveness-` with the same refusing cleanup, constructs `NoBackend` (never contacted)
+  and touches no network. Each measured condition uses its own seeded directory, and the complete
+  request, the partial store/audit reads, and the concurrency runs are printed separately and never
+  added together.
+
 - Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
   reporting, not a cleanup task.
 
@@ -1382,6 +1388,119 @@ At 25 evaluations the derivation's read was bounded and it refused a pattern fro
   candidate, by design.
 
 This script is not part of `npm test` and no test depends on it.
+
+## Adaptation effectiveness benchmark (Batch AP-04)
+
+`run-effectiveness-benchmark.mjs` measures the bounded, read-only effectiveness read Batch AP-04
+added and the **complete verified request** it is served by. It runs entirely on synthetic fixtures
+written through the ordinary controller actions: no model, no backend, no network. It has three
+sections, and their numbers are never added together.
+
+- **Linked uses.** One approved rule and, for each use, the full real path — an executive `prepare`
+  that records the decision and the plan in one operation, a separate user approval, activation and
+  verified execution, goal evidence for each criterion, and the plan's own assessment. Sizes 4 / 12 /
+  24 use records; the 24 case exercises the 20-kept-use bound and discloses truncation.
+- **Stored adaptations.** 1 / 8 / 20 / 21 stored adaptation records against the same history. The 21
+  case exercises the 20-record window: the oldest record is outside it and its uses are honestly
+  reported as not read.
+- **Concurrent activity.** Two reads issued beside two writes, and four reads beside each other, then
+  one serial read on the same store. Nothing is averaged away: a read that refuses to confirm a
+  concurrent change is printed with its reason.
+
+The **complete** request is the authorized `adaptation.effectiveness` action: the analysis, the
+independent verification that re-runs the whole analysis and compares its digest, the audit append,
+and the controller return. The experience-store read, the plan-store read, the audit read and the
+pure analysis are printed separately and labelled *partial*; they are not the request cost. No cache
+or index is added: every sample of a repeated read pays the same cost.
+
+### Procedure
+
+```bash
+cd apex_app
+node benchmarks/run-effectiveness-benchmark.mjs
+node benchmarks/run-effectiveness-benchmark.mjs --sizes 4,12,24 --adaptations 1,8,20,21 --repeats 7
+```
+
+`--repeats` is capped at 15; two warm-up calls are made before each measured series. Every fixture is
+built in its own temporary data directory under the OS temp root, and `--keep` leaves it in place.
+The script is not part of `npm test`.
+
+### What it reports
+
+- the fixture's JSONL record and byte counts per store; the seeded use's outcome kind and the
+  adaptation's classification state;
+- **partial** medians for the adaptation-detail read, the plan-store read, the audit read, and the
+  pure analysis;
+- the **complete** request median, minimum and every sample, plus the read counts it discloses
+  (adaptations, plans, audit records, disclosure sites), whether the displayed sample list was
+  truncated, the report bytes, and the first and last sample so the growing audit log is visible;
+- the number of adaptation rows against the 20-record window, the total uses and evaluated uses, and
+  whether a named target fell outside the window;
+- concurrent wall times, the number of reads that verified or refused, and the exact refusal reason;
+- a final consistency check: a request that does not verify, a report that is not the expected
+  schema, wrong use counts, wrong truncation disclosure, a digest that is not deterministic between
+  two direct analyses of the same store, or a write that does not verify makes the run exit non-zero.
+  A read that honestly refuses because a concurrent write changed the evidence is reported, not
+  counted as a failure — the refusal is the designed behavior.
+
+### Measured
+
+One run of `--repeats 7` on Windows 11, Node v26.4.0, x64, with no test or other benchmark active.
+These are observations of one machine at one time, not targets.
+
+Complete request, one approved rule, one plan and assessment per use:
+
+| linked uses | median ms | min ms | partial: plan read / audit read / pure analysis (ms) | audit records read | report bytes |
+|---|---|---|---|---|---|
+| 4 | 52.327 | 48.804 | 1.465 / 3.088 / 27.491 | 61 | 13,395 |
+| 12 | 146.657 | 138.360 | 2.844 / 6.412 / 71.400 | 149 | 25,283 |
+| 24 | 318.400 | 301.425 | 4.941 / 11.770 / 167.604 | 281 | 25,283 |
+
+Each use adds a plan, a task, conversation and audit records, so both the plan and audit reads grow
+with the history; the complete request grew 52 → 147 → 318 ms and the pure analysis 27 → 71 → 168 ms,
+about 13 / 12 / 13 ms of complete request per use. The report size stops growing once the displayed
+samples are bounded (10 shown, 20 kept). The 24-use case discloses sample truncation and counts 20
+kept uses, not an inflated total.
+
+Complete request against stored adaptations on the same 24-use history:
+
+| stored adaptations | median ms | rows reported | uses counted | report bytes |
+|---|---|---|---|---|
+| 1 | 316.417 | 1 | 20 | 25,249 |
+| 8 | 320.387 | 8 | 20 | 40,855 |
+| 20 | 337.901 | 20 | 20 | 66,285 |
+| 21 | 65.126 | 20 | 0 | 44,543 |
+
+At 21 stored records the named target is outside the newest-20 window, so its uses are not read and
+the report says so; the drop from 338 to 65 ms is the lineage of those 20 uses not being walked, not
+a faster read of the same work.
+
+Concurrent activity, one 8-use history:
+
+| condition | wall ms | outcome |
+|---|---|---|
+| two reads + two writes in parallel | 129.499 | both writes verified; both reads `verification_failed` because a write landed between their two reads |
+| four reads in parallel | 188.615 | 4 of 4 verified |
+| one read, serial | 97.504 | verified |
+
+The read/write refusals are the designed fail-closed answer: the report's digest covers the
+audit-record count, so a concurrent append is a real change and the read refuses to confirm it. The
+four-read wall time is roughly twice one serial read in this process; no throughput is claimed.
+
+### Interpretation limits
+
+- Medians over 7 samples in one process on one machine. Absolute figures include controller work,
+  audit append, the independent re-read and machine noise; the partial lines are pieces, not the
+  request.
+- Fixtures are synthetic success histories with one approved rule; they show how the bounded read
+  scales and that the full path continues to describe an association, not that any rule improves
+  outcomes.
+- The digest covers the audit-record count, so a direct analysis of one store state cannot be
+  compared with a request made after another record was appended. The benchmark compares two direct
+  analyses of the same state for determinism, and relies on the action's own verification for the
+  across-append re-read.
+- A read beside a write can verify-fail by design: the second read sees the new record and refuses to
+  confirm the first. The concurrency section reports that instead of hiding it.
 
 ## Cognitive runtime diagnostics benchmark (Batch AO, package G)
 

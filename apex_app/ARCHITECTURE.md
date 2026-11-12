@@ -357,6 +357,85 @@ planner, no new permission or origin, no authorization rule, and no second decis
   can be described and shown, that a directional one can become a candidate, and that only the user's
   explicit approval lets it move one disclosed comparison.
 
+### How an approved adaptation is traced to its outcomes, without claiming cause (AP-04)
+
+Batch AP-04 answers a different question from AP-01 through AP-03. Those batches let a record move
+one disclosed comparison; AP-04 asks whether the *decisions that record was actually part of* were
+followed by better, worse, or unchanged recorded outcomes. It adds one pure read module
+(`plans/effectiveness.js`), one read action (`adaptation.effectiveness`), a controller method and a
+CLI command. It adds no store, no new record type, no planner, no permission or origin, no new
+decision dimension, and no execution path. Nothing in the read approves, guides, retires, retries, or
+executes anything.
+
+- **Approval is not application, application is not success, and success is not cause.** The read
+  keeps these four apart in its own vocabulary. A record with a decision and no disclosed use is
+  `approved_never_applied`; a use whose plan has not reached an outcome is `applied_outcome_pending`;
+  a verified execution whose assessment failed is `applied_failed`, not a success; and an evaluated
+  success is only ever described as an association with the plan that ran under the rule, never as
+  something the rule caused.
+- **Lineage.** Each use is reconstructed from records that already exist: the adaptation's rule,
+  version and hash → the decision disclosure recorded in the `plan.candidates` operation → the
+  candidate and plan identity that disclosure named → the plan's activation, step operations and
+  audit records → the per-step verification outcomes → the plan assessment and its outcome evidence.
+  Ids and content hashes from those records are the join keys; no id is invented and no record is
+  rewritten. A use whose decision cannot be established is excluded with its reason rather than
+  inferred from eligibility.
+- **The comparison is a disclosure, not a baseline trial.** For every use the read states which
+  candidate led before and after the rule, whether selection changed, whether execution followed,
+  what verification reported, and whether a comparable unadapted outcome exists. The unadapted
+  decision was a *disclosed* alternative that was not executed, so its outcome is reported
+  `unavailable` and is never estimated, imputed, or manufactured. No baseline plan is created or run.
+- **Classification is one closed state per adaptation.** Sixteen states, computed from the uses and
+  the plan/assessment records: `not_approved`, `approved_never_applied`, `applied_outcome_pending`,
+  `applied_successful`, `applied_partially_successful`, `applied_failed`,
+  `applied_blocked_or_uncertain`, `applied_awaiting_confirmation`, `applied_insufficient_evidence`,
+  `applied_conflicting_evidence`, `applied_mixed_outcomes`, `applied_not_changed`,
+  `applied_unattributed`, `applied_to_earlier_version`, `retired_before_evaluation`, and
+  `ineligible_support_invalid`. A `blocked` or `uncertain` outcome is never converted into a failure;
+  a cancelled plan and a missing record are `insufficient_evidence`, not success; a use tied to an
+  older rule version is `applied_to_earlier_version` rather than counted under the current one.
+  Conflicting assessments are preserved as `applied_conflicting_evidence`.
+- **The outcome vocabulary is closed.** Effective outcomes are `successful`, `failed`,
+  `partially_successful`, `blocked`, `uncertain`, `awaiting_confirmation`, `insufficient_evidence`,
+  and `conflicting_evidence`. Real-world success is never inferred from a successful execution alone:
+  a use is only `successful` when the plan's own assessment established it, which for this plan model
+  requires goal-criterion evidence.
+- **Aggregates are counts, stated with their scope.** Each adaptation row carries raw uses and
+  per-version counts, the outcomes observed under the adapted and unadapted attributions, the
+  inclusion/exclusion counts, the read window, and the rule versions seen. The report separates the
+  records from the summary and never invents a confidence percentage, success probability,
+  significance test, or causal explanation. A sample under the thresholds stays explicitly
+  `insufficient_evidence`.
+- **Bounded and fail-closed.** The read takes at most 20 adaptations (`MAX_EFFECTIVENESS_ADAPTATIONS`),
+  at most 100 uses in total (`MAX_EFFECTIVENESS_USES`), keeps at most 10 use samples per row for
+  display while reporting the true counts, and scans at most 20,000 audit records (`MAX_AUDIT_SCAN`),
+  saying which bound it hit. A damaged or unreadable store is a refusal, not an empty history: the
+  same `StoreError` the other reads raise. The read re-runs itself to verify its digest, so a change
+  between the two reads (an approval, a guidance change, a retirement, a new plan or assessment, a
+  differently linked use) is reported as a failed verification instead of a stale report.
+- **User-controlled review, not optimization.** The report may recommend *review* and may name
+  `consider_retirement`; it cannot retire. Retirement remains `adaptation.retire`, rule changes remain
+  `adaptation.guide`, and the read cannot approve, execute, retry, or change a plan, a goal, or a
+  task. `authorizes` is `false` on every report, and the rendered display says the read approves
+  nothing, changes no rule, retires no adaptation, and executes no task.
+- **Tests and cost.** `tests/adaptation-effectiveness.test.js` (registered in `npm test`) covers the
+  lifecycle states, lineage and version attribution, conflicting and insufficient evidence, damaged
+  stores, bounded and concurrent reads, counterfactual limits, that approval is never treated as
+  application or success, that a record cannot retire itself, and a deterministic end-to-end run
+  (approve → influenced decision → separate plan approval → execution → verification → outcome →
+  assessment → review → optional retirement → baseline decision restored).
+  `benchmarks/run-effectiveness-benchmark.mjs` measures the **complete** verified request as the
+  number of linked uses and stored adaptations grows, plus concurrent reads beside writes, with the
+  partial store and audit reads printed separately and labelled partial. On this machine the complete
+  request took a median 52.3 / 146.7 / 318.4 ms at 4 / 12 / 24 linked uses and 316.4 / 320.4 / 337.9 ms
+  at 1 / 8 / 20 stored adaptations; the pure analysis was 27.5 / 71.4 / 167.6 ms. A target outside the
+  newest-20 window was disclosed and not read. Observations of one machine at one time, not a
+  specification.
+- **What it does not claim.** No proven causality, no guaranteed improvement, no autonomous rule
+  optimization, and no automatic retirement. An association between an approved rule and a later
+  assessed outcome can have many other causes, including the user's own choices, and the report says
+  so.
+
 ## 5. C. Evidence and memory architecture
 
 ### Stores
@@ -468,6 +547,7 @@ nothing and does not call a model. It has no executive-handoff scenario; handoff
 | Decision path, AP-01 vs prediction-informed (AP-02) | AP-01 0.201 / 0.262 / 0.687 ms at 4 / 10 / 20 candidates | AP-02 0.166 / 0.261 / 0.678 ms | Combined ledger + comparison, warmed in-run medians over 15 samples on identical fixtures; differences −0.035 / −0.001 / −0.009 ms, within run-to-run spread. Candidate bytes, gates and binding identical. The AP-02 currentness store read is not in this figure (see `benchmarks/README.md`) |
 | Longitudinal analysis (AP-03, pure) | — | 0.21 / 0.40 / 2.74 / 2.73 ms at 20 / 100 / 500 / 1,000 evaluations | One capability, one group per 25 records capped at 20 groups; the 1,000-record read is bounded at 1,000 and discloses group truncation. In-run medians over 7 samples |
 | Complete request, no-rule vs longitudinal (AP-03) | — | no rule 27.7 / 68.0 / 72.5 ms at 8 / 14 / 19 evaluations | AP-03 rule +1.2 / +5.8 / +7.1 ms (AP-02 +0.5 / +19.1 / +2.3 ms) over the identical store; includes the batched currentness read and machine noise. Partial (analysis/store/derivation) timings are printed separately and are not the request cost |
+| Effectiveness read, complete request (AP-04) | — | 52.3 / 146.7 / 318.4 ms at 4 / 12 / 24 linked uses; 316.4 / 320.4 / 337.9 ms at 1 / 8 / 20 stored adaptations | Complete verified request (analysis + independent re-read + audit append) on synthetic histories where each use adds a plan and about ten audit records; about 13 / 12 / 13 ms per use. Pure analysis 27.5 / 71.4 / 167.6 ms and plan/audit reads are printed separately and are not the request cost. At 21 stored adaptations the oldest target falls outside the 20-record window, so its uses are not read (65.1 ms, disclosed) |
 
 Known scaling behavior: memory and knowledge searches are linear in the number of records; JSONL
 cold reads parse the whole store; the AM index removes the repeated learning read, not the initial
@@ -538,6 +618,7 @@ The only authority owner is the action registry. Everything else observes, propo
 | Evidence-driven decision adaptation (AP-01) | `IMPLEMENTED_AND_TESTED` | `plans/evaluation.js` (`adaptationDecisionOf`), `plans/guidance.js`, `executive/selection.js` | `adaptation-decision.test.js` (23 cases), `plan-guidance.test.js`, `plan-scenarios-am.test.js` |
 | Prediction-derived adaptation (AP-02) | `IMPLEMENTED_AND_TESTED` | `experience/prediction-derivation.js`, prediction branch in `experience/experience-store.js`, `adaptation.eligibility` in `actions/experience-actions.js`, `plans/evaluation.js` disclosure | `prediction-adaptation-learning.test.js` (21 cases), `adaptation-decision.test.js`, `prediction-adaptation-boundary.test.js` |
 | Longitudinal outcome analysis (AP-03) | `IMPLEMENTED_AND_TESTED` | `prediction/longitudinal.js`, `adaptation.derive` longitudinal branch in `experience/experience-store.js`, `longitudinal`/`derivation` classification in `actions/experience-actions.js`, `predictions.details` batch read in `prediction/prediction-store.js`, `sources.longitudinalDerived` in `plans/guidance.js`/`evaluation.js` | `longitudinal-outcome-analysis.test.js` (29 cases), `prediction-adaptation-learning.test.js`, `adaptation-decision.test.js` |
+| Adaptation effectiveness and outcome tracing (AP-04) | `IMPLEMENTED_AND_TESTED` | `plans/effectiveness.js` (pure read), `adaptation.effectiveness` in `actions/experience-actions.js`, controller/CLI read surface; uses only the existing experience, plan, audit and goal stores | `adaptation-effectiveness.test.js` (20 cases) |
 | Adversarial acceptance | `IMPLEMENTED_AND_TESTED` | Cross-cutting; no new runtime component | `acceptance-ao09.test.js` (7), `adversarial-batch-am.test.js` (16), `plan-adversarial.test.js` (15), `executive-adversarial.test.js` (11), plus the suites cited in `README.md` Batch AO package H |
 | Cross-process interruption | `IMPLEMENTED_PARTIALLY_TESTED` | Real child fixtures at most boundaries | `plan-continuation.test.js`, `continuation-cross-process-an.test.js`, `finalization-interruption.test.js`, `process-recovery.test.js`, `cross-process-ao09.test.js`; two boundaries lack a killed child |
 | Concurrent store integrity | `IMPLEMENTED_AND_TESTED` | `memory/writer-lock.js`, store locks, JSONL append | `storage-concurrency.test.js`, `store-write-concurrency.test.js`, `cross-process-stress.test.js`, `lock-contention.test.js`, `lock-recovery.test.js` |
@@ -587,6 +668,11 @@ invalidate the recommended milestone, not that it blocks all work.
 | 28 | A longitudinal pattern could be read as a causal or predictive claim | The vocabulary is closed and directional; the report and every proposal carry the "no causal claim, no confidence" note, and no probability or fitted weight exists | `longitudinal-outcome-analysis.test.js` (pattern disclosures), `prediction-adaptation-boundary.test.js` | Documentation states the non-claims; a reader can still over-read a repeated association | Medium (interpretive) | No |
 | 29 | A pattern could be derived from a partial read of a large scope | The derivation read is bounded at 20 predictions; an over-bound read is disclosed and refuses a pattern rather than inferring from a prefix | `longitudinal-outcome-analysis.test.js` (bound and over-bound cases), `benchmarks/run-longitudinal-benchmark.mjs` (25-evaluation case) | A scope with more than 20 predictions yields no longitudinal candidate at all; that is a refusal to answer, not a wrong answer | Low | No |
 | 30 | Aggregated evidence could approve or activate itself | `adaptation.derive` only appends an unapproved candidate; `adaptation.decide` is the only approval, user-origin only, and aggregation cannot retire, authorize, or start anything | `longitudinal-outcome-analysis.test.js` (aggregation approves nothing; only an approved adaptation moves the dimension), `adaptation-decision.test.js` | None observed; approval and derivation are separate records | None | No |
+| 31 | A later positive outcome could be read as proof the approved rule caused it | The report states a recorded association only; the unadapted decision was disclosed but never executed, so its outcome is `unavailable` and never estimated; `authorizes:false` and the note say no causal claim is made | `adaptation-effectiveness.test.js` (counterfactual and summary cases), `benchmarks/run-effectiveness-benchmark.mjs` | A reader can still over-read an association; documentation states the limit | Medium (interpretive) | No |
+| 32 | Approval or successful execution could be reported as an effective outcome | Classification keeps `approved_never_applied`, `applied_outcome_pending`, and `applied_successful` distinct, and only a plan assessment that established the outcome counts as success; execution verification alone does not | `adaptation-effectiveness.test.js` (lifecycle states, blocked/uncertain not failures) | None observed; the states are computed from separate records | None | No |
+| 33 | A missing or conflicting record could be silently converted into success, failure, or a manufactured baseline | Missing evidence is `insufficient_evidence`; conflicting assessments are `applied_conflicting_evidence`; a cancelled plan is not a failure; no baseline outcome is synthesized | `adaptation-effectiveness.test.js` (conflicting assessments, cancelled, damaged stores) | The vocabulary bounds what can be said; nothing infers real-world truth | None | No |
+| 34 | The read could approve, guide, retire, or execute during a review | Read action only; `authorizes:false`; retirement remains `adaptation.retire` and rule changes remain `adaptation.guide`; the independent verification refuses if any of those changed between its two reads | `adaptation-effectiveness.test.js` (retirement only through the existing operation; audit-append failure), `benchmarks/run-effectiveness-benchmark.mjs` (concurrent read/write refusal) | None observed; the read has no write path | None | No |
+| 35 | A large store could make the read partial, slow, or lie about its scope | Bounds: 20 adaptations, 100 uses, 10 displayed samples per row (true counts still reported), 20,000 audit records scanned; over-bound reads disclose `truncatedUses`, and a damaged store raises `StoreError` | `adaptation-effectiveness.test.js` (bounded reads, damaged stores), `benchmarks/run-effectiveness-benchmark.mjs` (21-adaptation window case) | A target outside the newest 20 adaptations is not read at all; that is a disclosed refusal, not an inaccurate row | Low | No |
 
 No gap in this register was implemented in AO-10: none exposed a new concrete defect in behavior,
 and none invalidated a documented security guarantee. AP-01 closed the roadmap's "one recorded
@@ -597,7 +683,10 @@ prediction-derived signal: it closed the "an evaluated prediction may inform one
 clause under explicit user approval, and left the accuracy, causal and autonomy claims open.
 AP-03 added rows 28–30 for the longitudinal signal: bounded repeated-outcome analysis may describe
 one scope and become a candidate under the same explicit approval, and it still claims no causation,
-no confidence, and no autonomous activation.
+no confidence, and no autonomous activation. AP-04 added rows 31–35 for the effectiveness read: it
+traces an approved record through the decisions it was part of to the outcomes those plans recorded,
+keeps approval, application, execution, assessment and cause apart, discloses insufficient and
+conflicting evidence, and grants no approval, rule change, retirement, or execution authority.
 
 ## 10. Running the verification
 
@@ -609,10 +698,12 @@ node --test tests/acceptance-ao09.test.js tests/cross-process-ao09.test.js
 node --test tests/adaptation-decision.test.js
 node --test tests/prediction-adaptation-learning.test.js tests/prediction-adaptation-boundary.test.js
 node --test tests/longitudinal-outcome-analysis.test.js
+node --test tests/adaptation-effectiveness.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs
 node benchmarks/run-longitudinal-benchmark.mjs
+node benchmarks/run-effectiveness-benchmark.mjs
 ```
 
 Tests use `NoBackend` or fixed programmatic replies and isolated temporary data directories. No

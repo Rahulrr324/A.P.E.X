@@ -64,6 +64,7 @@ Usage:
   node bin/apex.js feedback record <experience-or-operation-id> --assessment <kind> [--guidance <text>] [--reason <text>] [--supersedes <id[,id...]>]
   node bin/apex.js adaptation derive [--min-support N]     turn repeated feedback and evaluated predictions into candidates (never active)
   node bin/apex.js adaptation eligibility [--capability <name>] [--limit N]   which evaluated predictions could become a candidate, and why others cannot
+  node bin/apex.js adaptation effectiveness [--adaptation <id>] [--limit N]   what happened after an approved rule changed a decision (read-only; claims no cause)
   node bin/apex.js adaptation list [--limit N] [--exclude-retired]
   node bin/apex.js adaptation approve <id> [--reason <text>]     your decision; the only way a rule takes effect
   node bin/apex.js adaptation reject <id> [--reason <text>]
@@ -177,6 +178,7 @@ Experience and adaptation examples (what APEX did, what you thought, what to cha
                  | user_correction | outcome_succeeded | outcome_failed
   adaptation derive           repeated feedback or an evaluated prediction becomes a candidate; a candidate does nothing yet
   adaptation eligibility      which evaluated predictions could become a candidate, and why the rest cannot
+  adaptation effectiveness    trace an approved rule through the decisions it changed and the outcomes recorded after them
   adaptation list             shows each state: candidate, approved, in effect, rejected, retired, ambiguous
   adaptation approve <id>     your decision; only an approved rule is offered to future answers
   adaptation guide <id>       say what shape the approved rule asks future work to take
@@ -1129,6 +1131,14 @@ export async function main(argv, {
           limit: flags.limit,
         }));
       }
+      if (sub === 'effectiveness') {
+        const { flags, rest: extra } = parseFlags(rest, ['adaptation', 'limit']);
+        rejectUnexpected(extra, 'adaptation effectiveness [--adaptation <id>] [--limit N]');
+        return emit(await app.controller.adaptationEffectiveness({
+          target: flags.adaptation ?? null,
+          limit: flags.limit,
+        }));
+      }
       if (sub === 'approve' || sub === 'reject') {
         const { flags, rest: ids } = parseFlags(rest, ['reason']);
         if (ids.length !== 1) {
@@ -1167,7 +1177,7 @@ export async function main(argv, {
         }
         return emit(await app.controller.adaptationRetire({ target: ids[0], reason: flags.reason ?? null }));
       }
-      err('usage: adaptation derive|eligibility|list|approve|reject|guide|retire');
+      err('usage: adaptation derive|eligibility|effectiveness|list|approve|reject|guide|retire');
       return 2;
     }
 

@@ -1501,6 +1501,20 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // Read-only trace from an approved adaptation through the decision it changed, the plan recorded
+  // from that decision, its execution and verification, and the outcome evidence recorded after it.
+  // It runs through the same registry and independent verifier as every other command, but the
+  // verify step re-reads the evidence and compares the report digest, so a concurrent decision,
+  // approval, or retirement is disclosed rather than silently reported as the earlier state.
+  async adaptationEffectiveness({ target = null, limit } = {}) {
+    const op = this.#experienceOp('adaptation.effectiveness');
+    const input = {};
+    if (target !== undefined && target !== null) input.target = target;
+    if (limit !== undefined && limit !== null) input.limit = limit;
+    const step = await this.runAction('adaptation.effectiveness', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   // Read-only inspection of the whole experience log, plus the check that gives the store its
   // meaning: every recorded experience re-verified against the audit record it names. Nothing is
   // repaired, nothing is approved, and an unreadable store is reported as unreadable, never as an

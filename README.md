@@ -36,7 +36,11 @@ preserved for provenance.
   whether the evidence behind the ordering was feedback-derived, prediction-derived, both, or rejected.
   `apex prediction longitudinal` describes repeated, alternating or directional recorded outcomes for one
   capability with a closed vocabulary and no causal claim; a directional pattern may become a candidate,
-  but only the user's approval lets it reach the same disclosed comparison.
+  but only the user's approval lets it reach the same disclosed comparison. `apex adaptation effectiveness`
+  traces each approved rule through the comparisons it actually changed to the plans that ran, what their
+  execution and verification recorded, and the assessments that followed, then classifies what the records
+  show - separating approval from application, application from success, and success from cause. It never
+  estimates an unexecuted baseline, claims a cause, changes a rule, retires an adaptation, or runs anything.
   Execution success is never reported as real-world success, and none of this grants permission.
   It answers
   deterministic requests with no model and sends
@@ -172,7 +176,13 @@ recorded outcomes rather than single ones: a closed eight-kind pattern analysis 
 bounded history, kept separate from calibration and from approval, from which a directional pattern may
 become an unapproved candidate citing its observations
 ([details](apex_app/README.md#batch-ap-03-repeated-recorded-outcomes-described-and-never-assumed-as-implemented);
-tests: `tests/longitudinal-outcome-analysis.test.js`, 29 cases). It needs no model and no new store.
+tests: `tests/longitudinal-outcome-analysis.test.js`, 29 cases). Batch AP-04 then made the lifecycle
+auditable end to end: a read-only trace from an approved rule through the decision it influenced, the
+plan recorded from that decision, its execution and verification, and the outcome evidence recorded
+afterwards, classified into a closed vocabulary that keeps approval, application, execution, assessment
+and cause apart and never manufactures an unexecuted baseline
+([details](apex_app/README.md#batch-ap-04-adaptation-effectiveness-and-outcome-verification-as-implemented);
+tests: `tests/adaptation-effectiveness.test.js`, 20 cases). It needs no model and no new store.
 What remains is the wider clause: an expectation verdict changing subsequent behaviour without a
 user-approved candidate, or changing more than the one disclosed ordering, and any claim of prediction
 accuracy or causation. The runtime keeps that wider clause open; this is a recommendation only, and no

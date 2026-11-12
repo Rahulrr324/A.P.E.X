@@ -277,6 +277,7 @@ suites re-hash the directory afterwards to prove it.
 | `experience timeline\|trends\|patterns` `[--since <date>] [--until <date>] [--days N] [--capability <name>] [--limit N]` | Read-only temporal views of recorded experiences: ordered events in a window, per-capability outcome trends, and detected outcome patterns. Derived at read time from the experience log; reads no audit file, calls no model, and changes no store - the command's own operation record is the only audit entry, as for every command. A malformed date is rejected before the read (`input_rejected`, exit 1); a window whose start is after its end is refused by the engine (exit 1). See [Batch AC](#batch-ac-temporal-experience-and-outcome-tracking-as-implemented). |
 | `experience compare [--a-since <date>] [--a-until <date>] [--b-since <date>] [--b-until <date>] [--days N] [--capability <name>]` | Read-only comparison of two time windows: counts, outcome classes, success rate over completed attempts, feedback, and per-capability changes. With no window A given, A is the same-length period immediately before B. A difference means the records differ, not that anything caused anything. |
 | `adaptation eligibility [--capability <name>] [--limit N]` | Read-only: which recorded predictions carry a completed, current evaluation that could become a candidate adaptation, and the closed state that makes each other prediction inert. Derives nothing, approves nothing, applies nothing; the only audit entry is the command's own operation record. See [Batch AP-02](#batch-ap-02-one-evaluated-prediction-one-approved-candidate-one-disclosed-influence-as-implemented). |
+| `adaptation effectiveness [--adaptation <id>] [--limit N]` | Read-only: traces each approved rule through the comparisons it changed, the plan recorded from that decision, its execution and verification, and the outcome evidence recorded afterwards, then classifies what the records show and states which comparisons are unavailable. It never estimates an unadapted baseline, claims a cause, approves or changes a rule, retires an adaptation, or executes a task. See [Batch AP-04](#batch-ap-04-adaptation-effectiveness-and-outcome-verification-as-implemented). |
 | `prediction record --capability <name> --expect success\|failure\|blocked --subject <text> (--expires <date> \| --in-days N) [--supports <id,...>] [--contradicts <id,...>] [--feedback <id,...>] [--pattern <kind,...>] [--replaces <id,...>]` | Records one expectation **you** hold about a later outcome of a named capability, with an explicit horizon and the recorded events it is based on. User origin only: a model proposal naming this command is denied. Cited ids must resolve in the experience log and must predate the moment of recording; nothing is written when they do not. The record stores no confidence and can store no state or verdict. See [Batch AE](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented). |
 | `prediction list [--limit N] [--capability <name>] [--status <name>]`, `prediction show <id>`, `prediction history <id>`, `prediction summary [--capability <name>]` | Read-only views of the ledger: standing expectations and their derived state, one expectation with its evidence lineage, every record that names one expectation (oldest first), and the aggregate counts with each rate's denominator named and its exclusions counted. Derived at read time; calls no model; the only audit entry is the command's own operation record. |
 | `prediction evaluate <id>` | Compares one expectation with the outcomes recorded inside its horizon and stores the verdict **only** when those records establish one. Otherwise it reports `insufficient_evidence`, `outcome_unavailable`, `expired`, `invalidated`, `superseded`, `already_evaluated`, or `evidence_unavailable` and writes nothing. A verdict already stored is never rewritten. User origin only. |
@@ -1147,6 +1148,7 @@ node --test tests/security-end-to-end.test.js
 node --test tests/audit-secret-redaction.test.js tests/data-dir-isolation.test.js
 node --test tests/model-self-authorization.test.js tests/prediction-adaptation-boundary.test.js
 node --test tests/longitudinal-outcome-analysis.test.js
+node --test tests/adaptation-effectiveness.test.js
 node --test tests/cognition-understanding.test.js tests/cognition-reasoning.test.js \
   tests/cognition-scenarios.test.js
 node --test tests/corruption-recovery-boundaries.test.js tests/lock-ownership-and-recovery.test.js \
@@ -3597,6 +3599,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `adaptation.guide` | user | write | never in a plan | `experiences.jsonl` (one guidance line) | no (self-bookkeeping) | yes |
 | `adaptation.list` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `adaptation.eligibility` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
+| `adaptation.effectiveness` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `experience.list`, `experience.show`, `experience.timeline`, `experience.trends`, `experience.patterns`, `experience.compare` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `prediction.record` | user | write | never in a plan | `predictions.jsonl` | no (expectation) | yes |
 | `prediction.evaluate` | user | write | never in a plan | `predictions.jsonl`, or nothing when no outcome has resolved yet (measured: verified, nothing written) | no (expectation) | yes |
@@ -5822,6 +5825,106 @@ accuracy, and does not approve, activate, or execute anything. It claims only th
 deduplicated sequence of recorded outcomes can be described and shown, that a directional one can become a
 candidate, and that only the user's explicit approval lets it reorder one disclosed comparison. Stages 5 and
 6 of the roadmap below remain open on their wider clauses.
+
+## Batch AP-04: adaptation effectiveness and outcome verification (as implemented)
+
+This package asks whether the decisions an approved record was actually part of were followed by
+better, worse, or unchanged **recorded** outcomes — and refuses to answer more than the records
+support. It adds one pure read module (`src/plans/effectiveness.js`), one read action
+(`adaptation.effectiveness`), a controller method, and a CLI command. It adds no store, no new record
+type, no planner, no permission or origin, no decision dimension, and no execution path. Approval,
+application, execution, assessment and cause remain five different facts.
+
+### What the read traces
+
+For each approved adaptation the read follows records that already exist: the rule, version and hash
+→ the decision disclosure recorded in the `plan.candidates` operation → the candidate and plan
+identity that disclosure named → the plan's activation, step operations and audit records → the
+per-step verification outcomes → the plan assessment and its outcome evidence. Ids and content hashes
+are the join keys; nothing is invented and nothing is rewritten. A use whose decision cannot be
+established is excluded with its reason, never inferred from eligibility.
+
+The read is one closed classification per adaptation:
+
+| State | What the records show |
+|---|---|
+| `not_approved` | a candidate exists and no decision was recorded |
+| `approved_never_applied` | approved, but no comparison recorded it as applied |
+| `applied_outcome_pending` | applied and executed, no assessment yet |
+| `applied_successful` | an assessment established success |
+| `applied_partially_successful` | an assessment established a partial outcome |
+| `applied_failed` | an assessment recorded a failure |
+| `applied_blocked_or_uncertain` | the outcome was blocked or uncertain, never converted to failure |
+| `applied_awaiting_confirmation` | the plan's assessment awaits user confirmation |
+| `applied_insufficient_evidence` | no assessment, a cancelled plan, or a missing record |
+| `applied_conflicting_evidence` | assessments that disagree are preserved, not averaged |
+| `applied_mixed_outcomes` | uses under the current version divide between success and failure |
+| `applied_not_changed` | the rule applied but did not change the comparison |
+| `applied_unattributed` | the use cannot be attributed to the rule with the available records |
+| `applied_to_earlier_version` | every use is tied to a superseded rule version |
+| `retired_before_evaluation` | the record was retired before an outcome could be read |
+| `ineligible_support_invalid` | the record's support no longer stands |
+
+### The comparison is a disclosure, not a baseline trial
+
+For each use the report states which candidate led before and after the rule, whether selection
+changed, whether execution followed, what verification reported, and whether a comparable unadapted
+outcome exists. The unadapted decision was disclosed but **not executed**, so its outcome is reported
+`unavailable` and is never estimated. No baseline plan is created or run, and no probability,
+confidence, significance test, or causal explanation is produced. A small sample stays explicitly
+`insufficient_evidence`.
+
+```bash
+apex adaptation effectiveness                       # every adaptation, newest 20 within the bound
+apex adaptation effectiveness --adaptation <id>    # one record, its uses and counterfactuals
+```
+
+### Review, not optimization
+
+The report may recommend review and may name `consider_retirement`, but it cannot retire. Retirement
+remains `adaptation.retire`, rule changes remain `adaptation.guide`, and the read cannot approve,
+execute, retry, or change a plan, goal, or task. Every report carries `authorizes: false`; the
+display says the read approves nothing, changes no rule, retires no adaptation, and executes no task.
+The independent verification re-runs the whole analysis and compares its digest, so a change between
+the two reads (an approval, a guidance change, a retirement, a new plan or assessment, a differently
+linked use) is reported as a failed verification instead of a stale report.
+
+### Bounds and failure behavior
+
+At most 20 adaptations (`MAX_EFFECTIVENESS_ADAPTATIONS`), at most 100 uses in total
+(`MAX_EFFECTIVENESS_USES`), 20 kept uses per adaptation with 10 displayed samples and the true counts
+still reported, and at most 20,000 audit records scanned (`MAX_AUDIT_SCAN`); the report names the
+bound it hit. A damaged or unreadable store raises the same `StoreError` as the other reads — a
+refusal, not an empty history.
+
+### Tests and measured cost
+
+`tests/adaptation-effectiveness.test.js` (20 cases, registered in `npm test`) covers the lifecycle
+states and the distinctions above, lineage and version attribution, conflicting and insufficient
+evidence, damaged stores, bounded reads, counterfactual limits, that approval is never treated as
+application or success, that a record cannot retire itself, that retirement happens only through the
+existing operation, and a deterministic end-to-end run (approve → influenced decision → separate plan
+approval → execution → verification → outcome → assessment → review → optional retirement → baseline
+decision restored).
+
+`benchmarks/run-effectiveness-benchmark.mjs` measures the **complete verified request** as the number
+of linked uses (4 / 12 / 24) and stored adaptations (1 / 8 / 20 / 21) grows, plus concurrent reads
+beside writes, with the store and audit reads printed separately and labelled partial. On this machine
+the complete request took a median 52.3 / 146.7 / 318.4 ms at 4 / 12 / 24 linked uses - about 13 / 12
+/ 13 ms per use, with the pure analysis at 27.5 / 71.4 / 167.6 ms - and 316.4 / 320.4 / 337.9 ms at 1
+/ 8 / 20 stored adaptations. At 21 stored records the oldest target falls outside the newest-20 window
+and its uses are not read, which the report says. A read issued beside a write verified the write and
+refused itself (`verification_failed`), because the concurrent append changed the evidence between its
+two reads; that refusal is reported, not hidden. See
+[`benchmarks/README.md`](benchmarks/README.md#adaptation-effectiveness-benchmark-batch-ap-04) for the
+tables and their limits; the figures are observations of one machine at one time, not a specification.
+
+### What this does not claim
+
+No proven causality, no guaranteed improvement, no autonomous rule optimization, and no automatic
+retirement. An association between an approved rule and a later assessed outcome can have many other
+causes, including the user's own choices, and the report says so. Stages 5 and 6 of the roadmap below
+remain open on their wider clauses.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 

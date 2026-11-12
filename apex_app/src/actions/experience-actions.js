@@ -45,6 +45,11 @@ import {
   renderTrends,
   temporalAuditShape,
 } from '../experience/temporal.js';
+import {
+  MAX_EFFECTIVENESS_ADAPTATIONS,
+  analyzeAdaptationEffectiveness,
+  renderEffectiveness,
+} from '../plans/effectiveness.js';
 
 function textField(value, name, max) {
   if (typeof value !== 'string') throw new ValidationError(`${name} must be text`);
@@ -972,6 +977,80 @@ export function experienceActions(store) {
           return { ok: false, detail: 'the prediction ledger changed between two reads of the same eligibility question' };
         }
         return { ok: true, detail: `${fresh.considered.length} prediction record(s) confirmed against an independent read; nothing was derived` };
+      },
+    },
+    {
+      name: 'adaptation.effectiveness',
+      description: 'Trace each approved adaptation through the decisions it influenced, the plan recorded from that decision, its execution and verification, and the outcome evidence recorded afterwards. Read-only; it never approves, changes, retires, or executes anything, and it claims no cause.',
+      inputHint: '{"target":"optional adaptation id","limit":"optional 1-20"}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      // A question about what the user\'s own approved records were followed by. No plan becomes
+      // better by naming this read, and the transition from evidence to a changed rule is still the
+      // user\'s act through `adaptation.guide` or `adaptation.retire`.
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input ?? {}, ['target', 'adaptation', 'limit']);
+        const raw = o.target ?? o.adaptation;
+        const target = raw === undefined || raw === null
+          ? null
+          : textField(raw, 'target', 64);
+        return {
+          target,
+          limit: limitValue(o.limit, { max: MAX_EFFECTIVENESS_ADAPTATIONS, fallback: MAX_EFFECTIVENESS_ADAPTATIONS }),
+        };
+      },
+      async execute(ctx, { target, limit }) {
+        const report = await analyzeAdaptationEffectiveness({
+          experience: store,
+          plans: ctx?.plans ?? null,
+          operations: ctx?.operations ?? null,
+          goals: ctx?.goals ?? null,
+          knowledge: ctx?.knowledge ?? null,
+          memory: ctx?.memory ?? null,
+          now: ctx?.now ?? (() => new Date()),
+          target,
+          limit,
+        });
+        return {
+          summary: report.available
+            ? `adaptation effectiveness: ${report.totals.adaptations} record(s), ${report.totals.uses} use(s), ${report.totals.evaluated} evaluated`
+            : `adaptation effectiveness unavailable: ${report.reason}`,
+          data: { target, limit, report },
+          display: [
+            renderEffectiveness(report),
+            report.available
+              ? `Read ${report.reads.adaptationsRead} adaptation record(s), ${report.reads.plansRead} plan record(s), and ${report.reads.auditRecords} audit record(s) (${report.reads.auditRecordsScanned} scanned${report.reads.auditTruncated ? ', truncated' : ''}); ${report.reads.disclosures} decision disclosure(s) found, ${report.reads.unlinkedWrites} plan record(s) outside a disclosure.`
+              : null,
+            'An unavailable baseline is never estimated: an unadapted candidate that was not executed has no recorded outcome.',
+            'This read approves nothing, changes no rule, retires no adaptation, and executes no task. Retirement remains `adaptation.retire`.',
+          ].filter(Boolean).join('\n'),
+        };
+      },
+      async verify(ctx, { target, limit }, result) {
+        const fresh = await analyzeAdaptationEffectiveness({
+          experience: store,
+          plans: ctx?.plans ?? null,
+          operations: ctx?.operations ?? null,
+          goals: ctx?.goals ?? null,
+          knowledge: ctx?.knowledge ?? null,
+          memory: ctx?.memory ?? null,
+          now: ctx?.now ?? (() => new Date()),
+          target,
+          limit,
+        });
+        if (fresh.available !== result.data.report.available) {
+          return { ok: false, detail: 'the stores became readable, or unreadable, between two reads' };
+        }
+        if (!fresh.available) {
+          return fresh.reason === result.data.report.reason
+            ? { ok: false, detail: `the same stores remain unavailable: ${fresh.reason}` }
+            : { ok: false, detail: 'the reason the stores are unavailable changed between two reads' };
+        }
+        if (fresh.digest !== result.data.report.digest) {
+          return { ok: false, detail: 'the recorded evidence changed between two reads: an adaptation was decided, guided, or retired, a plan or assessment was recorded, or a use was linked differently' };
+        }
+        return { ok: true, detail: `${fresh.totals.adaptations} adaptation record(s) and ${fresh.totals.uses} linked use(s) re-read to the same evidence; nothing was approved, changed, retired, or executed` };
       },
     },
     {
