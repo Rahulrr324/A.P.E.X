@@ -31,7 +31,7 @@ import {
 } from '../plans/model.js';
 import { renderPlan } from '../plans/format.js';
 import { candidatesForGoal, revisedCandidates, renderCandidates } from '../plans/candidates.js';
-import { evaluateCandidates, renderEvaluation } from '../plans/evaluation.js';
+import { evaluateCandidates, renderAdaptationDecision, renderEvaluation } from '../plans/evaluation.js';
 import {
   constraintDigest, constraintLedger, planConstraintFinding, readConstraintRecords, renderConstraints,
 } from '../plans/constraints.js';
@@ -331,11 +331,17 @@ function guidanceAudit(guidance) {
       id: r.id,
       capability: r.capability,
       rule: r.rule,
+      ruleHash: r.ruleHash ?? null,
+      // Which recorded statement of the rule was in force: the store keeps every shape the user recorded
+      // and the last one wins, so an influenced decision that names a version can be traced to the
+      // statement, not only to the adaptation.
+      version: r.version ?? null,
       state: r.state,
       why: r.why,
       decisionState: r.decisionState,
       active: r.active,
       supportCount: r.supportCount,
+      support: r.support ?? { experienceIds: [], feedbackIds: [] },
       decidedAt: r.decidedAt,
       conflicts: r.conflicts,
       guidance: r.guidance,
@@ -793,6 +799,10 @@ export function planActions(store) {
             constraints: constraintAudit(constraints),
             guidance: guidanceAudit(guidance),
             comparison: comparisonOf(evaluation),
+            // The one decision the approved records were allowed to move: the order the same rule produced
+            // without them, the order it produced with them, the record ids and versions behind it, and the
+            // explicit statement that it authorized nothing. Null means no comparison was made at all.
+            adaptationDecision: evaluation.adaptationDecision ?? null,
             learning,
             recorded: false,
             approved: false,
@@ -803,6 +813,7 @@ export function planActions(store) {
             renderEvaluation(evaluation),
             renderConstraints(constraints),
             renderGuidance(guidance),
+            renderAdaptationDecision(evaluation.adaptationDecision),
             occupancyNote(occupancy),
             renderLearning(learning),
             'No effort estimate appears above because the audit log holds no per-action duration to average; a number here would be a guess.',
@@ -939,6 +950,7 @@ export function planActions(store) {
             constraints: constraintAudit(constraints),
             guidance: guidanceAudit(guidance),
             comparison: comparisonOf(evaluation),
+            adaptationDecision: evaluation.adaptationDecision ?? null,
             learning,
             freshApprovalRequired: generated.revision ? generated.revision.freshApprovalRequired : null,
             recorded: false,
@@ -954,6 +966,7 @@ export function planActions(store) {
             renderEvaluation(evaluation),
             renderConstraints(constraints),
             renderGuidance(guidance),
+            renderAdaptationDecision(evaluation.adaptationDecision),
             occupancyNote(occupancy),
             renderLearning(learning),
             `Plan ${shortId(prior.id)} is unchanged by this read, and its approval binds to its own bytes: none of the candidates above inherits it.`,

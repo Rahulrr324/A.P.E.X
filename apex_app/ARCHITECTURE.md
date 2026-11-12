@@ -1,9 +1,9 @@
 # APEX Local Alpha — consolidated architecture
 
 This document is the single consolidated description of the cognitive runtime and the executive
-system as they exist in `apex_app/` after Batch AO-10. It replaces no code and grants nothing. It
-was written against commit `cbc34cb` (`ao-09`) plus the AO-10 documentation changes, by reading the
-modules and tests named below. Where a statement is a contract enforced by code, the module is
+system as they exist in `apex_app/` after Batch AO-10 and the bounded AP-01 pathway. It replaces no
+code and grants nothing. It was written against commit `a2c9a64` (`ao-10`) plus the Batch AP working
+tree, by reading the modules and tests named below. Where a statement is a contract enforced by code, the module is
 named; where it is a guarantee established by tests, the suite is named; where it is only a
 description, it says so.
 
@@ -107,6 +107,7 @@ output, or a record attached to an operation that has already been decided elsew
 | Continuation and recovery | `plans/continuation.js`, `continuation/engine.js`, `executive/recovery.js`, `tasks/lock-recovery.js` | Read nine states from plan/task/audit records; take up only steps proven never to have started; refuse to replay an uncertain effect | User initiates continuation; no background recovery | Reads only; the resulting step runs through the normal path | A refused or unsafe continuation executes and writes nothing; a second continuation takes up nothing | `plan-continuation.test.js` (real children), `continuation-cross-process-an.test.js`, `executive-readiness.test.js` |
 | Prediction and experience | `prediction/*`, `experience/*`, `actions/prediction-actions.js`, `actions/experience-actions.js` | Append-only expectation and experience records; feedback; adaptation candidates; outcome evaluation derived at read time | User writes only; a model cannot write | `predictions.jsonl`, `experiences.jsonl` under their locks | An expired horizon is not a wrong prediction; a rate below 20 evaluations is withheld; a damaged store is unavailable, not empty | `prediction-*.test.js`, `experience-*.test.js` |
 | Adaptation boundary | `experience/derivation.js`, `experience/experience-store.js`, `plans/guidance.js` | Repeated user corrections may yield one candidate rule; only a user decision approves it; an approved rule may shape (never gate) a later selection | User approval only | `experiences.jsonl` | A retired rule shapes nothing; two conflicting approved rules are disclosed, neither chosen | `experience-adaptation.test.js`, `plan-guidance.test.js`, `adversarial-batch-am.test.js` I-01–I-08 |
+| Decision adaptation (AP-01) | `plans/evaluation.js` (`adaptationDecisionOf`), `plans/guidance.js`, `executive/selection.js` | One approved, shaped adaptation may change only which candidate leads a comparison; the decision block states the order the same rule would have produced without it, with rule ids, versions, hashes and bounded evidence ids | User approval only; the block says `authorizes:false` | None; carried on the audited `plan.candidates`/`plan.replan` read and its display | No applicable record → declined with the ledger's own reason; candidate bytes that changed since the comparison are refused by selection | `adaptation-decision.test.js`, `plan-guidance.test.js`, `plan-learning.test.js` |
 
 ### Who owns each transition
 
@@ -124,6 +125,58 @@ output, or a record attached to an operation that has already been decided elsew
 | Verify a result | Independent verifier | Step `verification.outcome` |
 | Record the operation | Finalization contract | Whether the audit line was appended |
 | Continue an interrupted run | User, explicitly | Continuation reading + new step records |
+
+### The one decision an approved record may move (AP-01)
+
+The pathway is: **a recorded outcome → an approved adaptation with a recorded shape → one later
+comparison's ordering → the decision states what it would have been without the record → retirement
+restores the unadapted ordering.** It uses the existing experience store, the existing one-user
+approval (`adaptation.decide`), the existing shape record (`adaptation.guide`), the existing
+retirement event (`adaptation.retire`), and the existing gate-then-Pareto comparison. No store,
+planner, registry, authorization rule, or execution path was added.
+
+- **Decision point.** Only the *leading candidate* of a `plan.candidates` or `plan.replan`
+  comparison can move, and only through the one ranked dimension `approved_adaptation_fit`. The
+  eligible signal is the user's recorded feedback/experience that supports an adaptation the user
+  approved. A prediction verdict, a model suggestion, or an unapproved candidate rule is not an
+  eligible signal: the eligibility and adversarial suites prove each has no effect.
+- **Eligibility rules.** A record can move the ordering only when all of these hold in the ledger
+  read for this comparison: the user approved it; it is active; its supporting evidence still
+  stands; it has a recorded shape; its scope names a capability these candidates use; it does not
+  contradict another active record in its scope; and the fields it states are answerable by the
+  candidates' own steps. Anything else is reported with the state that made it inert
+  (`candidate`, `rejected`, `retired`, `ambiguous`, `stale`, `unshaped`, `out_of_scope`,
+  `conflicted`, `contradicted`) and moves nothing. Unknown fields, a malformed shape, or a step
+  bound outside 1–8 are refused by the store before any comparison sees them.
+- **What the decision discloses.** The `adaptationDecision` block carries the schema
+  `apex.adaptation-decision.v1`, the dimension it can move, the front and leading candidate
+  *without* the dimension and *with* it, whether the record applied and whether the outcome changed,
+  the applied rules (id, capability, version, rule hash, bounded support ids), the deduplicated and
+  bounded evidence ids, every record considered with its state and reason, the ledger's own
+  decline reason when nothing applied, the guidance digest, and `authorizes:false`. It carries no
+  free-form reasoning and no score.
+- **Authority boundary.** The block is computed after the gates, the included set, the candidate
+  bytes, the ranked dimensions and the front are already fixed; it cannot re-admit a gated
+  candidate, change a step, change an approval, change authorization, change verification, or start
+  anything. `selectCandidate` additionally refuses a leader whose digest no longer matches the
+  candidate list, so an influenced comparison cannot record bytes it did not read. The plan that
+  results is still an ordinary draft that needs the user's approval and the normal validation.
+- **Reversal.** `adaptation.retire` is the reversal. The records are append-only: the approval, the
+  shape, the support and the retiring event all remain. The next comparison reads the retired state,
+  reports it as inert with its reason, applies nothing, and produces the same ordering the
+  unadapted rule produced before approval. Reversal never rewrites the earlier decision, never
+  changes an approved or executed plan, and never changes a historical audit line.
+- **Tests and cost.** `tests/adaptation-decision.test.js` covers eligibility, malformed/unknown
+  rules, duplicate evidence, the before/after/after-reversal fixture, selection refusal on changed
+  bytes, model-origin refusals, expired/awaiting predictions, authorization and registry
+  invariance, and audit-write failure. The decision path was measured before (the module extracted
+  from the pre-AP commit) and after, in one process, at 4 / 10 / 20 candidates: the added block
+  costs about 0.04 / 0.01 / 0.41 ms, or 25% / 3% / 48% of a comparison that itself takes
+  0.14 / 0.26 / 0.85 ms. No cache or index is justified by these figures.
+- **What it does not claim.** An applied record orders approaches; it does not predict that the
+  ordered approach will succeed, does not establish a causal effect of past outcomes, and does not
+  fit a weight or recompute a ranking from results. Prediction verdicts remain unconsumed by any
+  planner or controller.
 
 ## 5. C. Evidence and memory architecture
 
@@ -232,6 +285,7 @@ nothing and does not call a model. It has no executive-handoff scenario; handoff
 | Plan activation | — | 336–728 ms (fixture-dependent) | Dominated by store reads and task creation, not the handoff |
 | Continuation | — | 9.8–10.6 ms (fixture); 220 ms `work`/`next` at XL | Reads the goal log once; the pre-AN shape replayed it per interrupted plan |
 | Diagnostics overhead | — | 21.5–22.8 µs; record 3,334 bytes | Attached after the outcome is decided |
+| Candidate comparison, AP-01 before → after | 0.14 / 0.26 / 0.85 ms at 4 / 10 / 20 candidates | 0.18 / 0.27 / 1.26 ms | The added counterfactual block costs about 0.04 / 0.01 / 0.41 ms (25% / 3% / 48%); warmed in-run medians over 15 samples; no cache or index added |
 
 Known scaling behavior: memory and knowledge searches are linear in the number of records; JSONL
 cold reads parse the whole store; the AM index removes the repeated learning read, not the initial
@@ -255,6 +309,9 @@ The only authority owner is the action registry. Everything else observes, propo
 | Missing records do not establish success | Continuation/recovery read states; a missing step record is unknown/unrecordable, not success | `plan-continuation.test.js`, `executive-interruption.test.js` |
 | A handoff never grants authority | `executive/handoff.js` (`authorizes:false` on every record) | `handoff-integrity-ao.test.js`, `handoff-hash-binding-ao.test.js` |
 | A retracted/superseded record stops supporting a claim | `cognition/lineage.js` (`reassessClaims`), late re-check in `controller.js` | `cognition-lineage.test.js`, `acceptance-ao09.test.js` 4-5 |
+| An approved adaptation does not gate, approve, or execute | `plans/evaluation.js` computes the decision after every gate; `plans/guidance.js` says `authorizes:false`; `plans/validity.js` and the registry are unchanged | `adaptation-decision.test.js` (bounded influence), `plan-guidance.test.js` |
+| An influenced comparison cannot record candidate bytes it did not read | `executive/selection.js` refuses `candidate-changed` against the comparison's bound digests | `adaptation-decision.test.js`, `plan-guidance.test.js` |
+| A prediction verdict, model suggestion, or unapproved rule moves no decision | The guidance ledger admits only user-approved, active, evidence-backed, shaped records; everything else is inert | `adaptation-decision.test.js` (eligibility), `adversarial-batch-am.test.js` I-01–I-08 |
 
 ### Known gaps between documentation and code
 
@@ -294,6 +351,8 @@ The only authority owner is the action registry. Everything else observes, propo
 | Cross-process continuation | `IMPLEMENTED_AND_TESTED` | `plans/continuation.js`, `continuation/engine.js` | `plan-continuation.test.js` (real children), `continuation-cross-process-an.test.js` |
 | Runtime diagnostics | `IMPLEMENTED_AND_TESTED` | `cognition/runtime-diagnostics.js` | `runtime-diagnostics-ao.test.js` |
 | Performance optimization (learning read) | `IMPLEMENTED_AND_TESTED` | AM per-snapshot index in the learning read path | `learning-read-equivalence.test.js`, `plan-dimensions.test.js` |
+| Evidence-driven decision adaptation (AP-01) | `IMPLEMENTED_AND_TESTED` | `plans/evaluation.js` (`adaptationDecisionOf`), `plans/guidance.js`, `executive/selection.js` | `adaptation-decision.test.js` (23 cases), `plan-guidance.test.js`, `plan-scenarios-am.test.js` |
+| Prediction-verdict-driven adaptation | `NOT_IMPLEMENTED` | No planner, controller, or adaptation read consumes a verdict | Adversarial cases prove a verdict moves nothing (`adaptation-decision.test.js`, `prediction-adaptation-boundary.test.js`) |
 | Adversarial acceptance | `IMPLEMENTED_AND_TESTED` | Cross-cutting; no new runtime component | `acceptance-ao09.test.js` (7), `adversarial-batch-am.test.js` (16), `plan-adversarial.test.js` (15), `executive-adversarial.test.js` (11), plus the suites cited in `README.md` Batch AO package H |
 | Cross-process interruption | `IMPLEMENTED_PARTIALLY_TESTED` | Real child fixtures at most boundaries | `plan-continuation.test.js`, `continuation-cross-process-an.test.js`, `finalization-interruption.test.js`, `process-recovery.test.js`, `cross-process-ao09.test.js`; two boundaries lack a killed child |
 | Concurrent store integrity | `IMPLEMENTED_AND_TESTED` | `memory/writer-lock.js`, store locks, JSONL append | `storage-concurrency.test.js`, `store-write-concurrency.test.js`, `cross-process-stress.test.js`, `lock-contention.test.js`, `lock-recovery.test.js` |
@@ -330,10 +389,17 @@ invalidate the recommended milestone, not that it blocks all work.
 | 15 | Evidence retraction between analysis and response | `recheckEvidence` + `#recheckAnswerEvidence`; notice; lineage unchanged | `acceptance-ao09.test.js` 4-5 | An unreadable record weakens to unverified rather than proving falsity, by design | Low | No |
 | 16 | Remote synchronization uncertainty | None | `git fetch` fails here | `origin/main` is cached; no push verification possible | Medium | Yes, for publishing; no for runtime |
 | 17 | Authorization/after-approval interruption boundaries | In-process refusal tests | `plan-adversarial.test.js`, `executive-acceptance.test.js` K-17/K-18 | No killed child at those instants | Low | No |
+| 18 | An approved adaptation influences a decision other than candidate ordering | The decision block names `approved_adaptation_fit`, is computed after every gate, and is the only dimension the ledger feeds; `selection.js` binds the choice to the compared bytes | `adaptation-decision.test.js` (bounded influence), `plan-guidance.test.js` | The ranked dimension list is fixed in code; a record cannot add one | Low | No |
+| 19 | The counterfactual disclosure costs a second Pareto pass | The same `dominance` rule is applied to the same rows without one dimension; measured before (pre-AP module) and after in one process | `adaptation-decision.test.js`; `benchmarks/run-adaptation-decision-benchmark.mjs` | Cost is quadratic in candidate count, as the comparison already was; measured about 0.04 / 0.01 / 0.41 ms at 4 / 10 / 20 candidates | Low | No |
+| 20 | Reversal is prospective, not retrospective | `adaptation.retire` appends a lifecycle event; every read recomputes state | `adaptation-decision.test.js` (approval and reversal on identical fixtures) | An already-displayed decision is not rewritten; the next comparison restores the unadapted order. Historical audit lines are unchanged by design | Low | No |
+| 21 | A supporting record outside the retrieval window influences nothing and is not named as applied | `guidanceFrom` admits only rows the learning read returned; `activeAdaptations` has a default window of 3 | `experience-*` suites, `plan-guidance.test.js` | The decision reports the records it was handed; it does not claim knowledge of records it never read | Low | No |
+| 22 | An applied ordering could be read as a claim that the ordered approach will succeed | The rule is the user's recorded shape; no weight is fitted from outcomes and no causal effect is claimed | `plan-guidance.test.js`, `adaptation-decision.test.js` | Documentation states the limit; the block says `authorizes:false` and the note says it moved at most a comparison | Medium (interpretive) | No |
 
 No gap in this register was implemented in AO-10: none exposed a new concrete defect in behavior,
-and none invalidated a documented security guarantee. The `getMany` contract defect found in AO-09
-was already fixed there with a regression test.
+and none invalidated a documented security guarantee. AP-01 closed the roadmap's "one recorded
+outcome changes exactly one later disclosed decision" clause for the user-approved adaptation
+signal only, and added rows 18–22 for what that does not claim; the `getMany` contract defect found
+in AO-09 had already been fixed there with a regression test.
 
 ## 10. Running the verification
 
@@ -342,7 +408,9 @@ cd apex_app
 npm test                       # every suite named in package.json
 node --test tests/cognition-lifecycle.test.js tests/cognition-artifacts.test.js
 node --test tests/acceptance-ao09.test.js tests/cross-process-ao09.test.js
+node --test tests/adaptation-decision.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
+node benchmarks/run-adaptation-decision-benchmark.mjs
 ```
 
 Tests use `NoBackend` or fixed programmatic replies and isolated temporary data directories. No
@@ -358,3 +426,9 @@ only to fresh temporary directories. The complete measured tables and their cave
   security.
 - It does not claim remote synchronization; the configured remote is unreachable from this machine.
 - It does not claim the neural research tree is integrated; `stark/` is separate and is not imported.
+- It does not claim an approved adaptation improves work. It claims that, when the user approved a
+  shaped record and its evidence still stands, the recorded shape can reorder the approaches the
+  comparison already admits; that the order the same rule would have produced without it is shown
+  beside the order it produced; and that retirement restores the unadapted order without erasing
+  history. It does not claim that the earlier outcome caused the later success, or that a prediction
+  verdict influences anything.

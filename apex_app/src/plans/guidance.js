@@ -32,6 +32,12 @@ import { shortId, singleLine } from '../util.js';
 export const GUIDANCE_NOTE = 'recorded guidance can move an approach in the comparison and nothing else: it authorizes no step, refuses no step, and starts nothing';
 export const GUIDANCE_SCHEMA = 'apex.guidance.v1';
 
+// Which ordinal of the user's recorded shapes is governing. The store keeps every shape record and the
+// last one wins, so a version is the count of records, not a number APEX invents: version 2 is the second
+// shape the user recorded for this adaptation. It is what an influenced decision names, so a reader can
+// tell which statement of the rule was in force.
+const versionOf = (row) => (Number.isInteger(row?.guidanceCount) && row.guidanceCount > 0 ? row.guidanceCount : null);
+
 // The four things a guidance record can ask for, in the words the reader is shown. `order` is the only
 // enumerated one; the other three are names and counts the candidate either matches or does not.
 export const GUIDANCE_FIELDS = Object.freeze(['order', 'avoid', 'prefer', 'maxSteps']);
@@ -185,7 +191,13 @@ export function guidanceFrom({
       id: row.id,
       capability: row.capability ?? null,
       rule: singleLine(row.rule ?? '', 200),
+      ruleHash: row.ruleHash ?? null,
+      version: versionOf(row),
       supportCount: row.supportCount ?? 0,
+      support: {
+        experienceIds: [...(row.support?.experienceIds ?? [])],
+        feedbackIds: [...(row.support?.feedbackIds ?? [])],
+      },
       decidedAt: row.decidedAt ?? null,
       decisionState: row.decisionState ?? null,
       active: row.active === true,
@@ -302,7 +314,7 @@ export function guidanceFrom({
     influencesSelection: influenced,
     authorizes: false,
     digest: digestOf({
-      applicable: usable.map((e) => [e.id, e.capability, e.guidance.order, e.guidance.avoid, e.guidance.prefer, e.guidance.maxSteps]).sort(),
+      applicable: usable.map((e) => [e.id, e.capability, e.version, e.guidance.order, e.guidance.avoid, e.guidance.prefer, e.guidance.maxSteps]).sort(),
       // Inert records are deliberately not in here: this digest certifies what ranked the candidates,
       // and a record that ranked nothing moving between two inert states must not read as a change to
       // the answer. What can move the ranking - an applicable shape, an unresolved conflict, a field
@@ -348,6 +360,28 @@ export function emptyGuidance(reason = null, candidates = []) {
 
 export function guidanceDigest(guidance) {
   return guidance ? guidance.digest : null;
+}
+
+// Why the ordering was not moved. This is the comparison's own reading of the ledger it was handed, in
+// the states the ledger already derives - it adds no reason the records do not support. `null` means the
+// guidance was applied; a caller prints this only when it was not.
+export function guidanceDeclinedReason(guidance) {
+  if (!guidance) return 'no guidance read was made for this comparison';
+  const records = guidance.records ?? [];
+  if (records.length === 0) return guidance.reason ?? 'no approved guidance record bears on these capabilities';
+  if ((guidance.conflicts ?? []).length > 0) {
+    return 'two approved records for this scope disagree, so the ordering is withheld rather than decided';
+  }
+  if ((guidance.applicable ?? []).length === 0) {
+    const states = new Set(records.map((r) => r.state));
+    if (states.has('unshaped')) return 'the approved record carries no shape the user recorded, so it asks nothing this comparison can check';
+    if (states.has('out_of_scope')) return 'the approved record names a scope no step of these candidates uses';
+    if ([...states].some((s) => ['candidate', 'rejected', 'retired', 'ambiguous', 'stale'].includes(s))) {
+      return 'the records that bear on this scope are not approved, active, and intact, so none of them may move the ordering';
+    }
+    return 'no approved guidance record bears on these capabilities';
+  }
+  return 'the applicable guidance asks nothing these candidate steps can answer';
 }
 
 // One line per record and per candidate: what the record says, what it was allowed to do about it, and

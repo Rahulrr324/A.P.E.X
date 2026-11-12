@@ -1111,6 +1111,83 @@ different run, so it is context, not a comparable column.
 
 This script is not part of `npm test` and no test depends on it.
 
+## Adaptation decision benchmark (Batch AP)
+
+`run-adaptation-decision-benchmark.mjs` measures the one stage Batch AP added to `evaluateCandidates`:
+the counterfactual decision block that runs the existing Pareto rule a second time over the same
+candidate bytes with the `approved_adaptation_fit` dimension removed, so a reader is shown what the
+comparison would have said without the approved record. It trains no model, constructs no backend
+and builds no application: the comparison is a pure function over synthetic candidates and a
+synthetic guidance ledger.
+
+### Procedure
+
+```bash
+cd apex_app
+node benchmarks/run-adaptation-decision-benchmark.mjs --repeats 15
+node benchmarks/run-adaptation-decision-benchmark.mjs --repeats 9 --sizes S
+node benchmarks/run-adaptation-decision-benchmark.mjs --before-ref <sha> --repeats 15
+```
+
+1. `--sizes` selects any of `S,M,L` (default all three). The growth axes are the candidate count and
+   the guidance ledger: **4 / 10 / 20 candidates**, **1 / 6 / 12 approved records**, and
+   **2 / 10 / 20 support ids per kind**. The support axis stops at the 20-id bound the decision
+   itself applies, because a larger number would measure slicing.
+2. The **before** module is the real pre-change code, not a switched-off mode: `git archive` extracts
+   `apex_app/src` from `--before-ref` (default `a2c9a64`, the last commit before Batch AP) into a
+   fresh temporary directory and imports its `evaluation.js`. Once Batch AP is committed, pass the
+   parent commit's SHA. If the ref cannot be materialized the run stops rather than printing
+   after-only numbers as a before/after.
+3. Both modules are warmed 20 times, then measured **interleaved per sample** on the same fixture
+   objects, `--repeats` times each; medians and minima are printed with every sample. The two
+   results are compared field by field with `adaptationDecision` removed, so the run also checks
+   that the disclosure stage changed nothing else.
+4. Nothing is written outside the temp directory; `--keep` leaves it and prints where. The removal
+   helper refuses any path that is not one of its own `apex-bench-ap01-` directories.
+
+### What it reports
+
+Per size: the fixture's record/candidate counts, the front with and without the dimension, the
+decision outcome (`declined` / `changed` / `applied_not_changed`), the number of rules, evidence ids
+and considered records, the before and after comparison medians with samples, the added cost and its
+share of the pre-change median, the disclosure render time, and whether the two evaluations agree on
+every other field.
+
+### Measured
+
+One run of `--repeats 15` on Windows 11, Node v24.18.0, x64, with no test or other benchmark active.
+Fixture contents as above; every candidate passed every gate.
+
+| ms (median) | S (4 candidates, 1 record) | M (10, 6) | L (20, 12) |
+|---|---|---|---|
+| comparison before (module at `a2c9a64`) | 0.144 | 0.261 | 0.849 |
+| comparison after (AP-01) | 0.180 | 0.268 | 1.258 |
+| added by the decision disclosure | 0.036 (25.1%) | 0.007 (2.7%) | 0.408 (48.1%) |
+| disclosure render | 0.002 | 0.004 | 0.010 |
+
+The fronts moved as the design intends: without the dimension 2 / 4 / 7 candidates were on the front
+and none led; with it 1 / 2 / 3 led, all of them the reads-first approaches the record asks for. A
+second run of the same command measured the added cost as −0.009 / +0.154 / +0.270 ms, so at four
+candidates the added work is within noise and at twenty it is well under half a millisecond.
+
+The finding is narrow: the counterfactual is a second O(n²) pass, but at the candidate counts a
+comparison actually sees its absolute cost is under 1.3 ms, against an audited `plan.candidates` read
+that spends hundreds of milliseconds in store reads at the same fixture sizes (Batch AM's planning
+benchmark). **No cache and no index is justified, and none was added.**
+
+### Interpretation limits
+
+- Medians over 15 samples in one process on one machine. Differences below about 0.05 ms are noise;
+  only the before/after pair inside one run is treated as a finding.
+- The fixture candidates are synthetic and uniform (two step structures, varied step counts and
+  estimated seconds), and the guidance ledger is built to apply rather than conflict. Conflict,
+  ineligibility and reversal are covered by `tests/adaptation-decision.test.js`, not measured here.
+- The comparison is pure, so this measures the decision stage alone. It does not include the store
+  reads, the learning read, rendering the whole comparison, or the audit append that surround it.
+- No inference is run or simulated; nothing here shows that an influenced ordering is better work.
+
+This script is not part of `npm test` and no test depends on it.
+
 ## Cognitive runtime diagnostics benchmark (Batch AO, package G)
 
 `run-cognitive-runtime-benchmark.mjs` measures the request lifecycle and the stage record it now

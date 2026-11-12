@@ -28,8 +28,10 @@ preserved for provenance.
   recording or approving one is a separate user act. `apex plan outcome <plan-id>` then answers seven
   separate questions about what a run established and what it left open, citing the audit operation
   behind each, and `apex plan assess <plan-id>` records that derived verdict without changing the plan's
-  bytes, approval, or any goal's status. Execution success is never reported as real-world success, and
-  none of this grants permission.
+  bytes, approval, or any goal's status. One recorded, user-approved adaptation can move which candidate
+  leads that comparison, and the answer states the decision the same rule would have taken without it,
+  with the rule, version and evidence named; retiring the adaptation restores the unadapted decision.
+  Execution success is never reported as real-world success, and none of this grants permission.
   It answers
   deterministic requests with no model and sends
   everything else to a local model backend **you** configure; without one it reports
@@ -150,10 +152,11 @@ Consolidated architecture and authority boundary:
 
 ## Next recommended milestone
 
-Close the one open arrow in the application roadmap's stage 6 rather than adding more scaffolding:
-make one recorded outcome or prediction verdict change exactly one later, disclosed decision (for
-example, the order of plan candidates), reversibly and with an audit record, without granting any
-component new authority. It is measurable by a before/after comparison over stored records, a
-reversal test, and an adversarial test showing the verdict cannot approve, start, or carry a plan,
-and it requires no model and no new store. This is a recommendation only; nothing in this
-checkout implements it yet.
+Batch AP implemented the bounded form of the application roadmap's stage-6 recommendation: one recorded,
+eligible, user-approved adaptation changes exactly one later, disclosed decision - which candidate leads a
+comparison of approaches that already passed every gate - reversibly and with an audit record, and no
+component gained authority ([details](apex_app/README.md#batch-ap-one-disclosed-reversible-decision-from-recorded-evidence-as-implemented)).
+The recommendation that remains is the clause that implementation did **not** reach: make an expectation
+verdict (a `prediction evaluate` result) change exactly one later, disclosed decision, with the same
+before/after, reversal, and adversarial proof that it cannot approve, start, or carry a plan. It needs no
+model and no new store. This is a recommendation only; nothing in this checkout implements it yet.

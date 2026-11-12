@@ -58,6 +58,10 @@ export const LEARNING_BOUNDS = Object.freeze({
   // it is bounded line by line: a record list long enough to push the selection off the end of the
   // answer would make the answer worse, not more informative. The command's own print shows all of them.
   answerStatements: 4,
+  // How many supporting record ids travel beside an adaptation row. The store caps one adaptation at 20
+  // per evidence list, so this is that cap restated: a row that carried more would be a row the store
+  // could not have produced.
+  evidenceIds: 20,
 });
 
 // Printed beside every block this module produces. Batch AL wrote it as a flat absence, because nothing
@@ -118,9 +122,16 @@ export function adaptationRow(a) {
     id: a.id,
     capability: a.capability,
     rule: wording(a.rule, LEARNING_BOUNDS.ruleChars) ?? 'no rule text is recorded',
+    ruleHash: a.ruleHash ?? null,
     method: a.method ?? null,
     minSupport: a.minSupport ?? null,
     supportCount: (a.support?.experienceIds ?? []).length,
+    // The exact records the rule rests on, bounded like the store's own support lists. The comparison's
+    // decision record names these, because "a rule the user approved" is not traceable without them.
+    support: {
+      experienceIds: [...(a.support?.experienceIds ?? [])].slice(0, LEARNING_BOUNDS.evidenceIds),
+      feedbackIds: [...(a.support?.feedbackIds ?? [])].slice(0, LEARNING_BOUNDS.evidenceIds),
+    },
     decidedAt: a.decision?.createdAt ?? null,
     decisionReason: wording(a.decision?.reason, 200),
     decisionState: a.decisionState ?? null,

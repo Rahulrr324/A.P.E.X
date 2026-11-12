@@ -24,7 +24,7 @@ import { dependencyProblems, stableStringify, StepStatus } from '../tasks/model.
 import { shortId, singleLine } from '../util.js';
 import { Requirement, requirementOf } from '../goals/model.js';
 import { constraintFinding, constraintLedger } from './constraints.js';
-import { emptyGuidance } from './guidance.js';
+import { emptyGuidance, guidanceDeclinedReason } from './guidance.js';
 import { outcomesAudit } from './outcomes.js';
 import {
   MAX_ASSERTIONS, MAX_PLAN_STEPS, MAX_PRECONDITIONS, MAX_PRECONDITION_CHARS, RISK_ORDER,
@@ -32,6 +32,14 @@ import {
 } from './model.js';
 
 export const EVALUATION_NOTE = 'an evaluation compares what each candidate records; it is not a prediction, a probability, or an approval, and it starts nothing';
+
+// The one decision dimension an approved adaptation is allowed to move. Naming it here is what lets the
+// comparison compute the same ranking without it, so the reader can see the decision the records of the
+// work alone would have produced beside the decision the user's approved guidance produced.
+export const ADAPTATION_DECISION_DIMENSION = 'approved_adaptation_fit';
+export const ADAPTATION_DECISION_SCHEMA = 'apex.adaptation-decision.v1';
+export const ADAPTATION_DECISION_NOTE = 'the recorded guidance moved at most which candidate leads a comparison of approaches that passed every gate; it recorded no plan, approved no plan, authorized no step, and started nothing';
+const MAX_DECISION_EVIDENCE = 20;
 
 // The dimensions the ordering uses, in the order they are named to the reader. Every one of them is
 // a recorded count or a recorded class, not a weight: the list is disclosed so the reader can see
@@ -484,8 +492,10 @@ function assess(candidate, context) {
 
 // Pareto: `a` dominates `b` when it is at least as good on every ranked dimension and better on one.
 // Anything no other candidate dominates is on the front, and every member of the front is reported -
-// reducing a genuine trade-off to one winner is the false precision this avoids.
-function dominance(rows) {
+// reducing a genuine trade-off to one winner is the false precision this avoids. `dimensions` is a
+// parameter only so the same rule can be applied to the same candidate bytes without one dimension, which
+// is how the adaptation decision's counterfactual is computed. There is one rule then, not two.
+function dominance(rows, dimensions = RANKED_DIMENSIONS) {
   const wins = new Map(rows.map((r) => [r.strategy, []]));
   const losses = new Map(rows.map((r) => [r.strategy, []]));
   for (const a of rows) {
@@ -494,7 +504,7 @@ function dominance(rows) {
       let better = 0;
       let worse = 0;
       const dims = [];
-      for (const name of RANKED_DIMENSIONS) {
+      for (const name of dimensions) {
         const c = compareDimension(a.assessed.ranked[name], b.assessed.ranked[name]);
         if (c > 0) { better += 1; dims.push(name); } else if (c < 0) worse += 1;
       }
@@ -505,6 +515,65 @@ function dominance(rows) {
     }
   }
   return { wins, losses };
+}
+
+function frontUnder(rows, dimensions) {
+  const { losses } = dominance(rows, dimensions);
+  return rows.filter((r) => losses.get(r.strategy).length === 0).map((r) => r.strategy);
+}
+
+// What the approved guidance did to the decision, stated as the decision it would have been without it.
+// Both sides are the same rule over the same candidate bytes; the only difference is whether the one
+// dimension a recorded guidance shape feeds is on the table. Nothing here adds a ranking, a score, or a
+// reason the records do not state: `declinedReason` is the ledger's own state, and the candidate bytes
+// are bound elsewhere in the evaluation.
+function adaptationDecisionOf({ guidance, included, front }) {
+  const baseline = frontUnder(included, RANKED_DIMENSIONS.filter((d) => d !== ADAPTATION_DECISION_DIMENSION));
+  const adapted = front.map((r) => r.strategy);
+  const before = { leading: baseline.length === 1 ? baseline[0] : null, front: baseline };
+  const after = { leading: adapted.length === 1 ? adapted[0] : null, front: adapted };
+  const applied = guidance?.influencesSelection === true;
+  const changed = stableStringify(before) !== stableStringify(after);
+  const applicable = new Set(guidance?.applicable ?? []);
+  const rules = (guidance?.records ?? [])
+    .filter((r) => applicable.has(r.id))
+    .map((r) => ({
+      id: r.id,
+      capability: r.capability,
+      version: r.version ?? null,
+      ruleHash: r.ruleHash ?? null,
+      support: {
+        experienceIds: [...(r.support?.experienceIds ?? [])],
+        feedbackIds: [...(r.support?.feedbackIds ?? [])],
+      },
+    }));
+  const experienceIds = [...new Set(rules.flatMap((r) => r.support.experienceIds))];
+  const feedbackIds = [...new Set(rules.flatMap((r) => r.support.feedbackIds))];
+  return {
+    schema: ADAPTATION_DECISION_SCHEMA,
+    dimension: ADAPTATION_DECISION_DIMENSION,
+    applied,
+    changed,
+    outcome: !applied ? 'declined' : (changed ? 'changed' : 'applied_not_changed'),
+    before,
+    after,
+    rules,
+    evidence: {
+      experienceIds: experienceIds.slice(0, MAX_DECISION_EVIDENCE),
+      feedbackIds: feedbackIds.slice(0, MAX_DECISION_EVIDENCE),
+      truncated: experienceIds.length > MAX_DECISION_EVIDENCE || feedbackIds.length > MAX_DECISION_EVIDENCE,
+    },
+    // Every record the ledger read, with the state that decided whether it could move anything. The
+    // ineligible ones are here for the same reason as the eligible ones: a reader has to be able to see
+    // what was excluded and why, not only what was used.
+    considered: (guidance?.records ?? []).map((r) => ({
+      id: r.id, capability: r.capability, state: r.state, version: r.version ?? null, why: r.why,
+    })),
+    declinedReason: applied ? null : guidanceDeclinedReason(guidance),
+    digest: guidance?.digest ?? null,
+    authorizes: false,
+    note: ADAPTATION_DECISION_NOTE,
+  };
 }
 
 // Evaluate a generated candidate set. `result` is what `candidatesForGoal` or `revisedCandidates`
@@ -526,6 +595,9 @@ export function evaluateCandidates({ result, goal, registry, evidence = null, co
       excluded: [],
       front: [],
       behind: [],
+      // No comparison was made, so no decision was formed for an approved record to move. `null` says
+      // that, which is different from "a decision was formed and the guidance was declined".
+      adaptationDecision: null,
       outcomesRead: outcomesAudit(outcomes),
       whatWouldSettleIt: [],
     };
@@ -542,6 +614,7 @@ export function evaluateCandidates({ result, goal, registry, evidence = null, co
       excluded: [],
       front: [],
       behind: [],
+      adaptationDecision: null,
       outcomesRead: outcomesAudit(outcomes),
       whatWouldSettleIt: [],
     };
@@ -604,6 +677,10 @@ export function evaluateCandidates({ result, goal, registry, evidence = null, co
   const { wins, losses } = dominance(included);
   const front = included.filter((r) => losses.get(r.strategy).length === 0);
   const behind = included.filter((r) => losses.get(r.strategy).length > 0);
+  // The one decision an approved record may move, stated as what the same rule would have said without
+  // it. Computed here, from the candidates that already passed every gate, so nothing above this line
+  // depends on it: the gate list, the included set, and the candidate bytes are identical either way.
+  const adaptationDecision = adaptationDecisionOf({ guidance: context.guidance, included, front });
 
   // Each unresolved pair says which dimensions pull in opposite directions: that is the whole of what
   // APEX can honestly report, and it is enough for the user to decide on.
@@ -661,6 +738,10 @@ export function evaluateCandidates({ result, goal, registry, evidence = null, co
     gates: GATES,
     constraints: context.constraints,
     guidance: context.guidance,
+    // The decision the guidance did or did not move, as the decision without it beside the decision with
+    // it. Every record the ledger read is named with the state that allowed or stopped it, so an
+    // ineligible record is disclosed rather than silently ignored.
+    adaptationDecision,
     // Whether the past runs of these capabilities were read at all, and what that read covered. The
     // audit line carries it so a reader can see that a ranking which used no history did not use a
     // clean history either.
@@ -782,5 +863,31 @@ export function renderEvaluation(evaluation, { indent = '' } = {}) {
     for (const item of evaluation.whatWouldSettleIt) lines.push(`${indent}    - ${item}`);
   }
   lines.push(`${indent}${evaluation.note}`);
+  return lines.join('\n');
+}
+
+// The decision an approved record was allowed to move, printed beside the decision the ranked records of
+// the work alone would have produced. A reader can disagree with the use made of their own guidance only
+// if they can see both answers, so both are printed even when they are the same. Kept separate from
+// renderEvaluation because it is disclosure about learning, not a part of the comparison: the same
+// candidate bytes, gates and ranked dimensions are what renderEvaluation prints either way.
+export function renderAdaptationDecision(decision, { indent = '' } = {}) {
+  if (!decision) return `${indent}No comparison was made, so no adaptation decision was formed.`;
+  const lines = [];
+  lines.push(`${indent}Approved guidance and this decision (${decision.dimension}):`);
+  lines.push(`${indent}  without it: ${decision.before.leading ? `${decision.before.leading} leads` : 'no single leading candidate'} (front: ${decision.before.front.join(', ') || 'none'})`);
+  lines.push(`${indent}  with it: ${decision.after.leading ? `${decision.after.leading} leads` : 'no single leading candidate'} (front: ${decision.after.front.join(', ') || 'none'})`);
+  if (decision.outcome === 'declined') {
+    lines.push(`${indent}  declined: ${decision.declinedReason}`);
+  } else {
+    for (const r of decision.rules) {
+      lines.push(`${indent}  applied: approved record ${r.id} version ${r.version ?? '-'} for ${r.capability}; evidence ${r.support.experienceIds.length ? r.support.experienceIds.join(', ') : 'none recorded'}`);
+    }
+    if (!decision.changed) lines.push(`${indent}  applied, and it changed nothing: the same candidate led with or without it`);
+  }
+  for (const c of decision.considered ?? []) {
+    if (c.state !== 'applicable') lines.push(`${indent}  not applied: ${c.id} for ${c.capability ?? '-'} [${c.state}] - ${c.why}`);
+  }
+  lines.push(`${indent}  ${decision.note}`);
   return lines.join('\n');
 }
