@@ -53,6 +53,20 @@ import {
   deriveCandidateSpecs,
 } from './derivation.js';
 import {
+  ADAPTATION_METHODS,
+  MAX_PROPOSAL_LIMITATIONS,
+  OUTCOME_PROPOSAL_FIELD,
+  PREDICTION_DECISION_DIMENSION,
+  PREDICTION_DERIVATION_METHOD,
+  PREDICTION_PROPOSAL_TYPE,
+  decidingOutcomeOf,
+  evidenceDigest,
+  predictionEligibility,
+  proposalFor,
+  proposalKey,
+  proposalRule,
+} from './prediction-derivation.js';
+import {
   MAX_PATTERNS,
   MAX_TEMPORAL_EVENTS,
   MIN_PATTERN_EVENTS,
@@ -118,6 +132,10 @@ export const MAX_SAMPLES = 8;
 export const MAX_HEALTH_SAMPLES = 20;
 export const MAX_ACTIVE_ADAPTATIONS = 10;
 export const DEFAULT_ACTIVE_ADAPTATIONS = 3;
+// The bound on expectations one derivation or eligibility read opens. A ledger larger than this is
+// reported as truncated rather than silently halved: an outcome outside the window is not considered,
+// and the reader is told so.
+export const MAX_PREDICTION_CANDIDATES = 20;
 export const EXPERIENCE_PARSE_CACHE_BYTES = 32 * 1024 * 1024;
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -249,6 +267,14 @@ function storedIdListProblem(value, name, max) {
 function optionalIdListProblem(value, name, max) {
   if (value === undefined) return null;
   return storedIdListProblem(value, name, max);
+}
+
+// A prediction-derived adaptation names no feedback; the field is present and empty rather than
+// absent so a reader can tell "researched and found none" from a record written before the field
+// existed.
+function emptyIdListProblem(value, name) {
+  if (!Array.isArray(value) || value.length !== 0) return `${name} must be an empty list`;
+  return null;
 }
 
 function validateTimestamp(value, name, { nullable = false } = {}) {
@@ -435,6 +461,57 @@ function validateFeedback(r) {
   return validateProvenance(r, FEEDBACK_KIND);
 }
 
+// A prediction-derived candidate states one recorded outcome as a rule in the same four-field guidance
+// vocabulary a user already uses. Nothing in it is free text: the type, the dimension, the field, the
+// capability and the rule text are each re-derived from the stored outcome class, so a hand-edited line
+// that claims a rule its evidence does not state is refused rather than read.
+function validateProposal(r, capability) {
+  const p = r.proposal;
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return 'a prediction-derived adaptation must carry a proposal';
+  if (p.type !== PREDICTION_PROPOSAL_TYPE) return 'proposal type is not the recorded proposal type';
+  if (p.dimension !== PREDICTION_DECISION_DIMENSION) return `proposal must feed the ${PREDICTION_DECISION_DIMENSION} dimension and no other`;
+  if (!Array.isArray(p.verdicts) || p.verdicts.length !== 1) return 'a proposal states exactly one recorded verdict';
+  const verdict = p.verdicts[0];
+  if (!verdict || typeof verdict !== 'object' || Array.isArray(verdict)) return 'proposal verdict is not an object';
+  if (typeof verdict.predictionId !== 'string' || !ID_RE.test(verdict.predictionId)) return 'proposal verdict has an invalid prediction id';
+  if (typeof verdict.evaluationId !== 'string' || !ID_RE.test(verdict.evaluationId)) return 'proposal verdict has an invalid evaluation id';
+  if (verdict.capability !== capability) return 'proposal verdict names a different capability than the adaptation';
+  if (!Object.hasOwn(OUTCOME_PROPOSAL_FIELD, verdict.expectation)) return 'proposal verdict has an unknown expectation';
+  if (verdict.verdict !== 'matched' && verdict.verdict !== 'contradicted') return 'proposal verdict must be matched or contradicted';
+  if (!Object.hasOwn(OUTCOME_PROPOSAL_FIELD, verdict.outcomeClass)) return 'proposal verdict has an unknown deciding outcome class';
+  // The single mapping, re-applied: an outcome class may only propose the field the rule states, so a
+  // record cannot propose "avoid" while its verdict says the capability succeeded.
+  const field = OUTCOME_PROPOSAL_FIELD[verdict.outcomeClass];
+  const guidance = p.guidance;
+  if (!guidance || typeof guidance !== 'object' || Array.isArray(guidance)) return 'proposal carries no guidance shape';
+  if (guidance.order !== null) return 'a proposal names no step order';
+  if (guidance.maxSteps !== null) return 'a proposal names no step bound';
+  for (const name of ['avoid', 'prefer']) {
+    const list = guidance[name];
+    if (!Array.isArray(list) || list.length > MAX_GUIDANCE_NAMES) return `proposal ${name} must be a list of at most ${MAX_GUIDANCE_NAMES} capability names`;
+    if (list.some((item) => typeof item !== 'string' || !CAPABILITY_RE.test(item))) return `proposal ${name} holds a name that is not a capability name`;
+    if (new Set(list).size !== list.length) return `proposal ${name} names the same capability twice`;
+  }
+  const expectedNames = field === 'prefer' ? guidance.prefer : guidance.avoid;
+  const otherNames = field === 'prefer' ? guidance.avoid : guidance.prefer;
+  if (expectedNames.length !== 1 || expectedNames[0] !== capability) return `proposal ${field} must name exactly the adaptation's own capability`;
+  if (otherNames.length !== 0) return `a ${verdict.outcomeClass} outcome proposes ${field} and nothing else`;
+  if (r.rule !== proposalRule(capability, verdict.outcomeClass)) return 'proposal rule text is not the text its recorded outcome states';
+  if (!Array.isArray(p.limitations) || p.limitations.length === 0 || p.limitations.length > MAX_PROPOSAL_LIMITATIONS) {
+    return `proposal must record between 1 and ${MAX_PROPOSAL_LIMITATIONS} limitations`;
+  }
+  if (p.limitations.some((item) => typeof item !== 'string' || item.length === 0 || item.length > MAX_RULE_CHARS)) return 'proposal limitation text is invalid';
+  if (typeof p.evidenceDigest !== 'string' || p.evidenceDigest.length !== 64) return 'proposal has a missing or invalid evidence digest';
+  if (p.evidenceDigest !== evidenceDigest({
+    predictionId: verdict.predictionId,
+    evaluationId: verdict.evaluationId,
+    verdict: verdict.verdict,
+    outcomeClass: verdict.outcomeClass,
+    outcomeExperienceIds: r.support.experienceIds,
+  })) return 'proposal evidence digest does not match the evidence it cites';
+  return null;
+}
+
 function validateAdaptation(r) {
   if (typeof r.id !== 'string' || !ID_RE.test(r.id)) return 'adaptation has missing or invalid id';
   if (!isScopableCapability(r.capability)) return 'adaptation capability is not a dotted capability name';
@@ -442,13 +519,29 @@ function validateAdaptation(r) {
   if (rule) return rule;
   if (typeof r.ruleHash !== 'string' || r.ruleHash.length !== 64) return 'adaptation has missing or invalid ruleHash';
   if (r.ruleHash !== sha256Hex(normalizeRuleText(r.rule))) return 'adaptation ruleHash does not match its rule';
-  if (r.method !== DERIVATION_METHOD) return 'adaptation was not produced by the recorded derivation method';
+  if (!ADAPTATION_METHODS.includes(r.method)) return 'adaptation was not produced by a recorded derivation method';
   if (!Number.isInteger(r.minSupport) || r.minSupport < 1 || r.minSupport > MAX_SUPPORT_REFS) return 'adaptation minSupport is out of range';
+  if (r.method === PREDICTION_DERIVATION_METHOD && r.minSupport !== 1) return 'a prediction-derived adaptation rests on one evaluation, so its minSupport must be 1';
   if (!r.support || typeof r.support !== 'object' || Array.isArray(r.support)) return 'adaptation has no supporting evidence';
   const experiences = storedIdListProblem(r.support.experienceIds, 'adaptation supporting experiences', MAX_SUPPORT_REFS);
   if (experiences) return experiences;
-  const feedback = storedIdListProblem(r.support.feedbackIds, 'adaptation supporting feedback', MAX_SUPPORT_REFS);
+  const feedback = r.method === PREDICTION_DERIVATION_METHOD
+    ? emptyIdListProblem(r.support.feedbackIds, 'adaptation supporting feedback')
+    : storedIdListProblem(r.support.feedbackIds, 'adaptation supporting feedback', MAX_SUPPORT_REFS);
   if (feedback) return feedback;
+  if (r.method === PREDICTION_DERIVATION_METHOD) {
+    const predictions = storedIdListProblem(r.support.predictionIds, 'adaptation supporting predictions', 1);
+    if (predictions) return predictions;
+    const evaluations = storedIdListProblem(r.support.evaluationIds, 'adaptation supporting evaluations', 1);
+    if (evaluations) return evaluations;
+    const proposalProblem = validateProposal(r, r.capability);
+    if (proposalProblem) return proposalProblem;
+    if (r.support.predictionIds[0] !== r.proposal.verdicts[0].predictionId) return 'adaptation support names a different prediction than its proposal';
+    if (r.support.evaluationIds[0] !== r.proposal.verdicts[0].evaluationId) return 'adaptation support names a different evaluation than its proposal';
+  } else {
+    if (r.support.predictionIds !== undefined || r.support.evaluationIds !== undefined) return 'a feedback-derived adaptation must not carry prediction evidence';
+    if (r.proposal !== undefined) return 'a feedback-derived adaptation must not carry a prediction proposal';
+  }
   for (const field of ['targetId', 'decision', 'assessment', 'experienceId']) {
     if (r[field] !== undefined) return `adaptation must not carry ${field}`;
   }
@@ -727,8 +820,34 @@ function annotateAdaptations(index, { retiredExperiences, retiredFeedback }) {
         : 'a piece of supporting feedback has been corrected by later feedback';
     }
 
+    // A prediction-derived candidate arrives carrying its own shape: the typed proposal is what the
+    // recorded outcome states, so approval alone can put it in force. A guidance record the user writes
+    // afterwards restates the shape and supersedes the proposal's, exactly as it supersedes an earlier
+    // guidance record. `source` says which of the two a reader is looking at.
+    const proposal = record.method === PREDICTION_DERIVATION_METHOD ? record.proposal ?? null : null;
+    const recordedGuidance = guidanceEvents.length > 0 ? guidanceEvents.at(-1) : null;
+    const effectiveGuidance = recordedGuidance
+      ? { ...summarizeGuidance(recordedGuidance), source: 'record' }
+      : proposal
+        ? {
+          id: record.id,
+          order: proposal.guidance.order,
+          avoid: [...proposal.guidance.avoid],
+          prefer: [...proposal.guidance.prefer],
+          maxSteps: proposal.guidance.maxSteps,
+          reason: null,
+          createdAt: record.createdAt,
+          operationId: record.provenance?.operationId ?? null,
+          source: 'proposal',
+        }
+        : null;
+
     return {
       ...record,
+      // How this candidate was produced. The two derivations are never pooled: a reader can tell a rule
+      // the user's corrections support from one a recorded outcome proposes, and neither claims the other.
+      source: record.method === PREDICTION_DERIVATION_METHOD ? 'prediction' : 'feedback',
+      proposal,
       decisionState,
       active: decisionState === 'approved' && supportIntact,
       inactiveReason,
@@ -737,12 +856,14 @@ function annotateAdaptations(index, { retiredExperiences, retiredFeedback }) {
       retirement: retirements.length === 1 ? summarizeRetirement(retirements[0]) : null,
       decisions: events.slice(-MAX_SAMPLES).map(summarizeDecision),
       decision: latest ? summarizeDecision(latest) : null,
-      // The shape the user gave this guidance, as the last record of it names it. Store order governs,
-      // as with a decision: a later record restates the shape and every earlier one stays readable. An
-      // adaptation with no guidance record answers questions about its rule text and nothing else, and
-      // no reader may treat the absence as "the user asked for nothing in particular".
-      guidance: guidanceEvents.length > 0 ? summarizeGuidance(guidanceEvents.at(-1)) : null,
+      // The shape in force, as the last record of it names it. Store order governs, as with a decision:
+      // a later record restates the shape and every earlier one stays readable. An adaptation with no
+      // guidance record answers questions about its rule text and nothing else, and no reader may treat
+      // the absence as "the user asked for nothing in particular".
+      guidance: effectiveGuidance,
       guidanceCount: guidanceEvents.length,
+      shapeSource: effectiveGuidance?.source ?? null,
+      shapeVersion: guidanceEvents.length > 0 ? guidanceEvents.length : (proposal ? 1 : null),
       guidanceHistory: guidanceEvents.slice(-MAX_SAMPLES).map(summarizeGuidance),
       supportState: supportIntact ? 'intact' : 'stale',
       supportProblems: [
@@ -830,6 +951,7 @@ export class ExperienceStore {
   constructor(filePath, {
     now = () => new Date(),
     operations = null,
+    predictions = null,
     parseCacheBytes = EXPERIENCE_PARSE_CACHE_BYTES,
     lockWaitMs,
     lockRetryMs,
@@ -840,12 +962,25 @@ export class ExperienceStore {
     // The audit log an experience must reference. Reads work without it; every experience write
     // refuses, because an unverified pointer would be a claim about an event nothing can confirm.
     this.operations = operations;
+    // The prediction ledger a prediction-derived candidate is checked against on every read. Feedback
+    // derivation works without it; a prediction-derived candidate is reported inert when it is absent,
+    // because "the evidence may have changed" cannot be answered by a store that does not hold it.
+    this.predictions = predictions;
     this.log = new JsonlStore(filePath, { validateRecord: validateExperienceRecord, parseCacheBytes });
     // Each write derives its decision from the whole authoritative log - what is already recorded
     // for that operation, which feedback is still current, which candidates exist - and then
     // appends. The lock covers read-derive-append for one store, so two processes cannot each
     // decide from a state the other has not written yet.
     this.writeLock = new WriterLock(filePath, { waitMs: lockWaitMs, retryMs: lockRetryMs, retryMaxMs: lockRetryMaxMs });
+  }
+
+  // The two stores are constructed in one direction (the prediction store already holds this one for
+  // its evidence reads), so the reverse edge is attached rather than passed through the constructor.
+  // Until it is attached, feedback-derived records behave exactly as they did and every prediction-
+  // derived record is reported inert.
+  attachPredictions(store) {
+    this.predictions = store;
+    return this;
   }
 
   #requireUser(origin, what) {
@@ -1037,9 +1172,9 @@ export class ExperienceStore {
 
   async #deriveFromAuthority({ recorded, minSupport }) {
     const records = await this.#loadComplete({ beforeAppend: true });
-    const { index, retiredExperiences, retiredFeedback } = deriveStore(records);
+    const { index, retiredExperiences, retiredFeedback, experiences: derivedExperiences } = deriveStore(records);
     const retiredTargets = new Set(index.retirements.map((r) => r.targetId));
-    const experiences = index.experiences.filter((r) =>
+    const experiences = derivedExperiences.filter((r) =>
       !retiredExperiences.has(r.id) && r.adaptationEligible === true && isScopableCapability(r.capability));
 
     const specs = deriveCandidateSpecs({
@@ -1051,10 +1186,11 @@ export class ExperienceStore {
     });
 
     const created = [];
-    const skipped = [...specs.skipped];
+    const skipped = specs.skipped.map((s) => ({ ...s, source: 'feedback' }));
     for (const spec of specs.created) {
       if (spec.support.experienceIds.length > MAX_SUPPORT_REFS || spec.support.feedbackIds.length > MAX_SUPPORT_REFS) {
         skipped.push({
+          source: 'feedback',
           capability: spec.capability,
           reason: `its supporting evidence is larger than the ${MAX_SUPPORT_REFS} reference bound for one adaptation`,
           supportingExperienceIds: spec.support.experienceIds.slice(0, MAX_HEALTH_SAMPLES),
@@ -1081,7 +1217,136 @@ export class ExperienceStore {
       await this.log.append(record);
       created.push(record);
     }
-    return { created, skipped, minSupport: specs.minSupport };
+
+    // The feedback candidates just written are part of what a prediction-derived proposal must not
+    // duplicate, so they join the taken set before the second derivation runs.
+    const taken = new Set(index.adaptations
+      .filter((a) => !retiredTargets.has(a.id))
+      .map((a) => proposalKey(a.capability, a.rule)));
+    for (const record of created) taken.add(proposalKey(record.capability, record.rule));
+    const prediction = await this.#derivePredictionCandidates({
+      index,
+      experiencesById: new Map(derivedExperiences.map((r) => [r.id, r])),
+      recorded,
+      taken,
+      records,
+    });
+    created.push(...prediction.created);
+    skipped.push(...prediction.skipped);
+
+    return { created, skipped, minSupport: specs.minSupport, prediction: prediction.report };
+  }
+
+  // The second, separate derivation: one eligible recorded outcome proposes one candidate. It reads the
+  // prediction ledger once, judges every expectation with the same rule the read path uses, and appends
+  // nothing unless the user asked for a derivation - an evaluation still approves and derives nothing.
+  // A scope-and-rule pair already stated by a candidate that has not been retired is not restated, so two
+  // evaluations of the same capability cannot double the influence one rule has.
+  async #derivePredictionCandidates({ index, experiencesById, recorded, taken, records }) {
+    const report = {
+      available: false,
+      reason: null,
+      considered: 0,
+      eligible: 0,
+      ineligible: 0,
+      created: 0,
+      truncated: false,
+      limit: MAX_PREDICTION_CANDIDATES,
+    };
+    if (!this.predictions || typeof this.predictions.list !== 'function') {
+      report.reason = 'no prediction ledger is attached to this store, so no recorded outcome was read';
+      return { created: [], skipped: [], report };
+    }
+    let ledger;
+    try {
+      ledger = await this.predictions.list({ limit: MAX_PREDICTION_CANDIDATES });
+    } catch (err) {
+      report.available = true;
+      report.reason = `the prediction ledger could not be read: ${err?.message ?? String(err)}`;
+      return { created: [], skipped: [], report };
+    }
+    report.available = true;
+    report.truncated = ledger.truncated === true;
+    const projections = ledger.projections ?? [];
+    report.considered = projections.length;
+    if (report.truncated) {
+      report.reason = `only the most recent ${MAX_PREDICTION_CANDIDATES} of ${ledger.total ?? projections.length} expectation(s) were read; an older one is not considered by this derivation`;
+    }
+
+    const created = [];
+    const skipped = [];
+    for (const projection of projections) {
+      const eligibility = predictionEligibility({ projection, experiencesById });
+      if (!eligibility.eligible) {
+        report.ineligible += 1;
+        // Only an expectation that was actually evaluated is reported here: the rest are the subject of
+        // the eligibility read, and listing them in a derivation result would bury the candidates.
+        if (projection.status === 'evaluated') {
+          skipped.push({
+            source: 'prediction',
+            predictionId: projection.id,
+            capability: projection.capability ?? null,
+            reason: `its recorded outcome cannot propose a rule: ${eligibility.reason}`,
+            eligibility: eligibility.state,
+          });
+        }
+        continue;
+      }
+      report.eligible += 1;
+      const proposal = proposalFor({ projection, experiencesById });
+      const deciding = decidingOutcomeOf(projection, experiencesById);
+      const rule = proposalRule(projection.capability, deciding.outcomeClass);
+      const key = proposalKey(projection.capability, rule);
+      if (taken.has(key)) {
+        skipped.push({
+          source: 'prediction',
+          predictionId: projection.id,
+          capability: projection.capability,
+          reason: 'a candidate that has not been retired already states this rule for this scope, so this outcome is not counted again',
+        });
+        continue;
+      }
+      const experienceIds = [...new Set(projection.evaluation.outcomeExperienceIds)];
+      if (experienceIds.length === 0 || experienceIds.length > MAX_SUPPORT_REFS) {
+        skipped.push({
+          source: 'prediction',
+          predictionId: projection.id,
+          capability: projection.capability,
+          reason: `its recorded evaluation cites ${experienceIds.length} outcome record(s), and a candidate carries between 1 and ${MAX_SUPPORT_REFS}`,
+        });
+        continue;
+      }
+      const id = randomUUID();
+      if (records.some((r) => r.id === id) || created.some((r) => r.id === id)) {
+        throw new StoreError('identifier collision; nothing written');
+      }
+      const record = {
+        schema: EXPERIENCE_SCHEMA,
+        kind: ADAPTATION_KIND,
+        id,
+        capability: projection.capability,
+        rule,
+        ruleHash: sha256Hex(normalizeRuleText(rule)),
+        method: PREDICTION_DERIVATION_METHOD,
+        minSupport: 1,
+        support: {
+          experienceIds,
+          feedbackIds: [],
+          predictionIds: [projection.id],
+          evaluationIds: [projection.evaluation.id],
+        },
+        proposal,
+        createdAt: this.now().toISOString(),
+        provenance: recorded,
+      };
+      const problem = validateExperienceRecord(record);
+      if (problem) throw new StoreError(`the derived prediction candidate failed validation (${problem}); nothing written`);
+      await this.log.append(record);
+      created.push(record);
+      taken.add(key);
+      report.created += 1;
+    }
+    return { created, skipped, report };
   }
 
   // The user's decision on one candidate. A model cannot reach this path: the registry refuses a
@@ -1266,6 +1531,138 @@ export class ExperienceStore {
     return records;
   }
 
+  // Every predicate outside this method treats an adaptation's stored evidence as sufficient. A
+  // prediction-derived candidate is the one kind whose evidence lives in another store and can change
+  // without this log changing at all, so each read re-checks it against the ledger as it stands now. The
+  // check can only make a record less active, never more: approval, retirement, and support are still
+  // decided here. Nothing is cached between reads, so an evaluation or withdrawal appended a moment ago
+  // is seen by the next read.
+  async #predictionCurrentness(rows, experiencesById) {
+    const derived = rows.filter((r) => r.method === PREDICTION_DERIVATION_METHOD);
+    if (derived.length === 0) return { rows, report: null };
+    const available = Boolean(this.predictions && typeof this.predictions.detail === 'function');
+    const report = {
+      available,
+      checked: derived.length,
+      current: 0,
+      stale: 0,
+      reason: available ? null : 'the prediction ledger is not attached to this store, so no prediction-derived candidate can be confirmed current',
+    };
+    const cache = new Map();
+    const out = [];
+    for (const row of rows) {
+      if (row.method !== PREDICTION_DERIVATION_METHOD) {
+        out.push(row);
+        continue;
+      }
+      const predictionId = row.support?.predictionIds?.[0] ?? null;
+      const evaluationId = row.support?.evaluationIds?.[0] ?? null;
+      let judgment;
+      if (!available) {
+        judgment = { eligible: false, state: 'prediction_store_unavailable', reason: report.reason };
+      } else if (!predictionId) {
+        judgment = { eligible: false, state: 'evaluation_missing', reason: 'the candidate names no prediction record' };
+      } else {
+        if (!cache.has(predictionId)) {
+          try {
+            cache.set(predictionId, await this.predictions.detail(predictionId));
+          } catch (err) {
+            cache.set(predictionId, { unavailable: err?.message ?? String(err) });
+          }
+        }
+        const projection = cache.get(predictionId);
+        if (projection?.unavailable !== undefined) {
+          judgment = { eligible: false, state: 'prediction_store_unavailable', reason: `the prediction ledger could not be read: ${projection.unavailable}` };
+        } else if (evaluationId && projection?.evaluation?.id !== evaluationId) {
+          judgment = { eligible: false, state: 'evaluation_changed', reason: 'the evaluation this candidate cites is no longer the evaluation on record for the prediction' };
+        } else {
+          judgment = predictionEligibility({ projection, experiencesById });
+          // The proposal is a statement of one recorded verdict. If any part of that statement no longer
+          // matches the records it was taken from, the candidate is inert until the user derives again.
+          if (judgment.eligible && row.proposal) {
+            const verdict = row.proposal.verdicts?.[0] ?? null;
+            const recomputed = verdict && evidenceDigest({
+              predictionId,
+              evaluationId,
+              verdict: verdict.verdict,
+              outcomeClass: verdict.outcomeClass,
+              outcomeExperienceIds: row.support?.experienceIds ?? [],
+            });
+            if (recomputed !== row.proposal.evidenceDigest) {
+              judgment = { eligible: false, state: 'evaluation_changed', reason: 'the recorded outcome, verdict, or evidence behind this candidate has changed since it was derived' };
+            }
+          }
+        }
+      }
+      if (judgment.eligible) {
+        report.current += 1;
+        out.push({ ...row, predictionEvidence: { eligible: true, state: 'eligible', reason: null } });
+        continue;
+      }
+      report.stale += 1;
+      out.push({
+        ...row,
+        // An unapproved candidate was already inert for its own reason; an approved one loses its effect
+        // here, and the reason names the evidence rather than the approval, which still stands.
+        active: false,
+        inactiveReason: row.decisionState === 'approved'
+          ? `the prediction evidence no longer supports this candidate: ${judgment.reason}`
+          : row.inactiveReason,
+        predictionEvidence: { eligible: false, state: judgment.state, reason: judgment.reason },
+      });
+    }
+    return { rows: out, report };
+  }
+
+  // Read-only inspection of what each recorded expectation could propose, judged by the same rule the
+  // derivation uses. Nothing is written; an eligible row is not a candidate until the user asks for one.
+  async predictionEligibilityReport({ capability = null, limit = MAX_PREDICTION_CANDIDATES } = {}) {
+    const size = Number.isInteger(limit) && limit >= 1
+      ? Math.min(limit, MAX_PREDICTION_CANDIDATES)
+      : MAX_PREDICTION_CANDIDATES;
+    const report = { available: false, reason: null, considered: [], total: 0, truncated: false, limit: size };
+    if (!this.predictions || typeof this.predictions.list !== 'function') {
+      report.reason = 'no prediction ledger is attached to this store';
+      return report;
+    }
+    let ledger;
+    try {
+      ledger = await this.predictions.list({ limit: size });
+    } catch (err) {
+      report.available = true;
+      report.reason = `the prediction ledger could not be read: ${err?.message ?? String(err)}`;
+      return report;
+    }
+    report.available = true;
+    const records = await this.#loadComplete();
+    const derived = deriveStore(records);
+    const experiencesById = new Map(derived.experiences.map((r) => [r.id, r]));
+    const projections = (ledger.projections ?? []).filter((p) => scopeMatches({ capability: p.capability }, { capability }));
+    report.total = projections.length;
+    report.truncated = ledger.truncated === true;
+    report.considered = projections.slice(0, size).map((projection) => {
+      const eligibility = predictionEligibility({ projection, experiencesById });
+      return {
+        predictionId: projection.id,
+        capability: projection.capability,
+        subject: projection.subject,
+        expectation: projection.expectation,
+        status: projection.status,
+        verdict: projection.evaluation?.verdict ?? null,
+        evaluationId: projection.evaluation?.id ?? null,
+        outcomeExperienceIds: [...(projection.evaluation?.outcomeExperienceIds ?? [])],
+        outcomeClass: decidingOutcomeOf(projection, experiencesById)?.outcomeClass ?? null,
+        eligible: eligibility.eligible,
+        state: eligibility.state,
+        reason: eligibility.reason,
+        proposal: eligibility.eligible ? proposalFor({ projection, experiencesById }) : null,
+        alreadyCandidate: derived.adaptations.some((a) => a.decisionState !== 'retired'
+          && (a.support?.predictionIds ?? []).includes(projection.id)),
+      };
+    });
+    return report;
+  }
+
   async lockReport() {
     return this.writeLock.state();
   }
@@ -1276,7 +1673,9 @@ export class ExperienceStore {
 
   async status() {
     const { records, corrupt } = await this.log.load();
-    const { index, adaptations } = deriveStore(records);
+    const { index, experiences, adaptations } = deriveStore(records);
+    const experiencesById = new Map(experiences.map((r) => [r.id, r]));
+    const current = await this.#predictionCurrentness(adaptations.filter((a) => a.active), experiencesById);
     return {
       path: this.filePath,
       records: records.length,
@@ -1286,10 +1685,13 @@ export class ExperienceStore {
       unknownCapture: index.experiences.filter((r) => captureOf(r) === CAPTURE_UNKNOWN).length,
       feedback: index.feedback.length,
       adaptations: index.adaptations.length,
+      feedbackDerivedAdaptations: index.adaptations.filter((a) => a.method !== PREDICTION_DERIVATION_METHOD).length,
+      predictionDerivedAdaptations: index.adaptations.filter((a) => a.method === PREDICTION_DERIVATION_METHOD).length,
+      predictionEvidenceStale: current.report?.stale ?? 0,
       decisions: index.decisions.length,
       retirements: index.retirements.length,
       guidance: index.guidance.length,
-      activeAdaptations: adaptations.filter((a) => a.active).length,
+      activeAdaptations: current.rows.filter((a) => a.active).length,
       corrupt: corrupt.length,
     };
   }
@@ -1347,20 +1749,23 @@ export class ExperienceStore {
 
   async adaptations({ limit = 20, includeRetired = true } = {}) {
     const records = await this.#loadComplete();
-    const { adaptations } = deriveStore(records);
+    const { experiences, adaptations } = deriveStore(records);
     const kept = includeRetired ? adaptations : adaptations.filter((a) => a.decisionState !== 'retired');
-    return kept.slice(-Math.max(1, limit)).reverse();
+    const window = kept.slice(-Math.max(1, limit)).reverse();
+    const current = await this.#predictionCurrentness(window, new Map(experiences.map((r) => [r.id, r])));
+    return current.rows;
   }
 
   async adaptationDetail(target) {
     const ref = typeof target === 'string' ? target.trim() : '';
     if (ref.length === 0) return null;
     const records = await this.#loadComplete();
-    const { adaptations } = deriveStore(records);
+    const { experiences, adaptations } = deriveStore(records);
     const matches = adaptations.filter((a) => matchesRef(a, ref));
     if (matches.length === 0) return null;
     if (matches.length > 1) throw new ValidationError('the adaptation target is ambiguous; use a longer id prefix');
-    return matches[0];
+    const current = await this.#predictionCurrentness(matches, new Map(experiences.map((r) => [r.id, r])));
+    return current.rows[0];
   }
 
   // Bounded retrieval of the adaptations in effect: approved by the user's latest applicable
@@ -1377,8 +1782,14 @@ export class ExperienceStore {
   async activeAdaptations({ query = null, capability = null, limit = DEFAULT_ACTIVE_ADAPTATIONS } = {}) {
     const size = Number.isInteger(limit) && limit >= 1 ? Math.min(limit, MAX_ACTIVE_ADAPTATIONS) : DEFAULT_ACTIVE_ADAPTATIONS;
     const records = await this.#loadComplete();
-    const { adaptations } = deriveStore(records);
-    const inScope = adaptations.filter((a) => a.active && scopeMatches(a, { capability, terms: null }));
+    const { experiences, adaptations } = deriveStore(records);
+    // Overlay only what could possibly be active: the currentness check can remove a row, never add one,
+    // so an unapproved or retired candidate costs no ledger read at all.
+    const current = await this.#predictionCurrentness(
+      adaptations.filter((a) => a.active),
+      new Map(experiences.map((r) => [r.id, r])),
+    );
+    const inScope = current.rows.filter((a) => a.active && scopeMatches(a, { capability, terms: null }));
     const terms = typeof query === 'string' && query.trim().length > 0 ? new Set(tokenize(query)) : null;
     const ranked = inScope
       .map((a, index) => ({ a, index, related: terms ? scopesNamedIn(a, terms) : false }))

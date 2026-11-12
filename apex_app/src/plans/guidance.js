@@ -35,15 +35,20 @@ export const GUIDANCE_SCHEMA = 'apex.guidance.v1';
 // Which ordinal of the user's recorded shapes is governing. The store keeps every shape record and the
 // last one wins, so a version is the count of records, not a number APEX invents: version 2 is the second
 // shape the user recorded for this adaptation. It is what an influenced decision names, so a reader can
-// tell which statement of the rule was in force.
-const versionOf = (row) => (Number.isInteger(row?.guidanceCount) && row.guidanceCount > 0 ? row.guidanceCount : null);
+// tell which statement of the rule was in force. A prediction-derived adaptation carries its shape in the
+// candidate itself rather than in a separate guidance event, so the store states that version directly as
+// `shapeVersion`; it is read first and the guidance-event count is only the fallback.
+const versionOf = (row) => {
+  if (Number.isInteger(row?.shapeVersion) && row.shapeVersion > 0) return row.shapeVersion;
+  return Number.isInteger(row?.guidanceCount) && row.guidanceCount > 0 ? row.guidanceCount : null;
+};
 
 // The four things a guidance record can ask for, in the words the reader is shown. `order` is the only
 // enumerated one; the other three are names and counts the candidate either matches or does not.
 export const GUIDANCE_FIELDS = Object.freeze(['order', 'avoid', 'prefer', 'maxSteps']);
 
 const INERT_STATES = Object.freeze({
-  candidate: 'it was derived from the user\'s corrections and the user has not approved it',
+  candidate: 'it was derived from recorded evidence and the user has not approved it',
   rejected: 'the user rejected it, so it is history and not guidance',
   retired: 'the user retired it, so nothing in it applies to future work',
   ambiguous: 'the log holds more than one retirement for it, so its state is not established',
@@ -187,17 +192,51 @@ export function guidanceFrom({
   for (const row of adaptations ?? []) {
     const state = stateOf(row);
     const shape = row.guidance ?? null;
+    const source = row.source === 'prediction' || row.method === 'evaluated_prediction' ? 'prediction' : 'feedback';
     const entry = {
       id: row.id,
       capability: row.capability ?? null,
       rule: singleLine(row.rule ?? '', 200),
       ruleHash: row.ruleHash ?? null,
       version: versionOf(row),
+      // What produced the rule. Feedback-derived and prediction-derived records run through the same
+      // approval gate and the same ordering, so a comparison that could not name which one it was reading
+      // could not disclose that two different kinds of evidence were behind the same dimension.
+      source,
+      method: row.method ?? null,
       supportCount: row.supportCount ?? 0,
+      // The exact records the rule rests on, kept separated by kind. A prediction-derived rule cites one
+      // prediction and one evaluation; folding those into the experience list would let a reader count one
+      // evaluation twice and lose which ledger it came from.
       support: {
         experienceIds: [...(row.support?.experienceIds ?? [])],
         feedbackIds: [...(row.support?.feedbackIds ?? [])],
+        predictionIds: [...(row.support?.predictionIds ?? [])],
+        evaluationIds: [...(row.support?.evaluationIds ?? [])],
       },
+      // The store's read of whether the cited prediction still stands behind this candidate. It is null
+      // for a feedback-derived record and for a caller that did not read the prediction ledger, which is
+      // why it is printed as an absence rather than treated as "eligible".
+      predictionEvidence: row.predictionEvidence ? {
+        eligible: row.predictionEvidence.eligible === true,
+        state: row.predictionEvidence.state ?? null,
+        reason: row.predictionEvidence.reason ?? null,
+      } : null,
+      // The typed rule the evaluated outcome proposed, exactly as stored, for the records whose shape came
+      // from a prediction rather than from a guidance event. Bounded to what the validator admits.
+      proposal: row.proposal ? {
+        type: row.proposal.type ?? null,
+        dimension: row.proposal.dimension ?? null,
+        verdicts: (row.proposal.verdicts ?? []).slice(0, 2).map((v) => ({ ...v })),
+        guidance: {
+          order: row.proposal.guidance?.order ?? null,
+          avoid: [...(row.proposal.guidance?.avoid ?? [])],
+          prefer: [...(row.proposal.guidance?.prefer ?? [])],
+          maxSteps: row.proposal.guidance?.maxSteps ?? null,
+        },
+        limitations: [...(row.proposal.limitations ?? [])],
+        evidenceDigest: row.proposal.evidenceDigest ?? null,
+      } : null,
       decidedAt: row.decidedAt ?? null,
       decisionState: row.decisionState ?? null,
       active: row.active === true,
@@ -225,7 +264,9 @@ export function guidanceFrom({
     }
     if (state !== 'applied') {
       entry.state = state;
-      entry.why = INERT_STATES[state] ?? 'the record it belongs to is not an approved, active adaptation';
+      entry.why = (state === 'stale' && typeof row.inactiveReason === 'string' && row.inactiveReason.length > 0)
+        ? singleLine(row.inactiveReason, 300)
+        : (INERT_STATES[state] ?? 'the record it belongs to is not an approved, active adaptation');
       inert.push(entry);
       records.push(entry);
       continue;
@@ -299,14 +340,26 @@ export function guidanceFrom({
   });
 
   const influenced = rows.some((r) => r.value !== null);
+  // Which kind of evidence is behind the ordering that was applied. The five distinctions the disclosure
+  // owes the user are all readable here: a feedback-derived rule, a prediction-derived rule, both kinds
+  // applicable at once, a prediction record that was considered and could not stand, and no prediction
+  // record at all (`predictionConsidered === 0`).
+  const sources = {
+    feedbackDerived: usable.filter((e) => e.source === 'feedback').map((e) => e.id),
+    predictionDerived: usable.filter((e) => e.source === 'prediction').map((e) => e.id),
+    bothEligible: usable.some((e) => e.source === 'feedback') && usable.some((e) => e.source === 'prediction'),
+    predictionConsidered: records.filter((e) => e.source === 'prediction').length,
+    predictionRejected: inert.filter((e) => e.source === 'prediction').map((e) => ({ id: e.id, state: e.state, why: e.why })),
+  };
   return {
     schema: GUIDANCE_SCHEMA,
     note: GUIDANCE_NOTE,
     at: now ?? null,
     records,
     applicable: usable.map((e) => e.id),
-    inert: inert.map((e) => ({ id: e.id, state: e.state, why: e.why })),
+    inert: inert.map((e) => ({ id: e.id, source: e.source, state: e.state, why: e.why })),
     conflicts: pairs,
+    sources,
     candidates: rows,
     // The claim the AL record set made as an absence, now stated as a fact about this comparison: one
     // record shaped the ordering, or none could. `false` is still the honest answer when no approved
@@ -314,7 +367,7 @@ export function guidanceFrom({
     influencesSelection: influenced,
     authorizes: false,
     digest: digestOf({
-      applicable: usable.map((e) => [e.id, e.capability, e.version, e.guidance.order, e.guidance.avoid, e.guidance.prefer, e.guidance.maxSteps]).sort(),
+      applicable: usable.map((e) => [e.id, e.capability, e.version, e.source, e.guidance.order, e.guidance.avoid, e.guidance.prefer, e.guidance.maxSteps]).sort(),
       // Inert records are deliberately not in here: this digest certifies what ranked the candidates,
       // and a record that ranked nothing moving between two inert states must not read as a change to
       // the answer. What can move the ranking - an applicable shape, an unresolved conflict, a field
@@ -337,6 +390,7 @@ export function emptyGuidance(reason = null, candidates = []) {
     applicable: [],
     inert: [],
     conflicts: [],
+    sources: { feedbackDerived: [], predictionDerived: [], bothEligible: false, predictionConsidered: 0, predictionRejected: [] },
     // A row per candidate, so the comparison prints the same dimension for every approach and says it
     // had nothing to judge - the alternative is a dimension that silently disappears from half the
     // answers, which reads like a difference between the candidates rather than between the reads.
@@ -398,8 +452,17 @@ export function renderGuidance(guidance, { indent = '' } = {}) {
     const shape = record.guidance
       ? [`order ${record.guidance.order ?? '-'}`, `avoid ${record.guidance.avoid.join(', ') || '-'}`, `prefer ${record.guidance.prefer.join(', ') || '-'}`, `at most ${record.guidance.maxSteps ?? '-'} step(s)`].join(', ')
       : 'no shape recorded';
+    // Which ledger the rule came from, stated beside the rule. A prediction-derived rule is not more or
+    // less authoritative than a feedback-derived one - both needed the user's approval - but the reader
+    // is entitled to know which kind of evidence they approved.
+    const provenance = record.source === 'prediction'
+      ? `prediction-derived${record.predictionEvidence ? ` (prediction evidence ${record.predictionEvidence.eligible ? 'still stands' : `no longer stands: ${record.predictionEvidence.reason ?? record.predictionEvidence.state ?? 'not established'}`})` : ''}`
+      : 'feedback-derived';
+    const support = record.source === 'prediction'
+      ? `${record.support.predictionIds.length} prediction(s), ${record.support.evaluationIds.length} evaluation(s)`
+      : `${record.support.experienceIds.length} experience(s), ${record.support.feedbackIds.length} feedback record(s)`;
     lines.push(`${indent}  ${record.id} for ${record.capability ?? '-'} [${record.state}]: ${record.rule}`);
-    lines.push(`${indent}    shape: ${shape}; approved ${record.active ? 'and still standing' : 'not established as active'}${record.supportCount ? `; ${record.supportCount} supporting record(s)` : ''}`);
+    lines.push(`${indent}    ${provenance}; shape: ${shape}; approved ${record.active ? 'and still standing' : 'not established as active'}; support: ${support}`);
     lines.push(`${indent}    ${record.why}`);
   }
   for (const pair of guidance.conflicts ?? []) {

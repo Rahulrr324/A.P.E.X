@@ -101,6 +101,9 @@ describe('AB-5 an operation interrupted before its audit append', () => {
       // Batch AM: the shapes a user records on an approved rule are counted here, so a restart that
       // holds none says so rather than leaving the field out and letting a reader guess.
       guidance: 0,
+      // Batch AP-02: the two derivations and the currentness read are counted too, so an empty store
+      // states each as 0 rather than omitting them.
+      feedbackDerivedAdaptations: 0, predictionDerivedAdaptations: 0, predictionEvidenceStale: 0,
       activeAdaptations: 0, corrupt: 0,
     });
 

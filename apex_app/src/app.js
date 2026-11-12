@@ -78,6 +78,10 @@ export function createApp({
   // citations do not resolve there is refused, and every later read re-opens the horizon against it.
   // It is a separate log on purpose - see the header of prediction-store.js.
   const predictions = new PredictionStore(path.join(dataDir, 'predictions.jsonl'), { now: clock, experiences: experience });
+  // A prediction-derived candidate is checked against its prediction on every read, so the experience
+  // store holds the reverse edge. Until the attach below, feedback-derived records behave exactly as
+  // before and any prediction-derived record reads as inert.
+  experience.attachPredictions(predictions);
   const registry = new ActionRegistry();
   // Goals and plans are append-only records of intent. The plan store validates against the
   // live registry and reads goals, so it is constructed after both; neither store can execute

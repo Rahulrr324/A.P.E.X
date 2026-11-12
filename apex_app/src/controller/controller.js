@@ -1489,6 +1489,18 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // Read-only inspection of what the prediction ledger offers adaptation, and why the rest cannot be
+  // proposed. Nothing is derived here: a candidate still needs `adaptation.derive` and then the user's
+  // explicit decision, so this read is a question the user asks, not a step toward approval.
+  async adaptationEligibility({ capability = null, limit } = {}) {
+    const op = this.#experienceOp('adaptation.eligibility');
+    const input = {};
+    if (capability !== undefined && capability !== null) input.capability = capability;
+    if (limit !== undefined && limit !== null) input.limit = limit;
+    const step = await this.runAction('adaptation.eligibility', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   // Read-only inspection of the whole experience log, plus the check that gives the store its
   // meaning: every recorded experience re-verified against the audit record it names. Nothing is
   // repaired, nothing is approved, and an unreadable store is reported as unreadable, never as an

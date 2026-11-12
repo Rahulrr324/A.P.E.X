@@ -27,10 +27,12 @@ import {
   MAX_SUBJECT_CHARS,
   MAX_SUPERSEDES,
   MAX_SUPPORT_REFS,
+  MAX_PREDICTION_CANDIDATES,
   CAPTURE_AUTOMATIC,
   captureOf,
 } from '../experience/experience-store.js';
 import { MIN_SUPPORT_FEEDBACK } from '../experience/derivation.js';
+import { PREDICTION_DERIVATION_METHOD } from '../experience/prediction-derivation.js';
 import {
   MAX_TEMPORAL_EVENTS,
   MAX_WINDOW_DAYS,
@@ -192,6 +194,7 @@ function feedbackLine(f) {
 
 function adaptationLine(a) {
   const state = a.active ? 'active' : a.decisionState;
+  const predictionDerived = a.source === 'prediction' || a.method === PREDICTION_DERIVATION_METHOD;
   const notes = [];
   if (a.decisionState === 'candidate') notes.push('not approved: no user decision recorded');
   if (a.decisionState === 'rejected') notes.push('the user rejected this candidate');
@@ -204,11 +207,19 @@ function adaptationLine(a) {
   // The record's own provenance describes how the rule was produced, and it never changes, so it
   // is printed as derivation evidence. `decisionState` is what says whether the user approved it;
   // printing "candidate_unapproved" beside an approved rule would read as a contradiction.
-  const derived = `derived by ${a.provenance.origin === 'deterministic_derivation' ? 'deterministic derivation' : a.provenance.origin}`
-    + (a.provenance.updateMode === 'candidate_unapproved' ? ' (a candidate until your decision)' : '');
+  const derived = predictionDerived
+    ? 'derived by deterministic derivation from an evaluated prediction'
+      + (a.provenance.updateMode === 'candidate_unapproved' ? ' (a candidate until your decision)' : '')
+    : `derived by ${a.provenance.origin === 'deterministic_derivation' ? 'deterministic derivation' : a.provenance.origin}`
+      + (a.provenance.updateMode === 'candidate_unapproved' ? ' (a candidate until your decision)' : '');
+  // A prediction-derived rule rests on one prediction and one evaluation, not on a group of experiences.
+  // Printing "0 experience(s)" would read as missing evidence rather than as a different kind of evidence.
+  const support = predictionDerived
+    ? `${(a.support.predictionIds ?? []).length} prediction(s), ${(a.support.evaluationIds ?? []).length} evaluation(s)`
+    : `${a.support.experienceIds.length} experience(s), ${a.support.feedbackIds.length} feedback record(s)`;
   return `  [${shortId(a.id)}] scope ${a.capability} | ${state}\n`
     + `      rule: ${a.rule}\n`
-    + `      support: ${a.support.experienceIds.length} experience(s), ${a.support.feedbackIds.length} feedback record(s) | ${derived}\n`
+    + `      support: ${support} | ${derived}\n`
     + (notes.length > 0 ? `      ${notes.join('; ')}` : '      in effect for this scope');
 }
 
@@ -469,7 +480,7 @@ export function experienceActions(store) {
 
     {
       name: 'adaptation.derive',
-      description: 'Derive candidate adaptations from recorded experiences and the user\'s corrective feedback. Deterministic and bounded: a candidate is unapproved until the user decides. Write: user origin only.',
+      description: 'Derive candidate adaptations from recorded experiences, the user\'s corrective feedback, and completed evaluations of recorded predictions. Deterministic and bounded: a candidate is unapproved until the user decides. Write: user origin only.',
       inputHint: '{"minSupport": optional integer 1-20}',
       permission: 'write',
       origins: [ORIGIN_USER],
@@ -485,7 +496,7 @@ export function experienceActions(store) {
         return { minSupport };
       },
       async execute(ctx, { minSupport }) {
-        const { created, skipped } = await store.deriveAdaptations({
+        const { created, skipped, prediction } = await store.deriveAdaptations({
           minSupport,
           provenance: { operationId: ctx.operationId },
           origin: ctx.origin,
@@ -495,17 +506,36 @@ export function experienceActions(store) {
             ? `no new candidate adaptation (${skipped.length} supporting group(s) already recorded or too small)`
             : `derived ${created.length} candidate adaptation(s); ${skipped.length} group(s) skipped`,
           data: {
-            created: created.map((r) => ({ id: r.id, capability: r.capability, rule: r.rule, support: r.support })),
+            created: created.map((r) => ({
+              id: r.id,
+              capability: r.capability,
+              rule: r.rule,
+              method: r.method,
+              support: r.support,
+            })),
             skipped,
             minSupport,
+            // The prediction-ledger read that ran beside the feedback derivation, reported even when it
+            // found nothing: "no evaluated prediction was eligible" and "the ledger could not be read" are
+            // different facts, and only the report can tell them apart.
+            prediction: prediction ?? null,
           },
           display: [
             created.length === 0
               ? 'No new candidate adaptation.'
               : `Derived ${created.length} candidate(s) from the recorded evidence:`,
-            ...created.map((r) => `  [${shortId(r.id)}] scope ${r.capability} | rule: ${r.rule}\n      support: ${r.support.experienceIds.length} experience(s) | NOT APPROVED`),
+            ...created.map((r) => (r.method === PREDICTION_DERIVATION_METHOD
+              ? `  [${shortId(r.id)}] scope ${r.capability} | rule: ${r.rule}\n      prediction: ${(r.support.predictionIds ?? []).join(', ')} | evaluation: ${(r.support.evaluationIds ?? []).join(', ')} | NOT APPROVED`
+              : `  [${shortId(r.id)}] scope ${r.capability} | rule: ${r.rule}\n      support: ${r.support.experienceIds.length} experience(s) | NOT APPROVED`)),
             skipped.length === 0 ? null : `Skipped: ${skipped.map((s) => `${s.capability}: ${s.reason}`).join('; ')}`,
-            'A candidate is evidence that you asked for the same thing more than once. Nothing takes effect until you approve it.',
+            prediction && prediction.considered > 0
+              ? `Predictions: ${prediction.considered} evaluated record(s) read, ${prediction.eligible} eligible, ${prediction.created} candidate(s) added${prediction.truncated ? '; the read was bounded and more remain' : ''}.`
+              : null,
+            // A prediction-derived candidate rests on one evaluation, so the feedback wording would be
+            // false for it; the feedback-only path keeps its exact AP-01 sentence.
+            created.some((r) => r.method === PREDICTION_DERIVATION_METHOD)
+              ? 'A candidate is a bounded restatement of recorded evidence, never an instruction. Nothing takes effect until you approve it.'
+              : 'A candidate is evidence that you asked for the same thing more than once. Nothing takes effect until you approve it.',
           ].filter(Boolean).join('\n'),
         };
       },
@@ -520,11 +550,25 @@ export function experienceActions(store) {
           if (detail.provenance?.origin !== 'deterministic_derivation' || detail.provenance?.updateMode !== 'candidate_unapproved') {
             return { ok: false, detail: `candidate ${shortId(created.id)} provenance is not deterministic derivation` };
           }
-          if (detail.minSupport !== minSupport) {
+          // A prediction-derived candidate rests on one evaluation by construction, so the requested
+          // feedback threshold does not apply to it. It never rests on fewer than one evaluation, and the
+          // cited prediction and evaluation must both be present.
+          if (detail.method === PREDICTION_DERIVATION_METHOD) {
+            if (detail.minSupport !== 1) {
+              return { ok: false, detail: `prediction-derived candidate ${shortId(created.id)} was stored with a different support threshold` };
+            }
+            if ((detail.support.predictionIds ?? []).length !== 1 || (detail.support.evaluationIds ?? []).length !== 1) {
+              return { ok: false, detail: `prediction-derived candidate ${shortId(created.id)} does not cite exactly one prediction and one evaluation` };
+            }
+          } else if (detail.minSupport !== minSupport) {
             return { ok: false, detail: `candidate ${shortId(created.id)} was stored with a different support threshold` };
           }
           if (detail.support.experienceIds.length !== created.support.experienceIds.length) {
             return { ok: false, detail: `candidate ${shortId(created.id)} support differs from the derivation result` };
+          }
+          if ((detail.support.predictionIds ?? []).length !== (created.support.predictionIds ?? []).length
+            || (detail.support.evaluationIds ?? []).length !== (created.support.evaluationIds ?? []).length) {
+            return { ok: false, detail: `candidate ${shortId(created.id)} prediction support differs from the derivation result` };
           }
         }
         const active = await store.activeAdaptations({ limit: MAX_SUPPORT_REFS });
@@ -582,7 +626,9 @@ export function experienceActions(store) {
           display: [
             `Recorded your decision ${shortId(record.id)} on adaptation ${shortId(adaptation.id)}: ${decision}.`,
             `  scope: ${adaptation.capability} | rule: ${adaptation.rule}`,
-            `  support: ${adaptation.support.experienceIds.length} recorded experience(s)`,
+            adaptation.method === PREDICTION_DERIVATION_METHOD
+              ? `  support: ${(adaptation.support.predictionIds ?? []).length} prediction(s), ${(adaptation.support.evaluationIds ?? []).length} evaluation(s)`
+              : `  support: ${adaptation.support.experienceIds.length} recorded experience(s)`,
             changed ? `  earlier decision: ${previous.decision} (${shortId(previous.id)}) kept as history` : '  this is the first decision on this candidate',
             decision === 'approved'
               ? 'This now applies to future requests in this scope, within the bounded context. It grants no permission: an approved rule never authorizes an action.'
@@ -606,12 +652,16 @@ export function experienceActions(store) {
         if ((latest.reason ?? null) !== (reason ?? null)) {
           return { ok: false, detail: 'stored decision reason differs from the request' };
         }
-        const shouldBeActive = decision === 'approved' && detail.supportState === 'intact';
+        // An approved prediction-derived rule is active only while the prediction it cites still stands;
+        // approval is preserved, but the ledger can withdraw the evidence underneath it. The store derives
+        // that currentness, so verification reads it rather than assuming approval alone is sufficient.
+        const ledgerCurrent = detail.predictionEvidence == null || detail.predictionEvidence.eligible === true;
+        const shouldBeActive = decision === 'approved' && detail.supportState === 'intact' && ledgerCurrent;
         if (detail.active !== shouldBeActive) {
-          return { ok: false, detail: `active state ${detail.active} does not follow from the decision and the support` };
+          return { ok: false, detail: `active state ${detail.active} does not follow from the decision, the support, and the prediction evidence` };
         }
-        if (decision === 'approved' && detail.supportState !== 'intact') {
-          return { ok: true, detail: `decision recorded; the rule is not applied because ${detail.inactiveReason}` };
+        if (decision === 'approved' && !shouldBeActive) {
+          return { ok: true, detail: `decision recorded; the rule is not applied because ${detail.inactiveReason ?? 'its evidence no longer stands'}` };
         }
         const active = await store.activeAdaptations({ capability: detail.capability, limit: MAX_SUPPORT_REFS });
         if (decision === 'approved' && !active.adaptations.some((a) => a.id === detail.id)) {
@@ -842,6 +892,69 @@ export function experienceActions(store) {
           return { ok: false, detail: 'listed adaptations or their states differ from an independent store read' };
         }
         return { ok: true, detail: `${fresh.length} adaptation(s) and their states confirmed against the store` };
+      },
+    },
+    {
+      name: 'adaptation.eligibility',
+      description: 'Inspect which recorded predictions carry a completed evaluation that could become a candidate adaptation, and why the others cannot. Read-only; nothing is derived, approved, or applied.',
+      inputHint: '{"capability":"optional capability name","limit":"optional 1-20"}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      // A user-facing question about their own prediction ledger. It is not offered as a step a model
+      // plan may use: no plan becomes better by naming this read, and the transition from evidence to
+      // candidate is the user's act through `adaptation.derive`.
+      plannable: false,
+      // Read-only and derived: this answers "what could be proposed and why is the rest inert". It
+      // deliberately stops before derivation, because the transition from evidence to candidate is the
+      // user's act, not a read.
+      validate(input) {
+        const o = expectObject(input ?? {}, ['capability', 'limit']);
+        const capability = o.capability === undefined || o.capability === null
+          ? null
+          : textField(o.capability, 'capability', 64);
+        return {
+          capability,
+          limit: limitValue(o.limit, { max: MAX_PREDICTION_CANDIDATES, fallback: MAX_PREDICTION_CANDIDATES }),
+        };
+      },
+      async execute(_ctx, { capability, limit }) {
+        const report = await store.predictionEligibilityReport({ capability, limit });
+        const eligible = report.considered.filter((p) => p.eligible).length;
+        return {
+          summary: report.available
+            ? `prediction eligibility: ${report.considered.length} of ${report.total} projected record(s) inspected; ${eligible} eligible`
+            : 'prediction eligibility could not be read',
+          data: { capability, limit, report },
+          display: [
+            report.available
+              ? `Prediction eligibility (${report.considered.length} of ${report.total} projected, limit ${report.limit}${report.truncated ? ', truncated' : ''}):`
+              : `Prediction eligibility unavailable: ${report.reason}`,
+            ...report.considered.map((p) => {
+              const proposed = p.proposal
+                ? `\n      proposed rule: ${p.proposal.guidance.prefer.length ? `prefer ${p.proposal.guidance.prefer.join(', ')}` : `avoid ${p.proposal.guidance.avoid.join(', ')}`}`
+                : '';
+              return `  [${shortId(p.predictionId)}] ${p.capability ?? '-'} | ${p.status} | verdict ${p.verdict ?? '-'} | ${p.eligible ? 'ELIGIBLE' : `not eligible: ${p.state}`}\n`
+                + `      ${singleLine(p.subject ?? '', 200)}`
+                + (p.reason ? `\n      why: ${p.reason}` : '')
+                + proposed
+                + (p.alreadyCandidate ? '\n      a candidate already records this prediction' : '');
+            }),
+            report.available && report.considered.length === 0 ? '  (none recorded for this scope)' : null,
+            'An eligible prediction is only a candidate for your approval. Nothing here was derived, approved, or applied; run adaptation.derive and then decide explicitly.',
+          ].filter(Boolean).join('\n'),
+        };
+      },
+      async verify(_ctx, { capability, limit }, result) {
+        const fresh = await store.predictionEligibilityReport({ capability, limit });
+        if (fresh.available !== result.data.report.available) {
+          return { ok: false, detail: 'the prediction ledger became readable, or unreadable, between two reads' };
+        }
+        const before = result.data.report.considered.map((p) => [p.predictionId, p.eligible, p.state, p.evaluationId]);
+        const after = fresh.considered.map((p) => [p.predictionId, p.eligible, p.state, p.evaluationId]);
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
+          return { ok: false, detail: 'the prediction ledger changed between two reads of the same eligibility question' };
+        }
+        return { ok: true, detail: `${fresh.considered.length} prediction record(s) confirmed against an independent read; nothing was derived` };
       },
     },
     {

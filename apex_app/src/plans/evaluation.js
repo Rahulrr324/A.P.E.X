@@ -542,13 +542,33 @@ function adaptationDecisionOf({ guidance, included, front }) {
       capability: r.capability,
       version: r.version ?? null,
       ruleHash: r.ruleHash ?? null,
+      // Which ledger produced the rule, kept on the rule rather than summarised away: two records can
+      // score the same dimension from different evidence, and the reader is entitled to see which.
+      source: r.source ?? 'feedback',
+      method: r.method ?? null,
       support: {
         experienceIds: [...(r.support?.experienceIds ?? [])],
         feedbackIds: [...(r.support?.feedbackIds ?? [])],
+        predictionIds: [...(r.support?.predictionIds ?? [])],
+        evaluationIds: [...(r.support?.evaluationIds ?? [])],
       },
+      predictionEvidence: r.predictionEvidence ? { ...r.predictionEvidence } : null,
     }));
   const experienceIds = [...new Set(rules.flatMap((r) => r.support.experienceIds))];
   const feedbackIds = [...new Set(rules.flatMap((r) => r.support.feedbackIds))];
+  const predictionIds = [...new Set(rules.flatMap((r) => r.support.predictionIds))];
+  const evaluationIds = [...new Set(rules.flatMap((r) => r.support.evaluationIds))];
+  // The five distinctions Batch AP2 owes the reader, derived from the ledger's own record states rather
+  // than from a second read: feedback-derived, prediction-derived, both kinds applicable, prediction
+  // evidence considered but not usable, and no prediction record at all.
+  const sourceLedger = guidance?.sources ?? null;
+  const predictionEvidence = !sourceLedger || sourceLedger.predictionConsidered === 0
+    ? 'none'
+    : sourceLedger.predictionDerived.length > 0 && sourceLedger.feedbackDerived.length > 0
+      ? 'both'
+      : sourceLedger.predictionDerived.length > 0
+        ? 'prediction_derived'
+        : 'prediction_rejected';
   return {
     schema: ADAPTATION_DECISION_SCHEMA,
     dimension: ADAPTATION_DECISION_DIMENSION,
@@ -561,13 +581,33 @@ function adaptationDecisionOf({ guidance, included, front }) {
     evidence: {
       experienceIds: experienceIds.slice(0, MAX_DECISION_EVIDENCE),
       feedbackIds: feedbackIds.slice(0, MAX_DECISION_EVIDENCE),
-      truncated: experienceIds.length > MAX_DECISION_EVIDENCE || feedbackIds.length > MAX_DECISION_EVIDENCE,
+      predictionIds: predictionIds.slice(0, MAX_DECISION_EVIDENCE),
+      evaluationIds: evaluationIds.slice(0, MAX_DECISION_EVIDENCE),
+      truncated: experienceIds.length > MAX_DECISION_EVIDENCE
+        || feedbackIds.length > MAX_DECISION_EVIDENCE
+        || predictionIds.length > MAX_DECISION_EVIDENCE
+        || evaluationIds.length > MAX_DECISION_EVIDENCE,
+    },
+    // Which kind of evidence stands behind the one dimension an approved record may move.
+    sources: {
+      feedbackDerived: [...(sourceLedger?.feedbackDerived ?? [])],
+      predictionDerived: [...(sourceLedger?.predictionDerived ?? [])],
+      bothEligible: sourceLedger?.bothEligible === true,
+      predictionConsidered: sourceLedger?.predictionConsidered ?? 0,
+      predictionRejected: (sourceLedger?.predictionRejected ?? []).map((r) => ({ id: r.id, state: r.state, why: r.why })),
+      predictionEvidence,
     },
     // Every record the ledger read, with the state that decided whether it could move anything. The
     // ineligible ones are here for the same reason as the eligible ones: a reader has to be able to see
     // what was excluded and why, not only what was used.
     considered: (guidance?.records ?? []).map((r) => ({
-      id: r.id, capability: r.capability, state: r.state, version: r.version ?? null, why: r.why,
+      id: r.id,
+      capability: r.capability,
+      state: r.state,
+      version: r.version ?? null,
+      source: r.source ?? 'feedback',
+      predictionEvidence: r.predictionEvidence ? { ...r.predictionEvidence } : null,
+      why: r.why,
     })),
     declinedReason: applied ? null : guidanceDeclinedReason(guidance),
     digest: guidance?.digest ?? null,
@@ -881,12 +921,37 @@ export function renderAdaptationDecision(decision, { indent = '' } = {}) {
     lines.push(`${indent}  declined: ${decision.declinedReason}`);
   } else {
     for (const r of decision.rules) {
-      lines.push(`${indent}  applied: approved record ${r.id} version ${r.version ?? '-'} for ${r.capability}; evidence ${r.support.experienceIds.length ? r.support.experienceIds.join(', ') : 'none recorded'}`);
+      const provenance = r.source === 'prediction'
+        ? `prediction-derived; prediction ${r.support.predictionIds.join(', ') || '-'} evaluation ${r.support.evaluationIds.join(', ') || '-'}`
+        : `feedback-derived; evidence ${r.support.experienceIds.length ? r.support.experienceIds.join(', ') : 'none recorded'}`;
+      lines.push(`${indent}  applied: approved record ${r.id} version ${r.version ?? '-'} for ${r.capability} (${provenance})`);
     }
     if (!decision.changed) lines.push(`${indent}  applied, and it changed nothing: the same candidate led with or without it`);
   }
+  // The kind of evidence behind the dimension, said in one place so a reader does not have to infer it
+  // from the rule list: prediction evidence was absent, present beside feedback evidence, the only kind
+  // applied, or considered and unusable. All four are facts about this comparison, not about APEX's
+  // confidence in the rule.
+  const sources = decision.sources;
+  if (sources) {
+    if (sources.predictionEvidence === 'none') {
+      lines.push(`${indent}  evidence behind this dimension: no prediction-derived adaptation record bears on these capabilities`);
+    } else if (sources.predictionEvidence === 'both') {
+      lines.push(`${indent}  evidence behind this dimension: both feedback-derived and prediction-derived rules were applicable`);
+    } else if (sources.predictionEvidence === 'prediction_derived') {
+      lines.push(`${indent}  evidence behind this dimension: a prediction-derived rule was applicable`);
+    } else if (sources.predictionEvidence === 'prediction_rejected') {
+      lines.push(`${indent}  evidence behind this dimension: prediction evidence was considered and could not be used (${sources.predictionRejected.map((r) => `${r.id} [${r.state}]`).join(', ')})`);
+    }
+    if (sources.feedbackDerived.length > 0 || sources.predictionDerived.length > 0) {
+      lines.push(`${indent}    applied feedback-derived: ${sources.feedbackDerived.join(', ') || 'none'}; applied prediction-derived: ${sources.predictionDerived.join(', ') || 'none'}`);
+    }
+  }
   for (const c of decision.considered ?? []) {
-    if (c.state !== 'applicable') lines.push(`${indent}  not applied: ${c.id} for ${c.capability ?? '-'} [${c.state}] - ${c.why}`);
+    if (c.state !== 'applicable') {
+      const provenance = c.source === 'prediction' ? ' [prediction-derived]' : '';
+      lines.push(`${indent}  not applied: ${c.id} for ${c.capability ?? '-'}${provenance} [${c.state}] - ${c.why}`);
+    }
   }
   lines.push(`${indent}  ${decision.note}`);
   return lines.join('\n');

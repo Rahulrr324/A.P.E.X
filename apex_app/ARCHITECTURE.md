@@ -1,9 +1,9 @@
 # APEX Local Alpha — consolidated architecture
 
 This document is the single consolidated description of the cognitive runtime and the executive
-system as they exist in `apex_app/` after Batch AO-10 and the bounded AP-01 pathway. It replaces no
-code and grants nothing. It was written against commit `a2c9a64` (`ao-10`) plus the Batch AP working
-tree, by reading the modules and tests named below. Where a statement is a contract enforced by code, the module is
+system as they exist in `apex_app/` after Batch AO-10 and the bounded AP-01 and AP-02 pathways. It
+replaces no code and grants nothing. It was written against commit `a2c9a64` (`ao-10`) plus the Batch
+AP working tree, by reading the modules and tests named below. Where a statement is a contract enforced by code, the module is
 named; where it is a guarantee established by tests, the suite is named; where it is only a
 description, it says so.
 
@@ -108,6 +108,7 @@ output, or a record attached to an operation that has already been decided elsew
 | Prediction and experience | `prediction/*`, `experience/*`, `actions/prediction-actions.js`, `actions/experience-actions.js` | Append-only expectation and experience records; feedback; adaptation candidates; outcome evaluation derived at read time | User writes only; a model cannot write | `predictions.jsonl`, `experiences.jsonl` under their locks | An expired horizon is not a wrong prediction; a rate below 20 evaluations is withheld; a damaged store is unavailable, not empty | `prediction-*.test.js`, `experience-*.test.js` |
 | Adaptation boundary | `experience/derivation.js`, `experience/experience-store.js`, `plans/guidance.js` | Repeated user corrections may yield one candidate rule; only a user decision approves it; an approved rule may shape (never gate) a later selection | User approval only | `experiences.jsonl` | A retired rule shapes nothing; two conflicting approved rules are disclosed, neither chosen | `experience-adaptation.test.js`, `plan-guidance.test.js`, `adversarial-batch-am.test.js` I-01–I-08 |
 | Decision adaptation (AP-01) | `plans/evaluation.js` (`adaptationDecisionOf`), `plans/guidance.js`, `executive/selection.js` | One approved, shaped adaptation may change only which candidate leads a comparison; the decision block states the order the same rule would have produced without it, with rule ids, versions, hashes and bounded evidence ids | User approval only; the block says `authorizes:false` | None; carried on the audited `plan.candidates`/`plan.replan` read and its display | No applicable record → declined with the ledger's own reason; candidate bytes that changed since the comparison are refused by selection | `adaptation-decision.test.js`, `plan-guidance.test.js`, `plan-learning.test.js` |
+| Prediction-derived adaptation (AP-02) | `experience/prediction-derivation.js`, `experience/experience-store.js`, `actions/experience-actions.js` (`adaptation.derive`, `adaptation.eligibility`) | One completed, valid evaluation of one user-recorded prediction may become a bounded, typed adaptation **candidate**; the user inspects it and approves it through the existing `adaptation.decide`; only then does it feed the same AP-01 dimension | User approval only; derivation only creates a candidate; the candidate cannot serialize any executable text | One adaptation record and its lifecycle events in `experiences.jsonl`, unchanged in shape; `predictionEvidence` on the record is a pointer, and currentness is re-read from `predictions.jsonl` | Awaiting / expired / invalidated / superseded / conflicting / stale / model-origin / duplicated evidence is inert with a state; stale or unreadable lineage forces `active:false` on read; no parallel learning store | `prediction-adaptation-learning.test.js` (21 cases), `adaptation-decision.test.js`, `prediction-adaptation-boundary.test.js` |
 
 ### Who owns each transition
 
@@ -138,8 +139,10 @@ planner, registry, authorization rule, or execution path was added.
 - **Decision point.** Only the *leading candidate* of a `plan.candidates` or `plan.replan`
   comparison can move, and only through the one ranked dimension `approved_adaptation_fit`. The
   eligible signal is the user's recorded feedback/experience that supports an adaptation the user
-  approved. A prediction verdict, a model suggestion, or an unapproved candidate rule is not an
-  eligible signal: the eligibility and adversarial suites prove each has no effect.
+  approved. A model suggestion or an unapproved candidate rule is never an eligible signal: the
+  eligibility and adversarial suites prove each has no effect. A prediction verdict reaches this
+  point only after a user-approved prediction-derived candidate exists (AP-02, below); the verdict
+  alone does nothing.
 - **Eligibility rules.** A record can move the ordering only when all of these hold in the ledger
   read for this comparison: the user approved it; it is active; its supporting evidence still
   stands; it has a recorded shape; its scope names a capability these candidates use; it does not
@@ -175,8 +178,91 @@ planner, registry, authorization rule, or execution path was added.
   0.14 / 0.26 / 0.85 ms. No cache or index is justified by these figures.
 - **What it does not claim.** An applied record orders approaches; it does not predict that the
   ordered approach will succeed, does not establish a causal effect of past outcomes, and does not
-  fit a weight or recompute a ranking from results. Prediction verdicts remain unconsumed by any
-  planner or controller.
+  fit a weight or recompute a ranking from results. Prediction verdicts have no effect of their own:
+  they reach this pathway only through a user-approved prediction-derived candidate (AP-02, below).
+
+### How a prediction verdict may inform that one decision (AP-02)
+
+Batch AP-02 extends the same pathway to a second kind of recorded evidence — an expectation the user
+recorded and a verdict a deterministic evaluation derived from it — **without a parallel learning
+system**. It adds one pure derivation module, one read action, and a prediction branch inside the
+existing derivation and store; it adds no store, no planner, no registry entry, no authorization
+rule, and no second decision dimension. The five transitions are separate and each is a different
+fact:
+
+| Transition | What establishes it | What it does **not** do |
+| --- | --- | --- |
+| **Recorded** | `prediction record`: the user states an expectation, a capability, a horizon, and cited evidence; user origin only | It is not an observation, a verdict, or a rule; no model can write one |
+| **Evaluated** | `prediction evaluate`: compares the expectation with outcome experiences inside the horizon and stores a verdict only when they establish one | It does not approve an adaptation, create a candidate, or change any other record |
+| **Eligible** | `predictionEligibility` over a projection: completed, valid, current evidence, readable lineage, current outcome records | It does not derive or approve anything; it only answers whether a candidate *could* rest on this evaluation |
+| **Approved** | `adaptation.decide` by the user on a derived candidate, appended to `experiences.jsonl` | Approval is not inferred from a successful evaluation, and it grants no permission |
+| **Influencing** | The AP-01 read: approved + active + intact support + a recorded shape + current prediction evidence, feeding only `approved_adaptation_fit` | It cannot change candidate bytes, gates, plan steps, goal criteria, approvals, authorization, execution, or verification |
+
+- **Eligibility rules (closed states).** `experience/prediction-derivation.js` judges one projection:
+  a missing projection or a status other than `evaluated` is `not_evaluated`; a scope that is not a
+  capability name is `not_scopable`; a non-user origin is `provenance_not_user`; a withdrawal is
+  `invalidated`; a replacement (or a retired flag) is `superseded`; no stored evaluation is
+  `evaluation_missing`; a recorded verdict a fresh read would settle differently is
+  `evaluation_stale`; an unreadable experience log is `evidence_unavailable`; a cited record that
+  does not resolve is `unresolved_citation`; an evaluation that cites no still-current outcome
+  experience, or names no deciding outcome class, is `outcome_evidence_not_current`. Any state other
+  than `eligible` is inert and carries its reason. Awaiting and expired predictions never reach
+  `evaluated`, so they are inert; expired is not incorrect.
+- **What the proposal may say.** The mapping is the explicit, closed `OUTCOME_PROPOSAL_FIELD`:
+  a recorded `success` proposes `prefer` for the capability; `failure` and `blocked` propose
+  `avoid`. The *verdict word* is not the rule — a contradicted verdict still follows the recorded
+  outcome class, and the mapping is printed in the record so a reader can disagree with it. The
+  prediction's own subject text is display-only and is never parsed; the proposal is a typed
+  object (`type: 'evaluated_prediction'`, `dimension: 'approved_adaptation_fit'`,
+  `guidance: { order, avoid, prefer, maxSteps }`, `verdicts`, `limitations`, `evidenceDigest`), and
+  an unknown type or malformed field is refused. There is no free-form text that can execute.
+- **One evaluation, one candidate.** Derivation stores a candidate with
+  `method: 'evaluated_prediction'`, `minSupport: 1`, and exactly one prediction id and one
+  evaluation id in `support`. Repeated derivation with the same prediction is skipped, a duplicate
+  citation cannot add a second candidate, and the decision's evidence lists are deduplicated and
+  bounded. A prediction-derived proposal whose normalized scope-and-rule key equals an existing
+  rule does not create a parallel rule for the same scope.
+- **Approval is unchanged and explicit.** `adaptation.derive` only appends an unapproved candidate;
+  its independent verification re-reads the record and refuses if the candidate is active, if its
+  provenance is not deterministic derivation, or if it does not cite exactly one current prediction
+  and evaluation. `adaptation.decide` remains the only approval, remains user-origin only, and
+  verifies that the decision did not change the candidate's rule or scope. A successful evaluation
+  is never treated as consent.
+- **Currentness is re-read, not cached.** The store overlays a prediction-derived record on read
+  with `source: 'prediction'`, `shapeSource: 'proposal'`, and `predictionEvidence`. For every active
+  prediction-derived row it re-reads `predictions.detail` (no cache, no index) and forces
+  `active:false` with an `inactiveReason` of `prediction_store_unavailable` or `evaluation_changed`
+  when the ledger no longer supports the record. An approval is preserved; its effect is withdrawn
+  until the lineage is explicitly reconciled. A re-evaluation or invalidation therefore cannot leave
+  stale guidance active.
+- **Disclosure is the AP-01 block.** `adaptationDecision` is unchanged in schema
+  (`apex.adaptation-decision.v1`), carries `authorizes:false`, and gains only a per-rule
+  `source`/`method` and a `sources.predictionEvidence` distinction: `none` when no prediction record
+  was considered, `both` when feedback- and prediction-derived rules both applied,
+  `prediction_derived` when only a prediction-derived rule applied, and `prediction_rejected` when
+  prediction evidence was considered and could not be used, naming each rejected record and its
+  state. Feedback-only is `predictionEvidence: 'none'` with a non-empty `feedbackDerived` list. The
+  counterfactual removes `approved_adaptation_fit` exactly as AP-01 did; there is no new dimension.
+  A combined outcome never double-counts one prediction: the same record id appears once, and the
+  evidence lists are per-kind.
+- **Reversal and lineage.** `adaptation.retire` works identically for a prediction-derived record:
+  the candidate, decision, proposal and prediction/evaluation ids stay readable, and the next
+  comparison returns the unadapted order. Retirement or invalidation of the prediction itself makes
+  the record ineligible on the next read rather than rewriting history; an existing decision is never
+  retroactively changed, and no already-approved plan or executed task is altered.
+- **Tests and cost.** `tests/prediction-adaptation-learning.test.js` (21 cases, registered in
+  `npm test`) covers the eligibility matrix, inert waiting/expired/invalidated/superseded evidence,
+  stale and unreadable lineages, model-origin refusal, duplicate non-amplification, approval
+  separation, typed-rule refusal, the five disclosure distinctions, the real-store/controller/audit
+  end-to-end run, retirement, and audit-append failure. The pure decision path was benchmarked
+  against AP-01 on identical fixtures (see `benchmarks/README.md`); it shows no measurable added
+  overhead there, because the AP-02-specific cost is a store read (the currentness check), measured
+  separately and disclosed as a limitation rather than optimized away.
+- **What it does not claim.** It does not claim APEX predicts accurately, that a prediction is a
+  probability, that an evaluated outcome caused the later result, or that any of this improves work.
+  It claims only that one completed evaluation can become a candidate, that only the user's approval
+  makes it evidence, and that the resulting ordering influence is disclosed, bounded, auditable and
+  reversible.
 
 ## 5. C. Evidence and memory architecture
 
@@ -286,6 +372,7 @@ nothing and does not call a model. It has no executive-handoff scenario; handoff
 | Continuation | — | 9.8–10.6 ms (fixture); 220 ms `work`/`next` at XL | Reads the goal log once; the pre-AN shape replayed it per interrupted plan |
 | Diagnostics overhead | — | 21.5–22.8 µs; record 3,334 bytes | Attached after the outcome is decided |
 | Candidate comparison, AP-01 before → after | 0.14 / 0.26 / 0.85 ms at 4 / 10 / 20 candidates | 0.18 / 0.27 / 1.26 ms | The added counterfactual block costs about 0.04 / 0.01 / 0.41 ms (25% / 3% / 48%); warmed in-run medians over 15 samples; no cache or index added |
+| Decision path, AP-01 vs prediction-informed (AP-02) | AP-01 0.201 / 0.262 / 0.687 ms at 4 / 10 / 20 candidates | AP-02 0.166 / 0.261 / 0.678 ms | Combined ledger + comparison, warmed in-run medians over 15 samples on identical fixtures; differences −0.035 / −0.001 / −0.009 ms, within run-to-run spread. Candidate bytes, gates and binding identical. The AP-02 currentness store read is not in this figure (see `benchmarks/README.md`) |
 
 Known scaling behavior: memory and knowledge searches are linear in the number of records; JSONL
 cold reads parse the whole store; the AM index removes the repeated learning read, not the initial
@@ -312,6 +399,8 @@ The only authority owner is the action registry. Everything else observes, propo
 | An approved adaptation does not gate, approve, or execute | `plans/evaluation.js` computes the decision after every gate; `plans/guidance.js` says `authorizes:false`; `plans/validity.js` and the registry are unchanged | `adaptation-decision.test.js` (bounded influence), `plan-guidance.test.js` |
 | An influenced comparison cannot record candidate bytes it did not read | `executive/selection.js` refuses `candidate-changed` against the comparison's bound digests | `adaptation-decision.test.js`, `plan-guidance.test.js` |
 | A prediction verdict, model suggestion, or unapproved rule moves no decision | The guidance ledger admits only user-approved, active, evidence-backed, shaped records; everything else is inert | `adaptation-decision.test.js` (eligibility), `adversarial-batch-am.test.js` I-01–I-08 |
+| A prediction-derived candidate cannot gain authority from its own evaluation | `experience/prediction-derivation.js` is pure and returns only a typed proposal; `adaptation.derive` appends an unapproved candidate; `adaptation.decide` is the only approval and remains user-origin only; the registry and plan-validity paths are unchanged | `prediction-adaptation-learning.test.js` (approval separation, authority isolation), `prediction-adaptation-boundary.test.js` |
+| A stale prediction lineage cannot leave approved guidance active | `experience-store.js` `#predictionCurrentness` re-reads `predictions.detail` on every active prediction-derived row and forces `active:false` | `prediction-adaptation-learning.test.js` (stale/unreadable ledger), `prediction-adaptation-boundary.test.js` |
 
 ### Known gaps between documentation and code
 
@@ -352,7 +441,7 @@ The only authority owner is the action registry. Everything else observes, propo
 | Runtime diagnostics | `IMPLEMENTED_AND_TESTED` | `cognition/runtime-diagnostics.js` | `runtime-diagnostics-ao.test.js` |
 | Performance optimization (learning read) | `IMPLEMENTED_AND_TESTED` | AM per-snapshot index in the learning read path | `learning-read-equivalence.test.js`, `plan-dimensions.test.js` |
 | Evidence-driven decision adaptation (AP-01) | `IMPLEMENTED_AND_TESTED` | `plans/evaluation.js` (`adaptationDecisionOf`), `plans/guidance.js`, `executive/selection.js` | `adaptation-decision.test.js` (23 cases), `plan-guidance.test.js`, `plan-scenarios-am.test.js` |
-| Prediction-verdict-driven adaptation | `NOT_IMPLEMENTED` | No planner, controller, or adaptation read consumes a verdict | Adversarial cases prove a verdict moves nothing (`adaptation-decision.test.js`, `prediction-adaptation-boundary.test.js`) |
+| Prediction-derived adaptation (AP-02) | `IMPLEMENTED_AND_TESTED` | `experience/prediction-derivation.js`, prediction branch in `experience/experience-store.js`, `adaptation.eligibility` in `actions/experience-actions.js`, `plans/evaluation.js` disclosure | `prediction-adaptation-learning.test.js` (21 cases), `adaptation-decision.test.js`, `prediction-adaptation-boundary.test.js` |
 | Adversarial acceptance | `IMPLEMENTED_AND_TESTED` | Cross-cutting; no new runtime component | `acceptance-ao09.test.js` (7), `adversarial-batch-am.test.js` (16), `plan-adversarial.test.js` (15), `executive-adversarial.test.js` (11), plus the suites cited in `README.md` Batch AO package H |
 | Cross-process interruption | `IMPLEMENTED_PARTIALLY_TESTED` | Real child fixtures at most boundaries | `plan-continuation.test.js`, `continuation-cross-process-an.test.js`, `finalization-interruption.test.js`, `process-recovery.test.js`, `cross-process-ao09.test.js`; two boundaries lack a killed child |
 | Concurrent store integrity | `IMPLEMENTED_AND_TESTED` | `memory/writer-lock.js`, store locks, JSONL append | `storage-concurrency.test.js`, `store-write-concurrency.test.js`, `cross-process-stress.test.js`, `lock-contention.test.js`, `lock-recovery.test.js` |
@@ -394,12 +483,19 @@ invalidate the recommended milestone, not that it blocks all work.
 | 20 | Reversal is prospective, not retrospective | `adaptation.retire` appends a lifecycle event; every read recomputes state | `adaptation-decision.test.js` (approval and reversal on identical fixtures) | An already-displayed decision is not rewritten; the next comparison restores the unadapted order. Historical audit lines are unchanged by design | Low | No |
 | 21 | A supporting record outside the retrieval window influences nothing and is not named as applied | `guidanceFrom` admits only rows the learning read returned; `activeAdaptations` has a default window of 3 | `experience-*` suites, `plan-guidance.test.js` | The decision reports the records it was handed; it does not claim knowledge of records it never read | Low | No |
 | 22 | An applied ordering could be read as a claim that the ordered approach will succeed | The rule is the user's recorded shape; no weight is fitted from outcomes and no causal effect is claimed | `plan-guidance.test.js`, `adaptation-decision.test.js` | Documentation states the limit; the block says `authorizes:false` and the note says it moved at most a comparison | Medium (interpretive) | No |
+| 23 | An evaluated prediction could become evidence without the user's approval | Derivation only appends an unapproved candidate; `adaptation.decide` is the only approval, user-origin only, and both the display and the independent verification say the candidate is not approved | `prediction-adaptation-learning.test.js` (evaluation approves nothing; approval required), `adaptation-decision.test.js` | None observed; an evaluation and an approval are separate records | None | No |
+| 24 | A prediction-derived rule could be read as proof APEX predicts accurately, or as a causal finding | The proposal is a closed mapping from recorded outcome class, carries four stated limitations, and `authorizes:false`; no probability, score, or fitted weight exists | `prediction-adaptation-learning.test.js` (typed proposal), `prediction-adaptation-boundary.test.js` | Documentation states the non-claims; the record shows the verdict it was read from | Medium (interpretive) | No |
+| 25 | Re-evaluation or invalidation could leave stale guidance active | `#predictionCurrentness` re-reads the ledger per active prediction-derived row and forces `active:false` with a reason; no cache | `prediction-adaptation-learning.test.js` (stale evaluation, unreadable ledger, withdrawal after approval) | An already-displayed decision is not rewritten; the next comparison reports the record inert | Low | No |
+| 26 | Duplicate evaluations or duplicate evidence ids could amplify one prediction | One proposal per projection, one prediction and one evaluation in `support`, `minSupport:1`, duplicate derivation skipped, evidence lists deduplicated and bounded | `prediction-adaptation-learning.test.js` (duplicate derivation/citation) | None observed | None | No |
+| 27 | The added currentness read makes a planning read cost more on large ledgers | It is one `predictions.detail` read per active prediction-derived row, deliberately uncached so stale evidence cannot be hidden | `prediction-adaptation-learning.test.js` (real store), `benchmarks/run-prediction-adaptation-benchmark.mjs` | The published comparison measures the pure decision path; the store currentness read is measured separately and is not included in that figure | Low | No |
 
 No gap in this register was implemented in AO-10: none exposed a new concrete defect in behavior,
 and none invalidated a documented security guarantee. AP-01 closed the roadmap's "one recorded
 outcome changes exactly one later disclosed decision" clause for the user-approved adaptation
 signal only, and added rows 18–22 for what that does not claim; the `getMany` contract defect found
-in AO-09 had already been fixed there with a regression test.
+in AO-09 had already been fixed there with a regression test. AP-02 added rows 23–27 for the
+prediction-derived signal: it closed the "an evaluated prediction may inform one later decision"
+clause under explicit user approval, and left the accuracy, causal and autonomy claims open.
 
 ## 10. Running the verification
 
@@ -409,8 +505,10 @@ npm test                       # every suite named in package.json
 node --test tests/cognition-lifecycle.test.js tests/cognition-artifacts.test.js
 node --test tests/acceptance-ao09.test.js tests/cross-process-ao09.test.js
 node --test tests/adaptation-decision.test.js
+node --test tests/prediction-adaptation-learning.test.js tests/prediction-adaptation-boundary.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
+node benchmarks/run-prediction-adaptation-benchmark.mjs
 ```
 
 Tests use `NoBackend` or fixed programmatic replies and isolated temporary data directories. No
@@ -430,5 +528,11 @@ only to fresh temporary directories. The complete measured tables and their cave
   shaped record and its evidence still stands, the recorded shape can reorder the approaches the
   comparison already admits; that the order the same rule would have produced without it is shown
   beside the order it produced; and that retirement restores the unadapted order without erasing
-  history. It does not claim that the earlier outcome caused the later success, or that a prediction
-  verdict influences anything.
+  history. It does not claim that the earlier outcome caused the later success.
+- It does not claim APEX predicts accurately or learns causally. AP-02 claims only that one completed
+  evaluation of one user-recorded expectation can become a bounded candidate, that the candidate is
+  evidence only after the user approves it, and that the resulting ordering influence is disclosed,
+  reversible and grants no authority. It does not claim a prediction is a probability, that the
+  evaluation is independent of the user's expectation, or that any of this improves future work.
+  It does not claim autonomy: every transition from recorded evidence to an applied rule requires a
+  user action.

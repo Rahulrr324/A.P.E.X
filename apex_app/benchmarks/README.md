@@ -1188,6 +1188,92 @@ benchmark). **No cache and no index is justified, and none was added.**
 
 This script is not part of `npm test` and no test depends on it.
 
+## Prediction-informed adaptation benchmark (Batch AP-02)
+
+`run-prediction-adaptation-benchmark.mjs` measures whether the decision path Batch AP-01 built costs
+more when part of the approved ledger is prediction-derived. It runs the same pure path
+`plan.candidates` and `plan.replan` run — read the approved adaptation ledger, then compare the
+candidate bytes — under two conditions over **identical candidates** and the **same total number of
+approved records**; only the provenance of some records differs:
+
+- **AP-01 condition:** every record was derived from user feedback and shaped by a guidance record.
+- **prediction condition:** `P` of those records were derived from one evaluated prediction each
+  (a typed proposal restating the recorded outcome in the same four guidance fields), with a
+  separated `support.predictionIds`/`evaluationIds` list and a `predictionEvidence` read.
+
+It trains no model, constructs no backend and builds no application; no cache, index, or validation
+skip was added, so the figures describe the existing code rather than a benchmark-only path.
+
+### Procedure
+
+```bash
+cd apex_app
+node benchmarks/run-prediction-adaptation-benchmark.mjs --repeats 15
+node benchmarks/run-prediction-adaptation-benchmark.mjs --repeats 9 --sizes S
+```
+
+1. `--sizes` selects any of `S,M,L` (default all three). The axes are the candidate count, the
+   number of approved records, and how many of them are prediction-derived:
+   **S** 4 candidates / 1 record / 1 prediction / 2 support ids; **M** 10 / 6 / 2 / 10;
+   **L** 20 / 12 / 4 / 20.
+2. Each condition is rendered 20 times before sampling. Samples are then taken **interleaved per
+   sample** (A, B, A, B, …), `--repeats` times each (default 9, capped at 25), and medians, minima
+   and every sample are printed.
+3. The run also checks that both conditions produced **identical candidate bytes, digests, gates,
+   included/excluded sets, binding (`boundTo`) and ranked dimensions**. If they differ, the run
+   exits non-zero instead of printing a timing comparison of different work.
+4. A second section measures the pure eligibility rule (`predictionEligibility` and `proposalFor`)
+   over projections of evaluated predictions at 25 / 100 / 400 records. It reads no ledger and
+   caches nothing; it is included to show the per-record rule the store applies, not a decision-path
+   cost.
+
+### Measured
+
+One run of `--repeats 15` on Windows 11, Node v26.4.0, x64, with no test or other benchmark active.
+
+| ms (median) | S (4 candidates, 1 record) | M (10, 6) | L (20, 12) |
+|---|---|---|---|
+| combined ledger read + comparison, AP-01 | 0.201 | 0.262 | 0.687 |
+| combined ledger read + comparison, prediction | 0.166 | 0.261 | 0.678 |
+| difference (prediction − AP-01) | −0.035 (−17.5%) | −0.001 (−0.5%) | −0.009 (−1.3%) |
+
+For the largest fixture the two components were: ledger read 0.216 (AP-01) vs 0.232 (prediction),
+and comparison 0.524 vs 0.448 ms. The disclosure render took 0.004 / 0.004 / 0.009 ms at S / M / L.
+Both ledgers applied: the decision's `sources.predictionEvidence` was `none` under AP-01 at every
+size, and `prediction_derived` at S and `both` at M and L under the prediction condition; the
+prediction records/evaluations applied were 1/1, 2/2 and 4/4.
+
+Eligibility scan over evaluated projections, one process, no ledger read:
+
+| projections | total ms | µs/record | eligible / proposal produced |
+|---|---|---|---|
+| 25 | 0.112 | 4.476 | 25 / 25 |
+| 100 | 0.263 | 2.626 | 100 / 100 |
+| 400 | 1.061 | 2.654 | 400 / 400 |
+
+The finding is narrow: within one run the prediction-informed ledger is not measurably slower than
+the feedback-only ledger at these sizes, and every difference is smaller than the run-to-run spread.
+The eligibility rule is linear in the number of projections at roughly 2.6–4.5 µs per record, with
+the higher first figure consistent with a cold first pass.
+
+### Interpretation limits
+
+- Medians over 15 interleaved samples in one process on one machine. Differences below about
+  0.05 ms are noise and are reported as measured, not as an improvement; only the in-run pair is a
+  finding. Across runs the same numbers move by more than the effect being compared.
+- The measured path is pure (ledger read + comparison). **It does not include the AP-02-specific
+  store read**: `experience-store.js` re-reads `predictions.detail` for each active
+  prediction-derived row on every adaptation read so stale evidence cannot remain active. That
+  currentness check, its cost, and the experience/audit stores around the decision are excluded
+  here; the test suite covers its behavior, not its timing.
+- The fixtures are synthetic and uniform, and their prediction-derived rows rest on one current
+  prediction/evaluation each. Conflict, ineligibility, staleness, withdrawal and reversal are
+  covered by `tests/prediction-adaptation-learning.test.js`, not measured here.
+- No inference is run or simulated; nothing here shows that an influenced ordering is better work,
+  or that a prediction is accurate. Batch AP-02 claims neither.
+
+This script is not part of `npm test` and no test depends on it.
+
 ## Cognitive runtime diagnostics benchmark (Batch AO, package G)
 
 `run-cognitive-runtime-benchmark.mjs` measures the request lifecycle and the stage record it now

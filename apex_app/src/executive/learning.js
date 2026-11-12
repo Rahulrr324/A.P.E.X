@@ -124,20 +124,54 @@ export function adaptationRow(a) {
     rule: wording(a.rule, LEARNING_BOUNDS.ruleChars) ?? 'no rule text is recorded',
     ruleHash: a.ruleHash ?? null,
     method: a.method ?? null,
+    // Which ledger produced the rule. The comparison's ordering treats both kinds identically, but the
+    // disclosure has to be able to say which one a reader approved, so it travels with the row.
+    source: a.source ?? (a.method === 'evaluated_prediction' ? 'prediction' : 'feedback'),
     minSupport: a.minSupport ?? null,
     supportCount: (a.support?.experienceIds ?? []).length,
     // The exact records the rule rests on, bounded like the store's own support lists. The comparison's
-    // decision record names these, because "a rule the user approved" is not traceable without them.
+    // decision record names these, because "a rule the user approved" is not traceable without them. The
+    // prediction and evaluation ids are kept apart from the experience ids so one evaluation cannot be
+    // read as two pieces of evidence.
     support: {
       experienceIds: [...(a.support?.experienceIds ?? [])].slice(0, LEARNING_BOUNDS.evidenceIds),
       feedbackIds: [...(a.support?.feedbackIds ?? [])].slice(0, LEARNING_BOUNDS.evidenceIds),
+      predictionIds: [...(a.support?.predictionIds ?? [])].slice(0, LEARNING_BOUNDS.evidenceIds),
+      evaluationIds: [...(a.support?.evaluationIds ?? [])].slice(0, LEARNING_BOUNDS.evidenceIds),
     },
+    // The store's read of whether a cited prediction still stands behind the candidate. It is null for a
+    // feedback-derived rule and for a caller that did not read the prediction ledger.
+    predictionEvidence: a.predictionEvidence ? {
+      eligible: a.predictionEvidence.eligible === true,
+      state: a.predictionEvidence.state ?? null,
+      reason: a.predictionEvidence.reason ?? null,
+    } : null,
+    // The typed proposal a prediction-derived candidate was derived from, bounded to what the validator
+    // admits. It is what makes the rule auditable from the outcome rather than from its prose.
+    proposal: a.proposal ? {
+      type: a.proposal.type ?? null,
+      dimension: a.proposal.dimension ?? null,
+      verdicts: (a.proposal.verdicts ?? []).slice(0, 2).map((v) => ({ ...v })),
+      guidance: {
+        order: a.proposal.guidance?.order ?? null,
+        avoid: [...(a.proposal.guidance?.avoid ?? [])],
+        prefer: [...(a.proposal.guidance?.prefer ?? [])],
+        maxSteps: a.proposal.guidance?.maxSteps ?? null,
+      },
+      limitations: [...(a.proposal.limitations ?? [])],
+      evidenceDigest: a.proposal.evidenceDigest ?? null,
+    } : null,
     decidedAt: a.decision?.createdAt ?? null,
     decisionReason: wording(a.decision?.reason, 200),
     decisionState: a.decisionState ?? null,
     active: a.active === true,
     guidance: a.guidance ?? null,
     guidanceCount: a.guidanceCount ?? 0,
+    // The ordinal of the shape in force. A prediction-derived proposal has no guidance event, so the
+    // store states its version directly; passing it through lets the comparison name which statement of
+    // the rule was applied without a second read.
+    shapeVersion: a.shapeVersion ?? null,
+    shapeSource: a.shapeSource ?? null,
     // The rule-level disagreement the store derives between two active records in one scope. The count
     // is the store's own field and stays a count; the comparison needs the partners to withhold an
     // ordering rather than pick a winner, so they travel beside it instead of being re-derived from a
@@ -340,6 +374,12 @@ export function learningDigest(learning) {
     scope: learning.scope?.capabilities ?? [],
     adaptations: (learning.adaptations?.rows ?? []).map((a) => [
       shortId(a.id), a.capability, a.supportCount,
+      // Which ledger the rule rests on, and the exact prediction and evaluation behind a prediction-
+      // derived row: a swapped or withdrawn evaluation is a record that moved even though a count of
+      // support did not.
+      a.source ?? null,
+      (a.support?.predictionIds ?? []).map(shortId),
+      (a.support?.evaluationIds ?? []).map(shortId),
       // The four fields an approved record can move a comparison with, and the state that says whether
       // it may: a guidance shape that changed is a record that moved, not a wording that changed.
       a.guidance ? [a.guidance.order, a.guidance.avoid, a.guidance.prefer, a.guidance.maxSteps] : null,
@@ -407,6 +447,19 @@ function expectationState(p) {
   return `the ledger records it as ${p.status}`;
 }
 
+// What the rule rests on, in the records the method actually consumed. A prediction-derived rule has one
+// prediction and the one evaluation that judged it, not an experience count: printing "1 experience(s)"
+// would let the answer sound like feedback support and hide the evaluation a reader has to check.
+function adaptationSupport(a) {
+  if (a.source === 'prediction') {
+    const predictionId = (a.support?.predictionIds ?? [])[0] ?? null;
+    const evaluationId = (a.support?.evaluationIds ?? [])[0] ?? null;
+    return `from one evaluated prediction${predictionId ? ` ${shortId(predictionId)}` : ''}${evaluationId ? ` (evaluation ${shortId(evaluationId)})` : ''} by ${a.method ?? 'an unrecorded method'}, whose evidence was current when this was read`;
+  }
+  return `from ${a.supportCount} experience(s) by ${a.method ?? 'an unrecorded method'}`;
+}
+
+
 // One line per record, in the class of claim that record is allowed to make, and short enough to
 // survive the answer's own line bound. Nothing here paraphrases a store's status into a stronger claim:
 // the verdict, the horizon, and the basis are the store's fields, read back.
@@ -424,7 +477,7 @@ export function learningStatements(learning) {
     out.push({ kind: ClaimKind.FACT, text: `this learning read is scoped to the capabilities these steps name: ${caps.join(', ')}${learning.scope?.truncated ? `, of ${learning.scope.considered} named in total` : ''}.` });
   }
   for (const a of adaptations.rows ?? []) {
-    out.push({ kind: ClaimKind.FACT, text: `an adaptation the user approved bears on ${a.capability}: "${a.rule}" [record ${shortId(a.id)}, from ${a.supportCount} experience(s) by ${a.method ?? 'an unrecorded method'}, decided ${a.decidedAt ?? 'at an unrecorded time'}].` });
+    out.push({ kind: ClaimKind.FACT, text: `an adaptation the user approved bears on ${a.capability}: "${a.rule}" [record ${shortId(a.id)}, ${adaptationSupport(a)}, decided ${a.decidedAt ?? 'at an unrecorded time'}].` });
   }
   for (const p of ledger.rows ?? []) {
     out.push({

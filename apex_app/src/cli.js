@@ -62,7 +62,8 @@ Usage:
   node bin/apex.js experience compare [--a-since <date>] [--a-until <date>] [--b-since <date>] [--b-until <date>] [--days N] [--capability <name>]
   node bin/apex.js experience health       experiences, feedback, adaptation states, and evidence checks (read-only)
   node bin/apex.js feedback record <experience-or-operation-id> --assessment <kind> [--guidance <text>] [--reason <text>] [--supersedes <id[,id...]>]
-  node bin/apex.js adaptation derive [--min-support N]     turn repeated feedback into candidates (never active)
+  node bin/apex.js adaptation derive [--min-support N]     turn repeated feedback and evaluated predictions into candidates (never active)
+  node bin/apex.js adaptation eligibility [--capability <name>] [--limit N]   which evaluated predictions could become a candidate, and why others cannot
   node bin/apex.js adaptation list [--limit N] [--exclude-retired]
   node bin/apex.js adaptation approve <id> [--reason <text>]     your decision; the only way a rule takes effect
   node bin/apex.js adaptation reject <id> [--reason <text>]
@@ -173,7 +174,8 @@ Experience and adaptation examples (what APEX did, what you thought, what to cha
   feedback record <experience-id> --assessment incorrect --reason "the file it names does not exist"
       assessments: correct | incorrect | partially_correct | useful | not_useful
                  | user_correction | outcome_succeeded | outcome_failed
-  adaptation derive           repeated feedback becomes a candidate; a candidate does nothing yet
+  adaptation derive           repeated feedback or an evaluated prediction becomes a candidate; a candidate does nothing yet
+  adaptation eligibility      which evaluated predictions could become a candidate, and why the rest cannot
   adaptation list             shows each state: candidate, approved, in effect, rejected, retired, ambiguous
   adaptation approve <id>     your decision; only an approved rule is offered to future answers
   adaptation guide <id>       say what shape the approved rule asks future work to take
@@ -1117,6 +1119,14 @@ export async function main(argv, {
           includeRetired: flags['exclude-retired'] ? false : undefined,
         }));
       }
+      if (sub === 'eligibility') {
+        const { flags, rest: extra } = parseFlags(rest, ['capability', 'limit']);
+        rejectUnexpected(extra, 'adaptation eligibility [--capability name] [--limit N]');
+        return emit(await app.controller.adaptationEligibility({
+          capability: flags.capability ?? null,
+          limit: flags.limit,
+        }));
+      }
       if (sub === 'approve' || sub === 'reject') {
         const { flags, rest: ids } = parseFlags(rest, ['reason']);
         if (ids.length !== 1) {
@@ -1155,7 +1165,7 @@ export async function main(argv, {
         }
         return emit(await app.controller.adaptationRetire({ target: ids[0], reason: flags.reason ?? null }));
       }
-      err('usage: adaptation derive|list|approve|reject|guide|retire');
+      err('usage: adaptation derive|eligibility|list|approve|reject|guide|retire');
       return 2;
     }
 

@@ -80,7 +80,7 @@ const LIMITS = Object.freeze([
   'Derived at read time from stored records; nothing is persisted, repaired, or approved.',
   'A recorded event is evidence that an audited operation ended with an outcome, not proof about the user or the world.',
   'Patterns describe the order of recorded outcomes. Temporal order alone does not establish that one event caused another, and no pattern is a prediction.',
-  'No pattern becomes an adaptation. A behaviour rule needs the user\'s corrective feedback and an explicit user approval, exactly as before.',
+  'No pattern becomes an adaptation. A behaviour rule needs the user\'s corrective feedback or a completed evaluation of a recorded prediction, and an explicit user approval in every case.',
   'Events are ordered by finishedAt, then requestedAt, then createdAt; equal timestamps keep their append-only log order. Undated records are never placed in a window.',
   'A success rate is computed over completed attempts (success or failure). Refused, other, and unknown outcomes are counted but are not attempts, so they neither raise nor lower the rate.',
   'An experience a later record replaced is reported in the timeline and counts, but it is not current evidence and is excluded from every pattern, which says how many it left out.',
@@ -1179,7 +1179,7 @@ export function summarizeTemporal({ view, patterns, adaptations = null } = {}) {
   }));
   const limitations = [
     'A pattern describes recorded order, not cause, and never a prediction.',
-    'Nothing in this summary becomes an adaptation; adaptations still require the user\'s corrective feedback and approval.',
+    'Nothing in this summary becomes an adaptation; every adaptation still requires the user\'s explicit approval, whether it rests on corrective feedback or on a completed evaluation of a recorded prediction.',
   ];
   if (view.counts.undated > 0) {
     limitations.push(`${view.counts.undated} experience record(s) have no usable timestamp and are not placed in the window.`);

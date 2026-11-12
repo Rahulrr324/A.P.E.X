@@ -31,6 +31,9 @@ preserved for provenance.
   bytes, approval, or any goal's status. One recorded, user-approved adaptation can move which candidate
   leads that comparison, and the answer states the decision the same rule would have taken without it,
   with the rule, version and evidence named; retiring the adaptation restores the unadapted decision.
+  A completed evaluation of a prediction the user recorded can also become such an adaptation, but only
+  after the user inspects and approves a bounded candidate derived from it; the decision then says
+  whether the evidence behind the ordering was feedback-derived, prediction-derived, both, or rejected.
   Execution success is never reported as real-world success, and none of this grants permission.
   It answers
   deterministic requests with no model and sends
@@ -156,7 +159,12 @@ Batch AP implemented the bounded form of the application roadmap's stage-6 recom
 eligible, user-approved adaptation changes exactly one later, disclosed decision - which candidate leads a
 comparison of approaches that already passed every gate - reversibly and with an audit record, and no
 component gained authority ([details](apex_app/README.md#batch-ap-one-disclosed-reversible-decision-from-recorded-evidence-as-implemented)).
-The recommendation that remains is the clause that implementation did **not** reach: make an expectation
-verdict (a `prediction evaluate` result) change exactly one later, disclosed decision, with the same
-before/after, reversal, and adversarial proof that it cannot approve, start, or carry a plan. It needs no
-model and no new store. This is a recommendation only; nothing in this checkout implements it yet.
+Batch AP-02 then extended that same one decision to a completed evaluation of a prediction the user
+recorded: the evaluation can become a bounded, typed candidate, the user must inspect and approve it
+through the existing decision record, and only then can it re-order the same comparison, with the decision
+naming whether the evidence was feedback- or prediction-derived
+([details](apex_app/README.md#batch-ap-02-one-evaluated-prediction-one-approved-candidate-one-disclosed-influence-as-implemented);
+tests: `tests/prediction-adaptation-learning.test.js`, 21 cases). It needs no model and no new store.
+What remains is the wider clause: an expectation verdict changing subsequent behaviour without a
+user-approved candidate, or changing more than the one disclosed ordering. The runtime keeps that wider
+clause open; this is a recommendation only, and no part of it is implemented.
