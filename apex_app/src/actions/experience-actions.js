@@ -32,7 +32,7 @@ import {
   captureOf,
 } from '../experience/experience-store.js';
 import { MIN_SUPPORT_FEEDBACK } from '../experience/derivation.js';
-import { PREDICTION_DERIVATION_METHOD } from '../experience/prediction-derivation.js';
+import { LONGITUDINAL_DERIVATION_METHOD, PREDICTION_DERIVATION_METHOD } from '../experience/prediction-derivation.js';
 import {
   MAX_TEMPORAL_EVENTS,
   MAX_WINDOW_DAYS,
@@ -524,16 +524,21 @@ export function experienceActions(store) {
             created.length === 0
               ? 'No new candidate adaptation.'
               : `Derived ${created.length} candidate(s) from the recorded evidence:`,
-            ...created.map((r) => (r.method === PREDICTION_DERIVATION_METHOD
-              ? `  [${shortId(r.id)}] scope ${r.capability} | rule: ${r.rule}\n      prediction: ${(r.support.predictionIds ?? []).join(', ')} | evaluation: ${(r.support.evaluationIds ?? []).join(', ')} | NOT APPROVED`
-              : `  [${shortId(r.id)}] scope ${r.capability} | rule: ${r.rule}\n      support: ${r.support.experienceIds.length} experience(s) | NOT APPROVED`)),
+            ...created.map((r) => (r.method === LONGITUDINAL_DERIVATION_METHOD
+              ? `  [${shortId(r.id)}] scope ${r.capability} | rule: ${r.rule}\n      pattern: ${r.proposal?.pattern?.kind ?? '-'} over ${(r.support.predictionIds ?? []).length} observation(s) | predictions: ${(r.support.predictionIds ?? []).join(', ')} | NOT APPROVED`
+              : r.method === PREDICTION_DERIVATION_METHOD
+                ? `  [${shortId(r.id)}] scope ${r.capability} | rule: ${r.rule}\n      prediction: ${(r.support.predictionIds ?? []).join(', ')} | evaluation: ${(r.support.evaluationIds ?? []).join(', ')} | single observation, NOT APPROVED`
+                : `  [${shortId(r.id)}] scope ${r.capability} | rule: ${r.rule}\n      support: ${r.support.experienceIds.length} experience(s) | NOT APPROVED`)),
             skipped.length === 0 ? null : `Skipped: ${skipped.map((s) => `${s.capability}: ${s.reason}`).join('; ')}`,
             prediction && prediction.considered > 0
               ? `Predictions: ${prediction.considered} evaluated record(s) read, ${prediction.eligible} eligible, ${prediction.created} candidate(s) added${prediction.truncated ? '; the read was bounded and more remain' : ''}.`
               : null,
-            // A prediction-derived candidate rests on one evaluation, so the feedback wording would be
-            // false for it; the feedback-only path keeps its exact AP-01 sentence.
-            created.some((r) => r.method === PREDICTION_DERIVATION_METHOD)
+            prediction?.longitudinal && prediction.longitudinal.supported > 0
+              ? `Longitudinal: ${prediction.longitudinal.supported} scope(s) hold a supported pattern; ${prediction.longitudinal.created} candidate(s) added, ${prediction.longitudinal.skipped.length} not derived - a pattern is an association in recorded order, not a cause and not a forecast.`
+              : null,
+            // A prediction-derived candidate rests on recorded evaluations, so the feedback wording would
+            // be false for it; the feedback-only path keeps its exact AP-01 sentence.
+            created.some((r) => r.method === PREDICTION_DERIVATION_METHOD || r.method === LONGITUDINAL_DERIVATION_METHOD)
               ? 'A candidate is a bounded restatement of recorded evidence, never an instruction. Nothing takes effect until you approve it.'
               : 'A candidate is evidence that you asked for the same thing more than once. Nothing takes effect until you approve it.',
           ].filter(Boolean).join('\n'),
@@ -550,15 +555,27 @@ export function experienceActions(store) {
           if (detail.provenance?.origin !== 'deterministic_derivation' || detail.provenance?.updateMode !== 'candidate_unapproved') {
             return { ok: false, detail: `candidate ${shortId(created.id)} provenance is not deterministic derivation` };
           }
-          // A prediction-derived candidate rests on one evaluation by construction, so the requested
-          // feedback threshold does not apply to it. It never rests on fewer than one evaluation, and the
-          // cited prediction and evaluation must both be present.
+          // A prediction-derived candidate rests on recorded evaluations by construction, so the
+          // requested feedback threshold does not apply to it. A single-observation candidate cites
+          // exactly one prediction and one evaluation; a longitudinal one cites as many pairs as its
+          // pattern counts, and never fewer than two.
           if (detail.method === PREDICTION_DERIVATION_METHOD) {
             if (detail.minSupport !== 1) {
               return { ok: false, detail: `prediction-derived candidate ${shortId(created.id)} was stored with a different support threshold` };
             }
             if ((detail.support.predictionIds ?? []).length !== 1 || (detail.support.evaluationIds ?? []).length !== 1) {
               return { ok: false, detail: `prediction-derived candidate ${shortId(created.id)} does not cite exactly one prediction and one evaluation` };
+            }
+          } else if (detail.method === LONGITUDINAL_DERIVATION_METHOD) {
+            const cited = (detail.support.predictionIds ?? []).length;
+            if (cited < 2 || cited > 20) {
+              return { ok: false, detail: `longitudinal candidate ${shortId(created.id)} does not cite between two and twenty observations` };
+            }
+            if ((detail.support.evaluationIds ?? []).length !== cited) {
+              return { ok: false, detail: `longitudinal candidate ${shortId(created.id)} does not cite one evaluation per observation` };
+            }
+            if (detail.minSupport !== cited || detail.proposal?.pattern?.observations !== cited) {
+              return { ok: false, detail: `longitudinal candidate ${shortId(created.id)} does not state the observation count its evidence supports` };
             }
           } else if (detail.minSupport !== minSupport) {
             return { ok: false, detail: `candidate ${shortId(created.id)} was stored with a different support threshold` };

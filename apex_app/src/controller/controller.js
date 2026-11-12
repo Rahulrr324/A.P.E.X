@@ -1572,6 +1572,18 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // The longitudinal analysis the user asks for by scope. It writes nothing: a supported pattern is
+  // evidence a later `adaptationDerive` may propose, and that candidate still needs an explicit
+  // decision. No model action routes here, because this read never makes a plan better by existing.
+  async predictionLongitudinal({ capability = null, limit } = {}) {
+    const op = this.#predictionOp('prediction.longitudinal');
+    const input = {};
+    if (capability !== undefined && capability !== null) input.capability = capability;
+    if (limit !== undefined && limit !== null) input.limit = limit;
+    const step = await this.runAction('prediction.longitudinal', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   // Read-only inspection of the whole ledger: whether it parses, what each record kind counts, and
   // whether the withdrawals and evaluations still name predictions that exist. Nothing is repaired,
   // nothing is evaluated, and an unreadable ledger is reported as unreadable rather than as an empty

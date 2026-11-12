@@ -21,6 +21,7 @@ import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 import { PATTERN_KINDS, parseInstant } from '../experience/temporal.js';
+import { MAX_LONGITUDINAL_PREDICTIONS, renderLongitudinal } from '../prediction/longitudinal.js';
 import {
   EXPECTATIONS,
   MAX_EVIDENCE_IDS,
@@ -413,6 +414,46 @@ export function predictionActions(store) {
           return { ok: false, detail: 'listed predictions differ from an independent store read' };
         }
         return { ok: true, detail: `${expected.length} prediction(s) of ${fresh.total} confirmed against the store` };
+      },
+    },
+
+    {
+      name: 'prediction.longitudinal',
+      description: 'Analyze the recorded outcomes of one scope over time: eligible evaluated expectations grouped by exact capability, the excluded records and why, one pattern from a closed vocabulary, and calibration availability. Read-only; no rule is derived or applied.',
+      inputHint: '{"capability":"optional exact capability","limit": optional 1-20}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      // Like the eligibility read: a plan is not made better by naming this analysis, and the move
+      // from evidence to a candidate is the user's act through adaptation.derive.
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input ?? {}, ['capability', 'limit']);
+        return {
+          capability: capabilityFilter(o.capability),
+          limit: limitValue(o.limit, { max: MAX_LONGITUDINAL_PREDICTIONS, fallback: MAX_LONGITUDINAL_PREDICTIONS }),
+        };
+      },
+      async execute(_ctx, query) {
+        const report = await store.longitudinal(query);
+        const supported = report.groups.filter((g) => g.pattern.sufficient).length;
+        return {
+          summary: `longitudinal analysis: ${report.groups.length} scope(s), ${supported} with a pattern that could propose a candidate; nothing was derived or applied`,
+          data: { query, report },
+          display: renderLongitudinal(report),
+        };
+      },
+      async verify(_ctx, query, result) {
+        const fresh = await store.longitudinal(query);
+        if (fresh.digest !== result.data.report.digest) {
+          return { ok: false, detail: 'the recorded evidence changed between two reads of the same analysis' };
+        }
+        if (JSON.stringify(fresh.totals) !== JSON.stringify(result.data.report.totals)) {
+          return { ok: false, detail: 'an independent read counts different observations or exclusions' };
+        }
+        if (fresh.groups.some((g) => g.pattern.sufficient)) {
+          return { ok: true, detail: `${fresh.groups.length} scope(s) confirmed by an independent read; a supported pattern is evidence for a candidate, not a candidate` };
+        }
+        return { ok: true, detail: `${fresh.groups.length} scope(s) confirmed by an independent read; no pattern here proposes anything` };
       },
     },
 

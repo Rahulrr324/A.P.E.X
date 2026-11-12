@@ -103,7 +103,8 @@ describe('AB-5 an operation interrupted before its audit append', () => {
       guidance: 0,
       // Batch AP-02: the two derivations and the currentness read are counted too, so an empty store
       // states each as 0 rather than omitting them.
-      feedbackDerivedAdaptations: 0, predictionDerivedAdaptations: 0, predictionEvidenceStale: 0,
+      feedbackDerivedAdaptations: 0, predictionDerivedAdaptations: 0, longitudinalDerivedAdaptations: 0,
+      predictionEvidenceStale: 0,
       activeAdaptations: 0, corrupt: 0,
     });
 

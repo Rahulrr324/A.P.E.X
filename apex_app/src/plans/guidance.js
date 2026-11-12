@@ -28,6 +28,7 @@
 //     inert here, exactly as it is inert everywhere else.
 import { createHash } from 'node:crypto';
 import { shortId, singleLine } from '../util.js';
+import { derivationBasis, isPredictionDerived } from '../experience/prediction-derivation.js';
 
 export const GUIDANCE_NOTE = 'recorded guidance can move an approach in the comparison and nothing else: it authorizes no step, refuses no step, and starts nothing';
 export const GUIDANCE_SCHEMA = 'apex.guidance.v1';
@@ -192,7 +193,7 @@ export function guidanceFrom({
   for (const row of adaptations ?? []) {
     const state = stateOf(row);
     const shape = row.guidance ?? null;
-    const source = row.source === 'prediction' || row.method === 'evaluated_prediction' ? 'prediction' : 'feedback';
+    const source = row.source === 'prediction' || isPredictionDerived(row.method) ? 'prediction' : 'feedback';
     const entry = {
       id: row.id,
       capability: row.capability ?? null,
@@ -201,9 +202,13 @@ export function guidanceFrom({
       version: versionOf(row),
       // What produced the rule. Feedback-derived and prediction-derived records run through the same
       // approval gate and the same ordering, so a comparison that could not name which one it was reading
-      // could not disclose that two different kinds of evidence were behind the same dimension.
+      // could not disclose that two different kinds of evidence were behind the same dimension. `basis`
+      // separates one recorded evaluation from a supported longitudinal pattern inside the prediction
+      // source, because the two do not rest on the same amount of evidence.
       source,
+      basis: row.basis ?? derivationBasis(row.method),
       method: row.method ?? null,
+      pattern: row.pattern ? { ...row.pattern } : null,
       supportCount: row.supportCount ?? 0,
       // The exact records the rule rests on, kept separated by kind. A prediction-derived rule cites one
       // prediction and one evaluation; folding those into the experience list would let a reader count one
@@ -227,7 +232,10 @@ export function guidanceFrom({
       proposal: row.proposal ? {
         type: row.proposal.type ?? null,
         dimension: row.proposal.dimension ?? null,
-        verdicts: (row.proposal.verdicts ?? []).slice(0, 2).map((v) => ({ ...v })),
+        // A single-evaluation proposal states one verdict; a longitudinal one states the sequence its
+        // pattern counts. Both are bounded by the validator, and the disclosure prints what is stored.
+        verdicts: (row.proposal.verdicts ?? []).slice(0, 20).map((v) => ({ ...v })),
+        pattern: row.proposal.pattern ? { ...row.proposal.pattern } : null,
         guidance: {
           order: row.proposal.guidance?.order ?? null,
           avoid: [...(row.proposal.guidance?.avoid ?? [])],
@@ -347,6 +355,8 @@ export function guidanceFrom({
   const sources = {
     feedbackDerived: usable.filter((e) => e.source === 'feedback').map((e) => e.id),
     predictionDerived: usable.filter((e) => e.source === 'prediction').map((e) => e.id),
+    longitudinalDerived: usable.filter((e) => e.basis === 'longitudinal_pattern').map((e) => e.id),
+    singleEvaluationDerived: usable.filter((e) => e.basis === 'single_evaluation').map((e) => e.id),
     bothEligible: usable.some((e) => e.source === 'feedback') && usable.some((e) => e.source === 'prediction'),
     predictionConsidered: records.filter((e) => e.source === 'prediction').length,
     predictionRejected: inert.filter((e) => e.source === 'prediction').map((e) => ({ id: e.id, state: e.state, why: e.why })),
@@ -390,7 +400,15 @@ export function emptyGuidance(reason = null, candidates = []) {
     applicable: [],
     inert: [],
     conflicts: [],
-    sources: { feedbackDerived: [], predictionDerived: [], bothEligible: false, predictionConsidered: 0, predictionRejected: [] },
+    sources: {
+      feedbackDerived: [],
+      predictionDerived: [],
+      longitudinalDerived: [],
+      singleEvaluationDerived: [],
+      bothEligible: false,
+      predictionConsidered: 0,
+      predictionRejected: [],
+    },
     // A row per candidate, so the comparison prints the same dimension for every approach and says it
     // had nothing to judge - the alternative is a dimension that silently disappears from half the
     // answers, which reads like a difference between the candidates rather than between the reads.
@@ -456,7 +474,9 @@ export function renderGuidance(guidance, { indent = '' } = {}) {
     // less authoritative than a feedback-derived one - both needed the user's approval - but the reader
     // is entitled to know which kind of evidence they approved.
     const provenance = record.source === 'prediction'
-      ? `prediction-derived${record.predictionEvidence ? ` (prediction evidence ${record.predictionEvidence.eligible ? 'still stands' : `no longer stands: ${record.predictionEvidence.reason ?? record.predictionEvidence.state ?? 'not established'}`})` : ''}`
+      ? `${record.basis === 'longitudinal_pattern'
+        ? `longitudinal-pattern-derived (${record.pattern?.kind ?? 'pattern'} over ${record.pattern?.observations ?? record.support.predictionIds.length} observation(s))`
+        : 'single-evaluation-derived'}${record.predictionEvidence ? ` (prediction evidence ${record.predictionEvidence.eligible ? 'still stands' : `no longer stands: ${record.predictionEvidence.reason ?? record.predictionEvidence.state ?? 'not established'}`})` : ''}`
       : 'feedback-derived';
     const support = record.source === 'prediction'
       ? `${record.support.predictionIds.length} prediction(s), ${record.support.evaluationIds.length} evaluation(s)`

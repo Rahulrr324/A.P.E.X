@@ -54,18 +54,32 @@ import {
 } from './derivation.js';
 import {
   ADAPTATION_METHODS,
+  LONGITUDINAL_DERIVATION_METHOD,
+  LONGITUDINAL_PROPOSAL_TYPE,
   MAX_PROPOSAL_LIMITATIONS,
   OUTCOME_PROPOSAL_FIELD,
   PREDICTION_DECISION_DIMENSION,
   PREDICTION_DERIVATION_METHOD,
   PREDICTION_PROPOSAL_TYPE,
   decidingOutcomeOf,
+  derivationBasis,
   evidenceDigest,
+  isPredictionDerived,
   predictionEligibility,
   proposalFor,
   proposalKey,
   proposalRule,
 } from './prediction-derivation.js';
+import {
+  MAX_LONGITUDINAL_OBSERVATIONS,
+  MIN_REPEATED_OBSERVATIONS,
+  PATTERN_DEFINITIONS,
+  PROPOSAL_FIELD_BY_PATTERN,
+  analyzeLongitudinal,
+  longitudinalEvidenceDigest,
+  longitudinalProposalFor,
+  longitudinalRule,
+} from '../prediction/longitudinal.js';
 import {
   MAX_PATTERNS,
   MAX_TEMPORAL_EVENTS,
@@ -464,11 +478,19 @@ function validateFeedback(r) {
 // A prediction-derived candidate states one recorded outcome as a rule in the same four-field guidance
 // vocabulary a user already uses. Nothing in it is free text: the type, the dimension, the field, the
 // capability and the rule text are each re-derived from the stored outcome class, so a hand-edited line
-// that claims a rule its evidence does not state is refused rather than read.
+// that claims a rule its evidence does not state is refused rather than read. A longitudinal candidate
+// states a pattern of between two and twenty recorded observations instead, and the two shapes are
+// validated separately so neither can borrow the other's checks.
 function validateProposal(r, capability) {
   const p = r.proposal;
   if (!p || typeof p !== 'object' || Array.isArray(p)) return 'a prediction-derived adaptation must carry a proposal';
-  if (p.type !== PREDICTION_PROPOSAL_TYPE) return 'proposal type is not the recorded proposal type';
+  if (p.type === PREDICTION_PROPOSAL_TYPE) return validateSingleProposal(r, capability);
+  if (p.type === LONGITUDINAL_PROPOSAL_TYPE) return validateLongitudinalProposal(r, capability);
+  return 'proposal type is not a recorded proposal type';
+}
+
+function validateSingleProposal(r, capability) {
+  const p = r.proposal;
   if (p.dimension !== PREDICTION_DECISION_DIMENSION) return `proposal must feed the ${PREDICTION_DECISION_DIMENSION} dimension and no other`;
   if (!Array.isArray(p.verdicts) || p.verdicts.length !== 1) return 'a proposal states exactly one recorded verdict';
   const verdict = p.verdicts[0];
@@ -512,6 +534,83 @@ function validateProposal(r, capability) {
   return null;
 }
 
+// The longitudinal shape. Every field is re-derived the same way: the pattern kind may only be one that
+// states a direction, its definition text is the recorded definition, its observations count is the
+// number of verdicts, the rule text is the text that pattern and count state, and the digest covers
+// every observation plus the outcome records the candidate cites.
+function validateLongitudinalProposal(r, capability) {
+  const p = r.proposal;
+  if (p.dimension !== PREDICTION_DECISION_DIMENSION) return `proposal must feed the ${PREDICTION_DECISION_DIMENSION} dimension and no other`;
+  const pattern = p.pattern;
+  if (!pattern || typeof pattern !== 'object' || Array.isArray(pattern)) return 'a longitudinal proposal carries no pattern';
+  const field = PROPOSAL_FIELD_BY_PATTERN[pattern.kind];
+  if (field !== 'prefer' && field !== 'avoid') return 'proposal pattern is not one that states a direction';
+  if (pattern.definition !== PATTERN_DEFINITIONS[pattern.kind]) return 'proposal pattern definition is not the recorded definition';
+  if (!Array.isArray(p.verdicts)
+    || p.verdicts.length < MIN_REPEATED_OBSERVATIONS || p.verdicts.length > MAX_LONGITUDINAL_OBSERVATIONS) {
+    return `a longitudinal proposal states between ${MIN_REPEATED_OBSERVATIONS} and ${MAX_LONGITUDINAL_OBSERVATIONS} recorded observations`;
+  }
+  if (pattern.observations !== p.verdicts.length) return 'proposal pattern count does not match its verdicts';
+  const predictionIds = new Set();
+  for (const verdict of p.verdicts) {
+    if (!verdict || typeof verdict !== 'object' || Array.isArray(verdict)) return 'proposal verdict is not an object';
+    if (typeof verdict.predictionId !== 'string' || !ID_RE.test(verdict.predictionId)) return 'proposal verdict has an invalid prediction id';
+    if (typeof verdict.evaluationId !== 'string' || !ID_RE.test(verdict.evaluationId)) return 'proposal verdict has an invalid evaluation id';
+    if (verdict.capability !== capability) return 'proposal verdict names a different capability than the adaptation';
+    if (verdict.verdict !== 'matched' && verdict.verdict !== 'contradicted') return 'proposal verdict must be matched or contradicted';
+    // Only a success or a failure can appear in a pattern that states a direction. A blocked or other
+    // outcome is excluded from these patterns by the analysis, so a record claiming one is damage.
+    if (verdict.outcomeClass !== 'success' && verdict.outcomeClass !== 'failure') return 'a longitudinal verdict states a success or failure outcome';
+    if (predictionIds.has(verdict.predictionId)) return 'proposal verdicts cite the same prediction twice';
+    predictionIds.add(verdict.predictionId);
+  }
+  const classes = p.verdicts.map((v) => v.outcomeClass);
+  if (pattern.kind === 'repeated_success' && !classes.every((c) => c === 'success')) return 'a repeated-success pattern requires every verdict to be a success';
+  if (pattern.kind === 'repeated_failure' && !classes.every((c) => c === 'failure')) return 'a repeated-failure pattern requires every verdict to be a failure';
+  if ((pattern.kind === 'consistent_improvement' || pattern.kind === 'consistent_regression')
+    && (classes.every((c) => c === 'success') || classes.every((c) => c === 'failure'))) {
+    return 'a directional pattern requires both a success and a failure observation';
+  }
+  if (pattern.window !== null) {
+    if (!pattern.window || typeof pattern.window !== 'object' || Array.isArray(pattern.window)) return 'proposal pattern window is not an object';
+    for (const key of ['since', 'until']) {
+      if (typeof pattern.window[key] !== 'string' || parseInstant(pattern.window[key]) === null) return 'proposal pattern window has an invalid instant';
+    }
+  }
+  const calibration = pattern.calibration;
+  if (!calibration || typeof calibration !== 'object' || Array.isArray(calibration)) return 'proposal pattern carries no calibration state';
+  if (typeof calibration.available !== 'boolean') return 'proposal pattern calibration availability must be true or false';
+  if (!Number.isInteger(calibration.denominator) || calibration.denominator < 0) return 'proposal pattern calibration denominator is invalid';
+  if (!Number.isInteger(calibration.requiredForRate) || calibration.requiredForRate < 1) return 'proposal pattern calibration floor is invalid';
+  const guidance = p.guidance;
+  if (!guidance || typeof guidance !== 'object' || Array.isArray(guidance)) return 'proposal carries no guidance shape';
+  if (guidance.order !== null) return 'a proposal names no step order';
+  if (guidance.maxSteps !== null) return 'a proposal names no step bound';
+  for (const name of ['avoid', 'prefer']) {
+    const list = guidance[name];
+    if (!Array.isArray(list) || list.length > MAX_GUIDANCE_NAMES) return `proposal ${name} must be a list of at most ${MAX_GUIDANCE_NAMES} capability names`;
+    if (list.some((item) => typeof item !== 'string' || !CAPABILITY_RE.test(item))) return `proposal ${name} holds a name that is not a capability name`;
+    if (new Set(list).size !== list.length) return `proposal ${name} names the same capability twice`;
+  }
+  const expectedNames = field === 'prefer' ? guidance.prefer : guidance.avoid;
+  const otherNames = field === 'prefer' ? guidance.avoid : guidance.prefer;
+  if (expectedNames.length !== 1 || expectedNames[0] !== capability) return `proposal ${field} must name exactly the adaptation's own capability`;
+  if (otherNames.length !== 0) return `a ${pattern.kind} pattern proposes ${field} and nothing else`;
+  if (r.rule !== longitudinalRule(capability, pattern.kind, pattern.observations)) return 'proposal rule text is not the text its recorded pattern states';
+  if (!Array.isArray(p.limitations) || p.limitations.length === 0 || p.limitations.length > MAX_PROPOSAL_LIMITATIONS) {
+    return `proposal must record between 1 and ${MAX_PROPOSAL_LIMITATIONS} limitations`;
+  }
+  if (p.limitations.some((item) => typeof item !== 'string' || item.length === 0 || item.length > MAX_RULE_CHARS)) return 'proposal limitation text is invalid';
+  if (typeof p.evidenceDigest !== 'string' || p.evidenceDigest.length !== 64) return 'proposal has a missing or invalid evidence digest';
+  if (p.evidenceDigest !== longitudinalEvidenceDigest({
+    capability,
+    kind: pattern.kind,
+    verdicts: p.verdicts,
+    outcomeExperienceIds: r.support.experienceIds,
+  })) return 'proposal evidence digest does not match the evidence it cites';
+  return null;
+}
+
 function validateAdaptation(r) {
   if (typeof r.id !== 'string' || !ID_RE.test(r.id)) return 'adaptation has missing or invalid id';
   if (!isScopableCapability(r.capability)) return 'adaptation capability is not a dotted capability name';
@@ -521,23 +620,48 @@ function validateAdaptation(r) {
   if (r.ruleHash !== sha256Hex(normalizeRuleText(r.rule))) return 'adaptation ruleHash does not match its rule';
   if (!ADAPTATION_METHODS.includes(r.method)) return 'adaptation was not produced by a recorded derivation method';
   if (!Number.isInteger(r.minSupport) || r.minSupport < 1 || r.minSupport > MAX_SUPPORT_REFS) return 'adaptation minSupport is out of range';
-  if (r.method === PREDICTION_DERIVATION_METHOD && r.minSupport !== 1) return 'a prediction-derived adaptation rests on one evaluation, so its minSupport must be 1';
+  const single = r.method === PREDICTION_DERIVATION_METHOD;
+  const repeated = r.method === LONGITUDINAL_DERIVATION_METHOD;
+  if (single && r.minSupport !== 1) return 'a prediction-derived adaptation rests on one evaluation, so its minSupport must be 1';
+  // A longitudinal candidate's support count is its observation count, and a pattern needs at least two
+  // observations before it can repeat anything. The upper bound is the same reference bound everything
+  // else uses.
+  if (repeated && (r.minSupport < MIN_REPEATED_OBSERVATIONS || r.minSupport > MAX_LONGITUDINAL_OBSERVATIONS)) {
+    return `a longitudinal adaptation rests on between ${MIN_REPEATED_OBSERVATIONS} and ${MAX_LONGITUDINAL_OBSERVATIONS} observations`;
+  }
   if (!r.support || typeof r.support !== 'object' || Array.isArray(r.support)) return 'adaptation has no supporting evidence';
   const experiences = storedIdListProblem(r.support.experienceIds, 'adaptation supporting experiences', MAX_SUPPORT_REFS);
   if (experiences) return experiences;
-  const feedback = r.method === PREDICTION_DERIVATION_METHOD
+  const feedback = single || repeated
     ? emptyIdListProblem(r.support.feedbackIds, 'adaptation supporting feedback')
     : storedIdListProblem(r.support.feedbackIds, 'adaptation supporting feedback', MAX_SUPPORT_REFS);
   if (feedback) return feedback;
-  if (r.method === PREDICTION_DERIVATION_METHOD) {
+  if (single) {
     const predictions = storedIdListProblem(r.support.predictionIds, 'adaptation supporting predictions', 1);
     if (predictions) return predictions;
     const evaluations = storedIdListProblem(r.support.evaluationIds, 'adaptation supporting evaluations', 1);
     if (evaluations) return evaluations;
     const proposalProblem = validateProposal(r, r.capability);
     if (proposalProblem) return proposalProblem;
+    if (r.proposal.type !== PREDICTION_PROPOSAL_TYPE) return 'a single-evaluation adaptation must carry a single-evaluation proposal';
     if (r.support.predictionIds[0] !== r.proposal.verdicts[0].predictionId) return 'adaptation support names a different prediction than its proposal';
     if (r.support.evaluationIds[0] !== r.proposal.verdicts[0].evaluationId) return 'adaptation support names a different evaluation than its proposal';
+  } else if (repeated) {
+    const predictions = storedIdListProblem(r.support.predictionIds, 'adaptation supporting predictions', MAX_LONGITUDINAL_OBSERVATIONS);
+    if (predictions) return predictions;
+    const evaluations = storedIdListProblem(r.support.evaluationIds, 'adaptation supporting evaluations', MAX_LONGITUDINAL_OBSERVATIONS);
+    if (evaluations) return evaluations;
+    const proposalProblem = validateProposal(r, r.capability);
+    if (proposalProblem) return proposalProblem;
+    if (r.proposal.type !== LONGITUDINAL_PROPOSAL_TYPE) return 'a longitudinal adaptation must carry a longitudinal proposal';
+    const verdicts = r.proposal.verdicts;
+    if (r.support.predictionIds.length !== verdicts.length) return 'adaptation support cites a different number of predictions than its proposal';
+    if (r.support.evaluationIds.length !== verdicts.length) return 'adaptation support cites a different number of evaluations than its proposal';
+    if (r.minSupport !== verdicts.length) return 'adaptation minSupport does not match the number of recorded observations';
+    for (let i = 0; i < verdicts.length; i += 1) {
+      if (r.support.predictionIds[i] !== verdicts[i].predictionId) return 'adaptation support names a different prediction than its proposal';
+      if (r.support.evaluationIds[i] !== verdicts[i].evaluationId) return 'adaptation support names a different evaluation than its proposal';
+    }
   } else {
     if (r.support.predictionIds !== undefined || r.support.evaluationIds !== undefined) return 'a feedback-derived adaptation must not carry prediction evidence';
     if (r.proposal !== undefined) return 'a feedback-derived adaptation must not carry a prediction proposal';
@@ -823,8 +947,9 @@ function annotateAdaptations(index, { retiredExperiences, retiredFeedback }) {
     // A prediction-derived candidate arrives carrying its own shape: the typed proposal is what the
     // recorded outcome states, so approval alone can put it in force. A guidance record the user writes
     // afterwards restates the shape and supersedes the proposal's, exactly as it supersedes an earlier
-    // guidance record. `source` says which of the two a reader is looking at.
-    const proposal = record.method === PREDICTION_DERIVATION_METHOD ? record.proposal ?? null : null;
+    // guidance record. `source` says which of the two a reader is looking at, and `basis` says whether
+    // the rule rests on one evaluation or on a supported longitudinal pattern.
+    const proposal = isPredictionDerived(record.method) ? record.proposal ?? null : null;
     const recordedGuidance = guidanceEvents.length > 0 ? guidanceEvents.at(-1) : null;
     const effectiveGuidance = recordedGuidance
       ? { ...summarizeGuidance(recordedGuidance), source: 'record' }
@@ -844,10 +969,14 @@ function annotateAdaptations(index, { retiredExperiences, retiredFeedback }) {
 
     return {
       ...record,
-      // How this candidate was produced. The two derivations are never pooled: a reader can tell a rule
-      // the user's corrections support from one a recorded outcome proposes, and neither claims the other.
-      source: record.method === PREDICTION_DERIVATION_METHOD ? 'prediction' : 'feedback',
+      // How this candidate was produced. The two derivation sources are never pooled: a reader can tell
+      // a rule the user's corrections support from one a recorded outcome proposes, and neither claims
+      // the other. `basis` separates the single observation from the supported pattern inside the
+      // prediction source, because the two rest on different amounts of evidence.
+      source: isPredictionDerived(record.method) ? 'prediction' : 'feedback',
+      basis: derivationBasis(record.method),
       proposal,
+      pattern: proposal?.pattern ? { ...proposal.pattern } : null,
       decisionState,
       active: decisionState === 'approved' && supportIntact,
       inactiveReason,
@@ -1252,6 +1381,15 @@ export class ExperienceStore {
       created: 0,
       truncated: false,
       limit: MAX_PREDICTION_CANDIDATES,
+      // The longitudinal pass is reported beside the single-evaluation one even when it proposed
+      // nothing: "no scope holds a supported pattern" and "the read was bounded" are different facts.
+      longitudinal: {
+        groups: 0,
+        supported: 0,
+        created: 0,
+        coveredCapabilities: [],
+        skipped: [],
+      },
     };
     if (!this.predictions || typeof this.predictions.list !== 'function') {
       report.reason = 'no prediction ledger is attached to this store, so no recorded outcome was read';
@@ -1275,7 +1413,129 @@ export class ExperienceStore {
 
     const created = [];
     const skipped = [];
+    // Evidence already cited by a candidate that has not been retired. Re-citing it would let one
+    // recorded evaluation move two rules, which is the double-count the derivation is meant to refuse.
+    const retiredTargets = new Set(index.retirements.map((r) => r.targetId));
+    const claimed = new Set();
+    for (const record of index.adaptations) {
+      if (retiredTargets.has(record.id)) continue;
+      for (const id of record.support?.predictionIds ?? []) claimed.add(id);
+    }
+
+    // The longitudinal pass runs first and claims the scopes it describes. A scope holding a supported
+    // pattern is not also reduced to a rule read from one of its members: the pattern is the stronger
+    // statement the records support, and a single observation beside it would present the same evidence
+    // twice. Scopes whose pattern states no direction fall through to the single-evaluation pass.
+    const analysis = analyzeLongitudinal({
+      projections,
+      experiencesById,
+      readTotal: ledger.total ?? projections.length,
+      readTruncated: report.truncated,
+      now: this.now().toISOString(),
+    });
+    report.longitudinal.groups = analysis.totals.groups;
+    const covered = new Map();
+    for (const group of analysis.groups) {
+      if (!group.pattern.sufficient) continue;
+      report.longitudinal.supported += 1;
+      covered.set(group.capability, { kind: group.pattern.kind, created: false });
+      report.longitudinal.coveredCapabilities.push(group.capability);
+      if (report.truncated || group.observationsTruncated) {
+        report.longitudinal.skipped.push({
+          capability: group.capability,
+          pattern: group.pattern.kind,
+          reason: 'the prediction read was bounded, so an observation outside it could change this pattern; a rule is not derived from a partial sequence',
+        });
+        continue;
+      }
+      const proposal = longitudinalProposalFor(group);
+      const rule = longitudinalRule(group.capability, group.pattern.kind, group.pattern.observations);
+      if (!proposal || !rule) continue;
+      const key = proposalKey(group.capability, rule);
+      if (taken.has(key)) {
+        report.longitudinal.skipped.push({
+          capability: group.capability,
+          pattern: group.pattern.kind,
+          reason: 'a candidate that has not been retired already states this rule for this scope',
+        });
+        continue;
+      }
+      const cited = group.evidenceRefs.predictionIds;
+      const alreadyClaimed = cited.filter((id) => claimed.has(id));
+      if (alreadyClaimed.length > 0) {
+        report.longitudinal.skipped.push({
+          capability: group.capability,
+          pattern: group.pattern.kind,
+          reason: `its evidence is already cited by a candidate that has not been retired (${alreadyClaimed.map((id) => shortId(id)).join(', ')})`,
+        });
+        continue;
+      }
+      if (group.evidenceRefs.truncated
+        || cited.length < MIN_REPEATED_OBSERVATIONS || cited.length > MAX_LONGITUDINAL_OBSERVATIONS) {
+        report.longitudinal.skipped.push({
+          capability: group.capability,
+          pattern: group.pattern.kind,
+          reason: `its evidence spans ${cited.length} prediction(s), and a candidate carries between ${MIN_REPEATED_OBSERVATIONS} and ${MAX_LONGITUDINAL_OBSERVATIONS}`,
+        });
+        continue;
+      }
+      const experienceIds = [...new Set(group.evidenceRefs.experienceIds)];
+      if (experienceIds.length === 0 || experienceIds.length > MAX_SUPPORT_REFS) {
+        report.longitudinal.skipped.push({
+          capability: group.capability,
+          pattern: group.pattern.kind,
+          reason: `its observations cite ${experienceIds.length} outcome record(s), and a candidate carries between 1 and ${MAX_SUPPORT_REFS}`,
+        });
+        continue;
+      }
+      const id = randomUUID();
+      if (records.some((r) => r.id === id) || created.some((r) => r.id === id)) {
+        throw new StoreError('identifier collision; nothing written');
+      }
+      const record = {
+        schema: EXPERIENCE_SCHEMA,
+        kind: ADAPTATION_KIND,
+        id,
+        capability: group.capability,
+        rule,
+        ruleHash: sha256Hex(normalizeRuleText(rule)),
+        method: LONGITUDINAL_DERIVATION_METHOD,
+        minSupport: proposal.pattern.observations,
+        support: {
+          experienceIds,
+          feedbackIds: [],
+          predictionIds: [...group.evidenceRefs.predictionIds],
+          evaluationIds: [...group.evidenceRefs.evaluationIds],
+        },
+        proposal,
+        createdAt: this.now().toISOString(),
+        provenance: recorded,
+      };
+      const problem = validateExperienceRecord(record);
+      if (problem) throw new StoreError(`the derived longitudinal candidate failed validation (${problem}); nothing written`);
+      await this.log.append(record);
+      created.push(record);
+      for (const predictionId of cited) claimed.add(predictionId);
+      taken.add(key);
+      covered.get(group.capability).created = true;
+      report.longitudinal.created += 1;
+    }
+
     for (const projection of projections) {
+      // A scope the longitudinal pass described is answered there, whether or not it produced a
+      // candidate; reducing it to one observation would state the same evidence a second time.
+      const coverage = covered.get(projection.capability);
+      if (coverage) {
+        if (projection.status === 'evaluated') {
+          skipped.push({
+            source: 'prediction',
+            predictionId: projection.id,
+            capability: projection.capability,
+            reason: `its scope's recorded outcomes support a ${coverage.kind} pattern, so a single-observation rule is not derived${coverage.created ? '' : ' and the pattern candidate was not created'}`,
+          });
+        }
+        continue;
+      }
       const eligibility = predictionEligibility({ projection, experiencesById });
       if (!eligibility.eligible) {
         report.ineligible += 1;
@@ -1538,7 +1798,7 @@ export class ExperienceStore {
   // decided here. Nothing is cached between reads, so an evaluation or withdrawal appended a moment ago
   // is seen by the next read.
   async #predictionCurrentness(rows, experiencesById) {
-    const derived = rows.filter((r) => r.method === PREDICTION_DERIVATION_METHOD);
+    const derived = rows.filter((r) => isPredictionDerived(r.method));
     if (derived.length === 0) return { rows, report: null };
     const available = Boolean(this.predictions && typeof this.predictions.detail === 'function');
     const report = {
@@ -1549,48 +1809,92 @@ export class ExperienceStore {
       reason: available ? null : 'the prediction ledger is not attached to this store, so no prediction-derived candidate can be confirmed current',
     };
     const cache = new Map();
+    // Every distinct cited prediction, read once. A per-id fallback stays for a ledger object that
+    // exposes only `detail`, and for a batch read that fails: the check then costs one read per
+    // citation, which is what it did before, rather than judging citations it could not read.
+    const cited = [...new Set(derived.flatMap((row) => row.support?.predictionIds ?? []))];
+    let prefetched = null;
+    if (cited.length > 0 && typeof this.predictions.details === 'function') {
+      try {
+        prefetched = await this.predictions.details(cited);
+      } catch {
+        prefetched = null;
+      }
+    }
+    const projectionOf = async (predictionId) => {
+      if (prefetched && prefetched.has(predictionId)) {
+        const answered = prefetched.get(predictionId);
+        return answered.error !== undefined ? { unavailable: answered.error } : answered.projection;
+      }
+      if (!cache.has(predictionId)) {
+        try {
+          cache.set(predictionId, await this.predictions.detail(predictionId));
+        } catch (err) {
+          cache.set(predictionId, { unavailable: err?.message ?? String(err) });
+        }
+      }
+      return cache.get(predictionId);
+    };
     const out = [];
     for (const row of rows) {
-      if (row.method !== PREDICTION_DERIVATION_METHOD) {
+      if (!isPredictionDerived(row.method)) {
         out.push(row);
         continue;
       }
-      const predictionId = row.support?.predictionIds?.[0] ?? null;
-      const evaluationId = row.support?.evaluationIds?.[0] ?? null;
+      const single = row.method === PREDICTION_DERIVATION_METHOD;
+      const predictionIds = row.support?.predictionIds ?? [];
+      const evaluationIds = row.support?.evaluationIds ?? [];
       let judgment;
       if (!available) {
         judgment = { eligible: false, state: 'prediction_store_unavailable', reason: report.reason };
-      } else if (!predictionId) {
+      } else if (predictionIds.length === 0 || (single && predictionIds.length !== 1)) {
         judgment = { eligible: false, state: 'evaluation_missing', reason: 'the candidate names no prediction record' };
+      } else if (evaluationIds.length !== predictionIds.length) {
+        judgment = { eligible: false, state: 'evaluation_missing', reason: 'the candidate cites a different number of predictions and evaluations' };
       } else {
-        if (!cache.has(predictionId)) {
-          try {
-            cache.set(predictionId, await this.predictions.detail(predictionId));
-          } catch (err) {
-            cache.set(predictionId, { unavailable: err?.message ?? String(err) });
+        judgment = { eligible: true, state: 'eligible', reason: null };
+        // Every cited observation is re-judged, not only the first. A longitudinal rule rests on the
+        // whole sequence, so any single withdrawn, replaced, stale, or unreadable member makes it inert
+        // until the user derives again.
+        for (let i = 0; i < predictionIds.length; i += 1) {
+          const projection = await projectionOf(predictionIds[i]);
+          if (projection?.unavailable !== undefined) {
+            judgment = { eligible: false, state: 'prediction_store_unavailable', reason: `the prediction ledger could not be read: ${projection.unavailable}` };
+            break;
+          }
+          if (projection?.evaluation?.id !== evaluationIds[i]) {
+            judgment = { eligible: false, state: 'evaluation_changed', reason: 'an evaluation this candidate cites is no longer the evaluation on record for its prediction' };
+            break;
+          }
+          const item = predictionEligibility({ projection, experiencesById });
+          if (!item.eligible) {
+            judgment = item;
+            break;
           }
         }
-        const projection = cache.get(predictionId);
-        if (projection?.unavailable !== undefined) {
-          judgment = { eligible: false, state: 'prediction_store_unavailable', reason: `the prediction ledger could not be read: ${projection.unavailable}` };
-        } else if (evaluationId && projection?.evaluation?.id !== evaluationId) {
-          judgment = { eligible: false, state: 'evaluation_changed', reason: 'the evaluation this candidate cites is no longer the evaluation on record for the prediction' };
-        } else {
-          judgment = predictionEligibility({ projection, experiencesById });
-          // The proposal is a statement of one recorded verdict. If any part of that statement no longer
-          // matches the records it was taken from, the candidate is inert until the user derives again.
-          if (judgment.eligible && row.proposal) {
+        // The proposal is a statement of recorded outcomes. If any part of that statement no longer
+        // matches the records it was taken from, the candidate is inert until the user derives again.
+        if (judgment.eligible && row.proposal) {
+          let recomputed;
+          if (single) {
             const verdict = row.proposal.verdicts?.[0] ?? null;
-            const recomputed = verdict && evidenceDigest({
-              predictionId,
-              evaluationId,
+            recomputed = verdict && evidenceDigest({
+              predictionId: predictionIds[0],
+              evaluationId: evaluationIds[0],
               verdict: verdict.verdict,
               outcomeClass: verdict.outcomeClass,
               outcomeExperienceIds: row.support?.experienceIds ?? [],
             });
-            if (recomputed !== row.proposal.evidenceDigest) {
-              judgment = { eligible: false, state: 'evaluation_changed', reason: 'the recorded outcome, verdict, or evidence behind this candidate has changed since it was derived' };
-            }
+          } else {
+            recomputed = row.proposal.verdicts && row.proposal.pattern && longitudinalEvidenceDigest({
+              capability: row.capability,
+              kind: row.proposal.pattern.kind,
+              verdicts: row.proposal.verdicts,
+              outcomeExperienceIds: row.support?.experienceIds ?? [],
+            });
+          }
+          if (recomputed !== row.proposal.evidenceDigest) {
+            judgment = { eligible: false, state: 'evaluation_changed', reason: 'the recorded outcome, verdict, or evidence behind this candidate has changed since it was derived' };
           }
         }
       }
@@ -1685,8 +1989,9 @@ export class ExperienceStore {
       unknownCapture: index.experiences.filter((r) => captureOf(r) === CAPTURE_UNKNOWN).length,
       feedback: index.feedback.length,
       adaptations: index.adaptations.length,
-      feedbackDerivedAdaptations: index.adaptations.filter((a) => a.method !== PREDICTION_DERIVATION_METHOD).length,
-      predictionDerivedAdaptations: index.adaptations.filter((a) => a.method === PREDICTION_DERIVATION_METHOD).length,
+      feedbackDerivedAdaptations: index.adaptations.filter((a) => !isPredictionDerived(a.method)).length,
+      predictionDerivedAdaptations: index.adaptations.filter((a) => isPredictionDerived(a.method)).length,
+      longitudinalDerivedAdaptations: index.adaptations.filter((a) => a.method === LONGITUDINAL_DERIVATION_METHOD).length,
       predictionEvidenceStale: current.report?.stale ?? 0,
       decisions: index.decisions.length,
       retirements: index.retirements.length,

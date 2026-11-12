@@ -127,6 +127,10 @@ export function adaptationRow(a) {
     // Which ledger produced the rule. The comparison's ordering treats both kinds identically, but the
     // disclosure has to be able to say which one a reader approved, so it travels with the row.
     source: a.source ?? (a.method === 'evaluated_prediction' ? 'prediction' : 'feedback'),
+    // Which kind of prediction evidence the rule rests on: one recorded evaluation or a supported
+    // longitudinal pattern. The comparison carries it onto the applied rule so a reader can tell a
+    // single observation from the pattern a later derivation found.
+    basis: a.basis ?? null,
     minSupport: a.minSupport ?? null,
     supportCount: (a.support?.experienceIds ?? []).length,
     // The exact records the rule rests on, bounded like the store's own support lists. The comparison's
@@ -151,6 +155,9 @@ export function adaptationRow(a) {
     proposal: a.proposal ? {
       type: a.proposal.type ?? null,
       dimension: a.proposal.dimension ?? null,
+      // The supported pattern a longitudinal candidate states. A single-evaluation proposal carries
+      // none, and the comparison reports the absence rather than inventing a pattern.
+      pattern: a.proposal.pattern ? { ...a.proposal.pattern } : null,
       verdicts: (a.proposal.verdicts ?? []).slice(0, 2).map((v) => ({ ...v })),
       guidance: {
         order: a.proposal.guidance?.order ?? null,
@@ -161,6 +168,9 @@ export function adaptationRow(a) {
       limitations: [...(a.proposal.limitations ?? [])],
       evidenceDigest: a.proposal.evidenceDigest ?? null,
     } : null,
+    // The supported pattern read off the record, stated once for the guidance ledger. It is null for
+    // a single-evaluation or feedback-derived rule.
+    pattern: a.pattern ? { ...a.pattern } : null,
     decidedAt: a.decision?.createdAt ?? null,
     decisionReason: wording(a.decision?.reason, 200),
     decisionState: a.decisionState ?? null,

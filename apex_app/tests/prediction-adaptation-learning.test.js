@@ -290,7 +290,10 @@ describe('AP-02 eligibility: only a completed, current, user-recorded evaluation
     assert.equal((await app.experience.activeAdaptations({ limit: 5 })).adaptations.length, 1);
 
     const originalDetail = app.predictions.detail;
-    app.predictions.detail = async () => { throw new StoreError('injected: the prediction ledger is unreadable'); };
+    const originalDetails = app.predictions.details;
+    const unreadableLedger = async () => { throw new StoreError('injected: the prediction ledger is unreadable'); };
+    app.predictions.detail = unreadableLedger;
+    app.predictions.details = unreadableLedger;
     let view;
     let detail;
     try {
@@ -298,6 +301,7 @@ describe('AP-02 eligibility: only a completed, current, user-recorded evaluation
       detail = await app.experience.adaptationDetail(candidate.id);
     } finally {
       app.predictions.detail = originalDetail;
+      app.predictions.details = originalDetails;
     }
     assert.deepEqual(view.adaptations, [], 'unreadable evidence fails closed rather than staying active');
     assert.equal(detail.active, false);

@@ -1,7 +1,8 @@
 # APEX Local Alpha — consolidated architecture
 
 This document is the single consolidated description of the cognitive runtime and the executive
-system as they exist in `apex_app/` after Batch AO-10 and the bounded AP-01 and AP-02 pathways. It
+system as they exist in `apex_app/` after Batch AO-10 and the bounded AP-01, AP-02 and AP-03
+pathways. It
 replaces no code and grants nothing. It was written against commit `a2c9a64` (`ao-10`) plus the Batch
 AP working tree, by reading the modules and tests named below. Where a statement is a contract enforced by code, the module is
 named; where it is a guarantee established by tests, the suite is named; where it is only a
@@ -230,7 +231,8 @@ fact:
   is never treated as consent.
 - **Currentness is re-read, not cached.** The store overlays a prediction-derived record on read
   with `source: 'prediction'`, `shapeSource: 'proposal'`, and `predictionEvidence`. For every active
-  prediction-derived row it re-reads `predictions.detail` (no cache, no index) and forces
+  prediction-derived row it re-reads the `predictions` ledger once (`details`, the batch read added
+  in AP-03; no retention between checks, no index) and forces
   `active:false` with an `inactiveReason` of `prediction_store_unavailable` or `evaluation_changed`
   when the ledger no longer supports the record. An approval is preserved; its effect is withdrawn
   until the lineage is explicitly reconciled. A re-evaluation or invalidation therefore cannot leave
@@ -256,13 +258,104 @@ fact:
   separation, typed-rule refusal, the five disclosure distinctions, the real-store/controller/audit
   end-to-end run, retirement, and audit-append failure. The pure decision path was benchmarked
   against AP-01 on identical fixtures (see `benchmarks/README.md`); it shows no measurable added
-  overhead there, because the AP-02-specific cost is a store read (the currentness check), measured
-  separately and disclosed as a limitation rather than optimized away.
+  overhead there. The AP-02-specific cost is the currentness store read, and AP-03 turned it from
+  one ledger read per cited prediction into one ledger read per check (see below).
 - **What it does not claim.** It does not claim APEX predicts accurately, that a prediction is a
   probability, that an evaluated outcome caused the later result, or that any of this improves work.
   It claims only that one completed evaluation can become a candidate, that only the user's approval
   makes it evidence, and that the resulting ordering influence is disclosed, bounded, auditable and
   reversible.
+
+### How repeated recorded outcomes may be described and, separately, approved (AP-03)
+
+Batch AP-03 extends AP-02 from one evaluated prediction to a bounded sequence of them. It answers a
+narrower question than "what always happens": *in one capability's recorded history, is the order of
+recorded outcomes repeated, alternating, turning, or not enough to say?* The answer is a read-time
+analysis, not a stored fact. It adds one pure module (`prediction/longitudinal.js`), a derivation
+branch that may cite several evaluations, one read action (`longitudinal`), and one batched ledger
+read used by the currentness check. It adds no store, no new prediction or experience file, no
+planner, no new permission or origin, no authorization rule, and no second decision dimension.
+
+- **Read-only analysis.** `analyzeLongitudinal` takes the predictions whose evaluation is known and
+  projects a scoped report. Nothing is written: no record is repaired, promoted, or annotated, and
+  the ledger is only read. The report carries schema `apex.longitudinal.v1` and repeats the note
+  that it "makes no causal claim, states no confidence, and approves nothing".
+- **The pattern vocabulary is closed.** Eight kinds, no free-form parsing:
+  `repeated_success`, `repeated_failure`, `alternating_outcomes`, `consistent_improvement`,
+  `consistent_regression`, `mixed_outcomes`, `insufficient_evidence`, `conflicting_evidence`. The
+  first four state a direction a candidate may carry; the last four describe evidence that supports
+  no single direction and therefore propose nothing. `MIN_REPEATED_OBSERVATIONS = 2` and
+  `MIN_SEQUENCE_OBSERVATIONS = 3` are definitions of "repeated" and "a sequence", not accuracy
+  thresholds: two observations can repeat, and three are needed before an order can alternate or
+  turn.
+- **Grouping, dedupe and exclusions.** A group is one capability name; a parent name never absorbs a
+  child capability's records, and unrelated capabilities are never merged. Observations are ordered
+  chronologically by recorded outcome time, deduplicated by prediction id and evaluation id, and each
+  observation names its own prediction, evaluation and evidence ids. A citation cannot count twice.
+  Records withdrawn, replaced, expired, stale, unreadable, non-user, or outside a capability scope are
+  **excluded by kind**, each with its wording; the report prints up to 20 exclusions per group and
+  says when it truncated. A missing record is never read as a failure: absence is an exclusion with
+  a reason, and an unreadable store is a refusal, not an empty history.
+- **Calibration is separate and unchanged.** The existing derivation is reused verbatim, with its
+  floor of **20 scored evaluations** intact. The report states recorded, evaluated, eligible-scored
+  and excluded counts; below the floor, calibration is explicitly `unavailable` with the reason
+  `below 20`, and is never read as a good or poor rate. Calibration is not authorization.
+- **Bounded reads are disclosed.** The derivation reads at most 20 predictions
+  (`MAX_LONGITUDINAL_PREDICTIONS`). When the scope holds more, the read is partial, the report says
+  so, and **no pattern is derived from it**: a rule is refused rather than inferred from a prefix of
+  the history. The report also bounds groups (20), observations and exclusions shown per group (20),
+  and support refs per rule (20), and says which of those it hit.
+- **A pattern may become a candidate; it never approves one.** `adaptation.derive` turns a
+  directional pattern into a candidate with `method: 'repeated_outcome_pattern'`, an explicit
+  `type: 'repeated_outcome_pattern'` proposal, `minSupport: 1`, and the cited prediction and
+  evaluation ids in `support` (bounded at 20). The rule is the recorded pattern's direction mapped
+  through a closed mapping, printed in the record so a reader can disagree with it; the predictions'
+  subject text is display-only and never parsed. `adaptation.decide` remains the only approval and
+  remains user-origin only. A repeated pattern is never automatically promoted to an executable rule.
+- **One scope, one answer.** The scope is answered by its pattern, not also by each member: a
+  prediction covered by the longitudinal candidate is not additionally turned into its own
+  single-evaluation candidate. Normalized scope-and-rule keying still prevents a parallel rule for
+  the same scope, and the derivation's independent verification refuses a candidate whose citations
+  no longer resolve.
+- **Influence is the AP-01 dimension, with a distinguishable basis.** An approved longitudinal
+  candidate feeds only `approved_adaptation_fit`. The decision block gains
+  `sources.longitudinalDerived` beside `sources.singleEvaluationDerived` and
+  `sources.predictionEvidence`, and each applied rule carries `basis` (`repeated_feedback`,
+  `single_evaluation`, or `longitudinal_pattern`), so a reader can tell a single observation from a
+  supported sequence. The counterfactual, candidate bytes, gates and ranked dimensions are
+  unchanged; there is no new dimension and no new authorization pathway.
+- **Currentness is one ledger read per check.** Every adaptation read re-judges each cited
+  prediction against the live ledger via `predictions.details`, which reads and projects the log
+  once for all references (including the predictions cited by longitudinal candidates). Nothing is
+  retained between checks, so a re-evaluation, invalidation, or a later outcome inside a cited
+  horizon makes the record ineligible until reconciled; the approval stands, its effect is withheld,
+  and on reconciliation the unadapted decision returns without any record being rewritten.
+  `tests/longitudinal-outcome-analysis.test.js` asserts the batched read returns exactly what one
+  read per citation returned.
+- **Reversal.** `adaptation.retire` remains the reversal for a longitudinal record exactly as for
+  AP-01/AP-02: the retire event is appended, the next comparison reports the record inert with its
+  reason and restores the unadapted ordering, and no prediction, evaluation, feedback, adaptation,
+  plan or task history is rewritten.
+- **Tests and cost.** `tests/longitudinal-outcome-analysis.test.js` (registered in `npm test`)
+  covers the vocabulary and eligibility matrix, calibration at 19 vs 20, duplicate evaluations and
+  citations, exclusion kinds (expiry is not failure, missing is not failure), mixed/alternating
+  groups, unrelated capabilities, conflicting and damaged-store evidence, model-origin
+  ineligibility, that aggregation can neither approve nor activate, that only an approved adaptation
+  moves the dimension, re-evaluation/invalidation removing influence, retirement restoring the
+  baseline, refusal to bypass plan approval/authorization/execution/verification, concurrent changes
+  not leaving stale influence, and a deterministic end-to-end run through real stores, controller and
+  audit. `benchmarks/run-longitudinal-benchmark.mjs` measures the pure analysis as history grows
+  (20 / 100 / 500 / 1000 evaluations) and the **complete** production request path. With one
+  capability and 8 / 14 / 19 recorded evaluations the AP-03 rule moves the decision by a median
+  `+1.2 / +5.8 / +7.1 ms` over the no-rule request, against AP-02's `+0.5 / +19.1 / +2.3 ms`; the
+  figures include the currentness read and machine noise and are observations of one machine, not a
+  specification.
+- **What it does not claim.** A repeated association in recorded order is not a cause, not a
+  probability, not a confidence, and not a forecast. The analysis does not say a capability will
+  succeed, does not fit a weight, does not compute an accuracy, and does not approve, activate, or
+  execute anything. It claims only that a bounded, scoped, deduplicated sequence of recorded outcomes
+  can be described and shown, that a directional one can become a candidate, and that only the user's
+  explicit approval lets it move one disclosed comparison.
 
 ## 5. C. Evidence and memory architecture
 
@@ -373,6 +466,8 @@ nothing and does not call a model. It has no executive-handoff scenario; handoff
 | Diagnostics overhead | — | 21.5–22.8 µs; record 3,334 bytes | Attached after the outcome is decided |
 | Candidate comparison, AP-01 before → after | 0.14 / 0.26 / 0.85 ms at 4 / 10 / 20 candidates | 0.18 / 0.27 / 1.26 ms | The added counterfactual block costs about 0.04 / 0.01 / 0.41 ms (25% / 3% / 48%); warmed in-run medians over 15 samples; no cache or index added |
 | Decision path, AP-01 vs prediction-informed (AP-02) | AP-01 0.201 / 0.262 / 0.687 ms at 4 / 10 / 20 candidates | AP-02 0.166 / 0.261 / 0.678 ms | Combined ledger + comparison, warmed in-run medians over 15 samples on identical fixtures; differences −0.035 / −0.001 / −0.009 ms, within run-to-run spread. Candidate bytes, gates and binding identical. The AP-02 currentness store read is not in this figure (see `benchmarks/README.md`) |
+| Longitudinal analysis (AP-03, pure) | — | 0.21 / 0.40 / 2.74 / 2.73 ms at 20 / 100 / 500 / 1,000 evaluations | One capability, one group per 25 records capped at 20 groups; the 1,000-record read is bounded at 1,000 and discloses group truncation. In-run medians over 7 samples |
+| Complete request, no-rule vs longitudinal (AP-03) | — | no rule 27.7 / 68.0 / 72.5 ms at 8 / 14 / 19 evaluations | AP-03 rule +1.2 / +5.8 / +7.1 ms (AP-02 +0.5 / +19.1 / +2.3 ms) over the identical store; includes the batched currentness read and machine noise. Partial (analysis/store/derivation) timings are printed separately and are not the request cost |
 
 Known scaling behavior: memory and knowledge searches are linear in the number of records; JSONL
 cold reads parse the whole store; the AM index removes the repeated learning read, not the initial
@@ -400,7 +495,7 @@ The only authority owner is the action registry. Everything else observes, propo
 | An influenced comparison cannot record candidate bytes it did not read | `executive/selection.js` refuses `candidate-changed` against the comparison's bound digests | `adaptation-decision.test.js`, `plan-guidance.test.js` |
 | A prediction verdict, model suggestion, or unapproved rule moves no decision | The guidance ledger admits only user-approved, active, evidence-backed, shaped records; everything else is inert | `adaptation-decision.test.js` (eligibility), `adversarial-batch-am.test.js` I-01–I-08 |
 | A prediction-derived candidate cannot gain authority from its own evaluation | `experience/prediction-derivation.js` is pure and returns only a typed proposal; `adaptation.derive` appends an unapproved candidate; `adaptation.decide` is the only approval and remains user-origin only; the registry and plan-validity paths are unchanged | `prediction-adaptation-learning.test.js` (approval separation, authority isolation), `prediction-adaptation-boundary.test.js` |
-| A stale prediction lineage cannot leave approved guidance active | `experience-store.js` `#predictionCurrentness` re-reads `predictions.detail` on every active prediction-derived row and forces `active:false` | `prediction-adaptation-learning.test.js` (stale/unreadable ledger), `prediction-adaptation-boundary.test.js` |
+| A stale prediction lineage cannot leave approved guidance active | `experience-store.js` `#predictionCurrentness` re-reads the cited predictions (`predictions.details`, one batched ledger read per check) and forces `active:false` | `prediction-adaptation-learning.test.js` (stale/unreadable ledger), `prediction-adaptation-boundary.test.js` |
 
 ### Known gaps between documentation and code
 
@@ -442,6 +537,7 @@ The only authority owner is the action registry. Everything else observes, propo
 | Performance optimization (learning read) | `IMPLEMENTED_AND_TESTED` | AM per-snapshot index in the learning read path | `learning-read-equivalence.test.js`, `plan-dimensions.test.js` |
 | Evidence-driven decision adaptation (AP-01) | `IMPLEMENTED_AND_TESTED` | `plans/evaluation.js` (`adaptationDecisionOf`), `plans/guidance.js`, `executive/selection.js` | `adaptation-decision.test.js` (23 cases), `plan-guidance.test.js`, `plan-scenarios-am.test.js` |
 | Prediction-derived adaptation (AP-02) | `IMPLEMENTED_AND_TESTED` | `experience/prediction-derivation.js`, prediction branch in `experience/experience-store.js`, `adaptation.eligibility` in `actions/experience-actions.js`, `plans/evaluation.js` disclosure | `prediction-adaptation-learning.test.js` (21 cases), `adaptation-decision.test.js`, `prediction-adaptation-boundary.test.js` |
+| Longitudinal outcome analysis (AP-03) | `IMPLEMENTED_AND_TESTED` | `prediction/longitudinal.js`, `adaptation.derive` longitudinal branch in `experience/experience-store.js`, `longitudinal`/`derivation` classification in `actions/experience-actions.js`, `predictions.details` batch read in `prediction/prediction-store.js`, `sources.longitudinalDerived` in `plans/guidance.js`/`evaluation.js` | `longitudinal-outcome-analysis.test.js` (29 cases), `prediction-adaptation-learning.test.js`, `adaptation-decision.test.js` |
 | Adversarial acceptance | `IMPLEMENTED_AND_TESTED` | Cross-cutting; no new runtime component | `acceptance-ao09.test.js` (7), `adversarial-batch-am.test.js` (16), `plan-adversarial.test.js` (15), `executive-adversarial.test.js` (11), plus the suites cited in `README.md` Batch AO package H |
 | Cross-process interruption | `IMPLEMENTED_PARTIALLY_TESTED` | Real child fixtures at most boundaries | `plan-continuation.test.js`, `continuation-cross-process-an.test.js`, `finalization-interruption.test.js`, `process-recovery.test.js`, `cross-process-ao09.test.js`; two boundaries lack a killed child |
 | Concurrent store integrity | `IMPLEMENTED_AND_TESTED` | `memory/writer-lock.js`, store locks, JSONL append | `storage-concurrency.test.js`, `store-write-concurrency.test.js`, `cross-process-stress.test.js`, `lock-contention.test.js`, `lock-recovery.test.js` |
@@ -485,9 +581,12 @@ invalidate the recommended milestone, not that it blocks all work.
 | 22 | An applied ordering could be read as a claim that the ordered approach will succeed | The rule is the user's recorded shape; no weight is fitted from outcomes and no causal effect is claimed | `plan-guidance.test.js`, `adaptation-decision.test.js` | Documentation states the limit; the block says `authorizes:false` and the note says it moved at most a comparison | Medium (interpretive) | No |
 | 23 | An evaluated prediction could become evidence without the user's approval | Derivation only appends an unapproved candidate; `adaptation.decide` is the only approval, user-origin only, and both the display and the independent verification say the candidate is not approved | `prediction-adaptation-learning.test.js` (evaluation approves nothing; approval required), `adaptation-decision.test.js` | None observed; an evaluation and an approval are separate records | None | No |
 | 24 | A prediction-derived rule could be read as proof APEX predicts accurately, or as a causal finding | The proposal is a closed mapping from recorded outcome class, carries four stated limitations, and `authorizes:false`; no probability, score, or fitted weight exists | `prediction-adaptation-learning.test.js` (typed proposal), `prediction-adaptation-boundary.test.js` | Documentation states the non-claims; the record shows the verdict it was read from | Medium (interpretive) | No |
-| 25 | Re-evaluation or invalidation could leave stale guidance active | `#predictionCurrentness` re-reads the ledger per active prediction-derived row and forces `active:false` with a reason; no cache | `prediction-adaptation-learning.test.js` (stale evaluation, unreadable ledger, withdrawal after approval) | An already-displayed decision is not rewritten; the next comparison reports the record inert | Low | No |
+| 25 | Re-evaluation or invalidation could leave stale guidance active | `#predictionCurrentness` re-reads the cited predictions (`predictions.details`, one batched ledger read per check) and forces `active:false` with a reason; no retention between checks | `prediction-adaptation-learning.test.js` (stale evaluation, unreadable ledger, withdrawal after approval) | An already-displayed decision is not rewritten; the next comparison reports the record inert | Low | No |
 | 26 | Duplicate evaluations or duplicate evidence ids could amplify one prediction | One proposal per projection, one prediction and one evaluation in `support`, `minSupport:1`, duplicate derivation skipped, evidence lists deduplicated and bounded | `prediction-adaptation-learning.test.js` (duplicate derivation/citation) | None observed | None | No |
-| 27 | The added currentness read makes a planning read cost more on large ledgers | It is one `predictions.detail` read per active prediction-derived row, deliberately uncached so stale evidence cannot be hidden | `prediction-adaptation-learning.test.js` (real store), `benchmarks/run-prediction-adaptation-benchmark.mjs` | The published comparison measures the pure decision path; the store currentness read is measured separately and is not included in that figure | Low | No |
+| 27 | The added currentness read makes a planning read cost more on large ledgers | It is one batched ledger read (`predictions.details`) per check for every active prediction-derived row, deliberately without retention between checks so stale evidence cannot be hidden | `prediction-adaptation-learning.test.js` (real store), `longitudinal-outcome-analysis.test.js` (batched vs per-citation equivalence), `benchmarks/run-longitudinal-benchmark.mjs` | The batched read is one whole-ledger parse per check, so cost still grows with ledger size and citation count; it is included in the complete request measurement, not subtracted | Low | No |
+| 28 | A longitudinal pattern could be read as a causal or predictive claim | The vocabulary is closed and directional; the report and every proposal carry the "no causal claim, no confidence" note, and no probability or fitted weight exists | `longitudinal-outcome-analysis.test.js` (pattern disclosures), `prediction-adaptation-boundary.test.js` | Documentation states the non-claims; a reader can still over-read a repeated association | Medium (interpretive) | No |
+| 29 | A pattern could be derived from a partial read of a large scope | The derivation read is bounded at 20 predictions; an over-bound read is disclosed and refuses a pattern rather than inferring from a prefix | `longitudinal-outcome-analysis.test.js` (bound and over-bound cases), `benchmarks/run-longitudinal-benchmark.mjs` (25-evaluation case) | A scope with more than 20 predictions yields no longitudinal candidate at all; that is a refusal to answer, not a wrong answer | Low | No |
+| 30 | Aggregated evidence could approve or activate itself | `adaptation.derive` only appends an unapproved candidate; `adaptation.decide` is the only approval, user-origin only, and aggregation cannot retire, authorize, or start anything | `longitudinal-outcome-analysis.test.js` (aggregation approves nothing; only an approved adaptation moves the dimension), `adaptation-decision.test.js` | None observed; approval and derivation are separate records | None | No |
 
 No gap in this register was implemented in AO-10: none exposed a new concrete defect in behavior,
 and none invalidated a documented security guarantee. AP-01 closed the roadmap's "one recorded
@@ -496,6 +595,9 @@ signal only, and added rows 18–22 for what that does not claim; the `getMany` 
 in AO-09 had already been fixed there with a regression test. AP-02 added rows 23–27 for the
 prediction-derived signal: it closed the "an evaluated prediction may inform one later decision"
 clause under explicit user approval, and left the accuracy, causal and autonomy claims open.
+AP-03 added rows 28–30 for the longitudinal signal: bounded repeated-outcome analysis may describe
+one scope and become a candidate under the same explicit approval, and it still claims no causation,
+no confidence, and no autonomous activation.
 
 ## 10. Running the verification
 
@@ -506,9 +608,11 @@ node --test tests/cognition-lifecycle.test.js tests/cognition-artifacts.test.js
 node --test tests/acceptance-ao09.test.js tests/cross-process-ao09.test.js
 node --test tests/adaptation-decision.test.js
 node --test tests/prediction-adaptation-learning.test.js tests/prediction-adaptation-boundary.test.js
+node --test tests/longitudinal-outcome-analysis.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs
+node benchmarks/run-longitudinal-benchmark.mjs
 ```
 
 Tests use `NoBackend` or fixed programmatic replies and isolated temporary data directories. No
@@ -536,3 +640,9 @@ only to fresh temporary directories. The complete measured tables and their cave
   evaluation is independent of the user's expectation, or that any of this improves future work.
   It does not claim autonomy: every transition from recorded evidence to an applied rule requires a
   user action.
+- It does not claim AP-03 identifies causes, states a confidence, forecasts, or learns on its own.
+  It claims only that a bounded, scoped, deduplicated sequence of user-recorded expectations and their
+  recorded verdicts can be described with a closed vocabulary, that a directional pattern can become
+  a candidate, and that only the user's explicit approval lets that candidate reorder one disclosed
+  comparison. A repeated association in recorded order is not evidence that the capability caused the
+  outcome.

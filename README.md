@@ -34,6 +34,9 @@ preserved for provenance.
   A completed evaluation of a prediction the user recorded can also become such an adaptation, but only
   after the user inspects and approves a bounded candidate derived from it; the decision then says
   whether the evidence behind the ordering was feedback-derived, prediction-derived, both, or rejected.
+  `apex prediction longitudinal` describes repeated, alternating or directional recorded outcomes for one
+  capability with a closed vocabulary and no causal claim; a directional pattern may become a candidate,
+  but only the user's approval lets it reach the same disclosed comparison.
   Execution success is never reported as real-world success, and none of this grants permission.
   It answers
   deterministic requests with no model and sends
@@ -164,7 +167,13 @@ recorded: the evaluation can become a bounded, typed candidate, the user must in
 through the existing decision record, and only then can it re-order the same comparison, with the decision
 naming whether the evidence was feedback- or prediction-derived
 ([details](apex_app/README.md#batch-ap-02-one-evaluated-prediction-one-approved-candidate-one-disclosed-influence-as-implemented);
-tests: `tests/prediction-adaptation-learning.test.js`, 21 cases). It needs no model and no new store.
+tests: `tests/prediction-adaptation-learning.test.js`, 21 cases). Batch AP-03 then described repeated
+recorded outcomes rather than single ones: a closed eight-kind pattern analysis over one capability's
+bounded history, kept separate from calibration and from approval, from which a directional pattern may
+become an unapproved candidate citing its observations
+([details](apex_app/README.md#batch-ap-03-repeated-recorded-outcomes-described-and-never-assumed-as-implemented);
+tests: `tests/longitudinal-outcome-analysis.test.js`, 29 cases). It needs no model and no new store.
 What remains is the wider clause: an expectation verdict changing subsequent behaviour without a
-user-approved candidate, or changing more than the one disclosed ordering. The runtime keeps that wider
-clause open; this is a recommendation only, and no part of it is implemented.
+user-approved candidate, or changing more than the one disclosed ordering, and any claim of prediction
+accuracy or causation. The runtime keeps that wider clause open; this is a recommendation only, and no
+part of it is implemented.

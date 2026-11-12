@@ -546,6 +546,11 @@ function adaptationDecisionOf({ guidance, included, front }) {
       // score the same dimension from different evidence, and the reader is entitled to see which.
       source: r.source ?? 'feedback',
       method: r.method ?? null,
+      // Whether the rule rests on one recorded evaluation, a supported longitudinal pattern, or repeated
+      // user feedback, kept on the rule so a reader need not re-read the ledger. A pattern is an order in
+      // recorded outcomes, not a cause and not a forecast.
+      basis: r.basis ?? null,
+      pattern: r.pattern ? { ...r.pattern } : null,
       support: {
         experienceIds: [...(r.support?.experienceIds ?? [])],
         feedbackIds: [...(r.support?.feedbackIds ?? [])],
@@ -592,6 +597,8 @@ function adaptationDecisionOf({ guidance, included, front }) {
     sources: {
       feedbackDerived: [...(sourceLedger?.feedbackDerived ?? [])],
       predictionDerived: [...(sourceLedger?.predictionDerived ?? [])],
+      longitudinalDerived: [...(sourceLedger?.longitudinalDerived ?? [])],
+      singleEvaluationDerived: [...(sourceLedger?.singleEvaluationDerived ?? [])],
       bothEligible: sourceLedger?.bothEligible === true,
       predictionConsidered: sourceLedger?.predictionConsidered ?? 0,
       predictionRejected: (sourceLedger?.predictionRejected ?? []).map((r) => ({ id: r.id, state: r.state, why: r.why })),
@@ -606,6 +613,8 @@ function adaptationDecisionOf({ guidance, included, front }) {
       state: r.state,
       version: r.version ?? null,
       source: r.source ?? 'feedback',
+      basis: r.basis ?? null,
+      pattern: r.pattern ? { ...r.pattern } : null,
       predictionEvidence: r.predictionEvidence ? { ...r.predictionEvidence } : null,
       why: r.why,
     })),
@@ -922,7 +931,9 @@ export function renderAdaptationDecision(decision, { indent = '' } = {}) {
   } else {
     for (const r of decision.rules) {
       const provenance = r.source === 'prediction'
-        ? `prediction-derived; prediction ${r.support.predictionIds.join(', ') || '-'} evaluation ${r.support.evaluationIds.join(', ') || '-'}`
+        ? (r.basis === 'longitudinal_pattern'
+          ? `longitudinal-pattern-derived; pattern ${r.pattern?.kind ?? '-'} over ${r.pattern?.observations ?? r.support.predictionIds.length} observation(s); predictions ${r.support.predictionIds.join(', ') || '-'}`
+          : `single-evaluation-derived; prediction ${r.support.predictionIds.join(', ') || '-'} evaluation ${r.support.evaluationIds.join(', ') || '-'}`)
         : `feedback-derived; evidence ${r.support.experienceIds.length ? r.support.experienceIds.join(', ') : 'none recorded'}`;
       lines.push(`${indent}  applied: approved record ${r.id} version ${r.version ?? '-'} for ${r.capability} (${provenance})`);
     }
@@ -945,6 +956,9 @@ export function renderAdaptationDecision(decision, { indent = '' } = {}) {
     }
     if (sources.feedbackDerived.length > 0 || sources.predictionDerived.length > 0) {
       lines.push(`${indent}    applied feedback-derived: ${sources.feedbackDerived.join(', ') || 'none'}; applied prediction-derived: ${sources.predictionDerived.join(', ') || 'none'}`);
+      if (sources.longitudinalDerived.length > 0 || sources.singleEvaluationDerived.length > 0) {
+        lines.push(`${indent}    of the prediction-derived records: longitudinal pattern ${sources.longitudinalDerived.join(', ') || 'none'}; single evaluated observation ${sources.singleEvaluationDerived.join(', ') || 'none'}`);
+      }
     }
   }
   for (const c of decision.considered ?? []) {

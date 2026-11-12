@@ -49,7 +49,7 @@ from a milestone number or a passing build.
 | World Model, entity memory and evidence graph | Implemented as an append-only `world-model.jsonl` of user-origin records: stable entity ids with aliases and lifecycle, subject-predicate-object facts with typed values, relationships with directionality and inverse reads, events that keep happened-at, learned-at, and stored-at apart, evidence references to existing stores (never copies), retraction and supersession as later records, conservative contradiction detection that keeps both sides, deterministic identity candidates, and explicit user confirm/reject/merge/unmerge. Reads reduce the log at read time; nothing is overwritten, and a model cannot write a record. | `world-model-core.test.js` (17 tests), `world-model-scenarios.test.js` (15 end-to-end scenarios A-O, including real CLI runs and real child processes). See [Batch AI](#batch-ai-world-model-entity-memory-and-evidence-graph-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Integrated cognitive reasoning layer | Implemented as a deterministic, read-only coordinator in `src/cognition/` over the stores APEX already has: request understanding and intent classification, bounded evidence retrieval with provenance and empty/unavailable/damaged distinctions, claim extraction with symmetric contradictions, a thirteen-step deliberation, qualitative uncertainty, clarification before any model call, a bounded grounding brief, and validation of model-authored structures. No stage calls a model, writes a store, grants authorization, or invents an answer. The model receives the brief as data and its reply is parsed as untrusted input; a citation it did not retrieve, a claim of execution, or a forged structure is rejected whole. | `cognition-understanding.test.js` (18 tests), `cognition-reasoning.test.js` (24 tests), `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through the real controller with a synthetic capture backend). See [Batch AJ](#batch-aj-integrated-cognitive-reasoning-deliberation-and-grounded-responses-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Executive bridge: action orchestration and verified execution | Implemented as a deterministic, model-free interpretation layer in `src/executive/` inside `controller.handle()`: a user's own words are mapped to registered actions, a bounded preview names every step and its risk before anything runs, approval is bound to a content hash and version, the authorized run executes through the existing `TaskRunner`, and the answer reports progress, failure boundary, recovery class, and continuation from records. It adds no store, no registry, no second authorization rule, and no second runner. No stage calls a model: the map from words to actions is vocabulary plus the action registry, and a request the mapping cannot resolve is clarified rather than guessed. It is not a general-purpose planner: it maps a bounded request over registered actions, keeps unknowns visible, and refuses what it cannot ground. | `executive-bridge.test.js` (21 tests), `executive-acceptance.test.js` (K-01 to K-25), `executive-adversarial.test.js` (J-01 to J-11) - 57 tests, every one with a stub or no backend, so none is evidence about a real model. See [Batch AK](#batch-ak-the-executive-bridge---safe-action-orchestration-and-verified-execution-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
-| Adaptive planning, outcome evaluation and goal progression | Implemented as four read paths and one recorded reading over the stores Batch AG to AK already own: the candidate approaches a recorded goal supports (`plan.candidates`), a revision of a plan that stopped being viable (`plan.replan`), what a plan's execution established and left open as seven separate questions (`plan.outcome`), and the assessment derived from those records as the one write (`plan.assess`). Every step a candidate names is a registered action, every candidate is a draft on screen until the user records and approves it, the comparison is a disclosed gate-then-Pareto rule with no score, weight, or probability, and no candidate, comparison, or verdict changes a goal's status or grants permission. Batch AM added four things over the same records: the blockers, prerequisites and limits a goal actually has, and which of them are allowed to exclude a candidate (`plan-constraints.test.js`); one disclosed influence of an approved adaptation on selection, which cannot override a gate, a constraint, an approval or a permission (`plan-guidance.test.js`); two more ranked dimensions in the comparison - whether a step's own action can re-check it, and what the plan records say happened the last time that capability ran - with the reason each remaining dimension stays disclosed printed beside it (`plan-dimensions.test.js`); and the continuation pair - `plan.continuation` reads the nine states of a partially executed run from its own records, `plan.continue` takes up only the steps proven never to have started (`plan-continuation.test.js`, with real child processes stopped at eight interruption boundaries); and that reading is now answered where a user looks - continuation readiness grew a seventh state, `ready to continue`, read only from that derivation, and `work`/`next` rank the interrupted run as one `continue-plan` candidate instead of two task and plan entries (`executive-readiness.test.js`). Batch AP then made that one ordering influence auditable at the decision level: every comparison now carries `adaptationDecision`, a counterfactual computed by the same dominance rule over the same candidate bytes with only `approved_adaptation_fit` removed, disclosing which candidate led before and after, the exact rule id/version/hash and evidence ids, every record considered with its ledger state and why, an explicit declined reason when nothing applied, and `authorizes: false` (`adaptation-decision.test.js`, 23 cases). Batch AP-02 then let a second evidence kind reach that same one influence: a completed, current evaluation of a user-recorded prediction can be derived as a bounded, typed candidate, stays inert until the user approves it through the same `adaptation.decide` record, and is disclosed through `sources.predictionEvidence`; stale, withdrawn or unreadable prediction lineage withdraws its effect on read (`prediction-adaptation-learning.test.js`, 21 cases). It adds no parallel learning system, no new decision dimension, and no authority. | `plan-generation.test.js`, `plan-candidates.test.js`, `plan-evaluation.test.js`, `plan-assessment.test.js`, `plan-learning.test.js`, `plan-adversarial.test.js` (15 adversarial cases), `plan-scenarios.test.js` (the 30 numbered end-to-end scenarios), `plan-cli.test.js` (9 scenarios through the real `node bin/apex.js`), `plan-constraints.test.js`, `plan-guidance.test.js`, `plan-dimensions.test.js`, `plan-continuation.test.js`, `learning-read-equivalence.test.js`, `goal-evidence-consistency.test.js`, `executive-readiness.test.js`, `adversarial-batch-am.test.js` (the 16 adversarial cases I-01 to I-16), `plan-scenarios-am.test.js` (the 30 Batch AM acceptance scenarios, 31 tests), `adaptation-decision.test.js` (23 cases), `prediction-adaptation-learning.test.js` (21 cases) - and `goal-provenance.test.js`, `goal-assessment.test.js`. See [Batch AL](#batch-al-adaptive-planning-outcome-evaluation-and-goal-progression-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
+| Adaptive planning, outcome evaluation and goal progression | Implemented as four read paths and one recorded reading over the stores Batch AG to AK already own: the candidate approaches a recorded goal supports (`plan.candidates`), a revision of a plan that stopped being viable (`plan.replan`), what a plan's execution established and left open as seven separate questions (`plan.outcome`), and the assessment derived from those records as the one write (`plan.assess`). Every step a candidate names is a registered action, every candidate is a draft on screen until the user records and approves it, the comparison is a disclosed gate-then-Pareto rule with no score, weight, or probability, and no candidate, comparison, or verdict changes a goal's status or grants permission. Batch AM added four things over the same records: the blockers, prerequisites and limits a goal actually has, and which of them are allowed to exclude a candidate (`plan-constraints.test.js`); one disclosed influence of an approved adaptation on selection, which cannot override a gate, a constraint, an approval or a permission (`plan-guidance.test.js`); two more ranked dimensions in the comparison - whether a step's own action can re-check it, and what the plan records say happened the last time that capability ran - with the reason each remaining dimension stays disclosed printed beside it (`plan-dimensions.test.js`); and the continuation pair - `plan.continuation` reads the nine states of a partially executed run from its own records, `plan.continue` takes up only the steps proven never to have started (`plan-continuation.test.js`, with real child processes stopped at eight interruption boundaries); and that reading is now answered where a user looks - continuation readiness grew a seventh state, `ready to continue`, read only from that derivation, and `work`/`next` rank the interrupted run as one `continue-plan` candidate instead of two task and plan entries (`executive-readiness.test.js`). Batch AP then made that one ordering influence auditable at the decision level: every comparison now carries `adaptationDecision`, a counterfactual computed by the same dominance rule over the same candidate bytes with only `approved_adaptation_fit` removed, disclosing which candidate led before and after, the exact rule id/version/hash and evidence ids, every record considered with its ledger state and why, an explicit declined reason when nothing applied, and `authorizes: false` (`adaptation-decision.test.js`, 23 cases). Batch AP-02 then let a second evidence kind reach that same one influence: a completed, current evaluation of a user-recorded prediction can be derived as a bounded, typed candidate, stays inert until the user approves it through the same `adaptation.decide` record, and is disclosed through `sources.predictionEvidence`; stale, withdrawn or unreadable prediction lineage withdraws its effect on read (`prediction-adaptation-learning.test.js`, 21 cases). Batch AP-03 then described repeated recorded outcomes instead of single ones: a closed eight-kind pattern analysis over one capability's bounded history, with chronological ordering, deduplicated citations, exclusions by kind, and calibration kept separate with its 20-evaluation floor; a directional pattern may become an unapproved candidate citing up to 20 observations, and only the user's explicit approval can let it reach the same dimension (`longitudinal-outcome-analysis.test.js`, 29 cases). It adds no parallel learning system, no new decision dimension, and no authority. | `plan-generation.test.js`, `plan-candidates.test.js`, `plan-evaluation.test.js`, `plan-assessment.test.js`, `plan-learning.test.js`, `plan-adversarial.test.js` (15 adversarial cases), `plan-scenarios.test.js` (the 30 numbered end-to-end scenarios), `plan-cli.test.js` (9 scenarios through the real `node bin/apex.js`), `plan-constraints.test.js`, `plan-guidance.test.js`, `plan-dimensions.test.js`, `plan-continuation.test.js`, `learning-read-equivalence.test.js`, `goal-evidence-consistency.test.js`, `executive-readiness.test.js`, `adversarial-batch-am.test.js` (the 16 adversarial cases I-01 to I-16), `plan-scenarios-am.test.js` (the 30 Batch AM acceptance scenarios, 31 tests), `adaptation-decision.test.js` (23 cases), `prediction-adaptation-learning.test.js` (21 cases), `longitudinal-outcome-analysis.test.js` (29 cases) - and `goal-provenance.test.js`, `goal-assessment.test.js`. See [Batch AL](#batch-al-adaptive-planning-outcome-evaluation-and-goal-progression-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Cognitive runtime contract, gateway boundary and continuation reliability | Implemented as an explicit, tested boundary over the request path that already exists. `src/cognition/contract.js` states the ten stages of one request, which component owns each, what each stage did, two invariants (no step executed without an allow decision, and none without an authorization record), and a fixed authority block in which `action_registry` owns authorization; the audit copy carries counts and fixed labels, never the request, evidence, model text or reasoning. `src/model/gateway.js` classifies every reply as `valid`, `empty`, `refused`, `unavailable`, `malformed`, `context_limit` or `cancelled`, records provenance with `verified:false`, and keeps caller cancellation distinct from timeout. Grounded claims carry one of six evidence states derived from the cited records (the weakest cited record wins), and a model-declared `supported` may rest only on `directly_supported`. A model proposal is a typed value (`mp:N`, `authority:'none'`) with only `action` and `input`; any authority-shaped or unknown root key rejects the line whole. The continuation path re-reads plan, task and validity inside the task lock, reports nine states from its own records, and never replays a step whose effect cannot be established. `src/cognition/trace.js` records bounded counts, fixed labels, refusals, validation and an explicit `authorizes:false`. No store, registry, planner, controller, runner or authorization rule is added. | `cognition-contract.test.js` (11 tests), `cognition-evidence-states.test.js` (5), `cognition-trace.test.js` (9), `proposal-boundary-an.test.js` (3), `continuation-cross-process-an.test.js` (3, real child processes stopped at the eight interruption boundaries), `integration-runtime-an.test.js` (15 end-to-end and adversarial tests through the assembled app). See [Batch AN](#batch-an-cognitive-runtime-contracts-executive-integration-and-continuation-reliability-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | General planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
 
@@ -282,6 +282,7 @@ suites re-hash the directory afterwards to prove it.
 | `prediction evaluate <id>` | Compares one expectation with the outcomes recorded inside its horizon and stores the verdict **only** when those records establish one. Otherwise it reports `insufficient_evidence`, `outcome_unavailable`, `expired`, `invalidated`, `superseded`, `already_evaluated`, or `evidence_unavailable` and writes nothing. A verdict already stored is never rewritten. User origin only. |
 | `prediction invalidate <id> --reason <text>` | Withdraws one expectation, keeping its reason and provenance in the log. The expectation is not deleted and stays auditable. User origin only. |
 | `prediction health` | Read-only ledger report: kind counts, standing versus superseded expectations, corrupt lines, and anomalies (a replacement that names nothing, a replacement circle, a reused record id), each with bounded samples. Never calls a model, writes no audit record, repairs nothing. Exit 0 only when the ledger was fully inspected and nothing requires attention. |
+| `prediction longitudinal [--capability <name>] [--limit N]` | Read-only, bounded analysis of how recorded outcomes for one scope are ordered: a closed pattern (`repeated_success`, `repeated_failure`, `alternating_outcomes`, `consistent_improvement`, `consistent_regression`, `mixed_outcomes`, `insufficient_evidence`, `conflicting_evidence`), chronological counts, excluded records with their kinds, and calibration reported separately with its 20-evaluation floor intact. Derives, approves and applies nothing; a repeated association is not a cause and not a forecast. See [Batch AP-03](#batch-ap-03-repeated-recorded-outcomes-described-and-never-assumed-as-implemented). |
 | `goal add [--criterion <text>]... [--priority N] [--deadline <iso>] [--depends-on <id>]... <request>` | Records a goal with at least one success criterion. The goal starts `proposed`; nothing runs, and the goal grants no permission. User origin only. |
 | `goal list [--limit N]`, `goal show <id>` | Read-only views of open and closed goals, and of one goal with its criteria, evidence, history, and linked plans/tasks. |
 | `goal assess <id>` | Read-only check of what the goal claims about its own evidence: each recorded support is re-opened in the audit log, and each knowledge record it established is re-checked for retraction or supersession. Reports a proof as standing, withdrawn, unsupported by the audit log, contradicted, or not checkable, and lists only the questions APEX cannot answer for the user. On a completed goal it also answers whether the recorded completion still holds, and `goal show` prints the same finding (`NOT SETTLED` / `Not re-checked` / `Re-checked`) beside the snapshot it was granted on. Writes no record, links nothing, completes nothing, reopens nothing, and exits 1 when a finding or an unreadable store means the goal's own claims do not hold. |
@@ -1145,6 +1146,7 @@ cd apex_app
 node --test tests/security-end-to-end.test.js
 node --test tests/audit-secret-redaction.test.js tests/data-dir-isolation.test.js
 node --test tests/model-self-authorization.test.js tests/prediction-adaptation-boundary.test.js
+node --test tests/longitudinal-outcome-analysis.test.js
 node --test tests/cognition-understanding.test.js tests/cognition-reasoning.test.js \
   tests/cognition-scenarios.test.js
 node --test tests/corruption-recovery-boundaries.test.js tests/lock-ownership-and-recovery.test.js \
@@ -3562,7 +3564,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 81 registered actions declare both `validate()` and `verify()` - 83 with a
+- **Verification.** All 84 registered actions declare both `validate()` and `verify()` - 86 with a
   filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
@@ -3600,6 +3602,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `prediction.evaluate` | user | write | never in a plan | `predictions.jsonl`, or nothing when no outcome has resolved yet (measured: verified, nothing written) | no (expectation) | yes |
 | `prediction.invalidate` | user | write | never in a plan | `predictions.jsonl` | no (expectation) | yes |
 | `prediction.list`, `prediction.show`, `prediction.history`, `prediction.summary` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `prediction.longitudinal` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `app.status` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `calc.evaluate` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `world.state` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
@@ -3633,8 +3636,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
 
 `filesystem.list` and `filesystem.read` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
-configured; there is no default root, and a model proposal cannot supply one, so the count is 81
-registered actions by default and 83 with a root. Batch AG added ten user-origin write actions
+configured; there is no default root, and a model proposal cannot supply one, so the count is 84
+registered actions by default and 86 with a root. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
 two more user-origin writes (`goal.confirm`, the user's own decision about a success criterion APEX
@@ -5675,7 +5678,9 @@ prediction-informed path on identical fixtures. At 4 / 10 / 20 candidates the co
 median was 0.201 / 0.262 / 0.687 ms under AP-01 and 0.166 / 0.261 / 0.678 ms with prediction-derived rows —
 differences within run-to-run spread — with identical candidate bytes, gates and binding throughout. The
 eligibility rule costs about 2.6–4.5 µs per evaluated projection with no caching. The measurement excludes
-the store's per-read currentness check, which is deliberately uncached; see
+the store's per-read currentness check; AP-03 later made that check one batched ledger read per read
+instead of one per cited prediction, and its cost is included in the AP-03 complete-request measurement
+below. See
 [`benchmarks/README.md`](benchmarks/README.md#prediction-informed-adaptation-benchmark-batch-ap-02).
 
 The complete `npm test` run after Batch AP-02 (141 files, the new suite included) ran **2,400 tests, 2,398
@@ -5694,6 +5699,129 @@ applied rule needs a user action. It claims only that one completed evaluation c
 candidate, that only the user's approval makes it evidence, and that the resulting ordering influence is
 disclosed, bounded, auditable and reversible. Stages 5 and 6 of the roadmap below remain open on their
 wider clauses.
+
+## Batch AP-03: repeated recorded outcomes, described and never assumed (as implemented)
+
+This package extends the single decision from one evaluated prediction to a bounded sequence of them. It
+answers one narrow question — **in one capability's recorded history, is the order of recorded outcomes
+repeated, alternating, turning, or not enough to say?** — and nothing more. It adds one pure analysis
+module (`src/prediction/longitudinal.js`), one read action (`prediction.longitudinal`), a longitudinal
+branch in `adaptation.derive` and the experience store, a `sources.longitudinalDerived` distinction in the
+existing disclosure, and one batched ledger read (`predictions.details`) used by the currentness check. It
+adds no store, no new prediction or experience file, no planner, no new permission or origin, no
+authorization rule, no new decision dimension, and no parallel learning system. An evaluation, an aggregation, an approval, and
+an applied rule remain four different facts.
+
+### Read-only analysis, closed vocabulary
+
+`analyzeLongitudinal` reads stored predictions and their recorded evaluations and projects a scoped report
+(schema `apex.longitudinal.v1`). It writes nothing: no record is repaired, promoted, annotated, or approved.
+The vocabulary is a closed set of eight kinds, with no free-form text parsing:
+
+| Kind | What the recorded order shows | Proposes a direction? |
+|---|---|---|
+| `repeated_success` | every scored outcome in the scope is a success | yes — `prefer` |
+| `repeated_failure` | every scored outcome is a failure | yes — `avoid` |
+| `alternating_outcomes` | successes and failures alternate in recorded order | yes |
+| `consistent_improvement` / `consistent_regression` | a directional sequence turns one way | yes |
+| `mixed_outcomes` | successes and failures without one direction | no |
+| `insufficient_evidence` | fewer than the two observations a repetition needs | no |
+| `conflicting_evidence` | the evidence disagrees or cannot be reconciled | no |
+
+`MIN_REPEATED_OBSERVATIONS = 2` and `MIN_SEQUENCE_OBSERVATIONS = 3` are definitions of "repeated" and "a
+sequence", not accuracy thresholds: two observations can repeat, and three are needed before an order can
+alternate or turn. The report repeats the note that it "makes no causal claim, states no confidence, and
+approves nothing".
+
+### Grouping, dedupe and exclusions
+
+A group is one capability name; a parent name never absorbs a child capability's records, and unrelated
+capabilities are never merged into one pattern. Observations are ordered chronologically by recorded
+outcome time, deduplicated by prediction id and evaluation id, and each observation names its own
+prediction, evaluation and evidence ids — a citation cannot count twice. Records withdrawn, replaced,
+expired, stale, unreadable, non-user, or outside a capability scope are **excluded by kind**, each with its
+wording, and the report prints up to 20 exclusions per group and says when it truncated. A missing record is
+never read as a failure: absence is an exclusion with a reason, and an unreadable store is a refusal, not an
+empty history.
+
+### Calibration is separate and keeps its floor
+
+The existing derivation is reused verbatim, with its **minimum of 20 scored evaluations** intact. The
+report states recorded, evaluated, eligible-scored and excluded counts; below the floor, calibration is
+explicitly `unavailable` with the reason `below 20`, and is never read as a good or poor rate. Calibration
+is not authorization.
+
+### Bounds, truncation and refusal
+
+The derivation reads at most 20 predictions (`MAX_LONGITUDINAL_PREDICTIONS`). When the scope holds more,
+the read is partial, the report says so, and **no pattern is derived from it**: a rule is refused rather
+than inferred from a prefix of the history. Groups are bounded at 20, observations and exclusions shown per
+group at 20, and support refs per rule at 20; the report names the bound it hit.
+
+### A pattern may become a candidate; it never approves one
+
+`adaptation.derive` turns a directional pattern into a candidate with `method: 'repeated_outcome_pattern'`,
+an explicit `type: 'repeated_outcome_pattern'` proposal, and the cited prediction/evaluation ids in
+`support` (bounded at 20). The rule is the recorded pattern's direction mapped through a closed mapping and
+printed in the record so a reader can disagree with it; the predictions' subject text is display-only and
+never parsed. A scope is answered by its pattern, not also by each member: a prediction covered by the
+longitudinal candidate is not additionally turned into its own single-evaluation candidate.
+`adaptation.approve` remains the only approval and remains user-origin only; its independent verification
+re-reads the candidate and refuses one whose citations no longer resolve. A repeated pattern is never
+automatically promoted to an executable rule.
+
+```bash
+apex prediction longitudinal --capability memory.add   # read-only: patterns, counts, exclusions, calibration
+apex adaptation derive                                 # a directional pattern may become an unapproved candidate
+apex adaptation approve <adaptation-id> --reason "I agree with the recorded sequence"
+apex plan candidates <goal-id>                         # disclosure names the longitudinal basis and its citations
+apex adaptation retire <adaptation-id> --reason "no longer applicable"
+```
+
+### Influence, currentness and reversal
+
+An approved longitudinal candidate feeds only `approved_adaptation_fit`, exactly as AP-01/AP-02. The
+decision block gains `sources.longitudinalDerived` beside `sources.singleEvaluationDerived` and
+`sources.predictionEvidence`, and each applied rule carries `basis` (`repeated_feedback`, `single_evaluation`,
+or `longitudinal_pattern`), so a reader can tell a single observation from a supported sequence. The
+counterfactual, candidate bytes, gates and ranked dimensions are unchanged; there is no new dimension and no
+new authorization pathway. Every adaptation read re-judges each cited prediction against the live ledger via
+`predictions.details`, which reads and projects the log once for all references; nothing is retained between
+checks, so a re-evaluation, invalidation, or a later outcome inside a cited horizon makes the record
+ineligible until reconciled. The approval stands, its effect is withheld, and on reconciliation the unadapted
+decision returns without any record being rewritten. `adaptation.retire` remains the reversal and restores
+the unadapted ordering.
+
+### Tests and measured cost
+
+`tests/longitudinal-outcome-analysis.test.js` (29 cases in 6 suites, registered in `npm test`) covers the
+vocabulary and eligibility matrix, calibration at 19 vs 20, duplicate evaluations and citations, exclusion
+kinds (expiry is not failure, missing is not failure), mixed and alternating groups, unrelated capabilities,
+conflicting and damaged-store evidence, model-origin ineligibility, that aggregation can neither approve nor
+activate, that only an approved adaptation moves the dimension, re-evaluation/invalidation removing
+influence, retirement restoring the baseline, refusal to bypass plan approval/authorization/execution/
+verification, concurrent changes not leaving stale influence, and a deterministic end-to-end run through real
+stores, the controller and the audit log. It also asserts the batched currentness read returns exactly what
+one read per citation returned.
+
+`benchmarks/run-longitudinal-benchmark.mjs` measures the pure analysis as the recorded history grows and the
+**complete** production request path. On this machine the pure analysis took a median 0.21 / 0.40 / 2.74 /
+2.73 ms at 20 / 100 / 500 / 1,000 evaluations (one capability, one group per 25 records capped at 20 groups).
+With one evaluated capability, the complete request cost a median 27.7 / 68.0 / 72.5 ms at 8 / 14 / 19
+recorded evaluations with no rule; the AP-03 rule moved it by a median +1.2 / +5.8 / +7.1 ms (AP-02 by
++0.5 / +19.1 / +2.3 ms) on the identical store. Those figures include the batched currentness read and
+machine noise and are observations of one machine at one time, not a specification; partial sub-timings are
+printed separately and are not the request cost. See
+[`benchmarks/README.md`](benchmarks/README.md#longitudinal-outcome-benchmark-batch-ap-03).
+
+### What this does not claim
+
+A repeated association in recorded order is not a cause, not a probability, not a confidence, and not a
+forecast. The analysis does not say a capability will succeed, does not fit a weight, does not compute an
+accuracy, and does not approve, activate, or execute anything. It claims only that a bounded, scoped,
+deduplicated sequence of recorded outcomes can be described and shown, that a directional one can become a
+candidate, and that only the user's explicit approval lets it reorder one disclosed comparison. Stages 5 and
+6 of the roadmap below remain open on their wider clauses.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 

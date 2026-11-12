@@ -33,6 +33,7 @@ import { StoreError, ValidationError } from '../errors.js';
 import { shortId, singleLine } from '../util.js';
 import { isScopableCapability } from '../experience/experience-store.js';
 import { MAX_TEMPORAL_EVENTS, PATTERN_KINDS, parseInstant } from '../experience/temporal.js';
+import { MAX_LONGITUDINAL_PREDICTIONS, analyzeLongitudinal } from './longitudinal.js';
 import {
   EVALUATION_KIND,
   EVALUATION_VERDICTS,
@@ -271,6 +272,37 @@ export class PredictionStore {
     return ledger.byId.get(matches.id) ?? null;
   }
 
+  // Several references answered from one read of the ledger. `detail` reads, splits and projects the
+  // whole log for one id, so a currentness check that re-judged a candidate citing N predictions paid
+  // that cost N times; this resolves every reference by the same rule - an absent or ambiguous
+  // reference is an error for that reference alone - and projects the resolved ids in one pass. A
+  // reference that resolves to no error carries `projection`, which is the object `detail` would have
+  // returned for it. Nothing is retained between calls, so this is a batched read, not a cache.
+  async details(refs) {
+    const wanted = [...new Set((Array.isArray(refs) ? refs : [])
+      .filter((ref) => typeof ref === 'string' && ref.trim().length > 0)
+      .map((ref) => ref.trim()))];
+    const out = new Map();
+    if (wanted.length === 0) return out;
+    const records = await this.#loadComplete();
+    const { predictions } = splitPredictionRecords(records);
+    const ids = new Map();
+    for (const ref of wanted) {
+      let matches;
+      try {
+        matches = matchOne(predictions.filter((record) => matchesPredictionRef(record, ref)));
+      } catch (err) {
+        out.set(ref, { error: err?.message ?? String(err) });
+        continue;
+      }
+      ids.set(ref, matches.id);
+    }
+    if (ids.size === 0) return out;
+    const ledger = await this.#project({ records, nowMs: parseInstant(this.now()), only: new Set(ids.values()) });
+    for (const [ref, id] of ids) out.set(ref, { projection: ledger.byId.get(id) ?? null });
+    return out;
+  }
+
   #match(records, ref) {
     return splitPredictionRecords(records).predictions.filter((record) => matchesPredictionRef(record, ref));
   }
@@ -299,6 +331,74 @@ export class PredictionStore {
       ? ledger
       : { ...ledger, projections: ledger.projections.filter((item) => item.capability === capability) };
     return { calibration: deriveCalibration({ ledger: scoped }), ledger: scoped };
+  }
+
+  // The longitudinal read: one grouped, bounded analysis of how recorded outcomes for a scope are
+  // ordered. It reuses the same projections `list` produces, so the eligibility rule and the evidence
+  // reads are the ones every other prediction read uses. It writes nothing and derives no candidate.
+  async longitudinal({ capability = null, limit = MAX_LONGITUDINAL_PREDICTIONS } = {}) {
+    const size = Number.isInteger(limit) && limit >= 1
+      ? Math.min(limit, MAX_LONGITUDINAL_PREDICTIONS)
+      : MAX_LONGITUDINAL_PREDICTIONS;
+    const { projections, ledger } = await this.list({ limit: MAX_PREDICTION_LIST });
+    const scoped = capability === null
+      ? projections
+      : projections.filter((item) => item.capability === capability);
+    const chosen = scoped.slice(0, size);
+    // One bounded read of the outcome records the chosen evaluations cite. A projection says which
+    // records decided each verdict, but not whether a later record corrected one of them; without
+    // this read an analysis could count an outcome that no longer stands. The read is reported even
+    // when it fails, and a failure is an absence of information, never "everything is current".
+    const outcomeIds = [...new Set(chosen.flatMap((p) => p.evaluation?.outcomeExperienceIds ?? []))];
+    let experiencesById = null;
+    let evidenceRead = null;
+    if (outcomeIds.length > 0) {
+      const times = chosen
+        .flatMap((p) => [p.createdAt, p.expiresAt, p.evaluation?.createdAt])
+        .map(parseInstant)
+        .filter((ms) => ms !== null);
+      if (this.experiences && typeof this.experiences.evidenceIndex === 'function' && times.length > 0) {
+        try {
+          const index = await this.experiences.evidenceIndex({
+            experienceIds: outcomeIds.slice(0, MAX_TEMPORAL_EVENTS),
+            since: new Date(Math.min(...times)).toISOString(),
+            until: new Date(Math.max(...times)).toISOString(),
+            limit: MAX_TEMPORAL_EVENTS,
+          });
+          experiencesById = new Map((index.experiences ?? []).map((record) => [record.id, record]));
+          evidenceRead = {
+            available: true,
+            resolved: (index.experiences ?? []).length,
+            unresolved: [...(index.unresolvedExperienceIds ?? [])],
+            reason: null,
+          };
+        } catch (err) {
+          evidenceRead = {
+            available: false,
+            resolved: 0,
+            unresolved: [...outcomeIds],
+            reason: err?.message ?? String(err),
+          };
+        }
+      } else {
+        evidenceRead = {
+          available: false,
+          resolved: 0,
+          unresolved: [...outcomeIds],
+          reason: times.length === 0
+            ? 'the chosen expectations carry no readable timestamp, so no outcome window could be opened'
+            : 'no experience log is attached to the prediction store',
+        };
+      }
+    }
+    return analyzeLongitudinal({
+      projections: chosen,
+      experiencesById,
+      readTotal: scoped.length,
+      readTruncated: ledger.truncated === true || scoped.length > size,
+      now: this.now().toISOString(),
+      evidenceRead,
+    });
   }
 
   // The bounded view a model context and the world-state projection receive: aggregate counts and at

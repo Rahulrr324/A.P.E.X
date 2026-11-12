@@ -25,13 +25,17 @@ import { DERIVATION_METHOD, normalizeRuleText } from './derivation.js';
 import { outcomeClass } from './temporal.js';
 
 export const PREDICTION_DERIVATION_METHOD = 'evaluated_prediction';
+export const LONGITUDINAL_DERIVATION_METHOD = 'repeated_outcome_pattern';
+export const LONGITUDINAL_PROPOSAL_TYPE = 'repeated_outcome_pattern';
 
 // The closed set of methods an adaptation record may name. An unknown method is damage, and the
 // record validator refuses it before any reader can act on it.
-export const ADAPTATION_METHODS = Object.freeze([DERIVATION_METHOD, PREDICTION_DERIVATION_METHOD]);
+export const ADAPTATION_METHODS = Object.freeze([
+  DERIVATION_METHOD, PREDICTION_DERIVATION_METHOD, LONGITUDINAL_DERIVATION_METHOD,
+]);
 
 // The one dimension a prediction-derived candidate may feed. It is the same ranked dimension AP-01
-// built; no second ordering rule is introduced.
+// built; no second ordering rule is introduced. A longitudinal candidate feeds the same dimension.
 export const PREDICTION_DECISION_DIMENSION = 'approved_adaptation_fit';
 export const PREDICTION_PROPOSAL_TYPE = 'evaluated_prediction';
 
@@ -227,4 +231,17 @@ export function proposalFor({ projection, experiencesById = null } = {}) {
 // proposal cannot duplicate a rule an approved feedback candidate already states for the same scope.
 export function proposalKey(capability, rule) {
   return `${capability}\u0000${normalizeRuleText(rule)}`;
+}
+
+// Which evidence a candidate rests on, stated in the record's own method. `single_evaluation` is one
+// observation; `longitudinal_pattern` is a supported sequence; `repeated_feedback` is the original
+// AP-01 derivation. A reader never has to infer the basis from a count.
+export function derivationBasis(method) {
+  if (method === LONGITUDINAL_DERIVATION_METHOD) return 'longitudinal_pattern';
+  if (method === PREDICTION_DERIVATION_METHOD) return 'single_evaluation';
+  return 'repeated_feedback';
+}
+
+export function isPredictionDerived(method) {
+  return method === PREDICTION_DERIVATION_METHOD || method === LONGITUDINAL_DERIVATION_METHOD;
 }

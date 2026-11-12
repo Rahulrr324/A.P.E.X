@@ -35,6 +35,13 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   created for that run**, which is why it is the last phase and why it is destructive only to a
   temporary store.
 
+- `run-longitudinal-benchmark.mjs` builds every fixture on a `mkdtemp` directory prefixed
+  `apex-bench-longitudinal-` and uses the same refusing cleanup. It constructs no backend (`NoBackend`
+  behind a `ModelGateway`) and touches no network. Every measured condition runs against its own copy of
+  the seeded store (`fs.cpSync`), so no measurement is taken on a store a previous measurement enlarged;
+  its partial (analysis / store read / derivation) timings and its complete request timings are printed
+  separately and never added together.
+
 - Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
   reporting, not a cleanup task.
 
@@ -1262,15 +1269,117 @@ the higher first figure consistent with a cold first pass.
   0.05 ms are noise and are reported as measured, not as an improvement; only the in-run pair is a
   finding. Across runs the same numbers move by more than the effect being compared.
 - The measured path is pure (ledger read + comparison). **It does not include the AP-02-specific
-  store read**: `experience-store.js` re-reads `predictions.detail` for each active
-  prediction-derived row on every adaptation read so stale evidence cannot remain active. That
-  currentness check, its cost, and the experience/audit stores around the decision are excluded
-  here; the test suite covers its behavior, not its timing.
+  store read**: `experience-store.js` re-reads the prediction ledger through `predictions.details`
+  for every active prediction-derived row on every adaptation read, so stale evidence cannot remain
+  active. Since AP-03 that is one batched ledger read per check rather than one `detail` read per
+  cited prediction; that currentness check, its cost, and the experience/audit stores around the
+  decision remain excluded here, and are covered by the AP-03 benchmark's complete-request
+  measurement and by the test suites for behavior.
 - The fixtures are synthetic and uniform, and their prediction-derived rows rest on one current
   prediction/evaluation each. Conflict, ineligibility, staleness, withdrawal and reversal are
   covered by `tests/prediction-adaptation-learning.test.js`, not measured here.
 - No inference is run or simulated; nothing here shows that an influenced ordering is better work,
   or that a prediction is accurate. Batch AP-02 claims neither.
+
+This script is not part of `npm test` and no test depends on it.
+
+## Longitudinal outcome benchmark (Batch AP-03)
+
+`run-longitudinal-benchmark.mjs` measures the bounded, read-only longitudinal analysis Batch AP-03
+added and the **complete** decision request it can inform. It runs entirely on synthetic histories:
+no model, no backend, no network. It has two sections, and their numbers are never added together.
+
+- **Pure analysis.** `analyzeLongitudinal` over increasing synthetic histories (default 20 / 100 /
+  500 / 1,000 recorded predictions, one group per 25 records capped at 20 groups), repeating each
+  sample and reporting the median, the per-record cost, group/eligible/excluded counts, the pattern
+  mix, whether per-group truncation was disclosed, and the report size.
+- **Real production path.** A temporary APEX application seeded through the ordinary controller
+  actions (evaluations for `memory.add` plus one single-evaluation `memory.list` scope), then three
+  things printed separately and labelled *partial*: the store longitudinal read, the authorized
+  action, and the derivation that may append a candidate. The **complete** `plan.candidates` request
+  is measured separately on byte-identical copies of the store under three conditions: no rule
+  approved, the AP-02 single-citation rule approved, and the AP-03 longitudinal rule approved. The
+  currentness read that re-judges every citation runs inside every complete request, with nothing
+  cached, so it is part of each total rather than a discount.
+
+### Procedure
+
+```bash
+cd apex_app
+node benchmarks/run-longitudinal-benchmark.mjs
+node benchmarks/run-longitudinal-benchmark.mjs --sizes 20,100,500,1000 --real 8,14,19,25 --repeats 7
+```
+
+`--repeats` is capped at 15. The real-path default sizes include 25, one above the
+`MAX_PREDICTION_CANDIDATES` derivation bound, so the refusal a partial read forces is measured
+rather than hidden. Every condition runs on its own `fs.cpSync` copy of the seeded store, so no
+measurement is taken on a store a previous measurement enlarged; only the OS temporary directory is
+written, and `--keep` leaves it in place.
+
+### What it reports
+
+- pure-analysis median and minimum, µs per recorded prediction, group counts, eligible and excluded
+  counts, the pattern mix, whether per-group truncation was disclosed, and report bytes;
+- the seeded pattern, eligible/excluded counts and calibration status (available or the exact
+  `below 20` reason) for the real store;
+- the **partial** store read, authorized action, one derivation, and repeat derivation, labelled as
+  partial and not the request cost;
+- the **complete** request under no rule / AP-02 rule / AP-03 rule, the median difference of each
+  against the no-rule request, the applied/changed flags, the citation count, the decision-block
+  bytes, and whether candidate bytes, gates and binding are identical across all three;
+- a final consistency check: if the candidate bytes moved, the dimension is wrong, the longitudinal
+  rule did not apply and change the comparison, the rule is not labelled `longitudinal_pattern`, the
+  citation count is not `min(size, 20)`, or the AP-02-shaped rule does not cite exactly one
+  prediction, the run exits non-zero.
+
+### Measured
+
+One run of `--repeats 7` on Windows 11, Node v26.4.0, x64, with no test or other benchmark active.
+These are observations of one machine at one time, not targets.
+
+Pure analysis (one group per 25 records, capped at 20 groups):
+
+| recorded predictions | median ms | min ms | µs/record | groups | eligible | excluded | per-group truncation |
+|---|---|---|---|---|---|---|---|
+| 20 | 0.208 | 0.163 | 10.39 | 1 | 15 | 5 | no |
+| 100 | 0.397 | 0.244 | 3.97 | 4 | 71 | 29 | no |
+| 500 | 2.738 | 1.847 | 5.48 | 20 | 359 | 141 | no |
+| 1,000 | 2.732 | 1.743 | 2.73 | 20 | 719 | 281 | yes |
+
+At 500 and 1,000 records the 20-group cap holds group work constant, so the cost tracks the bounded
+number of groups rather than the raw record count; at 1,000 the run says the per-group view was
+truncated. The pattern mix at both sizes was `repeated_success:5 repeated_failure:5 mixed_outcomes:10`.
+
+Complete production path, one evaluated capability, identical stores, noise included:
+
+| evaluations | no rule (ms) | AP-02 (ms) | AP-03 (ms) | AP-02 − no rule | AP-03 − no rule |
+|---|---|---|---|---|---|
+| 8 | 27.662 | 28.207 | 28.894 | +0.545 | +1.232 |
+| 14 | 67.984 | 87.111 | 73.791 | +19.128 | +5.807 |
+| 19 | 72.465 | 74.717 | 79.607 | +2.251 | +7.142 |
+
+The AP-03 rule applied and changed the comparison at each size, cited `min(size, 20)` predictions
+(8 / 14 / 19), and left the candidate bytes, gates and binding byte-identical to the no-rule and
+AP-02 conditions. Partial timings at 19 evaluations were: store longitudinal read 11.6 ms, authorized
+action 33.4 ms, one derivation 90.5 ms, repeat derivation 43.2 ms - each a piece, none the request.
+At 25 evaluations the derivation's read was bounded and it refused a pattern from a partial sequence
+(`no longitudinal candidate: ...`), which is a disclosed boundary rather than a benchmark failure.
+
+### Interpretation limits
+
+- Medians over 7 samples in one process on one machine. Differences of a few milliseconds move
+  between runs; the in-run comparison against the no-rule condition on the identical store is the
+  finding, not the absolute figure. The AP-02 column at 14 evaluations is visibly larger than at 19,
+  which is run-to-run noise, not a property of the rule.
+- The AP-03 delta includes the complete request: controller work, audit append, independent re-read,
+  the guidance read, and the currentness check (one batched ledger read per request, nothing cached).
+  The partial lines are printed separately and must not be summed into a request cost.
+- Fixtures are uniform synthetic success/failure histories, not a real user's record; they show how
+  the bounded analysis scales and that the full path still applies one disclosed influence, not that
+  a repeated pattern predicts anything.
+- The 1,000-record pure case and the 25-record real case exercise the upper bounds; a production
+  store larger than the derivation bound would report truncation and derive no longitudinal
+  candidate, by design.
 
 This script is not part of `npm test` and no test depends on it.
 

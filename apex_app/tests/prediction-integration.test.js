@@ -573,7 +573,7 @@ describe('the prediction command group through the command line', () => {
       { argv: ['prediction', 'show'], reason: /usage: prediction show <prediction-id>/ },
       { argv: ['prediction', 'health', 'extra'], reason: /usage: prediction health/ },
       { argv: ['prediction', 'summary', '--limit', 'many'], reason: /--limit needs a whole number/ },
-      { argv: ['prediction', 'nonsense'], reason: /usage: prediction record\|list\|show\|history\|evaluate\|invalidate\|summary\|health/ },
+      { argv: ['prediction', 'nonsense'], reason: /usage: prediction record\|list\|show\|history\|evaluate\|invalidate\|summary\|longitudinal\|health/ },
     ];
     for (const { argv, reason } of cases) {
       const res = await cli(app, dir, argv);

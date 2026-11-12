@@ -112,6 +112,7 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'prediction.show': 'read',
   'prediction.history': 'read',
   'prediction.summary': 'read',
+  'prediction.longitudinal': 'read',
   'memory.save_conclusion': 'model-words',
   'model.answer': 'model-words',
   'experience.record': 'self-bookkeeping',

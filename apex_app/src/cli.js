@@ -77,6 +77,7 @@ Usage:
   node bin/apex.js prediction evaluate <prediction-id>
   node bin/apex.js prediction invalidate <prediction-id> --reason <text>
   node bin/apex.js prediction summary [--capability <name>] [--limit N]
+  node bin/apex.js prediction longitudinal [--capability <name>] [--limit N]   recorded-outcome patterns per scope (read-only)
   node bin/apex.js prediction health      record kinds, standing expectations, and anomalies (read-only)
   node bin/apex.js goal add [--criterion <text>]... [--priority N] [--deadline <iso>] [--depends-on <id>]... <request>
   node bin/apex.js goal list [--limit N]
@@ -213,6 +214,7 @@ Prediction examples (what you expect to happen, kept apart from what happened):
   prediction evaluate <prediction-id>   the ledger compares the expectation to recorded outcomes
   prediction invalidate <prediction-id> --reason "the condition it assumed no longer holds"
   prediction summary                    what the verdicts support, their denominator, and their limits
+  prediction longitudinal               repeated, alternating, or directional recorded outcomes in one scope
   prediction health                     the ledger parses, and every withdrawal and verdict names a prediction
 A prediction is an expectation you record, not an observation: nothing about it has happened. It lives
 in predictions.jsonl, separate from experiences.jsonl, so no read of what happened can count it, and it
@@ -1242,6 +1244,11 @@ export async function main(argv, {
         rejectUnexpected(extra, 'prediction summary [--capability <name>] [--limit N]');
         return emit(await app.controller.predictionSummary({ capability: flags.capability, limit: flags.limit }));
       }
+      if (sub === 'longitudinal') {
+        const { flags, rest: extra } = parseFlags(rest, ['capability', 'limit']);
+        rejectUnexpected(extra, 'prediction longitudinal [--capability <name>] [--limit N]');
+        return emit(await app.controller.predictionLongitudinal({ capability: flags.capability, limit: flags.limit }));
+      }
       if (sub === 'health') {
         rejectUnexpected(parseFlags(rest, []).rest, 'prediction health');
         // A direct, unaudited read, like `experience health`: exit 0 only when the ledger was fully
@@ -1250,7 +1257,7 @@ export async function main(argv, {
         out(res.display ?? res.output ?? '(none)');
         return res.health?.attention ? 1 : 0;
       }
-      err('usage: prediction record|list|show|history|evaluate|invalidate|summary|health');
+      err('usage: prediction record|list|show|history|evaluate|invalidate|summary|longitudinal|health');
       return 2;
     }
 
