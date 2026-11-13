@@ -55,6 +55,13 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   touches no network. Complete stage, partial reads and concurrency runs are printed separately and
   never added together.
 
+- `run-evidence-benchmark.mjs` builds every fixture on a `mkdtemp` directory prefixed
+  `apex-bench-evidence-`, asserts each directory with `assertIsolatedDataDir`, and uses the same
+  refusing cleanup. It accepts `APEX_DATA_ISOLATED` unset or `1` and refuses any other value,
+  constructs `NoBackend` (never contacted) and touches no network. Every measured condition runs on
+  identical copied bytes; the retrieval partial is printed separately from the complete actions and
+  the two are never added together.
+
 - Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
   reporting, not a cleanup task.
 
@@ -1682,5 +1689,106 @@ measured".
   the same difference.
 - Memory observation is a single `heapUsed` reading without forced collection; it is not a leak
   measurement.
+
+This script is not part of `npm test` and no test depends on it.
+
+## Evidence fabric benchmark (Batch AP-06)
+
+`run-evidence-benchmark.mjs` measures what a cross-store read window costs and what the complete
+cross-store reads cost at increasing store size. It starts no child process and constructs no backend.
+
+```sh
+APEX_DATA_ISOLATED=1 node benchmarks/run-evidence-benchmark.mjs [--records 100,1000,4000] [--repeats R] [--keep]
+```
+
+`--repeats` is 1-10 and defaults to 5. `APEX_DATA_ISOLATED` must be unset or `1`; any other value is
+refused. Every directory is a fresh `apex-bench-evidence-` entry under the OS temp root, asserted with
+`assertIsolatedDataDir`, and cleanup refuses any path that is not its own.
+
+### Procedure
+
+- The base fixture is built through the ordinary controller actions: two user corrections derive and
+  approve one rule, one goal is prepared into a plan, approved, activated and executed, each criterion
+  is evidenced, and the plan is assessed. Synthetic memory records are then appended directly as valid
+  JSONL at 100 / 1,000 / 4,000 records, each fixture copied so no measurement is taken on a store a
+  previous measurement enlarged.
+- For each size the script times, separately: the window open and verify alone (partial), the
+  integrity report alone (partial), the complete `evidence.integrity` request (two windows, verify,
+  audit), cognitive retrieval called directly (partial - a free-form request cannot reach retrieval
+  under `NoBackend`, which answers `model_unavailable` before the model call), the complete
+  `adaptation.effectiveness` request and the complete `adaptation.reviews` request.
+- The cost of the window itself is measured by alternating the same effectiveness analysis with and
+  without a window on identical bytes, three times each, so the comparison is in-run rather than
+  across runs.
+- A second section stores 20 then 21 adaptations and reads the complete effectiveness request, which
+  checks that the clipped window is disclosed rather than silently applied.
+- A third section issues an integrity read, a write, an effectiveness read and another write in
+  parallel, then four integrity reads in parallel beside one serial read. It reports every refusal
+  reason. Any complete read that does not verify, any report with `authorizes` not `false`, any state
+  that is not `consistent`, or a missing truncation disclosure makes the run exit non-zero.
+
+### Measured
+
+One run of `--records 100,1000,4000 --repeats 5` on Windows 11, Node v26.4.0, x64, with no test or
+other benchmark active. Medians with the min-max spread in brackets; the nine stores held 146 /
+1,046 / 4,046 records.
+
+| Complete request | 100 records | 1,000 records | 4,000 records |
+|---|---|---|---|
+| `evidence.integrity` | 20.874 [16.839–22.310] | 23.557 [21.974–24.750] | 33.475 [32.574–41.450] |
+| `adaptation.effectiveness` | 31.488 [31.122–32.470] | 39.410 [37.968–44.840] | 57.463 [56.148–69.020] |
+| `adaptation.reviews` | 34.899 [34.026–36.330] | 40.961 [40.781–44.450] | 56.906 [56.672–59.340] |
+| cognitive retrieval (partial) | 12.999 [9.945–36.870] | 21.281 [20.359–22.230] | 58.103 [56.139–63.600] |
+
+Partial pieces, for attribution only - none is a request: window open and verify alone took 1.071 /
+0.719 / 0.778 ms, and the integrity report alone took 9.990 / 11.361 / 14.775 ms.
+
+The window itself, on identical bytes:
+
+| memory records | effectiveness without a window | with the window | delta |
+|---|---|---|---|
+| 100 | 15.107 | 15.008 | -0.098 |
+| 1,000 | 15.780 | 16.413 | +0.633 |
+| 4,000 | 25.215 | 26.168 | +0.953 |
+
+The delta is within the sample noise at 100 records and stays around a millisecond at 4,000: the
+window is one `stat` pair per store, so its cost is per store rather than per record. The growth in
+the complete requests is in parsing and lineage, not in certification.
+
+Adaptation window, complete effectiveness request:
+
+| stored adaptations | median ms | rows reported | integrity | truncated |
+|---|---|---|---|---|
+| 20 | 33.211 | 20 | `valid` | false |
+| 21 | 32.706 | 20 | `valid_bounded` | true (`adaptations`) |
+
+Concurrent activity:
+
+| condition | wall ms | outcome |
+|---|---|---|
+| integrity + write + effectiveness + write | 122.670 | both writes verified; both reads refused (`verification_failed`) with their reasons |
+| four integrity reads in parallel | 66.256 | 4 of 4 verified |
+| one integrity read, serial | 29.115 | verified |
+
+### Interpretation limits
+
+- Medians over five samples in one process on one machine, on a synthetic history with one approved
+  rule. Absolute figures include controller work, audit appends, the independent second read and
+  machine noise. The partial lines are pieces, not requests.
+- `NoBackend` answers `model_unavailable` before retrieval, so the complete grounded request cannot be
+  measured without inference. Retrieval is therefore measured as a direct partial, and no figure here
+  is a model latency.
+- The retrieval partial reached 15 evidence records at every size with zero dropped and zero
+  unavailable sources, so the growth shown is store parsing and retrieval across the same bounded
+  result, not a larger answer.
+- The window delta is a difference of medians on the same fixture; at 100 records it is smaller than
+  the sample spread, so it is reported as noise rather than a saving.
+- The 21-adaptation read is not faster or slower evidence: it reports one bounded window over 20 rows
+  and names the clipped source. The row count is the same by design.
+- A read beside a write can verify-fail by design. The refusal is the fail-closed answer, not a
+  benchmark failure; four reads issued beside each other verified because each action's audit line
+  lands after its own second window.
+- The fixture stores synthetic prose; nothing here is evidence that a rule improves outcomes or that
+  any report is true.
 
 This script is not part of `npm test` and no test depends on it.

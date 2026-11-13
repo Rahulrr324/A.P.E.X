@@ -1515,6 +1515,16 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // Read-only integrity of the evidence fabric: one cross-store window over every configured store,
+  // each store's own health check, and one closed integrity vocabulary. It repairs nothing and the
+  // verifier re-reads the whole window, so a write between the two reads is disclosed rather than
+  // silently reported as the earlier state.
+  async evidenceIntegrity() {
+    const op = this.#experienceOp('evidence.integrity');
+    const step = await this.runAction('evidence.integrity', {}, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   // Governance reads. They share the effectiveness read's independent verifier: a second pass
   // re-derives the evidence and compares the governance digest, so a concurrent decision or review
   // is reported as a changed read rather than silently presented as the earlier state.

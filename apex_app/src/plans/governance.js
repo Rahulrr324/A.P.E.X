@@ -18,7 +18,9 @@ import { createHash } from 'node:crypto';
 import { stableStringify } from '../tasks/model.js';
 import { StoreError, ValidationError } from '../errors.js';
 import { shortId, singleLine } from '../util.js';
-import { analyzeAdaptationEffectiveness, MAX_EFFECTIVENESS_ADAPTATIONS } from './effectiveness.js';
+import { analyzeEffectivenessWithSnapshot, MAX_EFFECTIVENESS_ADAPTATIONS } from './effectiveness.js';
+import { DEFAULT_SNAPSHOT_ATTEMPTS, contributingStores, runConsistentEvidenceRead } from '../evidence/snapshot.js';
+import { integrityFinding, integrityReport } from '../evidence/integrity.js';
 import { planContentHash } from './model.js';
 import {
   MAX_REVIEW_CHANGES,
@@ -37,6 +39,20 @@ const MAX_REVIEW_HISTORY = 20;
 
 function digestOf(value) {
   return createHash('sha256').update(stableStringify(value)).digest('hex');
+}
+
+// The digest covers what the read found, not when it ran. `generatedAt` is read-time metadata, the
+// snapshot identity says which bytes were present rather than what they meant, and the integrity
+// summary is represented by its own digest (which already excludes both). A second read over unchanged
+// records therefore returns the same digest even though its own audit line grew the file.
+function reportHashOf(report) {
+  return digestOf({
+    ...report,
+    generatedAt: null,
+    digest: null,
+    snapshot: null,
+    integrity: report.integrity?.digest ?? null,
+  });
 }
 
 function limitValue(value) {
@@ -170,9 +186,31 @@ function reportDigestOf({ adaptationId, row, report }) {
   });
 }
 
-// The projections a review cites for its prediction-derived support. A projection that cannot be read
-// is recorded as `unreadable` rather than as an older status: the ledger did not say what became of it.
-async function predictionRefsFor(adaptation, predictions) {
+// One shared read per label inside a snapshot; without a snapshot the read simply happens.
+function sharedRead(snapshot, label, fn) {
+  return snapshot ? snapshot.read(label, fn) : fn();
+}
+
+// What a reader may know about how the window was established, without the identity internals.
+function snapshotView(verdict) {
+  if (!verdict) return null;
+  return {
+    schema: verdict.schema,
+    state: verdict.state,
+    consistent: verdict.consistent === true,
+    complete: verdict.complete === true,
+    stores: verdict.stores ?? [],
+    reads: verdict.reads ?? 0,
+    digest: verdict.digest ?? null,
+    beginDigest: verdict.beginDigest ?? null,
+    bounded: verdict.bounded === true,
+    note: verdict.note ?? null,
+  };
+}
+
+// A projection that cannot be read is recorded as `unreadable` rather than as an older status: the
+// ledger did not say what became of it.
+async function predictionRefsFor(adaptation, predictions, snapshot = null) {
   const cited = [...new Set((adaptation.support?.predictionIds ?? []).map(String))].sort();
   const truncated = cited.length > MAX_REVIEW_REFS;
   const wanted = cited.slice(0, MAX_REVIEW_REFS);
@@ -180,7 +218,7 @@ async function predictionRefsFor(adaptation, predictions) {
   let answered = null;
   if (predictions && typeof predictions.details === 'function') {
     try {
-      answered = await predictions.details(wanted);
+      answered = await sharedRead(snapshot, `predictions:details:${wanted.join(',')}`, () => predictions.details(wanted));
     } catch {
       answered = null;
     }
@@ -209,7 +247,7 @@ async function predictionRefsFor(adaptation, predictions) {
 // Resolve every goal a cited plan names. A goal that is absent, or a goal store that is not attached,
 // is recorded as a goal reference with no state - not guessed, and not dropped, because dropping it
 // would make the evidence look like no plan named a goal.
-async function goalRefsFor(plans, goals, cache) {
+async function goalRefsFor(plans, goals, cache, snapshot = null) {
   const ids = [...new Set(plans.map((p) => p.goalId).filter((id) => typeof id === 'string'))].sort();
   const refs = [];
   for (const goalId of ids.slice(0, MAX_REVIEW_REFS)) {
@@ -217,7 +255,7 @@ async function goalRefsFor(plans, goals, cache) {
       let goal = null;
       if (goals && typeof goals.get === 'function') {
         try {
-          goal = await goals.get(goalId);
+          goal = await sharedRead(snapshot, `goals:get:${goalId}`, () => goals.get(goalId));
         } catch {
           goal = null;
         }
@@ -236,14 +274,17 @@ async function goalRefsFor(plans, goals, cache) {
 
 // Assemble the canonical evidence bundle for one adaptation from the report row that describes it and
 // the stores the row was read from. Every list is bounded and sorted by the canonicaliser.
-async function buildEvidence({ experience, plans, goals, predictions, adaptation, row, report, goalCache = new Map() }) {
+async function buildEvidence({ experience, plans, goals, predictions, adaptation, row, report, goalCache = new Map(), snapshot = null }) {
   const supportExperiences = [...new Set((adaptation.support?.experienceIds ?? []).map(String))];
   const supportFeedback = [...new Set((adaptation.support?.feedbackIds ?? []).map(String))];
   const supportTruncated = supportExperiences.length > MAX_REVIEW_REFS || supportFeedback.length > MAX_REVIEW_REFS;
-  const states = await experience.supportStates({
-    experienceIds: supportExperiences.slice(0, MAX_REVIEW_REFS),
-    feedbackIds: supportFeedback.slice(0, MAX_REVIEW_REFS),
-  });
+  const citedExperiences = supportExperiences.slice(0, MAX_REVIEW_REFS);
+  const citedFeedback = supportFeedback.slice(0, MAX_REVIEW_REFS);
+  const states = await sharedRead(
+    snapshot,
+    `experience:supportStates:${[...citedExperiences].sort().join(',')}:${[...citedFeedback].sort().join(',')}`,
+    () => experience.supportStates({ experienceIds: citedExperiences, feedbackIds: citedFeedback }),
+  );
 
   const uses = (row.uses ?? []).slice(0, MAX_REVIEW_REFS).map(useRefFromRow);
   const planMap = plans instanceof Map ? plans : new Map();
@@ -253,8 +294,8 @@ async function buildEvidence({ experience, plans, goals, predictions, adaptation
     .filter(Boolean)
     .slice(0, MAX_REVIEW_REFS)
     .map(planRefFromPlan);
-  const goalRefs = await goalRefsFor(planRefs, goals, goalCache);
-  const prediction = await predictionRefsFor(adaptation, predictions);
+  const goalRefs = await goalRefsFor(planRefs, goals, goalCache, snapshot);
+  const prediction = await predictionRefsFor(adaptation, predictions, snapshot);
 
   return canonicalReviewEvidence({
     targetId: adaptation.id,
@@ -314,11 +355,11 @@ async function buildEvidence({ experience, plans, goals, predictions, adaptation
   });
 }
 
-async function planMapOf(plans) {
+async function planMapOf(plans, snapshot = null) {
   if (!plans || typeof plans.load !== 'function') {
     throw new StoreError('the plan store is not available in this configuration; no review evidence can be assembled');
   }
-  const read = await plans.load();
+  const read = await sharedRead(snapshot, 'plans:load', () => plans.load());
   return read.plans instanceof Map
     ? read.plans
     : new Map((read.plans ?? []).map((p) => [p.id, p]));
@@ -326,13 +367,16 @@ async function planMapOf(plans) {
 
 // The one read that turns a target into the exact evidence a review would cite, plus the report row it
 // came from. Target-scoped on purpose: a review's evidence must describe its own adaptation, not the
-// bounded window a list read happened to return.
-async function prepareTarget({ experience, plans, operations, goals, knowledge, memory, predictions, now, target }) {
+// bounded window a list read happened to return. Inside a shared snapshot the adaptation, the plan
+// ledger, and every goal are read once for the whole operation rather than once per target.
+async function prepareTarget({
+  experience, plans, operations, goals, knowledge, memory, predictions, now, target, snapshot = null,
+}) {
   const ref = typeof target === 'string' ? target.trim() : '';
   if (ref.length === 0) throw new ValidationError('a review needs an adaptation reference');
-  const adaptation = await experience.adaptationDetail(ref);
+  const adaptation = await sharedRead(snapshot, `experience:adaptation:${ref}`, () => experience.adaptationDetail(ref));
   if (!adaptation) throw new ValidationError(`no adaptation matches "${singleLine(ref, 40)}"`);
-  const report = await analyzeAdaptationEffectiveness({
+  const { report } = await analyzeEffectivenessWithSnapshot({
     experience,
     plans,
     operations,
@@ -342,15 +386,16 @@ async function prepareTarget({ experience, plans, operations, goals, knowledge, 
     now,
     target: adaptation.id,
     limit: 1,
+    snapshot,
   });
   if (report.available !== true) {
     return { adaptation, report, row: null, evidence: null, reportDigest: null };
   }
   const row = (report.adaptations ?? []).find((r) => r.id === adaptation.id) ?? null;
   if (!row) return { adaptation, report, row: null, evidence: null, reportDigest: null };
-  const planMap = await planMapOf(plans);
+  const planMap = await planMapOf(plans, snapshot);
   const evidence = await buildEvidence({
-    experience, plans: planMap, goals, predictions, adaptation, row, report,
+    experience, plans: planMap, goals, predictions, adaptation, row, report, snapshot,
   });
   return { adaptation, report, row, evidence, reportDigest: reportDigestOf({ adaptationId: adaptation.id, row, report }) };
 }
@@ -450,8 +495,10 @@ function unavailableReport(reason, generatedAt, scope) {
 
 // The list read: for each bounded adaptation, the live recommendation and the state of its current
 // review. A review's evidence is assembled only when a review exists; an unreviewed adaptation costs
-// the recommendation it is shown with and nothing more.
-export async function governanceReport({
+// the recommendation it is shown with and nothing more. Everything here runs inside one snapshot, so
+// the effectiveness rows, the review history, and every review's live evidence describe the same
+// instant rather than a sequence of separately consistent reads.
+async function governanceReportWithin({
   experience,
   plans,
   operations,
@@ -461,21 +508,24 @@ export async function governanceReport({
   predictions = null,
   now = () => new Date(),
   limit = MAX_GOVERNANCE_ADAPTATIONS,
+  snapshot = null,
 } = {}) {
   const generatedAt = now().toISOString();
   const size = limitValue(limit);
   const scope = { target: null, limit: size };
   const missing = requireStores({ experience, operations });
-  if (missing) return unavailableReport(missing, generatedAt, scope);
+  if (missing) return { report: unavailableReport(missing, generatedAt, scope), diagnostics: null };
 
-  const report = await analyzeAdaptationEffectiveness({
-    experience, plans, operations, goals, knowledge, memory, now, limit: size,
+  const { report } = await analyzeEffectivenessWithSnapshot({
+    experience, plans, operations, goals, knowledge, memory, now, limit: size, snapshot,
   });
-  if (report.available !== true) return unavailableReport(report.reason ?? 'the effectiveness report is unavailable', generatedAt, scope);
+  if (report.available !== true) {
+    return { report: unavailableReport(report.reason ?? 'the effectiveness report is unavailable', generatedAt, scope), diagnostics: null };
+  }
 
   let reviews;
   try {
-    reviews = (await experience.reviews({ limit: MAX_REVIEW_HISTORY * 2 })).reviews;
+    reviews = (await sharedRead(snapshot, 'experience:reviews:current', () => experience.reviews({ limit: MAX_REVIEW_HISTORY * 2 }))).reviews;
   } catch (err) {
     throw new StoreError(`the review history could not be read: ${err?.message ?? String(err)}`);
   }
@@ -486,6 +536,7 @@ export async function governanceReport({
   }
 
   const rows = [];
+  const findings = [];
   const counts = Object.fromEntries(REVIEW_STATES.map((state) => [state, 0]));
   let requiringReview = 0;
   for (const row of report.adaptations.slice(0, size)) {
@@ -497,7 +548,7 @@ export async function governanceReport({
     if (review) {
       try {
         const prepared = await prepareTarget({
-          experience, plans, operations, goals, knowledge, memory, predictions, now, target: row.id,
+          experience, plans, operations, goals, knowledge, memory, predictions, now, target: row.id, snapshot,
         });
         if (prepared.evidence) {
           targetRow = prepared.row ?? row;
@@ -522,6 +573,26 @@ export async function governanceReport({
       || reviewState.state === 'review_awaiting_evidence'
       || reviewState.state === 'review_evidence_changed';
     if (requiresReview) requiringReview += 1;
+    if (unavailable) {
+      findings.push(integrityFinding('unverifiable', {
+        check: 'review_evidence', subject: row.id, detail: unavailable,
+      }));
+    }
+    if (diff) {
+      for (const change of diff.changes ?? []) {
+        const state = REVIEW_CHANGE_STATES[change.kind] ?? null;
+        if (!state) continue;
+        findings.push(integrityFinding(state, {
+          check: `review_${change.kind}`, subject: change.id ?? row.id, from: review.id, detail: change.detail,
+        }));
+      }
+      if (diff.reportChanged === true) {
+        findings.push(integrityFinding('stale', {
+          check: 'report_digest', subject: row.id, from: review.id,
+          detail: 'the effectiveness report digest changed after the review was opened',
+        }));
+      }
+    }
     rows.push({
       id: row.id,
       capability: row.capability,
@@ -544,6 +615,11 @@ export async function governanceReport({
       requiresReview,
     });
   }
+  const truncatedSources = [];
+  if (report.reads?.auditTruncated === true) truncatedSources.push('audit');
+  if (report.totals?.truncatedUses === true) truncatedSources.push('uses');
+  if (report.integrity?.truncated === true) truncatedSources.push('effectiveness-findings');
+  if (reviews.length >= MAX_REVIEW_HISTORY * 2) truncatedSources.push('reviews');
   const out = {
     schema: GOVERNANCE_SCHEMA,
     available: true,
@@ -558,16 +634,94 @@ export async function governanceReport({
       reviews: reviews.length,
       truncated: report.adaptations.length > rows.length,
     },
+    snapshot: snapshot ? snapshot.summary() : null,
+    integrity: integrityReport({
+      subject: 'adaptation-governance',
+      findings,
+      truncated: truncatedSources.length > 0,
+      truncatedSources,
+      counts: { adaptations: rows.length, reviews: reviews.length, requiringReview },
+      snapshot: snapshot ? snapshot.summary() : null,
+      generatedAt,
+    }),
     authorizes: false,
     note: GOVERNANCE_NOTE,
   };
-  out.digest = digestOf({ ...out, generatedAt: null, digest: null });
-  return out;
+  out.digest = reportHashOf(out);
+  return { report: out, diagnostics: { findings, truncatedSources } };
+}
+
+// Which reconciliation change is an integrity condition, and which is simply a later record. `added`
+// is not a fault, and `superseded` is the lifecycle working as recorded; neither is a finding.
+const REVIEW_CHANGE_STATES = Object.freeze({
+  withdrawn: 'broken_reference',
+  missing: 'missing',
+  stale: 'stale',
+  conflicting: 'conflicting',
+  unreadable: 'unverifiable',
+});
+
+// The public list read. One snapshot spans the effectiveness analysis, the review history and every
+// review's live evidence; a writer seen inside the window is retried at most twice more, and a read
+// that still cannot be certified is refused rather than reported as a result.
+export async function governanceReport({
+  experience,
+  plans,
+  operations,
+  goals = null,
+  knowledge = null,
+  memory = null,
+  predictions = null,
+  now = () => new Date(),
+  limit = MAX_GOVERNANCE_ADAPTATIONS,
+  snapshot = null,
+  attempts = DEFAULT_SNAPSHOT_ATTEMPTS,
+} = {}) {
+  const input = { experience, plans, operations, goals, knowledge, memory, predictions, now, limit };
+  if (snapshot) return (await governanceReportWithin({ ...input, snapshot })).report;
+  const stores = contributingStores({ experience, plans, operations, goals, knowledge, memory, predictions });
+  if (stores.length === 0) return (await governanceReportWithin(input)).report;
+  const generatedAt = now().toISOString();
+  const scope = { target: null, limit: limitValue(limit) };
+  const run = await runConsistentEvidenceRead({
+    stores,
+    attempts,
+    read: (view) => governanceReportWithin({ ...input, snapshot: view }),
+  });
+  const { report, diagnostics } = run.value;
+  const verdict = run.snapshot;
+  if (verdict.state !== 'consistent') {
+    const refused = unavailableReport(
+      verdict.state === 'unverifiable'
+        ? 'a contributing store could not be inspected while the governance read was in progress, so no consistent report can be stated'
+        : `the stores changed while the governance read was in progress${run.attempts > 1 ? ` (retried ${run.attempts - 1} time(s))` : ''}; no report is stated for a combination that did not exist at one instant`,
+      generatedAt,
+      scope,
+    );
+    refused.state = verdict.state;
+    refused.attempts = run.attempts;
+    refused.snapshot = snapshotView(verdict);
+    refused.integrity = integrityReport({ subject: 'adaptation-governance', snapshot: verdict, generatedAt });
+    return refused;
+  }
+  report.snapshot = snapshotView(verdict);
+  report.integrity = integrityReport({
+    subject: 'adaptation-governance',
+    findings: diagnostics?.findings ?? [],
+    truncated: (diagnostics?.truncatedSources ?? []).length > 0,
+    truncatedSources: diagnostics?.truncatedSources ?? [],
+    counts: report.integrity?.counts ?? {},
+    snapshot: verdict,
+    generatedAt,
+  });
+  report.digest = reportHashOf(report);
+  return report;
 }
 
 // One review or one adaptation's governance detail: the current review, its decision, the live
-// reconciliation of every item it cites, and the review history the adaptation still holds.
-export async function governanceDetail({
+// reconciliation of every item it cites, and the review history the adaptation still holds. The review
+// lookup, the adaptation, the review history and the live bundle are read inside one snapshot.
+async function governanceDetailWithin({
   experience,
   plans,
   operations,
@@ -577,29 +731,37 @@ export async function governanceDetail({
   predictions = null,
   now = () => new Date(),
   target,
+  snapshot = null,
 } = {}) {
   const generatedAt = now().toISOString();
   const missing = requireStores({ experience, operations });
-  if (missing) return { schema: GOVERNANCE_SCHEMA, available: false, reason: missing, generatedAt, authorizes: false, note: GOVERNANCE_NOTE };
+  if (missing) {
+    return { report: { schema: GOVERNANCE_SCHEMA, available: false, reason: missing, generatedAt, authorizes: false, note: GOVERNANCE_NOTE }, diagnostics: null };
+  }
   const ref = typeof target === 'string' ? target.trim() : '';
   if (ref.length === 0) throw new ValidationError('a review or adaptation reference is required');
 
   let review = null;
-  const byReview = await experience.reviewDetail(ref);
+  const byReview = await sharedRead(snapshot, `experience:review:${ref}`, () => experience.reviewDetail(ref));
   if (byReview) {
     review = byReview.review;
     if (!byReview.adaptation) {
       throw new StoreError(`review [${shortId(review.id)}] names an adaptation that is not in the store`);
     }
-  } else if (!(await experience.adaptationDetail(ref))) {
+  } else if (!(await sharedRead(snapshot, `experience:adaptation:${ref}`, () => experience.adaptationDetail(ref)))) {
     throw new ValidationError(`no review or adaptation matches "${singleLine(ref, 40)}"`);
   }
 
   const prepared = await prepareTarget({
-    experience, plans, operations, goals, knowledge, memory, predictions, now, target: byReview?.adaptation?.id ?? ref,
+    experience, plans, operations, goals, knowledge, memory, predictions, now,
+    target: byReview?.adaptation?.id ?? ref, snapshot,
   });
   const adaptation = prepared.adaptation;
-  const history = await experience.reviews({ target: adaptation.id, limit: MAX_REVIEW_HISTORY });
+  const history = await sharedRead(
+    snapshot,
+    `experience:reviews:${adaptation.id}`,
+    () => experience.reviews({ target: adaptation.id, limit: MAX_REVIEW_HISTORY }),
+  );
   if (!review) review = currentReviewOf(history.reviews);
   const recommendation = prepared.row?.recommendation?.kind ?? 'none';
   let diff = null;
@@ -610,6 +772,24 @@ export async function governanceDetail({
     unavailable = prepared.report?.reason ?? 'the effectiveness report is unavailable';
   }
   const reviewState = stateOf(review, diff, recommendation, unavailable);
+
+  const findings = [];
+  if (unavailable) {
+    findings.push(integrityFinding('unverifiable', { check: 'review_evidence', subject: adaptation.id, detail: unavailable }));
+  }
+  for (const change of diff?.changes ?? []) {
+    const state = REVIEW_CHANGE_STATES[change.kind] ?? null;
+    if (!state) continue;
+    findings.push(integrityFinding(state, {
+      check: `review_${change.kind}`, subject: change.id ?? adaptation.id, from: review?.id ?? null, detail: change.detail,
+    }));
+  }
+  if (diff?.reportChanged === true && review) {
+    findings.push(integrityFinding('stale', {
+      check: 'report_digest', subject: adaptation.id, from: review.id,
+      detail: 'the effectiveness report digest changed after the review was opened',
+    }));
+  }
 
   const historyRows = history.reviews.map((item) => ({
     id: item.id,
@@ -622,7 +802,7 @@ export async function governanceDetail({
     current: item.current === true,
   }));
 
-  return {
+  const out = {
     schema: GOVERNANCE_SCHEMA,
     available: true,
     reason: null,
@@ -656,16 +836,94 @@ export async function governanceDetail({
     awaitingEvidence: reviewState.state === 'review_awaiting_evidence',
     reconciliation: reconciliationSummary(diff),
     unavailable,
+    snapshot: snapshot ? snapshot.summary() : null,
+    integrity: integrityReport({
+      subject: `adaptation-review:${adaptation.id}`,
+      findings,
+      truncated: history.truncated === true || prepared.row?.usesTruncated === true,
+      truncatedSources: [
+        ...(history.truncated === true ? ['review-history'] : []),
+        ...(prepared.row?.usesTruncated === true ? ['uses'] : []),
+      ],
+      counts: { reviews: history.reviews.length, changes: diff?.changes?.length ?? 0 },
+      snapshot: snapshot ? snapshot.summary() : null,
+      generatedAt,
+    }),
     history: historyRows,
     historyTruncated: history.truncated === true,
     authorizes: false,
     note: GOVERNANCE_NOTE,
   };
+  out.digest = reportHashOf(out);
+  return { report: out, diagnostics: { findings } };
+}
+
+// The public detail read, with the same consistency contract as the list: one window, bounded retry,
+// explicit refusal rather than a report assembled from different instants.
+export async function governanceDetail({
+  experience,
+  plans,
+  operations,
+  goals = null,
+  knowledge = null,
+  memory = null,
+  predictions = null,
+  now = () => new Date(),
+  target,
+  snapshot = null,
+  attempts = DEFAULT_SNAPSHOT_ATTEMPTS,
+} = {}) {
+  const input = { experience, plans, operations, goals, knowledge, memory, predictions, now, target };
+  if (snapshot) return (await governanceDetailWithin({ ...input, snapshot })).report;
+  const stores = contributingStores({ experience, plans, operations, goals, knowledge, memory, predictions });
+  if (stores.length === 0) return (await governanceDetailWithin(input)).report;
+  const generatedAt = now().toISOString();
+  const run = await runConsistentEvidenceRead({
+    stores,
+    attempts,
+    read: (view) => governanceDetailWithin({ ...input, snapshot: view }),
+  });
+  const { report, diagnostics } = run.value;
+  const verdict = run.snapshot;
+  if (verdict.state !== 'consistent') {
+    const refused = {
+      schema: GOVERNANCE_SCHEMA,
+      available: false,
+      reason: verdict.state === 'unverifiable'
+        ? 'a contributing store could not be inspected while the review was read, so no consistent detail can be stated'
+        : `the stores changed while the review was read${run.attempts > 1 ? ` (retried ${run.attempts - 1} time(s))` : ''}; no detail is stated for a combination that did not exist at one instant`,
+      state: verdict.state,
+      attempts: run.attempts,
+      generatedAt,
+      snapshot: snapshotView(verdict),
+      integrity: integrityReport({ subject: 'adaptation-review', snapshot: verdict, generatedAt }),
+      authorizes: false,
+      note: GOVERNANCE_NOTE,
+    };
+    return refused;
+  }
+  report.snapshot = snapshotView(verdict);
+  report.integrity = integrityReport({
+    subject: `adaptation-review:${report.adaptation?.id ?? 'unknown'}`,
+    findings: diagnostics?.findings ?? [],
+    truncated: report.historyTruncated === true || report.report?.usesTruncated === true,
+    truncatedSources: [
+      ...(report.historyTruncated === true ? ['review-history'] : []),
+      ...(report.report?.usesTruncated === true ? ['uses'] : []),
+    ],
+    counts: {...(report.integrity?.counts ?? {})},
+    snapshot: verdict,
+    generatedAt,
+  });
+  report.digest = reportHashOf(report);
+  return report;
 }
 
 // The exact bundle an open or decision will cite, together with the report row and recommendation it
 // was read from. Actions use this so the record they write and the record they verify are assembled
-// by one function; nothing here writes.
+// by one function; nothing here writes. The bundle is assembled inside its own consistency window: a
+// write that lands mid-read is retried at most twice more, and a bundle that cannot be certified is
+// refused, because a record must not cite evidence assembled from two different instants.
 export async function prepareReview({
   experience,
   plans,
@@ -676,10 +934,29 @@ export async function prepareReview({
   predictions = null,
   now = () => new Date(),
   target,
+  snapshot = null,
+  attempts = DEFAULT_SNAPSHOT_ATTEMPTS,
 } = {}) {
   const missing = requireStores({ experience, operations });
   if (missing) throw new ValidationError(missing);
-  return prepareTarget({ experience, plans, operations, goals, knowledge, memory, predictions, now, target });
+  const input = { experience, plans, operations, goals, knowledge, memory, predictions, now, target };
+  if (snapshot) return prepareTarget({ ...input, snapshot });
+  const stores = contributingStores({ experience, plans, operations, goals, knowledge, memory, predictions });
+  if (stores.length === 0) return prepareTarget(input);
+  const run = await runConsistentEvidenceRead({
+    stores,
+    attempts,
+    read: (view) => prepareTarget({ ...input, snapshot: view }),
+  });
+  const verdict = run.snapshot;
+  if (verdict.state !== 'consistent') {
+    throw new StoreError(
+      verdict.state === 'unverifiable'
+        ? 'a contributing store could not be inspected while the review evidence was assembled; no bundle is recorded from a read that cannot be verified'
+        : `the stores changed while the review evidence was assembled${run.attempts > 1 ? ` (retried ${run.attempts - 1} time(s))` : ''}; no bundle is recorded for a combination of records that did not exist at one instant`,
+    );
+  }
+  return { ...run.value, snapshot: snapshotView(verdict) };
 }
 
 // A reader-facing view of the nine states, so a display can explain a state without inventing prose.

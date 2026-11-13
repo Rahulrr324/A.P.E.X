@@ -552,6 +552,56 @@ action and cannot write these stores. Audit records are masked at the single app
 heuristic over what APEX persists and prints; it does not protect a request that leaves for a model
 endpoint the user configured.
 
+### Cross-store read windows and the integrity vocabulary (AP-06)
+
+Several reports assemble one answer from more than one append-only store: longitudinal outcomes,
+adaptation effectiveness, governance, and `evidence.integrity`. Each store read was internally
+consistent, but a write between two of them could make the combination describe an instant that never
+existed. AP-06 addresses that without adding a transaction.
+
+- **A window is proved, not imposed.** `src/evidence/snapshot.js` records each contributing file's
+  identity (`exists`, byte `size`, whole-millisecond `mtimeMs`) before the first read and after the
+  last. A JSONL store only grows, so an unchanged identity proves no append happened inside the
+  window; a changed identity is `concurrent_modification`, a statement about the read. The window
+  holds no lock, cannot stop a writer, and does not detect a rewrite that preserves both size and
+  modification time - the stores' content validation and hashes remain the authority there.
+- **Retry is bounded and disclosed.** `runConsistentEvidenceRead` makes at most three attempts, only
+  after `concurrent_modification`, never after `unverifiable`, and reports the attempt count. One
+  write invalidates at most one window, so two concurrent appends (a record and its audit line) can
+  retire at most two windows; the budget never grows with store size. A store read that throws
+  propagates unchanged, because a failed read is not a concurrent write.
+- **One read per label per operation.** `snapshot.read(label, fn)` memoises the read for the life of
+  the window, so two reports assembled in one operation cannot disagree because one read the store
+  twice. The cache is never persisted or shared across operations.
+- **One closed vocabulary.** `src/evidence/integrity.js` defines ten ordered states - `valid`,
+  `valid_bounded`, `missing`, `stale`, `conflicting`, `broken_reference`, `damaged_store`,
+  `truncated_history`, `concurrent_modification`, `unverifiable` - and reports a bundle by its worst
+  state. `valid_bounded` is still evidence; `missing` maps to a gap, `out_of_window` and `unread` to
+  `valid_bounded` (a limit is not a negative fact), `missing` references to `broken_reference`, and a
+  duplicate identity in one store to `conflicting`. Findings are disclosed up to 50 with untrimmed
+  counts; the digest covers the state, counts and disclosed findings.
+- **Nothing is repaired.** A finding is a statement about the records as they read. Rewriting,
+  deleting or back-filling a record to make it disappear would destroy the evidence it describes.
+  Every report carries `authorizes:false`; a valid digest proves the bytes have not changed, never
+  that they are true or that an action is permitted.
+- **The integrity read is one window over every configured store.** `evidence.integrity` runs each
+  store's own health check where one exists and records the others by identity alone. `corruptLines`
+  and `corrupt` are normalised to a count; knowledge `claims` plus `lifecycleEvents` are counted as
+  records. `available` requires a consistent window and no `unverifiable` health check; damage stays
+  available because it is a finding about records that were actually read. Its verification opens a
+  second window and compares `available`, then the digest.
+- **Consumers.** `adaptation.effectiveness`, `adaptation.reviews` and the review stages assemble
+  inside one window and refuse a report that cannot be certified (`available:false` with `state` and
+  `attempts`, no rows, `totals:null`; the review stages raise `StoreError`). Cognitive retrieval,
+  world state and the prediction projection keep their per-store reads and per-source `unavailable`/
+  `damaged` disclosure; they do not claim cross-store consistency, and AP-06 did not make them
+  window-certified. The window wraps the same store methods those readers use - there is no second
+  evidence store or index.
+- **Bounded reads disclose clipping.** `adaptation.effectiveness` reads one adaptation past its
+  20-row window and reports `integrity.truncated` with `truncatedSources: ['adaptations']` when the
+  extra row exists, so a full store and a captured window no longer look identical. The state becomes
+  `valid_bounded`; the totals still report 20 read.
+
 ## 6. D. Diagnostics and evaluation
 
 ### Runtime diagnostics
@@ -609,6 +659,7 @@ nothing and does not call a model. It has no executive-handoff scenario; handoff
 | Complete request, no-rule vs longitudinal (AP-03) | — | no rule 27.7 / 68.0 / 72.5 ms at 8 / 14 / 19 evaluations | AP-03 rule +1.2 / +5.8 / +7.1 ms (AP-02 +0.5 / +19.1 / +2.3 ms) over the identical store; includes the batched currentness read and machine noise. Partial (analysis/store/derivation) timings are printed separately and are not the request cost |
 | Effectiveness read, complete request (AP-04) | — | 52.3 / 146.7 / 318.4 ms at 4 / 12 / 24 linked uses; 316.4 / 320.4 / 337.9 ms at 1 / 8 / 20 stored adaptations | Complete verified request (analysis + independent re-read + audit append) on synthetic histories where each use adds a plan and about ten audit records; about 13 / 12 / 13 ms per use. Pure analysis 27.5 / 71.4 / 167.6 ms and plan/audit reads are printed separately and are not the request cost. At 21 stored adaptations the oldest target falls outside the 20-record window, so its uses are not read (65.1 ms, disclosed) |
 | Governance review path, complete request (AP-05) | — | list 166.3 / 474.2 / 996.0 ms; open 151.7 / 445.1 / 640.1 ms; inspect 338.7 / 667.0 / 1,231.2 ms; reconcile 240.9 / 632.5 / 1,160.7 ms; decide 163.9 / 345.8 / 608.5 ms at 4 / 12 / 24 linked uses; list 967.8 / 997.4 / 1,049.9 ms at 1 / 8 / 20 stored adaptations | Complete verified request including its own analysis, evidence assembly and audit append; builder/detail/prepare reads are printed separately and labelled partial. At 21 stored adaptations the target is outside the 20-row window and is not reported (82.1 ms, disclosed; less lineage work, not faster execution). Five samples per figure |
+| Cross-store reads, complete request (AP-06) | — | integrity 20.9 / 23.6 / 33.5 ms; effectiveness 31.5 / 39.4 / 57.5 ms; reviews 34.9 / 41.0 / 56.9 ms at 100 / 1,000 / 4,000 memory records (9 stores, 146 / 1,046 / 4,046 records) | Complete verified requests including their own window(s), second read and audit append on identical copied bytes. The window alone took 1.07 / 0.72 / 0.78 ms and the integrity report alone 10.0 / 11.4 / 14.8 ms; those partials are printed separately and not added. The same effectiveness analysis with and without a window moved by −0.1 / +0.6 / +1.0 ms, so window cost is per store, not per record; growth is parsing and lineage. Five samples per figure |
 
 Known scaling behavior: memory and knowledge searches are linear in the number of records; JSONL
 cold reads parse the whole store; the AM index removes the repeated learning read, not the initial
@@ -742,6 +793,12 @@ invalidate the recommended milestone, not that it blocks all work.
 | 40 | Model output could open or decide a review | The actions are user-origin only and the store refuses a non-user origin independently; the model-origin write set is unchanged | `adaptation-governance.test.js` (model cannot open/keep/dismiss/retire; store refuses again), `model-self-authorization.test.js` | None observed | None | No |
 | 41 | Governance reads could add a second full analysis per row | The list is bounded at 20 rows and assembles a review bundle only when a review exists; the complete request is measured | `adaptation-governance.test.js` (bounded window), `benchmarks/run-governance-benchmark.mjs` | Cost still grows with history within the window; open, inspect, reconcile and decide repeat the analysis in verification and do not subtract it | Low | No |
 | 42 | A target outside the 20-adaptation window could look governed when it is not listed | The list read reports the window and its totals; a direct detail read still answers by id | `adaptation-governance.test.js` (bounded window), `benchmarks/run-governance-benchmark.mjs` (21-adaptation case) | A user who only lists may not see an older adaptation; the list says the read was truncated | Low | No |
+| 43 | A multi-store read could describe a combination of states that never coexisted | Identity before/after proves a quiescent window; a moved file is `concurrent_modification`; a read that still cannot be certified is refused with its attempt count | `evidence-fabric.test.js` (window states, concurrent writes, truncation), `benchmarks/run-evidence-benchmark.mjs` | A window is not a transaction and holds no lock; a rewrite preserving both size and mtime is invisible to `stat`, and the stores' hashing remains the authority | Medium | No |
+| 44 | A damaged or truncated store could be reported as empty or valid | Health checks are normalised (`corruptLines`/`corrupt`, knowledge `claims`+`lifecycleEvents`); damage is a finding about records read; a truncated child tail is `damaged_store` | `evidence-fabric.test.js` (damaged/truncated stores, cross-process child), `store-health.test.js` | A store with no health check is described by identity only; absence of a check is not evidence of damage | Low | No |
+| 45 | A bounded read could be read as a negative fact | Limits map to `valid_bounded`; `out_of_window`/`unread` are not `missing`; the adaptation window now discloses `truncatedSources` | `evidence-fabric.test.js` (reference mapping, adaptation-window clipping), `adaptation-effectiveness.test.js` | Only the adaptation window was newly disclosed; other bounds were already stated, and a record outside a window is still not named | Low | No |
+| 46 | A window that cannot be certified could be silently downgraded | Refusal is explicit: `available:false`, `state`, `attempts`, no rows and `totals:null`; `unverifiable` is never retried; review stages raise `StoreError` | `evidence-fabric.test.js` (refused governance, unverifiable store), `adaptation-effectiveness.test.js` | Cognitive retrieval, world state and the prediction projection remain per-store atomic and disclose an unavailable source; none claims cross-store consistency | Medium | No |
+| 47 | Integrity metadata could be read as authority or as proof of truth | `authorizes:false` on every report; the note states that a digest proves bytes did not change, never that records are true; nothing reads integrity to decide an action | `evidence-fabric.test.js` (authorizes false, digest stability), `model-self-authorization.test.js` | A reader can still over-read a digest or a `valid` state; documentation states the limit | Medium (interpretive) | No |
+| 48 | A retry could hide the write that caused it | Retries are bounded at three, occur only after a verdict, and the attempt count is reported with the result; a writer active for the whole budget still yields a refusal | `evidence-fabric.test.js` (two writes then a certified third attempt; a write in every attempt) | The retry re-reads the whole report; it is not incremental, and the cost grows with the report, not with the retry count | Low | No |
 
 No gap in this register was implemented in AO-10: none exposed a new concrete defect in behavior,
 and none invalidated a documented security guarantee. AP-01 closed the roadmap's "one recorded
@@ -760,7 +817,13 @@ AP-05 added rows 36–42 for the governance review: it binds a review to a canon
 derives its state on every read, names reconciliation differences without ranking them, and keeps
 approval, rule change, retirement and execution in their existing operations. The retirement decision
 reuses the existing authority rather than adding a second one, and the remainders it leaves open are
-concurrent-append timing and interpretive over-reading, not new authority.
+concurrent-append timing and interpretive over-reading, not new authority. AP-06 added rows 43–48 for
+the cross-store read window and the integrity vocabulary: a report assembled from several append-only
+stores now proves no contributing file moved while it read, names what it found in one closed
+ten-state vocabulary, refuses a combination that did not exist at one instant, and discloses a
+clipped adaptation window. The window is a proof of quiescence, not a transaction, holds no lock, and
+cannot see a same-size, same-mtime rewrite; the request path's retrieval, world-state and prediction
+readers remain per-store atomic and do not claim otherwise.
 
 ## 10. Running the verification
 
@@ -774,12 +837,14 @@ node --test tests/prediction-adaptation-learning.test.js tests/prediction-adapta
 node --test tests/longitudinal-outcome-analysis.test.js
 node --test tests/adaptation-effectiveness.test.js
 node --test tests/adaptation-governance.test.js
+node --test tests/evidence-fabric.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs
 node benchmarks/run-longitudinal-benchmark.mjs
 node benchmarks/run-effectiveness-benchmark.mjs
 node benchmarks/run-governance-benchmark.mjs
+APEX_DATA_ISOLATED=1 node benchmarks/run-evidence-benchmark.mjs
 ```
 
 Tests use `NoBackend` or fixed programmatic replies and isolated temporary data directories. No

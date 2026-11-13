@@ -281,6 +281,7 @@ suites re-hash the directory afterwards to prove it.
 | `adaptation reviews [--limit N]` | Read-only: which adaptations need governance attention, the current recommendation, and the derived state of each current review. Nothing is approved, changed, or retired. See [Batch AP-05](#batch-ap-05-adaptation-governance-evidence-reconciliation-and-controlled-lifecycle-decisions-as-implemented). |
 | `adaptation review show\|reconcile <id>` | Read-only: one review or adaptation's evidence digest, the live reconciliation against current stores with every added, withdrawn, superseded, stale, conflicting, missing, or unreadable item named, and the review history. A changed digest is a difference, not a verdict. |
 | `adaptation review open <id> [--reason <text>]`, `adaptation review keep\|dismiss\|retire <review-id> [--reason <text>]` | User-origin only: open one review against the exact evidence now recorded, then record `keep_active`, `dismiss`, or `retire`. A decision is refused if the evidence changed after the review was opened; `retire` reuses the existing `adaptation.retire` authority rather than adding a second retirement mechanism. |
+| `evidence integrity` | Read-only: opens one cross-store read window over every configured evidence store, inspects each file's identity before and after, runs the store's own health check where one exists, and reports one integrity state from the closed vocabulary (`valid`, `valid_bounded`, `missing`, `stale`, `conflicting`, `broken_reference`, `damaged_store`, `truncated_history`, `concurrent_modification`, `unverifiable`). A changed file is reported as a statement about the read, never as a verdict on the evidence; nothing is repaired, rewritten, or authorized. A consistent window is not a transaction. See [Batch AP-06](#batch-ap-06-evidence-fabric-scalability-and-cross-store-integrity-as-implemented). |
 | `prediction record --capability <name> --expect success\|failure\|blocked --subject <text> (--expires <date> \| --in-days N) [--supports <id,...>] [--contradicts <id,...>] [--feedback <id,...>] [--pattern <kind,...>] [--replaces <id,...>]` | Records one expectation **you** hold about a later outcome of a named capability, with an explicit horizon and the recorded events it is based on. User origin only: a model proposal naming this command is denied. Cited ids must resolve in the experience log and must predate the moment of recording; nothing is written when they do not. The record stores no confidence and can store no state or verdict. See [Batch AE](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented). |
 | `prediction list [--limit N] [--capability <name>] [--status <name>]`, `prediction show <id>`, `prediction history <id>`, `prediction summary [--capability <name>]` | Read-only views of the ledger: standing expectations and their derived state, one expectation with its evidence lineage, every record that names one expectation (oldest first), and the aggregate counts with each rate's denominator named and its exclusions counted. Derived at read time; calls no model; the only audit entry is the command's own operation record. |
 | `prediction evaluate <id>` | Compares one expectation with the outcomes recorded inside its horizon and stores the verdict **only** when those records establish one. Otherwise it reports `insufficient_evidence`, `outcome_unavailable`, `expired`, `invalidated`, `superseded`, `already_evaluated`, or `evidence_unavailable` and writes nothing. A verdict already stored is never rewritten. User origin only. |
@@ -3607,6 +3608,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `adaptation.reviews`, `adaptation.review.inspect`, `adaptation.review.reconcile` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `adaptation.review.open` | user | write | never in a plan | `experiences.jsonl` (one review line) | no (self-bookkeeping) | yes |
 | `adaptation.review.decide` | user | write | never in a plan | `experiences.jsonl` (one decision line; a retirement also appends the existing retirement line) | no (self-bookkeeping) | yes |
+| `evidence.integrity` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `experience.list`, `experience.show`, `experience.timeline`, `experience.trends`, `experience.patterns`, `experience.compare` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `prediction.record` | user | write | never in a plan | `predictions.jsonl` | no (expectation) | yes |
 | `prediction.evaluate` | user | write | never in a plan | `predictions.jsonl`, or nothing when no outcome has resolved yet (measured: verified, nothing written) | no (expectation) | yes |
@@ -6063,6 +6065,160 @@ adaptation, change guidance, or run a plan - those remain `adaptation.decide`, `
 `adaptation.retire` and the existing execution path. Reconciliation reports a difference, not a causal
 finding, a quality judgment, or real-world truth. Stages 5 and 6 of the roadmap below remain open on
 their wider clauses.
+
+## Batch AP-06: evidence fabric scalability and cross-store integrity (as implemented)
+
+AP-03, AP-04 and AP-05 each built a report that reads several append-only stores one after another:
+longitudinal outcomes, adaptation effectiveness, review governance. Each read was internally
+consistent, but a record appended between two of them could make the combined report describe a
+combination of states that never existed at one instant. AP-06 adds the shared machinery those reports
+now use, plus one read-only action. It adds no store, no write path and no new authority:
+`src/evidence/snapshot.js` certifies a read window, `src/evidence/integrity.js` names what a read
+found in one closed vocabulary, and `evidence.integrity` exposes the cross-store check.
+
+### A certified window is not a transaction
+
+Every evidence store is a JSON Lines file that is only ever appended to, so its byte size and
+modification time move on every append and cannot move on a read. The snapshot records each
+contributing file's identity - existence, byte size, modification time - before the first store read
+and again after the last. If nothing moved, no append happened inside the window, so every read
+observed bytes that were already present when it began, and the combination existed at one moment. If
+an identity moved, the read is reported as `concurrent_modification`: a statement about the read, not
+about the evidence.
+
+- A retry is bounded and visible: at most three attempts (`DEFAULT_SNAPSHOT_ATTEMPTS`,
+  `MAX_SNAPSHOT_ATTEMPTS`), only for `concurrent_modification`, never for `unverifiable`, and a store
+  read that throws propagates unchanged because a failed read is not a concurrent write.
+- The window holds no lock and cannot stop a writer; it proves quiescence, it does not impose it.
+- A store that exists but cannot be inspected makes the window `unverifiable`, which refuses
+  consistency rather than claiming an empty one.
+- A same-size rewrite that also preserves modification time is outside what a `stat` can see. The
+  stores' own content validation and hashing remain the authority there; this module does not replace
+  them.
+- Within one operation each label is read once (`snapshot.read(label, fn)`), so two reports assembled
+  in the same window cannot disagree because one of them read the store twice.
+
+### One closed vocabulary for what was found
+
+`INTEGRITY_STATES` is ordered from least to most severe. A report with several findings is described
+by its worst one, and an unknown state is a programming error rather than a new word.
+
+| State | What it says | Typical source |
+|---|---|---|
+| `valid` | the records read support the answer, with nothing disclosed | all checks pass |
+| `valid_bounded` | evidence, with a limit the report states | a bounded list, a reference outside the window, a bounded health history |
+| `missing` | a record the answer expected is not stored | no configured store; absent requested record |
+| `stale` | a recorded version no longer describes the record | a rule version behind the live rule |
+| `conflicting` | two records disagree, or one identity appears twice | duplicate ids; a hash that moved at the same version |
+| `broken_reference` | an answer cites an id that is not there | a plan id with no plan |
+| `damaged_store` | lines that could not be parsed were found | a truncated or corrupt JSONL tail |
+| `truncated_history` | a store's own history is bounded | a health check that reports truncation |
+| `concurrent_modification` | a contributing file moved during the read | a write landing inside the window |
+| `unverifiable` | a store could not be inspected, so neither consistency nor content can be claimed | an unreadable path; a failed health check |
+
+The distinctions are deliberate: a missing record is a gap, `valid_bounded` is still evidence,
+`out_of_window` and `unread` are limits rather than negative facts, and a bounded read is never
+`truncated_history` because nothing was lost. Findings are disclosed up to `MAX_INTEGRITY_FINDINGS`
+(50) with untrimmed counts beside them; the digest covers the state, the untrimmed counts and the
+disclosed findings. Every report carries `authorizes: false`. Nothing in this module repairs,
+back-fills or deletes a record: a finding is a statement about the records as they read, and rewriting
+them to make the finding disappear would destroy the evidence it describes.
+
+### The `evidence.integrity` read
+
+`evidence.integrity` opens one window over every evidence store this build has configured (at most
+`MAX_SNAPSHOT_STORES` = 32), runs each store's own health check where one exists, and records the
+others by identity alone - the absence of a health check is not evidence of damage. Health summaries
+do not agree on field names, so `corruptLines` and `corrupt` are both normalised to a count, and the
+knowledge store's `claims` plus `lifecycleEvents` are both counted as records. A report is
+`available` only when the window is consistent and no health check was `unverifiable`; damage stays
+available because it is a finding about records that were actually read. The action is a read: its
+verification opens a second window and compares `available`, then the digest, and explains a
+difference instead of averaging it away. Nothing is repaired, rewritten or authorized.
+
+### Which consumers read through a window
+
+| Consumer | Window covers | On a write inside the window |
+|---|---|---|
+| `adaptation.effectiveness` | experience, plans, operations, goals, knowledge, memory | refused: `available:false`, `state`, `attempts`, no rows and `totals:null` |
+| `adaptation.reviews` (list) | the same stores plus predictions | refused the same way; a refused report states no rows rather than a partial answer |
+| `adaptation.review.open`, `.inspect`, `.reconcile`, `.decide` | the evidence each stage re-derives | `StoreError`; no bundle or decision is recorded from a combination that never coexisted |
+| `evidence.integrity` | every configured evidence store | refused with `state` and `attempts`; no partial rows |
+| cognitive retrieval, world state, prediction projection, plan candidate evaluation | their own per-store reads (unchanged by AP-06) | each source already reports `unavailable` or `damaged`; none of them claims cross-store consistency |
+
+The last row is the honest boundary: AP-06 certifies the reports that assemble a cross-store answer
+and leaves the request path's per-store reads as they were, because those readers already disclose an
+unavailable or damaged source per source and refusing a user's question over a background append
+would be worse than the disclosure. The window wraps the same store methods those readers use; there
+is no second evidence store, index or cache, and nothing is persisted between operations.
+
+### Bounded reads now say when they clipped the adaptation window
+
+Designing the benchmark exposed one real defect: `adaptation.effectiveness` asked the experience
+store for exactly 20 adaptations, so a store holding 21 or more was silently clipped and the report
+looked exactly like one that held 20. The read now asks for one row past the window and reports
+`integrity.truncated: true` with `truncatedSources: ['adaptations']` when the extra row exists; the
+state becomes `valid_bounded` and the totals still say 20 read. A window that holds every stored rule
+stays `valid` with `truncated: false`. `tests/evidence-fabric.test.js` pins both sides.
+
+### Cross-process, interruption and concurrency
+
+Real child processes write into the same directory while a parent reads. A child that stops mid-line
+leaves a truncated tail that is reported as `damaged_store`, never replayed, repaired or counted as
+a record. A write landing inside every governance attempt is refused explicitly after
+`MAX_SNAPSHOT_ATTEMPTS` with `reason` matching "did not exist at one instant", `adaptations: []` and
+`totals: null`; when the writer stops inside the budget the same read is certified and the attempt
+count is reported. Two writes in successive attempts retire at most two windows, which is why three
+attempts are sufficient and the budget never grows with the store. Four `evidence.integrity` reads
+issued at once each verify, because each action's audit line lands after its own second window.
+
+### What a window costs
+
+`benchmarks/run-evidence-benchmark.mjs` measures the complete production paths at 100 / 1,000 / 4,000
+synthetic memory records over nine stores (146 / 1,046 / 4,046 records). On this machine (Node
+v26.4.0, win32 x64), medians of five repeats, one benchmark at a time:
+
+| Complete request | 100 records | 1,000 records | 4,000 records |
+|---|---|---|---|
+| `evidence.integrity` | 20.9 ms | 23.6 ms | 33.5 ms |
+| `adaptation.effectiveness` | 31.5 ms | 39.4 ms | 57.5 ms |
+| `adaptation.reviews` | 34.9 ms | 41.0 ms | 56.9 ms |
+| cognitive retrieval (partial; measured directly) | 13.0 ms | 21.3 ms | 58.1 ms |
+
+Re-running the same effectiveness read on identical bytes with and without a window moved it by
+-0.1 / +0.6 / +1.0 ms: the window is one `stat` pair per store, not per record, so growth appears in
+parsing and retrieval, not in certification. At 20 stored adaptations the complete read took 33.2 ms
+and reported `valid`; at 21 it took 32.7 ms and reported `valid_bounded` with the truncated source
+named. A complete read issued beside concurrent writes refused truthfully while both writes verified.
+No cache or index was added: the measurements put the growth in store parsing and lineage, and the
+window itself is cheaper than the noise on the smallest fixture. The figures are wall-clock
+observations of one machine at one time, not a specification. See
+[`benchmarks/README.md`](benchmarks/README.md#evidence-fabric-benchmark-batch-ap-06).
+
+### Tests
+
+`tests/evidence-fabric.test.js` (51 cases in 7 suites, registered in `npm test`) covers the window
+states and their boundaries, bounded retry, the closed vocabulary and severity order, reference
+mapping, duplicate identities, the cross-store report, the action and its second-window verification,
+governance and effectiveness reading through one window, the adaptation-window truncation disclosure,
+real child writers and truncation, and concurrent mixed reads.
+
+```bash
+node --test tests/evidence-fabric.test.js
+APEX_DATA_ISOLATED=1 node benchmarks/run-evidence-benchmark.mjs
+```
+
+### What this does not claim
+
+A consistent window is not a distributed transaction: APEX still has no cross-store commit, no
+two-phase protocol and no lock around a multi-store read. A valid digest proves the bytes read are the
+bytes described, never that the records are true, permitted or complete. `evidence.integrity`
+authorizes nothing, and `authorizes: false` is present on every report it produces. The request
+path's cognitive retrieval, world state and prediction projection remain per-store atomic as
+described above; AP-06 did not make them window-certified, and none of them claims otherwise. The
+`stat`-based window cannot detect a same-size, same-mtime rewrite, and a store whose health check is
+missing is described by identity only. The benchmark is deterministic and model-free, and says
+nothing about inference latency.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 

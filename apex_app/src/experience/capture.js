@@ -112,6 +112,7 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'adaptation.reviews': 'read',
   'adaptation.review.inspect': 'read',
   'adaptation.review.reconcile': 'read',
+  'evidence.integrity': 'read',
   'prediction.list': 'read',
   'prediction.show': 'read',
   'prediction.history': 'read',

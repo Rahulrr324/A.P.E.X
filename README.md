@@ -191,6 +191,14 @@ difference rather than a verdict, and neither the read nor a model can approve, 
 increase influence, or execute anything
 ([details](apex_app/README.md#batch-ap-05-adaptation-governance-evidence-reconciliation-and-controlled-lifecycle-decisions-as-implemented);
 tests: `tests/adaptation-governance.test.js`, 41 cases). It needs no model and no new store.
+Batch AP-06 then made the evidence those reports assemble provable rather than assumed: every report
+that reads several append-only stores now certifies that no contributing file moved while it read,
+names what it found in one closed ten-state vocabulary, and refuses a combination of records that did
+not exist at one instant instead of reporting it; `evidence.integrity` exposes the cross-store check,
+the effectiveness read now discloses when its 20-rule window clipped a stored rule, and a consistent
+window is documented as a proof of quiescence rather than a transaction
+([details](apex_app/README.md#batch-ap-06-evidence-fabric-scalability-and-cross-store-integrity-as-implemented);
+tests: `tests/evidence-fabric.test.js`, 51 cases). It needs no model and adds no store.
 What remains is the wider clause: an expectation verdict changing subsequent behaviour without a
 user-approved candidate, or changing more than the one disclosed ordering, and any claim of prediction
 accuracy or causation. The runtime keeps that wider clause open; this is a recommendation only, and no

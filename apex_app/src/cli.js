@@ -76,6 +76,7 @@ Usage:
   node bin/apex.js adaptation review open <id> [--reason <text>] open a review on the evidence the stores now hold
   node bin/apex.js adaptation review keep|dismiss|retire <review-id> [--reason <text>]
                                                             record your lifecycle decision; retire uses adaptation.retire
+  node bin/apex.js evidence integrity                      cross-store read consistency and per-store health (read-only; repairs nothing)
   node bin/apex.js prediction record --capability <name> --expect <kind> --subject <text> (--expires <iso> | --in-days N) [--supports <id[,id...]>] [--contradicts <id[,id...]>] [--feedback <id[,id...]>] [--pattern <kind[,kind...]>] [--replaces <id[,id...]>]
   node bin/apex.js prediction list [--limit N] [--capability <name>] [--status <name>]
   node bin/apex.js prediction show <prediction-id>
@@ -192,6 +193,7 @@ Experience and adaptation examples (what APEX did, what you thought, what to cha
   adaptation review show <id> open a governed question on the exact evidence now recorded
   adaptation review reconcile <id>  what changed since a review was opened; a diff is not a verdict
   adaptation review keep|dismiss|retire <review-id>   record your own lifecycle decision
+  evidence integrity          one read window over every store, with each store's own health check
   experience health           re-checks every recorded experience against the audit log
   experience timeline --days 7     recorded events in the window, newest first, corrections marked
   experience trends --days 30      per-capability outcome counts and an early/late trend
@@ -1230,6 +1232,17 @@ export async function main(argv, {
         return emit(await app.controller.adaptationRetire({ target: ids[0], reason: flags.reason ?? null }));
       }
       err('usage: adaptation derive|eligibility|effectiveness|list|approve|reject|guide|retire|reviews|review');
+      return 2;
+    }
+
+    if (command === 'evidence') {
+      const [sub, ...rest] = args;
+      if (sub === 'integrity') {
+        const { rest: extra } = parseFlags(rest, []);
+        rejectUnexpected(extra, 'evidence integrity');
+        return emit(await app.controller.evidenceIntegrity());
+      }
+      err('usage: evidence integrity');
       return 2;
     }
 

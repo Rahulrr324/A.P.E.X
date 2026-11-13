@@ -58,6 +58,7 @@ import {
   renderGovernance,
   renderReview,
 } from '../plans/governance.js';
+import { evidenceIntegrityReport, renderEvidenceIntegrity } from '../evidence/integrity.js';
 
 function textField(value, name, max) {
   if (typeof value !== 'string') throw new ValidationError(`${name} must be text`);
@@ -1059,6 +1060,72 @@ export function experienceActions(store) {
           return { ok: false, detail: 'the recorded evidence changed between two reads: an adaptation was decided, guided, or retired, a plan or assessment was recorded, or a use was linked differently' };
         }
         return { ok: true, detail: `${fresh.totals.adaptations} adaptation record(s) and ${fresh.totals.uses} linked use(s) re-read to the same evidence; nothing was approved, changed, retired, or executed` };
+      },
+    },
+    {
+      name: 'evidence.integrity',
+      description: 'Open one cross-store read window, inspect every configured evidence store, run each store health check that exists, and report a single integrity state from one closed vocabulary. Read-only; it repairs nothing and authorizes nothing.',
+      inputHint: '{}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      plannable: false,
+      validate(input) {
+        expectObject(input ?? {}, []);
+        return {};
+      },
+      async execute(ctx) {
+        const report = await evidenceIntegrityReport({
+          stores: {
+            experience: store,
+            plans: ctx?.plans ?? null,
+            operations: ctx?.operations ?? null,
+            goals: ctx?.goals ?? null,
+            knowledge: ctx?.knowledge ?? null,
+            memory: ctx?.memory ?? null,
+            predictions: ctx?.predictions ?? null,
+            world: ctx?.worldModel ?? null,
+            tasks: ctx?.taskStore ?? null,
+          },
+          now: ctx?.now ?? (() => new Date()),
+        });
+        return {
+          summary: report.available
+            ? `evidence integrity: ${report.state} across ${report.counts.stores} store(s), ${report.counts.records} record(s)`
+            : `evidence integrity unavailable: ${report.reason}`,
+          data: { report },
+          display: [
+            renderEvidenceIntegrity(report),
+            'Nothing was repaired, rewritten, or authorized by this read: a damaged or truncated store is reported exactly as it is found.',
+          ].join('\n'),
+        };
+      },
+      async verify(ctx, _input, result) {
+        const fresh = await evidenceIntegrityReport({
+          stores: {
+            experience: store,
+            plans: ctx?.plans ?? null,
+            operations: ctx?.operations ?? null,
+            goals: ctx?.goals ?? null,
+            knowledge: ctx?.knowledge ?? null,
+            memory: ctx?.memory ?? null,
+            predictions: ctx?.predictions ?? null,
+            world: ctx?.worldModel ?? null,
+            tasks: ctx?.taskStore ?? null,
+          },
+          now: ctx?.now ?? (() => new Date()),
+        });
+        if (fresh.available !== result.data.report.available) {
+          return { ok: false, detail: 'the evidence became readable, or unreadable, between two reads' };
+        }
+        if (!fresh.available) {
+          return fresh.state === result.data.report.state
+            ? { ok: false, detail: `the same condition remains: ${fresh.reason}` }
+            : { ok: false, detail: 'the reason the evidence is unavailable changed between two reads' };
+        }
+        if (fresh.digest !== result.data.report.digest) {
+          return { ok: false, detail: 'the stores changed between two reads: a record was written, a store became damaged, or its health changed' };
+        }
+        return { ok: true, detail: `${fresh.counts.stores} store(s) and ${fresh.counts.records} record(s) re-read to the same integrity state; nothing was repaired or changed` };
       },
     },
     {

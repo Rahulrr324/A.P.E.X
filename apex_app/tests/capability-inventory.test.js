@@ -106,7 +106,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 90, 'the default registry has 90 actions');
+    assert.equal(plain.registry.list().length, 91, 'the default registry has 91 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -211,7 +211,7 @@ describe('AF-19: the registry is the inventory', () => {
     const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 48, 'the inventory counts forty-eight read actions with a root configured');
+    assert.equal(reads.length, 49, 'the inventory counts forty-nine read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },

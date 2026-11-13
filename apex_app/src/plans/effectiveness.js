@@ -24,6 +24,8 @@ import { planContent, planContentHash } from './model.js';
 import { assessOutcome } from './assessment.js';
 import { StoreError, ValidationError } from '../errors.js';
 import { shortId, singleLine } from '../util.js';
+import { DEFAULT_SNAPSHOT_ATTEMPTS, contributingStores, runConsistentEvidenceRead } from '../evidence/snapshot.js';
+import { duplicateFindings, integrityFinding, integrityReport } from '../evidence/integrity.js';
 
 export const EFFECTIVENESS_SCHEMA = 'apex.adaptation-effectiveness.v1';
 export const EFFECTIVENESS_NOTE = 'An effectiveness report is a bounded read of recorded evidence. It states observations, not causes, probabilities, or a decision: nothing here approves, changes, retires, or executes anything.';
@@ -132,6 +134,37 @@ const LIMITATIONS = Object.freeze([
 
 function digestOf(value) {
   return createHash('sha256').update(stableStringify(value)).digest('hex');
+}
+
+// The digest covers what the read found, not when it ran. The snapshot identity is the window's bytes,
+// not their meaning, and the integrity summary is represented by its own digest (which excludes both
+// the timestamp and the identity). Two reads over unchanged records therefore agree.
+function reportDigestOf(report) {
+  return digestOf({
+    ...report,
+    generatedAt: null,
+    digest: null,
+    snapshot: null,
+    integrity: report.integrity?.digest ?? null,
+  });
+}
+
+// What a reader may know about how the window was established. The internals of a changed or
+// unreadable identity stay out of the evidence: they say when the read happened, not what it found.
+function snapshotView(verdict) {
+  if (!verdict) return null;
+  return {
+    schema: verdict.schema,
+    state: verdict.state,
+    consistent: verdict.consistent === true,
+    complete: verdict.complete === true,
+    stores: verdict.stores ?? [],
+    reads: verdict.reads ?? 0,
+    digest: verdict.digest ?? null,
+    beginDigest: verdict.beginDigest ?? null,
+    bounded: verdict.bounded === true,
+    note: verdict.note ?? null,
+  };
 }
 
 function boundedLimit(value) {
@@ -839,7 +872,12 @@ function unavailableReport(reason, generatedAt, scope = null) {
   return report;
 }
 
-export async function analyzeAdaptationEffectiveness({
+// The analysis itself, run inside a snapshot the caller owns. It never opens, verifies, or retries a
+// snapshot: every store read goes through `snapshot.read`, so a caller that assembles several reports
+// in one operation pays for each store read once and gets one consistent window around all of them.
+// `diagnostics` is the material an integrity report is built from; the snapshot's verdict is only known
+// after the caller verifies, so it cannot be attached here.
+export async function analyzeEffectivenessWithSnapshot({
   experience,
   plans,
   operations,
@@ -849,40 +887,61 @@ export async function analyzeAdaptationEffectiveness({
   now = () => new Date(),
   target = null,
   limit = MAX_EFFECTIVENESS_ADAPTATIONS,
+  snapshot = null,
 } = {}) {
   const generatedAt = now().toISOString();
   if (!experience || typeof experience.adaptationDetail !== 'function') {
-    return unavailableReport('the experience store is not available in this configuration', generatedAt);
+    return { report: unavailableReport('the experience store is not available in this configuration', generatedAt), diagnostics: null };
   }
   if (!plans || typeof plans.load !== 'function') {
-    return unavailableReport('the plan store is not available in this configuration', generatedAt);
+    return { report: unavailableReport('the plan store is not available in this configuration', generatedAt), diagnostics: null };
   }
   if (!operations || typeof operations.inspect !== 'function') {
-    return unavailableReport('the audit log is not available in this configuration', generatedAt);
+    return { report: unavailableReport('the audit log is not available in this configuration', generatedAt), diagnostics: null };
   }
   const size = boundedLimit(limit);
   const scope = { target: target ?? null, limit: size };
+  const shared = (label, fn) => (snapshot ? snapshot.read(label, fn) : fn());
+
   let adaptations;
+  let adaptationWindowTruncated = false;
   if (target !== null && target !== undefined && String(target).trim().length > 0) {
     const ref = String(target).trim();
-    const one = await experience.adaptationDetail(ref);
+    const one = await shared(`experience:adaptation:${ref}`, () => experience.adaptationDetail(ref));
     if (!one) throw new ValidationError(`no adaptation matches "${singleLine(ref, 40)}"`);
     adaptations = [one];
   } else {
-    adaptations = await experience.adaptations({ limit: size, includeRetired: true });
+    // One row past the window is read so the report can say whether records were clipped. Reading only
+    // `size` would make a full store and a captured window look identical.
+    const stored = await shared('experience:adaptations', () => experience.adaptations({ limit: size + 1, includeRetired: true }));
+    adaptations = stored.slice(0, size);
+    adaptationWindowTruncated = stored.length > size;
   }
 
-  const planRead = await plans.load();
+  const planRead = await shared('plans:load', () => plans.load());
   const planMap = planRead.plans instanceof Map
     ? planRead.plans
     : new Map((planRead.plans ?? []).map((p) => [p.id, p]));
-  const audit = await operations.inspect();
+  const audit = await shared('operations:inspect', () => operations.inspect());
   if ((audit.corrupt ?? []).length > 0) {
     throw new StoreError(`the audit log contains ${audit.corrupt.length} corrupt line(s); adaptation effectiveness cannot be established from an incomplete audit history`);
   }
   const records = Array.isArray(audit.records) ? audit.records : [];
   const scanning = scanDisclosures(records);
   const auditView = auditReader(records);
+
+  // The outcome assessment reads the goal it was recorded against, and the knowledge records that carry
+  // the evidence for its criteria. Those reads are shared through the same snapshot so a report that
+  // cites the same goal twice does not read it twice, and they are covered by the same window.
+  const goalsView = goals && typeof goals.get === 'function'
+    ? { get: (id) => shared(`goals:get:${id}`, () => goals.get(id)) }
+    : goals;
+  const knowledgeView = knowledge && typeof knowledge === 'object' ? {
+    ...(typeof knowledge.byOperation === 'function'
+      ? { byOperation: (id) => shared(`knowledge:byOperation:${id}`, () => knowledge.byOperation(id)) } : {}),
+    ...(typeof knowledge.history === 'function'
+      ? { history: (ref) => shared(`knowledge:history:${stableStringify(ref)}`, () => knowledge.history(ref)) } : {}),
+  } : knowledge;
 
   const outcomeCache = new Map();
   const outcomeOf = async (planId) => {
@@ -893,7 +952,7 @@ export async function analyzeAdaptationEffectiveness({
       outcome = unavailableOutcome('the plan named by the decision is not in the plan store');
     } else {
       try {
-        outcome = await derivePlanOutcome(plan, { goals, operations: auditView, knowledge, memory });
+        outcome = await derivePlanOutcome(plan, { goals: goalsView, operations: auditView, knowledge: knowledgeView, memory });
       } catch (err) {
         outcome = unavailableOutcome(`the plan's outcome evidence could not be read (${err?.code ?? 'store error'})`);
       }
@@ -903,6 +962,8 @@ export async function analyzeAdaptationEffectiveness({
   };
 
   const adaptationRows = [];
+  const findings = [];
+  const truncatedSources = [];
   let remaining = MAX_EFFECTIVENESS_USES;
   let totalUses = 0;
   let totalEvaluated = 0;
@@ -930,6 +991,29 @@ export async function analyzeAdaptationEffectiveness({
       if (kept.length >= MAX_USES_PER_ADAPTATION || remaining <= 0) break;
       kept.push(use);
       remaining -= 1;
+    }
+    if (kept.length >= MAX_USES_PER_ADAPTATION && sorted.length > kept.length) truncatedSources.push('adaptation-uses');
+    for (const use of kept) {
+      const outcome = use.outcome ?? {};
+      // A linked use that names a plan the store does not hold is a broken reference, not an absent
+      // outcome: the decision cited something that is not there, and calling that "no result" would
+      // hide the missing record behind a negative-sounding word.
+      if (outcome.state === 'unavailable' && /not in the plan store/.test(String(outcome.reason ?? ''))) {
+        findings.push(integrityFinding('broken_reference', {
+          check: 'plan_reference',
+          subject: use.planId ?? null,
+          from: use.operationId ?? null,
+          detail: outcome.reason,
+        }));
+      }
+      if (outcome.kind === 'conflicting_evidence') {
+        findings.push(integrityFinding('conflicting', {
+          check: 'assessment_verdict',
+          subject: use.planId ?? null,
+          from: use.operationId ?? null,
+          detail: outcome.reason,
+        }));
+      }
     }
     totalUses += kept.length;
     totalEvaluated += kept.filter((u) => u.outcome?.state === 'evaluated').length;
@@ -997,6 +1081,11 @@ export async function analyzeAdaptationEffectiveness({
     });
   }
 
+  if (adaptationWindowTruncated) truncatedSources.push('adaptations');
+  if (totalUses >= MAX_EFFECTIVENESS_USES) truncatedSources.push('uses');
+  if (scanning.truncated) truncatedSources.push('audit');
+  findings.push(...duplicateFindings({ store: 'experience', records: adaptations }));
+
   const classificationCounts = {};
   for (const state of EFFECTIVENESS_STATES) classificationCounts[state] = 0;
   for (const row of adaptationRows) classificationCounts[row.classification.state] = (classificationCounts[row.classification.state] ?? 0) + 1;
@@ -1028,7 +1117,93 @@ export async function analyzeAdaptationEffectiveness({
     authorizes: false,
     note: EFFECTIVENESS_NOTE,
   };
-  report.digest = digestOf({ ...report, generatedAt: null, digest: null });
+  const diagnostics = {
+    findings,
+    truncated: truncatedSources.length > 0,
+    truncatedSources,
+    counts: {
+      adaptations: adaptationRows.length,
+      uses: totalUses,
+      plans: planMap.size,
+      auditRecords: records.length,
+      auditScanned: scanning.inspected,
+      disclosures: scanning.decisions.length,
+    },
+  };
+  report.snapshot = snapshot ? snapshot.summary() : null;
+  report.integrity = integrityReport({
+    subject: `adaptation-effectiveness:${scope.target ?? 'all'}`,
+    findings,
+    truncated: diagnostics.truncated,
+    truncatedSources,
+    counts: diagnostics.counts,
+    snapshot: snapshot ? snapshot.summary() : null,
+    generatedAt,
+  });
+  report.digest = reportDigestOf(report);
+  return { report, diagnostics };
+}
+
+// The public read. It owns the consistency window: one snapshot over every store the analysis touches,
+// verified after the last read, re-run at most twice more when a writer is seen. A read that cannot be
+// certified is refused - never reported as an empty or a negative result - because a combination of
+// records that never existed at one instant is not evidence about the world.
+export async function analyzeAdaptationEffectiveness({
+  experience,
+  plans,
+  operations,
+  goals = null,
+  knowledge = null,
+  memory = null,
+  now = () => new Date(),
+  target = null,
+  limit = MAX_EFFECTIVENESS_ADAPTATIONS,
+  attempts = DEFAULT_SNAPSHOT_ATTEMPTS,
+} = {}) {
+  const generatedAt = now().toISOString();
+  const size = boundedLimit(limit);
+  const scope = { target: target ?? null, limit: size };
+  const stores = contributingStores({ experience, plans, operations, goals, knowledge, memory });
+  const input = { experience, plans, operations, goals, knowledge, memory, now, target, limit };
+  if (stores.length === 0) {
+    // Without a path for any contributing store there is no window to certify. The report says so by
+    // leaving the snapshot and its state explicitly unverified rather than by implying a consistency
+    // claim the read never established.
+    const { report } = await analyzeEffectivenessWithSnapshot(input);
+    return report;
+  }
+  const run = await runConsistentEvidenceRead({
+    stores,
+    attempts,
+    read: (snapshot) => analyzeEffectivenessWithSnapshot({ ...input, snapshot }),
+  });
+  const { report, diagnostics } = run.value;
+  const verdict = run.snapshot;
+  if (verdict.state !== 'consistent') {
+    const refused = unavailableReport(
+      verdict.state === 'unverifiable'
+        ? 'a contributing store could not be inspected while the evidence was read, so the report cannot be claimed consistent'
+        : `the stores changed while the evidence was read${run.attempts > 1 ? ` (retried ${run.attempts - 1} time(s))` : ''}; no report is stated for a combination of records that did not exist at one instant`,
+      generatedAt,
+      scope,
+    );
+    refused.state = verdict.state;
+    refused.attempts = run.attempts;
+    refused.snapshot = snapshotView(verdict);
+    refused.integrity = integrityReport({ subject: `adaptation-effectiveness:${scope.target ?? 'all'}`, snapshot: verdict, generatedAt });
+    return refused;
+  }
+  report.snapshot = snapshotView(verdict);
+  report.integrity = integrityReport({
+    subject: `adaptation-effectiveness:${scope.target ?? 'all'}`,
+    findings: diagnostics?.findings ?? [],
+    truncated: diagnostics?.truncated === true,
+    truncatedSources: diagnostics?.truncatedSources ?? [],
+    counts: diagnostics?.counts ?? {},
+    snapshot: verdict,
+    generatedAt,
+  });
+  report.digest = reportDigestOf(report);
   return report;
 }
 
