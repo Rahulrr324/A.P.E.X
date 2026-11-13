@@ -212,6 +212,18 @@ tests: `tests/evidence-read-contract.test.js` and `tests/ap07-consistency.test.j
 no model, adds no store, and no verdict authorizes an action. This does not make every read in APEX
 windowed: health reads and single-store lists remain atomic per store, and a window is still a proof
 of quiescence, not a transaction.
+Batch AP-08 then made a response say how far it may be trusted: every request now reports a fourteen-stage
+contract whose statuses keep a stage that never ran apart from one that ran with no result, grades each
+claim in a structured reply against the record it cites, and caps model prose at `factually_supported`
+- the fifth rung, `verified`, is unreachable by construction, because checking a citation is not
+verifying the sentence; an answer with no output, an unsupported claim, a rejected structure or a
+partially attributed citation degrades deterministically and says which; the audits that carry this are
+bounded and contain no request, record or reply text; and a grounded answer still carries no execution
+authority, with a model proposal revalidated against the live registry, a plan approval bound to its
+content hash, and a denied crossing written to the operations log
+([details](apex_app/README.md#batch-ap-08-grounded-response-integrity-and-the-model-output-trust-boundary-as-implemented);
+tests: `tests/cognition-response-integrity.test.js`, 42 cases). It needs no model, adds no store, and
+does not start AP-09.
 What remains is the wider clause: an expectation verdict changing subsequent behaviour without a
 user-approved candidate, or changing more than the one disclosed ordering, and any claim of prediction
 accuracy or causation. The runtime keeps that wider clause open; this is a recommendation only, and no

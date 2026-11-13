@@ -642,6 +642,56 @@ not see a same-size rewrite. AP-07 closes both without a second evidence system.
   restored. Stores with no health check are described by identity only. No consumer reads a verdict to
   authorize an action, and every report carries `authorizes: false`.
 
+### Grounded response integrity (AP-08)
+
+AP-07 made every contributing read certifiable. AP-08 adds no pipeline and no store: it makes the
+existing request path describe itself, claim by claim, and states how far a model's prose may be
+trusted. `src/cognition/response-integrity.js` is a pure module over what the path already produced.
+
+- **A fourteen-stage contract, in order.** Request understanding, retrieval, claim extraction,
+  contradiction detection, deliberation, grounding brief, model call, output validation, proposal
+  validation, handoff preparation, authorization, execution, verification, finalization. Each stage
+  names its owner and, where it can cross an authority boundary, that boundary; each records exactly
+  one of `ran`, `ran_no_result`, `skipped`, `not_reached`, `unavailable`, `failed`. `reachedThrough`
+  counts stages that executed, so a stage that was never reached, or whose inputs could not be read,
+  never inflates it. A contract that paired a failed model stage with a grounded answer fails its own
+  `grounding_precedes_final_answer` check.
+- **Grounding is per claim, not per answer.** The structured reply already names an `evidence` id
+  list and a `kind` per claim. The retrieval bundle already carries each evidence state. The contract
+  joins them: supported, partial, conflicting, unverified, stale, retracted, superseded. A claim that
+  restates a record it cites is checked lexically - content words only, digits as their own evidence -
+  and is `attributed` at 0.6 overlap, `partial` between 0.5 and 0.6, and `unattributed` if its numbers
+  do not appear in any cited record. A claim with no citation is `uncited`, and one whose record could
+  not be read is `unknown`. None of these is a truth claim; they are statements about matching text.
+- **Five trust states, and a ceiling.** `received`, `syntactically_valid`,
+  `accepted_for_presentation`, `factually_supported`, `verified`. The ladder is monotonic, and the
+  state is the highest rung that holds. `verified` is `ok:false` unconditionally: APEX checks that a
+  citation exists and that the sentence restates it; it does not verify the sentence. A model that
+  declares itself `verified`, `authorized`, `trusted` or `provenance`-bearing has its reply rejected by
+  the existing structural validator, because those keys are not the model's to assert.
+- **Degradation is deterministic.** `no_output` when there is no text to present; `present_as_is` only
+  when every factual claim restates a cited, current record and the sole limitation is that model
+  output is unverified; `present_with_limitations` otherwise, carrying a closed set of codes
+  (`plain_answer_unstructured`, `structured_response_rejected`, `claim_attribution_unverified`, ...).
+  The wording qualifies the answer; it never upgrades it. A reply rejected for a fabricated id reaches
+  the reader as a plain answer with no citation, not as a citation failure discovered afterwards.
+- **Audits are bounded and prose-free.** `responseContractAudit` and `responseIntegrityAudit` fix
+  their key sets, clamp counts to non-negative integers, drop non-finite values, cap disclosed claim
+  counts and limitation codes, and carry no request text, record text, prompt or reply. A proposal
+  tally that is not a count is reported `unavailable` rather than read as zero.
+- **A grounded answer authorizes nothing.** The contract's final stage and the handoff record are
+  separate objects. A model proposal is revalidated against the live action registry at preparation
+  from a live read; a plan activation is checked against the plan's content hash
+  (`APPROVAL_NOT_BOUND_TO_PLAN`); a task run checks the task's own approval and state. Every handoff
+  record names its authority owner and carries `authorizes:false`. A denial is still written to the
+  operations log, so a refused crossing is auditable.
+
+The contract is descriptive: the runtime still executes the path it always did, and the checks are
+assertions about that path that the suite enforces. What AP-08 changes is that a reader can now see,
+for one request, which stages ran, what each claim rested on, how far the answer may be trusted, and
+who - if anyone - authorized a side effect. See `cognition-response-integrity.test.js` (42 cases,
+including a 28-scenario acceptance table) and the AP-08 benchmark section.
+
 ## 6. D. Diagnostics and evaluation
 
 ### Runtime diagnostics
@@ -775,6 +825,8 @@ The only authority owner is the action registry. Everything else observes, propo
 | Adaptation governance and evidence reconciliation (AP-05) | `IMPLEMENTED_AND_TESTED` | `experience/review.js` (canonical evidence and reconciliation), `plans/governance.js` (pure reads), review record kinds in `experience/experience-store.js`, five `adaptation.review*` actions in `actions/experience-actions.js`, controller/CLI surface; no new store or authority | `adaptation-governance.test.js` (41 cases) |
 | Content-certified window and bounded-read contract (AP-07) | `IMPLEMENTED_AND_TESTED` | content identity in `evidence/snapshot.js`; nine-state `evidence/read-contract.js` | `evidence-read-contract.test.js` (14 cases), `evidence-fabric.test.js`, `ap07-consistency.test.js` |
 | Consumer-wide evidence consistency (AP-07) | `IMPLEMENTED_AND_TESTED` | cognitive retrieval, world state, prediction longitudinal, plan candidate/outcome/assessment and the existing effectiveness/governance reads through one content window | `ap07-consistency.test.js` (31 cases), existing consumer suites |
+| Response contract and model-output trust boundary (AP-08) | `IMPLEMENTED_AND_TESTED` | `cognition/response-integrity.js`: fourteen-stage contract with runtime statuses, five-state trust ladder capped below `verified`, bounded prose-free audits | `cognition-response-integrity.test.js` (42 cases) |
+| Claim-level grounding and safe degradation (AP-08) | `IMPLEMENTED_AND_TESTED` | `cognition/response-integrity.js`: per-claim evidence state and lexical attribution, closed limitation codes, deterministic `no_output`/`present_as_is`/`present_with_limitations` | `cognition-response-integrity.test.js` (42 cases), existing `cognition-evidence-states.test.js` |
 | Adversarial acceptance | `IMPLEMENTED_AND_TESTED` | Cross-cutting; no new runtime component | `acceptance-ao09.test.js` (7), `adversarial-batch-am.test.js` (16), `plan-adversarial.test.js` (15), `executive-adversarial.test.js` (11), plus the suites cited in `README.md` Batch AO package H |
 | Cross-process interruption | `IMPLEMENTED_PARTIALLY_TESTED` | Real child fixtures at most boundaries | `plan-continuation.test.js`, `continuation-cross-process-an.test.js`, `finalization-interruption.test.js`, `process-recovery.test.js`, `cross-process-ao09.test.js`; two boundaries lack a killed child |
 | Concurrent store integrity | `IMPLEMENTED_AND_TESTED` | `memory/writer-lock.js`, store locks, JSONL append | `storage-concurrency.test.js`, `store-write-concurrency.test.js`, `cross-process-stress.test.js`, `lock-contention.test.js`, `lock-recovery.test.js` |
@@ -848,6 +900,14 @@ invalidate the recommended milestone, not that it blocks all work.
 | 52 | A refused assessment could be recorded as an input error or as a partial success | `plan.assess` raises `EVIDENCE_WINDOW_UNCONFIRMED`; the executor reports `failed`; the controller reports `EXECUTION_FAILED`; no assessment is recorded | `ap07-consistency.test.js` §7 (moved window), `plan-continuation.test.js` | The refusal names the observed change, not its cause | Low | No |
 | 53 | A bounded read could prove an absence it did not prove | `absenceProven` holds only for `complete_empty`; a bounded, truncated or unavailable read leaves absence unproven, and the nine-state contract says which was observed | `evidence-read-contract.test.js`, `ap07-consistency.test.js` §8 | A caller that ignores `absenceProven` can still misread an empty bounded read; the API exposes the distinction | Low | No |
 | 54 | Snapshot reuse could hide a later write inside one operation | Reuse is one promise per label per operation and is never persisted; the second read is the same bytes by construction, and the window's end inspection still runs | `ap07-consistency.test.js` §3, `run-consistency-benchmark.mjs` (reuse section) | A caller that needs a later read must open a new snapshot; there is no cache across operations | Low | No |
+| 55 | A stage that never ran could be read as a check that ran and found nothing | Statuses are distinct; `not_reached` and `unavailable` are excluded from `reachedThrough`; grounding before a model reply exists is `not_reached` | `cognition-response-integrity.test.js` (contract, clarification, cancellation) | A consumer that counts stages instead of reading statuses can still misread the contract | Low | No |
+| 56 | A fluent answer could acquire factual authority from relevance | The trust ladder's top rung is `factually_supported`, which requires every factual claim to be cited and restate a current record; `verified` is `ok:false` unconditionally | `cognition-response-integrity.test.js` (unsupported claim, attribution, forbidden fields) | Attribution is lexical overlap, not entailment; a paraphrase with low overlap is reported `unattributed` | Medium | No |
+| 57 | A citation could be checked while the sentence it supports is false | `assessClaimAttribution` compares content words and digits per claim and reports `unattributed` on a number mismatch; the limitation `claim_attribution_unverified` is set | `cognition-response-integrity.test.js` 23, 28-scenario table | Word overlap cannot detect a claim that inverts or negates its record; documentation states this limit | Medium | No |
+| 58 | A rejected structure could still leave claims counted as attributed | A rejected reply reaches the reader as a plain answer; attribution failures are zero and a `structured_response_rejected` limitation is set | `cognition-response-integrity.test.js` 14, 15, 17 | None observed | None | No |
+| 59 | Degradation wording could upgrade an answer | `present_as_is` requires `factually_supported` with the single limitation `model_output_unverified`; every other case is `present_with_limitations` or `no_output` | `cognition-response-integrity.test.js` (degradation cases, refusal, cancellation) | A reader can ignore the qualification; the notice is present in the text | Low | No |
+| 60 | A grounded answer could be read as execution authority | The contract and handoff are separate objects; the handoff names its authority owner and carries `authorizes:false`; a denial is audited | `cognition-response-integrity.test.js` §9, `handoff-integrity-ao.test.js`, `model-self-authorization.test.js` | None observed; the proposal path was not changed | None | No |
+| 61 | An unreadable proposal tally could be reported as zero proposals | A non-integer tally makes stage 14 `unavailable` and the counts are dropped rather than zeroed | `cognition-response-integrity.test.js` (malformed tally) | None observed | None | No |
+| 62 | Audits could leak request or model prose | Both audit builders use fixed key sets and integer counts only; no text, prompt or reply field exists | `cognition-response-integrity.test.js` (audit shapes) | A new field added later could leak; the key list is asserted by the suite | Low | No |
 
 No gap in this register was implemented in AO-10: none exposed a new concrete defect in behavior,
 and none invalidated a documented security guarantee. AP-01 closed the roadmap's "one recorded
@@ -877,7 +937,13 @@ one content-certified window and report the nine-state read contract, or state w
 refused assessment is an execution failure, not an input error; reuse is per operation and never
 persisted; and no verdict authorizes an action. AP-07 does not make every read in APEX windowed -
 health reads and single-store lists remain atomic per store - and a window still cannot see a
-same-size rewrite restored to its original bytes.
+same-size rewrite restored to its original bytes. AP-08 added rows 55-62 for grounded response
+integrity: the request path now states its fourteen stages with statuses that keep a stage that never
+ran apart from one that ran with no result, grades each claim against the record it cites, and caps
+model prose at `factually_supported` because a citation check is not verification. Its stated limits
+are that attribution is lexical overlap rather than entailment, that an answer can still be fluent and
+wrong within a supported citation, and that the 28-scenario table is a deterministic fixture set and
+says nothing about a real model's answer quality.
 
 ## 10. Running the verification
 
@@ -893,6 +959,7 @@ node --test tests/adaptation-effectiveness.test.js
 node --test tests/adaptation-governance.test.js
 node --test tests/evidence-fabric.test.js
 node --test tests/evidence-read-contract.test.js tests/ap07-consistency.test.js
+node --test tests/cognition-response-integrity.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs
@@ -901,6 +968,7 @@ node benchmarks/run-effectiveness-benchmark.mjs
 node benchmarks/run-governance-benchmark.mjs
 APEX_DATA_ISOLATED=1 node benchmarks/run-evidence-benchmark.mjs
 APEX_DATA_ISOLATED=1 node benchmarks/run-consistency-benchmark.mjs
+APEX_DATA_ISOLATED=1 node benchmarks/run-response-integrity-benchmark.mjs
 ```
 
 Tests use `NoBackend` or fixed programmatic replies and isolated temporary data directories. No
@@ -939,3 +1007,10 @@ only to fresh temporary directories. The complete measured tables and their cave
   atomic per store. A content-certified window proves the bytes did not change between two
   inspections; it is not a transaction, holds no lock, and cannot see a same-size rewrite restored to
   its original bytes between them.
+- It does not claim APEX verifies what a model says. AP-08 claims that a response states which stages
+  ran, that each claim is graded against the record it cites, that a claim restating a cited record is
+  distinguished from one that only shares a subject, and that degradation is deterministic and
+  disclosed. It does not claim attribution proves entailment - the comparison is lexical, and a claim
+  that negates or inverts its record can still overlap it - that `verified` is reachable for model
+  prose, or that the deterministic 28-scenario table says anything about a real model's answer
+  quality.

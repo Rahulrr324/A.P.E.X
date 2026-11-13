@@ -1935,3 +1935,101 @@ Per-operation reuse and cold/warm:
   projection is true, or that any report authorizes an action.
 
 This script is not part of `npm test` and no test depends on it.
+
+## Grounded response integrity benchmark (Batch AP-08)
+
+`run-response-integrity-benchmark.mjs` measures the AP-08 request-to-response path: the complete
+deterministic request through the real controller, the trust assessment and fourteen-stage contract
+in isolation, and repeated identical requests. The model is a deterministic in-process fixture that
+returns one fixed `COGNITION` line citing a seeded record; nothing is inferred, downloaded, or sent.
+
+```sh
+APEX_DATA_ISOLATED=1 node benchmarks/run-response-integrity-benchmark.mjs [--repeats R] [--phase request|assessment|record|all] [--keep]
+```
+
+`--repeats` is 1-25 and defaults to 9. Every directory is a fresh `apex-bench-ap08-` entry under the
+OS temp root and cleanup refuses any path that is not its own. No backend or socket is constructed;
+the gateway wraps the fixture object, so the real classification, validation, trust and audit code
+runs against a controlled reply. `APEX_DATA_ISOLATED` is not consulted by the script itself, but it
+is set by convention so the fixture cannot fall back to a real data directory.
+
+### Procedure
+
+- The `request` phase seeds small / medium / large memory and knowledge histories (20 / 200 / 1,000
+  records). The filler history is never re-seeded, so a larger row measures retrieval over a larger
+  store rather than a different question. One exact target record is added last and cited by the
+  fixture reply. Two warm-up requests are run per size and not measured; the recorded samples are
+  the wall time of `controller.handle`.
+- Before measuring, the warm-up reply must reach `factually_supported`; otherwise the script throws
+  instead of measuring a different path.
+- The `assessment` phase calls `assessResponseIntegrity` and `buildResponseContract` directly on
+  synthetic analyses holding 6 / 24 / 36 evidence records (the retrieval budget), for a plain reply
+  and for a structured grounded reply. 200 measured iterations follow 20 warm-ups per row. The two
+  functions are timed together and separately; neither figure includes a store read or a model call.
+- The `record` phase repeats the identical request and compares the stored integrity audit and the
+  contract skeleton (stage orders, ids, statuses, checks, authority statement; the operation request
+  id and the growing retrieval counts are excluded, because each request appends a conversation turn
+  that later requests retrieve as evidence). It also reports the stored audit size.
+
+### Measured
+
+One run of `--repeats 9` on Windows, Node v26.4.0, x64, with no test or other benchmark active,
+taken on the final tree. Medians with min-max spread in parentheses; p95 is not printed below 20
+samples.
+
+Complete request, one grounded reply through the controller:
+
+| Memory+knowledge records | Wall per request | Retrieved evidence | Status | Trust | Contract reached |
+|---|---|---|---|---|---|
+| 20 | 34.277 ms (30.838-38.243) | 10 | `verification_unavailable` | `factually_supported` | 14, `ok: true` |
+| 200 | 155.318 ms (130.618-269.474) | 10 | `verification_unavailable` | `factually_supported` | 14, `ok: true` |
+| 1,000 | 336.757 ms (317.894-380.249) | 10 | `verification_unavailable` | `factually_supported` | 14, `ok: true` |
+
+`verification_unavailable` is the outcome of a grounded answer with no action to verify, not a
+failure: the fixture proposes nothing. Retrieval stays at 10 evidence records at every size because
+the per-source and total retrieval bounds apply, so the growth is the stores' search and parse cost,
+not a larger evidence set.
+
+Assessment and contract in isolation, microseconds per iteration:
+
+| Evidence | Reply | Assess + contract | Assess | Contract | Min | Max |
+|---|---|---|---|---|---|---|
+| 6 | plain | 27.20 | 6.80 | 20.15 | 22.80 | 1,922.60 |
+| 6 | structured | 40.35 | 19.90 | 20.10 | 36.30 | 3,186.50 |
+| 24 | plain | 23.10 | 6.30 | 16.55 | 20.40 | 2,177.10 |
+| 24 | structured | 31.50 | 14.50 | 16.50 | 25.20 | 2,326.60 |
+| 36 | plain | 17.90 | 3.30 | 14.60 | 16.30 | 2,169.80 |
+| 36 | structured | 22.65 | 10.20 | 12.10 | 17.90 | 4,376.40 |
+
+The medians are tens of microseconds against requests measured in tens to hundreds of milliseconds.
+The maxima are one-iteration outliers from JIT and garbage collection; garbage collection is not
+forced, so they are observations, not a tail measurement.
+
+Repeated identical requests:
+
+| Measure | Result |
+|---|---|
+| distinct integrity audits over 9 requests | 1 |
+| distinct contract skeletons (request id and counts excluded) | 1 |
+| retrieved records, first to last request | 8 -> 10 (conversation turns accumulate) |
+| stored integrity + contract skeleton size | 2,270 bytes |
+
+### Interpretation limits
+
+- The fixture reply is fixed synthetic prose. These figures measure APEX's handling of a controlled
+  reply; they say nothing about the quality, truthfulness, or latency of a real model.
+- One run on one machine. Wall-clock figures vary between runs; only in-run comparisons are treated
+  as findings, and the assessment rows have enough noise that only their medians are meaningful. A
+  repeat run on the same tree moved the 200-record request median by about 17% and changed only the
+  outlier maxima in the assessment rows; the ordering across sizes and the millisecond/microsecond
+  separation did not change.
+- The complete request includes the controller, retrieval, claim extraction, prompt construction,
+  the fixture model call, validation, assessment, contract, audit append and conversation write.
+  It is not a model latency and it is not comparable to the live model-endpoint benchmark.
+- The 20 / 200 / 1,000 histories are memory and knowledge prose. No world-model, plan, prediction or
+  experience history is seeded, so those stores are read but hold no records.
+- Repeated requests are not byte-identical in context: each appends a conversation turn that later
+  requests retrieve. The determinism claim covers the assessment and the contract's decisions, not
+  the accumulated evidence count.
+
+This script is not part of `npm test` and no test depends on it.

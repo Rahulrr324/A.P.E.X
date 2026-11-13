@@ -23,6 +23,10 @@ import { LifecycleStatus, lifecycleAudit } from '../cognition/lifecycle.js';
 import { SpanRecorder, buildRuntimeDiagnostics, StageOutcome } from '../cognition/runtime-diagnostics.js';
 import { ArtifactKind, validateArtifact } from '../cognition/artifacts.js';
 import { structuredDisclosureNotice, actionClaimNotice } from '../cognition/response.js';
+import {
+  assessResponseIntegrity, attributionNotice, buildResponseContract, responseContractAudit,
+  responseIntegrityAudit,
+} from '../cognition/response-integrity.js';
 import { recheckEvidence } from '../cognition/evidence.js';
 import { contributingStores, openEvidenceSnapshot, snapshotView } from '../evidence/snapshot.js';
 import { reassessClaims } from '../cognition/lineage.js';
@@ -5965,7 +5969,24 @@ export class CognitiveController {
       // The request ends at the cognitive decision. The model and executive stages were not reached,
       // and the record says so instead of leaving them pending.
       lifecycle?.closeRemaining({ fromOrder: 6, status: LifecycleStatus.NOT_REACHED });
-      op.cognition = analysisAudit(cognition);
+      const clarificationContract = buildResponseContract({
+        requestId: op.id,
+        analysis: cognition,
+        lifecycle,
+        clarification: true,
+        finalAnswer: true,
+      });
+      op.cognition = {
+        ...analysisAudit(cognition),
+        responseContract: responseContractAudit(clarificationContract),
+        // A deterministic question is APEX's own wording, not model output. No model stage ran, so
+        // the trust assessment records no output and the evidence finding still describes the records.
+        responseIntegrity: responseIntegrityAudit(assessResponseIntegrity({
+          analysis: cognition,
+          text: '',
+          classification: 'clarification',
+        })),
+      };
       return {
         status: Outcome.CLARIFICATION_REQUIRED,
         answer: question,
@@ -6216,6 +6237,25 @@ export class CognitiveController {
           ? { trace: attachBoundary(op.cognition.trace, boundary) }
           : { boundary }),
       };
+      // The model was asked and the request was cancelled. The output is discarded, so the contract
+      // records a failed classification stage and no response construction, and the integrity record
+      // states that no model output was accepted.
+      op.cognition.responseContract = responseContractAudit(buildResponseContract({
+        requestId: op.id,
+        analysis: cognition,
+        lifecycle,
+        model: { prepared: true, class: GatewayResponseClass.CANCELLED, promptChars: built.prompt.length },
+        text: '',
+        proposals: { observed: 0, wellFormed: 0, malformed: 0, overflow: 0 },
+        steps: [],
+        cancelled: true,
+        finalAnswer: true,
+      }));
+      op.cognition.responseIntegrity = responseIntegrityAudit(assessResponseIntegrity({
+        analysis: cognition,
+        text: '',
+        classification: GatewayResponseClass.CANCELLED,
+      }));
       return {
         status: Outcome.REQUEST_CANCELLED,
         answer: res.ok === true ? CANCELLED_AFTER_RESPONSE_MESSAGE : CANCELLED_MESSAGE,
@@ -6260,6 +6300,24 @@ export class CognitiveController {
           ? { trace: attachBoundary(op.cognition.trace, boundary) }
           : { boundary }),
       };
+      // The model stage was entered and produced no answer. The contract says so at stage 10 and
+      // records the later stages as skipped or not reached; nothing the transport returned is treated
+      // as a response.
+      op.cognition.responseContract = responseContractAudit(buildResponseContract({
+        requestId: op.id,
+        analysis: cognition,
+        lifecycle,
+        model: { prepared: true, class: res.class ?? 'unavailable', ok: false, promptChars: built.prompt.length },
+        text: '',
+        proposals: { observed: 0, wellFormed: 0, malformed: 0, overflow: 0 },
+        steps: [],
+        finalAnswer: true,
+      }));
+      op.cognition.responseIntegrity = responseIntegrityAudit(assessResponseIntegrity({
+        analysis: cognition,
+        text: '',
+        classification: res.class ?? 'unavailable',
+      }));
       return {
         status: cancelled ? Outcome.REQUEST_CANCELLED : Outcome.EXECUTION_FAILED,
         answer: cancelled
@@ -6525,6 +6583,44 @@ export class CognitiveController {
         ].filter(Boolean).join('\n\n');
       }
     }
+    // The request-to-response contract and the trust assessment are derived from the records above,
+    // never from the model's own claims about itself. The assessment decides how the answer is
+    // presented: supported content is kept, and every qualification is stated beside it.
+    const integrity = assessResponseIntegrity({
+      analysis: cognition,
+      text: res.text,
+      classification: res.class,
+      check: cognitionCheck,
+      recheck: evidenceRecheck,
+      truncated: res.truncated === true,
+    });
+    op.cognition = {
+      ...(op.cognition ?? { available: false }),
+      responseContract: responseContractAudit(buildResponseContract({
+        requestId: op.id,
+        analysis: cognition,
+        lifecycle,
+        model: {
+          prepared: true, class: res.class, ok: true, promptChars: built.prompt.length,
+        },
+        check: cognitionCheck,
+        text: res.text,
+        proposals: proposalCounts,
+        steps: actionSteps,
+        recheck: evidenceRecheck,
+        trustState: integrity.trust.state,
+        finalAnswer: true,
+      })),
+      responseIntegrity: responseIntegrityAudit(integrity),
+    };
+    // A plain answer that cites a record this request did not retrieve is shown with a correction;
+    // the text is still the model's and remains unverified either way.
+    const forgedCitation = cognitionCheck?.found === false
+      && cognitionCheck.validation?.ok === false
+      && cognitionCheck.validation.problems.some((problem) => /not in this retrieval/.test(problem));
+    const citationNotice = forgedCitation
+      ? '[APEX check: the answer cites a record this request did not retrieve; that citation is not evidence.]'
+      : '';
     const displayExtras = [loadNotice, historyNotice, actionClaim].filter(Boolean).join('\n\n');
     return {
       status: Outcome.VERIFICATION_UNAVAILABLE,
@@ -6537,7 +6633,7 @@ export class CognitiveController {
       hasText: modelText.length > 0,
       backend: res.backend,
       error: null,
-      annotation: [annotation, cognitionNotice].filter(Boolean).join('\n\n'),
+      annotation: [annotation, cognitionNotice, attributionNotice(integrity), citationNotice].filter(Boolean).join('\n\n'),
       proposalOverflow: overflow,
       lifecycle,
     };

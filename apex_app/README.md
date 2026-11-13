@@ -6376,6 +6376,179 @@ keep their own per-store or two-read verification, and no consumer claims more t
 nothing. The benchmark is deterministic and model-free, uses NoBackend, and says nothing about
 inference latency.
 
+## Batch AP-08: grounded response integrity and the model-output trust boundary (as implemented)
+
+AP-07 made the evidence a consumer reads provable. AP-08 makes the *response* say what it did with
+that evidence. Before this batch a reply was validated structurally and its supporting records were
+retrieved, but nothing recorded which pipeline stages ran, whether a stage was skipped or never
+reached, or how far a reply could be trusted. A fluent answer and a grounded answer looked alike in
+the stored operation. AP-08 adds one read-only module,
+`src/cognition/response-integrity.js`, and its controller wiring. It changes no transport, no
+gateway classification, no action registry, no authorization, and no store.
+
+### The fourteen-stage request-to-response contract
+
+`RESPONSE_STAGES` names, once, every stage a request passes through before it becomes an answer:
+
+| # | Stage | Owner | Authority |
+|---|---|---|---|
+| 1 | request received | user | none |
+| 2 | request classification | cognition | none |
+| 3 | context retrieval | cognition | none |
+| 4 | evidence snapshot and integrity validation | cognition | none |
+| 5 | claim extraction | cognition | none |
+| 6 | contradiction analysis | cognition | none |
+| 7 | deliberation | cognition | none |
+| 8 | uncertainty and limitation assessment | cognition | none |
+| 9 | model request preparation | controller | none |
+| 10 | model-output classification | gateway | none |
+| 11 | response construction | model | none |
+| 12 | grounding and provenance validation | cognition | none |
+| 13 | final response | controller | none |
+| 14 | executive proposal and handoff | executive | proposal only |
+
+`buildResponseContract` records one status per stage from a closed set: `ran`, `ran_no_result`,
+`skipped`, `not_reached`, `unavailable`, and `failed`. The distinctions are the point: a retrieval
+over an empty store **ran with no result**; a stage after a clarification was **never reached**; a
+model stage whose transport failed **failed**; a stage whose inputs could not be read is
+**unavailable**. A grounding stage that was never reachable is `not_reached`, not `skipped`, so a
+missing check cannot read as a check that found nothing. `reachedThrough` counts only stages that
+executed, so an unavailable classification cannot make the contract look further along than it is.
+The contract carries `authorizes: false` and a fixed authority statement; only stage 14 has
+`proposal_only` authority, and it records a handoff, never grants one. The same builders populate it
+on the clarification, cancellation, model-failure and ordinary-answer paths, so a stored operation
+can always say which case it was.
+
+### Claim-level grounding
+
+Each claim a structured reply makes keeps the evidence state it was extracted with:
+`directly_supported`, `partially_supported`, `conflicting`, `unverified`, `unsupported`,
+`temporally_stale`, `retracted`, or `superseded`. The design rules hold at runtime:
+
+- A relevant record is not proof: the model's claim must cite a record in this retrieval, and the
+  structural validator rejects an unknown id, a duplicate claim, an oversized claim or an unexpected
+  field.
+- A citation is not attribution: `assessClaimAttribution` compares the claim's content words and
+  numbers with the cited record's. Coverage at or above 0.6 is `attributed`, 0.5 to 0.6 is
+  `partial`, below that is `unattributed`, and a claimed number absent from every cited record is
+  `unattributed` regardless of nouns. An unattributed claim keeps its limitation and is named in an
+  APEX notice, never treated as a stored fact.
+- Conflicts stay visible: two disagreeing records remain conflicting evidence, and a structured
+  claim that picks one side is rejected as a whole rather than presented as settled.
+- Missing and bounded evidence are different: `not_found` requires a read the AP-07 contract reports
+  as complete; a bounded empty read is `unknown`. Unreadable and damaged sources are `unavailable`.
+- Staleness, retraction and supersession keep separate labels; none is silently read as current.
+- No numeric confidence is produced anywhere in this layer. A percentage would imply a calibration
+  APEX does not have.
+
+### The model-output trust boundary
+
+`assessModelOutputTrust` reports five separate states in a fixed ladder:
+
+| State | Meaning |
+|---|---|
+| `received` | output arrived and is not empty |
+| `syntactically_valid` | it is well-formed text and, when present, a well-formed structure |
+| `accepted_for_presentation` | it passed the presentation checks; a refusal, cancellation, empty or unavailable output stops below this |
+| `factually_supported` | every factual claim cites a retrieved record, restates it, is current and supported, and no claim beside it is labelled general knowledge or unknown |
+| `verified` | never reached in this build: `ok` is permanently false and the reason states that a citation check is not verification of the sentence |
+
+The ladder is monotonic in the only direction that matters: a later state requires every earlier
+one. A model cannot promote itself. `FORBIDDEN_KEYS` rejects `verified`, `authorization`,
+`provenance`, `authorized`, `trusted`, `execute`, `run`, `permission`, `confidence` and the other
+authority-shaped fields a reply might add, so a self-declaration is a rejected structure rather than
+a fact. A reply whose structure is rejected is classified `received` with
+`structured_response_rejected`, and none of its claims is counted as grounded.
+
+### Deterministic degradation
+
+`assessResponseIntegrity` returns the trust assessment, one primary evidence finding in a fixed
+precedence (`not_checked` when there was no analysis, then `unavailable`, `conflicting`,
+`not_checked` for an inconsistent snapshot, `not_found` or `unknown` for an empty read, and
+`insufficient_evidence`), a degradation decision, and a bounded limitation list. Supported content
+is never discarded because a secondary check failed:
+
+- `no_output` when there was no reply to qualify;
+- `present_as_is` only when the reply is factually supported and the sole limitation is
+  `model_output_unverified`;
+- `present_with_limitations` otherwise, with codes such as `plain_answer_unstructured`,
+  `structured_response_rejected`, `claim_attribution_unverified`, `claim_attribution_partial`,
+  `claims_inferred`, `claims_general_knowledge`, `claims_partially_supported`, `evidence_changed`,
+  `evidence_unavailable`, `evidence_conflicting`, `evidence_truncated` and `output_truncated`.
+
+A validation failure never upgrades authority: every assessment reports `verified: false` and
+`authorizes: false`, whatever it found.
+
+### Uncertainty and clarification
+
+The existing decision layer already asks a question when a reference is ambiguous or required detail
+is missing. AP-08 records that outcome in the contract: a clarification ends before every model and
+executive stage, the deterministic question is the final answer, and no trust state is produced.
+The seven distinctions the layer keeps apart are `unknown`, `not_found`, `not_checked`,
+`unavailable`, `conflicting`, `insufficient_evidence` and `explicitly_disproven`; the last is
+reserved for an explicit negation record and is never inferred from two disagreeing records.
+
+### Bounded, prose-free audits
+
+`responseContractAudit` and `responseIntegrityAudit` are what the operation persists. The contract
+audit holds the schema, request id, `ok`, `reachedThrough`, per-stage `{order, id, status, counts}`,
+the five checks and the authority statement. The integrity audit holds the trust state, the finding
+and its reason, the degradation, the bounded limitations and eight claim counts. Neither form can
+carry request text, record text or model prose: the controller test checks that a stored secret does
+not reach either audit. Counts are non-negative integers bounded per stage; a malformed proposal tally
+is `unavailable`, never read as zero. Losing diagnostics therefore changes what is disclosed, not
+what is decided, and a failed grounding check can never be paired with a `factually_supported`
+report - the contract check `grounding_precedes_final_answer` fails if it is.
+
+### The executive handoff boundary
+
+A grounded answer authorizes nothing. A proposal in the same reply is parsed, validated against the
+live action registry, and either denied or recorded as a handoff for the existing authority:
+`action_registry` for a proposal, `plan_approval` for plan activation, `task_status` for a task run.
+A model-origin `memory.add` is denied because that action is user-only; a read proposal is permitted
+and verified against the store; a task proposed by a model cannot run before approval, and the
+approved run is bound to the task's content hash. Changing an approved plan's content makes
+activation deny with `APPROVAL_NOT_BOUND_TO_PLAN`. Every crossing, including a denial, is audited,
+and stage 14 records `observed`, `well_formed`, `malformed`, `overflow`, `executed` and `denied`
+counts. No second execution engine or authorization system was added.
+
+### What it costs
+
+`benchmarks/run-response-integrity-benchmark.mjs` measures the complete deterministic request at
+20 / 200 / 1,000 memory+knowledge records and the assessment functions in isolation. One run on
+Windows 11, Node v26.4.0, medians of nine repeats: 34.3 ms, 155.3 ms and 336.8 ms per complete
+request, with the trust state `factually_supported`, the contract reaching stage 14, and ten
+retrieved evidence records at every size (retrieval stays bounded). The assessment and contract
+together cost tens of microseconds per reply - 27.2 us plain and 40.4 us structured at six evidence
+records - so the measured growth is the stores' search and parse cost, not the new integrity work.
+Repeated identical requests produce one distinct integrity audit and one distinct contract skeleton.
+The fixture returns fixed text; no inference was run and no model quality is claimed. A repeat run on
+the same tree moved the 200-record median by about 17% and changed only the outlier maxima, so these
+are single-run observations, not a latency guarantee.
+
+### Tests
+
+`tests/cognition-response-integrity.test.js` (42 cases, registered in `npm test`) covers the stage
+table and its status distinctions, the five trust states, attribution, the seven finding kinds,
+degradation and limitations, the 28 deterministic acceptance scenarios of the batch specification,
+the adversarial cases (forged and duplicate claims, oversized structures, unknown and
+authority-shaped fields, self-declared verification, malformed traces, diagnostic unavailability,
+secrets in audits) and the end-to-end handoff lifecycle from proposal through approval to a verified
+run. Every fixture is synthetic; no test contacts a model. The complete `npm test` run after this
+batch ran **2,633 tests in 398 suites: 2,631 passed, 0 failed, 2 skipped** (the two documented
+environment skips) in 498.9 s on Windows, and the focused AP-08 suite passed 42 of 42.
+
+### What this does not claim
+
+APEX does not verify that a sentence is true; it checks that a claim cites a record in this retrieval
+and restates it, and it says so. `factually_supported` means "every factual claim was checked against
+current records", not "the answer is correct", and `verified` is deliberately unreachable. The
+attribution comparison is lexical and bounded, so a paraphrase with little shared vocabulary is
+reported as unattributed rather than guessed. The acceptance suite is deterministic and says nothing
+about a real model's answer quality; no test runs one. The contract is descriptive of the existing
+pipeline, enforced by runtime checks and tests, not a new pipeline: a failure of a descriptive check
+is disclosed, and only the existing registry and approval decisions can authorize anything.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 
