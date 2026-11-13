@@ -324,12 +324,31 @@ function groupOf(capability, rows, now, experiencesById) {
   };
 }
 
+const WITHHELD_PREFIX_REASON = 'the ledger was read as a bounded window, so a pattern over that prefix is not a pattern over the recorded history';
+
+// A pattern drawn from a prefix of the ledger is a statement about the prefix, not about the scope's
+// history. It is kept identifiable (the kind is still named) but marked withheld and insufficient so
+// no consumer, including the candidate derivation, can treat it as established.
+function withholdPatterns(groups, reason) {
+  return groups.map((group) => ({
+    ...group,
+    pattern: {
+      ...group.pattern,
+      sufficient: false,
+      proposalField: null,
+      withheld: true,
+      withheldReason: reason,
+    },
+  }));
+}
+
 // The whole analysis. `projections` are the ledgers's projected predictions, already carrying their
 // evaluation and derived lineage; `readTotal` and `readTruncated` describe how the caller bounded the
-// read, so a group built from a truncated ledger says so.
+// read, `window` is the snapshot verdict for the stores it came from, and either cause withholds every
+// pattern rather than stating one from an incomplete or inconsistent read.
 export function analyzeLongitudinal({
   projections = [], experiencesById = null, capability = null,
-  readTotal = null, readTruncated = false, now = null, evidenceRead = null,
+  readTotal = null, readTruncated = false, now = null, evidenceRead = null, window = null,
 } = {}) {
   const scoped = [];
   const duplicates = [];
@@ -352,10 +371,20 @@ export function analyzeLongitudinal({
     rows.push(projection);
     byCapability.set(key, rows);
   }
-  const groups = [...byCapability.keys()]
+  const windowState = window?.state ?? 'unverified';
+  const truncated = readTruncated === true;
+  const consistent = windowState !== 'concurrent_modification' && windowState !== 'unverifiable';
+  const complete = !truncated && consistent;
+  const patternsAllowed = complete;
+  const computed = [...byCapability.keys()]
     .sort((a, b) => a.localeCompare(b))
     .slice(0, MAX_LONGITUDINAL_GROUPS)
     .map((name) => groupOf(name, byCapability.get(name), now, experiencesById));
+  const groups = patternsAllowed
+    ? computed
+    : withholdPatterns(computed, truncated
+      ? WITHHELD_PREFIX_REASON
+      : 'a contributing store changed or could not be inspected while this analysis was read, so the records describe no single instant');
 
   const byPattern = {};
   for (const group of groups) byPattern[group.pattern.kind] = (byPattern[group.pattern.kind] ?? 0) + 1;
@@ -367,12 +396,18 @@ export function analyzeLongitudinal({
     excluded: groups.reduce((sum, g) => sum + g.counts.excluded, 0),
     byPattern,
   };
-  const digest = digestOf(groups.map((g) => [
-    g.capability,
-    g.pattern.kind,
-    g.evidenceRefs.predictionIds,
-    g.evidenceRefs.experienceIds,
-  ]));
+  // The digest binds the completeness of the read, so a report drawn from a prefix or across a moved
+  // window cannot present the same digest as a complete one.
+  const digest = digestOf({
+    complete,
+    window: windowState,
+    groups: groups.map((g) => [
+      g.capability,
+      g.pattern.kind,
+      g.evidenceRefs.predictionIds,
+      g.evidenceRefs.experienceIds,
+    ]),
+  });
   return {
     schema: LONGITUDINAL_SCHEMA,
     note: LONGITUDINAL_NOTE,
@@ -380,7 +415,11 @@ export function analyzeLongitudinal({
     read: {
       considered: scoped.length,
       total: readTotal ?? scoped.length,
-      truncated: readTruncated === true,
+      truncated,
+      complete,
+      patternsAllowed,
+      window: windowState,
+      certification: window?.certification ?? null,
       limit: MAX_LONGITUDINAL_PREDICTIONS,
       duplicateReferences: [...new Set(duplicates)],
       // What the caller read of the experience log to judge whether each cited outcome still stands.
@@ -498,6 +537,12 @@ export function renderLongitudinal(report) {
     'Longitudinal outcome analysis (read-only; derived from recorded predictions and evaluations; nothing is approved or applied)',
     `  records considered: ${report.read.considered} of ${report.read.total} prediction record(s)${report.read.truncated ? ' (bounded read; older records were not inspected)' : ''}`,
   ];
+  if (report.read.patternsAllowed === false) {
+    const why = report.read.truncated
+      ? 'the ledger was read as a bounded window, and a prefix is not a recorded history'
+      : `a contributing store changed or could not be inspected while the read was in progress (${report.read.window})`;
+    lines.push(`  patterns:        withheld - ${why}; no pattern is stated from this read`);
+  }
   const outcomeEvidence = report.read.outcomeEvidence;
   if (outcomeEvidence && outcomeEvidence.available === false) {
     lines.push(`  outcome evidence: could not be read - ${outcomeEvidence.reason}; currentness was judged from the ledger projection alone`);
@@ -509,7 +554,7 @@ export function renderLongitudinal(report) {
     lines.push(
       '',
       `  scope ${group.capability}`,
-      `    pattern:        ${pattern.kind}${pattern.sufficient ? '' : ' (proposes nothing)'}`,
+      `    pattern:        ${pattern.kind}${pattern.withheld ? ' (withheld: this read is not a complete history)' : pattern.sufficient ? '' : ' (proposes nothing)'}`,
       `    definition:     ${pattern.definition}`,
       `    observations:   ${group.counts.eligibleScored} eligible scored of ${group.counts.recorded} recorded`
         + `${group.counts.excluded ? `; ${group.counts.excluded} excluded` : ''}`,

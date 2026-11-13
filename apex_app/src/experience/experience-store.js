@@ -1517,6 +1517,16 @@ export class ExperienceStore {
     report.longitudinal.groups = analysis.totals.groups;
     const covered = new Map();
     for (const group of analysis.groups) {
+      // A pattern the analysis itself withheld (a bounded prefix or a window that moved) is reported
+      // as skipped, not supported: the rule must not be derived from a read that is not a history.
+      if (group.pattern.withheld) {
+        report.longitudinal.skipped.push({
+          capability: group.capability,
+          pattern: group.pattern.kind,
+          reason: group.pattern.withheldReason,
+        });
+        continue;
+      }
       if (!group.pattern.sufficient) continue;
       report.longitudinal.supported += 1;
       covered.set(group.capability, { kind: group.pattern.kind, created: false });

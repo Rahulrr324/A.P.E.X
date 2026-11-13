@@ -166,21 +166,30 @@ export function digestFindings({ pairs = [] } = {}) {
 
 // A snapshot verdict is an integrity finding in its own right: a consistent window adds nothing, a
 // changed identity is `concurrent_modification`, and a store that could not be inspected is
-// `unverifiable`.
+// `unverifiable`. AP-07 adds the observed kind per store, so "the file was appended to" and "the file
+// was replaced with same-size bytes" are distinguishable in the report rather than both being a bare
+// change.
 export function snapshotFindings(snapshot) {
   if (!snapshot || typeof snapshot.state !== 'string' || snapshot.state === 'unverified') return [];
   if (snapshot.state === 'consistent') return [];
   if (snapshot.state === 'concurrent_modification') {
+    const changed = snapshot.changed ?? [];
+    const kinds = [...new Set(changed.map((entry) => entry.kind).filter(Boolean))];
     return [integrityFinding('concurrent_modification', {
       check: 'snapshot',
-      subject: (snapshot.changed ?? []).map((entry) => entry.name).join(', ') || null,
-      detail: 'a contributing store changed while this read was in progress; the combined result describes no single instant',
+      subject: changed.map((entry) => entry.name).join(', ') || null,
+      kinds,
+      certification: snapshot.certification ?? 'metadata',
+      detail: kinds.length > 0
+        ? `a contributing store changed while this read was in progress (${changed.map((entry) => `${entry.name}: ${entry.kind ?? 'changed'}`).join(', ')}); the combined result describes no single instant`
+        : 'a contributing store changed while this read was in progress; the combined result describes no single instant',
     })];
   }
   if (snapshot.state === 'unverifiable') {
     return [integrityFinding('unverifiable', {
       check: 'snapshot',
       subject: (snapshot.unverifiable ?? []).join(', ') || null,
+      certification: snapshot.certification ?? 'metadata',
       detail: 'a contributing store could not be inspected, so consistency cannot be claimed either way',
     })];
   }
@@ -199,7 +208,9 @@ function findingOrder(a, b) {
 // covers the state, the untrimmed counts and the disclosed findings: two runs over the same records
 // produce the same digest, and a run whose findings were clipped does not pretend to have seen fewer.
 // The snapshot state, not its identity digest, is part of the canonical form, because the window's
-// modification time says when the read happened rather than what it found.
+// modification time says when the read happened rather than what it found. AP-07 adds the
+// certification mode, because a metadata-only window proves strictly less than a content one and a
+// report must not let the two read alike.
 export function integrityReport({
   subject = null,
   findings = [],
@@ -210,30 +221,45 @@ export function integrityReport({
   generatedAt = null,
   note = null,
 } = {}) {
+  // A truncation has to name what stopped it. The bounded-read contract (AP-07 §8) already refuses a
+  // bare `truncated`, and this report speaks the same vocabulary: reporting `valid_bounded` without a
+  // source would leave a reader unable to tell a disclosed window from a limit nobody accounted for.
+  // It is a caller error, not a finding, so it throws rather than quietly producing a report.
+  const sources = [...new Set(
+    (Array.isArray(truncatedSources) ? truncatedSources : [])
+      .map((source) => singleLine(source, 80))
+      .filter((source) => source.length > 0),
+  )].sort();
+  const bounded = truncated === true || sources.length > 0;
+  if (bounded && sources.length === 0) {
+    throw new TypeError('a truncated integrity report must name the source it stopped inside');
+  }
   const combined = [...findings, ...snapshotFindings(snapshot)];
   const state = worstIntegrityState([
     ...combined.map((finding) => finding.state),
-    ...(truncated ? ['valid_bounded'] : []),
+    ...(bounded ? ['valid_bounded'] : []),
   ]);
   const ordered = [...combined].sort(findingOrder);
   const disclosed = ordered.slice(0, MAX_INTEGRITY_FINDINGS);
   const byState = Object.fromEntries(INTEGRITY_STATES.map((name) => [name, 0]));
   for (const finding of combined) byState[finding.state] += 1;
-  const bounded = {
+  const boundedFindings = {
     findings: ordered.length,
     disclosed: disclosed.length,
     byState,
     truncated: ordered.length > disclosed.length,
   };
+  const certification = snapshot?.certification ?? null;
   const canonical = {
     schema: INTEGRITY_SCHEMA,
     subject,
     state,
-    bounded,
+    bounded: boundedFindings,
     counts,
-    truncated,
-    truncatedSources: [...truncatedSources].sort(),
+    truncated: bounded,
+    truncatedSources: sources,
     snapshotState: snapshot?.state ?? 'unverified',
+    certification,
     findings: disclosed.map((finding) => ({
       state: finding.state, check: finding.check, subject: finding.subject ?? null,
     })),
@@ -244,12 +270,13 @@ export function integrityReport({
     state,
     usable: INTEGRITY_USABLE_STATES.includes(state),
     findings: disclosed,
-    bounded,
+    bounded: boundedFindings,
     counts,
-    truncated,
-    truncatedSources: canonical.truncatedSources,
+    truncated: bounded,
+    truncatedSources: sources,
     snapshot: snapshot?.digest ?? null,
     snapshotState: canonical.snapshotState,
+    certification,
     digest: sha256Hex(stableStringify(canonical)),
     generatedAt,
     authorizes: false,
@@ -405,6 +432,7 @@ export async function evidenceIntegrityReport({
     counts: { stores: rows.length, records },
     snapshot: {
       schema: verdict.schema,
+      certification: verdict.certification ?? 'metadata',
       state: verdict.state,
       consistent: verdict.consistent === true,
       complete: verdict.complete === true,
@@ -417,16 +445,17 @@ export async function evidenceIntegrityReport({
     integrity,
     digest: integrity.digest,
     authorizes: false,
-    note: EVIDENCE_READ_NOTE,
+    note: verdict.certification === 'content' ? EVIDENCE_READ_NOTE : EVIDENCE_READ_METADATA_NOTE,
   };
 }
 
-const EVIDENCE_READ_NOTE = 'this read certifies that no visible append moved a contributing file while it ran; it is not a transaction, holds no lock, and a matching digest proves the bytes did not change, never that the records are true';
+const EVIDENCE_READ_NOTE = 'this read certifies that no visible append moved a contributing file while it ran, byte for byte; it is not a transaction, holds no lock, and a matching digest proves the bytes did not change, never that the records are true';
+const EVIDENCE_READ_METADATA_NOTE = 'this read proves only that no contributing file changed size or modification time while it ran; it is not a transaction, holds no lock, it cannot see a same-size rewrite, and it says nothing about whether the records are true';
 
 export function renderEvidenceIntegrity(report, { indent = '' } = {}) {
   if (!report) return `${indent}No evidence-integrity report was produced.`;
   const lines = [
-    `${indent}Evidence integrity: ${report.state}${report.available ? '' : ` - ${report.reason}`} (${report.counts.stores} store(s), ${report.counts.records} record(s))`,
+    `${indent}Evidence integrity: ${report.state}${report.available ? '' : ` - ${report.reason}`} (${report.counts.stores} store(s), ${report.counts.records} record(s); ${report.snapshot?.certification ?? report.certification ?? 'unverified'} window)`,
   ];
   for (const row of report.stores) {
     lines.push(`${indent}  ${row.name}: ${row.present ? 'present' : 'absent'} | ${row.checked} | ${row.consistency}${row.corrupt ? ` | ${row.corrupt} corrupt line(s)` : ''}`);

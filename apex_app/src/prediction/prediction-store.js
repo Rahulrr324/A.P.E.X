@@ -34,6 +34,7 @@ import { shortId, singleLine } from '../util.js';
 import { isScopableCapability } from '../experience/experience-store.js';
 import { MAX_TEMPORAL_EVENTS, PATTERN_KINDS, parseInstant } from '../experience/temporal.js';
 import { MAX_LONGITUDINAL_PREDICTIONS, analyzeLongitudinal } from './longitudinal.js';
+import { contributingStores, runConsistentEvidenceRead } from '../evidence/snapshot.js';
 import {
   EVALUATION_KIND,
   EVALUATION_VERDICTS,
@@ -340,7 +341,31 @@ export class PredictionStore {
     const size = Number.isInteger(limit) && limit >= 1
       ? Math.min(limit, MAX_LONGITUDINAL_PREDICTIONS)
       : MAX_LONGITUDINAL_PREDICTIONS;
-    const { projections, ledger } = await this.list({ limit: MAX_PREDICTION_LIST });
+    // The ledger and the experience log are two stores that one analysis combines. They are read
+    // inside one consistency window, so "the outcome a prediction cites still stands" is judged
+    // against records that coexisted with the ledger the expectation was read from. The verdict is
+    // handed to the analysis, which withholds every pattern when the window moved or could not be
+    // verified instead of stating one across a read that describes no single instant.
+    const run = await runConsistentEvidenceRead({
+      stores: contributingStores({ predictions: this, experience: this.experiences }),
+      read: (snapshot) => this.#longitudinalRead({ capability, size, snapshot }),
+    });
+    const { scoped, chosen, experiencesById, evidenceRead, ledger } = run.value;
+    return analyzeLongitudinal({
+      projections: chosen,
+      experiencesById,
+      readTotal: scoped.length,
+      readTruncated: ledger.truncated === true || scoped.length > size,
+      now: this.now().toISOString(),
+      evidenceRead,
+      window: run.snapshot,
+    });
+  }
+
+  // One attempt inside the window. Both store reads go through `snapshot.read`, so a retried attempt
+  // re-reads both stores rather than combining a fresh ledger with a stale experience read.
+  async #longitudinalRead({ capability, size, snapshot }) {
+    const { projections, ledger } = await snapshot.read('predictions', () => this.list({ limit: MAX_PREDICTION_LIST }));
     const scoped = capability === null
       ? projections
       : projections.filter((item) => item.capability === capability);
@@ -359,12 +384,12 @@ export class PredictionStore {
         .filter((ms) => ms !== null);
       if (this.experiences && typeof this.experiences.evidenceIndex === 'function' && times.length > 0) {
         try {
-          const index = await this.experiences.evidenceIndex({
+          const index = await snapshot.read('experience', () => this.experiences.evidenceIndex({
             experienceIds: outcomeIds.slice(0, MAX_TEMPORAL_EVENTS),
             since: new Date(Math.min(...times)).toISOString(),
             until: new Date(Math.max(...times)).toISOString(),
             limit: MAX_TEMPORAL_EVENTS,
-          });
+          }));
           experiencesById = new Map((index.experiences ?? []).map((record) => [record.id, record]));
           evidenceRead = {
             available: true,
@@ -391,14 +416,7 @@ export class PredictionStore {
         };
       }
     }
-    return analyzeLongitudinal({
-      projections: chosen,
-      experiencesById,
-      readTotal: scoped.length,
-      readTruncated: ledger.truncated === true || scoped.length > size,
-      now: this.now().toISOString(),
-      evidenceRead,
-    });
+    return { scoped, chosen, experiencesById, evidenceRead, ledger };
   }
 
   // The bounded view a model context and the world-state projection receive: aggregate counts and at

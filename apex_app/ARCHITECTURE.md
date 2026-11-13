@@ -564,7 +564,8 @@ existed. AP-06 addresses that without adding a transaction.
   last. A JSONL store only grows, so an unchanged identity proves no append happened inside the
   window; a changed identity is `concurrent_modification`, a statement about the read. The window
   holds no lock, cannot stop a writer, and does not detect a rewrite that preserves both size and
-  modification time - the stores' content validation and hashes remain the authority there.
+  modification time - the stores' content validation and hashes remain the authority there. Batch
+  AP-07 later added a content digest to the identity by default; see below.
 - **Retry is bounded and disclosed.** `runConsistentEvidenceRead` makes at most three attempts, only
   after `concurrent_modification`, never after `unverifiable`, and reports the attempt count. One
   write invalidates at most one window, so two concurrent appends (a record and its audit line) can
@@ -596,11 +597,50 @@ existed. AP-06 addresses that without adding a transaction.
   world state and the prediction projection keep their per-store reads and per-source `unavailable`/
   `damaged` disclosure; they do not claim cross-store consistency, and AP-06 did not make them
   window-certified. The window wraps the same store methods those readers use - there is no second
-  evidence store or index.
+  evidence store or index. (Batch AP-07 integrates cognitive retrieval, world state and the
+  prediction projection; see below.)
 - **Bounded reads disclose clipping.** `adaptation.effectiveness` reads one adaptation past its
   20-row window and reports `integrity.truncated` with `truncatedSources: ['adaptations']` when the
   extra row exists, so a full store and a captured window no longer look identical. The state becomes
   `valid_bounded`; the totals still report 20 read.
+
+### Consumer-wide evidence consistency (AP-07)
+
+AP-06 certified the reports that already assembled several stores, but the request path still read
+cognition, world state and the prediction projection store by store, and a `stat`-based identity could
+not see a same-size rewrite. AP-07 closes both without a second evidence system.
+
+- **The identity carries the bytes.** `storeIdentity` hashes each contributing file (SHA-256) at both
+  inspections by default (`content: true`); a digest difference is a change even when size and mtime
+  agree, and `changeKind` names `deleted`, `created`, `appended`, `truncated`, `replaced`,
+  `content_changed` or `touched`. `content: false` is explicit and certifies metadata only, and the
+  verdict says so. The verification result is memoised for the life of the snapshot.
+- **One ordered read contract.** `src/evidence/read-contract.js` defines nine states -
+  `complete_empty`, `complete_nonempty`, `bounded_usable`, `truncated`, `missing`, `unavailable`,
+  `damaged`, `inconsistent`, `unverifiable`. `readReport` applies the window verdict: an
+  `unverifiable` window makes every source `unverifiable`, and a `concurrent_modification` window
+  makes them `inconsistent`. `absenceProven` holds only for `complete_empty`; a bounded window that
+  returned nothing proves no absence. Findings map onto the integrity vocabulary, and at most 32
+  sources are reported.
+- **Consumers read through the window.** Cognitive retrieval reads memory and knowledge through one
+  content window and hands the verdict to `retrieveEvidence`, which reports the bundle as `cognition`.
+  World state reads the experience temporal summary and the prediction prompt view through the same
+  window; `certifyWorldRead` re-derives the read and never promotes completeness, so a record-limit
+  cut stays `truncated`. `prediction.longitudinal` reads the ledger and the experience index in one
+  window and withholds every pattern when the read is truncated or the window moved. `plan.candidates`,
+  `plan.outcome`, goal assessment and the existing effectiveness and governance reads do the same. A
+  pattern, projection or assessment that cannot be certified says so; none is silently downgraded.
+- **A refusal is an outcome, not an input error.** `plan.assess` raises
+  `EVIDENCE_WINDOW_UNCONFIRMED` when the evidence it re-derived was not provably unchanged. The target
+  was well formed and the records moved, so the executor reports the execution as `failed` (the
+  controller's `EXECUTION_FAILED`), records no assessment, and names the window state and what moved.
+- **Reuse is per operation.** `snapshot.read(label, fn)` memoises one promise per label for the life
+  of a snapshot. The benchmark measures two reads of one label inside one window at about one
+  window's cost against two windows; nothing is persisted between operations.
+- **Not universal consistency.** A window proves quiescence between two inspections; it is not a
+  transaction, holds no lock, cannot stop a writer, and cannot see a same-size rewrite that is later
+  restored. Stores with no health check are described by identity only. No consumer reads a verdict to
+  authorize an action, and every report carries `authorizes: false`.
 
 ## 6. D. Diagnostics and evaluation
 
@@ -660,6 +700,7 @@ nothing and does not call a model. It has no executive-handoff scenario; handoff
 | Effectiveness read, complete request (AP-04) | — | 52.3 / 146.7 / 318.4 ms at 4 / 12 / 24 linked uses; 316.4 / 320.4 / 337.9 ms at 1 / 8 / 20 stored adaptations | Complete verified request (analysis + independent re-read + audit append) on synthetic histories where each use adds a plan and about ten audit records; about 13 / 12 / 13 ms per use. Pure analysis 27.5 / 71.4 / 167.6 ms and plan/audit reads are printed separately and are not the request cost. At 21 stored adaptations the oldest target falls outside the 20-record window, so its uses are not read (65.1 ms, disclosed) |
 | Governance review path, complete request (AP-05) | — | list 166.3 / 474.2 / 996.0 ms; open 151.7 / 445.1 / 640.1 ms; inspect 338.7 / 667.0 / 1,231.2 ms; reconcile 240.9 / 632.5 / 1,160.7 ms; decide 163.9 / 345.8 / 608.5 ms at 4 / 12 / 24 linked uses; list 967.8 / 997.4 / 1,049.9 ms at 1 / 8 / 20 stored adaptations | Complete verified request including its own analysis, evidence assembly and audit append; builder/detail/prepare reads are printed separately and labelled partial. At 21 stored adaptations the target is outside the 20-row window and is not reported (82.1 ms, disclosed; less lineage work, not faster execution). Five samples per figure |
 | Cross-store reads, complete request (AP-06) | — | integrity 20.9 / 23.6 / 33.5 ms; effectiveness 31.5 / 39.4 / 57.5 ms; reviews 34.9 / 41.0 / 56.9 ms at 100 / 1,000 / 4,000 memory records (9 stores, 146 / 1,046 / 4,046 records) | Complete verified requests including their own window(s), second read and audit append on identical copied bytes. The window alone took 1.07 / 0.72 / 0.78 ms and the integrity report alone 10.0 / 11.4 / 14.8 ms; those partials are printed separately and not added. The same effectiveness analysis with and without a window moved by −0.1 / +0.6 / +1.0 ms, so window cost is per store, not per record; growth is parsing and lineage. Five samples per figure |
+| Evidence consistency, complete requests (AP-07) | — | integrity 21.7 / 25.9 / 133.1 ms; candidates 22.7 / 64.1 / 70.1 ms; longitudinal 10.0 / 26.8 / 30.0 ms; outcome 33.7 / 128.0 / 154.6 ms; effectiveness 35.7 / 150.1 / 158.9 ms; reviews 33.6 / 150.8 / 122.5 ms at 100 / 1,000 / 4,000 memory records | Complete verified requests including their own content windows and audit appends. On the same run the window over the seeded retrieval control cost +1.8 / +2.8 / +15.4 ms, matching the standalone content window (+1.0 / +1.6 / +11.0 ms over metadata); world-state certification cost +2.9 / +9.7 / +16.0 ms. Complete-read spreads are wide and cross-run variation exceeds several differences; only in-run comparisons are treated as findings. See `benchmarks/README.md` |
 
 Known scaling behavior: memory and knowledge searches are linear in the number of records; JSONL
 cold reads parse the whole store; the AM index removes the repeated learning read, not the initial
@@ -732,6 +773,8 @@ The only authority owner is the action registry. Everything else observes, propo
 | Longitudinal outcome analysis (AP-03) | `IMPLEMENTED_AND_TESTED` | `prediction/longitudinal.js`, `adaptation.derive` longitudinal branch in `experience/experience-store.js`, `longitudinal`/`derivation` classification in `actions/experience-actions.js`, `predictions.details` batch read in `prediction/prediction-store.js`, `sources.longitudinalDerived` in `plans/guidance.js`/`evaluation.js` | `longitudinal-outcome-analysis.test.js` (29 cases), `prediction-adaptation-learning.test.js`, `adaptation-decision.test.js` |
 | Adaptation effectiveness and outcome tracing (AP-04) | `IMPLEMENTED_AND_TESTED` | `plans/effectiveness.js` (pure read), `adaptation.effectiveness` in `actions/experience-actions.js`, controller/CLI read surface; uses only the existing experience, plan, audit and goal stores | `adaptation-effectiveness.test.js` (20 cases) |
 | Adaptation governance and evidence reconciliation (AP-05) | `IMPLEMENTED_AND_TESTED` | `experience/review.js` (canonical evidence and reconciliation), `plans/governance.js` (pure reads), review record kinds in `experience/experience-store.js`, five `adaptation.review*` actions in `actions/experience-actions.js`, controller/CLI surface; no new store or authority | `adaptation-governance.test.js` (41 cases) |
+| Content-certified window and bounded-read contract (AP-07) | `IMPLEMENTED_AND_TESTED` | content identity in `evidence/snapshot.js`; nine-state `evidence/read-contract.js` | `evidence-read-contract.test.js` (14 cases), `evidence-fabric.test.js`, `ap07-consistency.test.js` |
+| Consumer-wide evidence consistency (AP-07) | `IMPLEMENTED_AND_TESTED` | cognitive retrieval, world state, prediction longitudinal, plan candidate/outcome/assessment and the existing effectiveness/governance reads through one content window | `ap07-consistency.test.js` (31 cases), existing consumer suites |
 | Adversarial acceptance | `IMPLEMENTED_AND_TESTED` | Cross-cutting; no new runtime component | `acceptance-ao09.test.js` (7), `adversarial-batch-am.test.js` (16), `plan-adversarial.test.js` (15), `executive-adversarial.test.js` (11), plus the suites cited in `README.md` Batch AO package H |
 | Cross-process interruption | `IMPLEMENTED_PARTIALLY_TESTED` | Real child fixtures at most boundaries | `plan-continuation.test.js`, `continuation-cross-process-an.test.js`, `finalization-interruption.test.js`, `process-recovery.test.js`, `cross-process-ao09.test.js`; two boundaries lack a killed child |
 | Concurrent store integrity | `IMPLEMENTED_AND_TESTED` | `memory/writer-lock.js`, store locks, JSONL append | `storage-concurrency.test.js`, `store-write-concurrency.test.js`, `cross-process-stress.test.js`, `lock-contention.test.js`, `lock-recovery.test.js` |
@@ -799,6 +842,12 @@ invalidate the recommended milestone, not that it blocks all work.
 | 46 | A window that cannot be certified could be silently downgraded | Refusal is explicit: `available:false`, `state`, `attempts`, no rows and `totals:null`; `unverifiable` is never retried; review stages raise `StoreError` | `evidence-fabric.test.js` (refused governance, unverifiable store), `adaptation-effectiveness.test.js` | Cognitive retrieval, world state and the prediction projection remain per-store atomic and disclose an unavailable source; none claims cross-store consistency | Medium | No |
 | 47 | Integrity metadata could be read as authority or as proof of truth | `authorizes:false` on every report; the note states that a digest proves bytes did not change, never that records are true; nothing reads integrity to decide an action | `evidence-fabric.test.js` (authorizes false, digest stability), `model-self-authorization.test.js` | A reader can still over-read a digest or a `valid` state; documentation states the limit | Medium (interpretive) | No |
 | 48 | A retry could hide the write that caused it | Retries are bounded at three, occur only after a verdict, and the attempt count is reported with the result; a writer active for the whole budget still yields a refusal | `evidence-fabric.test.js` (two writes then a certified third attempt; a write in every attempt) | The retry re-reads the whole report; it is not incremental, and the cost grows with the report, not with the retry count | Low | No |
+| 49 | A content-certified window could be read as a transaction or as authority | The digest is part of the identity; every report carries `authorizes:false`; the note says a consistent window proves bytes did not change, never that records are true | `ap07-consistency.test.js`, `evidence-fabric.test.js` | A reader can still over-read a digest; documentation states the limit | Low | No |
+| 50 | A same-size rewrite could pass a metadata-only window | Content certification is the default; `content:false` is explicit and reports `metadata`; `content_changed` and `replaced` are named change kinds | `ap07-consistency.test.js` (same-size rewrite), `evidence-read-contract.test.js` | A same-size rewrite restored to the original bytes between the two inspections is invisible to any before/after comparison | Medium | No |
+| 51 | A consumer could combine records from a moved window and still state a pattern | Longitudinal withholds every pattern on a moved or truncated read; world certification never promotes completeness; retrieval reports the bundle as `unverifiable` or `inconsistent` | `ap07-consistency.test.js` §4-§7, `longitudinal-outcome-analysis.test.js` | Health reads and single-store lists remain atomic per store and are not windowed | Low | No |
+| 52 | A refused assessment could be recorded as an input error or as a partial success | `plan.assess` raises `EVIDENCE_WINDOW_UNCONFIRMED`; the executor reports `failed`; the controller reports `EXECUTION_FAILED`; no assessment is recorded | `ap07-consistency.test.js` §7 (moved window), `plan-continuation.test.js` | The refusal names the observed change, not its cause | Low | No |
+| 53 | A bounded read could prove an absence it did not prove | `absenceProven` holds only for `complete_empty`; a bounded, truncated or unavailable read leaves absence unproven, and the nine-state contract says which was observed | `evidence-read-contract.test.js`, `ap07-consistency.test.js` §8 | A caller that ignores `absenceProven` can still misread an empty bounded read; the API exposes the distinction | Low | No |
+| 54 | Snapshot reuse could hide a later write inside one operation | Reuse is one promise per label per operation and is never persisted; the second read is the same bytes by construction, and the window's end inspection still runs | `ap07-consistency.test.js` §3, `run-consistency-benchmark.mjs` (reuse section) | A caller that needs a later read must open a new snapshot; there is no cache across operations | Low | No |
 
 No gap in this register was implemented in AO-10: none exposed a new concrete defect in behavior,
 and none invalidated a documented security guarantee. AP-01 closed the roadmap's "one recorded
@@ -822,8 +871,13 @@ the cross-store read window and the integrity vocabulary: a report assembled fro
 stores now proves no contributing file moved while it read, names what it found in one closed
 ten-state vocabulary, refuses a combination that did not exist at one instant, and discloses a
 clipped adaptation window. The window is a proof of quiescence, not a transaction, holds no lock, and
-cannot see a same-size, same-mtime rewrite; the request path's retrieval, world-state and prediction
-readers remain per-store atomic and do not claim otherwise.
+cannot see a same-size, same-mtime rewrite. AP-07 added rows 49-54 for consumer-wide consistency: the
+request path's retrieval, world-state and prediction readers now read their contributing stores inside
+one content-certified window and report the nine-state read contract, or state why they could not; a
+refused assessment is an execution failure, not an input error; reuse is per operation and never
+persisted; and no verdict authorizes an action. AP-07 does not make every read in APEX windowed -
+health reads and single-store lists remain atomic per store - and a window still cannot see a
+same-size rewrite restored to its original bytes.
 
 ## 10. Running the verification
 
@@ -838,6 +892,7 @@ node --test tests/longitudinal-outcome-analysis.test.js
 node --test tests/adaptation-effectiveness.test.js
 node --test tests/adaptation-governance.test.js
 node --test tests/evidence-fabric.test.js
+node --test tests/evidence-read-contract.test.js tests/ap07-consistency.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs
@@ -845,6 +900,7 @@ node benchmarks/run-longitudinal-benchmark.mjs
 node benchmarks/run-effectiveness-benchmark.mjs
 node benchmarks/run-governance-benchmark.mjs
 APEX_DATA_ISOLATED=1 node benchmarks/run-evidence-benchmark.mjs
+APEX_DATA_ISOLATED=1 node benchmarks/run-consistency-benchmark.mjs
 ```
 
 Tests use `NoBackend` or fixed programmatic replies and isolated temporary data directories. No
@@ -878,3 +934,8 @@ only to fresh temporary directories. The complete measured tables and their cave
   a candidate, and that only the user's explicit approval lets that candidate reorder one disclosed
   comparison. A repeated association in recorded order is not evidence that the capability caused the
   outcome.
+- It does not claim every read in APEX is window-certified. AP-07 covers the consumers that combine
+  several stores into one answer; health reads, single-store lists and store-level operations remain
+  atomic per store. A content-certified window proves the bytes did not change between two
+  inspections; it is not a transaction, holds no lock, and cannot see a same-size rewrite restored to
+  its original bytes between them.

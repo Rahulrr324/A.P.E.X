@@ -59,6 +59,7 @@ export async function analyzeRequest({
   stores = {},
   seeds = {},
   worldConflicts = null,
+  window = null,
   continuationLoader = null,
 } = {}) {
   const started = performance.now();
@@ -115,6 +116,7 @@ export async function analyzeRequest({
       stores,
       seeds,
       worldConflicts,
+      window,
     });
     timings.retrieval = millis(mark);
     lifecycle.complete(3, {
@@ -124,6 +126,7 @@ export async function analyzeRequest({
         unavailable: retrieval.counts.unavailable.length,
         damaged: retrieval.counts.damaged.length,
         dropped: retrieval.counts.dropped,
+        read: retrieval.read.state,
       },
     });
     stage = 4;
@@ -134,6 +137,7 @@ export async function analyzeRequest({
         unavailable: retrieval.counts.unavailable.length,
         damaged: retrieval.counts.damaged.length,
         dropped: retrieval.counts.dropped,
+        read: retrieval.read.state,
       },
       durationMs: timings.retrieval,
     });
@@ -399,6 +403,14 @@ export function analysisAudit(analysis) {
     // rested on against the stores as they are then. Identifiers, kinds, and states only.
     lineage: claimLineageSnapshot(analysis.claims),
     evidence: analysis.retrieval.counts,
+    read: {
+      state: analysis.retrieval.read.state,
+      complete: analysis.retrieval.read.complete,
+      patternsAllowed: analysis.retrieval.read.patternsAllowed,
+      window: analysis.retrieval.read.window,
+      certification: analysis.retrieval.read.certification,
+      digest: analysis.retrieval.read.digest,
+    },
     sources: analysis.retrieval.sources.map((source) => ({ source: source.source, status: source.status, count: source.count })),
     disclosures: analysis.deliberation.disclosures.slice(0, 16),
     clarification: analysis.deliberation.clarification.needed,

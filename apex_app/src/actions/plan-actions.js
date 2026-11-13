@@ -40,6 +40,9 @@ import { outcomesAudit, outcomesForGoal } from '../plans/outcomes.js';
 import { assessGoal, completionConsistency } from '../goals/assess.js';
 import { assessOutcome, renderAssessment, VERDICT_RULE } from '../plans/assessment.js';
 import { learningScope, learningDigest, readLearning, renderLearning, adaptationRow } from '../executive/learning.js';
+import {
+  DEFAULT_SNAPSHOT_ATTEMPTS, contributingStores, openEvidenceSnapshot, snapshotView,
+} from '../evidence/snapshot.js';
 
 // How many adaptation records, in any state, one comparison reads for guidance. The store bounds the
 // read; this bounds the answer, and a guidance ledger that had to truncate would say so in its own
@@ -485,23 +488,125 @@ const planSnapshot = (plan) => ({
   updatedAt: plan.updatedAt,
 });
 
+// ---- one evidence window per planning read (AP-07 §7) ------------------------
+//
+// An executive answer such as an outcome assessment or a candidate comparison joins records from
+// several append-only stores. Each read is internally consistent, but a write that lands between two of
+// them can make the joined answer describe a combination of states that never existed at one instant.
+// The reads below therefore run inside one snapshot and are verified afterwards, so the answer either
+// says the records were unchanged throughout or says they were not. The window holds no lock, stops no
+// writer, and is evidence about the read - never permission to act on it: execution revalidates the
+// approval, the constraints, and every step again at its own boundary, from the live stores.
+const READ_SURFACES = Object.freeze({
+  plans: ['resolve', 'get', 'load', 'list', 'assessments', 'candidateState', 'validatePlan'],
+  goals: ['resolve', 'get'],
+  operations: ['findById', 'inspect'],
+  knowledge: ['history', 'byOperation'],
+  memory: ['get'],
+  experience: ['get', 'adaptations', 'activeAdaptations'],
+  predictions: ['calibration', 'list'],
+});
+
+const WINDOW_NOTE = 'a consistent window proves no contributing store changed while this answer was read; it is not a transaction, holds no lock, and says nothing about whether the records are true';
+
+async function openReadWindow(store, ctx, names) {
+  const configured = {};
+  for (const name of names) if (ctx && ctx[name]) configured[name] = ctx[name];
+  const sources = contributingStores({ plans: store, ...configured });
+  if (sources.length === 0) {
+    return { ctx, store, snapshot: null, verdict: async () => null };
+  }
+  const snapshot = await openEvidenceSnapshot({ stores: sources });
+  const read = (label, fn) => snapshot.read(label, fn);
+  const viewCtx = { ...ctx };
+  for (const name of names) {
+    if (ctx && ctx[name]) viewCtx[name] = snapshotView(ctx[name], name, read, READ_SURFACES[name] ?? []);
+  }
+  return {
+    ctx: viewCtx,
+    store: snapshotView(store, 'plans', read, READ_SURFACES.plans),
+    snapshot,
+    verdict: () => snapshot.verify(),
+  };
+}
+
+// The verdict as an answer must be able to state it. A configuration with no inspectable store is a
+// window that was never opened, which is `unverified` - not a consistent one over nothing.
+function windowDisclosure(verdict) {
+  if (!verdict) {
+    return {
+      window: 'unverified',
+      certification: null,
+      consistent: false,
+      changed: [],
+      unverifiable: [],
+      note: 'no store this read consults could be inspected, so no consistency window was opened',
+    };
+  }
+  return {
+    window: verdict.state,
+    certification: verdict.certification,
+    consistent: verdict.consistent === true,
+    changed: (verdict.changed ?? []).map((c) => ({ store: c.name, kind: c.kind })),
+    unverifiable: [...(verdict.unverifiable ?? [])],
+    note: WINDOW_NOTE,
+  };
+}
+
+function describeWindow(evidence) {
+  const parts = [evidence.window];
+  if ((evidence.changed ?? []).length > 0) parts.push(`moved: ${evidence.changed.map((c) => `${c.store} ${c.kind}`).join(', ')}`);
+  if ((evidence.unverifiable ?? []).length > 0) parts.push(`unreadable: ${evidence.unverifiable.join(', ')}`);
+  parts.push(evidence.certification ? `${evidence.certification} certification` : 'no content certification');
+  return parts.join('; ');
+}
+
+function renderWindow(evidence, indent = '  ') {
+  if (!evidence) return null;
+  return `${indent}evidence window: ${describeWindow(evidence)} - ${evidence.note}`;
+}
+
 // The outcome questions are answered from four records, not one: the plan's own step outcomes, the
 // audit operation each step cites, the goal's criteria with the standing of their evidence, and what
 // the knowledge and memory stores still hold of what the plan wrote. A store this configuration does
 // not have is reported as unreadable by the assessment rather than assumed.
-async function outcomeOf(store, ctx, planRef) {
-  const plan = await store.resolve(planRef);
+async function deriveOutcome(store, ctx, planRef, { learning = false } = {}) {
+  const names = ['goals', 'operations', 'knowledge', 'memory', ...(learning ? ['experience', 'predictions'] : [])];
+  const window = await openReadWindow(store, ctx, names);
+  const plan = await window.store.resolve(planRef);
   let goal = null;
-  if (plan.goalId && ctx?.goals && typeof ctx.goals.resolve === 'function') {
-    goal = await ctx.goals.resolve(plan.goalId);
+  if (plan.goalId && window.ctx?.goals && typeof window.ctx.goals.resolve === 'function') {
+    goal = await window.ctx.goals.resolve(plan.goalId);
   }
   const assessment = await assessOutcome(plan, {
     goal,
-    operations: ctx?.operations ?? null,
-    knowledge: ctx?.knowledge ?? null,
-    memory: ctx?.memory ?? null,
+    operations: window.ctx?.operations ?? null,
+    knowledge: window.ctx?.knowledge ?? null,
+    memory: window.ctx?.memory ?? null,
   });
-  return { plan, assessment };
+  // The learning disclosure this answer carries is read inside the same window as the assessment it
+  // accompanies, so the two halves of the answer cannot describe different instants.
+  const learningRead = learning
+    ? await learningFor(window.store, window.ctx, { prior: plan, goalId: plan.goalId ?? null, excludePlanId: plan.id })
+    : null;
+  return { plan, assessment, learning: learningRead, window: await window.verdict() };
+}
+
+// A window that saw a writer is retried, because re-deriving a read has no external effect. A window
+// that could not be inspected is not retried: repeating the read cannot make an unreadable store
+// readable, and the assessment carries that state to whoever reads it.
+async function outcomeOf(store, ctx, planRef, options = {}) {
+  let last = null;
+  for (let attempt = 1; attempt <= DEFAULT_SNAPSHOT_ATTEMPTS; attempt += 1) {
+    last = await deriveOutcome(store, ctx, planRef, options);
+    const state = last.window?.state ?? 'unverified';
+    if (state === 'consistent' || state === 'unverifiable') break;
+  }
+  return {
+    plan: last.plan,
+    assessment: { ...last.assessment, evidence: windowDisclosure(last.window) },
+    learning: last.learning,
+  };
 }
 
 const findingRows = (findings = []) => findings.map((f) => ({
@@ -759,22 +864,27 @@ export function planActions(store) {
       async execute(ctx, { goalRef, work, cannotUse }) {
         const registry = registryFor(ctx);
         assertKnownActions(registry, cannotUse);
-        const goal = await goalForRead(ctx, goalRef);
+        // One window around every store this comparison joins: the goal, the records its constraints
+        // cite, the learning and guidance ledgers, and the plan records the ranking reads. The registry
+        // is not part of it - a capability's permissions are the live build, not a recorded log.
+        const read = await openReadWindow(store, ctx, ['goals', 'operations', 'knowledge', 'memory', 'experience', 'predictions']);
+        const goal = await goalForRead(read.ctx, goalRef);
         const evidence = { unavailableActions: cannotUse, knownBlockers: [], failedOperations: [] };
-        const constraints = await constraintsFor(ctx, registry, goal, evidence);
+        const constraints = await constraintsFor(read.ctx, registry, goal, evidence);
         const generated = candidatesForGoal({ goal, registry, evidence, workText: work, constraints });
         // Read after generation, because the capabilities the learning question is scoped to are the ones
         // the candidates name; before the comparison, because an approved guidance record is one of the
         // dimensions the comparison ranks on and it has to be on the table when the ranking is taken.
-        const learning = await learningFor(store, ctx, { candidates: generated.candidates, goalId: goal.id });
-        const guidance = await guidanceFor(ctx, registry, generated.candidates, { instructionRefusals: cannotUse });
+        const learning = await learningFor(read.store, read.ctx, { candidates: generated.candidates, goalId: goal.id });
+        const guidance = await guidanceFor(read.ctx, registry, generated.candidates, { instructionRefusals: cannotUse });
         // The step outcomes the goal's own plan records hold, read once for the ranking that compares
         // these candidates against them. An empty list here is a read that found nothing; the audit
         // line keeps that separate from a store nobody opened.
-        const outcomes = await outcomesForGoal(store, { goalId: goal.id });
-        const goalEvidence = await goalEvidenceFor(store, ctx, goal);
+        const outcomes = await outcomesForGoal(read.store, { goalId: goal.id });
+        const goalEvidence = await goalEvidenceFor(read.store, read.ctx, goal);
         const evaluation = evaluateCandidates({ result: generated, goal, registry, evidence, constraints, guidance, outcomes, goalEvidence });
-        const occupancy = await store.candidateState(goal.id);
+        const occupancy = await read.store.candidateState(goal.id);
+        const windowEvidence = windowDisclosure(await read.verdict());
         return {
           summary: `${generated.candidates.length} candidate plan(s) for goal ${shortId(goal.id)}; `
             + (evaluation.ok
@@ -804,6 +914,7 @@ export function planActions(store) {
             // explicit statement that it authorized nothing. Null means no comparison was made at all.
             adaptationDecision: evaluation.adaptationDecision ?? null,
             learning,
+            evidence: windowEvidence,
             recorded: false,
             approved: false,
             executable: false,
@@ -816,23 +927,25 @@ export function planActions(store) {
             renderAdaptationDecision(evaluation.adaptationDecision),
             occupancyNote(occupancy),
             renderLearning(learning),
+            renderWindow(windowEvidence),
             'No effort estimate appears above because the audit log holds no per-action duration to average; a number here would be a guess.',
             'These are drafts on screen. Recording one is plan.add, approving it is plan.approve, and both are user acts.',
-          ].join('\n'),
+          ].filter(Boolean).join('\n'),
         };
       },
       async verify(ctx, { goalRef, work, cannotUse }, result) {
         const registry = registryFor(ctx);
-        const goal = await goalForRead(ctx, goalRef);
+        const read = await openReadWindow(store, ctx, ['goals', 'operations', 'knowledge', 'memory', 'experience', 'predictions']);
+        const goal = await goalForRead(read.ctx, goalRef);
         const evidence = { unavailableActions: cannotUse, knownBlockers: [], failedOperations: [] };
-        const constraints = await constraintsFor(ctx, registry, goal, evidence);
+        const constraints = await constraintsFor(read.ctx, registry, goal, evidence);
         const again = candidatesForGoal({ goal, registry, evidence, workText: work, constraints });
-        const againLearning = await learningFor(store, ctx, { candidates: again.candidates, goalId: goal.id });
-        const againGuidance = await guidanceFor(ctx, registry, again.candidates, { instructionRefusals: cannotUse });
-        const againOutcomes = await outcomesForGoal(store, { goalId: goal.id });
+        const againLearning = await learningFor(read.store, read.ctx, { candidates: again.candidates, goalId: goal.id });
+        const againGuidance = await guidanceFor(read.ctx, registry, again.candidates, { instructionRefusals: cannotUse });
+        const againOutcomes = await outcomesForGoal(read.store, { goalId: goal.id });
         const compared = evaluateCandidates({
           result: again, goal, registry, evidence, constraints, guidance: againGuidance,
-          outcomes: againOutcomes, goalEvidence: await goalEvidenceFor(store, ctx, goal),
+          outcomes: againOutcomes, goalEvidence: await goalEvidenceFor(read.store, read.ctx, goal),
         });
         if (compared.boundTo.candidateSetDigest !== result.data.candidateSetDigest) {
           return {
@@ -858,7 +971,7 @@ export function planActions(store) {
             detail: 'the recorded step outcomes these candidates were ranked against no longer read the same: a step of one of this goal\'s plans failed, stayed uncertain, or was recorded while this answer was being read',
           };
         }
-        const occupancy = await store.candidateState(goal.id);
+        const occupancy = await read.store.candidateState(goal.id);
         if (occupancy.drafts.join(',') !== result.data.occupancy.drafts.join(',')) {
           return { ok: false, detail: 'the plan store now holds a different set of drafts for this goal than this read reported' };
         }
@@ -887,13 +1000,14 @@ export function planActions(store) {
       async execute(ctx, { planRef, reason, cannotUse }) {
         const registry = registryFor(ctx);
         assertKnownActions(registry, cannotUse);
-        const prior = await store.resolve(planRef);
+        const read = await openReadWindow(store, ctx, ['goals', 'operations', 'knowledge', 'memory', 'experience', 'predictions']);
+        const prior = await read.store.resolve(planRef);
         if (!prior.goalId) {
           throw new ValidationError(`plan ${shortId(prior.id)} records no goal, so a revision has no intention to revise an approach for`);
         }
-        const goal = await goalForRead(ctx, prior.goalId);
+        const goal = await goalForRead(read.ctx, prior.goalId);
         const failedOperations = failedOperationRecords(prior);
-        const constraints = await constraintsFor(ctx, registry, goal, { unavailableActions: cannotUse, knownBlockers: [], failedOperations });
+        const constraints = await constraintsFor(read.ctx, registry, goal, { unavailableActions: cannotUse, knownBlockers: [], failedOperations });
         const generated = revisedCandidates({
           goal,
           registry,
@@ -905,13 +1019,13 @@ export function planActions(store) {
         // What the earlier run refused stays refused while the revision is compared, so a revision that
         // quietly kept a capability that already failed is gated out rather than ranked.
         const refused = [...new Set([...cannotUse, ...(generated.revision?.refusedActions ?? [])].map(String))];
-        const learning = await learningFor(store, ctx, { candidates: generated.candidates, prior, goalId: goal.id });
-        const guidance = await guidanceFor(ctx, registry, generated.candidates, { instructionRefusals: refused });
+        const learning = await learningFor(read.store, read.ctx, { candidates: generated.candidates, prior, goalId: goal.id });
+        const guidance = await guidanceFor(read.ctx, registry, generated.candidates, { instructionRefusals: refused });
         // The recorded step outcomes this revision's capabilities carry, across every plan record for
         // this goal - the prior plan's own failures among them. Read here, not copied from the plan
         // being answered, because a revision has to see what the earlier approaches left behind.
-        const outcomes = await outcomesForGoal(store, { goalId: goal.id });
-        const goalEvidence = await goalEvidenceFor(store, ctx, goal);
+        const outcomes = await outcomesForGoal(read.store, { goalId: goal.id });
+        const goalEvidence = await goalEvidenceFor(read.store, read.ctx, goal);
         const evaluation = evaluateCandidates({
           result: generated,
           goal,
@@ -922,7 +1036,8 @@ export function planActions(store) {
           outcomes,
           goalEvidence,
         });
-        const occupancy = await store.candidateState(goal.id);
+        const occupancy = await read.store.candidateState(goal.id);
+        const windowEvidence = windowDisclosure(await read.verdict());
         return {
           summary: `${generated.candidates.length} revised candidate plan(s) for plan ${shortId(prior.id)} v${prior.version}; `
             + (evaluation.ok
@@ -952,6 +1067,7 @@ export function planActions(store) {
             comparison: comparisonOf(evaluation),
             adaptationDecision: evaluation.adaptationDecision ?? null,
             learning,
+            evidence: windowEvidence,
             freshApprovalRequired: generated.revision ? generated.revision.freshApprovalRequired : null,
             recorded: false,
             approved: false,
@@ -969,14 +1085,16 @@ export function planActions(store) {
             renderAdaptationDecision(evaluation.adaptationDecision),
             occupancyNote(occupancy),
             renderLearning(learning),
+            renderWindow(windowEvidence),
             `Plan ${shortId(prior.id)} is unchanged by this read, and its approval binds to its own bytes: none of the candidates above inherits it.`,
             'A revision is recorded with plan.add and authorized with plan.approve, both user acts, after fresh validation.',
-          ].join('\n'),
+          ].filter(Boolean).join('\n'),
         };
       },
       async verify(ctx, { planRef, reason, cannotUse }, result) {
         const registry = registryFor(ctx);
-        const prior = await store.resolve(planRef);
+        const read = await openReadWindow(store, ctx, ['goals', 'operations', 'knowledge', 'memory', 'experience', 'predictions']);
+        const prior = await read.store.resolve(planRef);
         const snapshot = planSnapshot(prior);
         const recorded = result.data.planSnapshot;
         if (snapshot.version !== recorded.version || snapshot.contentHash !== recorded.contentHash
@@ -984,8 +1102,8 @@ export function planActions(store) {
           return { ok: false, detail: `the plan being answered changed during the read (v${recorded.version} ${recorded.status} -> v${snapshot.version} ${snapshot.status})` };
         }
         if (!prior.goalId) return { ok: false, detail: 'the plan records no goal, so the revision cannot be regenerated' };
-        const goal = await goalForRead(ctx, prior.goalId);
-        const constraints = await constraintsFor(ctx, registry, goal, { unavailableActions: cannotUse, knownBlockers: [], failedOperations: failedOperationRecords(prior) });
+        const goal = await goalForRead(read.ctx, prior.goalId);
+        const constraints = await constraintsFor(read.ctx, registry, goal, { unavailableActions: cannotUse, knownBlockers: [], failedOperations: failedOperationRecords(prior) });
         const again = revisedCandidates({
           goal,
           registry,
@@ -995,9 +1113,9 @@ export function planActions(store) {
           constraints,
         });
         const refusedNow = [...new Set([...cannotUse, ...(again.revision?.refusedActions ?? [])].map(String))];
-        const againLearning = await learningFor(store, ctx, { candidates: again.candidates, prior, goalId: goal.id });
-        const againGuidance = await guidanceFor(ctx, registry, again.candidates, { instructionRefusals: refusedNow });
-        const againOutcomes = await outcomesForGoal(store, { goalId: goal.id });
+        const againLearning = await learningFor(read.store, read.ctx, { candidates: again.candidates, prior, goalId: goal.id });
+        const againGuidance = await guidanceFor(read.ctx, registry, again.candidates, { instructionRefusals: refusedNow });
+        const againOutcomes = await outcomesForGoal(read.store, { goalId: goal.id });
         const compared = evaluateCandidates({
           result: again,
           goal,
@@ -1006,7 +1124,7 @@ export function planActions(store) {
           constraints,
           guidance: againGuidance,
           outcomes: againOutcomes,
-          goalEvidence: await goalEvidenceFor(store, ctx, goal),
+          goalEvidence: await goalEvidenceFor(read.store, read.ctx, goal),
         });
         if (compared.boundTo.candidateSetDigest !== result.data.candidateSetDigest) {
           return { ok: false, detail: 'an independent revision gives different candidate bytes, so this answer describes a plan, goal, or registry that has since moved' };
@@ -1029,7 +1147,7 @@ export function planActions(store) {
             detail: 'the constraints that gated this revision no longer read the same: a blocker, prerequisite, dependency, or a record one of them cites has moved since this answer was read',
           };
         }
-        const occupancy = await store.candidateState(goal.id);
+        const occupancy = await read.store.candidateState(goal.id);
         if (occupancy.drafts.length !== result.data.occupancy.drafts.length) {
           return { ok: false, detail: 'the plan store holds a different number of drafts for this goal than this read reported' };
         }
@@ -1056,11 +1174,12 @@ export function planActions(store) {
         return { planRef: planRef.trim() };
       },
       async execute(ctx, { planRef }) {
-        const { plan, assessment } = await outcomeOf(store, ctx, planRef);
+        // The learning disclosure is read inside the same window as the assessment, so the answer's two
+        // halves are joined from one instant rather than from two reads that may straddle a write. The
+        // scope is the plan's own step actions, so the independent re-read below derives the same
+        // capabilities and can detect a moved record.
+        const { plan, assessment, learning } = await outcomeOf(store, ctx, planRef, { learning: true });
         const prior = assessment.ok ? await store.assessments(plan.id) : [];
-        // The scope is the plan's own step actions, so the independent re-read below, which is handed the
-        // same plan record, derives the same capabilities and can detect a moved record.
-        const learning = await learningFor(store, ctx, { prior: plan, goalId: plan.goalId ?? null, excludePlanId: plan.id });
         if (!assessment.ok) {
           return {
             summary: `plan ${shortId(plan.id)} v${plan.version} (${plan.status}) has no execution outcome to read back: ${assessment.reason}`,
@@ -1071,16 +1190,18 @@ export function planActions(store) {
               reason: assessment.reason,
               goalId: plan.goalId ?? null,
               recordable: false,
+              evidence: assessment.evidence ?? null,
               priorAssessments: [],
               learning,
               recorded: false,
             },
             display: [
               renderAssessment(assessment),
+              renderWindow(assessment.evidence),
               `Plan ${shortId(plan.id)} is v${plan.version} (${plan.status}) with ${plan.steps.length} step(s) and ${Object.keys(plan.stepResults ?? {}).length} recorded step outcome(s).`,
               renderLearning(learning),
               'Recording an assessment is plan.assess, and it needs an outcome to assess.',
-            ].join('\n'),
+            ].filter(Boolean).join('\n'),
           };
         }
         return {
@@ -1104,6 +1225,7 @@ export function planActions(store) {
             auditReads: assessment.auditReads,
             recordable: assessment.recordable,
             unrecordableReason: assessment.unrecordableReason,
+            evidence: assessment.evidence ?? null,
             priorAssessments: assessmentRows(prior),
             learning,
             note: assessment.note,
@@ -1112,17 +1234,18 @@ export function planActions(store) {
           },
           display: [
             renderAssessment(assessment),
+            renderWindow(assessment.evidence),
             prior.length
               ? `Already recorded against this plan: ${assessmentRows(prior).map((a) => `${a.verdict} for v${a.planVersion}${a.stale ? ' (stale: the plan content has since changed)' : ''}`).join('; ')}`
               : `No outcome assessment of plan ${shortId(plan.id)} is recorded yet.`,
             renderLearning(learning),
             'This read recorded nothing: an assessment is written by plan.assess, which is a user act, and it changes no status, approval, or timestamp.',
             'A step that ran and verified is a fact about the audit log. Whether the intention holds outside APEX\'s records is not answered here.',
-          ].join('\n'),
+          ].filter(Boolean).join('\n'),
         };
       },
       async verify(ctx, { planRef }, result) {
-        const { plan, assessment } = await outcomeOf(store, ctx, planRef);
+        const { plan, assessment, learning: againLearning } = await outcomeOf(store, ctx, planRef, { learning: true });
         const now = planSnapshot(plan);
         const then = result.data.planSnapshot;
         if (now.version !== then.version || now.status !== then.status
@@ -1133,7 +1256,6 @@ export function planActions(store) {
         if (recorded.length !== result.data.priorAssessments.length) {
           return { ok: false, detail: 'this read left a recorded assessment behind, which a read must not do' };
         }
-        const againLearning = await learningFor(store, ctx, { prior: plan, goalId: plan.goalId ?? null, excludePlanId: plan.id });
         if (learningDigest(againLearning) !== learningDigest(result.data.learning)) {
           return { ok: false, detail: 'the learning records this answer disclosed no longer read the same: an adaptation was decided, an expectation changed state, or an assessment was recorded against another plan for this goal while this answer was being read' };
         }
@@ -1173,6 +1295,15 @@ export function planActions(store) {
         const { plan, assessment } = await outcomeOf(store, ctx, target);
         if (!assessment.ok) {
           throw new ValidationError(`plan ${shortId(plan.id)} has no execution outcome to assess: ${assessment.reason}`);
+        }
+        // The evidence a recorded assessment becomes is read once, and a window that could not prove
+        // its stores stood still refuses the write: filing a durable reading of records that moved
+        // during the read would leave a claim behind that nothing re-checkable supports.
+        if (assessment.evidence && assessment.evidence.consistent !== true) {
+          throw new ValidationError(
+            `the stores this assessment reads were not provably unchanged while it was derived (${describeWindow(assessment.evidence)}), so nothing was recorded`,
+            'EVIDENCE_WINDOW_UNCONFIRMED',
+          );
         }
         // Recorded only when every retained finding cites an operation this read actually found and the
         // question the verdict depends on is among them. An assessment the store would refuse is reported

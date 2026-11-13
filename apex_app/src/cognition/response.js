@@ -29,6 +29,8 @@ const DISCLOSURE_PHRASES = Object.freeze({
   [Disclosure.ASSUMPTION_STATED]: 'the answer uses a stated assumption',
   [Disclosure.CLARIFICATION_REQUIRED]: 'one detail is needed before this can be answered',
   [Disclosure.CONTEXT_TRUNCATED]: 'some lower-relevance material was omitted to stay within the context budget',
+  [Disclosure.EVIDENCE_NOT_SINGLE_INSTANT]: 'a contributing store changed while this evidence was assembled, so the combined records describe no single instant',
+  [Disclosure.EVIDENCE_SNAPSHOT_UNVERIFIED]: 'a contributing store could not be inspected while this evidence was assembled, so consistency could not be checked',
   [Disclosure.MODEL_OUTPUT_UNVERIFIED]: 'model wording has no independent verification',
   [Disclosure.MODEL_STRUCTURE_REJECTED]: 'a malformed structured model response was rejected',
   [Disclosure.RECOMMENDATION_NOT_EXECUTED]: 'the recommended next step was not executed',

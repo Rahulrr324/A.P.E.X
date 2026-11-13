@@ -1792,3 +1792,146 @@ Concurrent activity:
   any report is true.
 
 This script is not part of `npm test` and no test depends on it.
+
+## Evidence consistency benchmark (Batch AP-07)
+
+`run-consistency-benchmark.mjs` measures the AP-07 consistency work on the paths it changed: content
+certification of a window, the integrity report, cognitive retrieval, world-state certification, the
+longitudinal read, the complete read actions, per-operation snapshot reuse, and cold versus warm
+reads. Each integrated consumer is measured beside the read shape it had before AP-07, on the same
+bytes in the same run.
+
+```sh
+APEX_DATA_ISOLATED=1 node benchmarks/run-consistency-benchmark.mjs [--records 100,1000,4000] [--repeats R] [--keep]
+```
+
+`--repeats` is 1-10 and defaults to 5; partial module calls use three samples. `APEX_DATA_ISOLATED`
+must be unset or `1`. Every directory is a fresh `apex-bench-consistency-` entry under the OS temp
+root, asserted with `assertIsolatedDataDir`, and cleanup refuses any path that is not its own.
+
+### Procedure
+
+- The base fixture is built through the ordinary controller actions: two user corrections derive and
+  approve one rule; one goal is prepared into a plan, approved, activated and executed; each criterion
+  is evidenced; the plan is assessed. Synthetic memory records are then appended directly as valid
+  JSONL at 100 / 1,000 / 4,000 records, each fixture copied so no measurement is taken on a store a
+  previous measurement enlarged. The nine stores hold 135 / 1,035 / 4,035 records.
+- For each size the script times, separately: a content window and a metadata-only window over all
+  nine stores; the integrity report alone; the complete `evidence.integrity` request (its own two
+  windows, verify, audit); cognitive retrieval; world-state construction; goal assessment without a
+  window; and the complete `plan.candidates`, `prediction.longitudinal`, `plan.outcome`,
+  `adaptation.effectiveness` and `adaptation.reviews` requests.
+- Cognitive retrieval is measured in **three arms** on the same stores and query: the AP-06 shape
+  (`retrieveEvidence` performs its own per-source reads), a control that performs the same two
+  searches up front and hands them in as seeds with no window, and the AP-07 shape that performs the
+  same reads through one content-certified window and passes its verdict. The control separates the
+  cost of the seeded read plan from the cost of certification; without it, run-to-run variation in
+  the memory search looks like window cost.
+- The longitudinal analysis is measured separately over in-memory projections at 20 / 200 / 1,000
+  records with and without a window verdict (the fixture's own ledger records no evaluated
+  expectations, so the complete read's ledger-backed analysis is empty and is disclosed as such).
+- One section reads the same label twice inside one window against two windows that each read it
+  once; one section measures the first read in a freshly assembled application (cold) against later
+  reads (warm) on a second fresh application, and times application assembly once, separately.
+- Any complete read that does not verify, any report with `authorizes` not `false`, any window that
+  is not `consistent`, any control arm that is not `unverified`, or a missing truncation disclosure
+  makes the run exit non-zero.
+
+### Measured
+
+One run of `--records 100,1000,4000 --repeats 5` on Windows 11, Node v26.4.0, x64, with no test or
+other benchmark active. Medians with the min-max spread in brackets. Wall-clock figures vary between
+runs on this machine; see the interpretation limits.
+
+Partial pieces, for attribution only - none is a request:
+
+| Partial | 100 records | 1,000 records | 4,000 records |
+|---|---|---|---|
+| window open + verify, content (9 stores) | 1.853 [1.807-2.852] | 2.478 [2.433-2.552] | 15.422 [14.904-17.376] |
+| window open + verify, metadata only | 0.886 [0.797-2.164] | 0.830 [0.825-0.834] | 4.374 [3.189-4.529] |
+| certification cost of the bytes | +0.967 | +1.648 | +11.049 |
+| integrity report (window + health) | 7.721 [7.272-8.050] | 10.834 [10.404-14.454] | 50.265 [45.875-68.837] |
+| goal assessment (no window) | 5.705 [5.458-6.708] | 13.860 [13.583-20.107] | 6.573 [5.349-8.544] |
+
+Cognitive retrieval, three arms on the same stores:
+
+| Arm | 100 records | 1,000 records | 4,000 records |
+|---|---|---|---|
+| stores read directly (AP-06 shape) | 10.201 [9.519-10.501] | 17.152 [16.604-33.144] | 109.210 [96.946-119.620] |
+| the same reads seeded, no window (control) | 9.710 [9.168-10.849] | 17.523 [17.391-45.838] | 104.090 [87.990-106.034] |
+| through one certified window (AP-07 shape) | 11.481 [10.534-11.912] | 20.278 [15.765-57.730] | 119.478 [111.412-144.116] |
+| seeded read plan (control over AP-06) | -0.491 | +0.371 | -5.119 |
+| window + verdict (AP-07 over control) | +1.771 | +2.755 | +15.388 |
+| window + verdict, total (AP-07 over AP-06) | +1.280 | +3.126 | +10.268 |
+
+The window over the control tracks the standalone content-window cost (+1.8 / +2.8 / +15.4 ms against
++1.0 / +1.6 / +11.0 ms of pure certification): the added cost is hashing the contributing bytes at the
+two inspections, not the read plan. At every size retrieval returned 15 evidence records with 2
+dropped by a bound.
+
+World-state construction and the analytic read:
+
+| Path | 100 records | 1,000 records | 4,000 records |
+|---|---|---|---|
+| world-state build, unwindowed | 3.645 [3.632-3.801] | 14.486 [14.443-17.004] | 23.150 [22.088-27.256] |
+| world-state build + window + certify | 6.505 [6.457-6.758] | 24.205 [23.163-28.528] | 39.125 [35.926-40.644] |
+| window + certification on the projection | +2.860 | +9.719 | +15.975 |
+| longitudinal analysis, no window | 0.190 (20 projections) | 1.032 (200) | 3.256 (1,000) |
+| longitudinal analysis, window verdict | 0.166 | 1.077 | 3.894 |
+| longitudinal delta | -0.024 | +0.045 | +0.638 |
+
+The world-state projection is cut at `WORLD_RECORD_LIMIT` (20 of 100 beliefs shown) at every size, so
+its read is `truncated` and certification never promotes its completeness.
+
+Complete read actions, each opening and verifying its own window and appending its own audit line:
+
+| Complete request | 100 records | 1,000 records | 4,000 records |
+|---|---|---|---|
+| `evidence.integrity` | 21.703 [20.627-22.630] | 25.945 [24.649-28.048] | 133.148 [113.486-171.666] |
+| `plan.candidates` | 22.697 [22.260-23.964] | 64.149 [57.563-67.784] | 70.137 [67.041-101.085] |
+| `prediction.longitudinal` | 10.038 [9.626-11.507] | 26.776 [24.888-45.100] | 30.007 [28.634-30.730] |
+| `plan.outcome` | 33.731 [31.648-36.267] | 128.042 [117.025-151.305] | 154.588 [125.839-171.446] |
+| `adaptation.effectiveness` | 35.736 [33.358-36.292] | 150.116 [89.828-216.613] | 158.947 [141.912-197.830] |
+| `adaptation.reviews` | 33.593 [31.622-35.222] | 150.788 [108.781-237.191] | 122.495 [115.356-153.671] |
+
+Per-operation reuse and cold/warm:
+
+| Measure | Result |
+|---|---|
+| one window, the same label read twice | 13.918 [13.726-16.259] |
+| two windows, each reading the label once | 46.500 [43.605-48.238] |
+| `evidence.integrity`, fresh application (cold) | 36.865 |
+| `evidence.integrity`, later reads (warm median) | 43.072 [25.789-77.747] |
+| `plan.outcome`, fresh application (cold) | 45.295 |
+| `plan.outcome`, later reads (warm median) | 45.694 [35.876-52.864] |
+| `prediction.longitudinal`, fresh application (cold) | 9.653 |
+| `prediction.longitudinal`, later reads (warm median) | 11.307 [10.732-11.980] |
+| application assembly, one fresh app | 2.165 |
+
+### Interpretation limits
+
+- Medians over one run in one process on one machine. The complete reads show a wide within-run
+  spread at 1,000 and 4,000 records (for example `adaptation.effectiveness` 89.8-216.6 ms at 1,000),
+  and repeated runs of the same fixture moved the complete `evidence.integrity` median between 48 and
+  133 ms at 4,000 records. Those figures are descriptive observations, not targets; only the in-run
+  paired and three-arm comparisons are treated as findings.
+- The direct retrieval median at 1,000 records ranged 17-42 ms across three runs of this section on
+  the same fixture. That is why the control arm exists: at 1,000 records it moved by -5 to +0.4 ms
+  against the AP-06 shape, while the window over it moved by +2.8 to +9.3 ms. An earlier two-arm run
+  that did not have the control showed +22 ms and was read as noise in the search, not as window
+  cost.
+- `NoBackend` answers `model_unavailable` before the model call, so the complete grounded request
+  cannot be measured without inference. Retrieval is measured as a direct partial on the same stores
+  and query; no figure here is a model latency.
+- "Cold" is the first read of a store in a freshly assembled application in this process, with the
+  OS file cache already warm. On this machine the cold read was not slower than the warm median for
+  any of the three measured reads; the warm spread is larger than the difference, so no cold penalty
+  is claimed.
+- The longitudinal sweep uses in-memory synthetic projections; the fixture's own ledger holds no
+  evaluated expectations, so the complete longitudinal request analyses an empty ledger and says so.
+- The world-state projection is truncated by its own record limit at every size, so its completeness
+  is false and certification is measured as overhead, not as a move to complete.
+- The fixture stores synthetic prose. Nothing here shows that a rule improves outcomes, that a
+  projection is true, or that any report authorizes an action.
+
+This script is not part of `npm test` and no test depends on it.

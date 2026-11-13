@@ -9,8 +9,9 @@
 //
 // Everything here is deterministic. Real child processes append to real files for the cross-process
 // cases, the application is assembled with NoBackend and a fixed clock, and no model is contacted. No
-// store is ever repaired by this suite, and the one same-size rewrite case exists to pin the documented
-// limit of a stat-based window rather than to claim it is detected.
+// store is ever repaired by this suite. AP-07 added content certification, so the same-size rewrite
+// that AP-06 could not see is now detected; the metadata-only mode is tested beside it so the cheaper
+// window's documented limit stays pinned rather than quietly assumed away.
 import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -246,18 +247,95 @@ describe('AP-06 snapshot: a window that can be certified', () => {
     assert.ok(verdict.changed[0].to.size < verdict.changed[0].from.size);
   });
 
-  test('a same-size rewrite that restores the modification time is outside what a stat can see (documented limit)', async () => {
+  test('a same-size rewrite that restores the modification time is a content change (AP-07)', async () => {
     const a = fixture('a.jsonl', 'aaaa\n');
     const before = await storeIdentity(a.filePath);
     const snapshot = await openEvidenceSnapshot({ stores: [{ name: 'a', filePath: a.filePath }] });
+    assert.equal(snapshot.certification, 'content');
     fs.writeFileSync(a.filePath, 'bbbb\n');
     fs.utimesSync(a.filePath, new Date(before.mtimeMs), new Date(before.mtimeMs));
     const verdict = await snapshot.verify();
     assert.equal(fs.readFileSync(a.filePath, 'utf8'), 'bbbb\n');
-    // This is the honest boundary: the stat window cannot see a replacement that preserves both size
-    // and mtime. The stores' own content validation and digests remain the authority for it.
+    // The metadata the AP-06 window compared is identical. The digest is what sees the replacement,
+    // and the report names what it saw instead of only that something moved.
+    assert.equal(verdict.state, 'concurrent_modification');
+    assert.equal(verdict.certification, 'content');
+    assert.equal(verdict.changed.length, 1);
+    assert.equal(verdict.changed[0].name, 'a');
+    assert.equal(verdict.changed[0].kind, 'content_changed');
+    assert.equal(verdict.changed[0].from.size, verdict.changed[0].to.size);
+    assert.equal(verdict.changed[0].from.mtimeMs, verdict.changed[0].to.mtimeMs);
+    assert.notEqual(verdict.changed[0].from.digest, verdict.changed[0].to.digest);
+    assert.equal(verdict.consistent, false);
+    assert.equal(verdict.complete, false);
+  });
+
+  test('a metadata-only window keeps the documented stat-only limit and says so', async () => {
+    const a = fixture('a.jsonl', 'aaaa\n');
+    const before = await storeIdentity(a.filePath);
+    const snapshot = await openEvidenceSnapshot({ stores: [{ name: 'a', filePath: a.filePath }], content: false });
+    assert.equal(snapshot.certification, 'metadata');
+    fs.writeFileSync(a.filePath, 'bbbb\n');
+    fs.utimesSync(a.filePath, new Date(before.mtimeMs), new Date(before.mtimeMs));
+    const verdict = await snapshot.verify();
+    assert.equal(fs.readFileSync(a.filePath, 'utf8'), 'bbbb\n');
+    // This is the honest boundary of the cheaper mode: without reading the bytes it cannot see a
+    // rewrite that preserves both size and mtime. It never claims content equality.
     assert.equal(verdict.state, 'consistent');
-    assert.match(verdict.note, /says nothing about whether the records are true/);
+    assert.equal(verdict.certification, 'metadata');
+    assert.equal(verdict.note.includes('cannot see a same-size rewrite'), true);
+    assert.equal(verdict.note.includes('byte for byte'), false);
+  });
+
+  test('a deletion and a creation inside the window are named as such', async () => {
+    const a = fixture('a.jsonl', '{"n":1}\n');
+    const b = { filePath: path.join(dir(), 'b.jsonl') };
+    const snapshot = await openEvidenceSnapshot({ stores: [
+      { name: 'a', filePath: a.filePath },
+      { name: 'b', filePath: b.filePath },
+    ] });
+    fs.unlinkSync(a.filePath);
+    fs.writeFileSync(b.filePath, '{"n":2}\n');
+    const verdict = await snapshot.verify();
+    assert.equal(verdict.state, 'concurrent_modification');
+    const byName = new Map(verdict.changed.map((row) => [row.name, row.kind]));
+    assert.equal(byName.get('a'), 'deleted');
+    assert.equal(byName.get('b'), 'created');
+  });
+
+  test('a shorter file is reported as a truncation, never a quiet history', async () => {
+    const a = fixture('a.jsonl', '{"n":1}\n{"n":2}\n{"n":3}\n');
+    const snapshot = await openEvidenceSnapshot({ stores: [{ name: 'a', filePath: a.filePath }] });
+    fs.writeFileSync(a.filePath, '{"n":1}\n');
+    const verdict = await snapshot.verify();
+    assert.equal(verdict.state, 'concurrent_modification');
+    assert.equal(verdict.changed[0].kind, 'truncated');
+    assert.ok(verdict.changed[0].to.size < verdict.changed[0].from.size);
+  });
+
+  test('a touch that leaves the bytes identical is not called a content change', async () => {
+    const a = fixture('a.jsonl', '{"n":1}\n');
+    const before = await storeIdentity(a.filePath);
+    const snapshot = await openEvidenceSnapshot({ stores: [{ name: 'a', filePath: a.filePath }] });
+    fs.utimesSync(a.filePath, new Date(before.mtimeMs + 5000), new Date(before.mtimeMs + 5000));
+    const verdict = await snapshot.verify();
+    // The metadata moved, so the window is not consistent - but the bytes did not, and the report
+    // says which of the two it saw so a reader does not treat a timestamp-only touch as new evidence.
+    assert.equal(verdict.state, 'concurrent_modification');
+    assert.equal(verdict.changed[0].kind, 'touched');
+    assert.equal(verdict.changed[0].from.digest, verdict.changed[0].to.digest);
+  });
+
+  test('a certified snapshot records the digest of every contributing store', async () => {
+    const a = fixture('a.jsonl', '{"n":1}\n');
+    const b = fixture('b.jsonl');
+    const snapshot = await openEvidenceSnapshot({ stores: [
+      { name: 'a', filePath: a.filePath },
+      { name: 'b', filePath: b.filePath },
+    ] });
+    const verdict = await snapshot.verify();
+    assert.equal(verdict.state, 'consistent');
+    for (const row of verdict.stores) assert.match(row.digest, /^[0-9a-f]{64}$/);
   });
 
   test('the summary before verification is unverified rather than optimistically consistent', async () => {

@@ -13,6 +13,7 @@
 //    observation. Its evidence type and status say what it is.
 import { singleLine, truncate } from '../util.js';
 import * as worldQuery from '../world/query.js';
+import { readReport, sourceRead } from '../evidence/read-contract.js';
 import {
   BOUNDS, ClaimKind, EVIDENCE_VALIDITIES, EvidenceSource, EvidenceValidity, SourceStatus, Uncertainty,
   sourceRank,
@@ -747,6 +748,60 @@ async function attempt(source, sources, fn) {
   }
 }
 
+// What each source read actually covered. Retrieval is relevance-gated and bounded, so a source that
+// contributed nothing is a window that selected nothing - never proof the store is empty. The only
+// source that is complete is the user's own request. `window` is the snapshot verdict for the stores
+// the seeds and reads came from, so a bundle assembled across a moving store is reported as such.
+function retrievalRead(sources, { seeded = new Set(), window = null } = {}) {
+  const reads = [];
+  for (const entry of sources) {
+    if (entry.status === SourceStatus.SKIPPED) continue;
+    if (entry.source === EvidenceSource.USER_INSTRUCTION) {
+      reads.push(sourceRead({ source: entry.source, returned: 1, total: 1 }));
+      continue;
+    }
+    if (entry.status === SourceStatus.UNAVAILABLE) {
+      reads.push(sourceRead({ source: entry.source, status: 'unavailable', reason: entry.detail ?? null }));
+      continue;
+    }
+    if (entry.status === SourceStatus.DAMAGED) {
+      reads.push(sourceRead({ source: entry.source, status: 'damaged', returned: entry.count, reason: entry.detail ?? null }));
+      continue;
+    }
+    reads.push(sourceRead({
+      source: entry.source,
+      status: 'bounded',
+      returned: entry.count,
+      limit: BOUNDS.maxEvidencePerSource,
+      reason: seeded.has(entry.source)
+        ? 'the caller retrieved this source for the same request before the consistency window opened'
+        : 'retrieval is bounded by relevance and the per-source evidence budget',
+    }));
+  }
+  return readReport({ subject: 'cognition', reads, window });
+}
+
+function seededSources(seeds) {
+  const names = new Set();
+  const add = (...values) => { for (const value of values) names.add(value); };
+  if (provided(seeds, 'memoryHits')) add(EvidenceSource.MEMORY);
+  if (provided(seeds, 'knowledge')) add(EvidenceSource.KNOWLEDGE);
+  if (provided(seeds, 'experience')) add(EvidenceSource.EXPERIENCE);
+  if (provided(seeds, 'feedback')) add(EvidenceSource.FEEDBACK);
+  if (provided(seeds, 'adaptations')) add(EvidenceSource.ADAPTATION);
+  if (provided(seeds, 'temporal')) add(EvidenceSource.TEMPORAL);
+  if (provided(seeds, 'predictions')) add(EvidenceSource.PREDICTION);
+  if (provided(seeds, 'executive')) add(EvidenceSource.GOAL, EvidenceSource.PLAN, EvidenceSource.TASK);
+  if (provided(seeds, 'worldState')) {
+    add(
+      EvidenceSource.WORLD_CONFLICT, EvidenceSource.WORLD_FACT, EvidenceSource.WORLD_RELATIONSHIP,
+      EvidenceSource.WORLD_EVENT, EvidenceSource.WORLD_ENTITY,
+    );
+  }
+  if (provided(seeds, 'turns')) add(EvidenceSource.CONVERSATION);
+  return names;
+}
+
 export async function retrieveEvidence({
   request,
   understanding,
@@ -754,6 +809,7 @@ export async function retrieveEvidence({
   stores = {},
   seeds = {},
   worldConflicts = null,
+  window = null,
 } = {}) {
   const list = [];
   const counters = new Map();
@@ -895,6 +951,7 @@ export async function retrieveEvidence({
   if (totalDropped > 0) {
     omitted.push({ source: 'all', count: totalDropped, reason: `bounded to ${BOUNDS.maxEvidenceTotal} evidence records` });
   }
+  const read = retrievalRead(sources, { seeded: seededSources(seeds), window });
   return {
     evidence: kept,
     byId,
@@ -902,20 +959,27 @@ export async function retrieveEvidence({
     sources,
     conflicts: conflictGroups,
     omitted,
+    read,
     counts: {
       total: kept.length,
       dropped,
       bySource: Object.fromEntries([...bySource.entries()].map(([source, rows]) => [source, rows.length])),
       unavailable: sources.filter((entry) => entry.status === SourceStatus.UNAVAILABLE).map((entry) => entry.source),
       damaged: sources.filter((entry) => entry.status === SourceStatus.DAMAGED).map((entry) => entry.source),
+      readState: read.state,
+      truncatedSources: read.truncatedSources,
+      window: read.window,
     },
   };
 }
 
 // The uncertainty a source failure forces on an otherwise supported conclusion. It is about
-// verifiability, not about the truth of the records that were read.
+// verifiability, not about the truth of the records that were read. A window that moved, or that
+// could not be checked at all, makes the combined evidence describe no single instant, which is an
+// unverifiable bundle even when every individual source read succeeded.
 export function sourceUncertainty(retrieval) {
   if (!retrieval) return null;
+  if (retrieval.read?.state === 'inconsistent' || retrieval.read?.state === 'unverifiable') return Uncertainty.UNVERIFIABLE;
   if ((retrieval.counts?.damaged ?? []).length > 0) return Uncertainty.UNVERIFIABLE;
   if ((retrieval.counts?.unavailable ?? []).length > 0) return Uncertainty.UNVERIFIABLE;
   return null;

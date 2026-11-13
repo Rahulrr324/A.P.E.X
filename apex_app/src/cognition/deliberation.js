@@ -148,6 +148,25 @@ function uncertaintyFor(understanding, retrieval, claims) {
       evidenceIds: [],
     };
   }
+  // A window that moved, or that could not be inspected, is not a damaged source: every record may be
+  // individually intact and the combination still describes a moment that never existed. Saying so
+  // before the per-source checks keeps the two conditions distinguishable.
+  if (retrieval?.read?.state === 'inconsistent') {
+    return {
+      category: Uncertainty.UNVERIFIABLE,
+      about: UncertaintyAbout.FACT,
+      reason: 'a contributing store changed while this evidence was assembled, so the combined records describe no single instant',
+      evidenceIds: [],
+    };
+  }
+  if (retrieval?.read?.state === 'unverifiable') {
+    return {
+      category: Uncertainty.UNVERIFIABLE,
+      about: UncertaintyAbout.FACT,
+      reason: 'a contributing store could not be inspected while this evidence was assembled, so consistency could not be checked',
+      evidenceIds: [],
+    };
+  }
   if (damaged.length > 0) {
     return {
       category: Uncertainty.UNVERIFIABLE,
@@ -436,6 +455,8 @@ export function deliberate({
   if (material.length === 0) disclose(Disclosure.NO_EVIDENCE);
   if ((retrieval?.counts?.unavailable ?? []).length > 0) disclose(Disclosure.SOURCE_UNAVAILABLE);
   if ((retrieval?.counts?.damaged ?? []).length > 0) disclose(Disclosure.SOURCE_DAMAGED);
+  if (retrieval?.read?.state === 'inconsistent') disclose(Disclosure.EVIDENCE_NOT_SINGLE_INSTANT);
+  if (retrieval?.read?.state === 'unverifiable') disclose(Disclosure.EVIDENCE_SNAPSHOT_UNVERIFIED);
   if (contradicting.length > 0) disclose(Disclosure.CONFLICT_UNRESOLVED);
   if (claims.some((claim) => claim.kind === ClaimKind.HISTORICAL)) disclose(Disclosure.EVIDENCE_HISTORICAL);
   if (claims.some((claim) => claim.kind === ClaimKind.UNKNOWN)) disclose(Disclosure.EVIDENCE_UNKNOWN_VALIDITY);

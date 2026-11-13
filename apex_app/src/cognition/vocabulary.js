@@ -176,6 +176,10 @@ export const Disclosure = Object.freeze({
   ASSUMPTION_STATED: 'assumption_stated',
   CLARIFICATION_REQUIRED: 'clarification_required',
   CONTEXT_TRUNCATED: 'context_truncated',
+  // AP-07: the records were read across a window that moved, or across a store that could not be
+  // inspected. Both say the combined evidence describes no single, verifiable instant.
+  EVIDENCE_NOT_SINGLE_INSTANT: 'evidence_not_single_instant',
+  EVIDENCE_SNAPSHOT_UNVERIFIED: 'evidence_snapshot_unverified',
   MODEL_OUTPUT_UNVERIFIED: 'model_output_unverified',
   MODEL_STRUCTURE_REJECTED: 'model_structure_rejected',
   RECOMMENDATION_NOT_EXECUTED: 'recommendation_not_executed',

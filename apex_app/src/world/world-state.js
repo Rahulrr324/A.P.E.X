@@ -7,6 +7,7 @@
 // keeps model conclusions separate from user assertions and keeps history (superseded,
 // retracted) out of the belief lists while still counting it.
 import { findMemoryConflictGroups } from '../memory/memory-store.js';
+import { readReport, sourceRead } from '../evidence/read-contract.js';
 import { shortId, truncate } from '../util.js';
 
 export const WORLD_SCHEMA = 1;
@@ -91,6 +92,21 @@ export function renderWorldState(world) {
     return `${name}: ${damaged ? `damaged - ${source.corruptLines} corrupt line(s); incomplete` : `ok - ${safeCount(source.records)} readable`}`;
   };
   lines.push(`  Sources:        ${sourceLine('memory', world.sources.memory)} | ${sourceLine('knowledge', world.sources.knowledge)}`);
+  // The projection's own store reads, in the shared bounded-read vocabulary. "truncated" names the
+  // bound that cut the read, so the reader can tell a complete survey from the most recent records.
+  if (world.read) {
+    const parts = [world.read.state];
+    if ((world.read.truncatedSources ?? []).length > 0) {
+      parts.push(`truncated at ${WORLD_RECORD_LIMIT} recent records: ${world.read.truncatedSources.join(', ')}`);
+    }
+    if ((world.read.damagedSources ?? []).length > 0) {
+      parts.push(`damaged: ${world.read.damagedSources.join(', ')}`);
+    }
+    if (world.read.window !== 'unverified') {
+      parts.push(`window ${world.read.window}${world.read.certification ? ` (${world.read.certification})` : ''}`);
+    }
+    lines.push(`  Store read:     ${parts.join('; ')}`);
+  }
   lines.push(`  Beliefs:        ${world.counts.userAsserted} user-asserted, ${world.counts.unverifiedModel} unverified model conclusion(s), ${world.counts.private} private`);
   lines.push(`  Contradictions: ${world.counts.unresolvedConflicts} unresolved knowledge group(s), ${world.counts.resolvedConflicts} with a recorded user decision, ${world.counts.memoryConflictGroups} memory subject group(s) carrying different values`);
   lines.push(`  History:        ${world.history.superseded} superseded, ${world.history.retracted} retracted, ${world.history.resolutions} resolution(s) (history or decisions, not beliefs)`);
@@ -195,6 +211,46 @@ export function renderWorldState(world) {
   return lines.join('\n');
 }
 
+// One store's contribution to the projection, expressed in the shared bounded-read vocabulary. The
+// distinction the projection previously lost is between "read the whole store" and "read the most
+// recent 100 records": both produced a believable-looking window, so a projection cut short by the
+// record limit still called itself complete. The store's own health says what it holds; the records
+// this read actually received say what was represented.
+function projectionSourceRead(name, { health, total, returned, limit }) {
+  if (health.inspected !== true) {
+    return sourceRead({
+      source: name,
+      status: 'unavailable',
+      reason: health.detail ?? `the ${name} store could not be inspected`,
+    });
+  }
+  if ((health.corruptLines ?? 0) > 0) {
+    return sourceRead({
+      source: name,
+      status: 'damaged',
+      returned,
+      reason: `${health.corruptLines} line(s) in the ${name} store could not be parsed, so no record from it is represented`,
+    });
+  }
+  const known = safeCount(total);
+  if (known !== null && known > returned) {
+    return sourceRead({
+      source: name,
+      status: 'truncated',
+      returned,
+      total: known,
+      limit,
+      stoppedAt: 'WORLD_RECORD_LIMIT',
+    });
+  }
+  return sourceRead({
+    source: name,
+    status: returned === 0 ? 'empty' : 'ok',
+    returned,
+    total: known ?? returned,
+  });
+}
+
 export async function buildWorldState({
   memory,
   knowledge,
@@ -203,6 +259,7 @@ export async function buildWorldState({
   recordLimit = WORLD_RECORD_LIMIT,
   temporal = null,
   predictions = null,
+  window = null,
 } = {}) {
   if (!memory || !knowledge) throw new Error('world state requires both stores');
   const beliefLimit = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), MAX_WORLD_LIMIT) : MAX_WORLD_BELIEFS;
@@ -221,6 +278,29 @@ export async function buildWorldState({
   // distinction between the two is carried by the health summary and reported as an unknown.
   const memoryContentAvailable = memoryRead.records !== null;
   const knowledgeContentAvailable = knowledgeRead.claims !== null;
+
+  // The projection's own two store reads, described once and shared by `complete`, the rendered
+  // summary, and any caller that already holds a certified window. A store the caller could not
+  // inspect is `unavailable`, never an empty store; one the record limit cut short is `truncated`
+  // and names the bound, so a 100-record prefix cannot pass as the whole history.
+  const read = readReport({
+    subject: 'world-state',
+    window,
+    reads: [
+      projectionSourceRead('memory', {
+        health: memoryHealth,
+        total: memoryHealth.records,
+        returned: memoryRecords.length,
+        limit: windowLimit,
+      }),
+      projectionSourceRead('knowledge', {
+        health: knowledgeHealth,
+        total: knowledgeHealth.claims,
+        returned: claimRecords.length,
+        limit: windowLimit,
+      }),
+    ],
+  });
 
   // Only live records are beliefs. A superseded or retracted record is history: it is
   // counted, shown by its own store's history command, and never presented as current.
@@ -355,11 +435,12 @@ export async function buildWorldState({
     addUnknown(`The prediction ledger could not be read, so the user's recorded expectations could not be inspected${predictions.detail ? ` (${safeText(predictions.detail, 100)})` : ''}.`);
   }
 
-  const memoryComplete = memoryHealth.inspected === true && memoryHealth.corruptLines === 0;
-  const knowledgeComplete = knowledgeHealth.inspected === true && knowledgeHealth.corruptLines === 0;
+  // Completeness means every part of the projection covered what it claims to cover. A bounded
+  // record window and a caller-supplied section that could not be read both make the projection
+  // partial, and a partial projection says so instead of reporting a complete view of a subset.
   const temporalComplete = !temporal || temporal.available !== false;
   const predictionsComplete = !predictions || predictions.available !== false;
-  const complete = memoryComplete && knowledgeComplete && temporalComplete && predictionsComplete;
+  const complete = read.complete && temporalComplete && predictionsComplete;
   const attention = !complete || totalUnresolved > 0 || memoryGroups.length > 0;
   const history = {
     superseded: safeCount(knowledgeHealth.superseded) ?? 0,
@@ -374,6 +455,7 @@ export async function buildWorldState({
     generatedAt: now().toISOString(),
     complete,
     attention,
+    read,
     sources,
     counts: {
       representedBeliefs: allBeliefs.length,
@@ -398,5 +480,23 @@ export async function buildWorldState({
     // tell what the stores say happened from what the user said they expect to happen.
     ...(predictions ? { predictions } : {}),
     limits: [...LIMITS],
+  };
+}
+
+// A caller that reads the projection inside a consistency window only learns the verdict after every
+// contributing read finished, which is after this projection was built. Re-deriving the report from
+// the per-source reads already recorded applies that verdict without re-reading a store: an
+// inconsistent or uninspectable window overrides each source read, and a projection that was complete
+// becomes partial, never the other way around.
+export function certifyWorldRead(world, window) {
+  if (!world || !world.read || !Array.isArray(world.read.reads) || !window) return world;
+  const reads = world.read.reads.map((read) => ({ ...read, state: read.sourceState ?? read.state }));
+  const read = readReport({ subject: world.read.subject ?? 'world-state', reads, window });
+  const complete = world.complete === true && read.complete;
+  return {
+    ...world,
+    read,
+    complete,
+    attention: world.attention === true || !complete,
   };
 }

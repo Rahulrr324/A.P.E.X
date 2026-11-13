@@ -24,6 +24,7 @@ import { SpanRecorder, buildRuntimeDiagnostics, StageOutcome } from '../cognitio
 import { ArtifactKind, validateArtifact } from '../cognition/artifacts.js';
 import { structuredDisclosureNotice, actionClaimNotice } from '../cognition/response.js';
 import { recheckEvidence } from '../cognition/evidence.js';
+import { contributingStores, openEvidenceSnapshot, snapshotView } from '../evidence/snapshot.js';
 import { reassessClaims } from '../cognition/lineage.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
@@ -51,7 +52,7 @@ import { executiveSystemText, normalizeExecutiveProposal, parseExecutiveOutput }
 import { StoreError } from '../errors.js';
 import { KNOWLEDGE_PROMPT_LIMIT } from '../actions/knowledge-actions.js';
 import { MAX_HEALTH_SAMPLES, MAX_HISTORY_CHAIN } from '../knowledge/knowledge-store.js';
-import { buildWorldState, renderWorldState } from '../world/world-state.js';
+import { buildWorldState, certifyWorldRead, renderWorldState } from '../world/world-state.js';
 import { autoCaptureDecision, captureSettingPhrase, CAPTURE_OFF } from '../experience/capture.js';
 import { CAPTURE_AUTOMATIC } from '../experience/experience-store.js';
 import { finalizeOperation } from './finalization.js';
@@ -148,6 +149,38 @@ function terminalStepOutcomes(task) {
       operationId: s.operationId ?? null,
       detail: s.summary ? truncate(s.summary, 300) : null,
     }));
+}
+
+// The consistency window a continuation reading was taken in, as the reading itself can state it. A
+// window that was never opened because no store could be inspected is `unverified`, not consistent.
+function continuationEvidence(verdict) {
+  if (!verdict) {
+    return {
+      window: 'unverified',
+      certification: null,
+      consistent: false,
+      changed: [],
+      unverifiable: [],
+      note: 'no store this reading consults could be inspected, so no consistency window was opened',
+    };
+  }
+  return {
+    window: verdict.state,
+    certification: verdict.certification,
+    consistent: verdict.consistent === true,
+    changed: (verdict.changed ?? []).map((c) => ({ store: c.name, kind: c.kind })),
+    unverifiable: [...(verdict.unverifiable ?? [])],
+    note: 'a consistent window proves no contributing store changed while this reading was taken; it is not a transaction, holds no lock, and authorizes nothing',
+  };
+}
+
+function renderContinuationEvidence(evidence) {
+  if (!evidence) return null;
+  const parts = [evidence.window];
+  if ((evidence.changed ?? []).length > 0) parts.push(`moved: ${evidence.changed.map((c) => `${c.store} ${c.kind}`).join(', ')}`);
+  if ((evidence.unverifiable ?? []).length > 0) parts.push(`unreadable: ${evidence.unverifiable.join(', ')}`);
+  parts.push(evidence.certification ? `${evidence.certification} certification` : 'no content certification');
+  return `Evidence window: ${parts.join('; ')} - ${evidence.note}`;
 }
 
 // The advice after a failed model call depends on why it failed. A reachable endpoint
@@ -3149,21 +3182,52 @@ export class CognitiveController {
   // a caller already has one - the outcome reading. Each of those is read here rather than assumed, and
   // a record that cannot be read is reported as unreadable by the reading it feeds.
   async #planReadiness(plan, assessment = null) {
+    // Readiness joins the plan, its live validity, the goal, the task, and the continuation derivation,
+    // so all of them are read through one window: a readiness answer assembled from reads that straddle
+    // a write would describe two instants. The window holds no lock and grants nothing; it is disclosed
+    // with the continuation it covers.
+    const windowReading = await this.#continuationWindow();
+    const views = windowReading.views ?? {};
+    // The caller resolved this plan to name it; it is re-read inside the window so the readiness answer
+    // describes the plan record as of the same instant as everything else it joins.
+    let current = plan;
+    try {
+      current = await (views.plans ?? this.plans).resolve(plan.id);
+    } catch {
+      current = plan;
+    }
     let validity = null;
     let validityRead = true;
     try {
-      validity = (await this.validateStoredPlan(plan.id)).validity;
+      validity = await assessPlanValidity(current, {
+        goals: views.goals ?? this.goals,
+        plans: views.plans ?? this.plans,
+        operations: views.operations ?? this.operations,
+        knowledge: views.knowledge ?? this.knowledge,
+        memory: views.memory ?? this.memory,
+        experience: views.experience ?? this.experience,
+        worldModel: views.worldModel ?? this.worldModel,
+        taskStore: views.taskStore ?? this.taskStore,
+        now: this.now(),
+        forActivation: false,
+      });
     } catch (err) {
       validityRead = false;
       validity = { ok: false, checks: [], problems: [`live validity could not be checked: ${redactSecrets(err.message)}`] };
     }
     let goal = null;
-    if (plan.goalId) goal = (await this.#goalRecordFor(plan.goalId)).goal ?? null;
-    let task = null;
-    const taskId = plan.activation?.taskId ?? null;
-    if (taskId && this.taskStore) {
+    if (current.goalId && (views.goals || this.goals)) {
       try {
-        task = await this.taskStore.get(taskId);
+        goal = await (views.goals ?? this.goals).resolve(current.goalId);
+      } catch {
+        goal = null;
+      }
+    }
+    let task = null;
+    const taskId = current.activation?.taskId ?? null;
+    if (taskId && (views.taskStore || this.taskStore)) {
+      try {
+        task = await (views.taskStore ?? this.taskStore).get(taskId);
       } catch {
         task = null;
       }
@@ -3176,9 +3240,9 @@ export class CognitiveController {
     // states the plan's own records and nothing about taking the run up.
     let continuation = null;
     if (task && Array.isArray(task.steps) && validityRead) {
-      const inputs = await this.#continuationInputs(plan, validity);
+      const inputs = await this.#continuationInputs(current, validity, undefined, windowReading);
       continuation = continuationOf({
-        plan, task,
+        plan: current, task,
         operations: inputs.operations,
         registry: this.registry,
         constraints: inputs.constraints,
@@ -3188,8 +3252,9 @@ export class CognitiveController {
         goal: inputs.goal ?? goal,
         now: this.now(),
       });
+      if (continuation) continuation.evidence = continuationEvidence(await windowReading.verdict());
     }
-    return readinessOf({ plan, goal, task, validity, assessment, continuation });
+    return readinessOf({ plan: current, goal, task, validity, assessment, continuation });
   }
 
   async #executiveClarify(op, sid, signal) {
@@ -4123,10 +4188,19 @@ export class CognitiveController {
   // The records a continuation reading needs, gathered with the same bounded reads every other
   // executive answer uses. A store that cannot be read is reported to the derivation as unreadable,
   // which keeps an interrupted step unknown; it is never handed on as an empty one.
-  async #continuationInputs(plan, validity = null, lockOverride = undefined) {
+  //
+  // AP-07 §7: when a window is supplied, every store this reading joins is read through it, so the
+  // continuation describes one instant rather than a sequence of reads that may straddle a write. The
+  // window is verified by the caller and disclosed with the reading; it holds no lock and grants
+  // nothing, and the continuation that actually runs steps revalidates everything again from the live
+  // stores under the task lock.
+  async #continuationInputs(plan, validity = null, lockOverride = undefined, window = null) {
     const inputs = { operations: null, auditReadable: true, lock: lockOverride ?? null, constraints: null, validity: null, goal: null };
+    const views = window?.views ?? {};
+    const operations = views.operations ?? this.operations;
+    const goals = views.goals ?? this.goals;
     try {
-      const audit = await this.operations.inspect();
+      const audit = await operations.inspect();
       inputs.operations = audit.records;
     } catch {
       inputs.operations = null;
@@ -4141,9 +4215,9 @@ export class CognitiveController {
         inputs.lock = null;
       }
     }
-    if (plan.goalId && this.goals) {
+    if (plan.goalId && goals) {
       try {
-        inputs.goal = await this.goals.get(plan.goalId);
+        inputs.goal = await goals.get(plan.goalId);
       } catch {
         inputs.goal = null;
       }
@@ -4157,10 +4231,10 @@ export class CognitiveController {
         const { cited, dependencies } = await readConstraintRecords({
           goal: inputs.goal,
           registry: this.registry,
-          goals: this.goals,
-          knowledge: this.knowledge,
-          memory: this.memory,
-          experience: this.experience,
+          goals,
+          knowledge: views.knowledge ?? this.knowledge,
+          memory: views.memory ?? this.memory,
+          experience: views.experience ?? this.experience,
         });
         inputs.constraints = constraintLedger({
           goal: inputs.goal,
@@ -4175,14 +4249,14 @@ export class CognitiveController {
     }
     try {
       inputs.validity = validity ?? await assessPlanValidity(plan, {
-        goals: this.goals,
-        plans: this.plans,
-        operations: this.operations,
-        knowledge: this.knowledge,
-        memory: this.memory,
-        experience: this.experience,
-        worldModel: this.worldModel,
-        taskStore: this.taskStore,
+        goals,
+        plans: views.plans ?? this.plans,
+        operations,
+        knowledge: views.knowledge ?? this.knowledge,
+        memory: views.memory ?? this.memory,
+        experience: views.experience ?? this.experience,
+        worldModel: views.worldModel ?? this.worldModel,
+        taskStore: views.taskStore ?? this.taskStore,
         now: this.now(),
         forActivation: false,
       });
@@ -4190,6 +4264,39 @@ export class CognitiveController {
       inputs.validity = null;
     }
     return inputs;
+  }
+
+  // The stores a continuation reading joins, opened as one window. A store this build does not have is
+  // not part of the window rather than an unreadable member of it. The verdict is taken after the
+  // reading has been performed, because a before-and-after content check only proves anything about the
+  // reads that happened between them.
+  async #continuationWindow() {
+    const sources = contributingStores({
+      plans: this.plans,
+      operations: this.operations,
+      goals: this.goals,
+      knowledge: this.knowledge,
+      memory: this.memory,
+      experience: this.experience,
+      world: this.worldModel,
+      tasks: this.taskStore,
+    });
+    if (sources.length === 0) return { views: null, verdict: async () => null };
+    const snapshot = await openEvidenceSnapshot({ stores: sources });
+    const read = (label, fn) => snapshot.read(label, fn);
+    return {
+      views: {
+        plans: snapshotView(this.plans, 'plans', read, ['resolve', 'get', 'load', 'validatePlan']),
+        operations: snapshotView(this.operations, 'operations', read, ['inspect', 'findById']),
+        goals: snapshotView(this.goals, 'goals', read, ['get', 'resolve']),
+        knowledge: snapshotView(this.knowledge, 'knowledge', read, ['history', 'byOperation']),
+        memory: snapshotView(this.memory, 'memory', read, ['get']),
+        experience: snapshotView(this.experience, 'experience', read, ['get']),
+        worldModel: snapshotView(this.worldModel, 'world', read, ['checkStatement']),
+        taskStore: snapshotView(this.taskStore, 'tasks', read, ['get']),
+      },
+      verdict: () => snapshot.verify(),
+    };
   }
 
   // Read-only: the nine-state reading of a plan's partially executed run, and what may be taken up.
@@ -4209,11 +4316,16 @@ export class CognitiveController {
       result: null,
     }, 'The continuation reading may have been recorded, but its audit record could not be written.', { status: null });
 
+    // Opening the window first means the plan record, the task it names, and every store the
+    // continuation joins are read through one window, so the reading describes one instant.
+    const windowReading = await this.#continuationWindow();
+    const views = windowReading.views ?? {};
+
     let plan;
     try {
       this.#requirePlans();
       this.#requireTasks();
-      plan = await this.plans.resolve(ref);
+      plan = await (views.plans ?? this.plans).resolve(ref);
       op.request = `plan continuation ${shortId(plan.id)}`;
       if (!plan.activation?.taskId) {
         return refuse(`plan ${shortId(plan.id)} was never activated, so no run of it was interrupted: ${plan.status === PlanStatus.DRAFT ? 'it has not been approved either' : 'start it with: node bin/apex.js plan start ' + shortId(plan.id)}`);
@@ -4225,14 +4337,14 @@ export class CognitiveController {
 
     let task;
     try {
-      task = await this.taskStore.get(plan.activation.taskId);
+      task = await (views.taskStore ?? this.taskStore).get(plan.activation.taskId);
     } catch (err) {
       if (err instanceof StoreError) return refuse(`${redactSecrets(err.message)}; the run it interrupted cannot be read, so nothing is claimed about it`);
       throw err;
     }
     if (!task) return refuse(`the task ${shortId(plan.activation.taskId)} this plan activated is not in the task log, so this plan's run cannot be described`);
 
-    const inputs = await this.#continuationInputs(plan);
+    const inputs = await this.#continuationInputs(plan, null, undefined, windowReading);
     const continuation = continuationOf({
       plan, task,
       operations: inputs.operations,
@@ -4244,6 +4356,10 @@ export class CognitiveController {
       goal: inputs.goal,
       now: this.now(),
     });
+    // The window is disclosed with the reading and grants nothing: it proves the stores this answer
+    // consulted stood still while it was taken, not that the run may be continued. The continuation
+    // that actually runs steps revalidates all of it again from the live stores under the task lock.
+    const evidence = continuationEvidence(await windowReading.verdict());
     const step = {
       action: 'plan.continuation',
       origin: 'user',
@@ -4252,14 +4368,14 @@ export class CognitiveController {
       execution: { status: 'ok' },
       verification: {
         outcome: Outcome.SUCCESS_VERIFIED,
-        detail: `the states were derived from the task log, this plan's own operation records, the plan record, the live registry, and the goal's recorded constraints; the reading ran nothing and wrote nothing beyond this audit record`,
+        detail: `the states were derived from the task log, this plan's own operation records, the plan record, the live registry, and the goal's recorded constraints; the reading ran nothing and wrote nothing beyond this audit record; the evidence window is ${evidence.window}`,
       },
       outcome: Outcome.SUCCESS_VERIFIED,
       summary: `plan ${shortId(plan.id)}: the run is ${continuation.runState}; ${continuation.continue.runnable.length} step(s) may be taken up, ${continuation.continue.neverReplay.length} must not be run again`,
-      display: [renderPlanContinuation(continuation), renderPlan(plan)].join('\n'),
+      display: [renderPlanContinuation(continuation), renderContinuationEvidence(evidence), renderPlan(plan)].filter(Boolean).join('\n'),
       result: {
         summary: `plan ${shortId(plan.id)}: ${continuation.runState}`,
-        data: { continuation, audit: continuationAudit(continuation) },
+        data: { continuation, audit: continuationAudit(continuation), evidence },
       },
     };
     return this.#finishCommandOp(op, step, 'The continuation reading may have been recorded, but its audit record could not be written.', { status: null });
@@ -5643,12 +5759,39 @@ export class CognitiveController {
 
     // Retrieve relevant knowledge before building the prompt so memory, knowledge,
     // and turns share one size budget. The store is bounded and fails safely.
+    //
+    // AP-07: every store this answer is assembled from is read inside one snapshot window, so the
+    // knowledge, experience, prediction, executive, and World Model sections of the prompt describe
+    // one set of files. The window is verified before the cognitive analysis runs; if it moved, the
+    // analysis discloses that the combined evidence describes no single instant. Opening a window is
+    // not a lock: writers are never stopped, and the verdict is about the read, not the records.
+    let evidenceSnapshot = null;
+    try {
+      evidenceSnapshot = await openEvidenceSnapshot({
+        stores: contributingStores({
+          memory: this.memory,
+          knowledge: this.knowledge,
+          experience: this.experience,
+          predictions: this.predictions,
+          goals: this.goals,
+          plans: this.plans,
+          tasks: this.taskStore,
+          world: this.worldModel,
+        }),
+      });
+    } catch {
+      // A window that cannot be opened is no window. The reads still happen and the analysis is told
+      // nothing was certified, rather than being handed an empty success.
+      evidenceSnapshot = null;
+    }
+    const readThrough = (label, fn) => (evidenceSnapshot ? evidenceSnapshot.read(label, fn) : fn());
+
     let knowledge = [];
     let knowledgeUnavailable = false;
     let knowledgeNotice = '';
     if (this.knowledge) {
       try {
-        const khits = await this.knowledge.search(request, { limit: KNOWLEDGE_PROMPT_LIMIT });
+        const khits = await readThrough('knowledge', () => this.knowledge.search(request, { limit: KNOWLEDGE_PROMPT_LIMIT }));
         knowledge = dedupeKnowledge(selectPromptKnowledge(khits));
       } catch (err) {
         // Knowledge is supplementary, so it does not block the answer. The failure
@@ -5661,7 +5804,9 @@ export class CognitiveController {
     // The approved behaviour rules for this request, retrieved once and bounded. Supplementary
     // like knowledge: an unreadable store does not stop the answer, but the model is told that no
     // rule could be checked rather than that none applies.
-    const { adaptations, unavailable: adaptationsUnavailable, omitted: adaptationsOmitted } = await this.#adaptationsFor(request, op);
+    const { adaptations, unavailable: adaptationsUnavailable, omitted: adaptationsOmitted } = await readThrough(
+      'adaptations', () => this.#adaptationsFor(request, op),
+    );
     // Read the epistemic projection once, from the same store instances this answer was
     // retrieved from, so the model is told what the stores as a whole hold rather than
     // only the records that happened to match. It is a read-only derivation: it writes
@@ -5673,7 +5818,7 @@ export class CognitiveController {
     let worldUnavailable = false;
     if (this.memory && this.knowledge) {
       try {
-        world = await buildWorldState({ memory: this.memory, knowledge: this.knowledge, now: this.now });
+        world = await readThrough('worldState', () => buildWorldState({ memory: this.memory, knowledge: this.knowledge, now: this.now }));
       } catch (err) {
         // Supplementary, like knowledge: the answer still goes ahead, but the model is
         // told the whole-store check did not happen.
@@ -5689,7 +5834,7 @@ export class CognitiveController {
     let temporalUnavailable = false;
     if (this.experience) {
       try {
-        temporal = await this.experience.temporalSummary();
+        temporal = await readThrough('temporal', () => this.experience.temporalSummary());
       } catch (err) {
         op.errors.push({ stage: 'temporal', code: err.code || 'STORE_ERROR', message: err.message });
         temporalUnavailable = true;
@@ -5706,7 +5851,7 @@ export class CognitiveController {
     let predictionsUnavailable = false;
     if (this.predictions && predictionsRelevant) {
       try {
-        predictions = await this.predictions.promptView();
+        predictions = await readThrough('predictions', () => this.predictions.promptView());
       } catch (err) {
         op.errors.push({ stage: 'predictions', code: err.code || 'STORE_ERROR', message: err.message });
         predictionsUnavailable = true;
@@ -5719,11 +5864,11 @@ export class CognitiveController {
     let executiveUnavailable = false;
     if (this.goals || this.plans || this.taskStore) {
       try {
-        const [goalRecords, planRecords, taskRecords] = await Promise.all([
+        const [goalRecords, planRecords, taskRecords] = await readThrough('executive', () => Promise.all([
           this.goals ? this.goals.list() : Promise.resolve([]),
           this.plans ? this.plans.list() : Promise.resolve([]),
           this.taskStore ? this.taskStore.list() : Promise.resolve([]),
-        ]);
+        ]));
         executive = { goals: goalRecords, plans: planRecords, tasks: taskRecords, unavailable: false };
       } catch (err) {
         op.errors.push({ stage: 'executive', code: err.code || 'STORE_ERROR', message: err.message });
@@ -5738,7 +5883,7 @@ export class CognitiveController {
     let worldModelConflicts = [];
     if (this.worldModel) {
       try {
-        worldModelState = await this.worldModel.state();
+        worldModelState = await readThrough('worldModel', () => this.worldModel.state());
         // One conflict derivation serves both the bounded World Model prompt view and the cognitive
         // analysis. Computing it twice could let the two sections disagree about the same store.
         worldModelConflicts = computeConflicts(worldModelState, { now: this.now() });
@@ -5752,6 +5897,14 @@ export class CognitiveController {
     // not an optimization detail: it makes the analysis describe the same records the prompt holds,
     // instead of a second read that could differ. A failure here is disclosed and does not block the
     // answer; an empty analysis is never rendered as "nothing applies".
+    // The window is verified once, after every contributing read and before the analysis that will
+    // describe them. A moved or uninspectable store is passed to the analysis as a verdict about the
+    // read, so the grounded result is disclosed as inconsistent rather than presented as complete.
+    const evidenceWindow = evidenceSnapshot ? await evidenceSnapshot.verify() : null;
+    // The projection was built before the verdict existed. Applying it now makes the same window that
+    // governs the analysis govern the world section: a store that moved mid-read makes the projection
+    // partial and disclosed, not complete.
+    if (world && evidenceWindow) world = certifyWorldRead(world, evidenceWindow);
     let cognition = null;
     let cognitionUnavailable = false;
     try {
@@ -5786,6 +5939,7 @@ export class CognitiveController {
           worldStateUnavailable: worldModelUnavailable,
         },
         worldConflicts: worldModelConflicts,
+        window: evidenceWindow,
         continuationLoader: () => this.continuationReport({}),
       });
       if (cognition?.available !== true) {
@@ -5867,6 +6021,8 @@ export class CognitiveController {
         memoryConflictGroups: world.counts.memoryConflictGroups,
         unknowns: world.unknowns.length,
         complete: world.complete,
+        readState: world.read?.state ?? null,
+        window: world.read?.window ?? null,
       };
     } else if (worldUnavailable) {
       op.prompt.world = { included: false, unavailable: true };

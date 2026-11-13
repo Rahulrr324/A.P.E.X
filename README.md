@@ -199,6 +199,19 @@ the effectiveness read now discloses when its 20-rule window clipped a stored ru
 window is documented as a proof of quiescence rather than a transaction
 ([details](apex_app/README.md#batch-ap-06-evidence-fabric-scalability-and-cross-store-integrity-as-implemented);
 tests: `tests/evidence-fabric.test.js`, 51 cases). It needs no model and adds no store.
+Batch AP-07 then made the consistency consumer-wide and the window content-based: every consumer that
+combines several stores into one answer - cognitive retrieval, world-state construction, the
+prediction longitudinal read, plan candidate and outcome reads, goal assessment, and the existing
+effectiveness and governance reports - now reads its contributing stores inside one content-certified
+window and reports the outcome through one nine-state read contract, or states why it could not; the
+window's identity now carries a SHA-256 of each file's bytes, so a same-size, same-mtime rewrite is a
+detected change; a longitudinal pattern is withheld when its read was truncated or moved; and an
+assessment whose evidence moved is refused as an execution failure rather than recorded
+([details](apex_app/README.md#batch-ap-07-evidence-snapshot-integrity-and-consumer-wide-consistency-as-implemented);
+tests: `tests/evidence-read-contract.test.js` and `tests/ap07-consistency.test.js`, 45 cases). It needs
+no model, adds no store, and no verdict authorizes an action. This does not make every read in APEX
+windowed: health reads and single-store lists remain atomic per store, and a window is still a proof
+of quiescence, not a transaction.
 What remains is the wider clause: an expectation verdict changing subsequent behaviour without a
 user-approved candidate, or changing more than the one disclosed ordering, and any claim of prediction
 accuracy or causation. The runtime keeps that wider clause open; this is a recommendation only, and no
