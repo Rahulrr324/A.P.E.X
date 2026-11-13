@@ -6549,6 +6549,205 @@ about a real model's answer quality; no test runs one. The contract is descripti
 pipeline, enforced by runtime checks and tests, not a new pipeline: a failure of a descriptive check
 is disclosed, and only the existing registry and approval decisions can authorize anything.
 
+## Batch AP-09: semantic grounding, claim consistency, and adversarial response verification (as implemented)
+
+AP-08 could say that a claim cited a record and restated its words. That check was lexical overlap:
+a sentence that kept every content word but reversed a negation, changed a number or swapped a name
+still overlapped the record completely and reached `factually_supported`. AP-09 adds the wording
+check. It is one read-only module, `src/cognition/semantic-consistency.js`, plus the existing
+assessment in `src/cognition/response-integrity.js` and three lines of controller wiring. It adds no
+store, no action, no dependency, no second pipeline and no second authorization path; AP-08's trust
+ladder keeps its five states and its unreachable `verified` rung.
+
+### A closed vocabulary and a fixed precedence
+
+Every factual claim that cites records now carries exactly one finding from a closed list of
+thirteen:
+
+`semantically_consistent`, `partially_consistent`, `polarity_conflict`, `numerical_conflict`,
+`temporal_conflict`, `entity_conflict`, `relationship_conflict`, `qualifier_conflict`,
+`unsupported_transformation`, `ambiguous`, `insufficient_evidence`, `unavailable`, `not_checked`.
+
+When several outcomes are true at once, one is reported by a documented precedence:
+
+```
+unavailable > not_checked > insufficient_evidence > polarity > numerical > temporal > entity >
+relationship > qualifier > transformation > ambiguous > partially_consistent > semantically_consistent
+```
+
+The three "could not check" outcomes sit above the conflicts because they describe the reading
+itself, not the claim. The rules that hold at runtime are:
+
+- **A conflict is never silently downgraded.** If a dimension found a conflict, a weaker outcome
+  cannot replace it because another axis disagreed or because the claim happened to be short.
+- **Ambiguity is not a fact.** A finding of `ambiguous` is presented as uncertainty; it never counts
+  as support.
+- **A missing check is not a successful check.** `not_checked` and `unavailable` are distinct from
+  `semantically_consistent` and can never be read as one.
+- **`unavailable` stays unavailable.** An unreadable record or a snapshot that moved is not reported
+  as checked, refuted or supported.
+- **A partial reading stays partial.** A bounded or truncated retrieval, or a record that states a
+  value or date the claim omits, is `partially_consistent`, never consistent.
+- **No confidence score exists.** The output is a label, a fixed reason and counts. There is no
+  percentage, no probability and no fitted weight anywhere in the module.
+
+### Eight bounded dimensions
+
+Each finding comes from one or more of eight dimensions. The comparison is deterministic lexical and
+structural analysis over the claim and the records it cites - not natural-language inference.
+
+| Dimension | What it compares |
+|---|---|
+| attribution | whether every cited record is readable, current, not withdrawn and not contested; lifecycle is re-read per record, independently of the earlier evidence-state derivation |
+| polarity | clause-scoped negation and a closed antonym list; `and` does not end a clause but `but`, `however`, `whereas`, `although`, `though` and punctuation do; partial negation (`not all`, `not every`, `not necessarily`, ...) or two or more cues in one clause is `ambiguous` |
+| numerical | values, signs, percentages, a closed unit-alias table (no unit conversion), bounds (`>=`, `<=`, `>`, `<`, `~`, `=`), precision, added and omitted quantities |
+| temporal | ISO dates, month names, weekdays, year-only dates, clock times, relative periods and quarters; explicit before/after ordering; stale and superseded records; "not recorded" is not "did not happen" |
+| entity | whether a claim names an entity the records do not; a sentence-initial capital is not treated as a name |
+| relationship | a closed set of relation verbs, passive voice, subject/object inversion and recorded equality (`owner=`, `=`) |
+| qualifier | the quantifier ladder `none < some < most < all` and the certainty ladder `possibly < likely < must`; dropping a hedge is an upgrade; uniqueness markers (`only`, `sole`, ...) |
+| transformation | causal markers (`because`, `therefore`, ...) and added content the records do not state |
+
+The unit table maps aliases but never converts: stating the same magnitude in a different unit is a
+`numerical_conflict`, not an arithmetic step APEX takes. A quantity or date the claim adds is
+`unsupported_transformation`; one the records state and the claim omits is `partially_consistent`.
+
+### How a claim reaches a finding
+
+`assessClaimSemantics` bounds the check to six cited records and applies the following in order:
+
+- A non-factual claim kind is `not_checked` (`not_a_fact`); a factual claim with no citation is
+  `insufficient_evidence` (`no_citation`); with no retrieval index it is `not_checked` (`no_index`).
+- `missing`, `unavailable` and `damaged` read windows are `unavailable`
+  (`retrieved_outside_window`); `inconsistent` and `unverifiable` are `not_checked`
+  (`snapshot_not_consistent`).
+- A cited record absent from this retrieval is `insufficient_evidence` (`missing_record`, marked
+  partial); with no readable record at all it is `unavailable` (`unreadable_record`).
+- A retired or superseded record is `insufficient_evidence` (`withdrawn`); a stale record is
+  `insufficient_evidence` (`not_current`) unless the claim is marked historical; a contested or
+  unverified evidence state is `insufficient_evidence` (`contested`).
+- A claim with no content words, or with no content word in common with the records, is
+  `insufficient_evidence`; a single shared word is enough to run the dimensions, because a swapped
+  name or changed number often leaves only the subject word.
+- If no dimension fires, coverage decides: below 0.5 is `insufficient_evidence`, below 0.6 is
+  `partially_consistent`, otherwise `semantically_consistent`.
+- A bounded or truncated read, or an omitted value or date, makes the result at least
+  `partially_consistent`.
+
+Each finding also carries a fixed reason code. Reasons and dimensions are labels and integers; no
+claim text, record text or model prose can appear in them.
+
+### Attribution integrity
+
+The evidence-state rules AP-08 already recorded are enforced again here, per claim, as the
+attribution dimension: a nonexistent, excluded, stale, retracted, superseded, damaged or incomplete
+record is never treated as a current source. Relevance is not support - a record found by the search
+must still be readable, current and semantically consistent with the claim. A model cannot upgrade
+its own evidence state: the lifecycle and window are read from the retrieval and the stores, never
+from a field the model wrote, and a semantic assessment carries `authorizes: false` with
+`factualAuthority: 'none'`.
+
+### Response-level consistency
+
+`assessResponseConsistency` compares the response with itself, bounded to twelve claims and six
+compared pairs. Only claims that assert a stored fact are compared; an inference beside a fact is a
+disclosed inference, not a contradiction. Two factual claims are a pair when they share a content
+word; polarity is compared regardless, while a numerical, temporal or qualifier mismatch is called a
+contradiction only for a related pair, so two unrelated facts in one answer are never paired. The
+summary finding follows the same precedence, `overstated` counts supported claims that are not
+semantically consistent, and contradictions are reported as index pairs with a dimension label.
+
+### Conservative trust and degradation
+
+The semantic result gates the existing AP-08 ladder rather than adding a sixth state:
+
+- `factually_supported` now requires every attributed factual claim to be `semantically_consistent`
+  **and** the response to contain no contradictions. Attribution alone can no longer reach it.
+- A non-consistent factual claim adds its fixed limitation beside the answer:
+  `semantic_partial`, `semantic_polarity_conflict`, `semantic_numerical_conflict`,
+  `semantic_temporal_conflict`, `semantic_entity_conflict`, `semantic_relationship_conflict`,
+  `semantic_qualifier_conflict`, `semantic_unsupported_transformation`, `semantic_ambiguous`,
+  `semantic_insufficient_evidence`, `semantic_unavailable` or `semantic_not_checked`; contradictions
+  add `response_inconsistent`.
+- A conflicting answer is still presented, with its wording and a stated limitation. It is not
+  discarded and it is not promoted: `present_as_is` still requires the single limitation
+  `model_output_unverified`, so any semantic limitation forces `present_with_limitations`.
+- `verified` remains unreachable (`ok: false` unconditionally). A semantic check is a comparison with
+  cited records, not verification of the sentence.
+- The reader sees an APEX notice naming the finding labels and counts, never the claim text. The
+  notice is appended to the answer's annotation and is never written into the stored model turn, so
+  it cannot later be replayed as something the model said.
+
+The response contract's stage 12 records counts of semantic claims, checked claims and conflicts
+beside the structural result; the stage status itself stays structural.
+
+### Snapshot consistency across the request
+
+A semantic finding is only as current as the evidence it read. The check therefore uses the AP-07
+read window already carried by the retrieval: an unfinished, missing, damaged or unavailable window
+yields `unavailable`, and an inconsistent or unverifiable snapshot yields `not_checked`. A window
+failure is an evidence result - it degrades the answer and stays visible - never an
+`execution_failed` outcome, and it never rewrites the recorded lineage. Evidence rechecked after the
+answer was produced still only observes: it can weaken support, and it never grants authority.
+
+### Bounded, prose-free audit
+
+The AP-08 integrity audit gains one fixed-key `semantic` block: `schema`, `finding`, `claims`
+(`total`, `assessed`, `consistent`, `partial`, `conflict`, `ambiguous`, `insufficient`, `unavailable`,
+`not_checked`), `dimensions` (six status counts for each of the eight dimensions), at most six
+`contradictions` as `{a, b, dimension}`, `overstated`, `bounded` and `authorizes: false`. The block
+cannot carry a claim, a record or a reply. A missing assessment produces no audit and no invented
+result. The block is observational: nothing in the request path reads it to decide an action.
+
+### The executive boundary is unchanged
+
+A semantic assessment grants nothing. A proposal in a conflicting answer is still validated against
+the live registry, still denied or recorded as a handoff, and still bound to the plan or task it
+names. AP-09 adds no authority, no approval and no execution path; it only makes the wording of an
+answer visible.
+
+### What it costs
+
+`benchmarks/run-semantic-validation-benchmark.mjs` measures the complete deterministic request at
+20 / 200 / 1,000 / 4,000 records, the AP-09 functions in isolation, claim-count scaling and eleven
+adversarial rows through the real controller. The final run on Windows 11, Node v26.4.0, medians of
+nine repeats: 40.5 ms, 59.9 ms, 171.3 ms and 747.2 ms per complete request, with ten retrieved
+evidence records at every size and the control reply at `factually_supported`. The semantic
+assessment costs about 74-99 us per call at 6-36 evidence records, and the whole integrity
+assessment about 108-150 us; the request growth is the stores' search and parse cost, not the new
+check. The ten contradiction fixtures and the supported control all behaved as expected: every
+adversarial class stayed at `accepted_for_presentation` with a notice and a limitation, none reached
+`factually_supported` or `verified`, and only the control did. These are single-run observations on
+one machine, not a latency guarantee: an earlier run of the identical code produced 34.6 / 137.2 /
+322.1 / 1,499.0 ms and 121-163 us for the semantic function under different load. The fixture text
+is fixed and no inference was run.
+
+### Tests
+
+`tests/semantic-consistency.test.js` (88 cases, registered in `npm test`) covers the vocabulary,
+precedence, every dimension, the read window, claim-level and response-level consistency, the 28
+deterministic attack classes of the batch specification and the audit shape.
+`tests/semantic-acceptance.test.js` (18 cases, registered) runs the real controller and stores with a
+fixed model stub: a supported answer reaches factual support but stays below `verified`, a
+reworded contradiction is disclosed rather than silently supported, two contradictory claims defeat
+factual support, an unreadable source is unavailable, a write during the window is `not_checked`, a
+post-answer change weakens the answer, and a conflicting answer beside a proposal never authorizes
+it. The AP-08 suite keeps 42 of 42 cases and now asserts the added semantic audit keys. The complete
+`npm test` run after this batch ran **2,739 tests in 414 suites: 2,737 passed, 0 failed, 2 skipped**
+(the two documented Windows environment skips) in 307.9 s; the focused AP-09 and AP-08 suites passed
+160 of 160, and the AP-01 through AP-07 focused suites passed 249 of 249.
+
+### What this does not claim
+
+This is a bounded lexical and structural comparison, not natural-language understanding and not
+textual entailment. It cannot recognise a paraphrase with little shared vocabulary, a metaphor, an
+implication or a novel causal argument; those are reported `insufficient_evidence` or
+`not_checked`, not guessed. Every rule is a finite list or pattern, so the fixtures were written to
+be decidable by those rules and the results say nothing about a real model's answer quality; no
+model was consulted. `semantically_consistent` means "the wording did not contradict the records on
+the dimensions APEX checks", not "the sentence is true", and `factually_supported` still means
+"every factual claim was checked against current records". The check reads at most six records per
+claim, twelve claims and six pairs per response, and a record outside the retrieval is not checked.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 

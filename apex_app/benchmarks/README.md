@@ -2033,3 +2033,133 @@ Repeated identical requests:
   the accumulated evidence count.
 
 This script is not part of `npm test` and no test depends on it.
+
+## Semantic validation benchmark (Batch AP-09)
+
+`run-semantic-validation-benchmark.mjs` measures the AP-09 semantic check: the complete deterministic
+request at 20 / 200 / 1,000 / 4,000 records, the attribution, semantic, response-consistency,
+integrity and contract functions in isolation, claim-count scaling, and eleven adversarial rows
+through the real controller. The model is a deterministic in-process fixture returning one fixed
+`COGNITION` line that cites the seeded target record; nothing is inferred, downloaded, or sent.
+
+```sh
+node benchmarks/run-semantic-validation-benchmark.mjs [--repeats R] [--phase request|components|adversarial|all] [--sizes 20,200,1000,4000] [--adversarial-size 200] [--keep]
+```
+
+`--repeats` is 1-15 and defaults to 7. Every directory is a fresh `apex-bench-ap09-` entry under the
+OS temp root, and cleanup refuses any path that is not its own. No backend or socket is constructed:
+the gateway wraps the fixture object, so retrieval, structured-reply validation, attribution,
+semantic assessment, response consistency, the trust ladder, the response contract and the handoff
+all run through their real code paths.
+
+### Procedure
+
+- The `request` phase seeds a memory and knowledge history of the requested size, adds one target
+  record last, and runs the same grounded question through `controller.handle`. Filler history is
+  never re-seeded, so a larger row measures retrieval and assessment over a larger store, not a
+  different request. Warm-ups are run but not measured.
+- The history fixture names the same three words the request asks about (`lighthouse`, `project`,
+  `status`). This is deliberate: knowledge search scores are IDF-weighted, and at 4,000 records a
+  filler record sharing only a generic word falls below the fixed 0.2 prompt-relevance floor, which
+  would drop every knowledge record from the prompt and make the evidence column non-comparable
+  between rows. Naming the asked words keeps the target above the floor at every size. The floor
+  itself is unchanged.
+- The `components` phase calls `assessClaimAttribution`, `assessClaimSemantics`,
+  `assessResponseConsistency`, `assessResponseIntegrity` and `buildResponseContract` directly on
+  synthetic analyses with 6 / 24 / 36 evidence records (the retrieval budget), for a claim that
+  restates its record and a claim that reverses it. 200 measured calls per function per row follow 20
+  warm-ups. Each function is timed on its own; the integrity figure re-runs attribution and semantic
+  assessment internally, so the columns are not additive and none includes a store read or a model
+  call. The claim-scaling section holds evidence at 36 records and grows one response from 1 to 12
+  claims (the structural bound).
+- The `adversarial` phase runs ten contradiction fixtures plus a supported control, each through the
+  complete controller at `--adversarial-size` records (default 200). It checks the trust state, the
+  summary semantic finding, the stated limitations, whether a notice is present, and that no class
+  reaches `factually_supported` or `verified`.
+
+### Measured
+
+One run of `--repeats 9` on Windows, Node v26.4.0, x64, 12 logical CPUs, 24 GiB, with no test or
+other benchmark active, taken on the final tree. Medians with min-max spread in parentheses; p95 is
+not printed below 20 samples.
+
+Complete request, one grounded reply through the controller:
+
+| Memory+knowledge records | Wall per request | Retrieved evidence | Status | Trust | Semantic finding | Contract reached |
+|---|---|---|---|---|---|---|
+| 20 | 40.534 ms (38.475-51.796) | 10 | `verification_unavailable` | `factually_supported` | `semantically_consistent` | 14, `ok: true` |
+| 200 | 59.911 ms (54.739-63.597) | 10 | `verification_unavailable` | `factually_supported` | `semantically_consistent` | 14, `ok: true` |
+| 1,000 | 171.308 ms (145.844-175.234) | 10 | `verification_unavailable` | `factually_supported` | `semantically_consistent` | 14, `ok: true` |
+| 4,000 | 747.173 ms (726.916-782.416) | 10 | `verification_unavailable` | `factually_supported` | `semantically_consistent` | 14, `ok: true` |
+
+Retrieval stays at ten evidence records at every size because the per-source and total retrieval
+bounds apply, so the growth is the stores' search and parse cost. `verification_unavailable` is the
+outcome of a grounded answer with no action to verify, not a failure: the fixture proposes nothing.
+
+Components in isolation, microseconds per call (median, 200 measured calls after 20 warm-ups):
+
+| Evidence | Reply | Attribution | Semantic | Consistency | Integrity | Contract |
+|---|---|---|---|---|---|---|
+| 6 | consistent | 8.00 | 98.60 | 37.25 | 149.70 | 26.05 |
+| 6 | adversarial | 7.40 | 83.05 | 33.60 | 127.35 | 23.20 |
+| 24 | consistent | 5.60 | 84.45 | 32.20 | 127.35 | 21.30 |
+| 24 | adversarial | 5.20 | 69.80 | 30.90 | 108.35 | 15.70 |
+| 36 | consistent | 5.00 | 73.65 | 29.30 | 108.00 | 16.20 |
+| 36 | adversarial | 5.60 | 73.80 | 31.95 | 112.90 | 14.90 |
+
+The adversarial reply is summarised as `polarity_conflict` in the integrity column; the consistent
+reply is `semantically_consistent`. The integrity figure re-runs attribution and semantic
+assessment internally, so the columns are not additive.
+
+Claim-count scaling at 36 evidence records:
+
+| Claims | Integrity median | Response finding | Assessed | Contradictions |
+|---|---|---|---|---|
+| 1 | 104.00 us | `semantically_consistent` | 1 | 0 |
+| 4 | 435.80 us | `polarity_conflict` | 4 | 4 |
+| 8 | 846.00 us | `polarity_conflict` | 8 | 6 |
+| 12 | 1,224.45 us | `polarity_conflict` | 12 | 6 |
+
+Every side is a constant bound (12 claims, 6 compared pairs); the growth is the per-claim
+comparison, not an unbounded scan.
+
+Adversarial rows through the complete controller at 200 records:
+
+| Class | Wall median | Trust | Semantic finding | Limitation | Notice |
+|---|---|---|---|---|---|
+| control: exact restatement | 47.072 ms | `factually_supported` | `semantically_consistent` | n/a | no |
+| polarity reversal | 49.407 ms | `accepted_for_presentation` | `polarity_conflict` | `semantic_polarity_conflict` | yes |
+| changed quantity | 49.408 ms | `accepted_for_presentation` | `numerical_conflict` | `semantic_numerical_conflict` | yes |
+| bound stated as an exact value | 51.262 ms | `accepted_for_presentation` | `numerical_conflict` | `semantic_numerical_conflict` | yes |
+| changed date | 47.969 ms | `accepted_for_presentation` | `temporal_conflict` | `semantic_temporal_conflict` | yes |
+| swapped entity | 49.191 ms | `accepted_for_presentation` | `entity_conflict` | `semantic_entity_conflict` | yes |
+| reversed relationship | 47.939 ms | `accepted_for_presentation` | `relationship_conflict` | `semantic_relationship_conflict` | yes |
+| widened quantifier | 47.820 ms | `accepted_for_presentation` | `qualifier_conflict` | `semantic_qualifier_conflict` | yes |
+| added cause | 47.204 ms | `accepted_for_presentation` | `unsupported_transformation` | `semantic_unsupported_transformation` | yes |
+| unestablished meaning | 47.201 ms | `accepted_for_presentation` | `ambiguous` | `semantic_ambiguous` | yes |
+| omitted quantity | 47.707 ms | `accepted_for_presentation` | `partially_consistent` | `semantic_partial` | yes |
+
+Every contradiction class stayed at presentation with a stated limitation; the supported control
+reached factual support. No class reached `verified`, which no path can.
+
+### Interpretation limits
+
+- The fixture text is fixed synthetic prose and each attack class is worded to be decidable by a
+  finite rule. These figures measure APEX's handling of controlled replies; they say nothing about
+  the quality, truthfulness, or latency of a real model, and nothing about whether the rules would
+  detect a naturally worded claim.
+- One run on one machine. Wall-clock figures vary between runs and the component rows have enough
+  noise that only their medians are meaningful. On the identical code tree, an earlier full run
+  produced 34.578 / 137.155 / 322.083 / 1,498.995 ms per request and semantic medians of 121-163 us,
+  while this final run produced 40.534 / 59.911 / 171.308 / 747.173 ms and 74-99 us. Both are
+  observations, not a latency specification, and only in-run comparisons are treated as findings.
+- The complete request includes the controller, retrieval, claim extraction, prompt construction,
+  the fixture model call, validation, semantic assessment, contract, audit append and conversation
+  write. It is not a model latency and is not comparable to a live model-endpoint benchmark.
+- A size row adds one target record plus filler history; the filler is never re-seeded. The 4,000
+  row therefore measures a much larger store read, which dominates the request cost.
+- The semantic check reads at most six records per claim, twelve claims and six pairs per response.
+  A record outside the retrieval, or a claim beyond those bounds, is not checked and is reported as
+  such.
+
+This script is not part of `npm test` and no test depends on it.

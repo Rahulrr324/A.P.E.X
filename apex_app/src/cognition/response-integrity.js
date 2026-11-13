@@ -16,6 +16,10 @@
 // The assessment is read-only and bounded. It carries identifiers, states, and counts, never the
 // request, evidence text, or model prose, and every record it produces says `authorizes: false`.
 import { EvidenceState } from './vocabulary.js';
+import {
+  assessClaimSemantics, assessResponseConsistency, contentTokens, SemanticDimensionStatus,
+  SEMANTIC_DIMENSIONS, SemanticFinding,
+} from './semantic-consistency.js';
 
 export const RESPONSE_CONTRACT_SCHEMA = 1;
 
@@ -102,7 +106,7 @@ export const RESPONSE_AUTHORITY = Object.freeze({
 const STAGE_BY_ORDER = new Map(RESPONSE_STAGES.map((stage) => [stage.order, stage]));
 const OUTCOMES = new Set(Object.values(ResponseStageStatus));
 const MAX_STAGE_COUNTS = 8;
-const MAX_LIMITATIONS = 10;
+const MAX_LIMITATIONS = 14;
 
 // The claim kinds that assert a stored fact. Only these have to restate a cited record; an inference,
 // an assumption, a general-knowledge sentence, and an unknown are labelled as such by the model and
@@ -110,11 +114,32 @@ const MAX_LIMITATIONS = 10;
 const FACTUAL_KINDS = new Set(['supported', 'partially_supported', 'historical']);
 const SUPPORTED_STATES = new Set([EvidenceState.DIRECTLY_SUPPORTED, EvidenceState.PARTIALLY_SUPPORTED]);
 
-const STOPWORDS = new Set([
-  'the', 'and', 'for', 'are', 'was', 'were', 'has', 'have', 'had', 'with', 'that', 'this', 'from',
-  'into', 'but', 'not', 'its', 'his', 'her', 'their', 'our', 'you', 'your', 'they', 'them', 'then',
-  'than', 'there', 'here', 'what', 'when', 'where', 'which', 'who', 'why', 'how', 'about', 'would',
-  'could', 'should', 'will', 'shall', 'may', 'might', 'must', 'been', 'being', 'does', 'did', 'done',
+// The conflict outcomes. A claim carrying one of these contradicts the records it cites; the other
+// semantic outcomes describe a check that was partial or could not run.
+const SEMANTIC_CONFLICTS = new Set([
+  SemanticFinding.POLARITY_CONFLICT,
+  SemanticFinding.NUMERICAL_CONFLICT,
+  SemanticFinding.TEMPORAL_CONFLICT,
+  SemanticFinding.ENTITY_CONFLICT,
+  SemanticFinding.RELATIONSHIP_CONFLICT,
+  SemanticFinding.QUALIFIER_CONFLICT,
+  SemanticFinding.UNSUPPORTED_TRANSFORMATION,
+]);
+
+// One fixed limitation code per non-consistent semantic outcome. A consistent claim adds nothing.
+const SEMANTIC_LIMITATION = new Map([
+  [SemanticFinding.PARTIALLY_CONSISTENT, 'semantic_partial'],
+  [SemanticFinding.POLARITY_CONFLICT, 'semantic_polarity_conflict'],
+  [SemanticFinding.NUMERICAL_CONFLICT, 'semantic_numerical_conflict'],
+  [SemanticFinding.TEMPORAL_CONFLICT, 'semantic_temporal_conflict'],
+  [SemanticFinding.ENTITY_CONFLICT, 'semantic_entity_conflict'],
+  [SemanticFinding.RELATIONSHIP_CONFLICT, 'semantic_relationship_conflict'],
+  [SemanticFinding.QUALIFIER_CONFLICT, 'semantic_qualifier_conflict'],
+  [SemanticFinding.UNSUPPORTED_TRANSFORMATION, 'semantic_unsupported_transformation'],
+  [SemanticFinding.AMBIGUOUS, 'semantic_ambiguous'],
+  [SemanticFinding.INSUFFICIENT_EVIDENCE, 'semantic_insufficient_evidence'],
+  [SemanticFinding.UNAVAILABLE, 'semantic_unavailable'],
+  [SemanticFinding.NOT_CHECKED, 'semantic_not_checked'],
 ]);
 
 function isObject(value) {
@@ -211,11 +236,6 @@ export function evidenceFinding(analysis) {
 
 // ---- claim attribution -------------------------------------------------------------------------
 
-function contentTokens(text) {
-  const tokens = String(text ?? '').toLowerCase().match(/[a-z0-9][a-z0-9_.-]*/g) ?? [];
-  return new Set(tokens.filter((token) => token.length > 2 && !STOPWORDS.has(token)));
-}
-
 function numbersIn(text) {
   return new Set(String(text ?? '').match(/[0-9]+(?:\.[0-9]+)?/g) ?? []);
 }
@@ -274,7 +294,7 @@ function claimStatesForTrust(claims) {
 // Model prose is never `verified` in this build. The ladder stops at `factually_supported` even
 // when every claim restates a current record, because APEX checked the citation, not the sentence.
 export function assessModelOutputTrust({
-  text, classification = null, check = null, recheck = null, evidenceById = null,
+  text, classification = null, check = null, recheck = null, evidenceById = null, read = null,
 } = {}) {
   const body = typeof text === 'string' ? text.trim() : '';
   const received = body.length > 0;
@@ -297,24 +317,51 @@ export function assessModelOutputTrust({
       ? assessClaimAttribution(claim.text, claim.evidenceIds, evidenceById).status
       : 'unknown'),
   }));
-  const { factual, attributed: attributedFactual, supported } = claimStatesForTrust(attributed);
+  // AP-09: every claim is also compared with the records it cites on the dimensions a bounded rule can
+  // decide. The assessment is always recomputed here; a field of the same name on model output is
+  // never read, and the structured validator rejects unknown claim keys in any case.
+  const assessed = attributed.map((claim) => ({
+    ...claim,
+    semantic: assessClaimSemantics({
+      text: claim.text,
+      evidenceIds: claim.evidenceIds,
+      evidenceById,
+      kind: claim.kind ?? 'supported',
+      evidenceState: claim.evidenceState ?? null,
+      read,
+    }),
+  }));
+  // Contradictions between factual claims of one response are a separate check from each claim's own
+  // grounding. Only claims that assert a stored fact are compared; an inference beside a fact is a
+  // disclosed inference, not a contradiction.
+  const consistency = assessResponseConsistency({ claims: assessed });
+  const { factual, attributed: attributedFactual, supported } = claimStatesForTrust(assessed);
   const weakened = Number.isFinite(recheck?.weakened) && recheck.weakened > 0;
   // A claim labelled general knowledge or unknown is the model saying it is not backed by a record.
   // The factual claims beside it may each check out, but the answer as a whole then rests on
   // something the records do not establish, so it stays at presentation with a stated limitation.
-  const unsupportedClaim = attributed.some((claim) => claim.kind === 'general_knowledge' || claim.kind === 'unknown');
+  const unsupportedClaim = assessed.some((claim) => claim.kind === 'general_knowledge' || claim.kind === 'unknown');
+  // A factual claim reaches `factually_supported` only when the wording was checked, not merely
+  // attributed: a paraphrase that reverses a negation or changes a number is lexically attributable.
+  const semanticallyConsistent = attributedFactual.length > 0
+    && attributedFactual.every((claim) => claim.semantic?.finding === SemanticFinding.SEMANTICALLY_CONSISTENT);
+  const internallyConsistent = (consistency.contradictions?.length ?? 0) === 0;
   const factuallySupported = accepted
     && structured
     && factual.length > 0
     && attributedFactual.length === factual.length
     && supported.length > 0
     && !unsupportedClaim
-    && !weakened;
+    && !weakened
+    && semanticallyConsistent
+    && internallyConsistent;
   const supportReason = factuallySupported
-    ? 'every factual claim restates cited, current records'
+    ? 'every factual claim restates cited, current records and matches their meaning'
     : unsupportedClaim
       ? 'at least one claim is not backed by the cited records'
-      : 'at least one factual claim is not supported by the cited records';
+      : !internallyConsistent
+        ? 'two factual claims of the response contradict each other'
+        : 'at least one factual claim is not supported by the cited records or does not match their meaning';
 
   const ladder = [
     { state: ResponseTrustState.RECEIVED, ok: received, reason: received ? 'model output was received' : 'no model output was received' },
@@ -328,8 +375,9 @@ export function assessModelOutputTrust({
     state,
     ladder,
     verified: false,
-    claims: attributed,
+    claims: assessed,
     weakened,
+    consistency,
   };
 }
 
@@ -345,6 +393,15 @@ function limitationCodes({ analysis, trust, check, recheck, truncated }) {
     if (claims.some((claim) => claim.kind === 'inference' || claim.kind === 'assumption')) codes.push('claims_inferred');
     if (claims.some((claim) => claim.kind === 'general_knowledge')) codes.push('claims_general_knowledge');
     if (claims.some((claim) => claim.evidenceState === EvidenceState.PARTIALLY_SUPPORTED)) codes.push('claims_partially_supported');
+    // Only a claim that asserts a stored fact has an entailment to check. A non-consistent outcome on
+    // one of those claims is disclosed with its fixed code; a consistent one adds nothing.
+    for (const claim of claims) {
+      if (!FACTUAL_KINDS.has(claim.kind)) continue;
+      const code = SEMANTIC_LIMITATION.get(claim.semantic?.finding ?? SemanticFinding.NOT_CHECKED);
+      if (code) codes.push(code);
+    }
+    const contradictions = trust.consistency?.contradictions?.length ?? 0;
+    if (contradictions > 0) codes.push('response_inconsistent');
   }
   if (recheck?.weakened > 0) codes.push('evidence_changed');
   const counts = analysis?.retrieval?.counts ?? {};
@@ -359,7 +416,12 @@ export function assessResponseIntegrity({
   analysis = null, text = '', classification = null, check = null, recheck = null, truncated = false,
 } = {}) {
   const trust = assessModelOutputTrust({
-    text, classification, check, recheck, evidenceById: analysis?.retrieval?.byId ?? null,
+    text,
+    classification,
+    check,
+    recheck,
+    evidenceById: analysis?.retrieval?.byId ?? null,
+    read: analysis?.retrieval?.read ?? null,
   });
   const finding = evidenceFinding(analysis);
   // With no model output there is no wording to qualify, so the limitation list is empty rather than
@@ -385,9 +447,58 @@ export function assessResponseIntegrity({
     finding,
     degradation,
     limitations,
+    consistency: trust.consistency,
     attributionFailures: claims.filter((claim) => claim.attribution === 'unattributed').length,
     accepted,
     verified: false,
+    authorizes: false,
+  };
+}
+
+// The semantic block is fixed-key and bounded like the rest of the audit: finding labels, counts per
+// claim outcome and per dimension, and the index pairs of contradictions. No claim, record, or model
+// text can appear in it.
+function semanticAudit(assessment) {
+  const consistency = assessment?.consistency ?? null;
+  if (!consistency) return null;
+  const claims = assessment?.trust?.claims ?? [];
+  const entries = claims.map((claim) => claim.semantic ?? null);
+  const present = entries.filter((entry) => entry !== null);
+  const findingCount = (code) => present.filter((entry) => entry.finding === code).length;
+  const dimensions = {};
+  for (const dimension of SEMANTIC_DIMENSIONS) {
+    const statuses = present
+      .map((entry) => entry.dimensions?.[dimension])
+      .filter((status) => typeof status === 'string');
+    dimensions[dimension] = {
+      checked: statuses.filter((status) => status === SemanticDimensionStatus.CHECKED).length,
+      conflict: statuses.filter((status) => status === SemanticDimensionStatus.CONFLICT).length,
+      ambiguous: statuses.filter((status) => status === SemanticDimensionStatus.AMBIGUOUS).length,
+      not_applicable: statuses.filter((status) => status === SemanticDimensionStatus.NOT_APPLICABLE).length,
+      not_checked: statuses.filter((status) => status === SemanticDimensionStatus.NOT_CHECKED).length,
+      unavailable: statuses.filter((status) => status === SemanticDimensionStatus.UNAVAILABLE).length,
+    };
+  }
+  return {
+    schema: consistency.schema ?? 1,
+    finding: consistency.finding ?? null,
+    claims: {
+      total: claims.length,
+      assessed: present.length,
+      consistent: findingCount(SemanticFinding.SEMANTICALLY_CONSISTENT),
+      partial: findingCount(SemanticFinding.PARTIALLY_CONSISTENT),
+      conflict: present.filter((entry) => SEMANTIC_CONFLICTS.has(entry.finding)).length,
+      ambiguous: findingCount(SemanticFinding.AMBIGUOUS),
+      insufficient: findingCount(SemanticFinding.INSUFFICIENT_EVIDENCE),
+      unavailable: findingCount(SemanticFinding.UNAVAILABLE),
+      not_checked: claims.length - present.length + findingCount(SemanticFinding.NOT_CHECKED),
+    },
+    dimensions,
+    contradictions: (Array.isArray(consistency.contradictions) ? consistency.contradictions : [])
+      .slice(0, 6)
+      .map((pair) => ({ a: pair.a, b: pair.b, dimension: pair.dimension })),
+    overstated: consistency.overstated ?? 0,
+    bounded: present.some((entry) => entry.bounded === true),
     authorizes: false,
   };
 }
@@ -415,6 +526,7 @@ export function responseIntegrityAudit(assessment) {
       partialAttribution: claims.filter((claim) => claim.attribution === 'partial').length,
       unattributed: claims.filter((claim) => claim.attribution === 'unattributed').length,
     },
+    semantic: semanticAudit(assessment),
     authorizes: false,
   };
 }
@@ -459,6 +571,7 @@ export function buildResponseContract({
   steps = [],
   recheck = null,
   trustState = null,
+  semantic = null,
   clarification = false,
   finalAnswer = false,
   cancelled = false,
@@ -521,11 +634,24 @@ export function buildResponseContract({
     ? ResponseStageStatus.NOT_REACHED
     : outputStageStatus(model, text), { chars: typeof text === 'string' ? Math.min(text.length, 100000) : 0 }));
 
+  // Stage 12 reports the semantic check beside the structural one. The stage status stays structural:
+  // a well-formed response whose claims contradict the records did run the grounding stage; the
+  // contradiction is carried by the trust state, the limitation codes, and the audit counts, not by
+  // claiming the stage failed to execute.
+  const semanticClaims = Array.isArray(semantic?.claims) ? semantic.claims : null;
+  const semanticCounts = semanticClaims === null
+    ? {}
+    : {
+      semantic_claims: semanticClaims.length,
+      semantic_checked: semantic?.checked ?? 0,
+      semantic_conflicts: semanticClaims.filter((entry) => SEMANTIC_CONFLICTS.has(entry.finding)).length,
+    };
   stages.push(stage(12, clarification
     ? ResponseStageStatus.NOT_REACHED
     : groundingStageStatus(check, analysisAvailable, modelReached), {
     claims: acceptedStructure(check) ? (check.structure.claims?.length ?? 0) : 0,
     rejected: check?.error ? 1 : 0,
+    ...semanticCounts,
   }));
 
   stages.push(stage(13, finalAnswer ? ResponseStageStatus.RAN : ResponseStageStatus.NOT_REACHED));
@@ -651,4 +777,23 @@ export function attributionNotice(assessment) {
   const failures = assessment?.attributionFailures ?? 0;
   if (failures <= 0) return '';
   return `[APEX check: ${failures} structured claim(s) marked as resting on stored records do not restate those records. That wording is the model's, not a stored fact.]`;
+}
+
+// A display line for factual claims whose wording did not match the records they cite, or for factual
+// claims that contradict each other. It carries finding labels and counts only, never claim text.
+export function semanticNotice(assessment) {
+  const claims = assessment?.trust?.claims ?? [];
+  const findings = claims
+    .filter((claim) => FACTUAL_KINDS.has(claim.kind))
+    .map((claim) => claim.semantic?.finding)
+    .filter((finding) => typeof finding === 'string' && finding !== SemanticFinding.SEMANTICALLY_CONSISTENT);
+  const contradictions = assessment?.consistency?.contradictions?.length ?? 0;
+  if (findings.length === 0 && contradictions === 0) return '';
+  const kinds = [...new Set(findings)].slice(0, 3);
+  const parts = [];
+  if (findings.length > 0) {
+    parts.push(`${findings.length} claim(s) did not match the cited records${kinds.length ? ` (${kinds.join(', ')})` : ''}`);
+  }
+  if (contradictions > 0) parts.push(`${contradictions} claim pair(s) contradict each other`);
+  return `[APEX check: ${parts.join('; ')}. That wording is the model's, not a stored fact.]`;
 }

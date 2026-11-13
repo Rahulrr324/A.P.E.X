@@ -692,6 +692,57 @@ for one request, which stages ran, what each claim rested on, how far the answer
 who - if anyone - authorized a side effect. See `cognition-response-integrity.test.js` (42 cases,
 including a 28-scenario acceptance table) and the AP-08 benchmark section.
 
+### Semantic grounding and claim consistency (AP-09)
+
+AP-08's attribution compares content words and digits. AP-09 adds a second, bounded comparison of
+what the claim means relative to the records it cites. `src/cognition/semantic-consistency.js` is a
+pure module; `response-integrity.js` calls it per claim and gates the existing ladder on it. No
+store, action, dependency, pipeline or authority was added.
+
+- **A closed thirteen-outcome vocabulary.** `semantically_consistent`, `partially_consistent`,
+  `polarity_conflict`, `numerical_conflict`, `temporal_conflict`, `entity_conflict`,
+  `relationship_conflict`, `qualifier_conflict`, `unsupported_transformation`, `ambiguous`,
+  `insufficient_evidence`, `unavailable`, `not_checked`. A documented precedence reports one:
+  `unavailable > not_checked > insufficient_evidence` and then `polarity > numerical > temporal >
+  entity > relationship > qualifier > transformation > ambiguous > partially_consistent >
+  semantically_consistent`. A conflict is never replaced by a weaker outcome, ambiguity is never
+  support, `not_checked` is not success, `unavailable` stays unavailable, a partial reading stays
+  partial, and no confidence score exists.
+- **Eight dimensions, all bounded.** Attribution (readable, current, not withdrawn or contested,
+  re-read per record), clause-scoped polarity and a closed antonym list, quantities (signs, percent,
+  a unit-alias table with no conversion, bounds, precision, added/omitted values), temporal
+  (formats, explicit ordering, stale and superseded, "not recorded" is not "did not happen"),
+  entities (a sentence-initial capital is not a name), relationships (closed verbs, passive voice,
+  subject/object inversion, equality), qualifiers (the quantifier and certainty ladders, hedges,
+  uniqueness) and transformation (causal markers and added content).
+- **Documented early outcomes.** A non-factual kind is `not_checked`; no citation is
+  `insufficient_evidence`; a moved, damaged or unavailable window is `unavailable`; an inconsistent
+  or unverifiable snapshot is `not_checked`; a withdrawn, stale or contested record is
+  `insufficient_evidence`; a single shared content word is enough to run the dimensions; zero
+  overlap is `insufficient_evidence`; with no dimension fired, coverage below 0.5 is insufficient,
+  below 0.6 partial, otherwise consistent; a bounded read or an omitted value/date is at least
+  partial. Every outcome also carries a fixed reason label.
+- **Response-level consistency.** At most twelve claims and six pairs. Only factual claims are
+  compared; polarity is compared for any pair, while numerical, temporal and qualifier mismatches
+  require the two claims to share a content word, so unrelated facts are not paired. `overstated`
+  counts supported claims that are not semantically consistent.
+- **Conservative trust.** `factually_supported` now additionally requires every attributed factual
+  claim to be semantically consistent and the response to have no contradictions. Any other outcome
+  adds a closed limitation (`semantic_*`, `response_inconsistent`) and forces
+  `present_with_limitations`; `present_as_is` still requires the single limitation
+  `model_output_unverified`. `verified` remains `ok:false`. The reader gets a notice of finding
+  labels and counts, never claim text, and the notice is not stored in the model's turn. The
+  contract's stage 12 adds semantic claim, checked and conflict counts beside the structural status.
+- **Observation, not authority.** A window failure that prevents the check is an evidence result,
+  not an `execution_failed`; the late recheck still only weakens. The audit's fixed-key `semantic`
+  block carries labels, counts, dimension statuses and at most six contradiction index pairs, no
+  text, and `authorizes:false`. A semantic finding grants nothing: proposals still cross the live
+  registry, and plan and task handoffs keep their existing approvals.
+
+See `semantic-consistency.test.js` (88 cases, including the 28 deterministic attack classes),
+`semantic-acceptance.test.js` (18 end-to-end cases through the real controller) and the AP-09
+benchmark section.
+
 ## 6. D. Diagnostics and evaluation
 
 ### Runtime diagnostics
@@ -827,6 +878,9 @@ The only authority owner is the action registry. Everything else observes, propo
 | Consumer-wide evidence consistency (AP-07) | `IMPLEMENTED_AND_TESTED` | cognitive retrieval, world state, prediction longitudinal, plan candidate/outcome/assessment and the existing effectiveness/governance reads through one content window | `ap07-consistency.test.js` (31 cases), existing consumer suites |
 | Response contract and model-output trust boundary (AP-08) | `IMPLEMENTED_AND_TESTED` | `cognition/response-integrity.js`: fourteen-stage contract with runtime statuses, five-state trust ladder capped below `verified`, bounded prose-free audits | `cognition-response-integrity.test.js` (42 cases) |
 | Claim-level grounding and safe degradation (AP-08) | `IMPLEMENTED_AND_TESTED` | `cognition/response-integrity.js`: per-claim evidence state and lexical attribution, closed limitation codes, deterministic `no_output`/`present_as_is`/`present_with_limitations` | `cognition-response-integrity.test.js` (42 cases), existing `cognition-evidence-states.test.js` |
+| Semantic claim assessment (AP-09) | `IMPLEMENTED_AND_TESTED` | `cognition/semantic-consistency.js`: closed thirteen-outcome vocabulary with fixed precedence, eight bounded dimensions, fixed reason labels, `authorizes:false` | `semantic-consistency.test.js` (88 cases, 28 attack classes), `semantic-acceptance.test.js` |
+| Response-level claim consistency (AP-09) | `IMPLEMENTED_AND_TESTED` | `cognition/semantic-consistency.js` (`assessResponseConsistency`): 12 claims, 6 factual pairs, contradiction index pairs, `overstated` | `semantic-consistency.test.js`, `semantic-acceptance.test.js` |
+| Semantic gating of model-output trust (AP-09) | `IMPLEMENTED_AND_TESTED` | `cognition/response-integrity.js`: `factually_supported` requires semantic consistency, `semantic_*` limitations, prose-free semantic audit block, controller notice | `semantic-acceptance.test.js` (18 cases), `cognition-response-integrity.test.js` |
 | Adversarial acceptance | `IMPLEMENTED_AND_TESTED` | Cross-cutting; no new runtime component | `acceptance-ao09.test.js` (7), `adversarial-batch-am.test.js` (16), `plan-adversarial.test.js` (15), `executive-adversarial.test.js` (11), plus the suites cited in `README.md` Batch AO package H |
 | Cross-process interruption | `IMPLEMENTED_PARTIALLY_TESTED` | Real child fixtures at most boundaries | `plan-continuation.test.js`, `continuation-cross-process-an.test.js`, `finalization-interruption.test.js`, `process-recovery.test.js`, `cross-process-ao09.test.js`; two boundaries lack a killed child |
 | Concurrent store integrity | `IMPLEMENTED_AND_TESTED` | `memory/writer-lock.js`, store locks, JSONL append | `storage-concurrency.test.js`, `store-write-concurrency.test.js`, `cross-process-stress.test.js`, `lock-contention.test.js`, `lock-recovery.test.js` |
@@ -908,6 +962,13 @@ invalidate the recommended milestone, not that it blocks all work.
 | 60 | A grounded answer could be read as execution authority | The contract and handoff are separate objects; the handoff names its authority owner and carries `authorizes:false`; a denial is audited | `cognition-response-integrity.test.js` §9, `handoff-integrity-ao.test.js`, `model-self-authorization.test.js` | None observed; the proposal path was not changed | None | No |
 | 61 | An unreadable proposal tally could be reported as zero proposals | A non-integer tally makes stage 14 `unavailable` and the counts are dropped rather than zeroed | `cognition-response-integrity.test.js` (malformed tally) | None observed | None | No |
 | 62 | Audits could leak request or model prose | Both audit builders use fixed key sets and integer counts only; no text, prompt or reply field exists | `cognition-response-integrity.test.js` (audit shapes) | A new field added later could leak; the key list is asserted by the suite | Low | No |
+| 63 | A claim could reverse a negation, change a number or swap a name and still be lexically attributed | AP-09 compares polarity, quantities, dates, entities, relationships, qualifiers and transformations against the cited records before factual support is granted | `semantic-consistency.test.js` (every dimension, 28 attack classes), `semantic-acceptance.test.js` | The rules are finite lists and patterns; a paraphrase, metaphor, implication or novel causal argument is not detected and is reported `insufficient_evidence` or `not_checked` | Medium | No |
+| 64 | Another dimension could downgrade a conflict, or a short claim could lose its conflict | Precedence is applied to the set of findings the claim produced; a conflict outranks ambiguity and partial readings, and a single shared content word is enough to run the dimensions | `semantic-consistency.test.js` (precedence, one-word overlap, multi-axis cases) | A conflict on a dimension with no shared vocabulary remains outside the check; that is reported as insufficient overlap, not as consistent | Low | No |
+| 65 | A check that could not run could be read as a check that passed | `not_checked` and `unavailable` are separate outcomes; `factually_supported` requires `semantically_consistent`, so neither can support it | `semantic-consistency.test.js` (read window, missing record), `semantic-acceptance.test.js` | A consumer that reads only the trust state still needs the limitation list to see why support was withheld; the notice is present | Low | No |
+| 66 | Evidence could move between retrieval, assessment and display | The AP-07 window state drives `unavailable` or `not_checked`; the late recheck still only weakens; the window failure is an evidence result, not `execution_failed` | `semantic-acceptance.test.js` (write during the window, post-answer change), `ap07-consistency.test.js` | A same-size rewrite restored to its original bytes between inspections remains invisible, as for every AP-07 window | Medium | No |
+| 67 | A semantic label could be read as understanding, entailment or verified truth | The vocabulary is a fixed list of bounded findings; every assessment and the audit carry `authorizes:false` and `factualAuthority:'none'`; documentation disclaims NLU and entailment | `semantic-consistency.test.js` (authority fields), `semantic-acceptance.test.js` (self-verification rejected) | A reader can still over-read "consistent"; documentation states the limit | Medium (interpretive) | No |
+| 68 | The semantic audit could carry claim or record text | The block is fixed-key and holds labels, non-negative counts, dimension statuses and at most six index pairs; the AP-08 suite asserts the key set and the absence of a secret | `cognition-response-integrity.test.js` (audit keys), `semantic-consistency.test.js` (audit) | A field added later could leak; the key list is asserted by the suite | Low | No |
+| 69 | The added check could make every grounded reply slower | At most six records per claim, twelve claims and six pairs per response; the module and the complete request are measured in one run | `semantic-consistency.test.js`, `benchmarks/run-semantic-validation-benchmark.mjs` | The per-claim comparison grows with claim count up to the fixed bound; the request cost is dominated by the stores' search and parse, and the benchmark is a single-run observation | Low | No |
 
 No gap in this register was implemented in AO-10: none exposed a new concrete defect in behavior,
 and none invalidated a documented security guarantee. AP-01 closed the roadmap's "one recorded
@@ -943,7 +1004,14 @@ ran apart from one that ran with no result, grades each claim against the record
 model prose at `factually_supported` because a citation check is not verification. Its stated limits
 are that attribution is lexical overlap rather than entailment, that an answer can still be fluent and
 wrong within a supported citation, and that the 28-scenario table is a deterministic fixture set and
-says nothing about a real model's answer quality.
+says nothing about a real model's answer quality. AP-09 added rows 63-69 for semantic grounding: a
+factual claim is now compared with the records it cites on eight bounded dimensions, a conflict is
+never downgraded, ambiguity is never support, a missing or unavailable check stays distinct from a
+passed one, and `factually_supported` additionally requires semantically consistent wording and no
+contradiction between claims. The limits it states are that the comparison is finite lexical and
+structural analysis rather than natural-language understanding or entailment, that a paraphrase or
+an implication can fall outside it and is then reported as insufficient or not checked, and that the
+attack fixtures were written to be decidable by the rules.
 
 ## 10. Running the verification
 
@@ -960,6 +1028,7 @@ node --test tests/adaptation-governance.test.js
 node --test tests/evidence-fabric.test.js
 node --test tests/evidence-read-contract.test.js tests/ap07-consistency.test.js
 node --test tests/cognition-response-integrity.test.js
+node --test tests/semantic-consistency.test.js tests/semantic-acceptance.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs
@@ -969,6 +1038,7 @@ node benchmarks/run-governance-benchmark.mjs
 APEX_DATA_ISOLATED=1 node benchmarks/run-evidence-benchmark.mjs
 APEX_DATA_ISOLATED=1 node benchmarks/run-consistency-benchmark.mjs
 APEX_DATA_ISOLATED=1 node benchmarks/run-response-integrity-benchmark.mjs
+node benchmarks/run-semantic-validation-benchmark.mjs
 ```
 
 Tests use `NoBackend` or fixed programmatic replies and isolated temporary data directories. No
@@ -1014,3 +1084,11 @@ only to fresh temporary directories. The complete measured tables and their cave
   that negates or inverts its record can still overlap it - that `verified` is reachable for model
   prose, or that the deterministic 28-scenario table says anything about a real model's answer
   quality.
+- It does not claim APEX understands language or performs entailment. AP-09 claims that a factual
+  claim is compared with the records it cites on eight bounded lexical and structural dimensions,
+  that a detected conflict, ambiguity, missing check or unavailable read is labelled and cannot be
+  read as support, and that `factually_supported` now also requires consistent wording and no
+  contradiction between claims. It does not claim a paraphrase, metaphor, implication or novel
+  causal argument is detected; those fall outside the rules and are reported as insufficient or not
+  checked. The vocabulary is finite, the fixtures were written to be decidable by it, and no model
+  was consulted.

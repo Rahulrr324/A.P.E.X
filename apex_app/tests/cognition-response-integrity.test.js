@@ -866,7 +866,8 @@ describe('AP-08 §11 adversarial response boundaries', () => {
     });
     const audit = responseIntegrityAudit(result);
     assert.deepEqual(Object.keys(audit).sort(), [
-      'authorizes', 'claims', 'degradation', 'finding', 'findingReason', 'limitations', 'schema', 'trust', 'verified',
+      'authorizes', 'claims', 'degradation', 'finding', 'findingReason', 'limitations', 'schema',
+      'semantic', 'trust', 'verified',
     ]);
     const serialized = JSON.stringify(audit);
     assert.equal(serialized.includes('hunter2'), false);
@@ -877,6 +878,17 @@ describe('AP-08 §11 adversarial response boundaries', () => {
     assert.deepEqual(Object.keys(audit.claims).sort(), [
       'factual', 'generalKnowledge', 'inferred', 'partial', 'partialAttribution', 'supported', 'total', 'unattributed',
     ]);
+    // AP-09 extends the audit with a fixed-key semantic block; the claim and record text still never
+    // reach it.
+    assert.deepEqual(Object.keys(audit.semantic).sort(), [
+      'authorizes', 'bounded', 'claims', 'contradictions', 'dimensions', 'finding', 'overstated', 'schema',
+    ]);
+    assert.deepEqual(Object.keys(audit.semantic.dimensions).sort(), [
+      'attribution', 'entity', 'numerical', 'polarity', 'qualifier', 'relationship', 'temporal', 'transformation',
+    ]);
+    assert.equal(audit.semantic.finding, 'semantically_consistent');
+    assert.equal(audit.semantic.claims.consistent, 1);
+    assert.equal(audit.semantic.authorizes, false);
   });
 
   test('diagnostics that are unavailable are recorded instead of silently deciding', () => {

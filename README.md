@@ -222,8 +222,21 @@ bounded and contain no request, record or reply text; and a grounded answer stil
 authority, with a model proposal revalidated against the live registry, a plan approval bound to its
 content hash, and a denied crossing written to the operations log
 ([details](apex_app/README.md#batch-ap-08-grounded-response-integrity-and-the-model-output-trust-boundary-as-implemented);
-tests: `tests/cognition-response-integrity.test.js`, 42 cases). It needs no model, adds no store, and
-does not start AP-09.
+tests: `tests/cognition-response-integrity.test.js`, 42 cases). It needs no model and adds no store.
+Batch AP-09 then checked what a claim means, not only which words it shares: every factual claim that
+cites records is compared with them on eight bounded dimensions - polarity, quantities and units,
+dates and ordering, entities, relationships, quantifiers and certainty, and added causal or
+transformative content - and receives exactly one outcome from a closed list of thirteen, applied
+under a documented precedence; a detected conflict is never downgraded, an ambiguous or unchecked
+claim is never support, an unavailable read stays unavailable, a partial reading stays partial, and
+no confidence score exists; contradictions between the factual claims of one response are reported
+separately; and `factually_supported` now additionally requires semantically consistent wording and
+no contradiction, while `verified` remains unreachable. The wording is compared lexically and
+structurally, not by natural-language understanding or entailment, so a paraphrase or implication
+outside the rules is reported as insufficient evidence or not checked rather than guessed
+([details](apex_app/README.md#batch-ap-09-semantic-grounding-claim-consistency-and-adversarial-response-verification-as-implemented);
+tests: `tests/semantic-consistency.test.js` and `tests/semantic-acceptance.test.js`, 106 cases). It
+needs no model, adds no store and grants no authority.
 What remains is the wider clause: an expectation verdict changing subsequent behaviour without a
 user-approved candidate, or changing more than the one disclosed ordering, and any claim of prediction
 accuracy or causation. The runtime keeps that wider clause open; this is a recommendation only, and no

@@ -25,7 +25,7 @@ import { ArtifactKind, validateArtifact } from '../cognition/artifacts.js';
 import { structuredDisclosureNotice, actionClaimNotice } from '../cognition/response.js';
 import {
   assessResponseIntegrity, attributionNotice, buildResponseContract, responseContractAudit,
-  responseIntegrityAudit,
+  responseIntegrityAudit, semanticNotice,
 } from '../cognition/response-integrity.js';
 import { recheckEvidence } from '../cognition/evidence.js';
 import { contributingStores, openEvidenceSnapshot, snapshotView } from '../evidence/snapshot.js';
@@ -6609,6 +6609,7 @@ export class CognitiveController {
         steps: actionSteps,
         recheck: evidenceRecheck,
         trustState: integrity.trust.state,
+        semantic: integrity.consistency,
         finalAnswer: true,
       })),
       responseIntegrity: responseIntegrityAudit(integrity),
@@ -6633,7 +6634,7 @@ export class CognitiveController {
       hasText: modelText.length > 0,
       backend: res.backend,
       error: null,
-      annotation: [annotation, cognitionNotice, attributionNotice(integrity), citationNotice].filter(Boolean).join('\n\n'),
+      annotation: [annotation, cognitionNotice, attributionNotice(integrity), semanticNotice(integrity), citationNotice].filter(Boolean).join('\n\n'),
       proposalOverflow: overflow,
       lifecycle,
     };
