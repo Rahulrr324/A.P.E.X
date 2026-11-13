@@ -48,6 +48,13 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   request, the partial store/audit reads, and the concurrency runs are printed separately and never
   added together.
 
+- `run-governance-benchmark.mjs` builds every fixture on a `mkdtemp` directory prefixed
+  `apex-bench-governance-`, asserts each directory with `assertIsolatedDataDir`, and uses the same
+  refusing cleanup. It accepts `APEX_DATA_ISOLATED` unset or `1` and refuses any other value, runs
+  each review stage on a fresh copy of the seeded store, constructs `NoBackend` (never contacted) and
+  touches no network. Complete stage, partial reads and concurrency runs are printed separately and
+  never added together.
+
 - Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
   reporting, not a cleanup task.
 
@@ -1501,6 +1508,120 @@ four-read wall time is roughly twice one serial read in this process; no through
   across-append re-read.
 - A read beside a write can verify-fail by design: the second read sees the new record and refuses to
   confirm the first. The concurrency section reports that instead of hiding it.
+
+## Adaptation governance benchmark (Batch AP-05)
+
+`run-governance-benchmark.mjs` measures the complete production review path Batch AP-05 added: the
+read-only list, then open, inspect, reconcile and decide (`keep_active`), each served by the authorized
+action, its independent verification re-running the whole analysis, the audit append, and the
+controller return. It runs entirely on synthetic fixtures written through the ordinary controller
+actions: no model, no backend, no network. It has three sections, and their numbers are never added
+together.
+
+- **Linked uses.** One approved rule and, for each use, the full real path (executive `prepare`, a
+  separate user approval, activation, verified execution, goal evidence per criterion, and the plan's
+  own assessment). Sizes 4 / 12 / 24 use records. Each stage is sampled on a fresh copy of the seeded
+  directory so the open, inspect, reconcile and decide actions can each perform their real write
+  without the earlier stages' records changing the fixture mid-series.
+- **Stored adaptations.** 1 / 8 / 20 / 21 stored adaptation records against the same 24-use history.
+  The 21 case exercises the 20-row window: the target's row is not reported and its uses are
+  honestly reported as not read.
+- **Concurrent activity.** Two reads issued beside two writes, four reads beside each other, and one
+  serial read on the same store. A read that refuses to confirm a concurrent change is printed with
+  its reason rather than averaged away.
+
+The **complete** stage is the authorized action plus its verification, audit append and controller
+return. The governance builder, the single-adaptation detail read and the review preparation are
+printed separately and labelled *partial*; they are not the request cost. No cache or index is added:
+every sample pays the same cost.
+
+### Procedure
+
+```bash
+cd apex_app
+APEX_DATA_ISOLATED=1 node benchmarks/run-governance-benchmark.mjs
+APEX_DATA_ISOLATED=1 node benchmarks/run-governance-benchmark.mjs --sizes 4,12,24 --adaptations 1,8,20,21 --repeats 5
+```
+
+`--repeats` defaults to 5 and is capped at 10. Every data directory is asserted to be under the OS
+temp root with the `apex-bench-governance-` prefix, and cleanup refuses any other path; `--keep`
+leaves the directories in place. The script is not part of `npm test`. Run it alone: concurrent tests
+would change every wall-clock figure.
+
+### What it reports
+
+- the fixture's JSONL record and byte counts per store, the seeded use's outcome kind, and the
+  adaptation's classification state;
+- **partial** medians for the governance builder, the single-adaptation detail read, and the review
+  preparation, plus the prepared evidence and detail sizes in bytes;
+- **complete** medians, minima and every sample for list, open, inspect, reconcile and decide, plus
+  the evidence digest equality each stage checks;
+- the number of adaptation rows against the 20-row window and whether a named target fell outside it;
+- concurrent wall times, whether every read and write verified, and the exact refusal reason when a
+  read declines to confirm a concurrent change;
+- a final consistency check: a stage that does not verify, a report that is not the expected schema,
+  `authorizes` not `false`, a wrong row count or window disclosure, an evidence digest that differs
+  from the live one, or a `keep_active` decision that records a retirement makes the run exit non-zero.
+
+### Measured
+
+One run of `--repeats 5` on Windows 11, Node v26.4.0, x64, with no test or other benchmark active.
+These are observations of one machine at one time, not targets.
+
+Complete stage medians, one approved rule, one plan and assessment per use:
+
+| linked uses | list ms | open ms | inspect ms | reconcile ms | decide keep_active ms | partial: builder / detail / prepare ms |
+|---|---|---|---|---|---|---|
+| 4 | 166.276 | 151.712 | 338.739 | 240.928 | 163.890 | 27.628 / 33.947 / 32.698 |
+| 12 | 474.227 | 445.081 | 667.049 | 632.501 | 345.750 | 240.475 / 296.247 / 279.935 |
+| 24 | 995.981 | 640.061 | 1,231.229 | 1,160.686 | 608.471 | 476.930 / 585.049 / 536.281 |
+
+The prepared evidence bundle was 7,536 bytes at 4 uses and 16,539 bytes at 12 and 24: it is capped at
+20 evidence references, so it stops growing once the bound is reached. The audit log grows by one
+record per stage, so every later sample is served from a slightly larger store. The spread between
+samples within one figure is large (for example 97–180 ms for the 4-use list), which is why only
+in-run comparisons are treated as findings.
+
+Complete list request against stored adaptations on the same 24-use history:
+
+| stored adaptations | median ms | rows reported | target read |
+|---|---|---|---|
+| 1 | 967.757 | 1 | yes (`no_review_required`) |
+| 8 | 997.409 | 8 | yes |
+| 20 | 1,049.925 | 20 | yes |
+| 21 | 82.096 | 20 | no — outside the newest-20 window |
+
+At 21 stored records the named target is outside the window and is not reported; the drop from about
+1,050 to 82 ms is the lineage of its 24 uses not being walked, not a faster read of the same work.
+
+Concurrent activity, one 8-use history:
+
+| condition | wall ms | outcome |
+|---|---|---|
+| two reads + two writes in parallel | 401.122 | both writes verified; both reads verified; 0 refusals |
+| four reads in parallel | 470.019 | 4 of 4 verified |
+| one read, serial | 331.192 | verified |
+
+Unlike the AP-04 read, these reads did not observe the concurrent writes between their two reads in
+this run, so none refused. That is a property of the timing, not a guarantee: the report digest covers
+the audit-record count, so a write that lands between the two reads is still a real change and is
+reported as a failed verification. The four-read wall time is one and a half times one serial read in
+this process; no throughput is claimed.
+
+### Interpretation limits
+
+- Medians over 5 samples in one process on one machine, on synthetic success histories with one
+  approved rule. Absolute figures include controller work, audit append, the independent re-read and
+  machine noise; the partial lines are pieces, not the request.
+- Each stage performs its own analysis and verification, so these are the costs of five different
+  production requests, not of one request repeated. They are not additive.
+- The fixtures show how the bounded review path scales and that it continues to describe evidence;
+  they are not evidence that any rule improves outcomes, that a review is needed, or that a
+  recommendation is correct.
+- At 21 stored adaptations the target is not listed; the lower figure is less work on a smaller
+  visible scope, not an optimization.
+- A read beside a write can verify-fail by design. The concurrency section reports what it observed,
+  and a refusal is the designed fail-closed answer rather than a benchmark failure.
 
 ## Cognitive runtime diagnostics benchmark (Batch AO, package G)
 

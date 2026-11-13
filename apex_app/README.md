@@ -278,6 +278,9 @@ suites re-hash the directory afterwards to prove it.
 | `experience compare [--a-since <date>] [--a-until <date>] [--b-since <date>] [--b-until <date>] [--days N] [--capability <name>]` | Read-only comparison of two time windows: counts, outcome classes, success rate over completed attempts, feedback, and per-capability changes. With no window A given, A is the same-length period immediately before B. A difference means the records differ, not that anything caused anything. |
 | `adaptation eligibility [--capability <name>] [--limit N]` | Read-only: which recorded predictions carry a completed, current evaluation that could become a candidate adaptation, and the closed state that makes each other prediction inert. Derives nothing, approves nothing, applies nothing; the only audit entry is the command's own operation record. See [Batch AP-02](#batch-ap-02-one-evaluated-prediction-one-approved-candidate-one-disclosed-influence-as-implemented). |
 | `adaptation effectiveness [--adaptation <id>] [--limit N]` | Read-only: traces each approved rule through the comparisons it changed, the plan recorded from that decision, its execution and verification, and the outcome evidence recorded afterwards, then classifies what the records show and states which comparisons are unavailable. It never estimates an unadapted baseline, claims a cause, approves or changes a rule, retires an adaptation, or executes a task. See [Batch AP-04](#batch-ap-04-adaptation-effectiveness-and-outcome-verification-as-implemented). |
+| `adaptation reviews [--limit N]` | Read-only: which adaptations need governance attention, the current recommendation, and the derived state of each current review. Nothing is approved, changed, or retired. See [Batch AP-05](#batch-ap-05-adaptation-governance-evidence-reconciliation-and-controlled-lifecycle-decisions-as-implemented). |
+| `adaptation review show\|reconcile <id>` | Read-only: one review or adaptation's evidence digest, the live reconciliation against current stores with every added, withdrawn, superseded, stale, conflicting, missing, or unreadable item named, and the review history. A changed digest is a difference, not a verdict. |
+| `adaptation review open <id> [--reason <text>]`, `adaptation review keep\|dismiss\|retire <review-id> [--reason <text>]` | User-origin only: open one review against the exact evidence now recorded, then record `keep_active`, `dismiss`, or `retire`. A decision is refused if the evidence changed after the review was opened; `retire` reuses the existing `adaptation.retire` authority rather than adding a second retirement mechanism. |
 | `prediction record --capability <name> --expect success\|failure\|blocked --subject <text> (--expires <date> \| --in-days N) [--supports <id,...>] [--contradicts <id,...>] [--feedback <id,...>] [--pattern <kind,...>] [--replaces <id,...>]` | Records one expectation **you** hold about a later outcome of a named capability, with an explicit horizon and the recorded events it is based on. User origin only: a model proposal naming this command is denied. Cited ids must resolve in the experience log and must predate the moment of recording; nothing is written when they do not. The record stores no confidence and can store no state or verdict. See [Batch AE](#batch-ae-prediction-ledger-hypothesis-lifecycle-and-outcome-evaluation-as-implemented). |
 | `prediction list [--limit N] [--capability <name>] [--status <name>]`, `prediction show <id>`, `prediction history <id>`, `prediction summary [--capability <name>]` | Read-only views of the ledger: standing expectations and their derived state, one expectation with its evidence lineage, every record that names one expectation (oldest first), and the aggregate counts with each rate's denominator named and its exclusions counted. Derived at read time; calls no model; the only audit entry is the command's own operation record. |
 | `prediction evaluate <id>` | Compares one expectation with the outcomes recorded inside its horizon and stores the verdict **only** when those records establish one. Otherwise it reports `insufficient_evidence`, `outcome_unavailable`, `expired`, `invalidated`, `superseded`, `already_evaluated`, or `evidence_unavailable` and writes nothing. A verdict already stored is never rewritten. User origin only. |
@@ -1149,6 +1152,7 @@ node --test tests/audit-secret-redaction.test.js tests/data-dir-isolation.test.j
 node --test tests/model-self-authorization.test.js tests/prediction-adaptation-boundary.test.js
 node --test tests/longitudinal-outcome-analysis.test.js
 node --test tests/adaptation-effectiveness.test.js
+node --test tests/adaptation-governance.test.js
 node --test tests/cognition-understanding.test.js tests/cognition-reasoning.test.js \
   tests/cognition-scenarios.test.js
 node --test tests/corruption-recovery-boundaries.test.js tests/lock-ownership-and-recovery.test.js \
@@ -3566,7 +3570,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 84 registered actions declare both `validate()` and `verify()` - 86 with a
+- **Verification.** All 90 registered actions declare both `validate()` and `verify()` - 92 with a
   filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
@@ -3600,6 +3604,9 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `adaptation.list` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `adaptation.eligibility` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `adaptation.effectiveness` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
+| `adaptation.reviews`, `adaptation.review.inspect`, `adaptation.review.reconcile` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
+| `adaptation.review.open` | user | write | never in a plan | `experiences.jsonl` (one review line) | no (self-bookkeeping) | yes |
+| `adaptation.review.decide` | user | write | never in a plan | `experiences.jsonl` (one decision line; a retirement also appends the existing retirement line) | no (self-bookkeeping) | yes |
 | `experience.list`, `experience.show`, `experience.timeline`, `experience.trends`, `experience.patterns`, `experience.compare` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `prediction.record` | user | write | never in a plan | `predictions.jsonl` | no (expectation) | yes |
 | `prediction.evaluate` | user | write | never in a plan | `predictions.jsonl`, or nothing when no outcome has resolved yet (measured: verified, nothing written) | no (expectation) | yes |
@@ -3639,8 +3646,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
 
 `filesystem.list` and `filesystem.read` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
-configured; there is no default root, and a model proposal cannot supply one, so the count is 84
-registered actions by default and 86 with a root. Batch AG added ten user-origin write actions
+configured; there is no default root, and a model proposal cannot supply one, so the count is 90
+registered actions by default and 92 with a root. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
 two more user-origin writes (`goal.confirm`, the user's own decision about a success criterion APEX
@@ -5926,6 +5933,137 @@ retirement. An association between an approved rule and a later assessed outcome
 causes, including the user's own choices, and the report says so. Stages 5 and 6 of the roadmap below
 remain open on their wider clauses.
 
+## Batch AP-05: adaptation governance, evidence reconciliation and controlled lifecycle decisions (as implemented)
+
+AP-04 made the lifecycle readable. AP-05 makes it answerable: when the effectiveness report says an
+approved record needs attention, the user can open a **governance review** against the exact evidence
+the stores hold at that moment, inspect it later, be told truthfully what changed since, and record
+one of three lifecycle decisions. It adds two record kinds to the existing experience store
+(`adaptation_review`, `adaptation_review_decision`), one canonical evidence module
+(`src/experience/review.js`), one pure analysis module (`src/plans/governance.js`), five actions, a
+controller surface and four CLI commands. It adds no store, no new authority, no planner, no decision
+dimension, no execution path, and no second retirement mechanism.
+
+### What a review cites
+
+A review is a bounded, canonical snapshot of the report that recommended it, in schema
+`apex.review-evidence.v1`: the adaptation id and capability; the rule text, hash, version and shape;
+the adaptation's decision state, active/retired flags, support state, source and conflict ids; the
+report's availability, state, summary, recommendation, recommendation reason and observations; the
+supporting, missing and superseded experience and feedback ids; up to 20 prediction references and
+one pattern reference; up to 20 uses with their recorded outcome; up to 20 plan references and 20 goal
+references; and the read bounds. Field order and bounds are fixed in one function, so two bundles can be compared by SHA-256
+digest without a normalisation step. The report digest is recorded separately because it covers the
+whole report - including how many audit records were read - and can move while every item the review
+cites stays identical.
+
+```bash
+apex adaptation reviews                                    # which adaptations need attention
+apex adaptation review show <adaptation-id|review-id>     # one review, its evidence and history
+apex adaptation review reconcile <adaptation-id>          # what changed against the live stores
+apex adaptation review open <adaptation-id> --reason "text" # open on the evidence now recorded
+apex adaptation review keep|dismiss|retire <review-id>    # record the user's own decision
+```
+
+### Nine reader states, three decisions
+
+The reader state is **derived on every read**, never stored: stored records are only the review and the
+user's decision, because a status field written beside the evidence would be a second, editable copy of
+what the log already says.
+
+| Derived state | What the records show |
+|---|---|
+| `no_review_required` | no recommendation and no open review |
+| `review_recommended` | the live report recommends review or consideration of retirement |
+| `review_opened` | a current review exists, its evidence still matches, and no decision was recorded |
+| `review_awaiting_evidence` | the review was opened before the report could classify an evaluated use of the current version |
+| `review_evidence_changed` | the evidence the review cited no longer matches the live stores |
+| `review_completed` | the user recorded `keep_active` (or retired the adaptation, which is the retire decision's own effect) |
+| `review_dismissed` | the user dismissed the recommendation and left the adaptation unchanged |
+| `review_decision_superseded` | a later review of the same adaptation supersedes this one |
+| `review_unavailable` | the evidence cannot be read at all, so the state cannot be derived |
+
+The three decisions are `keep_active`, `dismiss` and `retire`. All are user-origin writes; model output
+cannot open a review or record a decision, and the store refuses a non-user origin independently of the
+registry. A decision is refused if the evidence changed after the review was opened - the user must
+reconcile first. `retire` appends the existing `adaptation_retirement` record through the existing
+`adaptation.retire` authority and then records the decision citing the pre-retirement evidence digest;
+a retired adaptation cannot be used or reviewed again. Decisions are append-only, are never rewritten,
+and a completed review keeps its initiator, evidence digest, decision and currentness; a later change
+moves the live reader state, not the historical record.
+
+### Reconciliation names differences, not verdicts
+
+The reconciler re-derives the bundle from the live stores and compares it item by item. The change
+vocabulary is closed and ordered: `unchanged`, `added`, `stale`, `conflicting`, `withdrawn`,
+`superseded`, `missing`, `unreadable`. The distinctions are the message:
+
+- `added` is not an improvement, and `withdrawn`, `superseded` or `missing` are not a failure.
+- A rule **version** change is `stale`; a rule **hash** change at the same version is `conflicting`,
+  because the recorded rule and its stated version now disagree.
+- Conflicting evidence stays conflicting; it is never averaged into a verdict.
+- An item whose read was truncated is `unreadable`, never `withdrawn` - evidence that could not be read
+  is not evidence of absence.
+- A moved report digest alone is not an evidence change.
+
+A changed digest therefore never means better or worse; it means the review must be reconciled before
+it can be decided again.
+
+### Bounds and failure behavior
+
+At most 20 adaptation rows per list read (`MAX_GOVERNANCE_ADAPTATIONS`, the same bound as AP-04), at
+most 20 evidence references per list, at most 20 reviews read per adaptation history, and at most 40
+change entries per reconciliation. A damaged experience or plan store raises `StoreError` rather than
+reporting an empty history; a missing plan store yields `review_unavailable` with its reason and a
+`null` reconciliation, never an empty bundle that would look like settled evidence. An audit-append
+failure after a decision is disclosed, and the decision the store already recorded is not erased.
+
+### Tests and measured cost
+
+`tests/adaptation-governance.test.js` (41 cases in 8 suites, registered in `npm test`) covers the nine
+states and three decisions, the evidence bundle and its identity, reconciliation precedence and each
+change kind, stale/conflicting/missing/unreadable evidence, model-origin refusal at both the registry
+and the store, concurrent open/retire/reconcile, restart persistence, audit-append failure, damaged
+and missing stores, and two deterministic end-to-end paths (report → open → inspect → reconcile →
+decide → audit → fresh report) - one keeping the rule active and one retiring it.
+
+```bash
+node --test tests/adaptation-governance.test.js
+APEX_DATA_ISOLATED=1 node benchmarks/run-governance-benchmark.mjs
+```
+
+`benchmarks/run-governance-benchmark.mjs` measures the **complete production path** for list, open,
+inspect, reconcile and decide at 4 / 12 / 24 linked uses and at 1 / 8 / 20 / 21 stored adaptations,
+plus concurrent reads beside writes. On this machine (Node v26.4.0, win32 x64), with medians over five
+cycles:
+
+| Complete request | 4 uses | 12 uses | 24 uses |
+|---|---|---|---|
+| list | 166.3 ms | 474.2 ms | 996.0 ms |
+| open | 151.7 ms | 445.1 ms | 640.1 ms |
+| inspect | 338.7 ms | 667.0 ms | 1,231.2 ms |
+| reconcile | 240.9 ms | 632.5 ms | 1,160.7 ms |
+| decide `keep_active` | 163.9 ms | 345.8 ms | 608.5 ms |
+
+The list request took 967.8 / 997.4 / 1,049.9 ms at 1 / 8 / 20 stored adaptations on the same 24-use
+history. At 21 stored
+adaptations the target falls outside the newest-20 window and is not reported, which the report says;
+that row completes faster because it performs far less lineage work, not because execution improved.
+The store and builder reads are printed separately and labelled partial. A read issued beside a write
+and four reads issued beside each other both verified; the timings are wall-clock observations, not
+throughput claims. See
+[`benchmarks/README.md`](benchmarks/README.md#adaptation-governance-benchmark-batch-ap-05) for the
+tables and their limits; the figures are observations of one machine at one time, not a specification.
+
+### What this does not claim
+
+Opening a review approves nothing, changes no rule, increases no influence, and executes nothing. A
+recommendation is never a decision. The read has no write path, and the write actions cannot approve an
+adaptation, change guidance, or run a plan - those remain `adaptation.decide`, `adaptation.guide`,
+`adaptation.retire` and the existing execution path. Reconciliation reports a difference, not a causal
+finding, a quality judgment, or real-world truth. Stages 5 and 6 of the roadmap below remain open on
+their wider clauses.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 
@@ -6018,7 +6156,9 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    and `authorizes: false` (`adaptation-decision.test.js`). That is disclosure of an existing bounded
    influence, not a new learned change of behaviour: no weight is fitted, no ranking is recomputed from
    results, and a prediction verdict still reaches no decision without a user-approved candidate derived
-   from it (Batch AP-02, below).
+   from it (Batch AP-02, below). Batch AP-04 made the outcomes of those decisions traceable and Batch AP-05
+   gave the result a user-controlled review lifecycle; neither changes behaviour by itself. A review records
+   a question and a user's decision about an existing rule, and approves, orders and executes nothing.
 6. **Executive control and outcome evaluation.** Expectations recorded before an action,
    outcomes compared against them, and the controller using that difference to decide the
    next step. Depends on 1 and 5. Acceptance: an operation records an expectation, an

@@ -50,6 +50,14 @@ import {
   analyzeAdaptationEffectiveness,
   renderEffectiveness,
 } from '../plans/effectiveness.js';
+import {
+  MAX_GOVERNANCE_ADAPTATIONS,
+  governanceDetail,
+  governanceReport,
+  prepareReview,
+  renderGovernance,
+  renderReview,
+} from '../plans/governance.js';
 
 function textField(value, name, max) {
   if (typeof value !== 'string') throw new ValidationError(`${name} must be text`);
@@ -1051,6 +1059,417 @@ export function experienceActions(store) {
           return { ok: false, detail: 'the recorded evidence changed between two reads: an adaptation was decided, guided, or retired, a plan or assessment was recorded, or a use was linked differently' };
         }
         return { ok: true, detail: `${fresh.totals.adaptations} adaptation record(s) and ${fresh.totals.uses} linked use(s) re-read to the same evidence; nothing was approved, changed, retired, or executed` };
+      },
+    },
+    {
+      name: 'adaptation.reviews',
+      description: 'List adaptations whose recorded evidence needs a governance review, the current recommendation, and the state of each current review. Read-only; it approves nothing, changes no rule, and never retires.',
+      inputHint: '{"limit":"optional 1-20"}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input ?? {}, ['limit']);
+        return { limit: limitValue(o.limit, { max: MAX_GOVERNANCE_ADAPTATIONS, fallback: MAX_GOVERNANCE_ADAPTATIONS }) };
+      },
+      async execute(ctx, { limit }) {
+        const report = await governanceReport({
+          experience: store,
+          plans: ctx?.plans ?? null,
+          operations: ctx?.operations ?? null,
+          goals: ctx?.goals ?? null,
+          knowledge: ctx?.knowledge ?? null,
+          memory: ctx?.memory ?? null,
+          predictions: ctx?.predictions ?? null,
+          now: ctx?.now ?? (() => new Date()),
+          limit,
+        });
+        return {
+          summary: report.available
+            ? `adaptation governance: ${report.totals.adaptations} adaptation record(s), ${report.totals.requiringReview} need attention`
+            : `adaptation governance unavailable: ${report.reason}`,
+          data: { limit, report },
+          display: [
+            renderGovernance(report),
+            'A recommendation is a sentence for you, not a decision. Opening, dismissing, keeping, and retiring are all explicit user acts.',
+          ].join('\n'),
+        };
+      },
+      async verify(ctx, { limit }, result) {
+        const fresh = await governanceReport({
+          experience: store,
+          plans: ctx?.plans ?? null,
+          operations: ctx?.operations ?? null,
+          goals: ctx?.goals ?? null,
+          knowledge: ctx?.knowledge ?? null,
+          memory: ctx?.memory ?? null,
+          predictions: ctx?.predictions ?? null,
+          now: ctx?.now ?? (() => new Date()),
+          limit,
+        });
+        if (fresh.available !== result.data.report.available) {
+          return { ok: false, detail: 'the stores became readable, or unreadable, between two reads' };
+        }
+        if (!fresh.available) {
+          return fresh.reason === result.data.report.reason
+            ? { ok: false, detail: `the same stores remain unavailable: ${fresh.reason}` }
+            : { ok: false, detail: 'the reason the stores are unavailable changed between two reads' };
+        }
+        if (fresh.digest !== result.data.report.digest) {
+          return { ok: false, detail: 'the governance evidence changed between two reads: an adaptation, review, decision, or the evidence it cites changed' };
+        }
+        return { ok: true, detail: `${fresh.totals.adaptations} adaptation row(s) and ${fresh.totals.reviews} review record(s) re-read to the same states; nothing was approved, changed, or retired` };
+      },
+    },
+    {
+      name: 'adaptation.review.inspect',
+      description: 'Show one review or one adaptation: the exact evidence digest it cites, the live reconciliation against current stores, every changed, missing, stale, or conflicting item, and the review history. Read-only.',
+      inputHint: '{"target":"review or adaptation id"}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target']);
+        return { target: recordRef(o.target, 'target') };
+      },
+      async execute(ctx, { target }) {
+        const detail = await governanceDetail({
+          experience: store,
+          plans: ctx?.plans ?? null,
+          operations: ctx?.operations ?? null,
+          goals: ctx?.goals ?? null,
+          knowledge: ctx?.knowledge ?? null,
+          memory: ctx?.memory ?? null,
+          predictions: ctx?.predictions ?? null,
+          now: ctx?.now ?? (() => new Date()),
+          target,
+        });
+        return {
+          summary: detail.available
+            ? `review detail: ${detail.reviewState} for adaptation ${shortId(detail.adaptation.id)}`
+            : `review detail unavailable: ${detail.reason}`,
+          data: { target, detail },
+          display: renderReview(detail),
+        };
+      },
+      async verify(ctx, { target }, result) {
+        const fresh = await governanceDetail({
+          experience: store,
+          plans: ctx?.plans ?? null,
+          operations: ctx?.operations ?? null,
+          goals: ctx?.goals ?? null,
+          knowledge: ctx?.knowledge ?? null,
+          memory: ctx?.memory ?? null,
+          predictions: ctx?.predictions ?? null,
+          now: ctx?.now ?? (() => new Date()),
+          target,
+        });
+        if (fresh.available !== result.data.detail.available) {
+          return { ok: false, detail: 'the stores became readable, or unreadable, between two reads' };
+        }
+        if (!fresh.available) {
+          return { ok: false, detail: `the same stores remain unavailable: ${fresh.reason}` };
+        }
+        const before = result.data.detail;
+        if (fresh.reviewState !== before.reviewState) {
+          return { ok: false, detail: `the review state changed between two reads (${before.reviewState} -> ${fresh.reviewState})` };
+        }
+        if ((fresh.review?.evidenceDigest ?? null) !== (before.review?.evidenceDigest ?? null)) {
+          return { ok: false, detail: 'the review record changed between two reads' };
+        }
+        if (JSON.stringify(fresh.reconciliation) !== JSON.stringify(before.reconciliation)) {
+          return { ok: false, detail: 'the live reconciliation changed between two reads; the evidence moved during the read' };
+        }
+        if (JSON.stringify(fresh.history.map((h) => h.id)) !== JSON.stringify(before.history.map((h) => h.id))) {
+          return { ok: false, detail: 'the review history changed between two reads' };
+        }
+        return { ok: true, detail: `review state ${fresh.reviewState} and its reconciliation confirmed by an independent read; nothing was approved, changed, or retired` };
+      },
+    },
+    {
+      name: 'adaptation.review.reconcile',
+      description: 'Re-derive the evidence one review cites from the live stores and report exactly what changed, with the same explicit precedence as the detail read: unchanged, added, stale, conflicting, withdrawn, superseded, missing, or unreadable. Read-only; a changed digest is not a verdict.',
+      inputHint: '{"target":"review or adaptation id"}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target']);
+        return { target: recordRef(o.target, 'target') };
+      },
+      async execute(ctx, { target }) {
+        const detail = await governanceDetail({
+          experience: store,
+          plans: ctx?.plans ?? null,
+          operations: ctx?.operations ?? null,
+          goals: ctx?.goals ?? null,
+          knowledge: ctx?.knowledge ?? null,
+          memory: ctx?.memory ?? null,
+          predictions: ctx?.predictions ?? null,
+          now: ctx?.now ?? (() => new Date()),
+          target,
+        });
+        const reconciliation = detail.available ? detail.reconciliation : null;
+        const hasReview = detail.available && detail.review !== null;
+        return {
+          summary: detail.available
+            ? reconciliation
+              ? `review reconciliation: ${reconciliation.state}${reconciliation.changed ? ` (${reconciliation.kinds.join(', ')})` : ''}`
+              : hasReview
+                ? `review reconciliation unavailable: ${detail.unavailable ?? 'the evidence cannot be re-derived'}`
+                : 'review reconciliation: no review has been opened for this adaptation, so there is nothing to reconcile'
+            : `review reconciliation unavailable: ${detail.reason}`,
+          data: {
+            target,
+            available: detail.available,
+            reason: detail.reason,
+            adaptationId: detail.available ? detail.adaptation.id : null,
+            reviewId: detail.review?.id ?? null,
+            reviewedEvidenceDigest: detail.review?.evidenceDigest ?? null,
+            currentEvidenceDigest: reconciliation?.evidenceDigest ?? null,
+            reportChanged: reconciliation?.reportChanged ?? false,
+            reconciliation: reconciliation
+              ? { ...reconciliation, changes: reconciliation.changes }
+              : null,
+            reviewState: detail.reviewState ?? null,
+            unavailable: detail.unavailable ?? null,
+          },
+          display: detail.available
+            ? reconciliation
+              ? [
+                renderReview(detail),
+                reconciliation.changed
+                  ? 'The evidence moved. This says what differs, not whether the adaptation became better or worse; decide only on a review of the current evidence.'
+                  : 'The evidence a review cites still matches the live stores. No adaptation, rule, or plan was changed by this read.',
+              ].join('\n')
+              : hasReview
+                ? renderReview(detail)
+                : 'No review has been opened for this adaptation. Opening one records the evidence it would cite; use adaptation.review.open.'
+            : renderReview(detail),
+        };
+      },
+      async verify(ctx, { target }, result) {
+        const fresh = await governanceDetail({
+          experience: store,
+          plans: ctx?.plans ?? null,
+          operations: ctx?.operations ?? null,
+          goals: ctx?.goals ?? null,
+          knowledge: ctx?.knowledge ?? null,
+          memory: ctx?.memory ?? null,
+          predictions: ctx?.predictions ?? null,
+          now: ctx?.now ?? (() => new Date()),
+          target,
+        });
+        if (!result.data.available) {
+          return fresh.available === false
+            ? { ok: false, detail: `the same stores remain unavailable: ${fresh.reason}` }
+            : { ok: false, detail: 'the stores became readable between two reads' };
+        }
+        if (!fresh.available) return { ok: false, detail: 'the stores became unreadable between two reads' };
+        if (!result.data.reviewId) {
+          return fresh.review
+            ? { ok: false, detail: 'a review was opened between two reads' }
+            : { ok: true, detail: 'no review is recorded for this adaptation, confirmed by an independent read; nothing was approved or changed' };
+        }
+        if (JSON.stringify(fresh.reconciliation) !== JSON.stringify(result.data.reconciliation)) {
+          return { ok: false, detail: 'a second reconciliation produced a different change set; the evidence moved during the read' };
+        }
+        if (!fresh.reconciliation) {
+          return { ok: false, detail: `the review evidence remains unavailable: ${fresh.unavailable ?? 'the effectiveness report is unavailable'}` };
+        }
+        return { ok: true, detail: `${fresh.reconciliation.state} with ${fresh.reconciliation.changes.length} recorded change(s) confirmed by an independent read; nothing was approved or changed` };
+      },
+    },
+    {
+      name: 'adaptation.review.open',
+      description: 'Open one governance review against the exact evidence the stores now hold. The evidence digest, rule version, and rule hash are recorded with it; opening changes no rule, scope, or influence. Write: user origin only.',
+      inputHint: '{"target":"adaptation id","reason":"optional text"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target', 'reason']);
+        return {
+          target: recordRef(o.target, 'target'),
+          reason: optionalTextField(o.reason, 'reason', MAX_REASON_CHARS),
+        };
+      },
+      async execute(ctx, { target, reason }) {
+        const prepared = await prepareReview({
+          experience: store,
+          plans: ctx?.plans ?? null,
+          operations: ctx?.operations ?? null,
+          goals: ctx?.goals ?? null,
+          knowledge: ctx?.knowledge ?? null,
+          memory: ctx?.memory ?? null,
+          predictions: ctx?.predictions ?? null,
+          now: ctx?.now ?? (() => new Date()),
+          target,
+        });
+        if (!prepared.evidence) {
+          throw new ValidationError(
+            `no review evidence can be assembled: ${prepared.report?.reason ?? 'the effectiveness report is unavailable'}`,
+            'REVIEW_EVIDENCE_UNAVAILABLE',
+          );
+        }
+        const { record, adaptation } = await store.openReview({
+          target: prepared.adaptation.id,
+          evidence: prepared.evidence,
+          reportDigest: prepared.reportDigest,
+          reason,
+          provenance: { operationId: ctx.operationId },
+          origin: ctx.origin,
+        });
+        return {
+          summary: `opened review ${shortId(record.id)} for adaptation ${shortId(adaptation.id)} on evidence ${record.evidenceDigest.slice(0, 12)}`,
+          data: {
+            reviewId: record.id,
+            adaptationId: adaptation.id,
+            capability: adaptation.capability,
+            rule: adaptation.rule,
+            ruleHash: adaptation.ruleHash ?? null,
+            ruleVersion: adaptation.shapeVersion ?? null,
+            evidenceDigest: record.evidenceDigest,
+            reportDigest: record.reportDigest,
+            recommendation: record.recommendation,
+            awaitingEvidence: record.awaitingEvidence === true,
+            createdAt: record.createdAt,
+          },
+          display: [
+            `Opened review ${shortId(record.id)} for adaptation ${shortId(adaptation.id)}: ${adaptation.capability} | version ${adaptation.shapeVersion ?? 'none'}`,
+            `  evidence digest: ${record.evidenceDigest}`,
+            `  report digest: ${record.reportDigest ?? 'unavailable'}`,
+            `  recommendation at open: ${record.recommendation}${record.awaitingEvidence ? ' (the evidence it needs is not recorded yet)' : ''}`,
+            'Opening a review approves nothing, changes no rule, increases no influence, and executes no task. Record a decision explicitly.',
+          ].join('\n'),
+        };
+      },
+      async verify(_ctx, { reason }, result) {
+        const fresh = await store.reviewDetail(result.data.reviewId);
+        if (!fresh) return { ok: false, detail: 'the review cannot be read back' };
+        const { review, adaptation } = fresh;
+        if (review.targetId !== result.data.adaptationId) return { ok: false, detail: 'the stored review names a different adaptation' };
+        if (review.evidenceDigest !== result.data.evidenceDigest) return { ok: false, detail: 'the stored evidence digest differs from the write result' };
+        if ((review.reportDigest ?? null) !== (result.data.reportDigest ?? null)) return { ok: false, detail: 'the stored report digest differs from the write result' };
+        if ((review.reason ?? null) !== (reason ?? null)) return { ok: false, detail: 'the stored review reason differs from the request' };
+        if (review.decisionCount !== 0) return { ok: false, detail: 'opening a review recorded a decision' };
+        if (review.supersededBy.length > 0) return { ok: false, detail: 'the stored review is already superseded' };
+        if (!adaptation || adaptation.ruleHash !== result.data.ruleHash) return { ok: false, detail: 'the adaptation the review names no longer stands on the reviewed rule' };
+        if (adaptation.retired) return { ok: false, detail: 'opening a review retired the adaptation' };
+        if (adaptation.decisionState !== 'approved' && adaptation.decisionState !== 'candidate' && adaptation.decisionState !== 'ambiguous') {
+          return { ok: false, detail: `opening a review changed the adaptation state to ${adaptation.decisionState}` };
+        }
+        return { ok: true, detail: 'the review and its evidence digest are stored, no decision is attached, and the adaptation is unchanged' };
+      },
+    },
+    {
+      name: 'adaptation.review.decide',
+      description: 'Record the user decision on one current review: keep_active, dismiss, or retire. The decision is refused if the evidence changed after the review was opened; retirement reuses the existing adaptation.retire authority. Write: user origin only.',
+      inputHint: '{"review":"review id","decision":"keep_active|dismiss|retire","reason":"optional text"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['review', 'decision', 'reason']);
+        const decision = typeof o.decision === 'string' ? o.decision.trim() : '';
+        if (!['keep_active', 'dismiss', 'retire'].includes(decision)) {
+          throw new ValidationError('decision must be one of: keep_active, dismiss, retire');
+        }
+        return {
+          review: recordRef(o.review, 'review'),
+          decision,
+          reason: optionalTextField(o.reason, 'reason', MAX_REASON_CHARS),
+        };
+      },
+      async execute(ctx, { review, decision, reason }) {
+        const existing = await store.reviewDetail(review);
+        if (!existing) throw new ValidationError(`no review matches "${singleLine(review, 40)}"`);
+        if (!existing.adaptation) {
+          throw new ValidationError('the adaptation this review names is not in the store; nothing can be decided', 'REVIEW_TARGET_MISSING');
+        }
+        const prepared = await prepareReview({
+          experience: store,
+          plans: ctx?.plans ?? null,
+          operations: ctx?.operations ?? null,
+          goals: ctx?.goals ?? null,
+          knowledge: ctx?.knowledge ?? null,
+          memory: ctx?.memory ?? null,
+          predictions: ctx?.predictions ?? null,
+          now: ctx?.now ?? (() => new Date()),
+          target: existing.adaptation.id,
+        });
+        if (!prepared.evidence) {
+          throw new ValidationError(
+            `the review evidence cannot be re-derived: ${prepared.report?.reason ?? 'the effectiveness report is unavailable'}`,
+            'REVIEW_EVIDENCE_UNAVAILABLE',
+          );
+        }
+        const before = {
+          decisionState: existing.adaptation.decisionState,
+          rule: existing.adaptation.rule,
+          active: existing.adaptation.active === true,
+          retired: existing.adaptation.retired === true,
+        };
+        const { record, retirement } = await store.recordReviewDecision({
+          review: existing.review.id,
+          decision,
+          evidence: prepared.evidence,
+          reportDigest: prepared.reportDigest,
+          reason,
+          provenance: { operationId: ctx.operationId },
+          origin: ctx.origin,
+        });
+        return {
+          summary: `recorded ${decision} on review ${shortId(existing.review.id)}${retirement ? '; the adaptation is retired' : '; no rule or scope changed'}`,
+          data: {
+            decisionId: record.id,
+            reviewId: existing.review.id,
+            adaptationId: existing.adaptation.id,
+            decision,
+            reviewedEvidenceDigest: record.reviewedEvidenceDigest,
+            currentEvidenceDigest: record.currentEvidenceDigest,
+            reportDigest: record.reportDigest ?? null,
+            retirementId: retirement?.id ?? null,
+            before,
+            createdAt: record.createdAt,
+          },
+          display: [
+            `Recorded ${decision} on review ${shortId(existing.review.id)} for adaptation ${shortId(existing.adaptation.id)}.`,
+            `  decided against evidence: ${record.reviewedEvidenceDigest}`,
+            decision === 'retire'
+              ? `  retired through the same authority adaptation.retire uses; retirement record ${shortId(retirement?.id ?? '')}`
+              : '  the adaptation, its rule, its scope, and its influence are unchanged',
+            'The review and its decision stay in the log as history. Nothing was approved, no influence was increased, and no task was executed.',
+          ].join('\n'),
+        };
+      },
+      async verify(_ctx, { decision, reason }, result) {
+        const fresh = await store.reviewDetail(result.data.reviewId);
+        if (!fresh) return { ok: false, detail: 'the decided review cannot be read back' };
+        const recorded = (fresh.review.decisions ?? []).find((d) => d.id === result.data.decisionId);
+        if (!recorded) return { ok: false, detail: 'the recorded decision is not attached to the review' };
+        if (recorded.decision !== decision) return { ok: false, detail: 'the stored decision differs from the request' };
+        if (recorded.reviewedEvidenceDigest !== result.data.reviewedEvidenceDigest) {
+          return { ok: false, detail: 'the stored decision cites different reviewed evidence' };
+        }
+        if ((recorded.reason ?? null) !== (reason ?? null)) return { ok: false, detail: 'the stored decision reason differs from the request' };
+        if (fresh.review.decisionCount !== 1) return { ok: false, detail: `the review holds ${fresh.review.decisionCount} decisions, not one` };
+        const adaptation = fresh.adaptation;
+        if (!adaptation) return { ok: false, detail: 'the adaptation the review names cannot be read back' };
+        if (decision === 'retire') {
+          if (!adaptation.retired || adaptation.decisionState !== 'retired') return { ok: false, detail: 'a retirement decision did not retire the adaptation' };
+          if (adaptation.retirement?.id !== result.data.retirementId) return { ok: false, detail: 'the retirement record differs from the decision record' };
+          const active = await store.activeAdaptations({ capability: adaptation.capability, limit: MAX_SUPPORT_REFS });
+          if (active.adaptations.some((a) => a.id === adaptation.id)) return { ok: false, detail: 'a retired adaptation is still being retrieved for future context' };
+        } else {
+          if (adaptation.retired) return { ok: false, detail: 'a non-retirement decision retired the adaptation' };
+          if (adaptation.decisionState !== result.data.before.decisionState) {
+            return { ok: false, detail: `a ${decision} decision changed the adaptation state to ${adaptation.decisionState}` };
+          }
+          if (adaptation.rule !== result.data.before.rule) return { ok: false, detail: `a ${decision} decision changed the adaptation rule` };
+          if ((adaptation.active === true) !== result.data.before.active) return { ok: false, detail: `a ${decision} decision changed whether the adaptation is in effect` };
+        }
+        return { ok: true, detail: `${decision} confirmed: evidence binding intact${decision === 'retire' ? ', retirement recorded through the existing authority, and the adaptation is no longer retrieved' : ', and no rule, scope, or influence changed'}` };
       },
     },
     {

@@ -95,6 +95,10 @@ const MODEL_WRITE_ATTEMPTS = [
   ['adaptation.decide', { target: 'no-such-candidate', decision: 'approved' }],
   ['adaptation.retire', { target: 'no-such-adaptation', reason: 'the model retired it' }],
   ['adaptation.guide', { target: 'no-such-adaptation', order: 'reads_first' }],
+  // A governance review records a question the user asked about a rule, and its decision is the
+  // user's own; a reply may read neither into existence.
+  ['adaptation.review.open', { target: 'no-such-adaptation', reason: 'the model opened a review' }],
+  ['adaptation.review.decide', { review: 'no-such-review', decision: 'retire', reason: 'the model decided' }],
   ['prediction.record', { capability: 'memory.add', expectation: 'success', subject: 'the model expects success', inDays: 7 }],
   ['prediction.evaluate', { target: 'no-such-prediction' }],
   ['prediction.invalidate', { target: 'no-such-prediction', reason: 'the model withdrew it' }],

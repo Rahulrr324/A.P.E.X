@@ -1,11 +1,18 @@
-// Experience, feedback, and adaptation store. One append-only JSONL log holds five record kinds,
-// and every state a reader reports is derived from them:
+// Experience, feedback, adaptation, and governance-review store. One append-only JSONL log holds
+// eight record kinds, and every state a reader reports is derived from them:
 //
-//   experience             an event that happened: a verified reference to one audit record
-//   feedback               the user's own assessment of that event, in the user's own words
-//   adaptation             a candidate behaviour change, derived deterministically from the two above
-//   adaptation_decision    the user's approval or rejection of one candidate
-//   adaptation_retirement  the user's explicit end for one adaptation
+//   experience               an event that happened: a verified reference to one audit record
+//   feedback                 the user's own assessment of that event, in the user's own words
+//   adaptation               a candidate behaviour change, derived deterministically from the two above
+//   adaptation_decision      the user's approval or rejection of one candidate
+//   adaptation_retirement    the user's explicit end for one adaptation
+//   adaptation_guidance      the user's recorded shape for one adaptation
+//   adaptation_review        the user's opening of a governance review on exact recorded evidence
+//   adaptation_review_decision  the user's explicit lifecycle decision on one review
+//
+// A review is not an approval, a retirement, or a finding. It records that a question was opened
+// against a bounded evidence snapshot; what happens next is a separate user decision or the existing
+// `adaptation.retire` record. Nothing in the review kinds changes how any other record is read.
 //
 // An experience is deliberately *not* a copy of the conversation. The audit log already records
 // what APEX did and what outcome followed, so duplicating that here would create a second, weaker
@@ -92,6 +99,17 @@ import {
   summarizeTemporal,
   temporalPreparation,
 } from './temporal.js';
+import {
+  REVIEW_DECISION_KIND,
+  REVIEW_DECISIONS,
+  REVIEW_KIND,
+  canonicalReviewEvidence,
+  reconcileReviewEvidence,
+  reviewAwaitingEvidence,
+  reviewEvidenceDigest,
+  validateReviewDecisionRecord,
+  validateReviewRecord,
+} from './review.js';
 
 export const EXPERIENCE_SCHEMA = 1;
 
@@ -101,8 +119,10 @@ export const ADAPTATION_KIND = 'adaptation';
 export const DECISION_KIND = 'adaptation_decision';
 export const RETIREMENT_KIND = 'adaptation_retirement';
 export const GUIDANCE_KIND = 'adaptation_guidance';
+export { REVIEW_KIND, REVIEW_DECISION_KIND };
 export const RECORD_KINDS = Object.freeze([
   EXPERIENCE_KIND, FEEDBACK_KIND, ADAPTATION_KIND, DECISION_KIND, RETIREMENT_KIND, GUIDANCE_KIND,
+  REVIEW_KIND, REVIEW_DECISION_KIND,
 ]);
 
 // The vocabulary an approved adaptation's guidance may be expressed in, and nothing else. Batch AM's
@@ -168,6 +188,11 @@ const PROVENANCE_BY_KIND = Object.freeze({
   [DECISION_KIND]: { origin: 'user_approval', updateMode: 'user_confirmed' },
   [RETIREMENT_KIND]: { origin: 'user_retirement', updateMode: 'user_confirmed' },
   [GUIDANCE_KIND]: { origin: 'user_guidance', updateMode: 'user_confirmed' },
+  // A review is user-origin because only the user opens a governance question, and a review decision
+  // is user-origin because only the user may decide what happens to an adaptation. A model may read
+  // either record; it may not write one.
+  [REVIEW_KIND]: { origin: 'user_review', updateMode: 'user_confirmed' },
+  [REVIEW_DECISION_KIND]: { origin: 'user_review_decision', updateMode: 'user_confirmed' },
 });
 
 // An experience can arrive two ways, and the difference must stay visible forever: the user named
@@ -422,6 +447,8 @@ export function validateExperienceRecord(r) {
   if (r.kind === DECISION_KIND) return validateDecision(r);
   if (r.kind === RETIREMENT_KIND) return validateRetirement(r);
   if (r.kind === GUIDANCE_KIND) return validateGuidance(r);
+  if (r.kind === REVIEW_KIND) return validateReviewRecord(r);
+  if (r.kind === REVIEW_DECISION_KIND) return validateReviewDecisionRecord(r);
   return 'unknown record kind';
 }
 
@@ -728,6 +755,8 @@ function splitRecords(records) {
   const decisions = [];
   const retirements = [];
   const guidance = [];
+  const reviews = [];
+  const reviewDecisions = [];
   for (const record of records) {
     if (record.kind === EXPERIENCE_KIND) experiences.push(record);
     else if (record.kind === FEEDBACK_KIND) feedback.push(record);
@@ -735,13 +764,15 @@ function splitRecords(records) {
     else if (record.kind === DECISION_KIND) decisions.push(record);
     else if (record.kind === RETIREMENT_KIND) retirements.push(record);
     else if (record.kind === GUIDANCE_KIND) guidance.push(record);
-    // A line that is none of the five kinds is damage, and `deriveStore` has reported it that way
+    else if (record.kind === REVIEW_KIND) reviews.push(record);
+    else if (record.kind === REVIEW_DECISION_KIND) reviewDecisions.push(record);
+    // A line that is none of the eight kinds is damage, and `deriveStore` has reported it that way
     // since Batch AD: it is counted by `health()` rather than filed under whichever kind happens to
     // be the last branch, which is what an `else` here would have done to a guidance record's
     // sibling.
   }
   return {
-    experiences, feedback, adaptations, decisions, retirements, guidance,
+    experiences, feedback, adaptations, decisions, retirements, guidance, reviews, reviewDecisions,
   };
 }
 
@@ -858,6 +889,55 @@ function summarizeRetirement(event) {
   };
 }
 
+function summarizeReviewDecision(event) {
+  return {
+    id: event.id,
+    reviewId: event.reviewId,
+    decision: event.decision,
+    reviewedEvidenceDigest: event.reviewedEvidenceDigest,
+    currentEvidenceDigest: event.currentEvidenceDigest,
+    reportDigest: event.reportDigest ?? null,
+    retirementId: event.retirementId ?? null,
+    reason: event.reason ?? null,
+    createdAt: event.createdAt,
+    operationId: event.provenance?.operationId ?? null,
+  };
+}
+
+// A review and every decision recorded against it. A later review of the same adaptation supersedes
+// an earlier one by log order, which is the same rule every other derived state uses; the earlier
+// record stays readable and is never rewritten.
+function annotateReviews(index) {
+  const decisionsByReview = groupBy(index.reviewDecisions, (d) => d.reviewId);
+  const position = new Map(index.reviews.map((review, i) => [review.id, i]));
+  const targetGroups = groupBy(index.reviews, (r) => r.targetId);
+  return index.reviews.map((review) => {
+    const decisions = decisionsByReview.get(review.id) ?? [];
+    const latest = decisions.length > 0 ? decisions.at(-1) : null;
+    const order = position.get(review.id) ?? 0;
+    const supersededBy = (targetGroups.get(review.targetId) ?? [])
+      .filter((other) => (position.get(other.id) ?? 0) > order)
+      .map((other) => other.id);
+    let awaitingEvidence = false;
+    try {
+      awaitingEvidence = reviewAwaitingEvidence(review.evidence);
+    } catch {
+      // A stored review that passed record validation always canonicalises; if it does not, the
+      // evidence is damaged and health reports it. The review itself stays readable as history.
+      awaitingEvidence = true;
+    }
+    return {
+      ...review,
+      decisions: decisions.slice(-MAX_SAMPLES).map(summarizeReviewDecision),
+      decisionCount: decisions.length,
+      decision: latest ? summarizeReviewDecision(latest) : null,
+      awaitingEvidence,
+      supersededBy,
+      current: supersededBy.length === 0,
+    };
+  });
+}
+
 // The one derivation used by every reader, so no two paths can report different lifecycle state
 // for the same bytes. Cost is linear in the store; nothing is indexed across reads.
 function deriveStore(records) {
@@ -880,7 +960,8 @@ function deriveStore(records) {
     retiredFeedback,
   }));
   const adaptations = annotateAdaptations(index, { retiredExperiences, retiredFeedback });
-  return { index, retiredExperiences, retiredFeedback, experiences, adaptations };
+  const reviews = annotateReviews(index);
+  return { index, retiredExperiences, retiredFeedback, experiences, adaptations, reviews };
 }
 
 function annotateExperience(record, { feedbackByExperience, replacedBy, retiredExperiences, retiredFeedback }) {
@@ -1779,6 +1860,207 @@ export class ExperienceStore {
     return { record, adaptation, previous: latest ?? null };
   }
 
+  // --- governance reviews ----------------------------------------------------
+
+  // Open one review against one exact evidence bundle. The bundle is built by the governance module
+  // from the live stores and canonicalised here; a bundle that names another adaptation, another rule
+  // hash, or another rule version than the adaptation as it now stands is refused rather than stored,
+  // because a review of a different shape must never be readable as a review of this one.
+  async openReview({ target, evidence, reportDigest = null, reason = null, provenance = {}, origin } = {}) {
+    this.#requireUser(origin, 'opening a governance review');
+    const ref = validateRef(target, 'review target');
+    let canonical;
+    try {
+      canonical = canonicalReviewEvidence(evidence);
+    } catch (err) {
+      throw new ValidationError(`the review evidence is not a readable bundle: ${err?.message ?? String(err)}`, 'REVIEW_EVIDENCE_INVALID');
+    }
+    if (reportDigest !== null && (typeof reportDigest !== 'string' || !/^[0-9a-f]{64}$/.test(reportDigest))) {
+      throw new ValidationError('reportDigest must be a sha256 digest or null');
+    }
+    const reasonText = validateTextField(reason, 'reason', { required: false, max: MAX_REASON_CHARS });
+    const recorded = sanitizeProvenance(provenance, REVIEW_KIND);
+    return this.writeLock.run(() => this.#openReviewFromAuthority({
+      ref, canonical, reportDigest, reasonText, recorded,
+    }));
+  }
+
+  async #openReviewFromAuthority({ ref, canonical, reportDigest, reasonText, recorded }) {
+    const records = await this.#loadComplete({ beforeAppend: true });
+    const { adaptations, reviews } = deriveStore(records);
+    const adaptation = resolveAdaptationRef(adaptations, ref, 'review target');
+    if (canonical.targetId !== adaptation.id) {
+      throw new ValidationError('the review evidence names a different adaptation than the review target', 'REVIEW_TARGET_MISMATCH');
+    }
+    if (canonical.rule.hash !== adaptation.ruleHash) {
+      throw new ValidationError('the review evidence does not describe the rule the adaptation now states', 'REVIEW_RULE_MISMATCH');
+    }
+    if ((canonical.rule.version ?? null) !== (adaptation.shapeVersion ?? null)) {
+      throw new ValidationError(
+        `adaptation [${shortId(adaptation.id)}] now stands at version ${adaptation.shapeVersion ?? 'unrecorded'}; review the version on record rather than an earlier shape`,
+        'REVIEW_VERSION_MISMATCH',
+      );
+    }
+    if (adaptation.retired) {
+      throw new ValidationError(`adaptation [${shortId(adaptation.id)}] is retired; there is no active rule to review`, 'REVIEW_TARGET_RETIRED');
+    }
+
+    const digest = reviewEvidenceDigest(canonical);
+    const current = reviews.filter((r) => r.targetId === adaptation.id && r.supersededBy.length === 0);
+    if (current.some((r) => r.evidenceDigest === digest)) {
+      throw new ValidationError(
+        `adaptation [${shortId(adaptation.id)}] already has a current review of this exact evidence; record a decision on it or wait for the evidence to change`,
+        'REVIEW_EXISTS',
+      );
+    }
+
+    const id = randomUUID();
+    if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
+    const record = {
+      schema: EXPERIENCE_SCHEMA,
+      kind: REVIEW_KIND,
+      id,
+      targetId: adaptation.id,
+      evidence: canonical,
+      evidenceDigest: digest,
+      reportDigest,
+      recommendation: canonical.report.recommendation,
+      awaitingEvidence: reviewAwaitingEvidence(canonical),
+      ...(reasonText ? { reason: reasonText } : {}),
+      createdAt: this.now().toISOString(),
+      provenance: recorded,
+    };
+    const problem = validateExperienceRecord(record);
+    if (problem) throw new StoreError(`the recorded review failed validation (${problem}); nothing written`);
+    await this.log.append(record);
+    return { record, adaptation, previousReview: current.length > 0 ? current.at(-1) : null };
+  }
+
+  // Record the user's explicit decision on one review. The decision is bound to the exact evidence
+  // that was reviewed and to the evidence as it stands now; if the two differ, the decision is refused
+  // rather than attached to evidence the user did not see. Retirement reuses the existing retirement
+  // authority in this same lock, so there is one retirement record kind and one lifecycle.
+  async recordReviewDecision({ review, decision, evidence, reportDigest = null, reason = null, provenance = {}, origin } = {}) {
+    this.#requireUser(origin, 'deciding an adaptation review');
+    if (!REVIEW_DECISIONS.includes(decision)) throw new ValidationError(`decision must be one of: ${REVIEW_DECISIONS.join(', ')}`);
+    const ref = validateRef(review, 'review reference');
+    let canonical;
+    try {
+      canonical = canonicalReviewEvidence(evidence);
+    } catch (err) {
+      throw new ValidationError(`the current evidence is not a readable bundle: ${err?.message ?? String(err)}`, 'REVIEW_EVIDENCE_INVALID');
+    }
+    const reasonText = validateTextField(reason, 'reason', { required: false, max: MAX_REASON_CHARS });
+    if (reportDigest !== null && (typeof reportDigest !== 'string' || !/^[0-9a-f]{64}$/.test(reportDigest))) {
+      throw new ValidationError('reportDigest must be a sha256 digest or null');
+    }
+    const recorded = sanitizeProvenance(provenance, REVIEW_DECISION_KIND);
+    return this.writeLock.run(() => this.#reviewDecisionFromAuthority({
+      ref, decision, canonical, reportDigest, reasonText, provenance, recorded,
+    }));
+  }
+
+  async #reviewDecisionFromAuthority({
+    ref, decision, canonical, reportDigest, reasonText, provenance, recorded,
+  }) {
+    const records = await this.#loadComplete({ beforeAppend: true });
+    const { adaptations, reviews } = deriveStore(records);
+    const review = resolveReviewRef(reviews, ref, 'review reference');
+    if (review.supersededBy.length > 0) {
+      throw new ValidationError(
+        `review [${shortId(review.id)}] was superseded by a later review; decide the current review instead`,
+        'REVIEW_SUPERSEDED',
+      );
+    }
+    if (review.decisionCount > 0) {
+      throw new ValidationError(
+        `review [${shortId(review.id)}] already records a decision; open a new review on current evidence to revisit it`,
+        'REVIEW_ALREADY_DECIDED',
+      );
+    }
+    const adaptation = adaptations.find((a) => a.id === review.targetId) ?? null;
+    if (!adaptation) {
+      throw new ValidationError('the adaptation this review names is not in the store; nothing can be decided', 'REVIEW_TARGET_MISSING');
+    }
+    if (canonical.targetId !== adaptation.id) {
+      throw new ValidationError('the current evidence names a different adaptation than the review', 'REVIEW_TARGET_MISMATCH');
+    }
+    const diff = reconcileReviewEvidence({
+      stored: review.evidence,
+      current: canonical,
+      storedReportDigest: review.reportDigest,
+      currentReportDigest: reportDigest,
+    });
+    if (diff.state === 'unreadable') {
+      throw new StoreError(`the review evidence cannot be reconciled (${diff.why}); no decision was recorded`);
+    }
+    if (diff.changed) {
+      throw new ValidationError(
+        `the evidence changed since review [${shortId(review.id)}] was opened (${diff.why}); reconcile it and open a new review on current evidence rather than deciding the earlier one`,
+        'REVIEW_EVIDENCE_CHANGED',
+      );
+    }
+    if (decision === 'retire' && adaptation.retired) {
+      throw new ValidationError(`adaptation [${shortId(adaptation.id)}] is already retired; the decision was not recorded`, 'ADAPTATION_ALREADY_RETIRED');
+    }
+
+    const id = randomUUID();
+    if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
+
+    // Retirement first, through the same authority method `adaptation.retire` uses. If the second
+    // append then fails, the retirement stands and the error says so; the reverse order would leave a
+    // decision claiming a retirement that was never recorded.
+    let retirement = null;
+    if (decision === 'retire') {
+      const retirementReason = reasonText
+        ?? `retirement recorded through governance review [${shortId(review.id)}]`;
+      const retirementProvenance = sanitizeProvenance(provenance, RETIREMENT_KIND);
+      retirement = await this.#retireFromAuthority({
+        ref: adaptation.id,
+        reasonText: retirementReason,
+        recorded: retirementProvenance,
+      });
+    }
+
+    const decisionRecord = {
+      schema: EXPERIENCE_SCHEMA,
+      kind: REVIEW_DECISION_KIND,
+      id,
+      reviewId: review.id,
+      targetId: adaptation.id,
+      decision,
+      reviewedEvidenceDigest: review.evidenceDigest,
+      currentEvidenceDigest: diff.evidenceDigest,
+      reportDigest,
+      ...(retirement ? { retirementId: retirement.record.id } : {}),
+      ...(reasonText ? { reason: reasonText } : {}),
+      createdAt: this.now().toISOString(),
+      provenance: recorded,
+    };
+    const problem = validateExperienceRecord(decisionRecord);
+    if (problem) {
+      throw new StoreError(
+        `the review decision failed validation (${problem}); ${retirement ? 'the retirement was recorded but the decision was not' : 'nothing written'}`,
+      );
+    }
+    try {
+      await this.log.append(decisionRecord);
+    } catch (err) {
+      if (retirement) {
+        throw new StoreError(
+          `the retirement was recorded but the review decision could not be appended: ${err?.message ?? String(err)}`,
+        );
+      }
+      throw err;
+    }
+    return {
+      record: decisionRecord,
+      review,
+      adaptation,
+      retirement: retirement?.record ?? null,
+    };
+  }
+
   // --- reads -----------------------------------------------------------------
 
   // One authoritative read. `beforeAppend` marks the read a write performs first, which may reuse
@@ -2071,6 +2353,62 @@ export class ExperienceStore {
     if (matches.length > 1) throw new ValidationError('the adaptation target is ambiguous; use a longer id prefix');
     const current = await this.#predictionCurrentness(matches, new Map(experiences.map((r) => [r.id, r])));
     return current.rows[0];
+  }
+
+  // Reviews, newest first, bounded. `target` is an adaptation reference; when it is supplied the read
+  // is that adaptation's history, and a reference that matches no adaptation is an error rather than
+  // an empty list. Every other record kind is untouched: a review changes no state by being listed.
+  async reviews({ limit = 20, target = null } = {}) {
+    const size = Number.isInteger(limit) && limit >= 1 ? Math.min(limit, 50) : 20;
+    const records = await this.#loadComplete();
+    const { adaptations, reviews } = deriveStore(records);
+    let scoped = reviews;
+    if (target !== null && target !== undefined && String(target).trim().length > 0) {
+      const adaptation = resolveAdaptationRef(adaptations, String(target).trim(), 'review target');
+      scoped = reviews.filter((r) => r.targetId === adaptation.id);
+    }
+    const newest = [...scoped].reverse();
+    return { reviews: newest.slice(0, size), total: scoped.length, truncated: scoped.length > size, limit: size };
+  }
+
+  // One review with its decisions and its supersession state. The adaptation is included so a reader
+  // does not have to join two reads; it is resolved from the same authoritative log.
+  async reviewDetail(target) {
+    const ref = typeof target === 'string' ? target.trim() : '';
+    if (ref.length === 0) return null;
+    const records = await this.#loadComplete();
+    const { adaptations, reviews } = deriveStore(records);
+    const matches = reviews.filter((r) => matchesRef(r, ref));
+    if (matches.length === 0) return null;
+    if (matches.length > 1) throw new ValidationError('the review target is ambiguous; use a longer id prefix');
+    const review = matches[0];
+    const adaptation = adaptations.find((a) => a.id === review.targetId) ?? null;
+    return { review, adaptation };
+  }
+
+  // Exact support state for a bounded list of cited ids, from one authoritative read. A support
+  // reference can be present, missing, or superseded (corrected by a later record); a governance
+  // review records which of the three it saw so reconciliation can tell a withdrawal from damage.
+  async supportStates({ experienceIds = [], feedbackIds = [] } = {}) {
+    const wantedExperiences = new Set(Array.isArray(experienceIds) ? experienceIds.map(String) : []);
+    const wantedFeedback = new Set(Array.isArray(feedbackIds) ? feedbackIds.map(String) : []);
+    if (wantedExperiences.size > MAX_INDEX_IDS || wantedFeedback.size > MAX_INDEX_IDS) {
+      throw new ValidationError(`supportStates may resolve at most ${MAX_INDEX_IDS} ids per kind`);
+    }
+    const records = await this.#loadComplete();
+    const { index, retiredExperiences, retiredFeedback } = deriveStore(records);
+    const experiencesById = new Map(index.experiences.map((r) => [r.id, r]));
+    const feedbackById = new Map(index.feedback.map((r) => [r.id, r]));
+    const experiences = [...wantedExperiences].sort();
+    const feedback = [...wantedFeedback].sort();
+    return {
+      presentExperienceIds: experiences.filter((id) => experiencesById.has(id) && !retiredExperiences.has(id)),
+      missingExperienceIds: experiences.filter((id) => !experiencesById.has(id)),
+      retiredExperienceIds: experiences.filter((id) => retiredExperiences.has(id)),
+      presentFeedbackIds: feedback.filter((id) => feedbackById.has(id) && !retiredFeedback.has(id)),
+      missingFeedbackIds: feedback.filter((id) => !feedbackById.has(id)),
+      retiredFeedbackIds: feedback.filter((id) => retiredFeedback.has(id)),
+    };
   }
 
   // Bounded retrieval of the adaptations in effect: approved by the user's latest applicable
@@ -2397,6 +2735,13 @@ function resolveAdaptationRef(adaptations, ref, label) {
   return matches[0];
 }
 
+function resolveReviewRef(reviews, ref, label) {
+  const matches = reviews.filter((r) => matchesRef(r, ref));
+  if (matches.length === 0) throw new ValidationError(`${label} not found; it must be a recorded governance review`);
+  if (matches.length > 1) throw new ValidationError(`${label} is ambiguous; use a longer id prefix`);
+  return matches[0];
+}
+
 // ---- independent evidence check ---------------------------------------------
 
 function checkEvidenceAgainstAudit(experience, auditRecord) {
@@ -2437,6 +2782,10 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
       decisions: null,
       retirements: null,
       guidance: null,
+      reviews: null,
+      reviewDecisions: null,
+      openReviews: null,
+      currentReviews: null,
       activeExperiences: null,
       supersededExperiences: null,
       recordedByUser: null,
@@ -2460,7 +2809,7 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
   }
 
   const position = new Map(records.map((r, i) => [r.id, i]));
-  const { index, retiredExperiences, retiredFeedback, experiences, adaptations } = deriveStore(records);
+  const { index, retiredExperiences, retiredFeedback, experiences, adaptations, reviews } = deriveStore(records);
   const experiencesById = new Map(index.experiences.map((r) => [r.id, r]));
   const feedbackById = new Map(index.feedback.map((r) => [r.id, r]));
   const adaptationsById = new Map(index.adaptations.map((r) => [r.id, r]));
@@ -2521,6 +2870,40 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
       anomaly(`retirement [${shortId(event.id)}] names [${shortId(event.targetId)}], which is not a derived adaptation`);
     }
   }
+  const reviewsById = new Map(reviews.map((r) => [r.id, r]));
+  for (const review of reviews) {
+    const target = adaptationsById.get(review.targetId);
+    if (!target) {
+      anomaly(`review [${shortId(review.id)}] names [${shortId(review.targetId)}], which is not a derived adaptation`);
+      continue;
+    }
+    if (review.evidence.rule.hash !== target.ruleHash) {
+      anomaly(`review [${shortId(review.id)}] records a rule hash that the adaptation no longer states`);
+    } else if ((review.evidence.rule.version ?? null) !== (target.shapeVersion ?? null)) {
+      anomaly(`review [${shortId(review.id)}] records version ${review.evidence.rule.version ?? 'unrecorded'}, but the adaptation stands at ${target.shapeVersion ?? 'unrecorded'}`);
+    }
+  }
+  for (const event of index.reviewDecisions) {
+    const review = reviewsById.get(event.reviewId);
+    if (!review) {
+      anomaly(`review decision [${shortId(event.id)}] names [${shortId(event.reviewId)}], which is not a recorded review`);
+      continue;
+    }
+    if (event.targetId !== review.targetId) {
+      anomaly(`review decision [${shortId(event.id)}] names an adaptation the review does not`);
+    }
+    const prior = index.reviewDecisions.filter((d) => d.reviewId === event.reviewId);
+    if (prior.length > 1 && prior.at(-1).id === event.id) {
+      anomaly(`review [${shortId(event.reviewId)}] has ${prior.length} decisions`);
+    }
+    if (event.decision === 'retire') {
+      const retirement = index.retirements.find((r) => r.id === event.retirementId) ?? null;
+      if (!retirement) anomaly(`review decision [${shortId(event.id)}] names a retirement record that is not stored`);
+      else if (retirement.targetId !== event.targetId) {
+        anomaly(`review decision [${shortId(event.id)}] names a retirement of a different adaptation`);
+      }
+    }
+  }
   for (const record of adaptations) {
     for (const problem of record.supportProblems) anomaly(`adaptation [${shortId(record.id)}] ${problem}`);
     const ownRetirements = index.retirements.filter((r) => r.targetId === record.id);
@@ -2558,6 +2941,12 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
     decisions: index.decisions.length,
     retirements: index.retirements.length,
     guidance: index.guidance.length,
+    reviews: index.reviews.length,
+    reviewDecisions: index.reviewDecisions.length,
+    // A review is open when no decision has been recorded against it and no later review of the
+    // same adaptation has replaced it. Both are derived, never stored.
+    openReviews: reviews.filter((r) => r.decisionCount === 0 && r.supersededBy.length === 0).length,
+    currentReviews: reviews.filter((r) => r.current).length,
     activeExperiences: experiences.length - retiredExperiences.size,
     supersededExperiences: retiredExperiences.size,
     recordedByUser: index.experiences.filter((r) => captureOf(r) === CAPTURE_EXPLICIT).length,

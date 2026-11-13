@@ -1,7 +1,7 @@
 # APEX Local Alpha — consolidated architecture
 
 This document is the single consolidated description of the cognitive runtime and the executive
-system as they exist in `apex_app/` after Batch AO-10 and the bounded AP-01, AP-02 and AP-03
+system as they exist in `apex_app/` after Batch AO-10 and the bounded AP-01 through AP-05
 pathways. It
 replaces no code and grants nothing. It was written against commit `a2c9a64` (`ao-10`) plus the Batch
 AP working tree, by reading the modules and tests named below. Where a statement is a contract enforced by code, the module is
@@ -436,6 +436,66 @@ executes anything.
   assessed outcome can have many other causes, including the user's own choices, and the report says
   so.
 
+### How a governance review is bound to evidence (AP-05)
+
+Batch AP-05 answers the question AP-04 can only raise. When the effectiveness report says an approved
+record needs attention, a user can open a governance review against the exact evidence the stores hold
+at that moment, inspect and reconcile it later, and record one of three lifecycle decisions. It adds
+two record kinds to the existing experience store (`adaptation_review`, `adaptation_review_decision`),
+one canonical evidence module (`experience/review.js`), one pure analysis module (`plans/governance.js`),
+five actions, a controller surface and four CLI commands. It adds no store, no new authority, no
+planner, no decision dimension, no execution path, and no second retirement mechanism.
+
+- **The evidence is a canonical snapshot, not a live pointer.** A review cites the adaptation id and
+  capability; the rule text, hash, version and shape; the adaptation's decision state, active/retired
+  flags, support state, source and conflict ids; the report's availability, state, summary,
+  recommendation and observations; the supporting, missing and superseded experience and feedback ids;
+  up to 20 prediction/pattern refs; up to 20 uses with their recorded outcome; up to 20 plan and goal
+  refs; and the read bounds. One function fixes field order and bounds, so two bundles compare by
+  SHA-256 digest. Each reference list is separately capped at 20; the pattern is one reference. The report digest is recorded separately because it covers the whole report and can
+  move while nothing the review cites changed.
+- **Reader state is derived on every read, never stored.** Stored records are only the review and the
+  user's decision; a stored status beside the evidence would be a second, editable copy of what the log
+  already says. The closed vocabulary is `no_review_required`, `review_recommended`, `review_opened`,
+  `review_awaiting_evidence`, `review_evidence_changed`, `review_completed`, `review_dismissed`,
+  `review_decision_superseded` and `review_unavailable`. A review opened before the report could
+  classify an evaluated use of the current version is `review_awaiting_evidence`, not success and not
+  failure.
+- **Three decisions, one existing retirement authority.** `keep_active`, `dismiss` and `retire` are
+  user-origin writes. A decision is refused if the evidence changed after the review was opened - the
+  user must reconcile first. `retire` appends the existing `adaptation_retirement` record through the
+  existing `adaptation.retire` authority, then records the decision citing the pre-retirement evidence
+  digest; a retired adaptation cannot be used or reviewed again, so the decision is terminal. Decisions
+  are append-only and never rewritten; a later review supersedes an earlier undecided one.
+- **Reconciliation names differences, not verdicts.** The reconciler re-derives the bundle and compares
+  it item by item under a closed, ordered vocabulary: `unchanged`, `added`, `stale`, `conflicting`,
+  `withdrawn`, `superseded`, `missing`, `unreadable`. `added` is not an improvement; `withdrawn`,
+  `superseded` and `missing` are not a failure; a rule version change is `stale` while a rule hash
+  change at the same version is `conflicting`; conflicting evidence stays conflicting; an item behind a
+  truncated read is `unreadable`, never `withdrawn`; and a moved report digest alone is not an evidence
+  change. A changed digest means reconcile before deciding, never better or worse.
+- **Bounded and fail-closed.** At most 20 adaptation rows per list read (`MAX_GOVERNANCE_ADAPTATIONS`,
+  the AP-04 bound), 20 evidence references per list, 20 reviews read per adaptation history, and 40
+  change entries. A damaged experience or plan store raises `StoreError`; a missing plan store yields
+  `review_unavailable` with its reason and a `null` reconciliation rather than an empty bundle. An
+  audit-append failure after a decision is disclosed, and the decision the store already recorded is not
+  erased.
+- **Tests and cost.** `tests/adaptation-governance.test.js` (41 cases in 8 suites, registered in
+  `npm test`) covers the nine states and three decisions, evidence identity, reconciliation precedence
+  and every change kind, stale/conflicting/missing/unreadable evidence, model-origin refusal at the
+  registry and the store, concurrent open/retire/reconcile, restart persistence, audit-append failure,
+  damaged and missing stores, and two deterministic end-to-end paths. `benchmarks/run-governance-benchmark.mjs`
+  measures the complete verified list/open/inspect/reconcile/decide path. On this machine the list
+  request took a median 166.3 / 474.2 / 996.0 ms at 4 / 12 / 24 linked uses, open 151.7 / 445.1 / 640.1
+  ms, inspect 338.7 / 667.0 / 1,231.2 ms, reconcile 240.9 / 632.5 / 1,160.7 ms, and decide 163.9 /
+  345.8 / 608.5 ms; at 1 / 8 / 20 stored adaptations the list took 967.8 / 997.4 / 1,049.9 ms. At 21
+  stored adaptations the target falls outside the newest-20 window and is not reported, which the
+  report says. Observations of one machine at one time, not a specification.
+- **What it does not claim.** Opening a review approves nothing, changes no rule, increases no
+  influence, and executes nothing; a recommendation is never a decision. The read has no write path,
+  and the write actions cannot approve an adaptation, change guidance, or run a plan. Reconciliation
+  reports a difference, not a causal finding, a quality judgment, or real-world truth.
+
 ## 5. C. Evidence and memory architecture
 
 ### Stores
@@ -548,6 +608,7 @@ nothing and does not call a model. It has no executive-handoff scenario; handoff
 | Longitudinal analysis (AP-03, pure) | — | 0.21 / 0.40 / 2.74 / 2.73 ms at 20 / 100 / 500 / 1,000 evaluations | One capability, one group per 25 records capped at 20 groups; the 1,000-record read is bounded at 1,000 and discloses group truncation. In-run medians over 7 samples |
 | Complete request, no-rule vs longitudinal (AP-03) | — | no rule 27.7 / 68.0 / 72.5 ms at 8 / 14 / 19 evaluations | AP-03 rule +1.2 / +5.8 / +7.1 ms (AP-02 +0.5 / +19.1 / +2.3 ms) over the identical store; includes the batched currentness read and machine noise. Partial (analysis/store/derivation) timings are printed separately and are not the request cost |
 | Effectiveness read, complete request (AP-04) | — | 52.3 / 146.7 / 318.4 ms at 4 / 12 / 24 linked uses; 316.4 / 320.4 / 337.9 ms at 1 / 8 / 20 stored adaptations | Complete verified request (analysis + independent re-read + audit append) on synthetic histories where each use adds a plan and about ten audit records; about 13 / 12 / 13 ms per use. Pure analysis 27.5 / 71.4 / 167.6 ms and plan/audit reads are printed separately and are not the request cost. At 21 stored adaptations the oldest target falls outside the 20-record window, so its uses are not read (65.1 ms, disclosed) |
+| Governance review path, complete request (AP-05) | — | list 166.3 / 474.2 / 996.0 ms; open 151.7 / 445.1 / 640.1 ms; inspect 338.7 / 667.0 / 1,231.2 ms; reconcile 240.9 / 632.5 / 1,160.7 ms; decide 163.9 / 345.8 / 608.5 ms at 4 / 12 / 24 linked uses; list 967.8 / 997.4 / 1,049.9 ms at 1 / 8 / 20 stored adaptations | Complete verified request including its own analysis, evidence assembly and audit append; builder/detail/prepare reads are printed separately and labelled partial. At 21 stored adaptations the target is outside the 20-row window and is not reported (82.1 ms, disclosed; less lineage work, not faster execution). Five samples per figure |
 
 Known scaling behavior: memory and knowledge searches are linear in the number of records; JSONL
 cold reads parse the whole store; the AM index removes the repeated learning read, not the initial
@@ -619,6 +680,7 @@ The only authority owner is the action registry. Everything else observes, propo
 | Prediction-derived adaptation (AP-02) | `IMPLEMENTED_AND_TESTED` | `experience/prediction-derivation.js`, prediction branch in `experience/experience-store.js`, `adaptation.eligibility` in `actions/experience-actions.js`, `plans/evaluation.js` disclosure | `prediction-adaptation-learning.test.js` (21 cases), `adaptation-decision.test.js`, `prediction-adaptation-boundary.test.js` |
 | Longitudinal outcome analysis (AP-03) | `IMPLEMENTED_AND_TESTED` | `prediction/longitudinal.js`, `adaptation.derive` longitudinal branch in `experience/experience-store.js`, `longitudinal`/`derivation` classification in `actions/experience-actions.js`, `predictions.details` batch read in `prediction/prediction-store.js`, `sources.longitudinalDerived` in `plans/guidance.js`/`evaluation.js` | `longitudinal-outcome-analysis.test.js` (29 cases), `prediction-adaptation-learning.test.js`, `adaptation-decision.test.js` |
 | Adaptation effectiveness and outcome tracing (AP-04) | `IMPLEMENTED_AND_TESTED` | `plans/effectiveness.js` (pure read), `adaptation.effectiveness` in `actions/experience-actions.js`, controller/CLI read surface; uses only the existing experience, plan, audit and goal stores | `adaptation-effectiveness.test.js` (20 cases) |
+| Adaptation governance and evidence reconciliation (AP-05) | `IMPLEMENTED_AND_TESTED` | `experience/review.js` (canonical evidence and reconciliation), `plans/governance.js` (pure reads), review record kinds in `experience/experience-store.js`, five `adaptation.review*` actions in `actions/experience-actions.js`, controller/CLI surface; no new store or authority | `adaptation-governance.test.js` (41 cases) |
 | Adversarial acceptance | `IMPLEMENTED_AND_TESTED` | Cross-cutting; no new runtime component | `acceptance-ao09.test.js` (7), `adversarial-batch-am.test.js` (16), `plan-adversarial.test.js` (15), `executive-adversarial.test.js` (11), plus the suites cited in `README.md` Batch AO package H |
 | Cross-process interruption | `IMPLEMENTED_PARTIALLY_TESTED` | Real child fixtures at most boundaries | `plan-continuation.test.js`, `continuation-cross-process-an.test.js`, `finalization-interruption.test.js`, `process-recovery.test.js`, `cross-process-ao09.test.js`; two boundaries lack a killed child |
 | Concurrent store integrity | `IMPLEMENTED_AND_TESTED` | `memory/writer-lock.js`, store locks, JSONL append | `storage-concurrency.test.js`, `store-write-concurrency.test.js`, `cross-process-stress.test.js`, `lock-contention.test.js`, `lock-recovery.test.js` |
@@ -673,6 +735,13 @@ invalidate the recommended milestone, not that it blocks all work.
 | 33 | A missing or conflicting record could be silently converted into success, failure, or a manufactured baseline | Missing evidence is `insufficient_evidence`; conflicting assessments are `applied_conflicting_evidence`; a cancelled plan is not a failure; no baseline outcome is synthesized | `adaptation-effectiveness.test.js` (conflicting assessments, cancelled, damaged stores) | The vocabulary bounds what can be said; nothing infers real-world truth | None | No |
 | 34 | The read could approve, guide, retire, or execute during a review | Read action only; `authorizes:false`; retirement remains `adaptation.retire` and rule changes remain `adaptation.guide`; the independent verification refuses if any of those changed between its two reads | `adaptation-effectiveness.test.js` (retirement only through the existing operation; audit-append failure), `benchmarks/run-effectiveness-benchmark.mjs` (concurrent read/write refusal) | None observed; the read has no write path | None | No |
 | 35 | A large store could make the read partial, slow, or lie about its scope | Bounds: 20 adaptations, 100 uses, 10 displayed samples per row (true counts still reported), 20,000 audit records scanned; over-bound reads disclose `truncatedUses`, and a damaged store raises `StoreError` | `adaptation-effectiveness.test.js` (bounded reads, damaged stores), `benchmarks/run-effectiveness-benchmark.mjs` (21-adaptation window case) | A target outside the newest 20 adaptations is not read at all; that is a disclosed refusal, not an inaccurate row | Low | No |
+| 36 | A recommendation could be read as a governance decision | `recommendation` is derived from the report (`none`/`review`/`consider_retirement`); opening records only the review; only `adaptation.review.decide` records a decision, user-origin only | `adaptation-governance.test.js` (report states, lifecycle decisions) | Documentation states the limit; a reader can still over-read a recommendation | Low (interpretive) | No |
+| 37 | A changed evidence digest could be read as better or worse | Reconciliation has a closed change vocabulary and no quality, success, or causal field; the report digest moves separately | `adaptation-governance.test.js` (each change kind; moved report digest alone) | The vocabulary bounds what can be said; nothing ranks a change | Medium (interpretive) | No |
+| 38 | A review could be decided on evidence that changed | `recordReviewDecision` re-derives the bundle and refuses when the digest differs; the decision records the digest it was made on | `adaptation-governance.test.js` (changed digest requires a new decision; reconcile while deciding) | The check is a read immediately before the append; a concurrent append after that read is not eliminated | Low | No |
+| 39 | A review retirement could bypass the existing retirement authority | `retire` appends the existing `adaptation_retirement` record through the existing authority, then the decision record; a changed-digest refused before retirement | `adaptation-governance.test.js` (retire through the review; concurrent open/retire) | It is the same authority, not a second mechanism; the decision record is separate bookkeeping | None | No |
+| 40 | Model output could open or decide a review | The actions are user-origin only and the store refuses a non-user origin independently; the model-origin write set is unchanged | `adaptation-governance.test.js` (model cannot open/keep/dismiss/retire; store refuses again), `model-self-authorization.test.js` | None observed | None | No |
+| 41 | Governance reads could add a second full analysis per row | The list is bounded at 20 rows and assembles a review bundle only when a review exists; the complete request is measured | `adaptation-governance.test.js` (bounded window), `benchmarks/run-governance-benchmark.mjs` | Cost still grows with history within the window; open, inspect, reconcile and decide repeat the analysis in verification and do not subtract it | Low | No |
+| 42 | A target outside the 20-adaptation window could look governed when it is not listed | The list read reports the window and its totals; a direct detail read still answers by id | `adaptation-governance.test.js` (bounded window), `benchmarks/run-governance-benchmark.mjs` (21-adaptation case) | A user who only lists may not see an older adaptation; the list says the read was truncated | Low | No |
 
 No gap in this register was implemented in AO-10: none exposed a new concrete defect in behavior,
 and none invalidated a documented security guarantee. AP-01 closed the roadmap's "one recorded
@@ -687,6 +756,11 @@ no confidence, and no autonomous activation. AP-04 added rows 31–35 for the ef
 traces an approved record through the decisions it was part of to the outcomes those plans recorded,
 keeps approval, application, execution, assessment and cause apart, discloses insufficient and
 conflicting evidence, and grants no approval, rule change, retirement, or execution authority.
+AP-05 added rows 36–42 for the governance review: it binds a review to a canonical evidence snapshot,
+derives its state on every read, names reconciliation differences without ranking them, and keeps
+approval, rule change, retirement and execution in their existing operations. The retirement decision
+reuses the existing authority rather than adding a second one, and the remainders it leaves open are
+concurrent-append timing and interpretive over-reading, not new authority.
 
 ## 10. Running the verification
 
@@ -699,11 +773,13 @@ node --test tests/adaptation-decision.test.js
 node --test tests/prediction-adaptation-learning.test.js tests/prediction-adaptation-boundary.test.js
 node --test tests/longitudinal-outcome-analysis.test.js
 node --test tests/adaptation-effectiveness.test.js
+node --test tests/adaptation-governance.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs
 node benchmarks/run-longitudinal-benchmark.mjs
 node benchmarks/run-effectiveness-benchmark.mjs
+node benchmarks/run-governance-benchmark.mjs
 ```
 
 Tests use `NoBackend` or fixed programmatic replies and isolated temporary data directories. No

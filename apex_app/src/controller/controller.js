@@ -1515,6 +1515,43 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // Governance reads. They share the effectiveness read's independent verifier: a second pass
+  // re-derives the evidence and compares the governance digest, so a concurrent decision or review
+  // is reported as a changed read rather than silently presented as the earlier state.
+  async adaptationReviews({ limit } = {}) {
+    const op = this.#experienceOp('adaptation.reviews');
+    const step = await this.runAction('adaptation.reviews', { limit }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async adaptationReviewInspect({ target } = {}) {
+    const op = this.#experienceOp('adaptation.review.inspect');
+    const step = await this.runAction('adaptation.review.inspect', { target }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async adaptationReviewReconcile({ target } = {}) {
+    const op = this.#experienceOp('adaptation.review.reconcile');
+    const step = await this.runAction('adaptation.review.reconcile', { target }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // Opening a review is the user's act on evidence they are looking at. It writes only a review
+  // record; the action refuses evidence that names another adaptation, rule hash, or rule version.
+  async adaptationReviewOpen({ target, reason = null } = {}) {
+    const op = this.#experienceOp('adaptation.review.open');
+    const step = await this.runAction('adaptation.review.open', { target, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The review may have been opened, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  // The user's explicit lifecycle decision on one current review. It is refused if the evidence
+  // changed after the review was opened, and a retirement reuses `adaptation.retire`'s authority.
+  async adaptationReviewDecide({ review, decision, reason = null } = {}) {
+    const op = this.#experienceOp(`adaptation.review.${decision === 'retire' ? 'retire' : decision === 'dismiss' ? 'dismiss' : 'keep'}`);
+    const step = await this.runAction('adaptation.review.decide', { review, decision, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The review decision may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
   // Read-only inspection of the whole experience log, plus the check that gives the store its
   // meaning: every recorded experience re-verified against the audit record it names. Nothing is
   // repaired, nothing is approved, and an unreadable store is reported as unreadable, never as an

@@ -106,7 +106,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 85, 'the default registry has 85 actions');
+    assert.equal(plain.registry.list().length, 90, 'the default registry has 90 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -137,7 +137,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 42, 'the inventory counts forty-two write actions');
+    assert.equal(writes.length, 44, 'the inventory counts forty-four write actions');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -192,9 +192,26 @@ describe('AF-19: the registry is the inventory', () => {
     assert.equal(wf.outcome, 'success_verified');
     assert.equal(g.outcome, 'success_verified', g.summary);
     assert.equal(gp.outcome, 'success_verified', gp.summary);
+    // The governance reads need an adaptation to answer about, so the probe derives and approves one
+    // from two distinct corrected experiences. These seeds predate the snapshot below, which is what
+    // makes "a read wrote nothing" measurable rather than assumed.
+    const op2 = (await c.handle('remember that the probe seeded a second fact', { origin: 'user' })).operation.id;
+    const ex2 = await c.runAction('experience.record', { operationId: op2, subject: 'the gate opened a second time' }, 'user', 'seed3b');
+    const fb1 = await c.runAction('feedback.record', { target: ex.result.data.id, assessment: 'not_useful', guidance: 'give one dated fact' }, 'user', 'seedfb1');
+    const fb2 = await c.runAction('feedback.record', { target: ex2.result.data.id, assessment: 'not_useful', guidance: 'give one dated fact' }, 'user', 'seedfb2');
+    const dv = await c.runAction('adaptation.derive', {}, 'user', 'seed9');
+    const approved = await c.runAction('adaptation.decide', { target: dv.result.data.created[0].id, decision: 'approved' }, 'user', 'seed10');
+    assert.equal(ex2.outcome, 'success_verified', ex2.summary);
+    assert.equal(fb1.outcome, 'success_verified', fb1.summary);
+    assert.equal(fb2.outcome, 'success_verified', fb2.summary);
+    assert.equal(dv.outcome, 'success_verified', dv.summary);
+    assert.equal(approved.outcome, 'success_verified', approved.summary);
+    const adaptationId = approved.result.data.adaptationId;
     const afterSeeds = sizes(dir);
+    const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
+    const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 45, 'the inventory counts forty-five read actions with a root configured');
+    assert.equal(reads.length, 48, 'the inventory counts forty-eight read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -224,6 +241,8 @@ describe('AF-19: the registry is the inventory', () => {
         'world.evidence': { target: 'e-probe' },
         'world.changes': { from: '2020-01-01', to: '2030-01-01' },
         'world.state_at': { at: '2030-01-01T00:00:00.000Z' },
+        'adaptation.review.inspect': { target: adaptationId },
+        'adaptation.review.reconcile': { target: adaptationId },
       }[def.name] ?? {};
       const step = await c.runAction(def.name, input, 'user', `rd${def.name.replace(/[^A-Za-z0-9]/g, '')}`);
       assert.ok(['success_verified', 'verification_unavailable'].includes(step.outcome),
@@ -231,8 +250,8 @@ describe('AF-19: the registry is the inventory', () => {
       assert.deepEqual(changed(afterSeeds, sizes(dir)), [], `${def.name} is classified read but wrote a store`);
     }
     // The seeds are still the only records, so no read quietly appended anything.
-    assert.equal(fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length, 2);
-    assert.equal(fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length, 1);
+    assert.equal(fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length, memoryLines);
+    assert.equal(fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length, experienceLines);
     assert.equal(fs.readFileSync(path.join(dir, 'predictions.jsonl'), 'utf8').trim().split('\n').length, 1);
   });
 

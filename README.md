@@ -182,7 +182,15 @@ plan recorded from that decision, its execution and verification, and the outcom
 afterwards, classified into a closed vocabulary that keeps approval, application, execution, assessment
 and cause apart and never manufactures an unexecuted baseline
 ([details](apex_app/README.md#batch-ap-04-adaptation-effectiveness-and-outcome-verification-as-implemented);
-tests: `tests/adaptation-effectiveness.test.js`, 20 cases). It needs no model and no new store.
+tests: `tests/adaptation-effectiveness.test.js`, 20 cases). Batch AP-05 then made the lifecycle
+governable rather than only readable: a user-origin review can be opened against the exact evidence
+the report held at that moment, inspected and reconciled later so every added, withdrawn, superseded,
+stale, conflicting, missing or unreadable item is named, and decided with `keep_active`, `dismiss` or
+`retire` - where `retire` reuses the existing `adaptation.retire` authority, a changed digest is a
+difference rather than a verdict, and neither the read nor a model can approve, change a rule,
+increase influence, or execute anything
+([details](apex_app/README.md#batch-ap-05-adaptation-governance-evidence-reconciliation-and-controlled-lifecycle-decisions-as-implemented);
+tests: `tests/adaptation-governance.test.js`, 41 cases). It needs no model and no new store.
 What remains is the wider clause: an expectation verdict changing subsequent behaviour without a
 user-approved candidate, or changing more than the one disclosed ordering, and any claim of prediction
 accuracy or causation. The runtime keeps that wider clause open; this is a recommendation only, and no

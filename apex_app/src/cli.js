@@ -71,6 +71,11 @@ Usage:
   node bin/apex.js adaptation guide <id> [--order O] [--avoid a,b] [--prefer a,b] [--max-steps N] [--reason <text>]
                                                             record the shape you meant: what order, what to avoid, how many steps is too many
   node bin/apex.js adaptation retire <id> [--reason <text>]      stop using a rule; its history stays readable
+  node bin/apex.js adaptation reviews [--limit N]                which adaptations need a governance review (read-only)
+  node bin/apex.js adaptation review show|reconcile <id>         one review's evidence, its live reconciliation, and its history
+  node bin/apex.js adaptation review open <id> [--reason <text>] open a review on the evidence the stores now hold
+  node bin/apex.js adaptation review keep|dismiss|retire <review-id> [--reason <text>]
+                                                            record your lifecycle decision; retire uses adaptation.retire
   node bin/apex.js prediction record --capability <name> --expect <kind> --subject <text> (--expires <iso> | --in-days N) [--supports <id[,id...]>] [--contradicts <id[,id...]>] [--feedback <id[,id...]>] [--pattern <kind[,kind...]>] [--replaces <id[,id...]>]
   node bin/apex.js prediction list [--limit N] [--capability <name>] [--status <name>]
   node bin/apex.js prediction show <prediction-id>
@@ -183,6 +188,10 @@ Experience and adaptation examples (what APEX did, what you thought, what to cha
   adaptation approve <id>     your decision; only an approved rule is offered to future answers
   adaptation guide <id>       say what shape the approved rule asks future work to take
   adaptation retire <id>      stop using a rule without deleting the history of it
+  adaptation reviews          which adaptations the evidence says need governance attention
+  adaptation review show <id> open a governed question on the exact evidence now recorded
+  adaptation review reconcile <id>  what changed since a review was opened; a diff is not a verdict
+  adaptation review keep|dismiss|retire <review-id>   record your own lifecycle decision
   experience health           re-checks every recorded experience against the audit log
   experience timeline --days 7     recorded events in the window, newest first, corrections marked
   experience trends --days 30      per-capability outcome counts and an early/late trend
@@ -1139,6 +1148,49 @@ export async function main(argv, {
           limit: flags.limit,
         }));
       }
+      if (sub === 'reviews') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit']);
+        rejectUnexpected(extra, 'adaptation reviews [--limit N]');
+        return emit(await app.controller.adaptationReviews({ limit: flags.limit }));
+      }
+      if (sub === 'review') {
+        const [action, ...rest] = rest;
+        if (action === 'show' || action === 'inspect' || action === 'reconcile') {
+          const { rest: ids } = parseFlags(rest, []);
+          if (ids.length !== 1) {
+            err(`usage: adaptation review ${action} <review-or-adaptation-id>`);
+            return 2;
+          }
+          return emit(await (action === 'reconcile'
+            ? app.controller.adaptationReviewReconcile({ target: ids[0] })
+            : app.controller.adaptationReviewInspect({ target: ids[0] })));
+        }
+        if (action === 'open') {
+          const { flags, rest: ids } = parseFlags(rest, ['reason']);
+          if (ids.length !== 1) {
+            err('usage: adaptation review open <adaptation-id> [--reason <text>]');
+            return 2;
+          }
+          return emit(await app.controller.adaptationReviewOpen({ target: ids[0], reason: flags.reason ?? null }));
+        }
+        if (action === 'keep' || action === 'dismiss' || action === 'retire') {
+          const { flags, rest: ids } = parseFlags(rest, ['reason']);
+          if (ids.length !== 1) {
+            err(`usage: adaptation review ${action} <review-id> [--reason <text>]`);
+            return 2;
+          }
+          // The decision is the command that was typed, never a default: a bare
+          // `adaptation review` cannot decide anything.
+          const decision = action === 'keep' ? 'keep_active' : action;
+          return emit(await app.controller.adaptationReviewDecide({
+            review: ids[0],
+            decision,
+            reason: flags.reason ?? null,
+          }));
+        }
+        err('usage: adaptation review show|reconcile <id> | open <adaptation-id> | keep|dismiss|retire <review-id>');
+        return 2;
+      }
       if (sub === 'approve' || sub === 'reject') {
         const { flags, rest: ids } = parseFlags(rest, ['reason']);
         if (ids.length !== 1) {
@@ -1177,7 +1229,7 @@ export async function main(argv, {
         }
         return emit(await app.controller.adaptationRetire({ target: ids[0], reason: flags.reason ?? null }));
       }
-      err('usage: adaptation derive|eligibility|effectiveness|list|approve|reject|guide|retire');
+      err('usage: adaptation derive|eligibility|effectiveness|list|approve|reject|guide|retire|reviews|review');
       return 2;
     }
 
