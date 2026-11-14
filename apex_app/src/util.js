@@ -43,6 +43,34 @@ export function singleLine(value, max = 80) {
   );
 }
 
+// A strict ISO instant: a calendar date, or a date-time with an explicit zone. `Date.parse`
+// quietly rolls an impossible calendar date (2026-02-30) into the next month and reads a
+// zone-less date-time in the machine's local time, so neither is accepted here. Returns the
+// normalized UTC instant, or null when the text is not one unambiguous instant.
+export function parseIsoInstant(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (text.length === 0) return null;
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  const dateTime = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})$/.exec(text);
+  const parts = dateOnly ?? dateTime;
+  if (!parts) return null;
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const day = Number(parts[3]);
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month - 1, day);
+  calendar.setUTCHours(0, 0, 0, 0);
+  if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) {
+    return null;
+  }
+  if (dateTime) {
+    if (Number(parts[4]) > 23 || Number(parts[5]) > 59 || Number(parts[6] ?? 0) > 59) return null;
+  }
+  const ms = Date.parse(text);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
 export function round3(n) {
   return Math.round(n * 1000) / 1000;
 }

@@ -258,7 +258,7 @@ export function conflictingStatementIds(conflicts) {
   return ids;
 }
 
-export function statementStatus(state, targetType, id, { at = new Date(), conflicts = null } = {}) {
+export function statementStatus(state, targetType, id, { at = new Date(), conflicts = null, conflictIds = null } = {}) {
   const table = targetType === 'fact' ? state.facts
     : targetType === 'relationship' ? state.relationships : state.events;
   const statement = table.get(id);
@@ -273,8 +273,11 @@ export function statementStatus(state, targetType, id, { at = new Date(), confli
     return 'supported';
   }
   if (statement.validFrom === null) return 'validity_unknown';
-  const conflictSet = conflicts ?? computeConflicts(state, { now: instant });
-  if (conflictingStatementIds(conflictSet).has(id)) return 'conflicting';
+  // A caller that evaluates every statement against one replayed state can pass the member set
+  // once; rebuilding it per statement re-scans every disagreement group.
+  const conflictSet = conflictIds === null ? (conflicts ?? computeConflicts(state, { now: instant })) : null;
+  const conflicting = conflictIds ?? conflictingStatementIds(conflictSet);
+  if (conflicting.has(id)) return 'conflicting';
   if (!hasValidity(statement, instant)) return 'historical';
   if ((statement.evidence ?? []).some((entry) => entry.relation === 'contradicts')) return 'contested';
   return 'supported';

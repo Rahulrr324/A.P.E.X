@@ -11,6 +11,7 @@
 // false, and a trace is evidence for a person to read, not a decision.
 import { computeConflicts, statementStatus } from './conflicts.js';
 import { evidenceFor, statementsCiting } from './query.js';
+import { validityStanding } from './historical.js';
 
 export const TRACE_TARGET_TYPES = ['memory', 'knowledge', 'fact', 'relationship', 'event'];
 export const MAX_TRACE_CITATIONS = 100;
@@ -46,8 +47,11 @@ function instantOf(at) {
 
 function describeRef(ref, checked) {
   const state = checked ?? { check: 'not_checked', found: null, active: null, state: null, classification: null, detail: null };
-  const unavailable = state.check === 'unavailable' || state.check === 'no-store';
-  const missing = state.check === 'ok' && state.found === false;
+  const unavailable = state.check === 'unavailable' || state.check === 'no-store' || state.check === 'as_of_unavailable';
+  // A cited record that did not exist at the cutoff is not missing from its store; it simply
+  // cannot support a statement from before it was recorded.
+  const asOfMissing = state.check === 'ok' && state.found === false && state.state === 'not_yet_recorded';
+  const missing = state.check === 'ok' && state.found === false && !asOfMissing;
   const stale = state.check === 'ok' && state.found === true && state.active === false;
   return {
     relation: ref.relation,
@@ -63,6 +67,7 @@ function describeRef(ref, checked) {
     detail: state.detail ?? null,
     unavailable,
     missing,
+    asOfMissing,
     stale,
   };
 }
@@ -73,24 +78,35 @@ function traceWorldStatement(state, {
   at,
   conflicts,
   referenceStates,
+  recordedLater = null,
 }) {
   const table = tableFor(state, targetType);
   const statement = table?.get(targetId) ?? null;
   const instant = instantOf(at);
   const conflictSet = conflicts ?? computeConflicts(state, { now: instant });
+  const later = recordedLater?.recordedAt ? recordedLater : null;
   const base = {
     target: {
       type: targetType,
       id: targetId,
       found: statement !== null,
       label: null,
-      status: 'missing',
-      detail: `no ${targetType} ${targetId} is stored`,
+      status: later ? 'not_yet_recorded' : 'missing',
+      detail: later
+        ? `recorded at ${later.recordedAt}, after the cutoff`
+        : `no ${targetType} ${targetId} is stored`,
+      recordedAt: later?.recordedAt ?? null,
+      validity: null,
     },
-    disposition: {
-      state: 'missing',
-      reason: `no ${targetType} ${targetId} is stored, so there is nothing to trace`,
-    },
+    disposition: later
+      ? {
+        state: 'not_yet_recorded',
+        reason: `no ${targetType} ${targetId} existed at the cutoff; it was recorded at ${later.recordedAt}. The current standing is reported separately, not projected back into the past`,
+      }
+      : {
+        state: 'missing',
+        reason: `no ${targetType} ${targetId} is stored, so there is nothing to trace`,
+      },
     citations: { rows: [], total: 0, truncated: false },
     evidence: { refs: [], total: 0, truncated: false },
     conflicts: [],
@@ -104,11 +120,13 @@ function traceWorldStatement(state, {
   if (!statement) return base;
 
   const status = statementStatus(state, targetType, targetId, { at: instant, conflicts: conflictSet });
+  const validity = validityStanding(statement, targetType, instant);
   const evidence = evidenceFor(state, { targetType, targetId });
   const refs = (evidence.refs ?? []).slice(0, MAX_TRACE_REFS)
     .map((ref) => describeRef(ref, referenceStates?.get(`${ref.sourceType}:${ref.sourceId}`) ?? null));
   const refsTruncated = (evidence.refs ?? []).length > refs.length;
   const unavailable = refs.filter((ref) => ref.unavailable);
+  const notYet = refs.filter((ref) => ref.asOfMissing);
   const missing = refs.filter((ref) => ref.missing);
   const stale = refs.filter((ref) => ref.stale && (ref.relation === 'supports' || ref.relation === 'contradicts'));
 
@@ -126,9 +144,21 @@ function traceWorldStatement(state, {
   const [dispositionState, reason] = statusMap[status] ?? ['unknown', `the store reported status ${status}`];
   let stateName = dispositionState;
   let dispositionReason = reason;
-  if (status === 'supported' && unavailable.length > 0) {
+  if (status === 'historical' && validity === 'not_yet_valid') {
+    stateName = 'not_yet_valid';
+    dispositionReason = `the statement is stored but its valid interval begins after the trace time ${instant}`;
+  } else if (status === 'historical' && validity === 'expired') {
+    stateName = 'expired';
+    dispositionReason = `the statement was in force earlier but its valid interval ended at or before the trace time ${instant}`;
+  } else if (status === 'future') {
+    stateName = 'not_yet_occurred';
+    dispositionReason = `the event is stored but its occurrence time is after the trace time ${instant}`;
+  } else if (status === 'supported' && unavailable.length > 0) {
     stateName = 'unverified';
     dispositionReason = `${unavailable.length} cited record(s) could not be checked, so the support cannot be confirmed even though the statement itself is in force`;
+  } else if (status === 'supported' && notYet.length > 0) {
+    stateName = 'unverified';
+    dispositionReason = `${notYet.length} cited record(s) were not recorded yet at the trace time, so the support cannot be confirmed from that time`;
   } else if (status === 'supported' && missing.length > 0) {
     stateName = 'stale_evidence';
     dispositionReason = `${missing.length} cited record(s) no longer exist in their store, so the recorded support has gone stale`;
@@ -152,6 +182,7 @@ function traceWorldStatement(state, {
   const notes = [];
   if (refsTruncated) notes.push(`evidence references were cut at ${MAX_TRACE_REFS}`);
   if (unavailable.length > 0) notes.push(`${unavailable.length} evidence source(s) could not be read; an unreadable store is never reported as "no evidence"`);
+  if (notYet.length > 0) notes.push(`${notYet.length} cited record(s) did not exist at the cutoff, so they cannot support a statement from that time`);
   if (missing.length > 0) notes.push(`${missing.length} cited record(s) are absent from the store that should own them`);
   if (stale.length > 0) notes.push(`${stale.length} supporting record(s) are superseded, retracted, or retired in their own store`);
   if (status === 'retracted' || status === 'superseded') notes.push('the original statement is unchanged in the log; retraction and supersession are separate records');
@@ -164,6 +195,8 @@ function traceWorldStatement(state, {
       label: statementLabel(state, targetType, statement),
       status,
       detail: null,
+      recordedAt: statement.recordedAt ?? null,
+      validity,
     },
     disposition: { state: stateName, reason: dispositionReason },
     citations: { rows: [], total: 0, truncated: false },
@@ -184,7 +217,7 @@ function traceWorldStatement(state, {
       staleRefs: stale.length,
     },
     notes,
-    complete: !refsTruncated && unavailable.length === 0 && missing.length === 0
+    complete: !refsTruncated && unavailable.length === 0 && notYet.length === 0 && missing.length === 0
       && !['missing', 'validity_unknown', 'future'].includes(status),
     authorizes: false,
   };
@@ -229,13 +262,19 @@ function traceCitedRecord(state, {
   const qualifying = live.filter((row) => !row.relations.includes('supports') && !row.relations.includes('contradicts'));
   const found = targetState?.found === true;
   const unavailable = targetState?.unavailable === true;
-  const targetStatus = found ? targetState.state ?? 'stored' : unavailable ? 'unknown' : 'missing';
+  const recordedLater = targetState?.recordedLater === true;
+  const targetStatus = found ? targetState.state ?? 'stored'
+    : unavailable ? 'unknown'
+      : recordedLater ? 'not_yet_recorded' : 'missing';
   const beforeCounts = emptyCounts();
 
   let stateName;
   let reason;
   if (!found) {
-    if (unavailable) {
+    if (recordedLater) {
+      stateName = 'not_yet_recorded';
+      reason = `${targetId} was recorded at ${targetState.recordedAt ?? 'a later time'}, after the cutoff; it did not support anything at that time. The current standing is reported separately`;
+    } else if (unavailable) {
       stateName = 'unknown';
       reason = targetState.detail ?? `the ${targetType} store could not be read, so the record's standing cannot be established`;
     } else if (rows.length > 0) {
@@ -279,6 +318,7 @@ function traceCitedRecord(state, {
 
   const notes = [];
   if (unavailable) notes.push('the owning store could not be read; an unreadable store is never reported as an empty one');
+  if (recordedLater) notes.push('the record exists now but did not exist at the cutoff; the past view and the current view are kept apart');
   if (fetched.truncated) notes.push(`citations were cut at ${limit ?? MAX_TRACE_CITATIONS}; ${fetched.total} cite this record`);
   if (targetState?.conflicted === true) notes.push('the same-store conflict is heuristic for memory records: it compares clause subjects and values, and it never decides which value is right');
   if (targetStatus === 'model_proposed') notes.push('a model-proposed record is not user-confirmed, even when another store cites it');
@@ -292,9 +332,13 @@ function traceCitedRecord(state, {
       status: targetStatus,
       detail: found
         ? null
-        : unavailable
-          ? targetState.detail ?? 'the owning store could not be read'
-          : 'the owning store does not hold this record',
+        : recordedLater
+          ? `recorded at ${targetState.recordedAt ?? 'a later time'}, after the cutoff`
+          : unavailable
+            ? targetState.detail ?? 'the owning store could not be read'
+            : 'the owning store does not hold this record',
+      recordedAt: targetState?.createdAt ?? targetState?.recordedAt ?? null,
+      validity: null,
     },
     disposition: { state: stateName, reason },
     citations: { rows, total: fetched.total ?? rows.length, truncated: fetched.truncated === true },
@@ -328,9 +372,10 @@ export function traceBelief(state, {
   limit = null,
   citations = null,
   referenceStates = null,
+  recordedLater = null,
 } = {}) {
   if (WORLD_TYPES.has(targetType)) {
-    return traceWorldStatement(state, { targetType, targetId, at, conflicts, referenceStates });
+    return traceWorldStatement(state, { targetType, targetId, at, conflicts, referenceStates, recordedLater });
   }
   if (CITED_TYPES.has(targetType)) {
     return traceCitedRecord(state, { targetType, targetId, targetState, at, conflicts, limit, citations });

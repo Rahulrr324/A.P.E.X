@@ -20,6 +20,7 @@ import {
   factPredicate,
   relationshipType,
 } from './vocabulary.js';
+import { parseIsoInstant } from '../util.js';
 
 export const WORLD_SCHEMA = 1;
 export const MAX_ENTITY_NAME_CHARS = 200;
@@ -64,18 +65,10 @@ function textProblem(value, max, name, { required = true } = {}) {
 
 // A date-only value is midnight UTC. A date-time must carry an explicit zone (`Z` or `±hh:mm`):
 // a local-time string would parse differently on two machines, and a stored instant must not
-// depend on the reader's time zone.
+// depend on the reader's time zone. An impossible calendar date is refused rather than rolled
+// into the next month, so a typo cannot silently become a different historical instant.
 export function parseInstant(value) {
-  if (typeof value !== 'string') return null;
-  const text = value.trim();
-  if (text.length === 0) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    const ms = Date.parse(`${text}T00:00:00.000Z`);
-    return Number.isNaN(ms) ? null : new Date(ms).toISOString();
-  }
-  if (!/(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) return null;
-  const ms = Date.parse(text);
-  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+  return parseIsoInstant(value);
 }
 
 export function timeProblem(value, name, { nullable = true } = {}) {

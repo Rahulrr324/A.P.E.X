@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from './jsonl-store.js';
 import { WriterLock } from './writer-lock.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
+import { CONTROL_CHARS, parseIsoInstant, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { normalizeTokens, queryTokens } from '../retrieval/normalize.js';
 import { isIdentifierToken, queryWeights } from '../retrieval/relevance.js';
@@ -493,13 +493,28 @@ export class MemoryStore {
   // can say that a record disagrees with another stored record without rebuilding the index once
   // per id. Unlike getMany, a damaged store refuses the read: a trace must not describe a partial
   // corpus as the whole store.
-  async traceMany(ids) {
+  async traceMany(ids, { at = null } = {}) {
     const wanted = new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id.length > 0));
     const found = new Map();
     if (wanted.size === 0) return found;
     const records = await this.#loadComplete({ operation: 'trace' });
+    // A historical read reconstructs the store as it stood at the cutoff. A record created after
+    // it cannot supply a replacement, a conflict, or a status for that earlier time.
+    let cutoff = null;
+    if (at !== null && at !== undefined) {
+      const parsed = parseIsoInstant(at);
+      if (parsed === null) throw new ValidationError('at must be an ISO date or an ISO date-time with a time zone');
+      cutoff = Date.parse(parsed);
+    }
+    const known = cutoff === null
+      ? records
+      : records.filter((record) => {
+        const created = Date.parse(record.createdAt);
+        return Number.isFinite(created) && created <= cutoff;
+      });
+    const knownIds = new Set(known.map((record) => record.id));
     const replacedBy = new Map();
-    for (const record of records) {
+    for (const record of known) {
       for (const targetId of record.provenance?.replaces ?? []) {
         const list = replacedBy.get(targetId) ?? [];
         list.push(record.id);
@@ -508,7 +523,7 @@ export class MemoryStore {
     }
     // A replaced record is history, so it cannot be part of a live disagreement. The group scan
     // uses the same clause rule retrieval uses and is explicitly heuristic.
-    const active = records.filter((record) => (replacedBy.get(record.id) ?? []).length === 0);
+    const active = known.filter((record) => (replacedBy.get(record.id) ?? []).length === 0);
     const conflictById = new Map();
     for (const group of findMemoryConflictGroups(active)) {
       const recordIds = group.records.map((record) => record.id).sort();
@@ -522,6 +537,15 @@ export class MemoryStore {
     }
     for (const record of records) {
       if (!wanted.has(record.id)) continue;
+      if (!knownIds.has(record.id)) {
+        found.set(record.id, {
+          found: false,
+          id: record.id,
+          recordedAt: record.createdAt,
+          recordedLater: true,
+        });
+        continue;
+      }
       const replacements = replacedBy.get(record.id) ?? [];
       const conflict = conflictById.get(record.id) ?? null;
       found.set(record.id, {

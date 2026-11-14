@@ -46,7 +46,7 @@ from a milestone number or a passing build.
 | Executive proposal layer | Implemented as an append-only `proposals.jsonl` store plus a user-only decision surface: `propose`, `proposal list/show/accept/reject/invalidate`. A configured model may produce a structured proposal of one of five kinds; it is stored as model-origin with its evidence references, assumptions, unknowns, risk, invalidation conditions, and live validation result. It cannot create, complete, approve, activate, execute, or change any record until a separate user-origin acceptance revalidates it and applies it through the ordinary goal or plan store. `advice` applies nothing, and a proposal is never a user record. | `executive-continuation.test.js`, `executive-reliability.test.js`, `capability-inventory.test.js`. No proposal test calls a real model: responses are deterministic synthetic text. See [Batch AH](#batch-ah-executive-reliability-live-validity-proposals-and-continuation-as-implemented). |
 | `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
 | Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
-| World Model, entity memory and evidence graph | Implemented as an append-only `world-model.jsonl` of user-origin records: stable entity ids with aliases and lifecycle, subject-predicate-object facts with typed values, relationships with directionality and inverse reads, events that keep happened-at, learned-at, and stored-at apart, evidence references to existing stores (never copies), retraction and supersession as later records, conservative contradiction detection that keeps both sides, deterministic identity candidates, and explicit user confirm/reject/merge/unmerge. Reads reduce the log at read time; nothing is overwritten, and a model cannot write a record. | `world-model-core.test.js` (17 tests), `world-model-scenarios.test.js` (15 end-to-end scenarios A-O, including real CLI runs and real child processes). See [Batch AI](#batch-ai-world-model-entity-memory-and-evidence-graph-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
+| World Model, entity memory and evidence graph | Implemented as an append-only `world-model.jsonl` of user-origin records: stable entity ids with aliases and lifecycle, subject-predicate-object facts with typed values, relationships with directionality and inverse reads, events that keep happened-at, learned-at, and stored-at apart, evidence references to existing stores (never copies), retraction and supersession as later records, conservative contradiction detection that keeps both sides, deterministic identity candidates, and explicit user confirm/reject/merge/unmerge. Reads reduce the log at read time; a cutoff can replay it to reconstruct what had been recorded, what was in force, and what was known at that instant, keeping the current standing and later corrections separate (Batch AP-15); nothing is overwritten, and a model cannot write a record. | `world-model-core.test.js` (17 tests), `world-model-scenarios.test.js` (15 end-to-end scenarios A-O, including real CLI runs and real child processes), `temporal-belief.test.js` (18 historical-replay tests, including real CLI child processes). See [Batch AI](#batch-ai-world-model-entity-memory-and-evidence-graph-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Integrated cognitive reasoning layer | Implemented as a deterministic, read-only coordinator in `src/cognition/` over the stores APEX already has: request understanding and intent classification, bounded evidence retrieval with provenance and empty/unavailable/damaged distinctions, claim extraction with symmetric contradictions, a thirteen-step deliberation, qualitative uncertainty, clarification before any model call, a bounded grounding brief, and validation of model-authored structures. No stage calls a model, writes a store, grants authorization, or invents an answer. The model receives the brief as data and its reply is parsed as untrusted input; a citation it did not retrieve, a claim of execution, or a forged structure is rejected whole. | `cognition-understanding.test.js` (18 tests), `cognition-reasoning.test.js` (24 tests), `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through the real controller with a synthetic capture backend). See [Batch AJ](#batch-aj-integrated-cognitive-reasoning-deliberation-and-grounded-responses-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Executive bridge: action orchestration and verified execution | Implemented as a deterministic, model-free interpretation layer in `src/executive/` inside `controller.handle()`: a user's own words are mapped to registered actions, a bounded preview names every step and its risk before anything runs, approval is bound to a content hash and version, the authorized run executes through the existing `TaskRunner`, and the answer reports progress, failure boundary, recovery class, and continuation from records. It adds no store, no registry, no second authorization rule, and no second runner. No stage calls a model: the map from words to actions is vocabulary plus the action registry, and a request the mapping cannot resolve is clarified rather than guessed. It is not a general-purpose planner: it maps a bounded request over registered actions, keeps unknowns visible, and refuses what it cannot ground. | `executive-bridge.test.js` (21 tests), `executive-acceptance.test.js` (K-01 to K-25), `executive-adversarial.test.js` (J-01 to J-11) - 57 tests, every one with a stub or no backend, so none is evidence about a real model. See [Batch AK](#batch-ak-the-executive-bridge---safe-action-orchestration-and-verified-execution-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Adaptive planning, outcome evaluation and goal progression | Implemented as four read paths and one recorded reading over the stores Batch AG to AK already own: the candidate approaches a recorded goal supports (`plan.candidates`), a revision of a plan that stopped being viable (`plan.replan`), what a plan's execution established and left open as seven separate questions (`plan.outcome`), and the assessment derived from those records as the one write (`plan.assess`). Every step a candidate names is a registered action, every candidate is a draft on screen until the user records and approves it, the comparison is a disclosed gate-then-Pareto rule with no score, weight, or probability, and no candidate, comparison, or verdict changes a goal's status or grants permission. Batch AM added four things over the same records: the blockers, prerequisites and limits a goal actually has, and which of them are allowed to exclude a candidate (`plan-constraints.test.js`); one disclosed influence of an approved adaptation on selection, which cannot override a gate, a constraint, an approval or a permission (`plan-guidance.test.js`); two more ranked dimensions in the comparison - whether a step's own action can re-check it, and what the plan records say happened the last time that capability ran - with the reason each remaining dimension stays disclosed printed beside it (`plan-dimensions.test.js`); and the continuation pair - `plan.continuation` reads the nine states of a partially executed run from its own records, `plan.continue` takes up only the steps proven never to have started (`plan-continuation.test.js`, with real child processes stopped at eight interruption boundaries); and that reading is now answered where a user looks - continuation readiness grew a seventh state, `ready to continue`, read only from that derivation, and `work`/`next` rank the interrupted run as one `continue-plan` candidate instead of two task and plan entries (`executive-readiness.test.js`). Batch AP then made that one ordering influence auditable at the decision level: every comparison now carries `adaptationDecision`, a counterfactual computed by the same dominance rule over the same candidate bytes with only `approved_adaptation_fit` removed, disclosing which candidate led before and after, the exact rule id/version/hash and evidence ids, every record considered with its ledger state and why, an explicit declined reason when nothing applied, and `authorizes: false` (`adaptation-decision.test.js`, 23 cases). Batch AP-02 then let a second evidence kind reach that same one influence: a completed, current evaluation of a user-recorded prediction can be derived as a bounded, typed candidate, stays inert until the user approves it through the same `adaptation.decide` record, and is disclosed through `sources.predictionEvidence`; stale, withdrawn or unreadable prediction lineage withdraws its effect on read (`prediction-adaptation-learning.test.js`, 21 cases). Batch AP-03 then described repeated recorded outcomes instead of single ones: a closed eight-kind pattern analysis over one capability's bounded history, with chronological ordering, deduplicated citations, exclusions by kind, and calibration kept separate with its 20-evaluation floor; a directional pattern may become an unapproved candidate citing up to 20 observations, and only the user's explicit approval can let it reach the same dimension (`longitudinal-outcome-analysis.test.js`, 29 cases). Batch AP-13 then let a recorded verdict move one recommendation without an approved candidate in between: an approved, valid plan whose step capability carries a live, evidence-confirmed `contradicted` expectation is recommended for review (`review-expectation`, base 62) instead of start (`start-plan`, base 75), with the caution and its evidence printed, `requiresAuthorization: false`, and the plan's approval, bytes and readiness unchanged; a withdrawn expectation or a corrected experience that makes the verdict stale restores start (`expectation-caution.test.js`, 38 cases). It adds no parallel learning system, no new decision dimension, and no authority. | `plan-generation.test.js`, `plan-candidates.test.js`, `plan-evaluation.test.js`, `plan-assessment.test.js`, `plan-learning.test.js`, `plan-adversarial.test.js` (15 adversarial cases), `plan-scenarios.test.js` (the 30 numbered end-to-end scenarios), `plan-cli.test.js` (9 scenarios through the real `node bin/apex.js`), `plan-constraints.test.js`, `plan-guidance.test.js`, `plan-dimensions.test.js`, `plan-continuation.test.js`, `learning-read-equivalence.test.js`, `goal-evidence-consistency.test.js`, `executive-readiness.test.js`, `adversarial-batch-am.test.js` (the 16 adversarial cases I-01 to I-16), `plan-scenarios-am.test.js` (the 30 Batch AM acceptance scenarios, 31 tests), `adaptation-decision.test.js` (23 cases), `prediction-adaptation-learning.test.js` (21 cases), `longitudinal-outcome-analysis.test.js` (29 cases), `expectation-caution.test.js` (38 cases) - and `goal-provenance.test.js`, `goal-assessment.test.js`. See [Batch AL](#batch-al-adaptive-planning-outcome-evaluation-and-goal-progression-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
@@ -3658,7 +3658,9 @@ three reads (`plan.candidates`, `plan.replan`, `plan.outcome`: the candidate set
 comparison of it, and what a plan's execution established and left open - all read-only, and none of
 them recording or approving anything). Batch AP-14 added one more World Model read
 (`world.belief.trace`: which stored records a claim rests on, which contradict it, and which world
-statements cite a memory or knowledge record - descriptive only, and it authorizes nothing). No World
+statements cite a memory or knowledge record - descriptive only, and it authorizes nothing), and
+Batch AP-15 gave that read an optional historical cutoff and `world.state_at` a belief
+reconstruction; no action was added. No World
 Model write is plannable and every World Model read is user-origin, so the planning prompt offers
 exactly 20 reads to a model origin and 44 actions to a user origin with a root configured (42 without
 one).
@@ -7331,14 +7333,81 @@ secret masking in the display, an unsupported type, the cognition link (contradi
 directions; supports/qualifies/retracted and an unreadable memory add none), and the CLI contract.
 No test contacts a model; nothing here is evidence about a real model's behaviour.
 
+## Batch AP-15: historical belief reconstruction (as implemented)
+
+The World Model could already replay its own log to a cutoff (`world.state_at`), and AP-14 could
+trace a belief across stores. Neither answered the roadmap's third-stage question - *what was true
+on a given date, and which record says so* - for a chosen historical instant: which statements
+stood, which were recorded but not yet valid, which had expired, what the evidence said **then**,
+and what was learned **later**. AP-15 adds that read without a new store, a schema change, an index
+or a model call.
+
+**Stored time and valid time are kept apart.** Every World Model record carries a stored time
+(`recordedAt` / `.at`) and a valid time (`validFrom`, `validUntil`, `occurredAt`; an event also
+keeps `observedAt`). A cutoff first filters on stored time - a record written after the cutoff is
+not in the past view - and validity is then judged **at** the cutoff. A fact recorded before its
+valid-from is `historical`/`not_yet_valid` at an earlier cutoff, `supported`/`in_force` inside its
+interval, and `expired` after its valid-until (the interval is half-open). An event keeps
+happened-at, learned-at and stored-at as three different answers: an event that occurred before a
+cutoff but was observed after it was not known at that cutoff.
+
+**Where it lives.**
+
+| File | Responsibility |
+|---|---|
+| `src/world/historical.js` | Pure replay readings: `validityStanding()` (in force, not yet valid, expired, occurred, not yet occurred, unknown), `statementStanding()` (the replayed status plus that validity and its reason), `reconstructBelief()` (per-statement standing, believed/not-yet-valid/expired/conflicting counts, deterministic order, capped at 100 statements with the omission disclosed), and `relevantChanges()` (the changes after the cutoff that touch one record or its citations, capped at 100). Writes nothing and decides nothing. |
+| `src/world/store.js` | `historicalView(knownAt)` performs one certified read and returns the replayed state, the belief reconstruction, the current state, and the later change window - the current view and the later window are produced only when the cutoff is at or before the application clock. `stateAt()` delegates to the same replay. |
+| `src/world/belief-trace.js` | Validity-aware dispositions: `not_yet_valid`, `expired`, `not_yet_occurred` (beside `historical`), `not_yet_recorded` for a statement absent at the cutoff but stored now, and `unverified` when a cited record was not recorded yet or cannot be read. `describeRef()` marks a reference that did not exist at the cutoff instead of calling it missing. |
+| `src/memory/memory-store.js` | `traceMany(ids, { at })` filters on `createdAt <= cutoff`; supersession, replacement and the heuristic conflict group are rebuilt from the records known then; an id only recorded later returns `found: false, recordedLater: true`. |
+| `src/knowledge/knowledge-store.js` | `getMany(ids, { at })` rebuilds the lifecycle, supersession, conflict and resolution indexes from claims recorded at or before the cutoff, and reports a claim that only exists now as `recordedLater`. A resolution recorded later does not change what the earlier claim conflicted with. |
+| `src/actions/world-model-actions.js` | `world.belief.trace` accepts `at`; one read yields the historical trace, the current standing as a separate answer, and the later-change window. `world.state_at` returns the belief reconstruction. The independent verifier compares the replayed reading while masking only the two read instants. |
+| `src/util.js`, `src/world/model.js` | `parseIsoInstant()` accepts a date or a date-time with an explicit zone, normalizes it, and rejects impossible dates (`2026-02-30`), out-of-range components and zone-less local times. The action and the memory/knowledge store-level reads both use it. |
+| `src/world/format.js`, `src/cli.js` | Rendering of recorded-at, validity, the historical cutoff, the separately reported current standing, later changes, `[NOT YET RECORDED]` and `[NOT AVAILABLE AT CUTOFF]`; CLI help states that `--at` rebinds nothing to the present. |
+
+**One answer per question, never merged.** A historical trace reports `mode: historical`,
+`asOf { cutoff, records, excluded, problems }`, the replayed `disposition`, a separate
+`current { cutoff, found, status, disposition, reason }` evaluated at the read time, and
+`laterChanges { from, to, changes, total, truncated, note }`. A correction, retraction or
+supersession recorded after the cutoff appears in `laterChanges`, not in the past answer; the past
+answer is not rewritten. A trace taken without `at` is unchanged from AP-14. When the cutoff is at
+or after the application clock the later window is empty and that is stated, rather than presenting
+a reversed range.
+
+**Evidence at the cutoff.** Memory and knowledge references are checked as of the cutoff by their
+own stores. Every other evidence source (experience, prediction, task, operation) keeps its own
+clock and offers no certified historical read, so a reference to it at a cutoff is reported as
+`as_of_unavailable` and the trace becomes `unverified` - the present answer is never projected
+backwards. A damaged memory or knowledge store is `UNREADABLE` and the trace is `unverified`, not
+empty; a damaged world log refuses the historical read rather than reporting an empty past.
+
+**What it does not do.** It adds no store, no persisted index, no schema field and no background
+process. It does not implement as-of reads for experience, prediction, goal, plan, task or
+operation records; it discloses that they are unavailable at a cutoff instead. It does not decide
+which side of a disagreement is right, does not reconstruct an objective past beyond the stored
+records, and authorizes nothing (`authorizes: false` throughout). A historical query writes no data
+store.
+
+**Tests.** `tests/temporal-belief.test.js` (18 tests) runs the real controller, the real stores and
+real CLI child processes: a fact recorded before its valid-from, a record written after the cutoff
+excluded rather than projected backward, expiry versus never-in-force, contradictory statements
+recorded on different days, event happened-at/learned-at/stored-at across an observation boundary,
+a missing valid-from disclosed as unknown, a cutoff after the present, retraction and supersession,
+a memory correction after the cutoff, knowledge conflict/supersession reconstructed from records
+created by the cutoff, prediction evidence `as_of_unavailable`, a damaged memory store, a damaged
+world log, offset/date-only equivalence with half-open expiry, rejected impossible and zone-less
+timestamps (at the action and at the store), repeated queries that write nothing, cross-process
+additions visible to a historical read, and two CLI traces whose readings agree. No test contacts a
+model; none is evidence about a real model.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 
 This is a plan, not a status report. **No stage below is closed.** Five of the eight hold
 a partial implementation and the notes name both the clause each batch advanced and the
 remainder that keeps the stage open: stage 2's read-only projection, stage 3's
-event-with-time clause for the experience log (Batches AC and AD), stage 4's
-contradiction-surfacing clause (Batch X) and its cross-store evidence trace (Batch AP-14),
+event-with-time and historical-world-state clauses (Batches AC, AD and AP-15), stage 4's
+contradiction-surfacing clause (Batch X) and its cross-store evidence trace (Batches AP-14
+and AP-15),
 stage 5's feedback-to-surface path (Batches Z, AA and AB), and stage 6's expectation ledger,
 outcome capture and classification (Batch AE) plus one bounded read of a wrong expectation by
 the continuation recommendation (Batch AP-13). Each stage names the dependency it satisfies and the evidence that would demonstrate
@@ -7378,6 +7447,15 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    participants, arbitrary event kinds, and a schema owned by anything other than the
    experience log are still not implemented; the temporal view is a derivation, not a new
    store.
+   Batch AP-15 advanced the "what was true on <date>, and which record says so" clause for
+   world statements and for the memory/knowledge lifecycle: a cutoff replays only records
+   stored at or before it, then judges validity at that instant, so a fact can be reported as
+   unknown then, recorded but not yet valid, in force, expired, or superseded by a later
+   record without the past answer being rewritten. The current standing and the later changes
+   are returned as separate answers. This is still a read-time replay over the existing
+   append-only log: no as-of read exists for experience, prediction, goal, plan, task or
+   operation records, and those are disclosed as unavailable at a cutoff rather than reused
+   from the present.
 4. **Retrieval, evidence, uncertainty, and contradiction handling.** Evidence-linked belief
    records with explicit confidence, provenance-aware retrieval, and contradiction handling
    that is not a text heuristic. Depends on 3 (a claim must name what it is about).
@@ -7400,6 +7478,11 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    the world statements derived from it, and there is still no explicit confidence value to
    trace. An inference keeps its own claim kind through retrieval, which the cognition layer
    already labels; that clause was not changed here.
+   Batch AP-15 lets that same trace be taken at a historical cutoff: the citations, the owning
+   store's reading of each cited memory or knowledge record, and the statement's own status are
+   all derived from records stored at or before the cutoff, with the current standing and later
+   changes reported separately. A citation to a record that did not exist yet is not treated as
+   support from that time.
    The third clause is advanced for stored citations by Batch X and AP-14 - a conflict the
    retrieval ranking would hide is surfaced, and a cross-store contradiction is named on both
    claims. Non-heuristic contradiction detection remains the stage 3 dependency named here: the

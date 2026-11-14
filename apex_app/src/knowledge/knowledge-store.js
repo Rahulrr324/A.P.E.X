@@ -13,7 +13,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { WriterLock } from '../memory/writer-lock.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS, shortId } from '../util.js';
+import { CONTROL_CHARS, parseIsoInstant, shortId } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { normalizeTokens, queryTokens } from '../retrieval/normalize.js';
 import { queryWeights } from '../retrieval/relevance.js';
@@ -598,21 +598,47 @@ export class KnowledgeStore {
   // A bounded read of specific claim records for the late evidence re-check. Lifecycle events are
   // never returned here; each claim is annotated with the lifecycle state its own log implies, so
   // a claim retracted or superseded after the answer's analysis is visible as such.
-  async getMany(ids) {
+  async getMany(ids, { at = null } = {}) {
     const wanted = new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id.length > 0));
     const found = new Map();
     if (wanted.size === 0) return found;
+    // A historical read reconstructs lifecycle from records created at or before the cutoff, so a
+    // retraction or replacement written later cannot be applied to an earlier time.
+    let cutoff = null;
+    if (at !== null && at !== undefined) {
+      const parsed = parseIsoInstant(at);
+      if (parsed === null) throw new ValidationError('at must be an ISO date or an ISO date-time with a time zone');
+      cutoff = Date.parse(parsed);
+    }
     // The late re-check must see the file as it is now; it does, because the derivation is reused
     // only when this read's own content hash matches the entry. A change between analysis and
     // re-check produces a different hash and a fresh derivation. A read that certified no key
     // builds only the two indexes this annotation needs, exactly as before.
     const certification = { key: null };
     const records = await this.#loadComplete({ certification });
+    const source = cutoff === null
+      ? records
+      : records.filter((record) => {
+        const created = Date.parse(record.createdAt);
+        return Number.isFinite(created) && created <= cutoff;
+      });
     let claims;
     let retractionsByTarget;
     let supersededByMap;
-    if (certification.key === null) {
-      const split = splitLifecycle(records);
+    let conflictIndex = null;
+    let resolutionIndex = null;
+    if (cutoff !== null) {
+      // The historical view needs the lifecycle the store implied at that time, including a
+      // same-store disagreement and any resolution recorded by then. A retraction, replacement,
+      // or resolution written after the cutoff is already absent from `source`.
+      const split = splitLifecycle(source);
+      claims = split.claims;
+      retractionsByTarget = split.retractionsByTarget;
+      supersededByMap = buildSupersededByMap(claims);
+      conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+      resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, split.resolutionEvents, conflictIndex);
+    } else if (certification.key === null) {
+      const split = splitLifecycle(source);
       claims = split.claims;
       retractionsByTarget = split.retractionsByTarget;
       supersededByMap = buildSupersededByMap(claims);
@@ -624,7 +650,19 @@ export class KnowledgeStore {
     }
     for (const record of claims) {
       if (!wanted.has(record.id)) continue;
-      found.set(record.id, annotate(record, supersededByMap, new Map(), retractionsByTarget, null));
+      found.set(record.id, annotate(record, supersededByMap, conflictIndex ?? new Map(), retractionsByTarget, resolutionIndex));
+    }
+    if (cutoff !== null) {
+      const knownIds = new Set(source.map((record) => record.id));
+      for (const record of records) {
+        if (!wanted.has(record.id) || knownIds.has(record.id) || record.kind !== undefined) continue;
+        found.set(record.id, {
+          found: false,
+          id: record.id,
+          recordedAt: record.createdAt,
+          recordedLater: true,
+        });
+      }
     }
     return found;
   }

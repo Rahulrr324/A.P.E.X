@@ -46,6 +46,7 @@ import {
   statementHistory,
 } from './query.js';
 import { identityCandidates, pairAssessment } from './resolution.js';
+import { reconstructBelief } from './historical.js';
 
 function requireText(value, name, max = 500) {
   if (typeof value !== 'string' || value.trim().length === 0) throw new ValidationError(`${name} is required`);
@@ -635,11 +636,36 @@ export class WorldModelStore {
     return changesBetween(records, from, to);
   }
 
-  async stateAt(knownAt) {
+  // One file read yields the replayed state, its belief reconstruction, the current state, and the
+  // changes recorded since the cutoff. A historical trace needs both views, and reading the log
+  // twice would let an append between the reads split the answer across two states. A caller that
+  // needs only the past view (`stateAt`) asks for it and skips the second reduction.
+  async historicalView(knownAt, { withCurrent = true } = {}) {
     const { records } = await this.#readComplete();
-    const result = stateAt(records, knownAt);
-    if (result.problem) throw new ValidationError(result.problem);
-    return result;
+    const replay = stateAt(records, knownAt);
+    if (replay.problem) throw new ValidationError(replay.problem);
+    const now = this.now().toISOString();
+    return {
+      ...replay,
+      belief: reconstructBelief(replay.state, { at: replay.cutoff }),
+      current: withCurrent ? reduceRecords(records) : null,
+      // A cutoff at or after the present has no later window. Asking changesBetween for one would
+      // report reversed bounds as a problem, when the honest answer is that no change is later.
+      later: withCurrent && replay.cutoff <= now ? changesBetween(records, replay.cutoff, now) : null,
+    };
+  }
+
+  async stateAt(knownAt) {
+    const result = await this.historicalView(knownAt, { withCurrent: false });
+    return {
+      state: result.state,
+      cutoff: result.cutoff,
+      records: result.records,
+      excluded: result.excluded,
+      problems: result.problems,
+      note: result.note,
+      belief: result.belief,
+    };
   }
 
   async checkFact({ entityId, predicate, expected = null, at = undefined } = {}) {

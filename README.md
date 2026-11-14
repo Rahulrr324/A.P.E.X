@@ -299,6 +299,23 @@ open
 ([details](apex_app/README.md#batch-ap-14-cross-store-belief-tracing-as-implemented);
 tests: `tests/belief-trace.test.js`, 18 cases).
 
+Batch AP-15 then advanced the roadmap's "what was true on <date>, and which record says so" clause.
+`world state-at` and `world trace --at` now replay only records stored at or before a cutoff, then
+judge validity at that instant, so the same fact can be reported as not yet recorded, recorded but
+not yet valid, in force, expired, or superseded - without the past answer being rewritten. Stored
+time (when APEX learned it) and valid time (when it was true) are kept apart, an event keeps
+happened-at, learned-at and stored-at as three answers, and memory and knowledge records are read
+as of the cutoff from their own stores. The current standing and the changes recorded later are
+returned as separate answers rather than merged into one; a citation to a record that did not exist
+yet is not treated as support from that time; a damaged store is unreadable and a damaged world log
+refuses the read instead of reporting an empty past; and malformed or zone-less timestamps are
+rejected. Evidence sources with no certified historical read (experience, prediction, task,
+operation) are disclosed as unavailable at a cutoff rather than reused from the present. No store,
+schema field, index or model call was added, the replay writes nothing and authorizes nothing, and
+the read is bounded
+([details](apex_app/README.md#batch-ap-15-historical-belief-reconstruction-as-implemented);
+tests: `tests/temporal-belief.test.js`, 18 cases including real CLI child processes).
+
 Batch AP-11 (Runtime Performance, Cognitive Efficiency & End-to-End Latency Optimization) first
 corrected the measurement it was asked to optimize. The AP-10 benchmark shared one corpus across phases
 and only ever grew it, so after the retrieval phase reached 10,000 records every later `context` and

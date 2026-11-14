@@ -44,8 +44,8 @@ Usage:
   node bin/apex.js world statement retract|supersede <id> --target-type fact|relationship|event --reason <text> [--by <replacement-id>]
   node bin/apex.js world statement history <id> --target-type fact|relationship|event    (read-only)
   node bin/apex.js world history <entity>|related <entity> [--depth N] [--limit N]|evidence <entity>|conflicts [<entity>]   (read-only)
-  node bin/apex.js world trace <memory|knowledge|fact|relationship|event> <id> [--at <iso>] [--limit N]   (read-only; decides nothing)
-  node bin/apex.js world changes --from <iso> --to <iso>|state-at --at <iso>|inspect|health|lock   (read-only)
+  node bin/apex.js world trace <memory|knowledge|fact|relationship|event> <id> [--at <iso historical cutoff>] [--limit N]   (read-only; rebinds nothing to the present)
+  node bin/apex.js world changes --from <iso> --to <iso>|state-at --at <iso>|inspect|health|lock   (read-only; state-at reconstructs beliefs at that time)
   node bin/apex.js world entity|fact|relationship|event|statement writes are user-origin only; a model cannot write the world model
   node bin/apex.js history [--limit N]
   node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]
@@ -1782,7 +1782,7 @@ export async function main(argv, {
       if (sub === 'trace') {
         const { flags, rest: refs } = parseFlags(rest, ['at', 'limit']);
         if (refs.length !== 2) {
-          throw new ValidationError('usage: world trace <memory|knowledge|fact|relationship|event> <id> [--at <iso>] [--limit N]', 'USAGE');
+          throw new ValidationError('usage: world trace <memory|knowledge|fact|relationship|event> <id> [--at <iso historical cutoff>] [--limit N]', 'USAGE');
         }
         return await read('world.belief.trace', {
           targetType: refs[0],

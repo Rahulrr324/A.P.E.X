@@ -1067,6 +1067,60 @@ second authority.
   with zero data-store writes, bounds, model-proposed records, retraction, secret masking, the
   cognition link and the CLI. No test contacts a model; none is evidence about a real model.
 
+### Historical belief reconstruction (Batch AP-15)
+
+The World Model already replayed its log to a cutoff and AP-14 already traced across stores. AP-15
+joins them: a cutoff replays only records stored at or before it, then judges *validity* at that
+instant, and the past answer is returned beside - never merged with - the current standing and the
+changes recorded later. No store, schema field, persisted index or model call is added.
+
+- **Two times, one replay.** Stored time (`recordedAt` / `.at`) decides what existed at the cutoff;
+  valid time (`validFrom`, `validUntil`, `occurredAt`, `observedAt`) decides whether the statement
+  was in force then. `stateAt(records, knownAt)` filters on stored time inclusively, then
+  `reduceRecords` derives the state. A record written after the cutoff is absent from the past
+  view; it is never used to pretend the system knew something earlier.
+- **The reconstruction is a closed reading.** `validityStanding()` returns `in_force`,
+  `not_yet_valid`, `expired`, `occurred`, `not_yet_occurred` or `unknown`; the interval is
+  half-open, so `validUntil == cutoff` is expired. `reconstructBelief()` reports each statement's
+  status and validity, counts believed / not-yet-valid / expired / conflicting / other, and caps
+  the list at 100 rows with the omission disclosed. A statement counts as believed only while its
+  status is `supported`, `contested` or `conflicting` **and** its validity is `in_force` or
+  `occurred`; a conflicting statement is still a belief and is not silently dropped.
+- **One certified read, two answers.** `WorldModelStore.historicalView(knownAt)` derives the replayed
+  state, its belief reconstruction, the current state, and the later change window from the same
+  read, so an append between reads cannot split the past from the present. The current view and the
+  later window are produced only when the cutoff is at or before the application clock; otherwise
+  the window is empty and that is stated rather than reported as a reversed range.
+- **Per-store as-of reads where the semantics exist.** `MemoryStore.traceMany(ids, {at})` filters on
+  `createdAt` and rebuilds replacement and conflict grouping from the records known then;
+  `KnowledgeStore.getMany(ids, {at})` rebuilds lifecycle, supersession, conflict and resolution
+  indexes from claims recorded by the cutoff, so a resolution recorded later does not rewrite what
+  the earlier claim conflicted with. An id recorded only after the cutoff is `recordedLater`, not
+  missing. Experience, prediction, task and operation evidence keep their own clocks and expose no
+  certified historical read; at a cutoff they are `as_of_unavailable` and the trace is `unverified`
+  rather than borrowing the present.
+- **The trace names the condition.** `world.belief.trace` with `at` returns `mode: historical`,
+  `asOf {cutoff, records, excluded, problems}`, the replayed disposition, a separate
+  `current {cutoff, found, status, disposition, reason}`, and `laterChanges {from, to, changes,
+  total, truncated, note}`. Validity-aware dispositions are `not_yet_valid`, `expired`,
+  `not_yet_occurred` and `not_yet_recorded`; an unavailable or not-yet-recorded reference makes the
+  trace `unverified`. A correction, retraction or supersession recorded after the cutoff lives only
+  in `laterChanges`.
+- **Strict instants.** One `parseIsoInstant()` accepts a date or a date-time with an explicit zone,
+  normalizes to UTC, and rejects impossible dates (`2026-02-30`), out-of-range components and
+  zone-less local times at both the action and the store-level reads. A cutoff is never guessed.
+- **Bounds, read-only, no authority.** 100 reconstructed statements and 100 later changes per read;
+  truncation is disclosed. The replay, the trace and the current view write no store file (pinned in
+  `temporal-belief.test.js`), decide no disagreement, and return `authorizes: false`. The tracer
+  over-approximates its confirmation across two reads by masking only the two read instants - the
+  instant of the current view and the end of the later window - never a record, citation or status.
+- **Tests.** `temporal-belief.test.js` (18 tests) covers recorded-before-valid-from, later-record
+  exclusion, expiry, contradictory statements on different days, event observation boundaries, a
+  missing valid-from, a cutoff after the present, retraction, supersession, memory correction,
+  knowledge conflict and supersession as-of, prediction evidence and damaged stores, offset and
+  date-only cutoffs, rejected malformed timestamps, read-only determinism, and cross-process and CLI
+  reads. No model is contacted.
+
 ## 6. D. Diagnostics and evaluation
 
 ### Runtime diagnostics
@@ -1212,6 +1266,7 @@ The only authority owner is the action registry. Everything else observes, propo
 | Prediction ledger | `IMPLEMENTED_AND_TESTED` | `prediction/*`, `actions/prediction-actions.js` | `prediction-*.test.js` (6 suites) |
 | Expectation caution on the continuation recommendation (AP-13) | `IMPLEMENTED_AND_TESTED` | `prediction/caution.js`, `PredictionStore.expectationCautions`, `continuation/engine.js`, `executive/readiness.js`, controller wiring | `expectation-caution.test.js` (38 cases) |
 | Cross-store belief trace and retrieval contradiction link (AP-14) | `IMPLEMENTED_AND_TESTED` | reverse citation index in `world/query.js`, pure `world/belief-trace.js`, `MemoryStore.traceMany`, `world.belief.trace` action and CLI, `linkCrossStoreCitations` in `cognition/evidence.js` | `belief-trace.test.js` (18 cases) |
+| Historical belief reconstruction (AP-15) | `IMPLEMENTED_AND_TESTED` | pure `world/historical.js` (`validityStanding`, `statementStanding`, `reconstructBelief`, `relevantChanges`), `WorldModelStore.historicalView`, as-of `MemoryStore.traceMany` and `KnowledgeStore.getMany`, `world.belief.trace --at` and `world.state_at` belief output, strict `parseIsoInstant`; no store, schema field or index added | `temporal-belief.test.js` (18 cases, including real CLI child processes) |
 | Temporal experience | `IMPLEMENTED_AND_TESTED` | `experience/temporal.js`, `experience-store.js` | `experience-temporal*.test.js` |
 | Model gateway protocol (stub) | `IMPLEMENTED_AND_TESTED` | `model/gateway.js` | `gateway.test.js`, `model-workflow.test.js`; no test runs a real model |
 | Real-model answer quality | `DESCRIPTIVE_ONLY` | — | One dated observation (2026-10-31); no automated evidence |

@@ -59,6 +59,7 @@ import {
   TRACE_TARGET_TYPES,
   traceBelief,
 } from '../world/belief-trace.js';
+import { relevantChanges } from '../world/historical.js';
 import {
   renderAttributes,
   renderCandidates,
@@ -358,14 +359,22 @@ function sameInstant(left, right) {
 
 const TRACE_WORLD_TYPES = new Set(['fact', 'relationship', 'event']);
 
-async function memoryTraceTarget(ctx, id) {
+async function memoryTraceTarget(ctx, id, at = null) {
   if (!ctx.memory || typeof ctx.memory.traceMany !== 'function') {
     return { found: false, unavailable: true, detail: 'the memory store is not available in this configuration', complete: false };
   }
   try {
-    const rows = await ctx.memory.traceMany([id]);
+    const rows = await ctx.memory.traceMany([id], at === null ? {} : { at });
     const row = rows.get(id);
     if (!row) return { found: false };
+    if (row.found === false) {
+      return {
+        found: false,
+        recordedLater: row.recordedLater === true,
+        recordedAt: row.recordedAt ?? null,
+        complete: false,
+      };
+    }
     // The owning store's own lifecycle vocabulary is reported verbatim, so a superseded or
     // model-proposed record is never displayed as a current belief.
     const state = row.status === 'unresolved_conflict' ? 'conflicting' : row.status;
@@ -391,11 +400,41 @@ async function memoryTraceTarget(ctx, id) {
   }
 }
 
-async function knowledgeTraceTarget(ctx, id) {
+async function knowledgeTraceTarget(ctx, id, at = null) {
   if (!ctx.knowledge || typeof ctx.knowledge.history !== 'function') {
     return { found: false, unavailable: true, detail: 'the knowledge store is not available in this configuration', complete: false };
   }
   try {
+    if (at !== null) {
+      const rows = await ctx.knowledge.getMany([id], { at });
+      const row = rows.get(id);
+      if (!row) return { found: false };
+      if (row.found === false) {
+        return {
+          found: false,
+          recordedLater: row.recordedLater === true,
+          recordedAt: row.recordedAt ?? null,
+          complete: false,
+        };
+      }
+      return {
+        found: true,
+        label: `${row.subject} ${row.relationship} ${row.object}`,
+        state: row.lifecycleState ?? row.status ?? 'stored',
+        conflicted: (row.conflictsWith ?? []).length > 0,
+        complete: true,
+        createdAt: row.createdAt ?? null,
+        sameStore: {
+          lifecycleState: row.lifecycleState ?? null,
+          conflictsWith: [...(row.conflictsWith ?? [])],
+          conflictState: row.conflictState ?? null,
+          resolution: row.resolution ?? null,
+          retractedBy: row.retractedBy ?? null,
+          supersededBy: [...(row.supersededBy ?? [])],
+          problems: [],
+        },
+      };
+    }
     const history = await ctx.knowledge.history(id);
     if (!history?.record) return { found: false };
     const record = history.record;
@@ -405,6 +444,7 @@ async function knowledgeTraceTarget(ctx, id) {
       state: record.lifecycleState ?? record.status ?? 'stored',
       conflicted: (record.conflictsWith ?? []).length > 0,
       complete: history.complete !== false,
+      createdAt: record.createdAt ?? null,
       sameStore: {
         lifecycleState: record.lifecycleState ?? null,
         conflictsWith: [...(record.conflictsWith ?? [])],
@@ -428,7 +468,7 @@ async function knowledgeTraceTarget(ctx, id) {
 // One batched read answers every memory and knowledge reference; only the remaining source types
 // go through the store's own adapter, once per distinct source. A store that cannot be read is
 // reported as unavailable for every reference it owns - never as "no such evidence".
-async function traceReferenceStates(ctx, store, state, targetType, targetId) {
+async function traceReferenceStates(ctx, store, state, targetType, targetId, { at = null } = {}) {
   const refs = evidenceFor(state, { targetType, targetId }).refs ?? [];
   const states = new Map();
   const memoryIds = [...new Set(refs.filter((ref) => ref.sourceType === 'memory').map((ref) => ref.sourceId))];
@@ -439,14 +479,14 @@ async function traceReferenceStates(ctx, store, state, targetType, targetId) {
   let knowledgeError = null;
   if (memoryIds.length > 0) {
     try {
-      memoryRows = await ctx.memory.traceMany(memoryIds);
+      memoryRows = await ctx.memory.traceMany(memoryIds, at === null ? {} : { at });
     } catch (err) {
       memoryError = err;
     }
   }
   if (knowledgeIds.length > 0) {
     try {
-      knowledgeRows = await ctx.knowledge.getMany(knowledgeIds);
+      knowledgeRows = await ctx.knowledge.getMany(knowledgeIds, at === null ? {} : { at });
     } catch (err) {
       knowledgeError = err;
     }
@@ -470,6 +510,11 @@ async function traceReferenceStates(ctx, store, state, targetType, targetId) {
           states.set(key, {
             check: 'ok', found: false, active: false, state: null, classification: null,
             detail: `memory:${ref.sourceId} does not exist in that store`,
+          });
+        } else if (row.found === false) {
+          states.set(key, {
+            check: 'ok', found: false, active: false, state: 'not_yet_recorded', classification: null,
+            detail: `memory:${ref.sourceId} was recorded at ${row.recordedAt ?? 'a later time'}, after the cutoff`,
           });
         } else {
           const current = row.replacedBy.length === 0 && row.status !== 'superseded';
@@ -496,6 +541,11 @@ async function traceReferenceStates(ctx, store, state, targetType, targetId) {
             check: 'ok', found: false, active: false, state: null, classification: null,
             detail: `knowledge:${ref.sourceId} does not exist in that store`,
           });
+        } else if (row.found === false) {
+          states.set(key, {
+            check: 'ok', found: false, active: false, state: 'not_yet_recorded', classification: null,
+            detail: `knowledge:${ref.sourceId} was recorded at ${row.recordedAt ?? 'a later time'}, after the cutoff`,
+          });
         } else {
           const lifecycle = row.lifecycleState ?? row.status ?? null;
           states.set(key, {
@@ -508,6 +558,14 @@ async function traceReferenceStates(ctx, store, state, targetType, targetId) {
           });
         }
       }
+    } else if (at !== null) {
+      // The other source stores keep their own clocks and lifecycles; none exposes a certified
+      // historical read. Saying so is honest; reusing its current answer would project a later
+      // record back into the past.
+      states.set(key, {
+        check: 'as_of_unavailable', found: null, active: null, state: null, classification: null,
+        detail: `the ${ref.sourceType} store cannot report its standing at ${at}; only its current standing is available, and it is not used here`,
+      });
     } else {
       states.set(key, await store.checkReference(ref));
     }
@@ -516,21 +574,100 @@ async function traceReferenceStates(ctx, store, state, targetType, targetId) {
 }
 
 async function runBeliefTrace(ctx, store, { targetType, targetId, at, limit }) {
-  const state = await store.state();
-  const instant = at ?? ctx.now().toISOString();
+  const nowIso = ctx.now().toISOString();
+  const historical = at !== null && at !== undefined;
+  let state;
+  let replay = null;
+  if (historical) {
+    // One read yields the replayed state and the current state, so an append between two reads
+    // cannot split the past view from the present one.
+    replay = await store.historicalView(at);
+    state = replay.state;
+  } else {
+    state = await store.state();
+  }
+  const instant = historical ? replay.cutoff : nowIso;
   let targetState = null;
   let citations = null;
-  if (targetType === 'memory') targetState = await memoryTraceTarget(ctx, targetId);
-  else if (targetType === 'knowledge') targetState = await knowledgeTraceTarget(ctx, targetId);
+  if (targetType === 'memory') targetState = await memoryTraceTarget(ctx, targetId, historical ? instant : null);
+  else if (targetType === 'knowledge') targetState = await knowledgeTraceTarget(ctx, targetId, historical ? instant : null);
   if (targetState !== null) {
     citations = statementsCiting(state, { sourceType: targetType, sourceId: targetId, at: instant, limit });
   }
   const referenceStates = TRACE_WORLD_TYPES.has(targetType)
-    ? await traceReferenceStates(ctx, store, state, targetType, targetId)
+    ? await traceReferenceStates(ctx, store, state, targetType, targetId, historical ? { at: instant } : {})
     : null;
-  return traceBelief(state, {
-    targetType, targetId, targetState, at: instant, limit, citations, referenceStates,
+
+  // A world statement stored after the cutoff is absent from the replayed state. Name that
+  // condition instead of reporting the statement as one that never existed.
+  let recordedLater = null;
+  if (historical && TRACE_WORLD_TYPES.has(targetType)) {
+    const thenTable = targetType === 'fact' ? state.facts
+      : targetType === 'relationship' ? state.relationships : state.events;
+    const nowTable = targetType === 'fact' ? replay.current.facts
+      : targetType === 'relationship' ? replay.current.relationships : replay.current.events;
+    const current = nowTable?.get(targetId) ?? null;
+    if (current && !thenTable.has(targetId)) recordedLater = { recordedAt: current.recordedAt ?? null };
+  }
+
+  const trace = traceBelief(state, {
+    targetType, targetId, targetState, at: instant, limit, citations, referenceStates, recordedLater,
   });
+  if (!historical) return trace;
+
+  trace.asOf = {
+    cutoff: replay.cutoff,
+    records: replay.records,
+    excluded: replay.excluded,
+    problems: replay.problems.length,
+  };
+  trace.disposition.reason = `as of ${replay.cutoff}: ${trace.disposition.reason}`;
+  trace.notes = [
+    ...(trace.notes ?? []),
+    `this trace replays only records stored at or before ${replay.cutoff}; ${replay.excluded} later record(s) are excluded, so a later correction is not projected back`,
+  ];
+
+  // The current view is a second, separate answer from the same read. It is never merged into
+  // the historical one: a correction recorded later belongs to "now", not to "then".
+  let currentTarget = null;
+  if (targetType === 'memory') currentTarget = await memoryTraceTarget(ctx, targetId);
+  else if (targetType === 'knowledge') currentTarget = await knowledgeTraceTarget(ctx, targetId);
+  const currentCitations = currentTarget !== null
+    ? statementsCiting(replay.current, { sourceType: targetType, sourceId: targetId, at: nowIso, limit })
+    : null;
+  const currentRefs = TRACE_WORLD_TYPES.has(targetType)
+    ? await traceReferenceStates(ctx, store, replay.current, targetType, targetId)
+    : null;
+  const currentTrace = traceBelief(replay.current, {
+    targetType,
+    targetId,
+    targetState: currentTarget,
+    at: nowIso,
+    limit,
+    citations: currentCitations,
+    referenceStates: currentRefs,
+  });
+  trace.current = {
+    cutoff: nowIso,
+    found: currentTrace.target.found,
+    status: currentTrace.target.status,
+    disposition: currentTrace.disposition.state,
+    reason: currentTrace.disposition.reason,
+  };
+
+  const relevantIds = new Set([targetId]);
+  for (const row of trace.citations.rows) relevantIds.add(row.id);
+  for (const row of currentTrace.citations.rows) relevantIds.add(row.id);
+  const later = replay.later === null
+    ? { from: replay.cutoff, to: nowIso, changes: [], total: 0, truncated: false, problem: null }
+    : relevantChanges(replay.later, [...relevantIds]);
+  trace.laterChanges = later;
+  later.note = later.problem
+    ? later.problem
+    : replay.later === null
+      ? 'the cutoff is at or after the current time, so no change is recorded later than it'
+      : `${later.total} change(s) recorded after the cutoff touch this record or its citations`;
+  return trace;
 }
 
 function traceData(trace) {
@@ -538,6 +675,9 @@ function traceData(trace) {
     target: `${trace.target.type}:${trace.target.id}`,
     found: trace.target.found,
     status: trace.target.status,
+    recordedAt: trace.target.recordedAt ?? null,
+    validity: trace.target.validity ?? null,
+    mode: trace.asOf ? 'historical' : 'current',
     disposition: trace.disposition.state,
     citations: trace.citations.rows.map((row) => `${row.targetType}:${row.id}:${row.relations.join('+')}:${row.status}`),
     citationTotal: trace.citations.total,
@@ -546,6 +686,18 @@ function traceData(trace) {
     evidenceTotal: trace.evidence.total,
     unavailable: trace.references.unavailable,
     complete: trace.complete,
+    asOf: trace.asOf ?? null,
+    current: trace.current ?? null,
+    laterChanges: trace.laterChanges
+      ? {
+        from: trace.laterChanges.from,
+        to: trace.laterChanges.to,
+        changes: trace.laterChanges.changes.map((change) => `${change.at}|${change.kind}|${change.id ?? ''}`),
+        total: trace.laterChanges.total,
+        truncated: trace.laterChanges.truncated,
+        note: trace.laterChanges.note ?? null,
+      }
+      : null,
     authorizes: false,
   };
 }
@@ -1566,8 +1718,8 @@ export function worldModelActions(store) {
 
     readAction(
       'world.belief.trace',
-      'Trace one stored record across stores. A world statement lists the records that support or contradict it, the same-store disagreements it belongs to, and whether each cited record is still current. A memory or knowledge record lists the world statements that cite it and whether they support it, contradict it, or merely qualify it. Read-only; it decides nothing and authorizes nothing.',
-      '{"targetType":"memory|knowledge|fact|relationship|event","target":"record id","at":"optional ISO date or time","limit":"optional 1-100 citation bound"}',
+      'Trace one stored record across stores. A world statement lists the records that support or contradict it, the same-store disagreements it belongs to, and whether each cited record is still current. A memory or knowledge record lists the world statements that cite it and whether they support it, contradict it, or merely qualify it. With `at`, the trace replays only records stored at or before that cutoff, reconstructs what the record and its evidence meant then, and reports the current standing and later changes separately instead of projecting them into the past. Read-only; it decides nothing and authorizes nothing.',
+      '{"targetType":"memory|knowledge|fact|relationship|event","target":"record id","at":"optional ISO historical cutoff; only records stored at or before it are replayed","limit":"optional 1-100 citation bound"}',
       (input) => {
         const o = expectObject(input, ['targetType', 'target', 'at', 'limit']);
         return {
@@ -1586,7 +1738,15 @@ export function worldModelActions(store) {
       },
       async (ctx, input, result) => {
         const fresh = traceData(await runBeliefTrace(ctx, store, input));
-        if (JSON.stringify(fresh) !== JSON.stringify(result.data)) {
+        // Two reads happen at two instants. The instant of the "current" view and the end of the
+        // later window are read times, not readings: masking only those keeps the confirmation
+        // about the replayed records, their evidence, and the current standing derived from them.
+        const readings = (data) => ({
+          ...data,
+          current: data.current === null ? null : { ...data.current, cutoff: null },
+          laterChanges: data.laterChanges === null ? null : { ...data.laterChanges, to: null },
+        });
+        if (JSON.stringify(readings(fresh)) !== JSON.stringify(readings(result.data))) {
           return { ok: false, detail: 'a second trace reached a different reading' };
         }
         return { ok: true, detail: `${fresh.citations.length} citation(s) and ${fresh.evidence.length} evidence reference(s) confirmed` };
@@ -1627,7 +1787,7 @@ export function worldModelActions(store) {
 
     readAction(
       'world.state_at',
-      'Reconstruct the world as it was stored at or before a given instant. Later retractions, supersessions, and merges are not applied. Read-only.',
+      'Reconstruct the world as it was stored at or before a given instant, including which facts, relationships, and events were in force then, which were recorded but not yet valid, which had expired, and what evidence each rested on. Later retractions, supersessions, corrections, and merges are not applied. Read-only.',
       '{"at":"ISO date or time"}',
       (input) => {
         const o = expectObject(input, ['at']);
@@ -1637,8 +1797,9 @@ export function worldModelActions(store) {
       },
       async (_ctx, { at }) => {
         const result = await store.stateAt(at);
+        const belief = result.belief ?? null;
         return {
-          summary: `historical state at ${result.cutoff}: ${result.state.entities.size} entity record(s), ${result.state.facts.size} fact(s), ${result.state.relationships.size} relationship(s), ${result.state.events.size} event(s)`,
+          summary: `historical state at ${result.cutoff}: ${result.state.entities.size} entity record(s), ${result.state.facts.size} fact(s), ${result.state.relationships.size} relationship(s), ${result.state.events.size} event(s); ${belief?.counts?.believed ?? 0} statement(s) in force`,
           data: {
             cutoff: result.cutoff,
             records: result.records,
@@ -1649,6 +1810,12 @@ export function worldModelActions(store) {
               facts: result.state.facts.size,
               relationships: result.state.relationships.size,
               events: result.state.events.size,
+            },
+            belief: belief === null ? null : {
+              statements: belief.statements.map((row) => `${row.targetType}:${row.id}:${row.status}:${row.validity}`),
+              counts: belief.counts,
+              truncated: belief.truncated,
+              note: belief.note,
             },
           },
           display: renderStateAt(result),
@@ -1665,7 +1832,18 @@ export function worldModelActions(store) {
           || fresh.state.events.size !== result.data.counts.events) {
           return { ok: false, detail: 'a second replay derived different counts' };
         }
-        return { ok: true, detail: `historical state confirmed from ${fresh.records} record(s); ${fresh.excluded} later record(s) excluded` };
+        const belief = result.data.belief;
+        if (belief !== null) {
+          const statements = (fresh.belief?.statements ?? [])
+            .map((row) => `${row.targetType}:${row.id}:${row.status}:${row.validity}`);
+          if (!sameList(statements, belief.statements)) {
+            return { ok: false, detail: 'a second replay reached a different belief reconstruction' };
+          }
+          if (JSON.stringify(fresh.belief?.counts ?? null) !== JSON.stringify(belief.counts)) {
+            return { ok: false, detail: 'a second replay derived different belief counts' };
+          }
+        }
+        return { ok: true, detail: `historical state confirmed from ${fresh.records} record(s); ${fresh.excluded} later record(s) excluded; ${fresh.belief?.counts?.believed ?? 0} statement(s) in force` };
       },
     ),
 

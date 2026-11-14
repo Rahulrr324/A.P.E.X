@@ -343,6 +343,11 @@ export function renderBeliefTrace(result) {
   if (!target.found) lines.push('  this record is not in its store');
   else lines.push(`  stored status: ${target.status}`);
   if (target.detail) lines.push(`  ${storedText(target.detail)}`);
+  if (target.recordedAt) lines.push(`  recorded at: ${dateText(target.recordedAt)}`);
+  if (target.validity) lines.push(`  validity at the trace time: ${target.validity}`);
+  if (result.asOf) {
+    lines.push(`  historical cutoff: ${result.asOf.cutoff}  (${result.asOf.records} record(s) replayed, ${result.asOf.excluded} later record(s) excluded)`);
+  }
   lines.push(`  disposition: ${result.disposition.state} - ${storedText(result.disposition.reason)}`);
 
   const sameStore = result.sameStore;
@@ -374,11 +379,15 @@ export function renderBeliefTrace(result) {
         ? 'UNREADABLE'
         : ref.check === 'no-store'
           ? 'NO STORE'
-          : ref.missing
-            ? 'MISSING'
-            : ref.stale
-              ? `NOT CURRENT${ref.state ? `: ${ref.state}` : ''}`
-              : ref.check === 'ok' ? 'current' : 'not checked';
+          : ref.check === 'as_of_unavailable'
+            ? 'NOT AVAILABLE AT CUTOFF'
+            : ref.asOfMissing
+              ? 'NOT YET RECORDED'
+              : ref.missing
+                ? 'MISSING'
+                : ref.stale
+                  ? `NOT CURRENT${ref.state ? `: ${ref.state}` : ''}`
+                  : ref.check === 'ok' ? 'current' : 'not checked';
       lines.push(`  ${ref.sourceType}:${ref.sourceId}  ${ref.relation}  [${state}]${ref.detail ? `  ${storedText(ref.detail)}` : ''}`);
       lines.push(`      cited by ${ref.from.join(', ') || 'no stored statement'}`);
     }
@@ -404,6 +413,21 @@ export function renderBeliefTrace(result) {
     if (result.citations.truncated) lines.push(`  Showing ${result.citations.rows.length} of ${result.citations.total}.`);
   } else if (target.type === 'memory' || target.type === 'knowledge') {
     lines.push('', 'No world statement cites this record.');
+  }
+
+  if (result.current) {
+    lines.push('', `Current standing at ${result.current.cutoff}: ${result.current.disposition} - ${storedText(result.current.reason)}`);
+    lines.push(`  stored status now: ${result.current.status}${result.current.found ? '' : ' (not present now)'}`);
+  }
+
+  if (result.laterChanges) {
+    lines.push('', `Changes recorded after the cutoff (${result.laterChanges.total}):`);
+    if (result.laterChanges.total === 0) lines.push('  none touch this record or its citations');
+    for (const change of result.laterChanges.changes) {
+      lines.push(`  ${dateText(change.at)}  ${change.kind}  ${change.id ? shortId(change.id) : ''}  ${storedText(change.detail)}`);
+    }
+    if (result.laterChanges.truncated) lines.push(`  Showing ${result.laterChanges.changes.length} of ${result.laterChanges.total}.`);
+    if (result.laterChanges.note) lines.push(`  note: ${storedText(result.laterChanges.note)}`);
   }
 
   for (const note of result.notes ?? []) lines.push(`  note: ${storedText(note)}`);
@@ -432,7 +456,25 @@ export function renderStateAt(result) {
   if (result.problems.length) {
     lines.push(`${result.problems.length} record(s) stored at or before that time could not be applied; the state is incomplete.`);
   }
-  lines.push('Later retractions, supersessions, and merges are not included in this view.');
+  const belief = result.belief;
+  if (belief?.problem) {
+    lines.push(`Belief reconstruction: ${belief.problem}`);
+  } else if (belief) {
+    const c = belief.counts;
+    lines.push('', `Reconstructed beliefs: ${c.believed} in force then; ${c.notYetValid} not yet valid; ${c.notYetOccurred} not yet occurred; ${c.expired} expired; ${c.retracted} retracted; ${c.superseded} superseded; ${c.validityUnknown + c.timingUnknown} without a usable time.`);
+    const shown = belief.statements.filter((row) => row.believed).slice(0, 10);
+    if (shown.length === 0) lines.push('  no statement was in force at that time');
+    for (const row of shown) {
+      const when = row.validFrom !== null
+        ? `valid ${dateText(row.validFrom)} to ${dateText(row.validUntil ?? 'open')}`
+        : row.occurredAt !== null ? `occurred ${dateText(row.occurredAt)}` : 'no valid time recorded';
+      lines.push(`  ${row.targetType} ${shortId(row.id)}  [${row.status}]  ${storedText(row.label)}  ${when}  recorded ${dateText(row.recordedAt)}`);
+      lines.push(`      ${evidenceLine(row.evidence)}`);
+    }
+    if (belief.counts.believed > shown.length) lines.push(`  Showing ${shown.length} of ${belief.counts.believed} statement(s) in force; the listing is bounded.`);
+    if (belief.truncated) lines.push(`  The stored listing was cut at ${belief.statements.length}; counts cover the whole replayed state.`);
+  }
+  lines.push('Later retractions, supersessions, corrections, and merges are not included in this view; they appear only under the current state.');
   return lines.join('\n');
 }
 
