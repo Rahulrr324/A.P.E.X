@@ -3571,7 +3571,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 90 registered actions declare both `validate()` and `verify()` - 92 with a
+- **Verification.** All 92 registered actions declare both `validate()` and `verify()` - 94 with a
   filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
@@ -3619,7 +3619,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `calc.evaluate` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `world.state` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
 | `world.entity.add`, `world.entity.alias`, `world.entity.retire`, `world.entity.merge`, `world.entity.unmerge`, `world.identity.decide`, `world.fact.add`, `world.relationship.add`, `world.event.add`, `world.statement.retract`, `world.statement.supersede` | user | write | never in a plan | `world-model.jsonl` (append-only; each record names its evidence) | no (world-model) | yes |
-| `world.entity.list`, `world.entity.show`, `world.entity.find`, `world.facts`, `world.attributes`, `world.relationships`, `world.events`, `world.conflicts`, `world.related`, `world.history`, `world.statement.history`, `world.identity.candidates`, `world.identity.decision`, `world.pair`, `world.evidence`, `world.changes`, `world.state_at`, `world.inspect`, `world.status` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
+| `world.entity.list`, `world.entity.show`, `world.entity.find`, `world.facts`, `world.attributes`, `world.relationships`, `world.events`, `world.conflicts`, `world.related`, `world.history`, `world.statement.history`, `world.identity.candidates`, `world.identity.decision`, `world.pair`, `world.evidence`, `world.belief.trace`, `world.changes`, `world.state_at`, `world.inspect`, `world.status` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
 | `filesystem.list`, `filesystem.read` | user | read | never offered to a model plan | nothing (measured) | no (filesystem) | no |
 | `goal.add`, `goal.revise`, `goal.confirm`, `goal.update`, `goal.evidence`, `goal.complete`, `goal.link` | user | write | never in a plan | `goals.jsonl` (and `operations.jsonl`; a revision resets criterion evidence, completion re-checks the audit log) | no (executive) | yes |
 | `goal.list`, `goal.show` | user | read | - | nothing (measured) | no (read) | no |
@@ -3648,17 +3648,20 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
 
 `filesystem.list` and `filesystem.read` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
-configured; there is no default root, and a model proposal cannot supply one, so the count is 90
-registered actions by default and 92 with a root. Batch AG added ten user-origin write actions
+configured; there is no default root, and a model proposal cannot supply one, so the count is 92
+registered actions by default and 94 with a root. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
 two more user-origin writes (`goal.confirm`, the user's own decision about a success criterion APEX
 inferred, and `plan.assess`, which records the outcome assessment APEX derives from its own records) and
 three reads (`plan.candidates`, `plan.replan`, `plan.outcome`: the candidate set a goal supports, the
 comparison of it, and what a plan's execution established and left open - all read-only, and none of
-them recording or approving anything). No World Model write is
-plannable and every World Model read is user-origin, so the planning prompt offers exactly 20 reads to
-a model origin and 43 actions to a user origin with a root configured (41 without one).
+them recording or approving anything). Batch AP-14 added one more World Model read
+(`world.belief.trace`: which stored records a claim rests on, which contradict it, and which world
+statements cite a memory or knowledge record - descriptive only, and it authorizes nothing). No World
+Model write is plannable and every World Model read is user-origin, so the planning prompt offers
+exactly 20 reads to a model origin and 44 actions to a user origin with a root configured (42 without
+one).
 
 ### The inconsistencies this found, and what became of them
 
@@ -4109,6 +4112,7 @@ node bin/apex.js world event add --type <event-type> --participant <entity> [--a
 node bin/apex.js world statement retract|supersede <id> --target-type fact|relationship|event --reason <text> [--by <replacement-id>]
 node bin/apex.js world fact list <entity>|attribute list <entity>|relationship list <entity>|event list <entity>
 node bin/apex.js world history <entity>|related <entity>|evidence <entity>|conflicts [<entity>]|statement history <id> --target-type fact|relationship|event
+node bin/apex.js world trace memory|knowledge|fact|relationship|event <id> [--at <iso>] [--limit <1-100>]
 node bin/apex.js world changes --from <iso> --to <iso>|state-at --at <iso>|inspect|health|lock
 ```
 
@@ -4638,7 +4642,9 @@ prove that a statement is true, only that it is supported, contradicted, outdate
 unknown with respect to the records it read. There is no chain-of-thought capture and no attempt
 to model one. The roadmap's stage 4 is advanced on the request path, not closed: explicit
 confidence on stored beliefs, retrieval that is cheaper than a full store scan, and contradiction
-handling beyond the World Model's own conflict semantics remain open.
+detection beyond the World Model's own declared-predicate semantics remain open. Batch AP-14 later
+made the support and contradiction citations traceable across the memory, knowledge and world
+stores; it did not add a confidence value or a semantic conflict detector.
 
 ## Batch AK: the executive bridge - safe action orchestration and verified execution (as implemented)
 
@@ -7273,6 +7279,58 @@ assembled application: start → review substitution with plan bytes and approva
 readiness answer, withdrawal, a corrected experience, a matched verdict, a restart, a corrupt ledger,
 a denied model-origin write, and the two write-nothing claims.
 
+## Batch AP-14: cross-store belief tracing (as implemented)
+
+The World Model already stored, with every fact, relationship and event, the memory and knowledge
+records its evidence cites. Until this batch nothing could answer the reverse question: which world
+statements were built from a given memory or knowledge record, and whether that record is still
+current in the store that owns it. The first clause of the roadmap's stage 4 acceptance - *a stored
+belief can be traced to the records supporting and contradicting it* - was therefore only satisfied
+inside one store. AP-14 adds the crossing without a new store, a schema change or a model call.
+
+**Where it lives.**
+
+| File | Responsibility |
+|---|---|
+| `src/world/query.js` | `buildCitationIndex()` scans the reduced world state once and maps each evidence reference back to the statements that carry it; `statementsCiting()` returns a bounded window (100) for one record. Both derive from the stored evidence relation, not from text similarity. |
+| `src/world/belief-trace.js` | The pure trace: one shape for a world statement (its evidence references, each one checked in its owning store, plus the same-store disagreement it belongs to) and one for a cited record (the world statements that cite it, live and historical, with their relations). Always `authorizes: false`; nothing is decided or written. |
+| `src/memory/memory-store.js` | `traceMany(ids)` - one fail-closed read answers every referenced memory id and reports its lifecycle (`stored`, `user_confirmed`, `model_proposed`, `superseded`, `unresolved_conflict`) and the store's heuristic conflict group. A damaged store refuses the trace; it is never reported as an empty one. |
+| `src/actions/world-model-actions.js` | The `world.belief.trace` read action (input validation, independent verifier and plain-text rendering) and the per-reference store checks. |
+| `src/world/format.js` | `renderBeliefTrace()`: status, disposition, owning-store lifecycle, evidence references with `[current]`, `[NOT CURRENT: state]`, `[MISSING]`, `[UNREADABLE]`, same-store disagreements, citing statements, and the closing line that a trace decides nothing. |
+| `src/cognition/evidence.js` | `linkCrossStoreCitations()`: when a live world statement cites a memory or knowledge record with the stored relation `contradicts`, the statement enters retrieval as evidence with a reciprocal `relationships.contradicts`. Supports, qualifications and retracted statements create no link; an unreadable memory store contributes none. |
+
+**One trace, both directions.** `world trace memory <id>` names every world statement that cites the
+record and what each one says about it; `world trace fact <id>` names every memory and knowledge
+record the fact cites and whether each is still current. A corrected memory record keeps the citation
+and is reported as `NOT CURRENT: superseded`; the citing fact then reads as `stale_evidence` rather
+than as fresh support. A record the world cites but the owning store no longer holds is `unknown` -
+the citation and the absence disagree, and neither is assumed right. A record that is only cited by
+retracted or superseded statements is `historical`, not current support.
+
+**Why the cognition link is conservative.** The link is made only from the relation the world record
+already stores, only while that statement is live, and only in both directions. A one-sided
+disagreement is never presented: if the citing statement cannot be added, both sides are skipped. The
+retrieved evidence is then normalized exactly like any other record, so claim extraction marks the
+memory and world claims `contradicted` and links them symmetrically; deliberation and response
+validation see the disagreement without either side being preferred. The link adds no confidence and
+changes no verdict.
+
+**What it does not do.** It does not detect a contradiction that no stored record already asserts; it
+does not decide which side is right; it does not replace the memory store's heuristic same-store
+conflict grouping with a semantic one; and it does not make a model-proposed memory user-confirmed.
+The trace is a bounded read (100 citations, 100 evidence references) and a trace action changes no
+store file - pinned by measurement in `tests/capability-inventory.test.js`.
+
+**Tests.** `tests/belief-trace.test.js` (18 tests) exercises the real controller, the real stores and
+a separate CLI process: normal support in both directions, a live contradiction kept for both sides,
+same-store disagreement, a missing record versus an inconsistent citation, a corrected record read as
+stale evidence, an unreadable memory store, a damaged world log, a second application instance seeing
+new citations, repeated traces that write nothing and stay identical, the citation bound and its
+disclosure, a model-proposed record that a citation does not confirm, retraction followed by recovery,
+secret masking in the display, an unsupported type, the cognition link (contradiction only, both
+directions; supports/qualifies/retracted and an unreadable memory add none), and the CLI contract.
+No test contacts a model; nothing here is evidence about a real model's behaviour.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 
@@ -7280,10 +7338,10 @@ This is a plan, not a status report. **No stage below is closed.** Five of the e
 a partial implementation and the notes name both the clause each batch advanced and the
 remainder that keeps the stage open: stage 2's read-only projection, stage 3's
 event-with-time clause for the experience log (Batches AC and AD), stage 4's
-contradiction-surfacing clause (Batch X), stage 5's feedback-to-surface path (Batches Z,
-AA and AB), and stage 6's expectation ledger, outcome capture and classification (Batch
-AE) plus one bounded read of a wrong expectation by the continuation recommendation
-(Batch AP-13). Each stage names the dependency it satisfies and the evidence that would demonstrate
+contradiction-surfacing clause (Batch X) and its cross-store evidence trace (Batch AP-14),
+stage 5's feedback-to-surface path (Batches Z, AA and AB), and stage 6's expectation ledger,
+outcome capture and classification (Batch AE) plus one bounded read of a wrong expectation by
+the continuation recommendation (Batch AP-13). Each stage names the dependency it satisfies and the evidence that would demonstrate
 completion, so a later batch cannot claim progress by adding vocabulary.
 
 1. **Foundational infrastructure (done, keep).** Append-only stores, provenance,
@@ -7331,8 +7389,23 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    surfaced to the model as a bounded, counts-only view of the whole store, alongside the
    explicit unknowns and the completeness of the read. Batch AE did not add the confidence
    clause either: every prediction record carries `confidence: null` by design, because no
-   defensible method for supplying one exists in this build. Entity-linked evidence traces,
-   and non-heuristic contradiction detection still depend on stage 3 and are not implemented.
+   defensible method for supplying one exists in this build.
+   Batch AP-14 advanced the first clause: `world trace` now answers, in both directions, which
+   memory and knowledge records a world statement cites and which world statements cite a
+   memory or knowledge record, with the owning store's current lifecycle beside each reference.
+   A live stored contradiction is also surfaced inside retrieval as a symmetric claim link, so
+   the disagreement reaches deliberation without either side being preferred. The trace derives
+   from evidence relations already stored and adds no schema. The clause is not closed for the
+   whole system: no trace yet crosses from an experience, prediction, goal or plan record into
+   the world statements derived from it, and there is still no explicit confidence value to
+   trace. An inference keeps its own claim kind through retrieval, which the cognition layer
+   already labels; that clause was not changed here.
+   The third clause is advanced for stored citations by Batch X and AP-14 - a conflict the
+   retrieval ranking would hide is surfaced, and a cross-store contradiction is named on both
+   claims. Non-heuristic contradiction detection remains the stage 3 dependency named here: the
+   World Model detects only declared single-valued predicates with overlapping validity and
+   duplicate trusted external identifiers, while memory disagreements remain a clause heuristic
+   and are labelled as such wherever they are shown.
 5. **Learning and adaptation.** Updates driven by user feedback and verified outcomes,
    under the existing trust boundary: model output cannot authorize a write, and no
    inference is promoted to a fact without evidence. Depends on 4. Acceptance: a bounded

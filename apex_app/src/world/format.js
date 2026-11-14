@@ -337,6 +337,80 @@ export function renderEvidence(result) {
   return lines.join('\n');
 }
 
+export function renderBeliefTrace(result) {
+  const target = result?.target ?? {};
+  const lines = [`Belief trace for ${target.type ?? 'record'} ${target.id ? shortId(target.id) : ''}${target.label ? `  ${storedText(target.label)}` : ''}`];
+  if (!target.found) lines.push('  this record is not in its store');
+  else lines.push(`  stored status: ${target.status}`);
+  if (target.detail) lines.push(`  ${storedText(target.detail)}`);
+  lines.push(`  disposition: ${result.disposition.state} - ${storedText(result.disposition.reason)}`);
+
+  const sameStore = result.sameStore;
+  if (sameStore) {
+    lines.push('', 'Owning store:');
+    if (sameStore.status !== undefined) {
+      const replaced = (sameStore.replacedBy ?? []).length ? `  replaced by ${sameStore.replacedBy.map(shortId).join(', ')}` : '';
+      lines.push(`  status ${sameStore.status}${replaced}`);
+      if (sameStore.conflict) {
+        lines.push(`  possible conflict on "${storedText(sameStore.conflict.subject)}" with ${sameStore.conflict.recordIds.map(shortId).join(', ')}; values ${sameStore.conflict.values.map(storedText).join(' | ')}`);
+      }
+    } else {
+      const conflicts = (sameStore.conflictsWith ?? []).length
+        ? `  conflicts with ${sameStore.conflictsWith.map(shortId).join(', ')}${sameStore.conflictState ? ` (${sameStore.conflictState})` : ''}`
+        : '';
+      lines.push(`  lifecycle ${sameStore.lifecycleState ?? 'unknown'}${conflicts}`);
+      if (sameStore.resolution) {
+        lines.push(`  resolution: ${sameStore.resolution.chosen ? 'this record was chosen' : 'this record was not chosen'}${sameStore.resolution.reason ? ` - ${storedText(sameStore.resolution.reason)}` : ''}`);
+      }
+      if (sameStore.retractedBy) lines.push(`  retracted by ${shortId(sameStore.retractedBy)}`);
+      if ((sameStore.problems ?? []).length) lines.push(`  history problems: ${sameStore.problems.length}`);
+    }
+  }
+
+  if (result.evidence.refs.length) {
+    lines.push('', `Evidence references (${result.evidence.refs.length}):`);
+    for (const ref of result.evidence.refs) {
+      const state = ref.check === 'unavailable'
+        ? 'UNREADABLE'
+        : ref.check === 'no-store'
+          ? 'NO STORE'
+          : ref.missing
+            ? 'MISSING'
+            : ref.stale
+              ? `NOT CURRENT${ref.state ? `: ${ref.state}` : ''}`
+              : ref.check === 'ok' ? 'current' : 'not checked';
+      lines.push(`  ${ref.sourceType}:${ref.sourceId}  ${ref.relation}  [${state}]${ref.detail ? `  ${storedText(ref.detail)}` : ''}`);
+      lines.push(`      cited by ${ref.from.join(', ') || 'no stored statement'}`);
+    }
+    if (result.evidence.truncated) lines.push(`  Showing ${result.evidence.refs.length} of ${result.evidence.total}.`);
+  }
+
+  if (result.conflicts.length) {
+    lines.push('', `Same-store disagreements (${result.conflicts.length}):`);
+    for (const group of result.conflicts) {
+      lines.push(`  ${group.kind} ${group.predicate ?? ''}  [${group.state}]  members ${group.memberIds.map(shortId).join(', ')}  ${storedText(group.reason)}`);
+    }
+  }
+
+  if (result.citations.rows.length) {
+    lines.push('', `World statements citing this record (${result.citations.total}):`);
+    for (const row of result.citations.rows) {
+      const when = row.validFrom
+        ? `valid ${dateText(row.validFrom)} to ${dateText(row.validUntil ?? 'open')}`
+        : row.occurredAt ? `occurred ${dateText(row.occurredAt)}` : null;
+      lines.push(`  ${row.targetType} ${shortId(row.id)}  [${row.status}]  ${row.relations.join('+')}  ${storedText(row.label ?? '')}`);
+      lines.push(`      ${when ? `${when}  ` : ''}${evidenceLine(row.evidence)}`);
+    }
+    if (result.citations.truncated) lines.push(`  Showing ${result.citations.rows.length} of ${result.citations.total}.`);
+  } else if (target.type === 'memory' || target.type === 'knowledge') {
+    lines.push('', 'No world statement cites this record.');
+  }
+
+  for (const note of result.notes ?? []) lines.push(`  note: ${storedText(note)}`);
+  lines.push('', 'A trace is descriptive: it keeps both sides, decides nothing, and authorizes no action.');
+  return lines.join('\n');
+}
+
 export function renderChanges(result) {
   if (result.problem) return `Cannot compare: ${result.problem}`;
   const lines = [`Changes between ${result.from} and ${result.to}:`];

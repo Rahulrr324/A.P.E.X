@@ -556,6 +556,119 @@ export function evidenceFor(state, { entityId = null, targetType = null, targetI
   return { refs: rows, targets, bySourceType, problem: null };
 }
 
+// ---- cross-store citations --------------------------------------------------
+
+export const MAX_CITATION_REFS = 100;
+
+function entityCitationStatus(entity) {
+  if (entity.status === 'active') return 'supported';
+  if (entity.status === 'merged') return 'superseded';
+  if (entity.status === 'retired') return 'retracted';
+  return String(entity.status ?? 'unknown');
+}
+
+function citationRow(state, targetType, statement, { at, conflicts, relation }) {
+  let status;
+  let label;
+  let subjectId = null;
+  let predicate = null;
+  if (targetType === 'entity') {
+    status = entityCitationStatus(statement);
+    label = statement.name;
+    subjectId = statement.id;
+  } else if (targetType === 'fact') {
+    const objectName = statement.object.kind === 'entity' ? entityName(state, statement.object.entityId) : null;
+    status = statementStatus(state, 'fact', statement.id, { at, conflicts });
+    subjectId = canonicalId(state, statement.subjectId) ?? statement.subjectId;
+    predicate = statement.predicate;
+    label = `${entityName(state, statement.subjectId)} ${statement.predicate} ${objectLabel(statement.object, objectName)}`;
+  } else if (targetType === 'relationship') {
+    status = statementStatus(state, 'relationship', statement.id, { at, conflicts });
+    subjectId = canonicalId(state, statement.subjectId) ?? statement.subjectId;
+    predicate = statement.predicate;
+    label = `${entityName(state, statement.subjectId)} ${statement.predicate} ${entityName(state, statement.objectId)}`;
+  } else {
+    status = statementStatus(state, 'event', statement.id, { at, conflicts });
+    label = statement.eventType;
+  }
+  return {
+    targetType,
+    id: statement.id,
+    label,
+    subjectId,
+    subjectName: subjectId === null ? null : entityName(state, subjectId),
+    predicate,
+    relation,
+    relations: [relation],
+    status,
+    live: status === 'supported' || status === 'contested' || status === 'conflicting',
+    validFrom: statement.validFrom ?? null,
+    validUntil: statement.validUntil ?? null,
+    occurredAt: statement.occurredAt ?? null,
+    recordedAt: statement.recordedAt ?? null,
+    evidence: evidenceIds(statement.evidence),
+  };
+}
+
+// The reverse of evidenceFor: every world record whose stored evidence names one external record
+// (a memory or knowledge id, or any other configured source). The index is derived from the log,
+// so a citation is a stored fact about the world model rather than a guess from similar wording.
+// One index serves every lookup in a read; building it is the only whole-state scan.
+export function buildCitationIndex(state, { at = undefined, conflicts = null } = {}) {
+  const instant = atFor({ at });
+  const scopedConflicts = conflicts ?? computeConflicts(state, { now: instant });
+  const index = new Map();
+  const add = (targetType, statement) => {
+    for (const entry of statement.evidence ?? []) {
+      const key = `${entry.sourceType}\u0000${entry.sourceId}`;
+      if (!index.has(key)) index.set(key, []);
+      const list = index.get(key);
+      const existing = list.find((row) => row.targetType === targetType && row.id === statement.id);
+      if (existing) {
+        if (!existing.relations.includes(entry.relation)) {
+          existing.relations.push(entry.relation);
+          existing.relations.sort(cmpStr);
+        }
+        continue;
+      }
+      list.push(citationRow(state, targetType, statement, { at: instant, conflicts: scopedConflicts, relation: entry.relation }));
+    }
+  };
+  for (const entity of state.entities.values()) add('entity', entity);
+  for (const fact of state.facts.values()) add('fact', fact);
+  for (const relationship of state.relationships.values()) add('relationship', relationship);
+  for (const event of state.events.values()) add('event', event);
+  for (const list of index.values()) {
+    list.sort((a, b) => cmpStr(a.targetType, b.targetType) || cmpStr(a.id, b.id));
+  }
+  return index;
+}
+
+// Rows are ordered live statements first, then by target type and id, so a bounded answer keeps
+// the citations that could still change a belief and reports how many it omitted.
+export function statementsCiting(state, {
+  sourceType,
+  sourceId,
+  at = undefined,
+  conflicts = null,
+  limit = null,
+  index = null,
+} = {}) {
+  const instant = atFor({ at });
+  const citationIndex = index ?? buildCitationIndex(state, { at: instant, conflicts });
+  const rows = [...(citationIndex.get(`${sourceType}\u0000${sourceId}`) ?? [])]
+    .sort((a, b) => (a.live === b.live ? 0 : a.live ? -1 : 1)
+      || cmpStr(a.targetType, b.targetType) || cmpStr(a.id, b.id));
+  const bounded = Number.isInteger(limit) && limit > 0
+    ? Math.min(limit, MAX_CITATION_REFS) : rows.length;
+  return {
+    rows: rows.slice(0, bounded),
+    total: rows.length,
+    truncated: rows.length > bounded,
+    problem: null,
+  };
+}
+
 // ---- temporal ---------------------------------------------------------------
 
 // Replays only the records stored at or before `knownAt`. This is the prior-belief view: a

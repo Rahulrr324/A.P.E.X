@@ -352,6 +352,86 @@ function conflictsFor(state, entityId, conflicts) {
   }));
 }
 
+// A memory or knowledge record is not a world statement, so the World Model's own conflict analysis
+// cannot see a disagreement recorded on the world side. The world store does store which external
+// records each statement was built from, with the relation that was asserted. This reads that stored
+// relation, not a similarity between two texts: a live world statement that cites a retrieved record
+// as contradicting it becomes evidence against that record, and both sides are linked so the prompt
+// and the claim layer show a disagreement instead of one side. A withdrawn or superseded statement
+// is not linked; support links are not added, because a citation that agrees is not a contradiction.
+function linkCrossStoreCitations(state, conflicts, list, counters, sources, now) {
+  if (!state || !(state.entities instanceof Map)) return;
+  const cited = list.filter((item) => item.source === EvidenceSource.MEMORY
+    || item.source === EvidenceSource.KNOWLEDGE);
+  if (cited.length === 0) return;
+  const byTarget = new Map(cited.map((item) => [`${item.source}\u0000${item.recordId}`, item]));
+  const scopedConflicts = Array.isArray(conflicts) ? { groups: conflicts, contested: [], counts: {} } : conflicts;
+  let index;
+  try {
+    index = worldQuery.buildCitationIndex(state, { at: now, conflicts: scopedConflicts });
+  } catch (err) {
+    // The world read already ran. A citation index that cannot be built is a bounded failure of
+    // this link; it does not make the records that were read unavailable.
+    setSource(sources, EvidenceSource.WORLD_FACT, failureStatus(err), 0, err.message);
+    return;
+  }
+  const worldSource = (targetType) => (targetType === 'fact' ? EvidenceSource.WORLD_FACT
+    : targetType === 'relationship' ? EvidenceSource.WORLD_RELATIONSHIP
+      : EvidenceSource.WORLD_EVENT);
+  const added = new Map();
+  for (const [key, citations] of index) {
+    if (!key.startsWith('memory\u0000') && !key.startsWith('knowledge\u0000')) continue;
+    const record = byTarget.get(key);
+    if (!record) continue;
+    for (const citation of citations) {
+      if (!citation.live || !citation.relations.includes('contradicts')) continue;
+      if (citation.targetType === 'entity') continue;
+      const source = worldSource(citation.targetType);
+      const worldId = evidenceId(source, citation.id);
+      if (record.relationships.contradicts.includes(worldId)) continue;
+      const existing = list.find((item) => item.evidenceId === worldId);
+      if (existing) {
+        if (!existing.relationships.contradicts.includes(record.evidenceId)
+          && existing.relationships.contradicts.length < 12) {
+          existing.relationships.contradicts.push(record.evidenceId);
+        }
+      } else {
+        const entryId = addEvidence(list, counters, {
+          evidenceId: worldId,
+          source,
+          recordId: citation.id,
+          type: citation.targetType,
+          subject: citation.subjectId === null ? null : { entityId: citation.subjectId, name: citation.subjectName },
+          claim: `world ${citation.targetType}: ${citation.label} [${citation.status}] (stored evidence marks it as contradicting this record)`,
+          observedAt: citation.recordedAt,
+          validFrom: citation.validFrom,
+          validUntil: citation.validUntil,
+          recordedAt: citation.recordedAt,
+          provenance: { origin: null, operationId: null, updateMode: null },
+          status: worldFactStatus(citation.status),
+          current: citation.live,
+          retrievalReason: 'cross-store-citation',
+          contradicts: [record.evidenceId],
+        });
+        // A world side refused by the per-source bound is omitted evidence; linking only the
+        // record that survived would present a one-sided disagreement, so neither side is linked.
+        if (!entryId) continue;
+        added.set(source, (added.get(source) ?? 0) + 1);
+      }
+      if (!record.relationships.contradicts.includes(worldId)
+        && record.relationships.contradicts.length < 12) {
+        record.relationships.contradicts.push(worldId);
+      }
+    }
+  }
+  for (const [source, count] of added) {
+    const entry = sources.find((item) => item.source === source);
+    if (!entry) continue;
+    if (entry.status === SourceStatus.EMPTY || entry.status === SourceStatus.SKIPPED) entry.status = SourceStatus.OK;
+    entry.count += count;
+  }
+}
+
 function readMemory(hits, list, counters, sources) {
   if (!Array.isArray(hits)) {
     setSource(sources, EvidenceSource.MEMORY, SourceStatus.SKIPPED);
@@ -950,8 +1030,10 @@ export async function retrieveEvidence({
 
   const state = seeds.worldState ?? null;
   const conflictGroups = Array.isArray(worldConflicts) ? worldConflicts : (worldConflicts?.groups ?? []);
-  if (state) readWorld(state, worldConflicts, understanding, request, list, counters, sources, now);
-  else if (seeds.worldStateUnavailable) {
+  if (state) {
+    readWorld(state, worldConflicts, understanding, request, list, counters, sources, now);
+    linkCrossStoreCitations(state, worldConflicts, list, counters, sources, now);
+  } else if (seeds.worldStateUnavailable) {
     setSource(sources, EvidenceSource.WORLD_ENTITY, SourceStatus.UNAVAILABLE);
   }
 

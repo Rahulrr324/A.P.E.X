@@ -47,7 +47,18 @@ import {
   parseInstant,
   timeProblem,
 } from '../world/model.js';
-import { MAX_QUERY_LIMIT, MAX_RELATED_DEPTH, MAX_RELATED_NODES } from '../world/query.js';
+import {
+  MAX_QUERY_LIMIT,
+  MAX_RELATED_DEPTH,
+  MAX_RELATED_NODES,
+  evidenceFor,
+  statementsCiting,
+} from '../world/query.js';
+import {
+  MAX_TRACE_CITATIONS,
+  TRACE_TARGET_TYPES,
+  traceBelief,
+} from '../world/belief-trace.js';
 import {
   renderAttributes,
   renderCandidates,
@@ -65,6 +76,7 @@ import {
   renderHistory,
   renderIdentityDecision,
   renderIdentityDecisionRead,
+  renderBeliefTrace,
   renderInspect,
   renderMerge,
   renderPair,
@@ -342,6 +354,200 @@ function sameInstant(left, right) {
     return (left ?? null) === (right ?? null);
   }
   return parseInstant(left) === parseInstant(right);
+}
+
+const TRACE_WORLD_TYPES = new Set(['fact', 'relationship', 'event']);
+
+async function memoryTraceTarget(ctx, id) {
+  if (!ctx.memory || typeof ctx.memory.traceMany !== 'function') {
+    return { found: false, unavailable: true, detail: 'the memory store is not available in this configuration', complete: false };
+  }
+  try {
+    const rows = await ctx.memory.traceMany([id]);
+    const row = rows.get(id);
+    if (!row) return { found: false };
+    // The owning store's own lifecycle vocabulary is reported verbatim, so a superseded or
+    // model-proposed record is never displayed as a current belief.
+    const state = row.status === 'unresolved_conflict' ? 'conflicting' : row.status;
+    return {
+      found: true,
+      label: row.content,
+      state,
+      conflicted: row.conflict !== null,
+      complete: true,
+      sameStore: {
+        status: row.status,
+        replacedBy: [...row.replacedBy],
+        conflict: row.conflict,
+      },
+    };
+  } catch (err) {
+    return {
+      found: false,
+      unavailable: true,
+      detail: `the memory store could not be read: ${err?.message ?? String(err)}`,
+      complete: false,
+    };
+  }
+}
+
+async function knowledgeTraceTarget(ctx, id) {
+  if (!ctx.knowledge || typeof ctx.knowledge.history !== 'function') {
+    return { found: false, unavailable: true, detail: 'the knowledge store is not available in this configuration', complete: false };
+  }
+  try {
+    const history = await ctx.knowledge.history(id);
+    if (!history?.record) return { found: false };
+    const record = history.record;
+    return {
+      found: true,
+      label: `${record.subject} ${record.relationship} ${record.object}`,
+      state: record.lifecycleState ?? record.status ?? 'stored',
+      conflicted: (record.conflictsWith ?? []).length > 0,
+      complete: history.complete !== false,
+      sameStore: {
+        lifecycleState: record.lifecycleState ?? null,
+        conflictsWith: [...(record.conflictsWith ?? [])],
+        conflictState: record.conflictState ?? null,
+        resolution: record.resolution ?? null,
+        retractedBy: record.retractedBy ?? null,
+        supersededBy: [...(record.supersededBy ?? [])],
+        problems: [...(history.problems ?? [])],
+      },
+    };
+  } catch (err) {
+    return {
+      found: false,
+      unavailable: true,
+      detail: `the knowledge store could not be read: ${err?.message ?? String(err)}`,
+      complete: false,
+    };
+  }
+}
+
+// One batched read answers every memory and knowledge reference; only the remaining source types
+// go through the store's own adapter, once per distinct source. A store that cannot be read is
+// reported as unavailable for every reference it owns - never as "no such evidence".
+async function traceReferenceStates(ctx, store, state, targetType, targetId) {
+  const refs = evidenceFor(state, { targetType, targetId }).refs ?? [];
+  const states = new Map();
+  const memoryIds = [...new Set(refs.filter((ref) => ref.sourceType === 'memory').map((ref) => ref.sourceId))];
+  const knowledgeIds = [...new Set(refs.filter((ref) => ref.sourceType === 'knowledge').map((ref) => ref.sourceId))];
+  let memoryRows = null;
+  let knowledgeRows = null;
+  let memoryError = null;
+  let knowledgeError = null;
+  if (memoryIds.length > 0) {
+    try {
+      memoryRows = await ctx.memory.traceMany(memoryIds);
+    } catch (err) {
+      memoryError = err;
+    }
+  }
+  if (knowledgeIds.length > 0) {
+    try {
+      knowledgeRows = await ctx.knowledge.getMany(knowledgeIds);
+    } catch (err) {
+      knowledgeError = err;
+    }
+  }
+  for (const ref of refs) {
+    const key = `${ref.sourceType}:${ref.sourceId}`;
+    if (states.has(key)) continue;
+    if (ref.sourceType === 'user') {
+      states.set(key, {
+        check: 'ok', found: true, active: true, state: 'user_statement', classification: 'user_statement', detail: null,
+      });
+    } else if (ref.sourceType === 'memory') {
+      if (memoryError) {
+        states.set(key, {
+          check: 'unavailable', found: null, active: null, state: null, classification: null,
+          detail: `the memory store could not be read: ${memoryError?.message ?? String(memoryError)}`,
+        });
+      } else {
+        const row = memoryRows?.get(ref.sourceId);
+        if (!row) {
+          states.set(key, {
+            check: 'ok', found: false, active: false, state: null, classification: null,
+            detail: `memory:${ref.sourceId} does not exist in that store`,
+          });
+        } else {
+          const current = row.replacedBy.length === 0 && row.status !== 'superseded';
+          states.set(key, {
+            check: 'ok',
+            found: true,
+            active: current,
+            state: row.status,
+            classification: row.source === 'model' ? 'model_generated' : 'user_statement',
+            detail: row.replacedBy.length > 0 ? `superseded by ${row.replacedBy.map(shortId).join(', ')}` : null,
+          });
+        }
+      }
+    } else if (ref.sourceType === 'knowledge') {
+      if (knowledgeError) {
+        states.set(key, {
+          check: 'unavailable', found: null, active: null, state: null, classification: null,
+          detail: `the knowledge store could not be read: ${knowledgeError?.message ?? String(knowledgeError)}`,
+        });
+      } else {
+        const row = knowledgeRows?.get(ref.sourceId);
+        if (!row) {
+          states.set(key, {
+            check: 'ok', found: false, active: false, state: null, classification: null,
+            detail: `knowledge:${ref.sourceId} does not exist in that store`,
+          });
+        } else {
+          const lifecycle = row.lifecycleState ?? row.status ?? null;
+          states.set(key, {
+            check: 'ok',
+            found: true,
+            active: row.active === true,
+            state: lifecycle,
+            classification: row.provenance?.origin === 'model_proposed' ? 'model_generated' : 'recorded_claim',
+            detail: row.active === true ? null : `no longer current (${singleLine(lifecycle ?? 'not current', 40)})`,
+          });
+        }
+      }
+    } else {
+      states.set(key, await store.checkReference(ref));
+    }
+  }
+  return states;
+}
+
+async function runBeliefTrace(ctx, store, { targetType, targetId, at, limit }) {
+  const state = await store.state();
+  const instant = at ?? ctx.now().toISOString();
+  let targetState = null;
+  let citations = null;
+  if (targetType === 'memory') targetState = await memoryTraceTarget(ctx, targetId);
+  else if (targetType === 'knowledge') targetState = await knowledgeTraceTarget(ctx, targetId);
+  if (targetState !== null) {
+    citations = statementsCiting(state, { sourceType: targetType, sourceId: targetId, at: instant, limit });
+  }
+  const referenceStates = TRACE_WORLD_TYPES.has(targetType)
+    ? await traceReferenceStates(ctx, store, state, targetType, targetId)
+    : null;
+  return traceBelief(state, {
+    targetType, targetId, targetState, at: instant, limit, citations, referenceStates,
+  });
+}
+
+function traceData(trace) {
+  return {
+    target: `${trace.target.type}:${trace.target.id}`,
+    found: trace.target.found,
+    status: trace.target.status,
+    disposition: trace.disposition.state,
+    citations: trace.citations.rows.map((row) => `${row.targetType}:${row.id}:${row.relations.join('+')}:${row.status}`),
+    citationTotal: trace.citations.total,
+    citationTruncated: trace.citations.truncated,
+    evidence: trace.evidence.refs.map((ref) => `${ref.relation}:${ref.sourceType}:${ref.sourceId}:${ref.check}:${ref.found}:${ref.active}`),
+    evidenceTotal: trace.evidence.total,
+    unavailable: trace.references.unavailable,
+    complete: trace.complete,
+    authorizes: false,
+  };
 }
 
 export function worldModelActions(store) {
@@ -1355,6 +1561,35 @@ export function worldModelActions(store) {
         const refs = (fresh.refs ?? []).map((ref) => `${ref.relation}|${ref.sourceType}|${ref.sourceId}`);
         if (!sameList(refs, result.data.refs)) return { ok: false, detail: 'a second read found a different evidence set' };
         return { ok: true, detail: `${refs.length} evidence reference(s) confirmed` };
+      },
+    ),
+
+    readAction(
+      'world.belief.trace',
+      'Trace one stored record across stores. A world statement lists the records that support or contradict it, the same-store disagreements it belongs to, and whether each cited record is still current. A memory or knowledge record lists the world statements that cite it and whether they support it, contradict it, or merely qualify it. Read-only; it decides nothing and authorizes nothing.',
+      '{"targetType":"memory|knowledge|fact|relationship|event","target":"record id","at":"optional ISO date or time","limit":"optional 1-100 citation bound"}',
+      (input) => {
+        const o = expectObject(input, ['targetType', 'target', 'at', 'limit']);
+        return {
+          targetType: enumField(o.targetType, 'targetType', TRACE_TARGET_TYPES),
+          targetId: recordRef(o.target, 'target'),
+          at: timeField(o.at, 'at'),
+          limit: integerField(o.limit, 'limit', { fallback: MAX_TRACE_CITATIONS, min: 1, max: MAX_TRACE_CITATIONS }),
+        };
+      },
+      async (ctx, input) => {
+        const trace = await runBeliefTrace(ctx, store, input);
+        const parts = [`${trace.target.type} ${trace.target.id}: ${trace.disposition.state}`];
+        if (trace.citations.rows.length > 0) parts.push(`${trace.citations.rows.length} citing world statement(s)`);
+        if (trace.evidence.refs.length > 0) parts.push(`${trace.evidence.refs.length} evidence reference(s)`);
+        return { summary: parts.join('; '), data: traceData(trace), display: renderBeliefTrace(trace) };
+      },
+      async (ctx, input, result) => {
+        const fresh = traceData(await runBeliefTrace(ctx, store, input));
+        if (JSON.stringify(fresh) !== JSON.stringify(result.data)) {
+          return { ok: false, detail: 'a second trace reached a different reading' };
+        }
+        return { ok: true, detail: `${fresh.citations.length} citation(s) and ${fresh.evidence.length} evidence reference(s) confirmed` };
       },
     ),
 

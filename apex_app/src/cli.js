@@ -44,6 +44,7 @@ Usage:
   node bin/apex.js world statement retract|supersede <id> --target-type fact|relationship|event --reason <text> [--by <replacement-id>]
   node bin/apex.js world statement history <id> --target-type fact|relationship|event    (read-only)
   node bin/apex.js world history <entity>|related <entity> [--depth N] [--limit N]|evidence <entity>|conflicts [<entity>]   (read-only)
+  node bin/apex.js world trace <memory|knowledge|fact|relationship|event> <id> [--at <iso>] [--limit N]   (read-only; decides nothing)
   node bin/apex.js world changes --from <iso> --to <iso>|state-at --at <iso>|inspect|health|lock   (read-only)
   node bin/apex.js world entity|fact|relationship|event|statement writes are user-origin only; a model cannot write the world model
   node bin/apex.js history [--limit N]
@@ -1778,6 +1779,19 @@ export async function main(argv, {
         return await read('world.history', { target: refs[0] });
       }
 
+      if (sub === 'trace') {
+        const { flags, rest: refs } = parseFlags(rest, ['at', 'limit']);
+        if (refs.length !== 2) {
+          throw new ValidationError('usage: world trace <memory|knowledge|fact|relationship|event> <id> [--at <iso>] [--limit N]', 'USAGE');
+        }
+        return await read('world.belief.trace', {
+          targetType: refs[0],
+          target: refs[1],
+          at: flags.at ?? null,
+          limit: flags.limit ?? null,
+        });
+      }
+
       if (sub === 'evidence') {
         const { flags, rest: refs } = parseFlags(rest, ['target-type']);
         if (flags['target-type']) {
@@ -1835,7 +1849,7 @@ export async function main(argv, {
         return 0;
       }
 
-      throw new ValidationError('usage: world [--limit N] | world entity|identity|fact|attribute|relationship|event|statement|conflicts|related|history|evidence|changes|state-at|inspect|health|lock ...', 'USAGE');
+      throw new ValidationError('usage: world [--limit N] | world entity|identity|fact|attribute|relationship|event|statement|conflicts|related|history|evidence|trace|changes|state-at|inspect|health|lock ...', 'USAGE');
     }
 
     if (command === 'goal') {

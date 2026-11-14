@@ -106,7 +106,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 91, 'the default registry has 91 actions');
+    assert.equal(plain.registry.list().length, 92, 'the default registry has 92 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -211,7 +211,7 @@ describe('AF-19: the registry is the inventory', () => {
     const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 49, 'the inventory counts forty-nine read actions with a root configured');
+    assert.equal(reads.length, 50, 'the inventory counts fifty read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -241,6 +241,7 @@ describe('AF-19: the registry is the inventory', () => {
         'world.evidence': { target: 'e-probe' },
         'world.changes': { from: '2020-01-01', to: '2030-01-01' },
         'world.state_at': { at: '2030-01-01T00:00:00.000Z' },
+        'world.belief.trace': { targetType: 'fact', target: 'f-probe' },
         'adaptation.review.inspect': { target: adaptationId },
         'adaptation.review.reconcile': { target: adaptationId },
       }[def.name] ?? {};
@@ -394,7 +395,7 @@ describe('AF-19: the planning prompt and the plan checker agree', () => {
       }
     }
     const user = offeredNames(planningPrompt({ goal: 'anything', registry: app.registry, memoryLines: [], origin: 'user' }).system);
-    assert.equal(user.length, 43, 'a user-origin prompt offers the forty-three plannable actions with a root');
+    assert.equal(user.length, 44, 'a user-origin prompt offers the forty-four plannable actions with a root');
     assert.ok(user.includes('memory.add'), 'a user plan may still contain memory.add');
     assert.ok(user.includes('world.entity.show'), 'a user plan may read the World Model');
     assert.ok(!user.includes('world.fact.add'), 'a World Model write is never plannable');

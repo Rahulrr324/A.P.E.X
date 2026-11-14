@@ -284,6 +284,21 @@ What remains is the rest of that wider clause: a verdict changing a gate, an aut
 than the one disclosed recommendation, and any claim of prediction accuracy or causation. The runtime
 keeps that rest open; AP-13 is one reversible recommendation and no part of it grants authority.
 
+Batch AP-14 then advanced the roadmap's stage-4 trace clause across stores. A World Model fact,
+relationship or event already named the memory and knowledge records its evidence cites; `world trace`
+now answers the reverse question without adding a store, a schema or a model call. A cited memory is
+checked in its owning store, so a corrected record reads `NOT CURRENT: superseded` and a citing fact
+reads `stale_evidence` rather than fresh support; an unreadable store is `UNREADABLE`, not empty; a
+citation to a record its store no longer holds is `unknown`; and a disagreement is always shown on both
+sides. Cognitive retrieval makes the same crossing for a stored live contradiction: the world statement
+enters as evidence with a reciprocal contradiction link, so claim extraction and response validation
+see both sides and prefer neither. The trace is bounded, read-only, writes no store file, and states
+`authorizes: false`. Explicit confidence, semantic (non-heuristic) contradiction detection, and traces
+from experience, prediction, goal or plan records into the world statements derived from them remain
+open
+([details](apex_app/README.md#batch-ap-14-cross-store-belief-tracing-as-implemented);
+tests: `tests/belief-trace.test.js`, 18 cases).
+
 Batch AP-11 (Runtime Performance, Cognitive Efficiency & End-to-End Latency Optimization) first
 corrected the measurement it was asked to optimize. The AP-10 benchmark shared one corpus across phases
 and only ever grew it, so after the retrieval phase reached 10,000 records every later `context` and

@@ -1027,6 +1027,46 @@ separation, cold-versus-reused equivalence including diagnostics and conflict pa
 damaged stores, interrupted append residue, `getMany` supersession, concurrent reads) and
 `benchmarks/run-runtime-performance-benchmark.mjs` phase `compare`.
 
+### Cross-store belief tracing (Batch AP-14)
+
+Every World Model fact, relationship and event already stored the memory and knowledge records its
+evidence cites. AP-14 adds the reverse read, without a new store, a schema change, an inference, or a
+second authority.
+
+- **The index is derived, not persisted.** `buildCitationIndex(state)` scans the already-reduced world
+  state once and maps `${sourceType}\u0000${sourceId}` to the statements whose evidence carries that
+  reference. `statementsCiting(state, {sourceType, sourceId, at, limit})` returns a bounded window
+  (`MAX_CITATION_REFS = 100`) ordered live-first. The relation comes from the stored evidence entry;
+  no text similarity, model, or new relation type is involved.
+- **A trace answers one direction without pretending to know the other.** For a world statement it
+  lists each evidence reference and the owning store's current reading of it; for a memory or
+  knowledge record it lists the world statements that cite it and whether each supports, contradicts
+  or merely qualifies. `traceBelief()` is pure and always returns `authorizes: false`. Its dispositions
+  are `supported`, `contradicted`, `withdrawn`, `superseded`, `historical`, `uncited`, `qualified`,
+  `proposed`, `stale_evidence`, `unverified`, `unknown` and `missing`.
+- **An unreadable store is not an empty one.** `MemoryStore.traceMany()` is fail-closed: a corrupt line
+  refuses the whole trace. A reference whose store cannot be read is `UNREADABLE` and the world trace
+  becomes `unverified`; a reference that no longer exists is `MISSING`; a record that exists but has
+  been corrected is `NOT CURRENT: superseded` and the citing statement becomes `stale_evidence`.
+  A citation from a store that does not hold the record is `unknown`, never `missing` and never
+  silently accepted.
+- **Retrieval sees stored cross-store contradictions.** `linkCrossStoreCitations()` reads the same
+  citation index during cognitive retrieval. When a live world fact, relationship or event cites a
+  memory or knowledge record with relation `contradicts`, the world statement is added as evidence
+  with a reciprocal `relationships.contradicts` entry, so claim extraction pairs the two claims and
+  response validation sees both sides. Supports, qualifications and retracted statements add no link;
+  an unreadable memory store adds none; a link is never presented one-sided.
+- **Nothing is decided.** The trace keeps both sides, names the sources, and prints its own closing
+  line that it decides nothing. It approves, retracts, supersedes, prefers, and authorizes nothing,
+  and it changes no store file (measured in `capability-inventory.test.js`). The same-store memory
+  conflict it reports remains the existing clause heuristic and is labelled as such.
+- **Bounds and tests.** 100 citations, 100 evidence references, 12 contradiction links per evidence
+  entry; the citation count and a truncated list are disclosed. `belief-trace.test.js` (18 tests)
+  covers both directions, contradiction, same-store disagreement, missing versus inconsistent records,
+  correction and stale evidence, unreadable and damaged stores, a second process, repeat determinism
+  with zero data-store writes, bounds, model-proposed records, retraction, secret masking, the
+  cognition link and the CLI. No test contacts a model; none is evidence about a real model.
+
 ## 6. D. Diagnostics and evaluation
 
 ### Runtime diagnostics
@@ -1171,6 +1211,7 @@ The only authority owner is the action registry. Everything else observes, propo
 | World Model (append-only records, read-time reduction) | `IMPLEMENTED_AND_TESTED` | `world/store.js`, `world/model.js`, `world/query.js` | `world-model-core.test.js`, `world-model-scenarios.test.js` |
 | Prediction ledger | `IMPLEMENTED_AND_TESTED` | `prediction/*`, `actions/prediction-actions.js` | `prediction-*.test.js` (6 suites) |
 | Expectation caution on the continuation recommendation (AP-13) | `IMPLEMENTED_AND_TESTED` | `prediction/caution.js`, `PredictionStore.expectationCautions`, `continuation/engine.js`, `executive/readiness.js`, controller wiring | `expectation-caution.test.js` (38 cases) |
+| Cross-store belief trace and retrieval contradiction link (AP-14) | `IMPLEMENTED_AND_TESTED` | reverse citation index in `world/query.js`, pure `world/belief-trace.js`, `MemoryStore.traceMany`, `world.belief.trace` action and CLI, `linkCrossStoreCitations` in `cognition/evidence.js` | `belief-trace.test.js` (18 cases) |
 | Temporal experience | `IMPLEMENTED_AND_TESTED` | `experience/temporal.js`, `experience-store.js` | `experience-temporal*.test.js` |
 | Model gateway protocol (stub) | `IMPLEMENTED_AND_TESTED` | `model/gateway.js` | `gateway.test.js`, `model-workflow.test.js`; no test runs a real model |
 | Real-model answer quality | `DESCRIPTIVE_ONLY` | — | One dated observation (2026-10-31); no automated evidence |

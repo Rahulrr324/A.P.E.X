@@ -229,6 +229,66 @@ export class WorldModelStore {
     return checked;
   }
 
+  // The read-side counterpart of checkEvidence: one reference, checked against the store that
+  // owns it, reporting what that store says without refusing. A store that cannot be read is
+  // reported as unavailable - never as "no such evidence" - and a missing adapter is a
+  // configuration difference the caller is told about rather than a silent absence.
+  async checkReference(entry) {
+    if (!entry || typeof entry !== 'object') throw new ValidationError('an evidence reference must be an object');
+    if (!EVIDENCE_SOURCE_TYPES.includes(entry.sourceType)) {
+      throw new ValidationError(`evidence source type must be one of: ${EVIDENCE_SOURCE_TYPES.join(', ')}`);
+    }
+    if (entry.sourceType === 'user') {
+      return { check: 'ok', found: true, active: true, state: 'user_statement', classification: 'user_statement', detail: null };
+    }
+    const sourceId = requireText(entry.sourceId, 'evidence source id', 128);
+    const adapter = this.sources[entry.sourceType];
+    if (typeof adapter !== 'function') {
+      return {
+        check: 'no-store',
+        found: false,
+        active: null,
+        state: null,
+        classification: null,
+        detail: `no ${entry.sourceType} store is configured, so this reference cannot be checked`,
+      };
+    }
+    let result;
+    try {
+      result = await adapter(sourceId);
+    } catch (err) {
+      return {
+        check: 'unavailable',
+        found: null,
+        active: null,
+        state: null,
+        classification: null,
+        detail: `${entry.sourceType}:${sourceId} could not be checked: ${err?.message ?? String(err)}`,
+      };
+    }
+    if (!result || result.found !== true) {
+      return {
+        check: 'ok',
+        found: false,
+        active: false,
+        state: null,
+        classification: null,
+        detail: `${entry.sourceType}:${sourceId} does not exist in that store`,
+      };
+    }
+    const active = result.active !== false;
+    return {
+      check: 'ok',
+      found: true,
+      active,
+      state: result.state ?? null,
+      classification: result.classification ?? null,
+      detail: active
+        ? null
+        : `${entry.sourceType}:${sourceId} is no longer current (${singleLine(result.state ?? 'not current', 40)})`,
+    };
+  }
+
   // ---- mutation -------------------------------------------------------------
 
   #base(type, fields) {

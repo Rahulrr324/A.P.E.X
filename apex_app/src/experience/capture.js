@@ -82,6 +82,7 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'world.identity.decision': 'read',
   'world.pair': 'read',
   'world.evidence': 'read',
+  'world.belief.trace': 'read',
   'world.changes': 'read',
   'world.inspect': 'read',
   'world.status': 'read',

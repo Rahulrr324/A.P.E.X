@@ -488,6 +488,58 @@ export class MemoryStore {
     return found;
   }
 
+  // A bounded, fail-closed read for the cross-store belief trace. One file read answers every id
+  // and also reports the store-wide heuristic conflict group each record belongs to, so a trace
+  // can say that a record disagrees with another stored record without rebuilding the index once
+  // per id. Unlike getMany, a damaged store refuses the read: a trace must not describe a partial
+  // corpus as the whole store.
+  async traceMany(ids) {
+    const wanted = new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id.length > 0));
+    const found = new Map();
+    if (wanted.size === 0) return found;
+    const records = await this.#loadComplete({ operation: 'trace' });
+    const replacedBy = new Map();
+    for (const record of records) {
+      for (const targetId of record.provenance?.replaces ?? []) {
+        const list = replacedBy.get(targetId) ?? [];
+        list.push(record.id);
+        replacedBy.set(targetId, list);
+      }
+    }
+    // A replaced record is history, so it cannot be part of a live disagreement. The group scan
+    // uses the same clause rule retrieval uses and is explicitly heuristic.
+    const active = records.filter((record) => (replacedBy.get(record.id) ?? []).length === 0);
+    const conflictById = new Map();
+    for (const group of findMemoryConflictGroups(active)) {
+      const recordIds = group.records.map((record) => record.id).sort();
+      for (const record of group.records) {
+        conflictById.set(record.id, {
+          subject: group.subject,
+          values: [...group.values],
+          recordIds: recordIds.filter((id) => id !== record.id),
+        });
+      }
+    }
+    for (const record of records) {
+      if (!wanted.has(record.id)) continue;
+      const replacements = replacedBy.get(record.id) ?? [];
+      const conflict = conflictById.get(record.id) ?? null;
+      found.set(record.id, {
+        found: true,
+        id: record.id,
+        content: record.content,
+        kind: record.kind,
+        source: record.source,
+        sensitivity: record.sensitivity ?? 'normal',
+        createdAt: record.createdAt,
+        replacedBy: replacements,
+        conflict,
+        status: getRecordStatus(record, conflict?.recordIds ?? [], replacements),
+      });
+    }
+    return found;
+  }
+
   async #loadComplete({ operation = 'retrieval', beforeAppend = false, certification = null } = {}) {
     // A write reads through the incremental validated state, so one append no longer costs the
     // whole store's parse and validation. Nothing about the rule below changes: the records it
