@@ -201,19 +201,41 @@ function validateResolutionEvent(r) {
 
 // ---- KnowledgeStore ---------------------------------------------------------
 
+// The whole lifecycle derivation for one record set: the split, and the three store-wide indexes.
+// Every index covers every claim, never a returned window, so a conflict partner outside the window
+// is still discoverable. `conflictIndex` is built once and handed to the resolution index, which
+// needs exactly the same grouping.
+function buildLifecycle(records) {
+  const split = splitLifecycle(records);
+  const supersededByMap = buildSupersededByMap(split.claims);
+  const conflictIndex = buildConflictIndex(split.claims, supersededByMap, split.retractionsByTarget);
+  const resolutionIndex = buildResolutionIndex(
+    split.claims, supersededByMap, split.retractionsByTarget, split.resolutionEvents, conflictIndex,
+  );
+  return { ...split, supersededByMap, conflictIndex, resolutionIndex };
+}
+
 // The newest `limit` claims, newest first, annotated with supersession, conflict and
 // resolution state. Shared by list() and projectionRead() so the two can never apply
-// different lifecycle rules to the same record.
-function knowledgeWindow(records, limit) {
-  const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
-  const supersededByMap = buildSupersededByMap(claims);
-  const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
-  const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
-  return claims.slice(-Math.max(1, limit)).reverse()
-    .map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex));
+// different lifecycle rules to the same record. Only the final window is bounded; the
+// indexes it annotates from always describe the whole store.
+function knowledgeWindow(records, limit, lifecycle = null) {
+  const state = lifecycle ?? buildLifecycle(records);
+  return state.claims.slice(-Math.max(1, limit)).reverse()
+    .map((r) => annotate(r, state.supersededByMap, state.conflictIndex, state.retractionsByTarget, state.resolutionIndex));
 }
 
 export class KnowledgeStore {
+  // Derived lifecycle state for one certified snapshot, and nothing else. One entry per store
+  // instance, replaced whenever the content key changes and dropped whenever a read cannot
+  // certify one, so it is bounded by a single snapshot and can never describe a different one.
+  #lifecycleMemo = null;
+  #indexBuilds = 0;
+  #indexHits = 0;
+  #indexMisses = 0;
+  #healthBuilds = 0;
+  #healthHits = 0;
+
   constructor(filePath, {
     now = () => new Date(),
     parseCacheBytes = KNOWLEDGE_PARSE_CACHE_BYTES,
@@ -229,6 +251,55 @@ export class KnowledgeStore {
     // appends one record. The lock covers that read-derive-append sequence for one store, so two
     // processes cannot each decide from a state the other has not written yet.
     this.writeLock = new WriterLock(filePath, { waitMs: lockWaitMs, retryMs: lockRetryMs, retryMaxMs: lockRetryMaxMs });
+  }
+
+  // Read-only introspection of the derived-state reuse. Like the parse snapshot stats it describes
+  // a performance aid, never stored state: `builds` counts full lifecycle-index constructions and
+  // `hits` counts reads answered from the entry those constructions produced. No decision about a
+  // record may be taken from it, and a hit is never an assertion that the store is healthy.
+  get lifecycleIndexStats() {
+    return {
+      cached: this.#lifecycleMemo !== null,
+      builds: this.#indexBuilds,
+      hits: this.#indexHits,
+      misses: this.#indexMisses,
+      healthBuilds: this.#healthBuilds,
+      healthHits: this.#healthHits,
+      authorizes: false,
+    };
+  }
+
+  // The lifecycle derivation for the records one read just handed out. `key` is the content hash
+  // that read certified, or null when it certified none. A null key never reuses and never retains:
+  // an uncertified or damaged read drops the entry, so the next certified read rebuilds.
+  #derive(records, key) {
+    const split = splitLifecycle(records);
+    const memo = key !== null && this.#lifecycleMemo?.key === key ? this.#lifecycleMemo : null;
+    if (memo) {
+      this.#indexHits += 1;
+      return { ...split, ...memo.indexes };
+    }
+    this.#indexMisses += 1;
+    this.#indexBuilds += 1;
+    const { supersededByMap, conflictIndex, resolutionIndex } = buildLifecycle(records);
+    const indexes = { supersededByMap, conflictIndex, resolutionIndex };
+    this.#lifecycleMemo = key === null ? null : { key, indexes, health: null };
+    return { ...split, ...indexes };
+  }
+
+  // The store-wide lifecycle summary for the same certified snapshot. It is derived state like the
+  // indexes, so it is reused under the same key and handed out as a copy: a caller that edits a
+  // summary cannot edit the entry, and the entry cannot edit a later caller's summary.
+  #healthFor(records, corrupt, key, derived) {
+    const memo = key !== null && this.#lifecycleMemo?.key === key ? this.#lifecycleMemo : null;
+    if (memo?.health) {
+      this.#healthHits += 1;
+      return structuredClone(memo.health);
+    }
+    this.#healthBuilds += 1;
+    const health = summarizeKnowledgeHealth(records, corrupt, { path: this.filePath, lifecycle: derived });
+    if (memo) memo.health = health;
+    return structuredClone(health);
   }
 
   // --- write (user origin only) ---
@@ -520,8 +591,10 @@ export class KnowledgeStore {
   // re-validates the whole store. Records from a reused state are exactly the records a full
   // re-read would have produced, and such a state only ever exists for a file with no damage in it,
   // so the refusal below still fires on a damaged store.
-  async #loadComplete({ beforeAppend = false } = {}) {
-    const { records, corrupt } = beforeAppend ? await this.log.loadForAppend() : await this.log.load();
+  async #loadComplete({ beforeAppend = false, certification = null } = {}) {
+    const { records, corrupt } = beforeAppend
+      ? await this.log.loadForAppend()
+      : await this.log.load({ certification });
     if (corrupt.length > 0) {
       throw new StoreError(`knowledge store contains ${corrupt.length} corrupt line(s); refusing an incomplete knowledge operation`);
     }
@@ -533,19 +606,18 @@ export class KnowledgeStore {
   async findByPrefix(prefix) {
     const p = typeof prefix === 'string' ? prefix.trim() : '';
     if (p.length === 0) return [];
-    const records = await this.#loadComplete();
-    const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
-    const supersededByMap = buildSupersededByMap(claims);
-    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
-    const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
-    return claims
+    const certification = { key: null };
+    const records = await this.#loadComplete({ certification });
+    const state = this.#derive(records, certification.key);
+    return state.claims
       .filter((r) => r.id === p || r.id.startsWith(p) || shortId(r.id) === p)
-      .map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex));
+      .map((r) => annotate(r, state.supersededByMap, state.conflictIndex, state.retractionsByTarget, state.resolutionIndex));
   }
 
   async list({ limit = 20 } = {}) {
-    const records = await this.#loadComplete();
-    return knowledgeWindow(records, limit);
+    const certification = { key: null };
+    const records = await this.#loadComplete({ certification });
+    return knowledgeWindow(records, limit, this.#derive(records, certification.key));
   }
 
   // Which claims one audited operation established. Every claim carries `provenance.operationId`,
@@ -558,17 +630,15 @@ export class KnowledgeStore {
     if (typeof operationId !== 'string' || operationId.length === 0) {
       return { matched: 0, truncated: false, records: [] };
     }
-    const records = await this.#loadComplete();
-    const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
-    const supersededByMap = buildSupersededByMap(claims);
-    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
-    const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
-    const matches = claims.filter((r) => r.provenance?.operationId === operationId);
+    const certification = { key: null };
+    const records = await this.#loadComplete({ certification });
+    const state = this.#derive(records, certification.key);
+    const matches = state.claims.filter((r) => r.provenance?.operationId === operationId);
     const shown = matches.slice(0, Math.max(1, limit));
     return {
       matched: matches.length,
       truncated: matches.length > shown.length,
-      records: shown.map((r) => annotate(r, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex)),
+      records: shown.map((r) => annotate(r, state.supersededByMap, state.conflictIndex, state.retractionsByTarget, state.resolutionIndex)),
     };
   }
 
@@ -578,20 +648,25 @@ export class KnowledgeStore {
   // summary that does not describe the records the projection was given. Same parser, same
   // integrity rules, same annotation as list(); nothing is written or repaired.
   async projectionRead({ limit = 20 } = {}) {
+    const certification = { key: null };
     let loaded;
     try {
-      loaded = await this.log.load();
+      loaded = await this.log.load({ certification });
     } catch (err) {
       return {
         health: summarizeKnowledgeHealth(null, [], { path: this.filePath, detail: err?.message ?? String(err) }),
         claims: null,
       };
     }
-    const health = summarizeKnowledgeHealth(loaded.records, loaded.corrupt, { path: this.filePath });
+    // A damaged store certifies nothing: no derivation is retained for it and none is reused, so
+    // an interrupted write can never be answered from an entry built before the damage.
+    const key = loaded.corrupt.length > 0 ? null : certification.key;
+    const derived = this.#derive(loaded.records, key);
+    const health = this.#healthFor(loaded.records, loaded.corrupt, key, derived);
     const usable = health.inspected === true && health.corruptLines === 0;
     return {
       health,
-      claims: usable ? knowledgeWindow(loaded.records, limit) : null,
+      claims: usable ? knowledgeWindow(loaded.records, limit, derived) : null,
     };
   }
 
@@ -620,7 +695,8 @@ export class KnowledgeStore {
   // common-word match; raw term overlap made the two indistinguishable. Superseded and
   // retracted records are excluded. Results are bounded (never the full store).
   async search(query, { limit = 5, diagnostics = null } = {}) {
-    const records = await this.#loadComplete();
+    const certification = { key: null };
+    const records = await this.#loadComplete({ certification });
     const { tokens: terms, dropped: droppedTokens, total: totalTokens } = queryTokens(query, { stem: false });
     const explain = diagnostics && typeof diagnostics === 'object' ? diagnostics : null;
     if (explain) {
@@ -630,10 +706,8 @@ export class KnowledgeStore {
     }
     if (terms.length === 0) return [];
 
-    const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
-    const supersededByMap = buildSupersededByMap(claims);
-    const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
-    const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
+    const state = this.#derive(records, certification.key);
+    const { claims, retractionsByTarget, supersededByMap, conflictIndex, resolutionIndex } = state;
 
     const pool = claims.filter((r) => isActive(r, supersededByMap, retractionsByTarget));
     const docs = pool.map((r) => new Set(tokenize(`${r.subject} ${r.relationship} ${r.object} ${r.evidence ?? ''}`)));
@@ -689,16 +763,19 @@ export class KnowledgeStore {
   // not to refuse and hide the readable part. Nothing is written, repaired, or inferred;
   // a corrupt line makes every count cover readable records only.
   async health() {
+    const certification = { key: null };
     let loaded;
     try {
-      loaded = await this.log.load();
+      loaded = await this.log.load({ certification });
     } catch (err) {
       return summarizeKnowledgeHealth(null, [], {
         path: this.filePath,
         detail: err?.message ?? String(err),
       });
     }
-    return summarizeKnowledgeHealth(loaded.records, loaded.corrupt, { path: this.filePath });
+    const key = loaded.corrupt.length > 0 ? null : certification.key;
+    const derived = this.#derive(loaded.records, key);
+    return this.#healthFor(loaded.records, loaded.corrupt, key, derived);
   }
 }
 
@@ -894,13 +971,15 @@ function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = 
   if (active && conflictIds.length > 0) {
     const applicable = resolutionIndex?.applicableGroups?.get(claimSetKey(group.map((r) => r.id))) ?? null;
     if (applicable) {
-      resolution = { ...applicable, chosen: applicable.chosenId === record.id };
+      resolution = { ...applicable, targetIds: [...applicable.targetIds], chosen: applicable.chosenId === record.id };
       conflictState = 'resolved';
     } else {
       conflictState = 'unresolved';
     }
   }
 
+  // These arrays belong to the derivation, which one certified snapshot may reuse across reads.
+  // Copies go out so a caller's edit cannot reach the next read.
   return {
     ...record,
     status: effectiveStatus,
@@ -910,7 +989,7 @@ function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = 
     conflictsWith: conflictIds,
     conflictState,
     resolution,
-    supersededBy: sby,
+    supersededBy: [...sby],
     replaces: [...(record.supersededBy ?? [])],
     retractedBy: events.length === 1 ? events[0].id : null,
     retraction: events.length === 1 ? summarizeRetraction(events[0]) : null,
@@ -952,9 +1031,9 @@ const ORDINARY_RESOLUTION_NOTES = new Set([
   'a later resolution for the same claims governs',
 ]);
 
-function buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents) {
+function buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents, prebuiltConflicts = null) {
   const byId = new Map(claims.map((r) => [r.id, r]));
-  const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+  const conflictIndex = prebuiltConflicts ?? buildConflictIndex(claims, supersededByMap, retractionsByTarget);
   const byClaim = new Map();
   const applicableGroups = new Map();
   const statusById = new Map();
@@ -1043,7 +1122,9 @@ function summarizeResolution(event) {
 //    relationship, and count as a group only when at least two distinct objects remain;
 //  - anomalies are detected facts about readable records. Missing links and corrupt
 //    lines are limitations, not proof that the remainder of the store is healthy.
-export function summarizeKnowledgeHealth(records, corrupt = [], { path = null, detail = null } = {}) {
+// `lifecycle` supplies indexes already derived from these exact records, so a caller holding one
+// certified derivation does not build a second one. It is only valid for the same record set.
+export function summarizeKnowledgeHealth(records, corrupt = [], { path = null, detail = null, lifecycle = null } = {}) {
   if (!Array.isArray(records)) {
     return {
       path,
@@ -1072,9 +1153,10 @@ export function summarizeKnowledgeHealth(records, corrupt = [], { path = null, d
 
   const { claims, retractionEvents, resolutionEvents, retractionsByTarget } = splitLifecycle(records);
   const byId = new Map(claims.map((r) => [r.id, r]));
-  const supersededByMap = buildSupersededByMap(claims);
-  const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
-  const resolutionIndex = buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents);
+  const supersededByMap = lifecycle?.supersededByMap ?? buildSupersededByMap(claims);
+  const conflictIndex = lifecycle?.conflictIndex ?? buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+  const resolutionIndex = lifecycle?.resolutionIndex
+    ?? buildResolutionIndex(claims, supersededByMap, retractionsByTarget, resolutionEvents, conflictIndex);
 
   const samples = [];
   let anomalyCount = 0;

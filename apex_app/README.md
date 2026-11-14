@@ -6905,10 +6905,21 @@ report state with per-source returned/contributed counts and the citation-comple
 network-free, uses a deterministic in-process model fixture, and is not part of `npm test`. See
 `benchmarks/README.md` for the methodology, the measured tables and their limits.
 
-In that measured run the request path reported `source_limit_reached` with `complete false` at every
-size — memory matched more than its bound of five returned — and the citation assessment named one
-relevant retrieved record that no claim cited, at every size. Neither was hidden and neither was
-"fixed" by forcing a citation or widening the bound.
+In that measured run the request path reported `source_limit_reached` with `complete false` — memory
+matched more than its bound of five returned — and the citation assessment named one relevant retrieved
+record that no claim cited. Neither was hidden and neither was "fixed" by forcing a citation or widening
+the bound.
+
+**Batch AP-11 corrected a defect in that benchmark's corpus management.** It shared one corpus across
+phases and only ever grew it, so after the retrieval phase had grown it to 10,000 records every
+subsequent `context` and `request` row — labelled 20, 200, 1,000, 4,000 and 10,000 — measured that same
+10,000-record corpus. The five request medians agreed because they were five measurements of one store,
+not because latency is independent of corpus size; the conclusion drawn from them was invalid and is
+marked superseded in `benchmarks/README.md`, with the historical rows preserved. Each row now rebuilds
+an isolated corpus of exactly the stated size and verifies the persisted record counts before
+measuring, and `tests/benchmark-corpus-size.test.js` proves the reported count is the count the request
+read. The classification and completeness findings above are unaffected: they were all observed on that
+one corpus.
 
 Tests: `tests/retrieval-scoring.test.js`, `tests/retrieval-context-budget.test.js`,
 `tests/retrieval-quality.test.js`, `tests/retrieval-report.test.js`,
@@ -6938,6 +6949,120 @@ that make claims, and two regression tests pin both the boundary and the end-to-
 A second finding was in this batch's own adversarial case 02: its fixture cited a record outside the
 snapshot, so the structure was rejected and the case had been passing on the zero-claim path. The
 fixture now cites a retrieved record and asserts the real finding.
+
+## Batch AP-11: Runtime Performance, Cognitive Efficiency and End-to-End Latency Optimization (as implemented)
+
+### The measurement was wrong before the code was slow
+
+AP-11 was asked to explain a request latency of about 2.2 s that did not move between 20 and 10,000
+records. The first finding was that **the benchmark, not the runtime, produced that flatness**. The
+AP-10 script shared one corpus across phases and `growTo()` only ever grew it. The `retrieval` phase ran
+first and grew the corpus 20 → 10,000; the `context` and `request` phases then asked for 20, 200, 1,000,
+4,000 and 10,000 in turn and every one of those rows measured the 10,000-record corpus left behind. Five
+medians of one store agree; that is not evidence of size independence.
+
+The correction is in the harness, not in a number picked to look better:
+
+- each store ends with **exactly** the number of records its row states, targets included, and the row
+  is refused if the persisted counts disagree;
+- a size smaller than the current corpus **rebuilds a fresh isolated directory** instead of measuring
+  the larger one, so no phase can contaminate a later one;
+- ascending growth reuses one corpus and never repeats a triple;
+- the module is importable without running a measurement, and
+  `tests/benchmark-corpus-size.test.js` drives the real fixture builder and the real controller to prove
+  that the ids in a request's prompt belong to the rebuilt corpus and not to the discarded one.
+
+The invalid AP-10 rows are preserved and marked **superseded** in `benchmarks/README.md`, together with
+the conclusion they had been used to support. The retrieval, scoring and normalization rows of that run
+are unaffected: the retrieval phase grew the corpus correctly, and the other two phases do not use it.
+
+### What the trace actually showed
+
+With the corpus corrected, latency does grow with the store. The request path was traced end to end and
+attributed **per leaf method**, by wrapping each store method on a real application and timing it, not
+by assuming the AP-10 benchmark had identified the bottleneck:
+
+- `knowledge.projectionRead` was the largest single contributor to a warm request. It loads the whole
+  log, summarizes store-wide health, and builds the supersession, conflict and resolution indexes over
+  **every** claim — to return twenty records. One request performs that derivation several times.
+- **Ruled out by measurement, not by opinion:** duplicate lexical search (exactly two searches per
+  request; cognition is seeded from the controller's read and does not search again); the executive
+  `goals.list`/`goals.load` pairs (nesting, not redundant reads, and the three executive reads already
+  run in parallel); the traced cognition stages (about 10 ms of a 168 ms request at 200 records); and
+  parse-cache thrashing (32 MiB per store, no eviction at these sizes).
+
+### The optimization: reuse derived state for one certified snapshot
+
+`KnowledgeStore` now holds at most one in-memory `{key, indexes, health}` entry.
+
+- **The key is content.** `JsonlStore.load()` accepts an optional caller-owned `certification` object and
+  writes into it the SHA-256 of the exact bytes the returned records were parsed from — the same digest
+  the AP-07 parse snapshot already compares. The returned `{records, corrupt}` shape is unchanged, so
+  every existing read-contract assertion still holds. A read that established no digest certifies `null`.
+- **Not a count, not a size.** A same-length rewrite of the same number of records with the same ids
+  misses. A test pins exactly that case.
+- **One construction per unchanged snapshot.** Twenty repeated reads of one corpus construct the indexes
+  once and the health summary once; a test asserts the counters, not just the timing.
+- **Invalidation is the content hash.** An append, retraction, resolution or supersession changes the
+  bytes, so the next read misses. There is no separate invalidation hook to forget, and no TTL.
+- **Fail-closed.** A corrupt line certifies nothing: the derivation is rebuilt, nothing is retained,
+  `projectionRead` reports `damaged` with `claims: null`, and the complete-only readers still refuse. An
+  interrupted write cannot be answered from an entry built before the damage.
+- **Nothing stale, nothing shared.** The claim list is re-split from the current read on every call, so a
+  returned record is always that read's own exclusive copy. `annotate` copies the arrays it hands out and
+  the health summary is handed out as a clone, so a caller editing a result cannot reach the entry.
+- **The window is still the only bound.** The indexes cover every claim, so a conflict partner outside
+  the returned window is still named — a test asserts 29 partners for a 5-record window over 30 claims.
+- **No new authority, no new persistence.** `lifecycleIndexStats` reports counts and `authorizes: false`.
+  No disk index, no cross-process cache, no schema change, no record-semantics change. Write paths still
+  derive under the write lock from the authoritative log; `history()` deliberately derives fresh.
+
+### The measured effect, and what it does not show
+
+The reuse is real and counted: one index construction and one health construction per unchanged
+snapshot, with every later read in the request answered from that entry (`builds 1, hits 3, misses 1;
+health builds 1, hits 1` over two requests, identical at every size). The end-to-end effect is smaller
+than the construction count suggests, and is reported as measured rather than assumed:
+
+- **Paired A/B on one corpus** (both trees alternating requests, six each, so machine drift cannot be
+  read as a code effect): −0.6% at 1,000 records (676.7 → 672.8 ms) and −7.6% at 4,000 (2,640.5 →
+  2,441.0 ms), with an identical answer surface — status, trust, retrieval state, completeness, claim
+  counts and per-source returned/contributed counts all equal.
+- **Sequential complete runs** of the same script on the two trees put warm medians at 385.5 → 488.0 ms
+  at 1,000 and 1,320.0 → 1,218.9 ms at 4,000. The 1,000 rows disagree in direction with the paired run;
+  that is why the paired comparison is used for the code effect and the sequential rows are reported as
+  complete-run medians together with their drift.
+- **At 10,000 records** the warm median is 3,513.6 ms before and 3,527.8 ms after — within run-to-run
+  drift. Index construction was not the dominant cost at that size.
+
+The residual explains the gap: the ten diagnostic stages cover about 2.4% of a 488 ms warm request at
+1,000 records and 0.2% of 3.53 s at 10,000, so almost all of the time is outside them. The rest is
+whole-store work: `knowledge.projectionRead` also loads and copies the whole log and annotates the
+returned window; the two searches tokenize every record; six whole-log `load` calls each clone every
+record; `getMany` and the executive reads add more. Reusing the derivation removes one of several
+whole-store costs, not the whole cost.
+
+**Targets.** 20 records (<300 ms): met warm at 37.5 ms. 1,000 (<500 ms): met warm under a single
+application (488.0 ms), not cold (581.0 ms), and about 670 ms in the paired steady state. 10,000
+(<1 s): not met (3.53 s warm). Reaching it would require not reading and tokenizing the whole store on
+every request — a persistent content index or a per-record token cache — which §5 does not authorize
+and which would change storage behaviour rather than tighten a read path. The measured lower bound is
+reported instead of a shortcut.
+
+### What it does not claim
+
+Retrieval is still bounded lexical token overlap, not semantic understanding. The fillers in this
+benchmark share one subject and relationship, so they form a single growing conflict group — a **worst
+case** for conflict annotation, which must name every partner. A store spread over many subjects behaves
+differently, and both are reported where measured. No prediction-accuracy or causation claim is made, and
+the wider clause quoted above remains unimplemented.
+
+Tests: `tests/knowledge-lifecycle-reuse.test.js` (17 tests: equivalence against a fresh instance, one
+construction per unchanged snapshot, append/retraction/resolution/supersession invalidation, same-length
+replacement, a concurrent writer, snapshot movement, interrupted and damaged stores, partners outside the
+window, cold start, two application instances on one directory, a write from another OS process,
+caller-edit isolation, and the real controller path) and `tests/benchmark-corpus-size.test.js` (6 tests).
+Benchmark: `benchmarks/run-runtime-performance-benchmark.mjs`, phases `scaling`, `shapes` and `limits`.
 
 ## Roadmap toward persistent cognition (dependency-ordered)
 

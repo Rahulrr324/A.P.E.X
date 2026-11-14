@@ -229,9 +229,19 @@ export class JsonlStore {
   // untouched so it can only miss. A store write path no longer uses it (see `loadForAppend`);
   // it stays for callers that must not touch the snapshot, and it is how the benchmark measures
   // the pre-Batch V write read.
-  async load({ maintainSnapshot = true } = {}) {
+  // `certification` is an optional caller-owned object that receives `key`: the SHA-256 of the
+  // exact bytes these records were parsed from, or null when this read did not establish one.
+  // It is the same digest the snapshot compares, so a caller may reuse work derived from these
+  // records only while that key still describes the file. It never changes what is returned.
+  async load({ maintainSnapshot = true, certification = null } = {}) {
+    const certify = certification && typeof certification === 'object' ? certification : null;
+    if (certify) certify.key = null;
+    const note = (key) => { if (certify) certify.key = key; };
     const buffer = await this.#readBytes();
-    if (buffer === null) return { records: [], corrupt: [] };
+    if (buffer === null) {
+      note(EMPTY_DIGEST);
+      return { records: [], corrupt: [] };
+    }
     const text = () => buffer.toString('utf8');
 
     if (!maintainSnapshot) {
@@ -251,11 +261,13 @@ export class JsonlStore {
     const key = digest(buffer);
     if (this.#snapshot && this.#snapshot.key === key) {
       this.#cacheHits += 1;
+      note(key);
       return snapshotRecords(this.#snapshot.records, this.#snapshot.corrupt);
     }
     this.#cacheMisses += 1;
     const parsed = parseLines(text(), this.validateRecord);
     this.#snapshot = { key, bytes: buffer.length, ...snapshotRecords(parsed.records, parsed.corrupt) };
+    note(key);
     return parsed;
   }
 

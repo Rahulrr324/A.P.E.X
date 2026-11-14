@@ -269,3 +269,34 @@ What remains is the wider clause: an expectation verdict changing subsequent beh
 user-approved candidate, or changing more than the one disclosed ordering, and any claim of prediction
 accuracy or causation. The runtime keeps that wider clause open; this is a recommendation only, and no
 part of it is implemented.
+
+Batch AP-11 (Runtime Performance, Cognitive Efficiency & End-to-End Latency Optimization) first
+corrected the measurement it was asked to optimize. The AP-10 benchmark shared one corpus across phases
+and only ever grew it, so after the retrieval phase reached 10,000 records every later `context` and
+`request` row - labelled 20, 200, 1,000, 4,000 and 10,000 - measured that same 10,000-record store. The
+five request medians agreed because they were five measurements of one corpus, and the conclusion drawn
+from them, that latency is flat across store sizes, was invalid. Those rows are marked superseded with
+the historical figures preserved; each row now rebuilds an isolated corpus of exactly the stated size,
+verifies the persisted record counts before measuring, and a regression test proves the reported count
+is the count the request read.
+
+With the measurement corrected, the request path was traced and attributed per leaf method rather than
+assumed. The dominant cost was the knowledge store rebuilding its supersession, conflict and resolution
+indexes over every claim, and its store-wide health summary, on each of the several reads one request
+makes of the same snapshot. Duplicate lexical search, the executive list/load pairs and the traced
+cognition stages were each ruled out by measurement. AP-11 reuses that derived state under the SHA-256
+of the exact bytes the read certified - the same digest the AP-07 parse snapshot already compares - with
+one in-memory entry per store, replaced on any content change and dropped whenever a read cannot
+certify one. A damaged or interrupted store certifies nothing and is never answered from an entry built
+before the damage. The indexes still cover every claim, so a conflict partner outside the returned
+window is still named; no persistence schema, record semantics, authorization rule, audit field or
+provenance link changed, and no disk index or cross-process cache was added
+([details](apex_app/README.md#batch-ap-11-runtime-performance-cognitive-efficiency-and-end-to-end-latency-optimization-as-implemented);
+tests: `tests/knowledge-lifecycle-reuse.test.js`, `tests/benchmark-corpus-size.test.js`). Measured on
+the corrected harness, the reuse removes a repeated construction per unchanged snapshot, but the
+end-to-end effect is modest: -0.6% at 1,000 records and -7.6% at 4,000 on one paired corpus, and within
+run-to-run drift at 10,000 (3.51 s before, 3.53 s after), because most of a request is whole-store
+reading and per-record tokenizing outside the derived state. Small stores are well inside the sub-300 ms
+target, 1,000 is inside 500 ms warm but not cold, and 10,000 remains above 1 s: that limit is reported
+as the measured lower bound rather than closed with a fragile shortcut. It needs no
+model and grants no authority. What remains open is the wider clause above; AP-11 implements none of it.

@@ -860,6 +860,66 @@ See `retrieval-scoring.test.js`, `retrieval-context-budget.test.js`, `retrieval-
 `retrieval-snapshot.test.js`, `retrieval-acceptance.test.js` and
 `benchmarks/run-retrieval-quality-benchmark.mjs`.
 
+### Derived lifecycle state reuse (Batch AP-11)
+
+One request reads the same knowledge snapshot several times — the world-state projection, the prompt
+projection and the retrieval search each derive lifecycle state from it. Before AP-11 every one of
+those reads rebuilt the supersession map, the conflict index and the resolution index over **all**
+claims, and `projectionRead` rebuilt the store-wide health summary as well. The measured cost was
+attributed per leaf method, not assumed: at 1,000 records `knowledge.projectionRead` was the largest
+single contributor to a warm request, and the executive `list`/`load` pairs, duplicate lexical search
+and the traced cognition stages were each ruled out by measurement.
+
+**The key is content, not size.** `JsonlStore.load()` accepts an optional caller-owned `certification`
+object and writes into it the SHA-256 of the exact bytes the returned records were parsed from — the
+same digest the AP-07 parse snapshot already compares. The returned `{records, corrupt}` shape is
+unchanged. A read that did not establish a digest (the store is larger than the parse cap, snapshot
+maintenance was declined, or this instance just wrote the file) certifies `null`.
+
+**One entry per store instance.** `KnowledgeStore` holds at most one `{key, indexes, health}` entry. A
+different key replaces it; a `null` key drops it. It is never persisted, never shared between stores or
+processes, and never bounded by a record count or a file size, so a same-length rewrite of the same
+number of records misses it.
+
+**What is reused and what is not.** Reused: `supersededByMap`, `conflictIndex`, `resolutionIndex` and
+the store-wide health summary, across `list`, `search`, `projectionRead`, `health`, `findByPrefix` and
+`byOperation`. Not reused: the claim list, which is re-split from the records of the current read on
+every call, so a returned record is always that read's own exclusive copy; every write path, which
+still derives its decision from the authoritative log under the write lock; and `history()`, whose
+chain report is built from the derivation's own record objects and which is an explicit single-record
+inspection rather than a repeated request-path read. The indexes always cover every claim — only the
+returned window is bounded, so a conflict partner outside the window is still named.
+
+**Nothing mutable escapes.** `annotate` copies the supersession and resolution arrays it hands out, and
+the health summary is handed out as a clone, so a caller editing a result cannot reach the entry and
+the entry cannot reach a later caller.
+
+**Fail-closed.** A corrupt line means no certification: the derivation is rebuilt, nothing is retained,
+`projectionRead` reports `damaged` with `claims: null`, and the complete-only readers still refuse. An
+interrupted write therefore cannot be answered from an entry built before the damage. A concurrent
+writer changes the bytes, which changes the key, which misses.
+
+`lifecycleIndexStats` reports `cached`, `builds`, `hits`, `misses`, `healthBuilds`, `healthHits` and
+`authorizes: false`. Like `parseCacheStats` it describes a performance aid, never stored state: a hit is
+not an assertion that the store is healthy, and no decision about a record may be taken from it. No
+persistence schema, record semantics, authorization rule, audit field or provenance link changed, and
+no disk index or cross-process cache was added.
+
+**Measured effect.** On the corrected benchmark the reuse removes one index construction and one health
+derivation per unchanged snapshot (`builds 1, hits 3, misses 1; health builds 1, hits 1` over two
+requests, at every size). The end-to-end change is smaller: a paired A/B on one corpus measures -0.6%
+at 1,000 records and -7.6% at 4,000 with an identical answer surface, and at 10,000 the warm median is
+within run-to-run drift (3,513.6 ms before, 3,527.8 ms after). The request remains dominated by
+whole-store work that is not derived state — whole-log loads and record copies, the two searches that
+tokenize every record, and the window annotation — which is why the reuse does not reach the sub-second
+target at 10,000 and why no persistent index was added.
+
+See `knowledge-lifecycle-reuse.test.js` (equivalence against a fresh instance, one construction per
+unchanged snapshot, append/retraction/resolution/supersession invalidation, same-length replacement,
+a concurrent writer, snapshot movement, interrupted and damaged stores, partners outside the window,
+cold start, two application instances, a write from another OS process, caller-edit isolation, and the
+real controller path) and `benchmarks/run-runtime-performance-benchmark.mjs`.
+
 ## 6. D. Diagnostics and evaluation
 
 ### Runtime diagnostics

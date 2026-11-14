@@ -2191,8 +2191,10 @@ through the stores' own validated write paths into a fresh temporary directory p
 Five query classes are reported **separately and never averaged**: `common` (every term in every
 record), `rare-token` (one term absent from the whole store — the class that exposed the AP-09 defect),
 `long` (380 unrelated words plus three relevant ones), `adversarial` (a negation), and `no-result`
-(no term present). The corpus is grown monotonically, so a larger row is the same corpus plus fillers
-rather than a different fixture. Two target records are added once.
+(no term present). Each store ends with **exactly** the number of records its row states: the two
+target records are part of that count, fillers are added only up to it, and the row is refused if the
+persisted counts disagree. A size smaller than the current corpus rebuilds a fresh isolated directory
+instead of measuring the larger one. Two target records are added once per corpus.
 
 The `scoring` phase is a before/after comparison of the **weighting policy on identical document
 frequencies**, computed from the same formula the stores use. It is not a comparison of two builds of
@@ -2208,17 +2210,29 @@ the application, and it is printed apart from the latency phases so the two are 
 - Never run this benchmark concurrently with another benchmark or with the test suite: the rows are
   wall-clock timings and contention invalidates them.
 
-### Measured results
+### Measured results (Batch AP-10 run — request and context rows SUPERSEDED)
 
 One run of `--sizes 20,200,1000,4000,10000 --repeats 7 --phase all`, on the final AP-10 tree, with no
 other benchmark and no test suite running. Node v26.4.0 on win32 x64, 12 logical CPUs, 24 GiB reported
 memory. Every row below is from that single run; nothing is averaged across runs and no figure is
 carried over from an earlier batch.
 
-The corpus is grown monotonically, so a larger row is the same corpus plus fillers rather than a
-different fixture. Two target records are added once. Fillers share the common query terms; the
-`rare-token` class asks for one term that occurs in no record; `long` is 380 unrelated words plus three
-relevant ones; `adversarial` is a negation; `no-result` shares no term with the store.
+> **Superseded by Batch AP-11.** That run shared one corpus across phases and `growTo()` only ever
+> grew it. The `retrieval` phase ran first and grew the corpus 20 → 10000, so its rows are valid. The
+> `context` and `request` phases then asked for 20, 200, 1000, 4000 and 10000 in turn and **every one
+> of those rows measured the 10000-record corpus the retrieval phase had left behind**. Their size
+> labels are wrong, and the conclusion drawn from them — that request latency is flat across corpus
+> sizes and dominated by a size-independent cost — is **invalid**. The corrected benchmark rebuilds an
+> isolated corpus per row and verifies the persisted record count before measuring; see
+> [Batch AP-11](#runtime-performance-benchmark-batch-ap-11) below for the corrected request and context
+> measurements. The historical rows are preserved here, marked invalid, not deleted.
+
+The corpus was grown monotonically within the retrieval phase, so a larger row there is the same
+corpus plus fillers rather than a different fixture. Two target records were added once, on top of the
+stated filler count, so the retrieval rows describe `size + 2` memory and `size + 1` knowledge records
+rather than exactly `size`. Fillers share the common query terms; the `rare-token` class asks for one
+term that occurs in no record; `long` is 380 unrelated words plus three relevant ones; `adversarial`
+is a negation; `no-result` shares no term with the store.
 
 **Normalization is size-independent and never truncated these queries.** Token counts: `common` 3,
 `rare-token` 3, `long` 383, `adversarial` 4, `no-result` 3; `dropped` 0 in every class, so
@@ -2279,37 +2293,43 @@ match and ranks it first at 0.0055 (20 records) and 0.0078 (200 and above), whic
 so it is excluded from the prompt and reported as `below_relevance_threshold`; knowledge returns
 nothing at all.
 
-**Context assembly** (`buildPrompt` over the retrieved hits): median 0.132 ms at 20 records, then
-0.064 / 0.061 / 0.083 / 0.048 ms at 200 / 1000 / 4000 / 10000. The prompt is 983 characters at every
-size with memory 1/1 and knowledge 5/5 lines surviving, 0 duplicates collapsed and 0 records omitted —
-the budget was not reached, so there was nothing to disclose. Two size-independent checks ran beside
-it: with both sides of a disagreement retrieved the contested marker is present, and after a budget
-that keeps only one side the marker is *still* present and the omission is disclosed; three retrieved
-triples of which two are identical collapse to 2 lines with 1 collapse disclosed and the disagreeing
-triple surviving.
+**Context assembly — SUPERSEDED, every row measured 10000 records** (`buildPrompt` over the retrieved
+hits): median 0.132 ms at the row labelled 20, then 0.064 / 0.061 / 0.083 / 0.048 ms at the rows labelled
+200 / 1000 / 4000 / 10000. Those labels are not the corpora measured; the spread between them is
+single-run noise on one 10000-record corpus, not a size effect. The prompt is 983 characters with
+memory 1/1 and knowledge 5/5 lines surviving, 0 duplicates collapsed and 0 records omitted — the budget
+was not reached, so there was nothing to disclose. Two size-independent checks ran beside it and are
+unaffected by the corpus defect: with both sides of a disagreement retrieved the contested marker is
+present, and after a budget that keeps only one side the marker is *still* present and the omission is
+disclosed; three retrieved triples of which two are identical collapse to 2 lines with 1 collapse
+disclosed and the disagreeing triple surviving.
 
-**The complete request path**, one grounded question, median wall time over 7 samples:
+**The complete request path — SUPERSEDED, every row measured 10000 records.** One grounded question,
+median wall time over 7 samples:
 
-| records | median | range | trust | read state |
-| --- | --- | --- | --- | --- |
-| 20 | 2222.288 ms | 2110.479–2464.019 ms | factually_supported | bounded_usable |
-| 200 | 2211.550 ms | 2098.968–2317.982 ms | factually_supported | bounded_usable |
-| 1000 | 2192.306 ms | 2150.544–2233.452 ms | factually_supported | bounded_usable |
-| 4000 | 2181.647 ms | 2080.679–2220.243 ms | factually_supported | bounded_usable |
-| 10000 | 2197.148 ms | 2070.635–2230.813 ms | factually_supported | bounded_usable |
+| row label | median | range | trust | read state | actual corpus |
+| --- | --- | --- | --- | --- | --- |
+| 20 | 2222.288 ms | 2110.479–2464.019 ms | factually_supported | bounded_usable | **10000, invalid** |
+| 200 | 2211.550 ms | 2098.968–2317.982 ms | factually_supported | bounded_usable | **10000, invalid** |
+| 1000 | 2192.306 ms | 2150.544–2233.452 ms | factually_supported | bounded_usable | **10000, invalid** |
+| 4000 | 2181.647 ms | 2080.679–2220.243 ms | factually_supported | bounded_usable | **10000, invalid** |
+| 10000 | 2197.148 ms | 2070.635–2230.813 ms | factually_supported | bounded_usable | 10000, valid |
 
-Every size produced 1 factual claim, 1 directly supported, 0 partial attribution, 0 unattributed. The
-retrieval report was `source_limit_reached` with `complete false` and window `consistent` at every
-size: memory returned 5 of more matches and contributed 1, knowledge returned 3 and contributed 1,
-conversation contributed 4 and temporal 1, and the remaining sources are named as not searched rather
+Only the last row describes the corpus its label states. The five medians are five measurements of the
+same 10000-record store, which is why they agree; they are **not** evidence that latency is independent
+of corpus size.
+
+The classification and completeness findings are unaffected by the size defect, because they were all
+observed on the same corpus: 1 factual claim, 1 directly supported, 0 partial attribution, 0
+unattributed. The retrieval report was `source_limit_reached` with `complete false` and window
+`consistent`: memory returned 5 of more matches and contributed 1, knowledge returned 3 and contributed
+1, conversation contributed 4 and temporal 1, and the remaining sources are named as not searched rather
 than omitted. The citation assessment found 1 claim, 0 citations outside the snapshot, **1 relevant
-retrieved record left uncited**, 0 one-sided conflicts, bounded true — at every size. The uncited record
-is disclosed, not force-cited, and the claim's support was not upgraded because of it.
+retrieved record left uncited**, 0 one-sided conflicts, bounded true. The uncited record is disclosed,
+not force-cited, and the claim's support was not upgraded because of it.
 
-Two things this table does **not** show. The request wall time did not grow with the corpus in this
-run, so it is dominated by a size-independent cost and is not evidence about retrieval scaling; the
-per-source table above is. And `factually_supported` is APEX's own bounded lexical classification of a
-fixed synthetic reply, not a verification of truth.
+`factually_supported` is APEX's own bounded lexical classification of a fixed synthetic reply, not a
+verification of truth.
 
 ### What it does not establish
 
@@ -2326,4 +2346,177 @@ fixed synthetic reply, not a verification of truth.
   about a real model's answer quality, and `factually_supported` is a bounded lexical verdict, not a
   verification of truth.
 
-This script is not part of `npm test` and no test depends on it.
+This script is not part of `npm test`. Since Batch AP-11 one test imports its corpus builder —
+`tests/benchmark-corpus-size.test.js` proves that the size a row reports is the size the request
+measured — but no test runs a measurement, and importing the module never starts one.
+
+## Runtime performance benchmark (Batch AP-11)
+
+```sh
+node benchmarks/run-runtime-performance-benchmark.mjs
+node benchmarks/run-runtime-performance-benchmark.mjs --phase scaling --sizes 20,200,1000,4000,10000 --repeats 5
+node benchmarks/run-runtime-performance-benchmark.mjs --phase shapes --shape-size 200
+node benchmarks/run-runtime-performance-benchmark.mjs --phase limits
+```
+
+Network-free, deterministic in-process model fixture, real controller, real persisted stores. It reuses
+the corrected corpus builder from the retrieval-quality benchmark, so a row labelled `size` holds
+exactly `size` records in each store and the count is verified against the persisted files before the
+row is measured. Temporary directories are prefixed `apex-bench-ap10-` and removed unless `--keep`.
+
+### What it measures
+
+| Phase | Subject |
+| --- | --- |
+| `scaling` | one grounded question at each size, **cold** (a fresh application per sample, so no parse snapshot and no derived lifecycle entry exists) and **warm** (one application, repeated requests, first discarded as warm-up). Median/min/max wall time, the per-stage trace, store read counts, lifecycle-index construction and reuse counts, parse-snapshot hits and misses, and process memory. |
+| `shapes` | ten request shapes, each on its own isolated corpus: simple factual, memory-only, knowledge-only, multi-source, conflicting, long query, empty store, large knowledge store, goal/plan, executive preview. Reported apart, never averaged. |
+| `limits` | the bounded-read disclosure ladder: the same question over corpora holding 1, 3, 5, 6, 10, 20 and 40 matching records, reporting returned/matched/eligible/contributed, the exclusion counts, the retrieval state and whether completeness was established. |
+
+### Measured results (corrected harness)
+
+Environment: Node v26.4.0, win32 x64, 12 logical CPUs, 24 GiB reported memory, Windows 10.0.26300.
+Every row is a real controller request against a temporary store whose persisted count is verified
+before measurement (the printed line names both counts). Repeats 5. The fillers share one subject and
+relationship, so they form a single conflict group and conflict annotation must name every partner —
+the worst case for that cost, stated rather than hidden.
+
+**Scaling, sequential runs.** The same script on two trees: the pre-AP-11 tree extracted with
+`git archive`, and the working tree. These are complete-run medians, not paired samples. Cold rows should
+be unaffected by the change, so their spread (for example 492.0 ms before and 581.0 ms after at 1,000)
+estimates the run-to-run drift that also affects the warm rows.
+
+| records per store | before cold | before warm | after cold | after warm |
+| --- | --- | --- | --- | --- |
+| 20 | 45.0 (38.9–181.0) | 35.6 (33.5–37.8) | 127.0 (124.7–264.6) | 37.5 (33.3–39.3) |
+| 200 | 211.2 (182.4–321.2) | 174.6 (164.8–224.9) | 181.2 (179.6–256.6) | 148.8 (144.3–158.0) |
+| 1,000 | 492.0 (406.0–506.0) | 385.5 (366.1–467.4) | 581.0 (464.0–688.1) | 488.0 (422.5–937.4) |
+| 4,000 | 1,389.3 (891.1–1,434.6) | 1,320.0 (1,250.5–1,344.0) | 1,441.3 (1,313.1–1,544.4) | 1,218.9 (1,193.2–1,249.6) |
+| 10,000 | 3,764.9 (3,675.6–3,942.3) | 3,513.6 (3,475.3–3,981.8) | 3,897.6 (3,764.8–4,098.5) | 3,527.8 (3,461.5–3,632.3) |
+
+All values are milliseconds: median, min–max over 5 samples. The 10,000 after-row was measured in a
+separate run of the same script (`--sizes 10000`) after the combined run stopped during its corpus
+build; its corpus was rebuilt and verified independently, and the pre-existing 10,000 row was kept.
+
+**Scaling, paired.** Both trees on one seeded corpus, alternating requests (six per tree), so machine
+drift cannot be read as a code effect. Absolute values are higher than the table above because two
+applications share one process and one conversation log that grows with every request; only the
+within-pair comparison is meaningful.
+
+| records per store | before | after | delta | answer surface |
+| --- | --- | --- | --- | --- |
+| 1,000 | 676.7 | 672.8 | −0.6% | identical |
+| 4,000 | 2,640.5 | 2,441.0 | −7.6% | identical |
+
+"Identical answer surface" means status, trust, retrieval state, completeness, claim counts and
+per-source returned/contributed counts were equal. The reuse itself is counted, not inferred: over two
+requests the working tree reports `builds 1, hits 3, misses 1; health builds 1, hits 1` at every size,
+while the pre-AP-11 tree has no such counters (`n/a`). Store read counts are size-independent: per two
+requests, six `log.load` calls each for memory, knowledge and experience, two searches and two
+projection reads per store, and two `getMany` reads per store. The number of reads does not grow with
+the corpus; the cost of each does.
+
+**Where the request time goes.** The ten measured diagnostic stages sum to about 11.8 ms of the
+benchmark's 488.0 ms warm request at 1,000 records (2.4%) and about 5.5 ms of 3,527.8 ms at 10,000
+(0.2%): the stage trace covers only part of the path. A separate instrumented probe — timed wrappers on
+a distinct application, whose per-call values are inflated by the wrappers and by GC, so it ranks costs
+rather than summing to the request — attributes the rest, in order, to `knowledge.projectionRead`
+(whole-log load, store-wide health, window annotation), `memory.search` and `knowledge.search`
+(tokenizing every record), the six whole-store `log.load` calls (each returns isolated copies of every
+record), and `getMany` plus the small executive reads. That residual is the measured lower bound this
+batch does not move: the sub-second target at 10,000 would require an inverted or persistent index over
+record content, which §5 forbids without measured justification and which would be a storage-behaviour
+change rather than a read-path tightening.
+
+**Targets.** Small store (<300 ms): met warm (37.5 ms). 1,000 (<500 ms): met warm under this
+benchmark's single-application conditions (488.0 ms), not cold (581.0 ms), and the paired run puts the
+steady state near 670 ms when two applications share the process. 10,000 (<1 s): not met (3.53 s warm).
+Targets are objectives, reported as measured rather than as guarantees.
+
+**Memory.** At 10,000 records the after-run reports rss 146.2 → 264.2 MiB and heapUsed 34.3 → 107.3 MiB
+across the cold samples and the counted reads. The retained derived state is one entry per store
+instance, replaced on any content change; it holds indexes, not record copies.
+
+**Query shapes.** Ten shapes, each on its own isolated corpus, warm, five samples. One run; shapes are
+reported apart and nothing is averaged across them. Fixture build time is excluded from the request
+measurement (it ranged from 0.1 ms to 17.2 s and is harness setup, not runtime cost).
+
+| shape | corpus memory/knowledge | warm median (min–max) | verdict |
+| --- | --- | --- | --- |
+| simple factual | 2 / 1 | 37.1 (35.6–40.0) | `factually_supported`, `bounded_results` |
+| memory-only | 1 / 0 | 33.5 (28.4–36.3) | `factually_supported`, `bounded_results` |
+| knowledge-only | 0 / 1 | 28.7 (28.2–32.8) | `accepted_for_presentation`, `bounded_results` |
+| multi-source | 1 / 1 | 31.9 (30.4–32.2) | `factually_supported`, `bounded_results` |
+| conflicting | 1 / 2 | 31.7 (28.6–32.6) | `factually_supported`, `bounded_results` |
+| long query (3,816 chars) | 199 / 198 | 202.3 (182.4–211.8) | `received`, `bounded_results`; memory 1 returned/0 contributed |
+| empty store | 0 / 0 | 99.1 (82.9–154.0) | `accepted_for_presentation`, `bounded_results` |
+| large knowledge store | 1 / 199 | 151.7 (141.8–199.8) | `factually_supported`, `source_limit_reached`; knowledge 3/3, 196 limit-excluded |
+| goal/plan | 2 / 1 | 113.8 (92.0–150.2) | `plan_rejected` (the fixture reply carries no plan proposal; nothing stored) |
+| executive preview | 2 / 1 | 28.0 (26.6–30.9) | `success_verified` |
+
+Three results deserve the caveats rather than a reading. The **long query** normalizes 383 tokens and
+is the only shape above 100 ms; its one retrieved memory record scored below the relevance floor, so it
+was returned but contributed nothing. The **goal/plan** shape measures the plan request through
+validation and rejection: the in-process fixture returns prose, never a `plan_create` proposal, so the
+real runtime correctly refused it and stored nothing — this is not a measurement of the accepted-plan
+path. The **empty store** median (99.1 ms) is higher than every small populated shape (28–37 ms) in the
+same run and its range is the widest; with five samples on a shared machine, that is unexplained
+run-to-run variability, not a claim that an empty store is slower. No shape is averaged into another
+and no overall latency or quality number is computed from them.
+
+**Source-limit disclosure ladder.** The same question over a 200-record corpus per store holding
+1, 3, 5, 6, 10, 20 or 40 matching records. Fillers share no content word with the question, so
+`matched` counts exactly the sewn records and every exclusion is attributable to a named bound.
+Warm, five samples. Nothing in this ladder widens a bound; it reports what each existing bound
+excludes.
+
+| matching | memory ret/mat/eli/con | memory limit-excluded | knowledge ret/mat/eli/con | knowledge limit-excluded | prompt knowledge lines | overall state | warm median (min–max) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1/1/1/1 | 0 | 1/1/1/1 | 0 | 1 | `bounded_results` | 167.9 (154.7–448.2) |
+| 3 | 3/3/3/3 | 0 | 3/3/3/3 | 0 | 3 | `bounded_results` | 158.8 (156.1–206.9) |
+| 5 | 5/5/5/5 | 0 | 3/5/3/3 | 2 | 3 | `source_limit_reached` | 163.4 (142.0–187.9) |
+| 6 | 5/6/5/5 | 1 | 3/6/3/3 | 3 | 3 | `source_limit_reached` | 154.6 (140.1–165.2) |
+| 10 | 5/10/5/5 | 5 | 3/10/3/3 | 7 | 3 | `source_limit_reached` | 169.5 (128.0–276.4) |
+| 20 | 5/20/5/5 | 15 | 3/20/3/3 | 17 | 3 | `source_limit_reached` | 150.5 (145.2–267.3) |
+| 40 | 5/40/5/5 | 35 | 3/40/3/3 | 37 | 3 | `source_limit_reached` | 146.0 (139.4–181.0) |
+
+`ret/mat/eli/con` are returned, matched, eligible and contributed. The binding windows are smaller
+than the evidence layer's own six-record per-source bound, because the answer path pre-reads both
+stores and seeds the evidence read from what it already chose: memory evidence inherits the
+five-record memory search window, and knowledge evidence inherits the three-record prompt knowledge
+window (`KNOWLEDGE_PROMPT_LIMIT`, the same window whose lines the prompt carries). So the prompt
+never shows more than three knowledge lines, and the report's knowledge exclusions count records
+the three-record window cut — not records a six-record bound would have kept.
+
+The state change point is exact. At 1 matching record both sources report `complete_with_results`
+and completeness true. At 3, memory still does (3 < 5) but knowledge reports `bounded_results`:
+a window that returned exactly its limit cannot establish that nothing else matched. From 5
+onward both sources report `source_limit_reached` with completeness false, and the
+limit-excluded counts grow one-for-one with the matching records. The overall state stays
+`bounded_results` at 1 and 3 only because other sources (world, experience, feedback, adaptation,
+goal, plan, task) are also read under bounds; from 5 the knowledge and memory exclusions raise it
+to `source_limit_reached`. Warm time does not grow with the number of matches (146–170 ms across
+all rows); the 448 ms maximum in the first row is one outlier in the first measured row, not a
+size effect. What grows is the disclosed exclusion count, which is the point.
+
+### Measurement rules
+
+- Timings are monotonic (`performance.now`). Default repeats 5, maximum 15.
+- **Latency is measured on an uninstrumented application.** Read and construction counts are collected
+  afterwards on a separate instrumented application, so no counting wrapper sits inside a timed request.
+- **Cold means cold application state, not cold disk.** The operating system's file cache is warm, so a
+  cold row measures construction and first-read cost, not device latency.
+- A duration or count that was not produced is `null` and prints `n/a`, never zero. The pre-AP-11 tree
+  has no derived-state reuse and therefore reports no construction counters; those cells are `n/a`.
+- Before/after comparisons run the same script, the same corpora and the same repeats on two trees: the
+  committed pre-AP-11 tree extracted with `git archive`, and the working tree. Nothing is averaged
+  across runs and no figure is carried over from an earlier batch.
+- Never run this benchmark concurrently with another benchmark or with the test suite.
+
+### What it does not establish
+
+- A fixture reply is not a model answer. `factually_supported` is APEX's own bounded lexical
+  classification of fixed synthetic text, not a verification of truth.
+- One corpus composition is not a scaling law. The fillers share one subject and relationship, so they
+  form a single growing conflict group: that is a **worst case** for conflict annotation, and a store
+  whose claims are spread over many subjects behaves differently. Both are reported where measured.
+- The ten shapes are reported apart. No overall latency or quality number is computed from them.

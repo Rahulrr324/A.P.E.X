@@ -39,6 +39,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { performance } from 'node:perf_hooks';
 import { createApp } from '../src/app.js';
@@ -81,6 +82,9 @@ function tempDir() {
 }
 
 function removeDir(dir) {
+  // A superseded corpus is removed as soon as it is rebuilt, so a tracked path may already be gone.
+  // The guard below still refuses anything outside the benchmark's own temporary directories.
+  if (!fs.existsSync(dir)) return;
   const real = fs.realpathSync(dir);
   if (!real.startsWith(TMP_ROOT) || !path.basename(real).startsWith(PREFIX)) {
     throw new Error(`refusing to remove non-benchmark directory: ${real}`);
@@ -176,10 +180,14 @@ function groundedReply(evidenceId) {
 
 // Fillers deliberately do not contain the word "project", so the rare-token class reproduces the
 // measured defect: one query term absent from the whole store, two present in every record.
-async function seed(app, count) {
-  for (let i = 1; i <= count; i += 1) {
-    await app.memory.add({ content: `the lighthouse archive batch ${i} was recorded`, kind: 'user_fact', source: 'user' });
-    await app.knowledge.add({ subject: 'lighthouse archive', relationship: 'status batch', object: `${i}`, origin: 'user' });
+// The two stores are seeded to independent counts so a row can state an exact per-store size, and the
+// index continues from what is already present so incremental growth never repeats a triple.
+async function seed(app, memoryCount, knowledgeCount, memoryFrom = 0, knowledgeFrom = 0) {
+  for (let i = 1; i <= memoryCount; i += 1) {
+    await app.memory.add({ content: `the lighthouse archive batch ${memoryFrom + i} was recorded`, kind: 'user_fact', source: 'user' });
+  }
+  for (let i = 1; i <= knowledgeCount; i += 1) {
+    await app.knowledge.add({ subject: 'lighthouse archive', relationship: 'status batch', object: `${knowledgeFrom + i}`, origin: 'user' });
   }
 }
 
@@ -323,7 +331,9 @@ async function phaseRequest(opts, state) {
   console.log('  every classification below is APEX\'s own assessment of that fixed reply');
   console.log('  records | median wall    | range                  | trust                 | read state   | claim attribution');
   for (const size of opts.sizes) {
-    await state.growTo(size);
+    // growTo rebuilds a fresh isolated corpus when the size shrinks and throws unless the persisted
+    // record counts equal `size`, so the label below is the corpus this row actually measured.
+    const actual = await state.growTo(size);
     const samples = [];
     let result = null;
     for (let i = 0; i < opts.repeats + 2; i += 1) {
@@ -344,6 +354,7 @@ async function phaseRequest(opts, state) {
       .map((entry) => `${entry.source} ${entry.returned ?? 'n/a'}/${entry.contributed ?? 'n/a'}`)
       .join(', ');
     console.log(`          retrieval ${report?.state ?? 'n/a'} (complete ${report?.complete ?? 'n/a'}, window ${report?.window ?? 'n/a'}); returned/contributed ${perSource || 'n/a'}`);
+    console.log(`          corpus verified: memory ${actual.memory} record(s), knowledge ${actual.knowledge} record(s) — the size this row measured`);
     console.log(`          citation ${citation ? `${citation.claims} claim(s), ${citation.outsideSnapshot} outside snapshot, ${citation.uncitedRelevant} relevant uncited, ${citation.oneSidedConflicts} one-sided, bounded ${citation.bounded}` : 'n/a'}`);
     if (integrity?.trust !== ResponseTrustState.FACTUALLY_SUPPORTED) {
       console.log(`          note: trust ${integrity?.trust ?? 'n/a'} at this size; the fixture reply is unchanged, so any difference is APEX's own assessment`);
@@ -378,29 +389,77 @@ function phaseScoring(opts) {
 
 // ---- driver -------------------------------------------------------------------------------------
 
-// One corpus is grown monotonically and shared by the phases that need a store, so a larger row is the
-// same corpus plus fillers rather than a different fixture. The two target records are added once.
+// One corpus is grown monotonically within a phase, so a larger row is the same corpus plus fillers
+// rather than a different fixture. The two target records are added once.
+//
+// AP-11 correction: `growTo` used to be monotonic only. Because the phases share one state, a later
+// phase asking for a smaller size silently measured the larger corpus the earlier phases had left
+// behind, and every request row was labelled with a size it did not use. `growTo` now rebuilds a fresh
+// isolated corpus whenever the requested size is smaller than the current one, and every caller
+// verifies the actual persisted record counts against the size it is about to print.
+function countRecords(app) {
+  const count = (file) => {
+    if (!fs.existsSync(file)) return 0;
+    return fs.readFileSync(file, 'utf8').split('\n').filter((line) => line.trim()).length;
+  };
+  return { memory: count(app.memory.filePath), knowledge: count(app.knowledge.filePath) };
+}
+
 async function makeState() {
-  const dataDir = tempDir();
+  let dataDir = tempDir();
   let evidenceId = null;
-  const app = makeApp(dataDir, () => groundedReply(evidenceId));
-  let seeded = 0;
+  let app = makeApp(dataDir, () => groundedReply(evidenceId));
+  let memoryCount = 0;
+  let knowledgeCount = 0;
+
+  async function rebuild() {
+    removeDir(dataDir);
+    const superseded = dirs.indexOf(dataDir);
+    if (superseded !== -1) dirs.splice(superseded, 1);
+    dataDir = tempDir();
+    evidenceId = null;
+    memoryCount = 0;
+    knowledgeCount = 0;
+    app = makeApp(dataDir, () => groundedReply(evidenceId));
+  }
+
   return {
-    app,
+    get app() { return app; },
+    get dir() { return dataDir; },
+    get evidenceId() { return evidenceId; },
+    counts: () => countRecords(app),
+    // Each store ends with EXACTLY `size` records, so a row labelled `size` is literally true.
+    // addTargets contributes 2 memory records and 1 knowledge record, so size must be at least 2.
     async growTo(size) {
+      if (!Number.isInteger(size) || size < 2) throw new Error(`benchmark size must be an integer >= 2, got ${size}`);
+      if (size < memoryCount) await rebuild();
       if (evidenceId === null) {
         evidenceId = await addTargets(app);
-        seeded += 3;
+        memoryCount = 2;
+        knowledgeCount = 1;
       }
-      const fillers = size - seeded;
-      if (fillers > 0) {
-        await seed(app, fillers);
-        seeded += fillers;
+      if (memoryCount < size || knowledgeCount < size) {
+        await seed(app, size - memoryCount, size - knowledgeCount, memoryCount, knowledgeCount);
+        memoryCount = size;
+        knowledgeCount = size;
       }
+      const actual = countRecords(app);
+      if (actual.memory !== size || actual.knowledge !== size) {
+        throw new Error(`corpus size mismatch: asked ${size}, persisted memory ${actual.memory}, knowledge ${actual.knowledge}`);
+      }
+      return actual;
     },
   };
 }
 
+// Exported so a regression test can prove the corpus a row reports is the corpus it measured, without
+// running the benchmark. Importing this module never starts a measurement.
+export { makeState, countRecords, parseArgs, seed, addTargets, makeApp, QUERIES, QUESTION, TARGET, LAUNCH, removeDir, dirs };
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) await main();
+
+async function main() {
 const opts = parseArgs(process.argv.slice(2));
 if (opts.help) {
   console.log('usage: node benchmarks/run-retrieval-quality-benchmark.mjs [--repeats R] [--phase normalize|retrieval|context|request|scoring|all] [--sizes 20,200,1000,4000,10000] [--keep]');
@@ -430,4 +489,5 @@ if (opts.help) {
       console.log('\ntemporary data directories removed; nothing outside them was written.');
     }
   }
+}
 }
