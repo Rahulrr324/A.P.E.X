@@ -13,8 +13,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { WriterLock } from '../memory/writer-lock.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS, STOPWORDS, shortId } from '../util.js';
+import { CONTROL_CHARS, shortId } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
+import { normalizeTokens, queryTokens } from '../retrieval/normalize.js';
+import { queryWeights } from '../retrieval/relevance.js';
 
 export const KNOWLEDGE_SCHEMA = 1;
 
@@ -617,11 +619,15 @@ export class KnowledgeStore {
   // policy the memory store uses, so a distinctive name match outranks an incidental
   // common-word match; raw term overlap made the two indistinguishable. Superseded and
   // retracted records are excluded. Results are bounded (never the full store).
-  async search(query, { limit = 5 } = {}) {
+  async search(query, { limit = 5, diagnostics = null } = {}) {
     const records = await this.#loadComplete();
-    if (!query || typeof query !== 'string' || query.trim().length === 0) return [];
-
-    const terms = [...new Set(tokenize(query))];
+    const { tokens: terms, dropped: droppedTokens, total: totalTokens } = queryTokens(query, { stem: false });
+    const explain = diagnostics && typeof diagnostics === 'object' ? diagnostics : null;
+    if (explain) {
+      Object.assign(explain, {
+        terms, droppedTokens, totalTokens, unmatched: [], corpusSize: 0, matched: 0, returned: 0, limit,
+      });
+    }
     if (terms.length === 0) return [];
 
     const { claims, retractionsByTarget, resolutionEvents } = splitLifecycle(records);
@@ -634,10 +640,7 @@ export class KnowledgeStore {
 
     const df = new Map(terms.map((t) => [t, docs.filter((d) => d.has(t)).length]));
     const n = pool.length;
-    // Floored at 1 for the same reason as the memory store: in a small personal
-    // store an unseen word would otherwise outweigh a matched one.
-    const idf = new Map(terms.map((t) => [t, Math.max(1, Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5)))]));
-    const totalWeight = terms.reduce((sum, t) => sum + idf.get(t), 0) || 1;
+    const { idf, totalWeight, unmatched } = queryWeights(terms, df, n);
 
     const scored = pool.map((record, index) => {
       const words = docs[index];
@@ -653,9 +656,17 @@ export class KnowledgeStore {
       const timeDelta = Date.parse(b.record.createdAt) - Date.parse(a.record.createdAt);
       if (timeDelta !== 0) return timeDelta;
       return b.index - a.index;
-    }).slice(0, Math.max(1, limit));
+    });
 
-    return scored.map(({ record, score }) => ({
+    // `matched` counts every record that scored above zero, before the bound cuts the window. Counting
+    // it after the slice made matched === returned at every size, so a retrieval report could never
+    // tell "the store held only these" from "the store held more than the bound returned".
+    const matchedTotal = scored.length;
+    const window = scored.slice(0, Math.max(1, limit));
+    if (explain) {
+      Object.assign(explain, { unmatched, corpusSize: n, matched: matchedTotal, returned: window.length });
+    }
+    return window.map(({ record, score }) => ({
       record: annotate(record, supersededByMap, conflictIndex, retractionsByTarget, resolutionIndex),
       score,
     }));
@@ -1488,8 +1499,8 @@ function hasSupersessionCycle(ids, byId) {
 }
 
 // Lowercase words, drop short words and words that carry no retrieval signal
-// (question words, pronouns, fillers). Mirrors the memory tokenizer's policy.
+// (question words, pronouns, fillers), keep negations and identifiers whole.
+// Shares the memory store's normalization policy; word forms are not folded here.
 export function tokenize(text) {
-  const words = String(text).toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
-  return words.filter((w) => w.length >= 2 && !STOPWORDS.has(w));
+  return normalizeTokens(text, { stem: false });
 }

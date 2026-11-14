@@ -2163,3 +2163,167 @@ reached factual support. No class reached `verified`, which no path can.
   such.
 
 This script is not part of `npm test` and no test depends on it.
+
+## Retrieval quality benchmark (Batch AP-10)
+
+```sh
+node benchmarks/run-retrieval-quality-benchmark.mjs
+node benchmarks/run-retrieval-quality-benchmark.mjs --sizes 20,200,1000,4000,10000 --repeats 9
+node benchmarks/run-retrieval-quality-benchmark.mjs --phase scoring
+```
+
+Network-free. The model is a deterministic in-process fixture object implementing the same small
+backend interface the HTTP backends implement; it returns fixed synthetic text. No inference is run,
+no socket is opened, no endpoint is named, and no model quality is claimed. Fixtures are written
+through the stores' own validated write paths into a fresh temporary directory prefixed
+`apex-bench-ap10-`, which is removed at the end unless `--keep` is passed.
+
+### What it measures
+
+| Phase | Subject | Sizes |
+| --- | --- | --- |
+| `normalize` | `queryTokens` alone, per query class: token count, dropped count, wall time | size-independent |
+| `scoring` | the absent-term weight before (uncapped AP-09 IDF) and after (capped AP-10), and the resulting score against the fixed 0.2 floor | every requested size |
+| `retrieval` | `memory.search` and `knowledge.search` separately, five query classes, returned counts, top and tail score | every requested size |
+| `context` | `buildPrompt` over the retrieved hits: assembly time, surviving line counts, dedup and omission disclosures; plus size-independent contradiction-preservation and deduplication checks | every requested size |
+| `request` | one grounded question through the complete controller path: wall time, trust state, retrieval read state, claim-attribution counts, the retrieval report state with per-source returned/contributed counts, and the citation-completeness counts | every requested size |
+
+Five query classes are reported **separately and never averaged**: `common` (every term in every
+record), `rare-token` (one term absent from the whole store — the class that exposed the AP-09 defect),
+`long` (380 unrelated words plus three relevant ones), `adversarial` (a negation), and `no-result`
+(no term present). The corpus is grown monotonically, so a larger row is the same corpus plus fillers
+rather than a different fixture. Two target records are added once.
+
+The `scoring` phase is a before/after comparison of the **weighting policy on identical document
+frequencies**, computed from the same formula the stores use. It is not a comparison of two builds of
+the application, and it is printed apart from the latency phases so the two are never conflated.
+
+### Measurement rules
+
+- Timings are monotonic (`performance.now`). Two warm-up calls per row are run but not measured.
+- Median, min and max are printed with the sample count. p95 is printed only at 20 or more samples.
+- A duration that was not produced is `null`, never zero, and prints as `n/a`.
+- Default repeats 7, maximum 15. Default sizes 20, 200, 1000, 4000; 10000 is available via `--sizes`
+  and is slower because seeding is a validated append per record.
+- Never run this benchmark concurrently with another benchmark or with the test suite: the rows are
+  wall-clock timings and contention invalidates them.
+
+### Measured results
+
+One run of `--sizes 20,200,1000,4000,10000 --repeats 7 --phase all`, on the final AP-10 tree, with no
+other benchmark and no test suite running. Node v26.4.0 on win32 x64, 12 logical CPUs, 24 GiB reported
+memory. Every row below is from that single run; nothing is averaged across runs and no figure is
+carried over from an earlier batch.
+
+The corpus is grown monotonically, so a larger row is the same corpus plus fillers rather than a
+different fixture. Two target records are added once. Fillers share the common query terms; the
+`rare-token` class asks for one term that occurs in no record; `long` is 380 unrelated words plus three
+relevant ones; `adversarial` is a negation; `no-result` shares no term with the store.
+
+**Normalization is size-independent and never truncated these queries.** Token counts: `common` 3,
+`rare-token` 3, `long` 383, `adversarial` 4, `no-result` 3; `dropped` 0 in every class, so
+`MAX_QUERY_TOKENS = 4096` was not reached. `not completed` normalizes to `[task, not, complet]` and
+`completed` to `[task, complet]` — the negation survives. `ap-10`, `2026-06-01` and `v1.2` are kept
+whole alongside their split parts.
+
+**The absent-term defect and its fix, on identical document frequencies.** Query terms: `lighthouse`
+and `status` in every record, `project` in none. Fixed floor 0.2; `MAX_UNSEEN_TERM_WEIGHT = 4`.
+
+| records | before weight | after weight | before score | after score | before floor | after floor |
+| --- | --- | --- | --- | --- | --- | --- |
+| 20 | 3.7377 | 3.7377 | 0.3486 | 0.3486 | kept | kept |
+| 200 | 5.9965 | 4.0000 | 0.2501 | 0.3333 | kept | kept |
+| 1000 | 7.6019 | 4.0000 | 0.2083 | 0.3333 | kept | kept |
+| 4000 | 8.9874 | 4.0000 | 0.1820 | 0.3333 | **excluded** | kept |
+| 10000 | 9.9036 | 4.0000 | 0.1680 | 0.3333 | **excluded** | kept |
+
+At 20 records the uncapped weight is still below the cap, so before and after are byte-identical — the
+fix changes nothing where the defect did not reach. From 200 records up the cap binds and the score
+stops moving. This is one fixture, not a claim of general retrieval quality.
+
+**Normalization wall time** (size-independent, median over 7 samples): `common` 10.40 µs
+(4.80–15.80), `rare-token` 3.40 µs (3.40–4.60), `long` 170.10 µs (159.50–218.70), `adversarial`
+3.30 µs (3.20–42.20), `no-result` 3.00 µs (2.10–12.00). The `long` class costs about 16× the `common`
+class because it normalizes 383 tokens; it is never subtracted from a request time.
+
+**Per-source retrieval, median wall time in milliseconds.** The source limit is 5 per search, so a
+class returning 5 may be truncated and the count alone does not say so.
+
+| class | source | 20 | 200 | 1000 | 4000 | 10000 |
+| --- | --- | --- | --- | --- | --- | --- |
+| common | memory | 1.767 | 11.812 | 14.263 | 65.180 | 236.067 |
+| common | knowledge | 1.119 | 7.399 | 13.951 | 47.236 | 255.476 |
+| rare-token | memory | 1.148 | 9.269 | 14.783 | 60.792 | 227.029 |
+| rare-token | knowledge | 0.909 | 8.278 | 11.694 | 89.898 | 199.164 |
+| long | memory | 2.747 | 17.914 | 30.466 | 228.637 | 683.810 |
+| long | knowledge | 1.976 | 10.636 | 19.683 | 159.992 | 772.439 |
+| adversarial | memory | 1.163 | 8.477 | 14.241 | 99.405 | 234.629 |
+| adversarial | knowledge | 0.891 | 8.530 | 8.980 | 72.095 | 195.546 |
+| no-result | memory | 0.730 | 4.949 | 6.047 | 42.390 | 97.256 |
+| no-result | knowledge | 0.601 | 5.090 | 6.127 | 52.407 | 116.595 |
+
+Returned counts are identical at every size: `common` 5/5, `rare-token` 5/5, `long` 1 memory and 0
+knowledge, `adversarial` 5/5, `no-result` 0/0 (memory/knowledge). Retrieval is a full scan, so the
+median grows with the corpus; the `long` class is the most expensive because every one of its 383
+tokens is weighted against every record. The growth is **not monotonic at every size in this run** —
+the 1000-record row is faster than the trend, and at 4000 records `rare-token` knowledge (89.898 ms)
+is slower than memory (60.792 ms) while at 10000 the order reverses. These are single-run medians on a
+shared machine, not a fitted scaling law, and no per-size ordering is claimed.
+
+Scores, kept apart from latency: `common` tops and tails at 1.0000 in both stores at every size.
+`rare-token` tops at 1.0000; its memory tail falls 0.1618 → 0.0927 → 0.0714 → 0.0596 → 0.0537 and its
+knowledge tail 0.4406 → 0.2904 → 0.2353 → 0.2023 → 0.1851, so at 10000 the fifth knowledge record is
+below the 0.2 floor while the target still ranks first. `adversarial` tops at 0.6262–0.6879 (memory)
+and 0.5510–0.5849 (knowledge). `long` is the known weakness stated below: memory retrieves the exact
+match and ranks it first at 0.0055 (20 records) and 0.0078 (200 and above), which is below the floor,
+so it is excluded from the prompt and reported as `below_relevance_threshold`; knowledge returns
+nothing at all.
+
+**Context assembly** (`buildPrompt` over the retrieved hits): median 0.132 ms at 20 records, then
+0.064 / 0.061 / 0.083 / 0.048 ms at 200 / 1000 / 4000 / 10000. The prompt is 983 characters at every
+size with memory 1/1 and knowledge 5/5 lines surviving, 0 duplicates collapsed and 0 records omitted —
+the budget was not reached, so there was nothing to disclose. Two size-independent checks ran beside
+it: with both sides of a disagreement retrieved the contested marker is present, and after a budget
+that keeps only one side the marker is *still* present and the omission is disclosed; three retrieved
+triples of which two are identical collapse to 2 lines with 1 collapse disclosed and the disagreeing
+triple surviving.
+
+**The complete request path**, one grounded question, median wall time over 7 samples:
+
+| records | median | range | trust | read state |
+| --- | --- | --- | --- | --- |
+| 20 | 2222.288 ms | 2110.479–2464.019 ms | factually_supported | bounded_usable |
+| 200 | 2211.550 ms | 2098.968–2317.982 ms | factually_supported | bounded_usable |
+| 1000 | 2192.306 ms | 2150.544–2233.452 ms | factually_supported | bounded_usable |
+| 4000 | 2181.647 ms | 2080.679–2220.243 ms | factually_supported | bounded_usable |
+| 10000 | 2197.148 ms | 2070.635–2230.813 ms | factually_supported | bounded_usable |
+
+Every size produced 1 factual claim, 1 directly supported, 0 partial attribution, 0 unattributed. The
+retrieval report was `source_limit_reached` with `complete false` and window `consistent` at every
+size: memory returned 5 of more matches and contributed 1, knowledge returned 3 and contributed 1,
+conversation contributed 4 and temporal 1, and the remaining sources are named as not searched rather
+than omitted. The citation assessment found 1 claim, 0 citations outside the snapshot, **1 relevant
+retrieved record left uncited**, 0 one-sided conflicts, bounded true — at every size. The uncited record
+is disclosed, not force-cited, and the claim's support was not upgraded because of it.
+
+Two things this table does **not** show. The request wall time did not grow with the corpus in this
+run, so it is dominated by a size-independent cost and is not evidence about retrieval scaling; the
+per-source table above is. And `factually_supported` is APEX's own bounded lexical classification of a
+fixed synthetic reply, not a verification of truth.
+
+### What it does not establish
+
+- Retrieval here is bounded lexical token overlap weighted by inverse document frequency. It is **not
+  semantic understanding**, not entailment and not natural-language inference. A synonym absent from
+  the record text, a paraphrase, an implication or a coreference is not resolved.
+- One fixture is not evidence of general retrieval quality. The five classes are reported apart, and
+  no single overall quality number is computed from them.
+- The `long` class measures a known weakness rather than a success: the score denominator sums every
+  query term, so a long request dilutes its own exact match below the prompt floor. The record is
+  still retrieved and still citable; it does not enter the prompt. That exclusion is reported as
+  `below_relevance_threshold`, never as "no match".
+- The request phase measures APEX's own classification of a fixed synthetic reply. It says nothing
+  about a real model's answer quality, and `factually_supported` is a bounded lexical verdict, not a
+  verification of truth.
+
+This script is not part of `npm test` and no test depends on it.

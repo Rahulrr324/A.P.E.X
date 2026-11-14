@@ -15,7 +15,8 @@
 //
 // The assessment is read-only and bounded. It carries identifiers, states, and counts, never the
 // request, evidence text, or model prose, and every record it produces says `authorizes: false`.
-import { EvidenceState } from './vocabulary.js';
+import { EvidenceState, EvidenceValidity } from './vocabulary.js';
+import { PROMPT_RELEVANCE_MIN } from '../memory/memory-store.js';
 import {
   assessClaimSemantics, assessResponseConsistency, contentTokens, SemanticDimensionStatus,
   SEMANTIC_DIMENSIONS, SemanticFinding,
@@ -278,6 +279,132 @@ export function assessClaimAttribution(text, evidenceIds, evidenceById) {
   return { status: 'unattributed' };
 }
 
+// ---- citation completeness (AP-10) -------------------------------------------------------------
+//
+// Attribution asks whether a claim restates the records it cites. Citation completeness asks the
+// other questions the records raise: was each cited record actually retrieved in this snapshot, what
+// is its lifecycle state, did the response lean on one side of a stored disagreement while the other
+// side sat retrieved and uncited, and which relevant retrieved records did no claim cite at all. It
+// is a disclosure, not a rejection: a relevant record going uncited never forces a citation and never
+// upgrades support, and relevance is only asserted where the lexical score establishes it.
+
+const MAX_CITATION_FINDINGS = 12;
+const ONE_SIDED_REASON = 'the claim relies on one side of a stored disagreement; the other side was retrieved and no claim cites it';
+
+// The lifecycle a cited record stands in, preserved rather than flattened: a superseded or retracted
+// record is not merely old, and a historical one is not current.
+function citationLifecycle(item) {
+  const validity = item?.validity ?? null;
+  const status = String(item?.status ?? '').toLowerCase();
+  if (validity === EvidenceValidity.RETRACTED || status === 'retracted') return 'retracted';
+  if (validity === EvidenceValidity.SUPERSEDED || status === 'superseded') return 'superseded';
+  if (item?.current === false || validity === EvidenceValidity.HISTORICAL || status === 'historical') return 'historical';
+  return 'current';
+}
+
+function conflictPartnersOf(record, evidenceById, conflicts) {
+  const partners = new Set();
+  for (const id of record?.relationships?.contradicts ?? []) {
+    if (typeof id === 'string') partners.add(id);
+  }
+  // The link is symmetric in the stores but may be recorded on only one side, so the reverse
+  // direction is read too: a record that names this one as a contradiction is a partner regardless.
+  for (const other of evidenceById.values()) {
+    if (other.evidenceId === record.evidenceId) continue;
+    if ((other.relationships?.contradicts ?? []).includes(record.evidenceId)) partners.add(other.evidenceId);
+  }
+  for (const group of conflicts ?? []) {
+    const members = group?.memberIds ?? (group?.members ?? []).map((member) => member.id);
+    const ids = members.filter(Boolean).map((id) => (String(id).startsWith('ev:') ? String(id) : `ev:world_fact:${id}`));
+    if (!ids.includes(record.evidenceId)) continue;
+    for (const id of ids) if (id !== record.evidenceId) partners.add(id);
+  }
+  partners.delete(record.evidenceId);
+  return [...partners];
+}
+
+// Pure assessment over the assessed claims and the retrieval snapshot. `perClaim` aligns with the
+// input claims; `summary` is the response-level finding list. Nothing here reads a store or a model.
+export function assessCitationCompleteness({
+  claims = [], evidenceById = null, conflicts = [], report = null, read = null,
+  floor = PROMPT_RELEVANCE_MIN,
+} = {}) {
+  const list = Array.isArray(claims) ? claims : [];
+  const index = evidenceById instanceof Map ? evidenceById : new Map();
+  const citedAll = new Set();
+  for (const claim of list) {
+    for (const id of Array.isArray(claim.evidenceIds) ? claim.evidenceIds : []) citedAll.add(id);
+  }
+  const perClaim = list.map((claim) => {
+    const ids = [...new Set((Array.isArray(claim.evidenceIds) ? claim.evidenceIds : []).filter((id) => typeof id === 'string'))].slice(0, 6);
+    const cited = [];
+    const outsideSnapshot = [];
+    const partners = new Set();
+    for (const id of ids) {
+      const record = index.get(id);
+      if (!record) {
+        outsideSnapshot.push(id);
+        continue;
+      }
+      cited.push({
+        evidenceId: id,
+        recordId: record.recordId ?? null,
+        source: record.source ?? null,
+        inSnapshot: true,
+        lifecycle: citationLifecycle(record),
+        score: Number.isFinite(record.score) ? record.score : null,
+      });
+      if (FACTUAL_KINDS.has(claim.kind)) {
+        for (const partner of conflictPartnersOf(record, index, conflicts)) {
+          if (index.has(partner) && !citedAll.has(partner)) partners.add(partner);
+        }
+      }
+    }
+    return {
+      cited,
+      outsideSnapshot,
+      oneSidedConflict: partners.size > 0,
+      conflictPartners: [...partners].slice(0, MAX_CITATION_FINDINGS),
+    };
+  });
+
+  // A relevant retrieved record no claim cites. Relevance is only establishable from the lexical
+  // score the search assigned; a record without one is never flagged, so this can neither force a
+  // citation nor imply the uncited record was irrelevant.
+  // An empty claim set has no citation behaviour to assess. Flagging every relevant record there
+  // would demand a citation from a response that asserts nothing; its grounding is already stated
+  // by the trust ladder, which cannot reach factually_supported without a factual claim.
+  const uncitedRelevant = [];
+  if (list.length > 0) {
+    for (const record of index.values()) {
+      if (citedAll.has(record.evidenceId)) continue;
+      if (!Number.isFinite(record.score) || record.score < floor) continue;
+      uncitedRelevant.push({ evidenceId: record.evidenceId, source: record.source ?? null, score: record.score });
+    }
+    uncitedRelevant.sort((a, b) => b.score - a.score || (a.evidenceId < b.evidenceId ? -1 : a.evidenceId > b.evidenceId ? 1 : 0));
+  }
+
+  const oneSidedConflicts = [];
+  perClaim.forEach((entry, i) => {
+    if (!entry.oneSidedConflict) return;
+    oneSidedConflicts.push({ claim: i, evidenceIds: list[i].evidenceIds ?? [], partners: entry.conflictPartners });
+  });
+  const outsideSnapshot = [...new Set(perClaim.flatMap((entry) => entry.outsideSnapshot))];
+  const bounded = report ? report.complete !== true : read?.complete !== true;
+  return {
+    perClaim,
+    summary: {
+      schema: RESPONSE_CONTRACT_SCHEMA,
+      claims: list.length,
+      outsideSnapshot: outsideSnapshot.slice(0, MAX_CITATION_FINDINGS),
+      uncitedRelevant: uncitedRelevant.slice(0, MAX_CITATION_FINDINGS),
+      oneSidedConflicts: oneSidedConflicts.slice(0, MAX_CITATION_FINDINGS),
+      bounded,
+      authorizes: false,
+    },
+  };
+}
+
 // ---- trust ladder ------------------------------------------------------------------------------
 
 function acceptedStructure(check) {
@@ -295,6 +422,7 @@ function claimStatesForTrust(claims) {
 // when every claim restates a current record, because APEX checked the citation, not the sentence.
 export function assessModelOutputTrust({
   text, classification = null, check = null, recheck = null, evidenceById = null, read = null,
+  retrieval = null,
 } = {}) {
   const body = typeof text === 'string' ? text.trim() : '';
   const received = body.length > 0;
@@ -331,16 +459,41 @@ export function assessModelOutputTrust({
       read,
     }),
   }));
+  // AP-10: citation completeness is assessed against the same snapshot. A factual claim that leans on
+  // one side of a stored disagreement while the other side sits retrieved and uncited cannot be
+  // semantically consistent: the override below replaces a consistent/partial outcome with
+  // insufficient_evidence, keeping any more severe finding the semantic check already reached.
+  const citation = assessCitationCompleteness({
+    claims: assessed,
+    evidenceById,
+    conflicts: retrieval?.conflicts ?? [],
+    report: retrieval?.report ?? null,
+    read,
+  });
+  const withCitation = assessed.map((claim, i) => {
+    const entry = citation.perClaim[i];
+    let semantic = claim.semantic;
+    if (entry.oneSidedConflict
+      && (semantic.finding === SemanticFinding.SEMANTICALLY_CONSISTENT || semantic.finding === SemanticFinding.PARTIALLY_CONSISTENT)) {
+      semantic = {
+        ...semantic,
+        finding: SemanticFinding.INSUFFICIENT_EVIDENCE,
+        reason: ONE_SIDED_REASON,
+        dimensions: { ...semantic.dimensions, attribution: SemanticDimensionStatus.CONFLICT },
+      };
+    }
+    return { ...claim, citation: entry, semantic };
+  });
   // Contradictions between factual claims of one response are a separate check from each claim's own
   // grounding. Only claims that assert a stored fact are compared; an inference beside a fact is a
   // disclosed inference, not a contradiction.
-  const consistency = assessResponseConsistency({ claims: assessed });
-  const { factual, attributed: attributedFactual, supported } = claimStatesForTrust(assessed);
+  const consistency = assessResponseConsistency({ claims: withCitation });
+  const { factual, attributed: attributedFactual, supported } = claimStatesForTrust(withCitation);
   const weakened = Number.isFinite(recheck?.weakened) && recheck.weakened > 0;
   // A claim labelled general knowledge or unknown is the model saying it is not backed by a record.
   // The factual claims beside it may each check out, but the answer as a whole then rests on
   // something the records do not establish, so it stays at presentation with a stated limitation.
-  const unsupportedClaim = assessed.some((claim) => claim.kind === 'general_knowledge' || claim.kind === 'unknown');
+  const unsupportedClaim = withCitation.some((claim) => claim.kind === 'general_knowledge' || claim.kind === 'unknown');
   // A factual claim reaches `factually_supported` only when the wording was checked, not merely
   // attributed: a paraphrase that reverses a negation or changes a number is lexically attributable.
   const semanticallyConsistent = attributedFactual.length > 0
@@ -375,9 +528,10 @@ export function assessModelOutputTrust({
     state,
     ladder,
     verified: false,
-    claims: assessed,
+    claims: withCitation,
     weakened,
     consistency,
+    citationCompleteness: citation.summary,
   };
 }
 
@@ -402,6 +556,12 @@ function limitationCodes({ analysis, trust, check, recheck, truncated }) {
     }
     const contradictions = trust.consistency?.contradictions?.length ?? 0;
     if (contradictions > 0) codes.push('response_inconsistent');
+    // Citation-completeness findings are disclosed only when they exist; a clean citation set adds
+    // nothing, so a fully grounded answer keeps its single unverified qualification.
+    const citation = trust.citationCompleteness;
+    if ((citation?.outsideSnapshot?.length ?? 0) > 0) codes.push('citation_outside_snapshot');
+    if ((citation?.oneSidedConflicts?.length ?? 0) > 0) codes.push('citation_one_sided_conflict');
+    if ((citation?.uncitedRelevant?.length ?? 0) > 0) codes.push('citation_relevant_uncited');
   }
   if (recheck?.weakened > 0) codes.push('evidence_changed');
   const counts = analysis?.retrieval?.counts ?? {};
@@ -422,6 +582,7 @@ export function assessResponseIntegrity({
     recheck,
     evidenceById: analysis?.retrieval?.byId ?? null,
     read: analysis?.retrieval?.read ?? null,
+    retrieval: analysis?.retrieval ?? null,
   });
   const finding = evidenceFinding(analysis);
   // With no model output there is no wording to qualify, so the limitation list is empty rather than
@@ -527,6 +688,24 @@ export function responseIntegrityAudit(assessment) {
       unattributed: claims.filter((claim) => claim.attribution === 'unattributed').length,
     },
     semantic: semanticAudit(assessment),
+    // The citation findings are reduced to counts here. The id-bearing detail stays in the live
+    // assessment and the disclosure notice; an audit record must not be able to name a stored record.
+    citationCompleteness: citationCompletenessAudit(assessment),
+    authorizes: false,
+  };
+}
+
+function citationCompletenessAudit(assessment) {
+  const citation = assessment?.trust?.citationCompleteness;
+  if (!citation) return null;
+  const count = (value) => (Array.isArray(value) ? value.length : 0);
+  return {
+    schema: RESPONSE_CONTRACT_SCHEMA,
+    claims: Number.isInteger(citation.claims) ? citation.claims : 0,
+    outsideSnapshot: count(citation.outsideSnapshot),
+    uncitedRelevant: count(citation.uncitedRelevant),
+    oneSidedConflicts: count(citation.oneSidedConflicts),
+    bounded: citation.bounded === true,
     authorizes: false,
   };
 }
@@ -796,4 +975,24 @@ export function semanticNotice(assessment) {
   }
   if (contradictions > 0) parts.push(`${contradictions} claim pair(s) contradict each other`);
   return `[APEX check: ${parts.join('; ')}. That wording is the model's, not a stored fact.]`;
+}
+
+// A display line for citation-completeness findings: one-sided reliance on a stored disagreement, a
+// citation outside this snapshot, and relevant retrieved records no claim cites. Counts and ids only,
+// never claim or record text. A clean citation set produces no notice.
+export function citationCompletenessNotice(assessment) {
+  const citation = assessment?.trust?.citationCompleteness;
+  if (!citation) return '';
+  const parts = [];
+  if ((citation.oneSidedConflicts?.length ?? 0) > 0) {
+    parts.push(`${citation.oneSidedConflicts.length} claim(s) cite one side of a stored disagreement while the other retrieved side is uncited`);
+  }
+  if ((citation.outsideSnapshot?.length ?? 0) > 0) {
+    parts.push(`${citation.outsideSnapshot.length} cited record(s) were not retrieved in this snapshot`);
+  }
+  if ((citation.uncitedRelevant?.length ?? 0) > 0) {
+    parts.push(`${citation.uncitedRelevant.length} relevant retrieved record(s) are cited by no claim`);
+  }
+  if (parts.length === 0) return '';
+  return `[APEX check: ${parts.join('; ')}. APEX has not resolved this or verified the answer.]`;
 }

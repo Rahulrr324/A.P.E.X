@@ -6,8 +6,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from './jsonl-store.js';
 import { WriterLock } from './writer-lock.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS, STOPWORDS, shortId, singleLine } from '../util.js';
+import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
+import { normalizeTokens, queryTokens } from '../retrieval/normalize.js';
+import { isIdentifierToken, queryWeights } from '../retrieval/relevance.js';
 
 export const MEMORY_SCHEMA = 1;
 export const MAX_CONTENT_CHARS = 4000;
@@ -109,22 +111,10 @@ export function validateMemoryRecord(r) {
   return null;
 }
 
-// Light normalisation: lower-case words, drop stopwords, strip common suffixes.
+// Light normalisation, shared with the knowledge store: lower-case words, drop the words that carry
+// no retrieval signal, keep negations and identifiers whole, strip common suffixes.
 export function tokenize(text) {
-  const words = String(text).toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
-  const out = [];
-  for (const w of words) {
-    if (w.length < 2 || STOPWORDS.has(w)) continue;
-    out.push(stem(w));
-  }
-  return out;
-}
-
-function stem(w) {
-  if (w.length > 5 && w.endsWith('ing')) return w.slice(0, -3);
-  if (w.length > 4 && w.endsWith('ed')) return w.slice(0, -2);
-  if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) return w.slice(0, -1);
-  return w;
+  return normalizeTokens(text, { stem: true });
 }
 
 function trigrams(word) {
@@ -159,6 +149,9 @@ function buildFuzzyIndex(docs) {
   docs.forEach((wordSet, index) => {
     for (const word of wordSet) {
       if (word.length < FUZZY_MIN_LENGTH) continue;
+      // An identifier, version, or date is compared exactly. A near-miss match would let AP-10
+      // retrieve AP-11 and 2026 retrieve 2027, which is the distinction retrieval must keep.
+      if (isIdentifierToken(word)) continue;
       let entry = words.get(word);
       if (!entry) {
         entry = { trigrams: trigrams(word), docs: [] };
@@ -185,6 +178,7 @@ function fuzzyScores(terms, docs) {
   const scores = new Map();
   for (const term of terms) {
     if (term.length < FUZZY_MIN_LENGTH) continue;
+    if (isIdentifierToken(term)) continue;
     const termTrigrams = trigrams(term);
     const candidates = new Set();
     for (const trigram of termTrigrams) {
@@ -515,11 +509,22 @@ export class MemoryStore {
 
   // Ranked retrieval. Each query term is weighted by its rarity in the store
   // (IDF) and matches a record term exactly, or approximately (character
-  // trigram similarity >= 0.6) for longer words. The score is in [0, 1].
+  // trigram similarity >= 0.6) for longer words that are not identifiers. The
+  // score is in [0, 1] and is a lexical coverage ratio, not a probability.
   // Ties go to the newer record. `includePrivate: false` omits private records.
-  async search(query, { limit = 5, includePrivate = true } = {}) {
-    const terms = [...new Set(tokenize(query))];
+  // `diagnostics`, when given an object, receives the bounded query profile:
+  // the tokens used, how many the token bound dropped, the terms no record
+  // holds, and how many records matched and were returned.
+  async search(query, { limit = 5, includePrivate = true, diagnostics = null } = {}) {
+    const { tokens: terms, dropped: droppedTokens, total: totalTokens } = queryTokens(query, { stem: true });
     const records = await this.#loadComplete();
+    // A bounded, fixed-key profile of what this search asked and what the store could answer. It is
+    // filled in place so the return shape stays the ranked array every caller already reads.
+    const profile = {
+      terms, droppedTokens, totalTokens, unmatched: [], corpusSize: 0, matched: 0, returned: 0, limit,
+    };
+    const explain = diagnostics && typeof diagnostics === 'object' ? diagnostics : null;
+    if (explain) Object.assign(explain, profile);
     if (terms.length === 0) return [];
     const pool = records.filter((r) => includePrivate || r.sensitivity !== 'private');
     const docs = pool.map((record) => new Set(tokenize(record.content)));
@@ -534,10 +539,7 @@ export class MemoryStore {
       df.set(t, count);
     }
     const n = pool.length;
-    // IDF is floored at 1. With a small personal store, an absent word would otherwise
-    // outweigh a matched one and a clearly relevant record would score below threshold.
-    const idf = new Map(terms.map((t) => [t, Math.max(1, Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5)))]));
-    const totalWeight = terms.reduce((s, t) => s + idf.get(t), 0) || 1;
+    const { idf, totalWeight, unmatched } = queryWeights(terms, df, n);
 
     const scored = [];
     pool.forEach((record, index) => {
@@ -623,7 +625,17 @@ export class MemoryStore {
         }
       }
     }
-    return unique.slice(0, Math.max(1, limit)).map(({ record, score }) => ({
+    const returned = unique.slice(0, Math.max(1, limit));
+    if (explain) {
+      // `matched` is the deduplicated set before the bound, so `matched - returned` is exactly what
+      // the source limit cut. Counting the pre-dedupe `scored` instead would report a collapsed
+      // duplicate as a record the limit excluded, which is a different limitation with a different
+      // disclosure.
+      Object.assign(explain, {
+        unmatched, corpusSize: n, matched: unique.length, returned: returned.length,
+      });
+    }
+    return returned.map(({ record, score }) => ({
       record,
       score,
       conflict: conflictIds.get(record.id) ?? [],

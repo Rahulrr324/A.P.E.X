@@ -14,6 +14,7 @@
 import { singleLine, truncate } from '../util.js';
 import * as worldQuery from '../world/query.js';
 import { readReport, sourceRead } from '../evidence/read-contract.js';
+import { buildRetrievalReport } from '../retrieval/report.js';
 import {
   BOUNDS, ClaimKind, EVIDENCE_VALIDITIES, EvidenceSource, EvidenceValidity, SourceStatus, Uncertainty,
   sourceRank,
@@ -107,6 +108,7 @@ function addEvidence(list, counters, item) {
       ? item.validity
       : (item.current === false ? EvidenceValidity.HISTORICAL : EvidenceValidity.CURRENT),
     retrievalReason: item.retrievalReason ?? 'match',
+    score: Number.isFinite(item.score) ? item.score : null,
     relationships: {
       supports: Array.isArray(item.supports) ? [...new Set(item.supports)].slice(0, 12) : [],
       contradicts: Array.isArray(item.contradicts) ? [...new Set(item.contradicts)].slice(0, 12) : [],
@@ -353,13 +355,15 @@ function conflictsFor(state, entityId, conflicts) {
 function readMemory(hits, list, counters, sources) {
   if (!Array.isArray(hits)) {
     setSource(sources, EvidenceSource.MEMORY, SourceStatus.SKIPPED);
-    return;
+    return null;
   }
   let count = 0;
+  let eligible = 0;
   for (const hit of hits) {
     const record = hit?.record ?? hit;
     if (!record || typeof record.id !== 'string') continue;
     if (record.sensitivity === 'private') continue;
+    eligible += 1;
     // Memory has no retraction event; a replaced record is superseded, and the store leaves older
     // records in place rather than deleting them.
     const validity = record.status === 'superseded'
@@ -381,22 +385,26 @@ function readMemory(hits, list, counters, sources) {
       current: record.status !== 'superseded' && record.status !== 'historical',
       validity,
       retrievalReason: 'memory-search',
+      score: typeof hit?.score === 'number' ? hit.score : null,
       contradicts: (hit?.conflict ?? record.conflict ?? []).map((id) => evidenceId(EvidenceSource.MEMORY, id)),
     });
     if (added) count += 1;
   }
   setSource(sources, EvidenceSource.MEMORY, count > 0 ? SourceStatus.OK : SourceStatus.EMPTY, count);
+  return { offered: hits.length, eligible, contributed: count };
 }
 
 function readKnowledge(records, list, counters, sources) {
   if (!Array.isArray(records)) {
     setSource(sources, EvidenceSource.KNOWLEDGE, SourceStatus.SKIPPED);
-    return;
+    return null;
   }
   let count = 0;
+  let eligible = 0;
   for (const record of records) {
     const item = record?.record ?? record;
     if (!item || typeof item.id !== 'string') continue;
+    eligible += 1;
     const claim = `${item.subject} ${item.relationship} ${item.object}`;
     const conflictsWith = Array.isArray(item.conflictsWith) ? item.conflictsWith : [];
     const lifecycle = typeof item.lifecycleState === 'string' ? item.lifecycleState : null;
@@ -419,11 +427,13 @@ function readKnowledge(records, list, counters, sources) {
       current: lifecycle !== 'retracted' && lifecycle !== 'historical' && lifecycle !== 'superseded' && lifecycle !== 'ambiguous',
       validity,
       retrievalReason: 'knowledge-search',
+      score: typeof record?.score === 'number' ? record.score : (typeof item.score === 'number' ? item.score : null),
       contradicts: conflictsWith.map((id) => evidenceId(EvidenceSource.KNOWLEDGE, id)),
     });
     if (added) count += 1;
   }
   setSource(sources, EvidenceSource.KNOWLEDGE, count > 0 ? SourceStatus.OK : SourceStatus.EMPTY, count);
+  return { offered: records.length, eligible, contributed: count };
 }
 
 function readPredictions(view, list, counters, sources) {
@@ -838,22 +848,54 @@ export async function retrieveEvidence({
   readInstruction(request, list, counters, sources);
 
   // Memory and knowledge arrive as seeds from the request path; a standalone caller may pass the
-  // stores instead. Only one read happens either way.
+  // stores instead. Only one read happens either way. The search profile (what the query asked, what
+  // the store matched, what the bound returned) is captured for the retrieval report; a seeded read
+  // carries the profile the caller observed instead.
+  const profiles = {};
+  const memoryDiagnostics = {};
   let memoryHits = provided(seeds, 'memoryHits') ? seeds.memoryHits : null;
   if (memoryHits === null && !provided(seeds, 'memoryHits') && stores.memory?.search) {
-    memoryHits = await attempt(EvidenceSource.MEMORY, sources, () => stores.memory.search(request, { limit: BOUNDS.maxEvidencePerSource }));
+    memoryHits = await attempt(EvidenceSource.MEMORY, sources, () => stores.memory.search(request, { limit: BOUNDS.maxEvidencePerSource, diagnostics: memoryDiagnostics }));
   }
   // An unavailable source is not an empty one. The caller may have read the store, failed, and passed
   // the empty result it has; the declared failure outranks the empty seed.
+  let memoryRead = null;
   if (seeds.memoryUnavailable) setSource(sources, EvidenceSource.MEMORY, SourceStatus.UNAVAILABLE);
-  else if (memoryHits !== null) readMemory(memoryHits, list, counters, sources);
+  else if (memoryHits !== null) memoryRead = readMemory(memoryHits, list, counters, sources);
 
+  const knowledgeDiagnostics = {};
   let knowledgeRecords = provided(seeds, 'knowledge') ? seeds.knowledge : null;
   if (knowledgeRecords === null && !provided(seeds, 'knowledge') && stores.knowledge?.search) {
-    knowledgeRecords = await attempt(EvidenceSource.KNOWLEDGE, sources, () => stores.knowledge.search(request, { limit: BOUNDS.maxEvidencePerSource }));
+    knowledgeRecords = await attempt(EvidenceSource.KNOWLEDGE, sources, () => stores.knowledge.search(request, { limit: BOUNDS.maxEvidencePerSource, diagnostics: knowledgeDiagnostics }));
   }
+  let knowledgeRead = null;
   if (seeds.knowledgeUnavailable) setSource(sources, EvidenceSource.KNOWLEDGE, SourceStatus.UNAVAILABLE);
-  else if (knowledgeRecords !== null) readKnowledge(knowledgeRecords, list, counters, sources);
+  else if (knowledgeRecords !== null) knowledgeRead = readKnowledge(knowledgeRecords, list, counters, sources);
+
+  const searchProfile = (seedProfile, diagnostics, read, limit) => {
+    const base = seedProfile ?? (Object.keys(diagnostics).length > 0 ? diagnostics : null);
+    return {
+      returned: base?.returned ?? read?.offered ?? null,
+      matched: base?.matched ?? null,
+      eligible: read?.eligible ?? null,
+      limit: base?.limit ?? limit,
+      corpusSize: base?.corpusSize ?? null,
+      queryTokens: base?.totalTokens ?? 0,
+      droppedTokens: base?.droppedTokens ?? 0,
+      unmatched: base?.unmatched ?? [],
+      belowRelevance: seedProfile?.belowRelevance ?? 0,
+    };
+  };
+  if (memoryRead !== null || seeds.memoryUnavailable) {
+    profiles[EvidenceSource.MEMORY] = searchProfile(seeds.memorySearch ?? null, memoryDiagnostics, memoryRead, BOUNDS.maxEvidencePerSource);
+  }
+  if (knowledgeRead !== null || seeds.knowledgeUnavailable) {
+    profiles[EvidenceSource.KNOWLEDGE] = searchProfile(seeds.knowledgeSearch ?? null, knowledgeDiagnostics, knowledgeRead, BOUNDS.maxEvidencePerSource);
+  }
+  profiles[EvidenceSource.USER_INSTRUCTION] = {
+    returned: 1, matched: 1, eligible: 1, limit: null, corpusSize: null,
+    queryTokens: 0, droppedTokens: 0, unmatched: [], belowRelevance: 0,
+  };
 
   const experienceRecords = provided(seeds, 'experience') ? seeds.experience : await attempt(EvidenceSource.EXPERIENCE, sources,
     () => (stores.experience?.list ? stores.experience.list({ limit: 5 }) : null));
@@ -952,6 +994,7 @@ export async function retrieveEvidence({
     omitted.push({ source: 'all', count: totalDropped, reason: `bounded to ${BOUNDS.maxEvidenceTotal} evidence records` });
   }
   const read = retrievalRead(sources, { seeded: seededSources(seeds), window });
+  const report = buildRetrievalReport({ sources, read, kept, profiles });
   return {
     evidence: kept,
     byId,
@@ -960,6 +1003,7 @@ export async function retrieveEvidence({
     conflicts: conflictGroups,
     omitted,
     read,
+    report,
     counts: {
       total: kept.length,
       dropped,

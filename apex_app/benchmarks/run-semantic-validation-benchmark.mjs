@@ -162,11 +162,13 @@ function makeApp(dataDir, reply) {
 }
 
 // The knowledge fixture names the same three words the request asks about. Knowledge triples enter the
-// prompt only above the fixed relevance floor, and their IDF-weighted score falls as the store grows
-// because query words absent from the store become rarer. A triple matching two of three asked words
-// crosses that floor between 1000 and 4000 records, so the row would silently drop its knowledge
-// evidence and measure less context instead of more store. Matching all three keeps the fixture above
-// the floor at every size, so each row retrieves the same kind of context from a larger store.
+// prompt only above the fixed relevance floor. Until AP-10 a query word absent from the store was
+// weighted by log(2n+2), which grows without bound with corpus size, so a triple matching two of three
+// asked words crossed that floor between 1000 and 4000 records and the row silently dropped its
+// knowledge evidence. AP-10 caps the absent-term weight at MAX_UNSEEN_TERM_WEIGHT, so that growth no
+// longer happens; the fixture is deliberately unchanged so the AP-09 and AP-10 rows stay comparable.
+// Matching all three words keeps the fixture above the floor at every size either way, so each row
+// retrieves the same kind of context from a larger store.
 async function seedHistory(app, target) {
   for (let i = 1; i <= target; i += 1) {
     await app.memory.add({

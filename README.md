@@ -237,6 +237,34 @@ outside the rules is reported as insufficient evidence or not checked rather tha
 ([details](apex_app/README.md#batch-ap-09-semantic-grounding-claim-consistency-and-adversarial-response-verification-as-implemented);
 tests: `tests/semantic-consistency.test.js` and `tests/semantic-acceptance.test.js`, 106 cases). It
 needs no model, adds no store and grants no authority.
+
+Batch AP-10 then fixed a measured retrieval defect and made omission visible: a query term occurring
+in no record was weighted by `log(2n + 2)`, so its weight grew with the store and pushed a record
+matching two of three terms below the fixed 0.2 prompt-relevance floor between 1,000 and 4,000
+records - the record was still retrieved and ranked first, and the floor silently discarded it. The
+absent-term weight is now capped at a value calibrated on a measured interval, reproducing the previous
+weighting exactly below the cap and changing nothing when every query term occurs in the store; no
+threshold was lowered. Normalization is shared by both stores, keeps negations, numbers, dates and
+identifiers distinct, and never fuzzily matches one identifier to another. What the context budget
+removes is now counted and disclosed, a collapsed duplicate triple is disclosed, and a disagreement
+survives the budget even when the record that disagrees is trimmed. Each request now carries one
+bounded retrieval report over eleven ordered states, per source: what was searched, what came back,
+what was excluded and why, and whether completeness is established - a missing result is never
+reported as a missing fact. Citation completeness is assessed against the same evidence snapshot, so a
+citation to a record outside it, a relevant retrieved record left uncited, or a claim leaning on one
+side of an unresolved disagreement is disclosed rather than passed; a response that makes no claims
+has no citation behaviour to assess and is not flagged. A deterministic evaluation
+framework reports precision, recall, reciprocal rank, coverage and citation completeness per query
+class, with no single overall accuracy number. Retrieval remains bounded lexical token overlap: it is
+not semantic understanding, a long query still dilutes its own exact match below the prompt floor, and
+a missing result is never treated as a missing fact
+([details](apex_app/README.md#batch-ap-10-evidence-retrieval-quality-relevance-calibration-and-citation-completeness-as-implemented);
+tests: `tests/retrieval-scoring.test.js`, `tests/retrieval-context-budget.test.js`,
+`tests/retrieval-quality.test.js`, `tests/retrieval-report.test.js`,
+`tests/citation-completeness.test.js`, `tests/retrieval-adversarial.test.js`,
+`tests/retrieval-snapshot.test.js`, `tests/retrieval-acceptance.test.js`). It needs no model, adds no
+store, no index and no cache, and grants no authority.
+
 What remains is the wider clause: an expectation verdict changing subsequent behaviour without a
 user-approved candidate, or changing more than the one disclosed ordering, and any claim of prediction
 accuracy or causation. The runtime keeps that wider clause open; this is a recommendation only, and no

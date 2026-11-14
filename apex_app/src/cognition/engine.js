@@ -411,6 +411,11 @@ export function analysisAudit(analysis) {
       certification: analysis.retrieval.read.certification,
       digest: analysis.retrieval.read.digest,
     },
+    // AP-10: what retrieval did with the bounded reads - the aggregate selection state and whether
+    // completeness was established. The per-source detail stays in analysis.retrieval.report.
+    retrievalReport: analysis.retrieval.report
+      ? { state: analysis.retrieval.report.state, complete: analysis.retrieval.report.complete }
+      : null,
     sources: analysis.retrieval.sources.map((source) => ({ source: source.source, status: source.status, count: source.count })),
     disclosures: analysis.deliberation.disclosures.slice(0, 16),
     clarification: analysis.deliberation.clarification.needed,

@@ -13,7 +13,9 @@ import { MAX_PROPOSALS, parseModelOutput } from './proposals.js';
 import { executeAction } from '../actions/executor.js';
 import { CONTROL_CHARS, redact, round3, shortId, truncate } from '../util.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
-import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, selectPromptMemory, systemPrompt, adaptationLine, adaptationOmittedNote, MAX_CONTEXT_CHARS, predictionPromptRelevant } from './context.js';
+import { buildPrompt, dedupeKnowledge, knowledgeLine, selectPromptKnowledge, selectPromptMemory, systemPrompt, adaptationLine, adaptationOmittedNote, MAX_CONTEXT_CHARS, predictionPromptRelevant, KNOWLEDGE_PROMPT_RELEVANCE_MIN } from './context.js';
+import { finalizeRetrievalReport, retrievalBudgetNotice } from '../retrieval/report.js';
+import { PROMPT_RELEVANCE_MIN } from '../memory/memory-store.js';
 import { buildWorldModelContext } from '../world/context.js';
 import { computeConflicts } from '../world/conflicts.js';
 import { analyzeRequest, analysisAudit, validateModelOutput } from '../cognition/engine.js';
@@ -25,7 +27,7 @@ import { ArtifactKind, validateArtifact } from '../cognition/artifacts.js';
 import { structuredDisclosureNotice, actionClaimNotice } from '../cognition/response.js';
 import {
   assessResponseIntegrity, attributionNotice, buildResponseContract, responseContractAudit,
-  responseIntegrityAudit, semanticNotice,
+  responseIntegrityAudit, semanticNotice, citationCompletenessNotice,
 } from '../cognition/response-integrity.js';
 import { recheckEvidence } from '../cognition/evidence.js';
 import { contributingStores, openEvidenceSnapshot, snapshotView } from '../evidence/snapshot.js';
@@ -657,8 +659,9 @@ export class CognitiveController {
         // though it had supplied context, and could report a store failure on an
         // unrelated successful operation.
         let context = [];
+        const memorySearchProfile = {};
         try {
-          context = await this.memory.search(request, { limit: this.retrievalLimit });
+          context = await this.memory.search(request, { limit: this.retrievalLimit, diagnostics: memorySearchProfile });
           op.retrieval = context.map((h) => ({
             id: h.record.id,
             kind: h.record.kind,
@@ -668,8 +671,15 @@ export class CognitiveController {
         } catch (err) {
           op.errors.push({ stage: 'retrieval', code: err.code || 'STORE_ERROR', message: err.message });
         }
+        const relevant = selectPromptMemory(context);
+        // The retrieval report needs what the search itself observed (the bound, the matching set)
+        // and how many returned records the relevance floor excluded, before the prompt budget runs.
+        const memorySearch = {
+          ...memorySearchProfile,
+          belowRelevance: context.filter((h) => h.score < PROMPT_RELEVANCE_MIN).length,
+        };
         const m = await this.answerWithModel(request, {
-          relevant: selectPromptMemory(context),
+          relevant,
           turns,
           // If the session or conversation log cannot be read, the prompt must not
           // claim that no earlier messages exist.
@@ -677,6 +687,7 @@ export class CognitiveController {
           // The caller may cancel a model request. Cancellation is reported as its own class and is
           // never retried, so it cannot be mistaken for a timeout or an outage.
           signal,
+          memorySearch,
         }, op, onProgress, diagnostics);
         status = m.status;
         lifecycle = m.lifecycle ?? null;
@@ -5691,7 +5702,7 @@ export class CognitiveController {
     };
   }
 
-  async answerWithModel(request, { relevant, turns, historyUnavailable = false, signal = null }, op, onProgress = null, diagnostics = null) {
+  async answerWithModel(request, { relevant, turns, historyUnavailable = false, signal = null, memorySearch = null }, op, onProgress = null, diagnostics = null) {
     const retrievalError = op.errors.find((error) => error.stage === 'retrieval');
     if (retrievalError) {
       return {
@@ -5793,10 +5804,20 @@ export class CognitiveController {
     let knowledge = [];
     let knowledgeUnavailable = false;
     let knowledgeNotice = '';
+    let knowledgeSearch = null;
     if (this.knowledge) {
       try {
-        const khits = await readThrough('knowledge', () => this.knowledge.search(request, { limit: KNOWLEDGE_PROMPT_LIMIT }));
-        knowledge = dedupeKnowledge(selectPromptKnowledge(khits));
+        const knowledgeDiagnostics = {};
+        const khits = await readThrough('knowledge', () => this.knowledge.search(request, { limit: KNOWLEDGE_PROMPT_LIMIT, diagnostics: knowledgeDiagnostics }));
+        // selectPromptKnowledge drops the score; the report and the citation assessment need it, so
+        // it is carried onto the deduplicated records the prompt and the analysis both read.
+        const scores = new Map(khits.map((h) => [h.record?.id, h.score]));
+        knowledge = dedupeKnowledge(selectPromptKnowledge(khits))
+          .map((record) => ({ ...record, score: scores.get(record.id) ?? null }));
+        knowledgeSearch = {
+          ...knowledgeDiagnostics,
+          belowRelevance: khits.filter((h) => h.score < KNOWLEDGE_PROMPT_RELEVANCE_MIN).length,
+        };
       } catch (err) {
         // Knowledge is supplementary, so it does not block the answer. The failure
         // must still be auditable and visible; it must not look like an empty store.
@@ -5929,6 +5950,8 @@ export class CognitiveController {
         seeds: {
           memoryHits: relevant,
           knowledge,
+          memorySearch,
+          knowledgeSearch,
           adaptations,
           temporal,
           predictions,
@@ -6022,6 +6045,19 @@ export class CognitiveController {
       cognitionUnavailable,
       maxChars: this.maxContextChars,
     });
+    // The prompt budget is only known now that buildPrompt has trimmed the context. The cut counts
+    // finalize the retrieval report: a source that lost records to the budget is disclosed as
+    // context_budget_limited rather than presented as a complete selection.
+    const retrievalReport = cognition?.available && cognition.retrieval?.report
+      ? finalizeRetrievalReport(cognition.retrieval.report, {
+        context: {
+          memory: built.memoryLinesTotal - built.memoryLines,
+          knowledge: Number.isInteger(built.knowledgeLinesTotal)
+            ? built.knowledgeLinesTotal - built.knowledgeIds.length
+            : null,
+        },
+      })
+      : null;
     const system = systemPrompt({ appName: APP_NAME, actions: this.readableActions(), now: this.now() });
     op.prompt = {
       memoryIds: built.memoryIds,
@@ -6030,6 +6066,35 @@ export class CognitiveController {
       adaptationIds: built.adaptationIds,
       chars: built.prompt.length,
     };
+    if (retrievalReport) {
+      // Per source the audit carries the read state and the counts that state was derived from, so a
+      // later reader can tell "the store held only these" from "the bound returned these" without
+      // re-running the search. `unmatched` and `detail` stay out: they quote query terms and store
+      // error text, and the fixed limitation lines already say what went wrong.
+      op.prompt.retrievalReport = {
+        state: retrievalReport.state,
+        complete: retrievalReport.complete,
+        window: retrievalReport.window,
+        counts: retrievalReport.counts,
+        limitations: retrievalReport.limitations,
+        sources: retrievalReport.sources.map((entry) => ({
+          source: entry.source,
+          state: entry.state,
+          readState: entry.readState,
+          searched: entry.searched,
+          returned: entry.returned,
+          matched: entry.matched,
+          eligible: entry.eligible,
+          contributed: entry.contributed,
+          complete: entry.complete,
+          absenceProven: entry.absenceProven,
+          queryTokens: entry.queryTokens,
+          droppedTokens: entry.droppedTokens,
+          exclusions: entry.exclusions,
+        })),
+        authorizes: false,
+      };
+    }
     // The projection contributes counts and record ids to the audit, never a belief
     // statement, so the stored audit stays free of memory content.
     if (world) {
@@ -6175,7 +6240,10 @@ export class CognitiveController {
         : includedAdaptations.size > 0
           ? `[APEX included ${includedAdaptations.size} approved adaptation(s) you recorded for this scope: ${adaptations.filter((a) => includedAdaptations.has(a.id)).map((a) => `"${truncate(a.rule, 120)}"`).join('; ')}]${omission}`
           : '';
-    let annotation = [storedNotice, adaptationNotice].filter(Boolean).join('\n\n');
+    // A budget cut is a limitation on the answer, so the user is told records were left out and
+    // remain stored, following the same disclosure pattern as the other retrieval notices.
+    const budgetNotice = retrievalReport ? retrievalBudgetNotice(retrievalReport) : '';
+    let annotation = [storedNotice, adaptationNotice, budgetNotice].filter(Boolean).join('\n\n');
 
     // Called once, immediately before the model is asked. It reports only the wait
     // and its limit; the transport is not streaming, so no progress or partial text is
@@ -6634,7 +6702,7 @@ export class CognitiveController {
       hasText: modelText.length > 0,
       backend: res.backend,
       error: null,
-      annotation: [annotation, cognitionNotice, attributionNotice(integrity), semanticNotice(integrity), citationNotice].filter(Boolean).join('\n\n'),
+      annotation: [annotation, cognitionNotice, attributionNotice(integrity), semanticNotice(integrity), citationCompletenessNotice(integrity), citationNotice].filter(Boolean).join('\n\n'),
       proposalOverflow: overflow,
       lifecycle,
     };

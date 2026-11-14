@@ -866,8 +866,8 @@ describe('AP-08 §11 adversarial response boundaries', () => {
     });
     const audit = responseIntegrityAudit(result);
     assert.deepEqual(Object.keys(audit).sort(), [
-      'authorizes', 'claims', 'degradation', 'finding', 'findingReason', 'limitations', 'schema',
-      'semantic', 'trust', 'verified',
+      'authorizes', 'citationCompleteness', 'claims', 'degradation', 'finding', 'findingReason',
+      'limitations', 'schema', 'semantic', 'trust', 'verified',
     ]);
     const serialized = JSON.stringify(audit);
     assert.equal(serialized.includes('hunter2'), false);
@@ -889,6 +889,32 @@ describe('AP-08 §11 adversarial response boundaries', () => {
     assert.equal(audit.semantic.finding, 'semantically_consistent');
     assert.equal(audit.semantic.claims.consistent, 1);
     assert.equal(audit.semantic.authorizes, false);
+    // AP-10 adds a citation block. It is counts only: an audit record must never name a stored
+    // record, so the evidence ids the live assessment carries are reduced before they are persisted.
+    assert.deepEqual(Object.keys(audit.citationCompleteness).sort(), [
+      'authorizes', 'bounded', 'claims', 'oneSidedConflicts', 'outsideSnapshot', 'schema', 'uncitedRelevant',
+    ]);
+    assert.equal(audit.citationCompleteness.claims, 1);
+    assert.equal(audit.citationCompleteness.uncitedRelevant, 0);
+    assert.equal(audit.citationCompleteness.oneSidedConflicts, 0);
+    assert.equal(audit.citationCompleteness.authorizes, false);
+  });
+
+  test('a citation finding with an uncited relevant record is counted, never named', () => {
+    const analysis = analysisOf([
+      { ...evidence('memory', 'm-secret', 'the vault password is hunter2'), score: 0.9 },
+      { ...evidence('memory', 'm-other', 'the vault review is pending'), score: 0.8 },
+    ]);
+    const result = assess(analysis, {
+      claims: [{ text: 'the vault password is hunter2', evidence: ['ev:memory:m-secret'], kind: 'supported' }],
+      answer: 'The vault password is hunter2.',
+    });
+    const audit = responseIntegrityAudit(result);
+    assert.equal(audit.citationCompleteness.uncitedRelevant, 1);
+    const serialized = JSON.stringify(audit);
+    assert.equal(serialized.includes('m-other'), false);
+    assert.equal(serialized.includes('m-secret'), false);
+    assert.equal(serialized.includes('hunter2'), false);
   });
 
   test('diagnostics that are unavailable are recorded instead of silently deciding', () => {

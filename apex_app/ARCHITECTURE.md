@@ -743,6 +743,123 @@ See `semantic-consistency.test.js` (88 cases, including the 28 deterministic att
 `semantic-acceptance.test.js` (18 end-to-end cases through the real controller) and the AP-09
 benchmark section.
 
+### Retrieval quality, relevance calibration and omission disclosure (AP-10)
+
+AP-10 adds no store, no pipeline and no index. It changes three things in the existing lexical
+retrieval path and makes what the context budget removed visible.
+
+**The defect that was measured, not guessed.** Both stores weight a query term by
+`idf(t) = max(1, log(1 + (n - df(t) + 0.5) / (df(t) + 0.5)))` and score a record as
+`matchedWeight / totalQueryWeight`. A term that occurs in *no* record has `df = 0`, so its weight is
+`log(2n + 2)`: it grows without bound as the store grows, and it sits in the denominator of every
+record's score. A record matching two of three query terms therefore scored 0.3486 at 20 records,
+0.2501 at 200, 0.2083 at 1000 and 0.1820 at 4000 — crossing the fixed `PROMPT_RELEVANCE_MIN = 0.2`
+floor between 1000 and 4000 purely because unrelated records were added. The record was still
+retrieved and still ranked first; the floor silently discarded it. This was reproduced on both real
+stores with three fixtures at four sizes before any scoring was changed
+(`retrieval-scoring.test.js` pins the four before-values exactly).
+
+**The fix is a calibrated cap, not a lowered threshold.** An absent term is rarer than any term the
+store holds, but the store cannot establish *how much* rarer: "appears in no record" is the same fact
+at 20 records and at 4000. Its weight is now
+`max(rarestObservedIdf, min(termIdf(0, n), MAX_UNSEEN_TERM_WEIGHT))` with
+`MAX_UNSEEN_TERM_WEIGHT = 4` (`src/retrieval/relevance.js`). Below the cap the AP-09 weighting is
+reproduced byte-for-byte; above it the weight stops growing. When every query term occurs in the
+store, nothing changes at all. The cap was calibrated on a measured interval: with one absent term of
+three and every observed term ubiquitous, a cap of 8 is the largest that keeps a two-of-three match at
+or above 0.2; with two absent terms of three, the cap must exceed 2 to keep a one-of-three match below
+it. 4 is the geometric mean of `(2, 8]`. After the fix the same fixture scores 0.3333 at 1000, 4000
+and 10000 records — size-independent — while a deliberately irrelevant one-of-three fixture stays
+below the floor at every size (0.1180 at 20, 0.1111 at 1000). The precision the old score bought by
+size-dependent accident is now bought deliberately.
+
+**Normalization is shared and deliberately lexical.** `src/retrieval/normalize.js` owns the split for
+both stores: lowercase, word separation, stopwords dropped, identifiers and dates kept whole, and
+negations (`not`, `no`, `never`, `without`) kept as content so "not completed" and "completed" stay
+different queries. The memory store stems word forms; the knowledge store does not. That divergence is
+deliberate and preserved. `MAX_QUERY_TOKENS` is 4096, derived from `MAX_REQUEST_CHARS = 4000`: a
+bounded request cannot yield more than about 2400 distinct content tokens, so the bound is a guard
+against an unbounded direct store call rather than a routine truncation. Cutting a legitimate request
+from the front discarded its informative tail and lost an exact match; `dropped` still reports any
+truncation so a shortened query is disclosed rather than silently searched as a prefix. Identifier-like
+tokens are excluded from fuzzy matching: `similarity("ap-10", "ap-11") = 0.667` and
+`similarity("2026", "2027") = 0.6` both exceeded the 0.6 fuzzy floor, so a query for one identifier
+could retrieve a different one.
+
+**What the context budget removes is now stated.** `buildPrompt` collapses knowledge records that
+repeat an identical subject-relationship-object triple, counts the collapse, and says so. Records cut
+by the size budget are counted and disclosed, and an emptied knowledge section renders as a disclosure
+rather than as silence. A disagreement survives the budget: the per-record `[contested: ...]` marker is
+decided from the *untrimmed* conflict list, so cutting the tail can never turn a contested claim into
+an apparently unopposed one. The omission note is chosen from a three-form ladder, shortest first while
+the budget is being spent and upgraded afterwards only into room that is actually left. This follows
+the existing rule for derived-section notices: a disclosure may never be the reason a record that
+answers the question is dropped. The full sentence is longer than a short knowledge line, so rendering
+it unconditionally made each trim step *grow* the prompt and emptied the section to pay for the note.
+
+**Known weaknesses, stated rather than hidden.** A long query dilutes its own score: the denominator
+sums every query term, so 380 unrelated words plus three relevant ones score an exact match at about
+0.0055 and the prompt floor excludes it even though the store retrieved it and ranked it first. The
+record is not lost — it is still returned by `search` and still citable — but it does not enter the
+prompt. This is a property of the coverage-ratio score, not of store size, and it is reported as
+`below_relevance_threshold` rather than as "no match". Thresholds were not lowered to hide it.
+Retrieval remains bounded lexical token overlap: it is **not semantic understanding**, not entailment
+and not natural-language inference. A synonym absent from the record text, a paraphrase, an implication
+or a coreference is not resolved, and no such capability is claimed.
+
+**One retrieval report, eleven ordered states.** `src/retrieval/report.js` describes every evidence
+read with the same vocabulary AP-07 uses for the read itself, extended to say what retrieval *did*
+with the window: `complete_empty`, `complete_with_results`, `not_searched`,
+`below_relevance_threshold`, `bounded_results`, `source_limit_reached`, `context_budget_limited`,
+`incomplete_source`, `unavailable_source`, `damaged_source`, `inconsistent_snapshot`. The list is
+ordered least to most limiting and the aggregate is the worst source, so two readers cannot disagree
+about whether a retrieval that lost records to a bound was "complete". Per source the report carries
+identity, read state, search status, returned/matched/eligible counts, the three exclusion kinds
+(below the relevance floor, beyond the source limit, cut by the context budget), whether completeness
+was established, and how many records contributed evidence. An unreadable source reports `null`
+counts, never `0`: zero would turn an unknown into an absence. `absenceProven` is reused from the read
+contract and is true only for `complete_empty` — a bounded window that returned nothing proves neither
+completeness nor absence. A `concurrent_modification` or `unverifiable` window forces
+`inconsistent_snapshot` on *every* source and blocks the aggregate, because the stores were read at
+separate instants and nothing here claims an atomic multi-store transaction. The report is built from
+the coordinator's own records and finalized purely once the prompt budget is known; it grants no
+authority (`authorizes: false`) and the persisted projection carries counts and states only, never
+record text, query terms or store error detail.
+
+**Citation completeness is assessed against the same snapshot.** `assessCitationCompleteness`
+(`src/cognition/response-integrity.js`) checks, per claim, that every cited evidence id was actually
+retrieved, preserves each cited record's lifecycle (`current`, `historical`, `superseded`,
+`retracted`), names a relevant retrieved record that no claim cites, and detects reliance on one side
+of a stored disagreement whose other side was retrieved and uncited. Relevance is only establishable
+from the lexical score the search assigned, so a record without a score is never flagged: the check
+can neither force a citation nor imply an uncited record was irrelevant. A response with **no claims**
+has no citation behaviour to assess, so nothing is flagged there; the trust ladder already states its
+grounding and cannot reach `factually_supported` without a factual claim. A one-sided reliance replaces
+a `semantically_consistent` or `partially_consistent` finding with `insufficient_evidence` and keeps
+any more severe finding the semantic check already reached. Three fixed limitation codes
+(`citation_relevant_uncited`, `citation_one_sided_conflict`, `citation_outside_snapshot`) and a
+bounded disclosure notice carry the result beside the answer; the audit stores counts only, so an
+audit record can never name a stored record.
+
+**Measured behaviour of the one-sided check, stated plainly.** Through the real controller a factual
+claim (`supported`, `partially_supported` or `historical`) that cites one side of a retrieved,
+unresolved disagreement is *always refused by the AP-08 structural validator before the citation
+assessment runs* — `claimStateProblem` rejects the label and asks for both sides or `unknown`. This
+was verified for memory records, knowledge triples and world-model facts, all of which receive
+symmetric `contradicts` links from `extractClaims`. Consequently `citation_one_sided_conflict` is a
+defence-in-depth layer: end to end it is reachable only where a conflict is recorded in the projection
+but not on the records themselves, and the §7 suite drives that case at the assessment boundary. This
+is a stronger guarantee than §7 requires, not a gap — but it means the code does not fire on the
+ordinary request path, and the refusal notice (`[Stored context contains conflicting records; …]`) is
+what the user actually sees. A related consequence: because a refused structure contributes no claims,
+the claim-level `evidence_conflicting` code cannot fire on that path either; the disagreement is
+disclosed by the notice instead. Both paths disclose, neither hides.
+
+See `retrieval-scoring.test.js`, `retrieval-context-budget.test.js`, `retrieval-quality.test.js`,
+`retrieval-report.test.js`, `citation-completeness.test.js`, `retrieval-adversarial.test.js`,
+`retrieval-snapshot.test.js`, `retrieval-acceptance.test.js` and
+`benchmarks/run-retrieval-quality-benchmark.mjs`.
+
 ## 6. D. Diagnostics and evaluation
 
 ### Runtime diagnostics

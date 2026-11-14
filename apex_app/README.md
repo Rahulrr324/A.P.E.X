@@ -6748,6 +6748,197 @@ the dimensions APEX checks", not "the sentence is true", and `factually_supporte
 "every factual claim was checked against current records". The check reads at most six records per
 claim, twelve claims and six pairs per response, and a record outside the retrieval is not checked.
 
+## Batch AP-10: evidence retrieval quality, relevance calibration and citation completeness (as implemented)
+
+AP-09 could say whether a claim's wording matched its records. It could not say why a record that
+answered the question never reached the prompt. AP-10 fixes a measured relevance defect, makes what
+the context budget removed visible, and adds a deterministic way to evaluate retrieval quality. It
+adds no store, no action, no dependency, no index, no cache and no second retrieval pipeline.
+
+### The defect, reproduced before it was changed
+
+Both stores weight a query term by `idf(t) = max(1, log(1 + (n - df(t) + 0.5) / (df(t) + 0.5)))` and
+score a record as `matchedWeight / totalQueryWeight`. A term occurring in **no** record has `df = 0`,
+so its weight is `log(2n + 2)` — it grows without bound as the store grows, and it sits in the
+denominator of every record's score.
+
+The AP-09 4,000-record knowledge probe was reproduced on both real stores with three fixtures at four
+sizes. A record matching two of three query terms scored:
+
+| records | relevance score | vs the fixed 0.2 prompt floor |
+| --- | --- | --- |
+| 20 | 0.3485735730804195 | kept |
+| 200 | 0.250110921423078 | kept |
+| 1000 | 0.2082920663382822 | kept |
+| 4000 | 0.18202590996175266 | **excluded** |
+
+The record was still retrieved and still ranked first at every size. The floor silently discarded it,
+and the only thing that changed was how many *unrelated* records the store held.
+
+### The fix is a calibrated cap, not a lowered threshold
+
+An absent term is rarer than any term the store holds, but the store cannot establish how much rarer:
+"appears in no record" is the same fact at 20 records and at 4000. Its weight is now
+`max(rarestObservedIdf, min(termIdf(0, n), 4))` (`src/retrieval/relevance.js`,
+`MAX_UNSEEN_TERM_WEIGHT = 4`). Below the cap the AP-09 weighting is reproduced exactly; above it the
+weight stops growing. **When every query term occurs in the store, nothing changes at all.**
+
+The cap was calibrated on a measured interval, not picked to make a test pass: with one absent term of
+three and every observed term ubiquitous, a cap of 8 is the largest that keeps a two-of-three match at
+or above 0.2; with two absent terms of three, the cap must exceed 2 to keep a one-of-three match below
+it. 4 is the geometric mean of `(2, 8]`. After the fix the same fixture scores 0.3333 at 1000, 4000 and
+10000 records — size-independent — while a deliberately irrelevant one-of-three fixture stays below
+the floor at every size (0.1180 at 20, 0.1111 at 1000). No threshold was lowered.
+
+### Normalization: shared, bounded, and deliberately lexical
+
+`src/retrieval/normalize.js` owns the split for both stores. It lowercases, separates words, drops
+stopwords, keeps identifiers and dates whole, and keeps negations (`not`, `no`, `never`, `without`) as
+content, so "the task is not completed" and "the task is completed" remain different queries. `10` and
+`100` stay different; `2026-06-01` and `2026-01-06` stay different; `AP-10` and `AP-11` stay different.
+The memory store stems word forms, the knowledge store does not — that divergence is deliberate and
+preserved. The original request text is never rewritten.
+
+`MAX_QUERY_TOKENS` is 4096, derived from `MAX_REQUEST_CHARS = 4000`: a bounded request cannot yield
+more than about 2400 distinct content tokens, so the bound guards an unbounded direct store call
+rather than routinely truncating. The previous bound of 32 cut a legitimate long request from the
+front and lost its exact match. Any truncation is still reported as `dropped`, so a shortened query is
+disclosed rather than silently searched as a prefix. Identifier-like tokens are excluded from fuzzy
+matching: `similarity("ap-10", "ap-11") = 0.667` and `similarity("2026", "2027") = 0.6` both exceeded
+the 0.6 fuzzy floor, so a query for one identifier could retrieve a different one.
+
+There is no synonym expansion, no coreference resolution and no inference of meaning. **Lexical
+retrieval is not semantic understanding.**
+
+### What the context budget removes is now stated
+
+`buildPrompt` collapses knowledge records repeating an identical subject-relationship-object triple,
+counts the collapse and discloses it. Records cut by the size budget are counted and disclosed; an
+emptied knowledge section renders as a disclosure rather than as silence. A disagreement survives the
+budget: the per-record `[contested: ...]` marker is decided from the **untrimmed** conflict list, so
+cutting the tail can never turn a contested claim into an apparently unopposed one.
+
+The omission note is chosen from a three-form ladder — shortest first while the budget is being spent,
+upgraded afterwards only into room that is actually left. This follows the existing rule for
+derived-section notices: *a disclosure may never be the reason a record that answers the question is
+dropped.* The full sentence is longer than a short knowledge line, so rendering it unconditionally
+made each trim step grow the prompt and emptied the section to pay for the note.
+
+### One retrieval report, eleven ordered states
+
+`src/retrieval/report.js` describes every evidence read with a closed vocabulary ordered least to most
+limiting: `complete_empty`, `complete_with_results`, `not_searched`, `below_relevance_threshold`,
+`bounded_results`, `source_limit_reached`, `context_budget_limited`, `incomplete_source`,
+`unavailable_source`, `damaged_source`, `inconsistent_snapshot`. The aggregate is the **worst** source,
+so one unreadable store describes the whole retrieval and two readers cannot disagree about whether a
+bounded selection was complete.
+
+Per source the report carries identity, read state, search status, returned/matched/eligible counts,
+the three exclusion kinds (below the relevance floor, beyond the source limit, cut by the context
+budget), whether completeness was established, and how many records contributed evidence. Three rules
+are load-bearing:
+
+- An unreadable source reports **`null` counts, never `0`**. Zero would turn an unknown into an absence.
+- `absenceProven` is reused from the AP-07 read contract and is true **only** for `complete_empty`. A
+  bounded window that returned nothing proves neither completeness nor absence.
+- A `concurrent_modification` or `unverifiable` window forces `inconsistent_snapshot` on every source
+  and blocks the aggregate. The stores are read at separate instants; **nothing here claims an atomic
+  multi-store transaction**, and a write between two reads is reported as inconsistent rather than
+  rolled back.
+
+The report is built from the coordinator's own records and finalized purely once the prompt budget is
+known. It grants no authority (`authorizes: false`), and the persisted projection carries counts and
+states only — never record text, query terms or store error detail.
+
+### Citation completeness, against the same snapshot
+
+`assessCitationCompleteness` checks per claim that every cited evidence id was actually retrieved,
+preserves each cited record's lifecycle (`current`, `historical`, `superseded`, `retracted`), names a
+relevant retrieved record no claim cites, and detects reliance on one side of a stored disagreement
+whose other side was retrieved and uncited. Relevance is only establishable from the lexical score the
+search assigned, so a record without a score is never flagged: the check can neither force a citation
+nor imply an uncited record was irrelevant. A response with **no claims** has no citation behaviour to
+assess, so nothing is flagged there: its grounding is already stated by the trust ladder, which cannot
+reach `factually_supported` without a factual claim. Three fixed codes carry the result —
+`citation_relevant_uncited`, `citation_one_sided_conflict`, `citation_outside_snapshot` — beside a
+bounded disclosure notice. The audit stores **counts only**, so an audit record can never name a
+stored record.
+
+**What the one-sided check actually does end to end, stated plainly.** Through the real controller a
+factual claim (`supported`, `partially_supported` or `historical`) citing one side of a retrieved,
+unresolved disagreement is *always refused by the AP-08 structural validator before the citation
+assessment runs*. This was verified for memory records, knowledge triples and world-model facts. So
+`citation_one_sided_conflict` is a **defence-in-depth layer**: end to end it is reachable only where a
+conflict is recorded in the projection but not on the records themselves, and the test suite drives
+that case at the assessment boundary. This is a stronger guarantee than required, not a gap — but the
+code does not fire on the ordinary request path, and what the user sees is the refusal notice
+`[Stored context contains conflicting records; APEX has not resolved them.]`. Because a refused
+structure contributes no claims, the claim-level `evidence_conflicting` code cannot fire on that path
+either; the notice discloses the disagreement instead. Both paths disclose, neither hides.
+
+### Known weaknesses, stated rather than hidden
+
+- **A long query dilutes its own score.** The denominator sums every query term, so 380 unrelated
+  words plus three relevant ones score an exact match at 0.0055 with 20 records and 0.0078 from 200
+  records up, and the prompt floor excludes it. The record is still returned by `search` and still
+  citable; it does not enter the prompt. This is a property of the coverage-ratio score, not of store
+  size, and it is reported as `below_relevance_threshold`, never as "no match".
+- **A missing result is not a missing fact.** A record that was not retrieved is not described as
+  disproven, and an empty result set is not proof of absence.
+- **Retrieval is lexical.** A synonym absent from the record text, a paraphrase, an implication or a
+  coreference is not resolved, and no such capability is claimed.
+
+### Evaluating and measuring it
+
+`src/retrieval/evaluate.js` computes Precision@K, Recall@K, reciprocal rank, relevant-evidence
+coverage, irrelevant inclusion, citation coverage, latency statistics and truncation counts over
+synthetic corpora with known expected-relevant and expected-irrelevant sets. A metric that cannot be
+calculated returns `null` with a reason — citation coverage without a declared relevant set is one
+such case, and retrieved records are never treated as should-be-cited. The classes are reported
+separately; **no single overall accuracy number is computed from incompatible metrics.**
+
+`benchmarks/run-retrieval-quality-benchmark.mjs` measures normalization, per-source retrieval,
+context assembly and the complete request path at 20 / 200 / 1,000 / 4,000 / 10,000 records, for five
+query classes kept apart: common, rare-token, long, adversarial and no-result. It also prints the
+before/after weighting on identical document frequencies, and beside each request row the retrieval
+report state with per-source returned/contributed counts and the citation-completeness counts. It is
+network-free, uses a deterministic in-process model fixture, and is not part of `npm test`. See
+`benchmarks/README.md` for the methodology, the measured tables and their limits.
+
+In that measured run the request path reported `source_limit_reached` with `complete false` at every
+size — memory matched more than its bound of five returned — and the citation assessment named one
+relevant retrieved record that no claim cited, at every size. Neither was hidden and neither was
+"fixed" by forcing a citation or widening the bound.
+
+Tests: `tests/retrieval-scoring.test.js`, `tests/retrieval-context-budget.test.js`,
+`tests/retrieval-quality.test.js`, `tests/retrieval-report.test.js`,
+`tests/citation-completeness.test.js`, `tests/retrieval-adversarial.test.js`,
+`tests/retrieval-snapshot.test.js`, `tests/retrieval-acceptance.test.js`.
+
+### Tests and final verification
+
+The eight suites above hold **166 tests in 22 suites**, all registered in `npm test` and all
+model-free: the reproduced defect and the calibrated cap with its interval; the context-budget
+disclosure ladder; 17 query classes with every metric and `null` where a metric cannot be calculated;
+all eleven report states and the per-source rules; the seven citation scenarios at the assessment
+boundary and through the real controller; the 25 required adversarial cases plus two extras; append,
+change, retraction, damage and limit crossing during a request; and the complete deterministic request
+path. Every fixture is a fixed stub or `NoBackend`; no test contacts a model.
+
+The complete `npm test` run on the final tree ran **2,906 tests in 436 suites: 2,904 passed, 0 failed,
+2 skipped** (the two documented Windows environment skips) in 301.0 s. The focused AP-10 suites passed
+166 of 166, and the AP-07, AP-08 and AP-09 regression suites together with the pre-existing retrieval
+contract passed 253 of 253. The four suites that read this documentation were re-run after the final
+documentation edits and passed 100 of 100.
+
+One defect was found by that full run and fixed rather than accommodated: the uncited-relevant check
+fired on a response with **no claims**, inventing a citation limitation on plain prose over a clean
+store and breaking the pre-existing `world-context` guarantee. The check is now scoped to responses
+that make claims, and two regression tests pin both the boundary and the end-to-end plain-prose case.
+A second finding was in this batch's own adversarial case 02: its fixture cited a record outside the
+snapshot, so the structure was rejected and the case had been passing on the zero-claim path. The
+fixture now cites a retrieved record and asserts the real finding.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 
