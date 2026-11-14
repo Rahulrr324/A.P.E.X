@@ -13,6 +13,7 @@ import { shortId, truncate } from '../util.js';
 import { goalProgress, isOpenStatus } from '../goals/model.js';
 import { isOpenPlan, planProgress, planRisk } from '../plans/model.js';
 import { ContinuationReadiness } from '../executive/vocabulary.js';
+import { CAUTION_NOTE, cautionLine } from '../prediction/caution.js';
 
 // A lower number is treated as more urgent. The recorded priority is used as given; a goal
 // without one is never assigned one.
@@ -34,6 +35,11 @@ const BASE = {
   'start-plan': 75,
   'resume-task': 70,
   'reconcile-plan': 65,
+  // A recorded contradicted expectation asks for one read before an approved plan is started. It sits
+  // under every execution step because it replaces no work: when it applies it takes `start-plan`'s
+  // place for that plan, and its lower base is what moves the plan down the ranking. It is a read, so
+  // the weight it is scored at is the weight of looking again, not of running anything.
+  'review-expectation': 62,
   'review-plan': 60,
   'create-plan': 55,
   'resolve-blocker': 50,
@@ -75,10 +81,30 @@ function riskWeight(risk) {
   return { weight: 0, note: risk ? `${risk} risk` : null };
 }
 
+// The capabilities an approved plan's steps would run, from the step records themselves. A step's
+// action is the capability the registry would authorize, so it is the one thing a recorded expectation
+// about that capability can bear on. A step that names no action matches nothing. Exported because the
+// readiness view and the controller scope their own expectation reads by the same rule.
+export function planCapabilities(plan) {
+  const capabilities = new Set();
+  for (const step of plan?.steps ?? []) {
+    if (typeof step?.action === 'string' && step.action.trim() !== '') capabilities.add(step.action.trim());
+  }
+  return [...capabilities];
+}
+
+// The cautions that bear on one plan. The caller derived them from the prediction ledger; this side
+// reads no ledger, so a caution ranked here cannot disagree with the read that produced it.
+function cautionsForPlan(plan, cautions) {
+  if (!Array.isArray(cautions) || cautions.length === 0) return [];
+  const capabilities = new Set(planCapabilities(plan));
+  return cautions.filter((caution) => caution && capabilities.has(caution.capability));
+}
+
 function candidate({
   kind, ref, title, action, command, status, priority = null, deadline = null,
   risk = null, requiresAuthorization = true, reasons = [], blockers = [], ready = true, now,
-  readiness = null,
+  readiness = null, cautions = [], cautionChangedAction = false,
 }) {
   const p = priorityWeight(priority);
   const d = deadlineWeight(deadline, now);
@@ -101,6 +127,8 @@ function candidate({
     reasons: [...reasons, p.note, d.note, r.note].filter(Boolean),
     score,
     readiness: readiness ?? (kind === 'plan' ? ACTION_READINESS[action] ?? null : null),
+    cautions: [...cautions],
+    cautionChangedAction,
   };
 }
 
@@ -126,9 +154,14 @@ function unmetDependencies(goal, goalsById) {
 // `ready to continue` state: a plan status and a task status cannot show that a step never started,
 // and the reading can. Without a reading the interrupted run is ranked by its task and plan records
 // alone, which is what Batch AL did, and no continuation is claimed.
+// `cautions` is the bounded read of live, current contradicted expectations (`expectationCautions` on
+// the prediction store). It is optional and defaulted to empty: a caller without a prediction ledger
+// ranks exactly as before. Where one applies to an approved plan, the recommendation is still an act
+// on that plan but a read rather than a start, and nothing about the plan's approval, its readiness, or
+// the registry's authorization moves.
 export function buildContinuation({
   goals = [], plans = [], tasks = [], validityByPlan = new Map(), continuationsByPlan = new Map(),
-  now = new Date(),
+  cautions = [], now = new Date(),
 } = {}) {
   const candidates = [];
   const excluded = [];
@@ -251,22 +284,46 @@ export function buildContinuation({
     if (plan.status === 'approved') {
       const blockers = validity ? [...validity.problems] : [];
       const stale = validity && !validity.ok;
+      // A caution applies only when the plan could otherwise be started: a stale plan is already held
+      // for revalidation, and adding the caution's read in front of that would name an act the records
+      // do not recommend first. The plan is still ranked here, still approved, and still startable.
+      const planCautions = cautionsForPlan(plan, cautions);
+      const caution = planCautions.length > 0 && !stale;
+      const cautioned = planCautions.map((c) => c.capability);
       candidates.push(candidate({
         ...base,
-        action: stale ? 'review-plan' : 'start-plan',
-        title: stale ? `Revalidate plan ${shortId(plan.id)} before starting it` : base.title,
+        action: stale ? 'review-plan' : caution ? 'review-expectation' : 'start-plan',
+        title: stale
+          ? `Revalidate plan ${shortId(plan.id)} before starting it`
+          : caution
+            ? `Review what the records say about plan ${shortId(plan.id)} before starting it`
+            : base.title,
         command: stale
           ? `node bin/apex.js plan validate ${shortId(plan.id)}`
-          : `node bin/apex.js plan start ${shortId(plan.id)}`,
-        requiresAuthorization: true,
+          : caution
+            // Both commands are reads. The candidates read names the goal's comparison, which is where a
+            // user sees the expectations recorded for the plan's capabilities beside what happened.
+            ? (plan.goalId
+              ? `node bin/apex.js plan candidates ${shortId(plan.goalId)}`
+              : `node bin/apex.js plan show ${shortId(plan.id)}`)
+            : `node bin/apex.js plan start ${shortId(plan.id)}`,
+        requiresAuthorization: caution ? false : true,
         reasons: [
           'the plan is approved and has not started',
           ...(validity && validity.ok ? ['live validation passed'] : []),
           ...(stale ? ['live state changed since approval; the approval cannot be reused'] : []),
+          ...(caution
+            ? [
+              `a recorded expectation for ${[...new Set(cautioned)].join(', ')} was contradicted, and a fresh read still confirms the verdict`,
+              'the caution changed the recommended act from starting the plan to reading the contradiction; it changed no readiness state, approval, or authorization',
+            ]
+            : []),
         ],
         blockers,
         ready: !stale,
         readiness: stale ? ContinuationReadiness.BLOCKED : ContinuationReadiness.READY_TO_EXECUTE,
+        cautions: planCautions,
+        cautionChangedAction: caution,
       }));
     } else if (plan.status === 'draft') {
       candidates.push(candidate({
@@ -482,8 +539,10 @@ export function renderContinuation({ candidates, excluded, notes, rule, generate
     if (c.readiness) lines.push(`   readiness: ${c.readiness}`);
     if (c.command) lines.push(`   next: ${c.command}`);
     for (const reason of c.reasons) lines.push(`   why: ${reason}`);
+    for (const caution of c.cautions ?? []) lines.push(`   caution: ${cautionLine(caution)}`);
     for (const blocker of c.blockers) lines.push(`   blocker: ${blocker}`);
     if (c.requiresAuthorization) lines.push('   this would be a separately authorized action, not taken here');
+    if (c.cautionChangedAction) lines.push(`   ${CAUTION_NOTE}`);
   }
   if (top && candidates.length > 1) lines.push('', `${candidates.length - 1} other candidate(s) are not shown; run "node bin/apex.js work" for the full list.`);
   if (excluded.length > 0) {

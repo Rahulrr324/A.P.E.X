@@ -50,7 +50,7 @@ import { constraintLedger, readConstraintRecords } from '../plans/constraints.js
 import { outcomesForGoal } from '../plans/outcomes.js';
 import { comparePlanVersions, renderComparison } from '../plans/history.js';
 import { continuationAudit, continuationOf, renderContinuation as renderPlanContinuation } from '../plans/continuation.js';
-import { buildContinuation, renderContinuation } from '../continuation/engine.js';
+import { buildContinuation, planCapabilities, renderContinuation } from '../continuation/engine.js';
 import { ProposalStatus, PROPOSAL_KINDS, proposalStatus } from '../proposals/model.js';
 import { assessProposal } from '../proposals/apply.js';
 import { renderProposal, renderProposalList } from '../proposals/format.js';
@@ -3269,7 +3269,38 @@ export class CognitiveController {
       });
       if (continuation) continuation.evidence = continuationEvidence(await windowReading.verdict());
     }
-    return readinessOf({ plan: current, goal, task, validity, assessment, continuation });
+    // The expectation cautions that bear on this plan's own capabilities. Read here, inside the same
+    // window as the plan and everything joined to it, so the caution discloses the state of the
+    // ledger as of the same instant. A ledger that is absent or unreadable is reported beside the
+    // state; it is never read as "nothing contradicted".
+    const cautionRead = await this.#expectationCautionRead([current]);
+    return readinessOf({
+      plan: current, goal, task, validity, assessment, continuation,
+      cautions: cautionRead.cautions, cautionRead,
+    });
+  }
+
+  // The bounded expectation-caution read for a set of plans. It opens no horizon for an expectation
+  // outside the capabilities those plans would run, and it names an absent or unreadable ledger rather
+  // than returning an empty list, because an empty list is a claim that nothing was contradicted.
+  async #expectationCautionRead(plans = []) {
+    const capabilities = [...new Set(plans.flatMap((plan) => planCapabilities(plan)))];
+    if (!this.predictions || typeof this.predictions.expectationCautions !== 'function') {
+      return { cautions: [], unavailable: 'no prediction ledger is configured, so no expectation was read', note: null };
+    }
+    if (capabilities.length === 0) return { cautions: [], unavailable: null, note: null };
+    try {
+      const read = await this.predictions.expectationCautions({ capabilities });
+      return {
+        cautions: Array.isArray(read.cautions) ? read.cautions : [],
+        unavailable: read.unavailable ?? null,
+        note: read.capabilitiesTruncated === true
+          ? `only ${read.capabilities.length} capability(ies) of the plans in scope were read, so an expectation for another of them was not considered`
+          : null,
+      };
+    } catch (err) {
+      return { cautions: [], unavailable: `the expectation read failed: ${redactSecrets(err.message)}`, note: null };
+    }
   }
 
   async #executiveClarify(op, sid, signal) {
@@ -5005,11 +5036,18 @@ export class CognitiveController {
       }
     }
 
+    // The expectation read is scoped by every capability the plans in this ranking would run, so the
+    // caution applies to a plan only where the work it would do is the work the verdict is about.
+    const cautionRead = await this.#expectationCautionRead(plans);
+    if (cautionRead.unavailable) problems.push(`expectations: ${cautionRead.unavailable}`);
+
     const report = buildContinuation({
       goals, plans, tasks, validityByPlan, now: this.now(),
       continuationsByPlan: await this.#continuationReadings(plans, tasks, goalView),
+      cautions: cautionRead.cautions,
     });
     let display = renderContinuation(report, { limit, top });
+    if (cautionRead.note) display = `${display}\n\nExpectation read: ${cautionRead.note}`;
     if (problems.length > 0) {
       display = [
         'Problems reading records:',
@@ -5021,8 +5059,17 @@ export class CognitiveController {
     const attention = problems.length > 0 || report.candidates.length > 0;
     // The three record lists are returned as well as the ranking, because an executive status answer
     // needs the same records this ranking was built from. Returning them here keeps that answer at
-    // one read per store instead of opening each log a second time.
-    return { ...report, goals, plans, tasks, problems, attention, display };
+    // one read per store instead of opening each log a second time. The caution read is returned too,
+    // so an answer built from this report states what it could not read rather than implying none.
+    return {
+      ...report, goals, plans, tasks, problems, attention, display,
+      cautionRead: {
+        cautions: cautionRead.cautions.length,
+        unavailable: cautionRead.unavailable,
+        note: cautionRead.note,
+        rule: cautionRead.cautions[0]?.rule ?? null,
+      },
+    };
   }
 
   // ---- tasks ------------------------------------------------------------------

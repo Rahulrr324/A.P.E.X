@@ -105,7 +105,7 @@ output, or a record attached to an operation that has already been decided elsew
 | Execution | `actions/executor.js`, `actions/builtin.js`, `actions/*-actions.js` | Validate input and run the action body; report what happened only | Registry already allowed it | The action's own store | Validation error → `input_rejected`; body throws → execution failed; no verification claimed | `actions.test.js`, `failure-semantics.test.js` |
 | Independent verification | `verify/verifier.js` | A different component re-reads the store or recomputes the value and decides the postcondition | None; it reports only | None | Verifier unavailable/failed → not success; independent of executor | `executive-acceptance.test.js`, `executive-bridge.test.js`, `integration-runtime-an.test.js` |
 | Finalization and audit | `controller/finalization.js`, `operations/operation-log.js` | One completion contract for every path: audit append, experience capture, completion; masking and minimization at the write boundary | Operation log's single append path | `operations.jsonl` | Audit append failure downgrades success and reports `recorded:false`; never invents experience | `finalization-contract.test.js`, `finalization-interruption.test.js`, `append-audit-failure-semantics.test.js` |
-| Continuation and recovery | `plans/continuation.js`, `continuation/engine.js`, `executive/recovery.js`, `tasks/lock-recovery.js` | Read nine states from plan/task/audit records; take up only steps proven never to have started; refuse to replay an uncertain effect | User initiates continuation; no background recovery | Reads only; the resulting step runs through the normal path | A refused or unsafe continuation executes and writes nothing; a second continuation takes up nothing | `plan-continuation.test.js` (real children), `continuation-cross-process-an.test.js`, `executive-readiness.test.js` |
+| Continuation and recovery | `plans/continuation.js`, `continuation/engine.js`, `executive/recovery.js`, `tasks/lock-recovery.js` | Read nine states from plan/task/audit records; take up only steps proven never to have started; refuse to replay an uncertain effect | User initiates continuation; no background recovery | Reads only; the resulting step runs through the normal path | A refused or unsafe continuation executes and writes nothing; a second continuation takes up nothing | `plan-continuation.test.js` (real children), `continuation-cross-process-an.test.js`, `executive-readiness.test.js`, `expectation-caution.test.js` |
 | Prediction and experience | `prediction/*`, `experience/*`, `actions/prediction-actions.js`, `actions/experience-actions.js` | Append-only expectation and experience records; feedback; adaptation candidates; outcome evaluation derived at read time | User writes only; a model cannot write | `predictions.jsonl`, `experiences.jsonl` under their locks | An expired horizon is not a wrong prediction; a rate below 20 evaluations is withheld; a damaged store is unavailable, not empty | `prediction-*.test.js`, `experience-*.test.js` |
 | Adaptation boundary | `experience/derivation.js`, `experience/experience-store.js`, `plans/guidance.js` | Repeated user corrections may yield one candidate rule; only a user decision approves it; an approved rule may shape (never gate) a later selection | User approval only | `experiences.jsonl` | A retired rule shapes nothing; two conflicting approved rules are disclosed, neither chosen | `experience-adaptation.test.js`, `plan-guidance.test.js`, `adversarial-batch-am.test.js` I-01–I-08 |
 | Decision adaptation (AP-01) | `plans/evaluation.js` (`adaptationDecisionOf`), `plans/guidance.js`, `executive/selection.js` | One approved, shaped adaptation may change only which candidate leads a comparison; the decision block states the order the same rule would have produced without it, with rule ids, versions, hashes and bounded evidence ids | User approval only; the block says `authorizes:false` | None; carried on the audited `plan.candidates`/`plan.replan` read and its display | No applicable record → declined with the ledger's own reason; candidate bytes that changed since the comparison are refused by selection | `adaptation-decision.test.js`, `plan-guidance.test.js`, `plan-learning.test.js` |
@@ -495,6 +495,39 @@ planner, no decision dimension, no execution path, and no second retirement mech
   influence, and executes nothing; a recommendation is never a decision. The read has no write path,
   and the write actions cannot approve an adaptation, change guidance, or run a plan. Reconciliation
   reports a difference, not a causal finding, a quality judgment, or real-world truth.
+
+### A wrong expectation as one recommendation (AP-13)
+
+The prediction ledger could state that an expectation ended as `contradicted`, and nothing downstream
+read it. AP-13 adds the smallest consumer that closes that clause without turning a verdict into a
+permission.
+
+- **The read.** `PredictionStore.expectationCautions({ capabilities, limit })` loads the prediction
+  ledger once, keeps only predictions in the caller's capabilities that are neither retired,
+  invalidated nor unevaluated, and opens their horizons with the existing scoped projection. The
+  derivation (`src/prediction/caution.js`) emits a caution only for a stored `contradicted` verdict
+  that a fresh evaluation still confirms with a readable experience log. Everything else is withheld
+  with its own reason (withdrawn, superseded, retired, no verdict, another verdict, stale with its
+  `staleReason`, unreadable log) or reported unavailable; nothing is silently dropped. The bounds are
+  fixed: 3 cautions, 8 capabilities, 4 withheld entries per read.
+- **The only consumer.** `continuation/engine.js` attaches a caution to an approved, valid,
+  not-yet-started plan whose step actions include the cautioned capability and replaces the
+  recommendation `start-plan` (base 75) with `review-expectation` (base 62). The printed command is a
+  read, `requiresAuthorization` is `false`, and the reasons state that the caution changed the
+  recommended act, not any readiness state, approval or authorization. A stale plan keeps
+  `review-plan`; revalidation outranks review.
+- **Disclosure beside readiness.** `executive/readiness.js` accepts the same bounded read and appends
+  factors beside the unchanged state; `renderReadiness` and `renderContinuation` print the caution
+  line and the fixed note that the plan remains approved and startable. An unread caution read is
+  disclosed as unavailable, never as an empty result. `controller.continuationReport()` reads once for
+  its window and passes the result to both; `#planReadiness` does the same for one plan.
+- **No new authority or storage.** No gate, approval, activation or authorization path consults a
+  caution. A withdrawal, a supersession, a retirement, a matched verdict, a corrected experience that
+  makes the verdict stale, or a capability the plan does not run all withdraw the recommendation on
+  read. A model origin cannot write the expectation the caution rests on.
+- **Tests.** `tests/expectation-caution.test.js` (38 cases), registered in `npm test`, covers the
+  derivation, the read bounds, the ranking and readiness disclosure, and nine end-to-end cases through
+  the assembled application including a restart and a corrupt ledger.
 
 ## 5. C. Evidence and memory architecture
 
@@ -1137,6 +1170,7 @@ The only authority owner is the action registry. Everything else observes, propo
 | Concurrent store integrity | `IMPLEMENTED_AND_TESTED` | `memory/writer-lock.js`, store locks, JSONL append | `storage-concurrency.test.js`, `store-write-concurrency.test.js`, `cross-process-stress.test.js`, `lock-contention.test.js`, `lock-recovery.test.js` |
 | World Model (append-only records, read-time reduction) | `IMPLEMENTED_AND_TESTED` | `world/store.js`, `world/model.js`, `world/query.js` | `world-model-core.test.js`, `world-model-scenarios.test.js` |
 | Prediction ledger | `IMPLEMENTED_AND_TESTED` | `prediction/*`, `actions/prediction-actions.js` | `prediction-*.test.js` (6 suites) |
+| Expectation caution on the continuation recommendation (AP-13) | `IMPLEMENTED_AND_TESTED` | `prediction/caution.js`, `PredictionStore.expectationCautions`, `continuation/engine.js`, `executive/readiness.js`, controller wiring | `expectation-caution.test.js` (38 cases) |
 | Temporal experience | `IMPLEMENTED_AND_TESTED` | `experience/temporal.js`, `experience-store.js` | `experience-temporal*.test.js` |
 | Model gateway protocol (stub) | `IMPLEMENTED_AND_TESTED` | `model/gateway.js` | `gateway.test.js`, `model-workflow.test.js`; no test runs a real model |
 | Real-model answer quality | `DESCRIPTIVE_ONLY` | — | One dated observation (2026-10-31); no automated evidence |

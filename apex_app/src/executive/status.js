@@ -16,6 +16,7 @@ import {
 } from './vocabulary.js';
 import { prioritizationFactors, renderReadiness } from './readiness.js';
 import { renderSelection } from './selection.js';
+import { CAUTION_NOTE, cautionLine } from '../prediction/caution.js';
 import { LEARNING_BOUNDS, LEARNING_NOT_APPLIED, learningStatements } from './learning.js';
 
 function words(text) {
@@ -218,8 +219,10 @@ export function describeExecutiveStatus({
           // state was never read is printed without it rather than with a guessed state.
           if (c.readiness) line(`     readiness: ${c.readiness}`, lines);
           if (c.command) line(`     command: ${c.command}`, lines);
+          for (const caution of c.cautions ?? []) line(`     caution: ${words(cautionLine(caution))}`, lines);
           for (const b of c.blockers.slice(0, 3)) line(`     blocker: ${words(b)}`, lines);
           if (c.requiresAuthorization) line('     this needs your own explicit action; APEX will not take it for you', lines);
+          if (c.cautionChangedAction) line(`     ${words(CAUTION_NOTE)}`, lines);
         }
         if (candidates.length > 3) line(`  ${candidates.length - 3} other candidate(s): "node bin/apex.js work"`, lines);
       }

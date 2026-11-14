@@ -17,7 +17,8 @@ import { shortId, singleLine, truncate } from '../util.js';
 import { isOpenPlan, planProgress } from '../plans/model.js';
 import { StepStatus } from '../tasks/model.js';
 import { isOpenStatus } from '../goals/model.js';
-import { PRIORITY_RULE } from '../continuation/engine.js';
+import { PRIORITY_RULE, planCapabilities } from '../continuation/engine.js';
+import { CAUTION_NOTE, cautionLine } from '../prediction/caution.js';
 import { BOUNDS, ContinuationReadiness, READINESS_BASIS, READINESS_RULE } from './vocabulary.js';
 
 // The order the states are settled in, most decisive first. `not feasible` outranks everything because
@@ -316,7 +317,7 @@ function readinessOfCandidates({ generation = null, comparison = null }, list) {
 // The answer for one piece of work. Pass the records that exist; anything absent is reported as absent
 // rather than assumed. `plan` wins over a candidate set, because a recorded plan is the user's own
 // intention and a candidate is a comparison of approaches to it.
-export function readinessOf(input = {}) {
+function computeReadiness(input = {}) {
   const list = [];
   const { plan = null, goal = null, generation = null, comparison = null } = input;
   if (goal) {
@@ -378,6 +379,46 @@ export function readinessOf(input = {}) {
   };
 }
 
+// What a live contradicted expectation adds to a plan's readiness: disclosure, and nothing else.
+//
+// The states above answer "can this be taken up", and a caution does not bear on that question. The
+// plan's approval, its content, the live registry, the goal's constraints and every step's own record
+// decide it, and none of them moves because an expectation was contradicted. So the caution is added as
+// a factor beside the state, never as a state of its own, and `renderReadiness` says in words that the
+// state did not move. Pushing it through PRECEDENCE would silently turn a read into a gate.
+//
+// `expectationCautions` is `null` when no read was attempted (nothing was claimed either way), and an
+// array - possibly empty - when one was. `cautionRead.unavailable` is reported rather than swallowed:
+// a log that could not be read is not the same record as one that holds no contradiction.
+function withExpectationCautions(reading, input) {
+  const plan = input.plan ?? null;
+  const cautionRead = input.cautionRead ?? null;
+  const provided = Array.isArray(input.cautions) ? input.cautions : (cautionRead?.cautions ?? null);
+  if (!plan || !isOpenPlan(plan.status) || provided === null) {
+    return { ...reading, expectationCautions: null, cautionRead };
+  }
+  const capabilities = new Set(planCapabilities(plan));
+  const cautions = provided.filter((c) => c && capabilities.has(c.capability));
+  const list = reading.factors;
+  for (const caution of cautions) {
+    factor(list, `a recorded expectation for ${caution.capability} was contradicted at ${caution.decidedAt ?? 'an unrecorded time'}, and a fresh read still confirms the verdict`,
+      `prediction ${shortId(caution.id)} evaluation ${shortId(caution.evaluationId ?? '')}, re-derived by the prediction store`);
+  }
+  if (cautions.length > 0) {
+    factor(list, 'the caution is disclosed beside the state and changes nothing about it: the same records decide whether the work can be taken up',
+      'the expectation caution rule (src/prediction/caution.js)');
+  }
+  if (cautionRead?.unavailable) {
+    factor(list, `the expectation read did not complete, so no caution could be confirmed or withdrawn: ${cautionRead.unavailable}`,
+      'the prediction log read this view attempted');
+  }
+  return { ...reading, expectationCautions: cautions, cautionRead };
+}
+
+export function readinessOf(input = {}) {
+  return withExpectationCautions(computeReadiness(input), input);
+}
+
 // The factors the continuation ranking used for one candidate, each naming the record it came from.
 // The score is reported as an ordering device, which is all the records support it being.
 export function prioritizationFactors(candidate) {
@@ -395,6 +436,14 @@ export function prioritizationFactors(candidate) {
   factor(list, candidate.risk ? `its recorded risk is \`${candidate.risk}\`` : 'no risk is recorded on it',
     candidate.kind === 'plan' ? `plan ${shortId(candidate.ref)} steps, as planRisk() reads them` : `${candidate.kind} ${shortId(candidate.ref)}`);
   for (const b of candidate.blockers ?? []) factor(list, `blocker: ${b}`, `${candidate.kind} ${shortId(candidate.ref)} record and the live check`);
+  for (const caution of candidate.cautions ?? []) {
+    factor(list, `a recorded expectation for ${caution.capability} was contradicted at ${caution.decidedAt ?? 'an unrecorded time'} and still stands on a fresh read`,
+      `prediction ${shortId(caution.id)} evaluation ${shortId(caution.evaluationId ?? '')}`);
+  }
+  if (candidate.cautionChangedAction) {
+    factor(list, 'a caution replaced the recommended start with a read; no approval, readiness state, or authorization changed',
+      `prediction ${shortId(candidate.cautions?.[0]?.id ?? '')}, read by the caution rule`);
+  }
   if (!candidate.ready) factor(list, 'the ranking marks it not ready, for the blocker named above', 'the continuation engine');
   if (candidate.requiresAuthorization) {
     factor(list, 'taking it up is your own act, and APEX will not take it for you', 'the authorization rule each action runs under');
@@ -422,6 +471,13 @@ export function renderReadiness(reading, { indent = '', command = true } = {}) {
   for (const f of shown) lines.push(`${indent}  - ${truncate(f.factor, 200)} [from: ${truncate(f.readFrom, 160)}]`);
   if (reading.factors.length > shown.length) {
     lines.push(`${indent}  - ... and ${reading.factors.length - shown.length} more read from the same records`);
+  }
+  for (const caution of reading.expectationCautions ?? []) {
+    lines.push(`${indent}  caution: ${truncate(cautionLine(caution), 200)}`);
+  }
+  if ((reading.expectationCautions ?? []).length > 0) lines.push(`${indent}  ${CAUTION_NOTE}`);
+  if (reading.cautionRead?.unavailable) {
+    lines.push(`${indent}  the expectation read did not complete: ${truncate(reading.cautionRead.unavailable, 200)}`);
   }
   if (command && reading.next) {
     const label = reading.nextIsRead

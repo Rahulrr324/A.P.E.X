@@ -34,6 +34,9 @@ import { shortId, singleLine } from '../util.js';
 import { isScopableCapability } from '../experience/experience-store.js';
 import { MAX_TEMPORAL_EVENTS, PATTERN_KINDS, parseInstant } from '../experience/temporal.js';
 import { MAX_LONGITUDINAL_PREDICTIONS, analyzeLongitudinal } from './longitudinal.js';
+import {
+  EXPECTATION_CAUTION_RULE, MAX_CAUTION_CAPABILITIES, MAX_EXPECTATION_CAUTIONS, deriveExpectationCautions,
+} from './caution.js';
 import { contributingStores, runConsistentEvidenceRead } from '../evidence/snapshot.js';
 import {
   EVALUATION_KIND,
@@ -332,6 +335,59 @@ export class PredictionStore {
       ? ledger
       : { ...ledger, projections: ledger.projections.filter((item) => item.capability === capability) };
     return { calibration: deriveCalibration({ ledger: scoped }), ledger: scoped };
+  }
+
+  // The caution read: the live, current, contradicted verdicts that bear on a bounded set of
+  // capabilities. It is the one read in this store whose answer a later decision consumes, so it is
+  // deliberately narrow: it opens a horizon only for an expectation that already carries a recorded
+  // evaluation, it re-derives that evaluation through the same projection every other read uses, and
+  // it withholds - never softens - a verdict that is stale, withdrawn, replaced, or unconfirmable.
+  //
+  // The scope is filtered before any experience read, so the cost is one ledger read plus at most one
+  // horizon per evaluated prediction in scope. Nothing is retained between calls.
+  async expectationCautions({ capabilities = [], limit = MAX_EXPECTATION_CAUTIONS } = {}) {
+    const size = Number.isInteger(limit) && limit >= 1 ? Math.min(limit, MAX_EXPECTATION_CAUTIONS) : MAX_EXPECTATION_CAUTIONS;
+    const all = [...new Set((Array.isArray(capabilities) ? capabilities : [])
+      .filter((capability) => typeof capability === 'string' && capability.trim().length > 0)
+      .map((capability) => capability.trim()))];
+    const scope = all.slice(0, MAX_CAUTION_CAPABILITIES);
+    const base = {
+      cautions: [], withheld: [], considered: 0, storedEvaluated: 0, truncated: false,
+      capabilities: scope, capabilitiesTruncated: all.length > scope.length,
+      rule: EXPECTATION_CAUTION_RULE, unavailable: null, derivedAt: null,
+    };
+    if (scope.length === 0) {
+      return { ...base, note: 'no capability was in scope, so no expectation was read' };
+    }
+    let records;
+    try {
+      records = await this.#loadComplete();
+    } catch (err) {
+      return { ...base, unavailable: `the prediction log could not be read: ${err?.message ?? String(err)}` };
+    }
+    const { predictions, invalidations, evaluations } = splitPredictionRecords(records);
+    const { retired } = deriveReplacementState(predictions);
+    const invalidated = new Set(invalidations.map((record) => record.predictionId));
+    const evaluated = new Set(evaluations.map((record) => record.predictionId));
+    // Only a live, evaluated expectation can be a caution. Filtering here means an unevaluated or
+    // withdrawn expectation never opens a horizon, and never appears in the denominator either.
+    const inScope = predictions.filter((record) => scope.includes(record.capability)
+      && !retired.has(record.id) && !invalidated.has(record.id) && evaluated.has(record.id));
+    if (inScope.length === 0) return { ...base, derivedAt: this.now().toISOString() };
+    const ledger = await this.#project({
+      records, nowMs: parseInstant(this.now()), only: new Set(inScope.map((record) => record.id)),
+    });
+    const inScopeIds = new Set(inScope.map((record) => record.id));
+    const derived = deriveExpectationCautions({
+      projections: ledger.projections.filter((projection) => inScopeIds.has(projection.id)),
+      limit: size,
+    });
+    return {
+      ...base,
+      ...derived,
+      storedEvaluated: inScope.length,
+      derivedAt: ledger.derivedAt,
+    };
   }
 
   // The longitudinal read: one grouped, bounded analysis of how recorded outcomes for a scope are

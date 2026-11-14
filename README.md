@@ -265,10 +265,24 @@ tests: `tests/retrieval-scoring.test.js`, `tests/retrieval-context-budget.test.j
 `tests/retrieval-snapshot.test.js`, `tests/retrieval-acceptance.test.js`). It needs no model, adds no
 store, no index and no cache, and grants no authority.
 
-What remains is the wider clause: an expectation verdict changing subsequent behaviour without a
-user-approved candidate, or changing more than the one disclosed ordering, and any claim of prediction
-accuracy or causation. The runtime keeps that wider clause open; this is a recommendation only, and no
-part of it is implemented.
+Batch AP-13 then closed the first half of that wider clause without an approved candidate in between.
+A stored `contradicted` verdict whose evidence still stands now changes exactly one later decision: an
+approved, valid plan whose step capability is the contradicted one is recommended for *review* instead
+of *start* in the continuation ranking, and the same caution is disclosed beside the plan's unchanged
+readiness state. The plan keeps its approval, bytes and readiness; the printed command is a read; the
+candidate states `requiresAuthorization: false` and that the caution changed what is recommended next,
+not what is permitted; and withdrawing the expectation, or a corrected experience that makes the
+verdict stale, restores `start-plan`. The caution is derived at read time from the bounded ledger read
+and a fresh evaluation, is scoped to the plan's own step capabilities, and reports an absent,
+unreadable or truncated read instead of an empty result. Nothing is stored, no weight is fitted, and no
+gate, authorization or readiness state moved
+([details](apex_app/README.md#batch-ap-13-expectation-caution-on-the-continuation-recommendation-as-implemented);
+tests: `tests/expectation-caution.test.js`, 38 cases including a corrupt ledger, a denied model-origin
+write, a corrected experience and a restart).
+
+What remains is the rest of that wider clause: a verdict changing a gate, an authorization, or more
+than the one disclosed recommendation, and any claim of prediction accuracy or causation. The runtime
+keeps that rest open; AP-13 is one reversible recommendation and no part of it grants authority.
 
 Batch AP-11 (Runtime Performance, Cognitive Efficiency & End-to-End Latency Optimization) first
 corrected the measurement it was asked to optimize. The AP-10 benchmark shared one corpus across phases
