@@ -122,7 +122,18 @@ test('performance - a cold memory read and a warm memory read are identical', as
   const warm = await store.log.load();
   assert.deepEqual(warm, cold, 'the snapshot must not change what a read returns');
   assert.equal(store.log.parseCacheStats.hits, 1);
-  assert.notEqual(warm.records[0], cold.records[0], 'a hit hands out copies, not the cached objects');
+  // AP-12: a hit returns its own list around the snapshot's deeply frozen records. A caller can
+  // reorder or extend its list, but cannot edit a record the snapshot still holds, so the old
+  // copy-per-hit guarantee is replaced by immutability rather than dropped.
+  assert.notEqual(warm.records, cold.records, 'each read gets its own list');
+  assert.equal(warm.records[0], cold.records[0], 'the records are shared, not copied');
+  assert.ok(Object.isFrozen(warm.records[0]), 'a shared record is frozen');
+  assert.ok(Object.isFrozen(warm.records[0].provenance), 'a nested field is frozen too');
+  assert.throws(() => { warm.records[0].content = 'tampered'; }, TypeError);
+  warm.records.reverse();
+  const reread = await store.log.load();
+  assert.equal(reread.records[0], cold.records[0], 'the snapshot kept its own order and record');
+  assert.equal(reread.records[0].content, 'The build runs on Node 26');
 
   const coldHealth = await store.health();
   const warmHealth = await store.health();

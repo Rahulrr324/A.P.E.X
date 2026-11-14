@@ -171,10 +171,9 @@ function buildFuzzyIndex(docs) {
   return { words, byTrigram };
 }
 
-// For each term, the best fuzzy score per record. Terms shorter than the minimum are
-// never compared, exactly as before.
-function fuzzyScores(terms, docs) {
-  const index = buildFuzzyIndex(docs);
+// For each term, the best fuzzy score per record, against an index built from one record set.
+// Terms shorter than the minimum are never compared, exactly as before.
+function fuzzyScores(terms, index) {
   const scores = new Map();
   for (const term of terms) {
     if (term.length < FUZZY_MIN_LENGTH) continue;
@@ -330,6 +329,16 @@ function memoryWindow(records, { limit, includePrivate }) {
 }
 
 export class MemoryStore {
+  // Tokenised corpus and fuzzy index for one certified snapshot. The content hash is the identity:
+  // a changed file - append, same-length rewrite, replacement - produces a different key, so an
+  // entry can never describe records this read did not receive. A read that certifies nothing
+  // (uncertified, oversize, or one immediately after this instance's own append) neither reuses nor
+  // retains. Two entries at most: one with private records, one without.
+  #retrievalMemo = null;
+  #retrievalBuilds = 0;
+  #retrievalHits = 0;
+  #retrievalMisses = 0;
+
   constructor(filePath, {
     now = () => new Date(),
     parseCacheBytes = MEMORY_PARSE_CACHE_BYTES,
@@ -344,6 +353,19 @@ export class MemoryStore {
     // decision from those records, and appends one record. The lock covers that whole sequence so
     // a second process cannot make its decision from a state this process has not written yet.
     this.writeLock = new WriterLock(filePath, { waitMs: lockWaitMs, retryMs: lockRetryMs, retryMaxMs: lockRetryMaxMs });
+  }
+
+  // Read-only introspection of retrieval reuse, like the parse snapshot stats: it describes a
+  // performance aid, never stored state, and no decision about a record may be taken from it. A
+  // build counts one tokenised corpus and fuzzy index; a hit counts a search answered from one.
+  get retrievalIndexStats() {
+    return {
+      cached: this.#retrievalMemo !== null,
+      builds: this.#retrievalBuilds,
+      hits: this.#retrievalHits,
+      misses: this.#retrievalMisses,
+      authorizes: false,
+    };
   }
 
   async add({ content, kind = 'user_fact', source = 'user', sensitivity = 'normal', provenance = {} } = {}) {
@@ -466,16 +488,39 @@ export class MemoryStore {
     return found;
   }
 
-  async #loadComplete({ operation = 'retrieval', beforeAppend = false } = {}) {
+  async #loadComplete({ operation = 'retrieval', beforeAppend = false, certification = null } = {}) {
     // A write reads through the incremental validated state, so one append no longer costs the
     // whole store's parse and validation. Nothing about the rule below changes: the records it
     // returns come from the same parser and the same integrity rules, and a state is only ever
     // retained for a file that had no damage in it, so a damaged store still reaches this refusal.
-    const { records, corrupt } = beforeAppend ? await this.log.loadForAppend() : await this.log.load();
+    const { records, corrupt } = beforeAppend
+      ? await this.log.loadForAppend()
+      : await this.log.load({ certification });
     if (corrupt.length > 0) {
       throw new StoreError(`memory store contains ${corrupt.length} corrupt line(s); refusing incomplete ${operation}`);
     }
     return records;
+  }
+
+  // The tokenised pool and fuzzy index for these exact records, reused only while the read's
+  // content key still describes them. A search asks the same store the same question repeatedly -
+  // across requests and within one - and rebuilding 4,000 token sets and their trigram index each
+  // time was the dominant cost of memory retrieval.
+  #corpusFor(records, key, includePrivate) {
+    const memo = key !== null && this.#retrievalMemo?.key === key ? this.#retrievalMemo : null;
+    const cached = memo?.corpora.get(includePrivate);
+    if (cached) {
+      this.#retrievalHits += 1;
+      return cached;
+    }
+    this.#retrievalMisses += 1;
+    if (key !== null && !memo) this.#retrievalMemo = { key, corpora: new Map() };
+    this.#retrievalBuilds += 1;
+    const pool = records.filter((r) => includePrivate || r.sensitivity !== 'private');
+    const docs = pool.map((record) => new Set(tokenize(record.content)));
+    const corpus = { pool, docs, fuzzyIndex: buildFuzzyIndex(docs) };
+    if (key !== null) this.#retrievalMemo.corpora.set(includePrivate, corpus);
+    return corpus;
   }
 
   async list({ limit = 20, includePrivate = true } = {}) {
@@ -517,7 +562,8 @@ export class MemoryStore {
   // holds, and how many records matched and were returned.
   async search(query, { limit = 5, includePrivate = true, diagnostics = null } = {}) {
     const { tokens: terms, dropped: droppedTokens, total: totalTokens } = queryTokens(query, { stem: true });
-    const records = await this.#loadComplete();
+    const certification = { key: null };
+    const records = await this.#loadComplete({ certification });
     // A bounded, fixed-key profile of what this search asked and what the store could answer. It is
     // filled in place so the return shape stays the ranked array every caller already reads.
     const profile = {
@@ -526,10 +572,9 @@ export class MemoryStore {
     const explain = diagnostics && typeof diagnostics === 'object' ? diagnostics : null;
     if (explain) Object.assign(explain, profile);
     if (terms.length === 0) return [];
-    const pool = records.filter((r) => includePrivate || r.sensitivity !== 'private');
-    const docs = pool.map((record) => new Set(tokenize(record.content)));
+    const { pool, docs, fuzzyIndex } = this.#corpusFor(records, certification.key, includePrivate);
 
-    const fuzzy = fuzzyScores(terms, docs);
+    const fuzzy = fuzzyScores(terms, fuzzyIndex);
     const df = new Map();
     for (const t of terms) {
       let count = docs.filter((d) => d.has(t)).length;

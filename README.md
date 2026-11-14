@@ -300,3 +300,18 @@ reading and per-record tokenizing outside the derived state. Small stores are we
 target, 1,000 is inside 500 ms warm but not cold, and 10,000 remains above 1 s: that limit is reported
 as the measured lower bound rather than closed with a fragile shortcut. It needs no
 model and grants no authority. What remains open is the wider clause above; AP-11 implements none of it.
+
+AP-12 then removed the costs AP-11 had left: a snapshot read deep-copied every record and nested field,
+every memory search re-tokenized the whole store and rebuilt its fuzzy index, every knowledge search
+re-tokenized the active pool again, and conflict-window annotation re-normalised and re-sorted a whole
+group once per record. A snapshot hit now returns the snapshot's frozen records in a new list, so a
+caller can reorder its list but cannot edit the shared record; retrieval corpora and the AP-11
+lifecycle entry are keyed by the same certified SHA-256, so a corpus can only describe the bytes the
+read returned, and a read that certifies nothing never reuses or retains one. The pre-AP-12 tree and the
+current tree were run through the same driver over identical count-verified corpora, alternating order,
+ratios computed within a round: warm request time fell to 0.95x at 20 records, 0.80x at 200, 0.58x at
+1,000, 0.45x at 4,000 (2.20x) and 0.44x at 10,000 (2.27x), with every row meeting its engineering
+target and both sides returning the same trust, retrieval-completeness and verification states. Scoring,
+ranking, bounds, conflict partners, provenance, audit and authorization are unchanged
+([details](apex_app/README.md#batch-ap-12-request-scoped-read-optimization-scalable-retrieval-and-end-to-end-latency-reduction-as-implemented);
+tests: `tests/request-scoped-reads.test.js`). No inference was run or configured for this work.

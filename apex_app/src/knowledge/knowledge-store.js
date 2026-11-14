@@ -235,6 +235,14 @@ export class KnowledgeStore {
   #indexMisses = 0;
   #healthBuilds = 0;
   #healthHits = 0;
+  // Active-pool token sets for one certified snapshot. The lifecycle derivation already answers
+  // which claims are active; tokenising them again for every search of the same unchanged file was
+  // repeated work with no new evidence. Keyed and dropped by the same content hash as the lifecycle
+  // entry, and never retained for a read that certified nothing.
+  #searchMemo = null;
+  #searchBuilds = 0;
+  #searchHits = 0;
+  #searchMisses = 0;
 
   constructor(filePath, {
     now = () => new Date(),
@@ -265,6 +273,18 @@ export class KnowledgeStore {
       misses: this.#indexMisses,
       healthBuilds: this.#healthBuilds,
       healthHits: this.#healthHits,
+      authorizes: false,
+    };
+  }
+
+  // Read-only introspection of retrieval reuse. Same contract as the lifecycle stats: it describes a
+  // performance aid and never authorizes a decision.
+  get retrievalIndexStats() {
+    return {
+      cached: this.#searchMemo !== null,
+      builds: this.#searchBuilds,
+      hits: this.#searchHits,
+      misses: this.#searchMisses,
       authorizes: false,
     };
   }
@@ -300,6 +320,22 @@ export class KnowledgeStore {
     const health = summarizeKnowledgeHealth(records, corrupt, { path: this.filePath, lifecycle: derived });
     if (memo) memo.health = health;
     return structuredClone(health);
+  }
+
+  // The active claims and their token sets for the same certified snapshot. The active set is
+  // derived from the lifecycle state, so reusing it is reusing a decision the same key governs.
+  #searchCorpus(state, key) {
+    if (key !== null && this.#searchMemo?.key === key) {
+      this.#searchHits += 1;
+      return this.#searchMemo.corpus;
+    }
+    this.#searchMisses += 1;
+    this.#searchBuilds += 1;
+    const pool = state.claims.filter((r) => isActive(r, state.supersededByMap, state.retractionsByTarget));
+    const docs = pool.map((r) => new Set(tokenize(`${r.subject} ${r.relationship} ${r.object} ${r.evidence ?? ''}`)));
+    const corpus = { pool, docs };
+    this.#searchMemo = key === null ? null : { key, corpus };
+    return corpus;
   }
 
   // --- write (user origin only) ---
@@ -566,9 +602,26 @@ export class KnowledgeStore {
     const wanted = new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id.length > 0));
     const found = new Map();
     if (wanted.size === 0) return found;
-    const records = await this.#loadComplete();
-    const { claims, retractionsByTarget } = splitLifecycle(records);
-    const supersededByMap = buildSupersededByMap(claims);
+    // The late re-check must see the file as it is now; it does, because the derivation is reused
+    // only when this read's own content hash matches the entry. A change between analysis and
+    // re-check produces a different hash and a fresh derivation. A read that certified no key
+    // builds only the two indexes this annotation needs, exactly as before.
+    const certification = { key: null };
+    const records = await this.#loadComplete({ certification });
+    let claims;
+    let retractionsByTarget;
+    let supersededByMap;
+    if (certification.key === null) {
+      const split = splitLifecycle(records);
+      claims = split.claims;
+      retractionsByTarget = split.retractionsByTarget;
+      supersededByMap = buildSupersededByMap(claims);
+    } else {
+      const state = this.#derive(records, certification.key);
+      claims = state.claims;
+      retractionsByTarget = state.retractionsByTarget;
+      supersededByMap = state.supersededByMap;
+    }
     for (const record of claims) {
       if (!wanted.has(record.id)) continue;
       found.set(record.id, annotate(record, supersededByMap, new Map(), retractionsByTarget, null));
@@ -707,10 +760,9 @@ export class KnowledgeStore {
     if (terms.length === 0) return [];
 
     const state = this.#derive(records, certification.key);
-    const { claims, retractionsByTarget, supersededByMap, conflictIndex, resolutionIndex } = state;
+    const { retractionsByTarget, supersededByMap, conflictIndex, resolutionIndex } = state;
 
-    const pool = claims.filter((r) => isActive(r, supersededByMap, retractionsByTarget));
-    const docs = pool.map((r) => new Set(tokenize(`${r.subject} ${r.relationship} ${r.object} ${r.evidence ?? ''}`)));
+    const { pool, docs } = this.#searchCorpus(state, certification.key);
 
     const df = new Map(terms.map((t) => [t, docs.filter((d) => d.has(t)).length]));
     const n = pool.length;
@@ -886,6 +938,35 @@ function conflictIndexKey(subject, relationship) {
   return `${String(subject).trim().toLowerCase()}\x00${String(relationship).trim().toLowerCase()}`;
 }
 
+// Per-group derived values, keyed by the group array itself. The conflict index is rebuilt only when
+// the certified record set changes, so its group arrays keep their identity and these entries live
+// exactly as long as the derivation that owns them. Without this, annotating each record in a window
+// re-normalised every triple in the group and re-sorted every id in it: a 4,000-claim group with a
+// 20-record window cost 80,000 triple normalisations and 20 sorts of 4,000 ids for one read.
+const groupTriples = new WeakMap();
+const groupSetKeys = new WeakMap();
+
+function triplesOfGroup(group) {
+  let entries = groupTriples.get(group);
+  if (!entries) {
+    entries = group.map((record) => ({
+      id: record.id,
+      triple: normalizedTriple(record.subject, record.relationship, record.object),
+    }));
+    groupTriples.set(group, entries);
+  }
+  return entries;
+}
+
+function setKeyOfGroup(group) {
+  let key = groupSetKeys.get(group);
+  if (key === undefined) {
+    key = claimSetKey(group.map((record) => record.id));
+    groupSetKeys.set(group, key);
+  }
+  return key;
+}
+
 function buildConflictIndex(records, supersededByMap, retractionsByTarget) {
   const index = new Map();
   for (const record of records) {
@@ -950,9 +1031,9 @@ function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = 
   // ambiguous record is not treated as active.
   const recordKey = normalizedTriple(record.subject, record.relationship, record.object);
   const group = conflictIndex.get(conflictIndexKey(record.subject, record.relationship)) ?? [];
-  const conflictIds = active ? group
-    .filter((r) => r.id !== record.id && normalizedTriple(r.subject, r.relationship, r.object) !== recordKey)
-    .map((r) => r.id) : [];
+  const conflictIds = active ? triplesOfGroup(group)
+    .filter((entry) => entry.id !== record.id && entry.triple !== recordKey)
+    .map((entry) => entry.id) : [];
 
   // The stored status is a snapshot from write time. A conflict that has since been
   // retired is not live, so a stale "conflicting" status becomes "supported".
@@ -969,7 +1050,11 @@ function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = 
   let resolution = null;
   let conflictState = null;
   if (active && conflictIds.length > 0) {
-    const applicable = resolutionIndex?.applicableGroups?.get(claimSetKey(group.map((r) => r.id))) ?? null;
+    // A store with no resolution events has an empty map, so the set key - a sort of every id in the
+    // group - cannot match anything and is not built.
+    const applicable = (resolutionIndex?.applicableGroups?.size ?? 0) > 0
+      ? resolutionIndex.applicableGroups.get(setKeyOfGroup(group)) ?? null
+      : null;
     if (applicable) {
       resolution = { ...applicable, targetIds: [...applicable.targetIds], chosen: applicable.chosenId === record.id };
       conflictState = 'resolved';
@@ -1289,10 +1374,10 @@ function summarizeConflicts(conflictIndex, resolutionIndex) {
   let resolvedClaims = 0;
   let totalGroups = 0;
   for (const group of conflictIndex.values()) {
-    const distinct = new Set(group.map((r) => normalizedTriple(r.subject, r.relationship, r.object)));
+    const distinct = new Set(triplesOfGroup(group).map((entry) => entry.triple));
     if (distinct.size < 2) continue;
     totalGroups += 1;
-    const resolved = resolutionIndex?.applicableGroups?.has(claimSetKey(group.map((r) => r.id))) ?? false;
+    const resolved = resolutionIndex?.applicableGroups?.has(setKeyOfGroup(group)) ?? false;
     if (resolved) {
       resolvedGroups += 1;
       resolvedClaims += group.length;

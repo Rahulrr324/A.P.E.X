@@ -2520,3 +2520,153 @@ size effect. What grows is the disclosed exclusion count, which is the point.
   form a single growing conflict group: that is a **worst case** for conflict annotation, and a store
   whose claims are spread over many subjects behaves differently. Both are reported where measured.
 - The ten shapes are reported apart. No overall latency or quality number is computed from them.
+
+## Runtime performance benchmark (Batch AP-12: request-scoped read reuse)
+
+```sh
+node benchmarks/run-runtime-performance-benchmark.mjs --phase compare --compare-ref <pre-AP-12 revision>
+node benchmarks/run-runtime-performance-benchmark.mjs --phase compare --sizes 20,200,1000,4000 --rounds 3
+node benchmarks/run-runtime-performance-benchmark.mjs --phase shapes --shape-size 200
+node benchmarks/run-runtime-performance-benchmark.mjs --phase limits
+```
+
+The script is the AP-11 one. AP-12 adds `--phase compare` and the driver it runs on each side
+(`benchmarks/request-read-side.mjs`), which is the only new file: one side of a paired measurement,
+run in its own process.
+
+### What changed in the harness, and why
+
+The AP-11 paired table alternated two applications inside one process. That keeps machine drift from
+being read as a code effect, but both applications then share one conversation log that grows with
+every request, so absolute values drift upward and only the within-pair delta is meaningful. AP-12
+needs absolutes to test the warm targets, so the comparison runs each side in its own process, one
+side at a time:
+
+1. One deterministic corpus per size is seeded once and its persisted record counts verified; it is
+   copied byte-for-byte for each side and each round.
+2. A discarded `settle` run per side with the given corpus warms the filesystem cache and the
+   process; its numbers are not printed.
+3. Rounds alternate order (baseline first, then current; next round the reverse), and each side runs
+   the same driver with the same `--repeats`, the first warm request discarded.
+4. Ratios are computed **within a round** only. The summary prints each round's median pair, the
+   pooled all-round min–max, the per-round ratios, and the median of the round medians.
+5. The target check uses the median of the current side's warm round medians, never a cross-run or
+   cross-round pooled figure.
+6. The baseline tree is extracted with `git archive` into a temporary directory, the driver is copied
+   into it, and both sides receive identical copies of the same seeded corpora. Temporary prefixes
+   were extended with `apex-bench-ap12-`; everything is removed unless `--keep`.
+
+The earlier phase outputs are unchanged, so the AP-10/AP-11 tables above remain reproducible with the
+same commands. A run that overlapped another benchmark or the test suite is discarded rather than
+published; the counts below come from runs that were the only CPU-heavy work on the machine.
+
+### Measured pair (pre-AP-12 `60dd25c` vs working tree)
+
+Environment: Node v26.4.0, win32 x64, 12 logical CPUs, 24 GiB reported memory, Windows 10.0.26300.
+Each size was measured in its own compare run with `--rounds 3 --repeats 5`; both sides verified their
+own corpus at every size (the printed line names both counts). Baseline warm/cold are medians of the
+three round medians. The answer surface was identical in every round and at every size: trust
+`factually_supported`, retrieval `source_limit_reached` with `complete: false`, status
+`verification_unavailable`.
+
+| records per store | baseline cold | current cold | paired cold | baseline warm | current warm | paired warm | speedup | warm target |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 20 | 40.1 | 37.7 | 0.99x | 35.7 | 33.4 | 0.95x | 1.06x | 100 ms, met |
+| 200 | 73.2 | 58.1 | 0.79x | 60.0 | 47.8 | 0.80x | 1.26x | 150 ms, met |
+| 1,000 | 175.1 | 126.3 | 0.70x | 161.9 | 93.2 | 0.58x | 1.74x | 300 ms, met |
+| 4,000 | 723.1 | 390.5 | 0.54x | 656.3 | 298.4 | 0.45x | 2.20x | 700 ms, met |
+| 10,000 | 1,820.3 | 974.8 | 0.54x | 1,625.2 | 715.0 | 0.44x | 2.27x | 1,500 ms, met |
+
+All values in milliseconds. The per-round ratios were stable: 0.92–0.96x warm at 20, 0.79–0.80x at
+200, 0.56–0.62x at 1,000, 0.44–0.48x at 4,000 and 0.44x in all three rounds at 10,000. Cold ratios
+ranged 0.99x (20) to 0.49–0.54x (10,000) — reuse helps a first request too, because one cold request
+still reads each store several times.
+
+The reuse is counted, not inferred. On the current side at every size each store reports: parse
+snapshot 17 hits / 1 miss; lifecycle index builds 1, hits 17; retrieval corpus builds 1, hits 5. The
+baseline has no retrieval counters (`n/a`) and reports lifecycle builds 1 / hits 11. Warm-end heap
+was 80.4 MiB baseline vs 67.4 MiB current at 10,000 records — a single sample per run, not a claim
+of a memory win at every size (at 4,000 the current side measured 55.4 MiB against 45.7 MiB).
+
+**Stage trace.** The traced stages total roughly 5–10 ms of a warm 10,000-record request, about 1% of
+the wall time, and at 200 records the sub-millisecond stage medians move in both directions while the
+request wall moved 20%. The gain therefore cannot be attributed to any traced stage; it is the
+whole-store work beneath them — record copying per snapshot read, tokenization and fuzzy-index
+construction per search, and group re-normalisation per annotated record. Aggregate figures are taken
+from the request wall, never from summing stages.
+
+### Query shapes (unchanged from AP-11, re-measured)
+
+Ten shapes, each on its own isolated 200-record filler corpus, five samples, warm. No shape is
+averaged into another.
+
+| shape | corpus memory/knowledge | warm median (min–max) | verdict |
+| --- | --- | --- | --- |
+| simple factual | 2 / 1 | 34.8 (33.8–38.2) | `verification_unavailable` / `factually_supported` / `bounded_results` (complete false) |
+| memory-only | 1 / 0 | 32.1 (29.9–32.8) | `verification_unavailable` / `factually_supported` / `bounded_results` |
+| knowledge-only | 0 / 1 | 28.9 (26.8–30.7) | `verification_unavailable` / `accepted_for_presentation` / `bounded_results` |
+| multi-source | 1 / 1 | 29.6 (28.8–30.7) | `verification_unavailable` / `factually_supported` / `bounded_results` |
+| conflicting | 1 / 2 | 28.2 (27.2–30.9) | `verification_unavailable` / `factually_supported` / `bounded_results` |
+| long query (3,816 chars) | 199 / 198 | 53.4 (51.6–56.8) | `verification_unavailable` / `received` / `bounded_results` |
+| empty store | 0 / 0 | 25.2 (24.1–69.9) | `verification_unavailable` / `accepted_for_presentation` / `bounded_results` |
+| large knowledge store | 1 / 199 | 38.0 (35.9–40.8) | `verification_unavailable` / `factually_supported` / `source_limit_reached` |
+| goal/plan | 2 / 1 | 30.3 (25.9–32.5) | `plan_rejected` / `n/a` / `n/a` |
+| executive preview | 2 / 1 | 8.4 (8.1–9.8) | `success_verified` / `n/a` / `n/a` |
+
+These rows are not compared with the AP-11 shape table above: that was a different run, and it had
+already shown unexplained variability (its empty-store median of 99.1 ms, far above every populated
+small shape). What is comparable is the behaviour: every shape returns the same trust, retrieval and
+completeness states as the AP-11 table, with the same exclusions — the large-knowledge shape still
+reports 196 limit-excluded records and three prompt lines, and the long query's memory record is
+still returned-but-not-contributed. The same caveats hold: the goal/plan shape measures a correctly
+rejected plan (the fixture cannot emit a `plan_create`), and the empty-store range is variability.
+
+### Source-limit ladder (re-measured)
+
+The same question over a 200-record corpus per store holding 1, 3, 5, 6, 10, 20 or 40 matching
+records; fillers share no content word with it. Warm, five samples. The bounds are unchanged and
+nothing here widens one.
+
+| matching | memory ret/mat/eli/con | memory excl. | knowledge ret/mat/eli/con | knowledge excl. | prompt knowledge lines | overall | warm median (min–max) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1/1/1/1 | 0 | 1/1/1/1 | 0 | 1 | `bounded_results` | 44.9 (43.7–51.5) |
+| 3 | 3/3/3/3 | 0 | 3/3/3/3 | 0 | 3 | `bounded_results` | 42.7 (39.8–44.3) |
+| 5 | 5/5/5/5 | 0 | 3/5/3/3 | 2 | 3 | `source_limit_reached` | 41.6 (40.6–45.0) |
+| 6 | 5/6/5/5 | 1 | 3/6/3/3 | 3 | 3 | `source_limit_reached` | 38.9 (37.1–40.1) |
+| 10 | 5/10/5/5 | 5 | 3/10/3/3 | 7 | 3 | `source_limit_reached` | 38.8 (37.6–41.5) |
+| 20 | 5/20/5/5 | 15 | 3/20/3/3 | 17 | 3 | `source_limit_reached` | 39.8 (35.6–40.7) |
+| 40 | 5/40/5/5 | 35 | 3/40/3/3 | 37 | 3 | `source_limit_reached` | 36.2 (34.9–40.6) |
+
+The state change points are exactly where AP-11 measured them: `complete_with_results` for both
+sources at 1 match, knowledge `bounded_results` at 3 (a window that returned exactly its limit cannot
+show that nothing else matched), `source_limit_reached` from 5 for both. Excluded counts still grow
+one-for-one with the matching records, and the prompt still carries at most three knowledge lines.
+Warm time does not grow with the number of matches.
+
+### Measurement rules (AP-12 additions)
+
+The AP-11 rules above still apply. Additions:
+
+- Each compare side runs in its own process, and each round alternates side order. A ratio is only
+  ever computed between the two sides of the same round on the same seeded corpus.
+- The target check reads the median of the current side's warm round medians. Pooled min–max spans
+  are printed for spread and are not used for any verdict.
+- `--rounds` is 1–5, default 2; three rounds are used for any published table. `--repeats` applies
+  within each side's warm loop after one discarded warm-up request.
+- A run that overlaps another benchmark, the test suite, or a second invocation of this script is
+  discarded. There is no correction for load; the environment is printed instead.
+- Cold is still cold application state with a warm OS file cache. Corpus construction is harness
+  setup and is excluded from request timings.
+
+### What it does not establish
+
+The AP-11 limitations apply unchanged. In addition:
+
+- The fixture model means the measured wall time excludes any real inference; the share of a real
+  request attributable to store reads is this measurement's own composition, not a model-independent
+  fraction.
+- The targets are engineering objectives. A met row is reported as measured on this machine in this
+  run, not as a guarantee for other hardware.
+- The 4,000-record heap samples show the current side above the baseline; memory is reported, not
+  optimized for, and no memory claim is made beyond the single 10,000-record observation.
+- Query-shape AP-11 numbers quoted for context come from a different run; compare only within a table.

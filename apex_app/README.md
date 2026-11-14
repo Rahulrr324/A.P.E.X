@@ -7064,6 +7064,149 @@ window, cold start, two application instances on one directory, a write from ano
 caller-edit isolation, and the real controller path) and `tests/benchmark-corpus-size.test.js` (6 tests).
 Benchmark: `benchmarks/run-runtime-performance-benchmark.mjs`, phases `scaling`, `shapes` and `limits`.
 
+## Batch AP-12: Request-Scoped Read Optimization, Scalable Retrieval and End-to-End Latency Reduction (as implemented)
+
+### The read inventory came before the optimization
+
+One grounded question reads memory and knowledge several times before the answer is written. Traced
+from `controller.handle` to the response, the request-path reads are:
+
+| Read | Where | Per request |
+| --- | --- | --- |
+| Memory search at request entry | `controller.js:664` | 1 |
+| Knowledge prompt search, inside the reply's evidence window | `controller.js:5811` | 1 |
+| World-state memory and knowledge projections | `world-state.js:271-272` | 1 each |
+| Citation re-check `getMany` | `cognition/evidence.js:1076` | 1 each |
+| Experience, prediction, goal, plan and task lists | `cognition/evidence.js:901, 937-939`; `controller.js:5893-5895` | 1 each |
+
+The cognition layer does not search again: it is seeded with the controller's memory hits and
+knowledge records (`evidence.js:850-873`), which the instrumented counts confirm — one memory search,
+one knowledge search, one projection and one `getMany` per store, and 3.6 whole-log loads per store,
+at every size.
+
+The inventory mattered because the obvious suspects were not the cost. The evidence snapshot already
+served same-label reads once per operation, so there was no duplicate read to remove; the executive
+lists read distinct stores and already run in parallel. The repeated work was **inside each read**:
+
+- every parse-snapshot hit deep-copied every record and every nested field;
+- every memory search tokenized every record again and rebuilt the fuzzy index again;
+- every knowledge search tokenized the active pool again;
+- window annotation re-normalised every triple in a conflict group, and re-sorted every id in it,
+  once per annotated record.
+
+An instrumented probe at 4,000 records (a separate application with timed wrappers, so its per-call
+values rank costs rather than sum to the request) put `knowledge.projectionRead` at 350.19 ms,
+`memory.search` at 60.72 ms, `knowledge.search` at 31.35 ms, and each whole-log `JsonlStore.load` at
+5.75 ms, three and a half times per store per request. Those four numbers, not a guess, set the work.
+
+### What was changed
+
+**The parse snapshot shares frozen records.** A snapshot hit used to return a deep copy of every
+record and nested field, once per read. A hit now returns the snapshot's frozen records in a new list:
+pushing or sorting the list a caller was handed cannot reach the snapshot, and editing a record field
+throws instead of silently diverging from the file. A miss freezes the records it parsed, to the same
+depth `loadForAppend()` has frozen records since Batch V. Stores that do not enable the snapshot —
+conversation, operations, tasks — are unchanged. The AP-07 assertion that a hit hands out copies was
+therefore replaced, not removed: `tests/world-state-performance.test.js` now proves the list is
+per-read, the record and its nested fields are frozen, an edit throws, and the snapshot keeps its own
+record and order.
+
+**Retrieval corpora are keyed by the certified content hash.** `MemoryStore` retains at most one entry
+holding up to two corpora (with private records, without), each a pool, one token set per record and
+the prebuilt fuzzy index. `KnowledgeStore` retains the active claims and their token sets, keyed like
+the AP-11 lifecycle entry and derived from it. The key is the SHA-256 the read itself certified, so a
+corpus can only describe the records that read returned: a same-length rewrite, an append from another
+process, a truncation or a replaced file all change the bytes and miss. A read that certified nothing
+— over the parse cap, an uncertified read, the read immediately after this instance's own append, or a
+damaged store — neither reuses nor retains.
+
+**Group-derived values are computed once per group per derivation.** `annotate` normalised every triple
+in a conflict group and sorted every id in it once per annotated record; a 4,000-claim group with a
+twenty-record window cost 80,000 normalisations and twenty sorts of 4,000 ids for one read. Those
+values are now memoized in a `WeakMap` keyed by the group array the lifecycle derivation owns, so they
+live exactly as long as the derivation that produced them and cannot outlive its records. A claim-set
+key is built only when a resolution index has entries, because an empty map can match nothing.
+
+### What is preserved
+
+Nothing about ranking or evidence semantics changed. Scoring, document frequencies, fuzzy scoring,
+tie-breaking, deduplication, the per-source bounds, the completeness states, the conflict partners
+named outside the returned window, claim annotation, provenance, audit fields and the authorization
+and execution boundaries all run exactly as before, over the same records. Retrieval results are never
+shared between different queries, bounds, scopes or snapshots; only the tokenized corpus and derived
+lifecycle state are shared, and both are functions of the certified bytes alone. No store schema, no
+persistence format, no disk index and no cross-process cache was added, and neither stats surface
+(`retrievalIndexStats` on memory and knowledge) authorizes a decision.
+
+### Reuse lifetime and its bound
+
+One entry per store instance, per process, until the content changes: one parse snapshot, one
+lifecycle entry, one knowledge search corpus, at most two memory corpora. The reuse is not released at
+the end of each request, because a request performs one search per store and the reply re-check and the
+next request would rebuild the same corpora; the content hash, not the request, is what makes a later
+read safe to serve. Nothing is persisted or shared across processes. A damaged store certifies nothing,
+drops the entries and fails closed; `projectionRead` reports `damaged` with a null record list and the
+complete-only readers still refuse.
+
+### The measured effect
+
+The `compare` phase in `benchmarks/run-runtime-performance-benchmark.mjs` seeds one deterministic
+corpus per size, verifies its exact record counts, copies it byte-for-byte for each side and each
+round, and alternates the order of the two sides. Both sides run the same driver in a separate
+process; ratios are computed within a round and reported as a median of three rounds, with repeats 5
+after one discarded warm-up request per current instance. Neither side overlaps another benchmark or
+the test suite.
+
+| Records | Baseline warm | Current warm | Paired warm ratio | Warm target | Baseline cold | Current cold | Paired cold ratio |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 20 | 35.7 ms | 33.4 ms | 0.95x (1.06x) | 100 ms, met | 40.1 ms | 37.7 ms | 0.99x |
+| 200 | 60.0 ms | 47.8 ms | 0.80x (1.26x) | 150 ms, met | 73.2 ms | 58.1 ms | 0.79x |
+| 1,000 | 161.9 ms | 93.2 ms | 0.58x (1.74x) | 300 ms, met | 175.1 ms | 126.3 ms | 0.70x |
+| 4,000 | 656.3 ms | 298.4 ms | 0.45x (2.20x) | 700 ms, met | 723.1 ms | 390.5 ms | 0.54x |
+| 10,000 | 1,625.2 ms | 715.0 ms | 0.44x (2.27x) | 1,500 ms, met | 1,820.3 ms | 974.8 ms | 0.54x |
+
+Warm times are the median of the three round medians, at the same size on this machine in this run.
+The baseline is the pre-AP-12 tree at commit `60dd25c` extracted with `git archive`; both sides
+return the same answer surface — trust `factually_supported`, retrieval `source_limit_reached` with
+`complete: false`, status `verification_unavailable` — so the gain is not bought by returning less
+evidence. Counters confirm what is reused: on the current side each store builds its lifecycle index
+once and hits it 17 times, builds the retrieval corpus once and hits it 5 times, and hits the parse
+snapshot 17 times with 1 miss; the baseline reports no retrieval counters at all. At 10,000 records
+the warm-end heap was 80.4 MiB on the baseline and 67.4 MiB on the current side; heap is a single
+sample per run and is not a claim of a memory win at every size (at 4,000 records the current side
+measured 55.4 MiB against 45.7 MiB).
+
+The gain grows with store size because it removes work proportional to the store while leaving work
+proportional to the answer untouched. At 20 records there is almost nothing to reuse. The traced
+per-stage medians cover only about 1% of a warm request at 10,000 records, and at 200 records the
+sub-millisecond stage medians move in both directions from noise while the request wall moved 20%;
+the aggregate figures come from the request wall, not from summing the stages.
+
+Query shapes and source-limit behaviour are measured by the same harness; `benchmarks/README.md`
+records those tables and the measurement rules.
+
+### Tests
+
+`tests/request-scoped-reads.test.js` adds 18 tests: a snapshot hit returns frozen records in its own
+list, damage is re-read per read, a same-length rewrite and a deletion/recreation each miss; memory
+corpora follow storage identity across instances, a concurrent append is visible, private and
+non-private corpora stay apart, a reused corpus matches a cold one including conflicts and
+diagnostics, an oversize or damaged store certifies and retains nothing, interrupted-append residue
+is damage rather than partial success, and `getMany` supersession still holds; knowledge lifecycle
+and search reuse re-annotate after a cross-instance resolution, see a cross-instance retraction, keep
+projection/list/`getMany` in agreement, reuse one tokenised pool, certify nothing for a damaged
+store, and match sequential reads under concurrency.
+
+### What the measurements do not establish
+
+The benchmark's model is an in-process fixture returning fixed synthetic text: no inference is run and
+no answer quality is claimed. The fillers share one subject and relationship, so they form a single
+growing conflict group — a worst case for annotation — and a store spread over many subjects behaves
+differently. The targets are engineering objectives; a row that meets one is reported as measured on
+this machine in this run, not as a guarantee. "Cold" means cold application state (no parse snapshot,
+no derived entry), with the operating system's file cache warm, so it is not a cold-disk measurement.
+The 10,000-record corpus build is harness setup and is excluded from the request timings.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 

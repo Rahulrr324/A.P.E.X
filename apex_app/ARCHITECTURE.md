@@ -920,6 +920,80 @@ a concurrent writer, snapshot movement, interrupted and damaged stores, partners
 cold start, two application instances, a write from another OS process, caller-edit isolation, and the
 real controller path) and `benchmarks/run-runtime-performance-benchmark.mjs`.
 
+### Request-scoped read reuse and retrieval token reuse (Batch AP-12)
+
+AP-11 removed one repeated derivation per read. AP-12 removed the two costs that remained between the
+derivation and the answer: **a full deep copy of every record on every read**, and **re-tokenizing the
+whole store on every search**.
+
+**The parse snapshot now shares frozen records.** A `JsonlStore` snapshot hit used to return a deep
+copy of every record and every nested field, once per read. One request reads knowledge and memory
+several times over one snapshot, so that copy was paid several times for bytes that had not changed.
+A hit now returns the snapshot's frozen records in a new list: pushing or sorting the list a caller was
+handed cannot reach the snapshot, and editing a record field throws instead of silently diverging from
+the file. A miss freezes the records it parsed, to the depth `loadForAppend()` has frozen records since
+Batch V. A store over the parse cap, or a read that this instance's own append just invalidated, still
+returns ordinary records exactly as before. The AP-07 copy-per-hit assertion became a frozen-record
+assertion in `world-state-performance.test.js`: the safety property is immutability, not duplication.
+
+**Retrieval corpora are keyed by the certified content hash.** `MemoryStore` retains at most one
+`{key, corpora}` entry holding up to two corpora — one with private records, one without — each a pool,
+one token set per record and the prebuilt fuzzy index. `KnowledgeStore` retains one `{key, corpus}` with
+the active claims and their token sets, keyed like the AP-11 lifecycle entry and derived from it. The
+key is the SHA-256 that the read itself certified, so a corpus can only describe the records that read
+returned. A read that certified nothing (store over the cap, uncertified read, the read immediately
+after this instance's own append, a damaged store) neither reuses nor retains. Two concurrent searches
+for different `includePrivate` scopes share the content key but never each other's corpus.
+
+**Group annotation is derived once per group per derivation.** `annotate` normalised every triple in a
+conflict group and sorted every id in it once per annotated record. A 4,000-claim group and a twenty
+record window cost 80,000 normalisations and twenty sorts of 4,000 ids for one read. Those derived
+values are now memoized in a `WeakMap` keyed by the group array itself, which the lifecycle derivation
+owns and replaces when the content key changes — so the entry lives exactly as long as the derivation
+that produced it and cannot outlive its records. The claim-set key is built only when a resolution index
+has entries, because an empty resolution map can match nothing.
+
+**What is not reused.** The record list around a snapshot, always; the returned window, which each call
+recomputes from the current records; scoring, document frequencies, fuzzy scoring, tie-breaking,
+deduplication and the per-source bounds, all of which run exactly as before over the shared token sets;
+the conversation, operations and task stores, which are not snapshotted at all. Retrieval results are
+never shared between different queries, bounds, scopes or snapshots — only the tokenized corpus and the
+derived lifecycle state are, and both are functions of the certified bytes alone.
+
+**Reuse lifetime and its bound.** One entry per store instance, per process, for the life of the
+instance or until the content changes: one parse snapshot, one lifecycle entry, one knowledge search
+corpus, at most two memory corpora. A request performs one search per store, so releasing the corpora at
+the end of each request would rebuild them for the reply re-check and again for the next request; the
+content hash, not the request, is what makes a later read safe to serve. Nothing is persisted, shared
+across processes, or written to disk, and a concurrent writer changes the bytes, which changes the key,
+which misses.
+
+**Fail-closed.** Damage certifies nothing: the memos are dropped, `projectionRead` reports `damaged`
+with a null record list, the complete-only readers still refuse, and an interrupted append cannot be
+answered from a corpus built before the damage. `retrievalIndexStats` reports `cached`, `builds`,
+`hits`, `misses` and `authorizes: false` on both stores, like `parseCacheStats`; a hit is never an
+assertion about a record.
+
+**Measured effect.** The `compare` phase of `benchmarks/run-runtime-performance-benchmark.mjs` runs
+the pre-AP-12 tree (extracted with `git archive`) and the current tree through the same driver over
+identical, count-verified corpora, alternating side order per round. Warm request time fell from
+35.7 to 33.4 ms at 20 records (0.95x), 60.0 to 47.8 ms at 200 (0.80x), 161.9 to 93.2 ms at 1,000
+(0.58x), 656.3 to 298.4 ms at 4,000 (0.45x, 2.20x) and 1,625.2 to 715.0 ms at 10,000 (0.44x, 2.27x);
+median-of-round-medians, one machine, one run. Cold-start times fell from 0.99x to 0.54x over the
+same ladder, so the reuse helps a first request too, less so. Both sides return the same trust,
+retrieval-completeness and verification states at every size. The saving tracks store size because
+the removed work was proportional to the store; at 20 records there is little to remove. The stage
+trace covers about 1% of a warm 10,000-record request, so the gain is not attributable to any single
+traced stage — it is the whole-store reads, copies and tokenization beneath them. Full tables,
+per-stage, query-shape and source-limit measurements, and the measurement rules are in
+`benchmarks/README.md`.
+
+See `request-scoped-reads.test.js` (frozen records and per-read lists, same-length rewrites, deletion
+and recreation, cross-instance append and retraction, conflict resolution re-annotation, private-scope
+separation, cold-versus-reused equivalence including diagnostics and conflict partners, oversize and
+damaged stores, interrupted append residue, `getMany` supersession, concurrent reads) and
+`benchmarks/run-runtime-performance-benchmark.mjs` phase `compare`.
+
 ## 6. D. Diagnostics and evaluation
 
 ### Runtime diagnostics

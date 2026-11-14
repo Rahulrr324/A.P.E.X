@@ -10,8 +10,9 @@
 // every read still reads the file, and every read that could be served from the snapshot
 // hashes what it found first, so an append, a truncation, a same-length rewrite or a
 // replaced file misses the snapshot and is parsed and validated again by the same rules.
-// Reads hand out freshly copied records, so a caller cannot mutate
-// the snapshot, and a store larger than the cap is never snapshotted. Stores that do not
+// The snapshot's records are frozen and shared between reads, so a caller cannot mutate
+// them into something the file does not contain, and a read pays the cost of the record
+// list rather than a copy of every record and every nested field. Stores that do not
 // enable it (tasks, conversation, operations) behave exactly as before and pay nothing.
 //
 // Snapshot work is skipped on the read that immediately follows one of this instance's own
@@ -45,33 +46,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { StoreError } from '../errors.js';
 
-// Copies a record to the depth the stores actually use: the record itself, every field
-// that is an object or array, and the arrays and objects inside those fields. Deeper
-// values are JSON scalars in every validated record, so they are shared deliberately.
-function isolateRecord(record) {
-  const copy = { ...record };
-  for (const key of Object.keys(copy)) {
-    const value = copy[key];
-    if (Array.isArray(value)) {
-      copy[key] = value.map((item) => (item && typeof item === 'object' ? { ...item } : item));
-    } else if (value && typeof value === 'object') {
-      const nested = { ...value };
-      for (const inner of Object.keys(nested)) {
-        if (nested[inner] && typeof nested[inner] === 'object') {
-          nested[inner] = Array.isArray(nested[inner]) ? [...nested[inner]] : { ...nested[inner] };
-        }
-      }
-      copy[key] = nested;
-    }
-  }
-  return copy;
-}
-
-function snapshotRecords(records, corrupt) {
-  return {
-    records: records.map(isolateRecord),
-    corrupt: corrupt.map((entry) => ({ ...entry })),
-  };
+function snapshotCorrupt(corrupt) {
+  return corrupt.map((entry) => ({ ...entry }));
 }
 
 // Freezes a record to the depth the stores actually use: the record itself, every field that is an
@@ -262,13 +238,17 @@ export class JsonlStore {
     if (this.#snapshot && this.#snapshot.key === key) {
       this.#cacheHits += 1;
       note(key);
-      return snapshotRecords(this.#snapshot.records, this.#snapshot.corrupt);
+      // The records are frozen and shared; only the list around them is per-read, so a caller
+      // sorting or pushing onto the list it was handed cannot reach the snapshot. A record field
+      // cannot be edited at all, which is the same guarantee `loadForAppend()` already gives.
+      return { records: [...this.#snapshot.records], corrupt: snapshotCorrupt(this.#snapshot.corrupt) };
     }
     this.#cacheMisses += 1;
     const parsed = parseLines(text(), this.validateRecord);
-    this.#snapshot = { key, bytes: buffer.length, ...snapshotRecords(parsed.records, parsed.corrupt) };
+    const records = retainRecords(parsed.records);
+    this.#snapshot = { key, bytes: buffer.length, records, corrupt: snapshotCorrupt(parsed.corrupt) };
     note(key);
-    return parsed;
+    return { records: [...records], corrupt: parsed.corrupt };
   }
 
   // The read a write performs. It returns the same shape as `load()`: the file's records and its
