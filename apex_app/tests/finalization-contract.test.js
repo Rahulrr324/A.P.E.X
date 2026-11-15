@@ -82,11 +82,13 @@ const NON_REGISTRY_CAPABILITIES = Object.freeze([
 describe('AB-1 the capability inventory is complete, exclusive, and source-backed', () => {
   test('every capability that can end an operation is capture-eligible or explicitly excluded', () => {
     const dir = tempDir();
-    // A configured filesystem root, so filesystem.list/read are registered: the inventory must
+    // A configured filesystem root, so every filesystem action is registered: the inventory must
     // cover the actions that exist in that configuration too, not just the default one.
     const app = createApp({ dataDir: dir, now: CLOCK, filesystemRoot: dir });
     const registered = app.registry.names();
-    assert.deepEqual(registered.filter((n) => n.startsWith('filesystem.')), ['filesystem.list', 'filesystem.read']);
+    assert.deepEqual(registered.filter((n) => n.startsWith('filesystem.')),
+      ['filesystem.compare', 'filesystem.find', 'filesystem.list', 'filesystem.read',
+        'filesystem.report', 'filesystem.summarize', 'filesystem.write']);
 
     const all = [...new Set([...registered, ...NON_REGISTRY_CAPABILITIES])];
     for (const name of all) {

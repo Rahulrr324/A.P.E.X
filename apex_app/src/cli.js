@@ -27,6 +27,14 @@ Usage:
   node bin/apex.js status [--model]      subsystem counts (--model probes the endpoint; no inference)
   node bin/apex.js capabilities [words...] [--json]   registered actions, optionally filtered (read-only)
   node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
+  node bin/apex.js workspace list [path] [--limit N]        one directory inside the authorized root (read-only)
+  node bin/apex.js workspace find [path] --name <text>|--extension <ext> [--max-depth N] [--limit N]
+  node bin/apex.js workspace read <path> [--max-bytes N]
+  node bin/apex.js workspace summarize <path> [--max-bytes N]   deterministic extract; no model is consulted
+  node bin/apex.js workspace compare <a> <b> [--max-bytes N]
+  node bin/apex.js workspace report [path] [--max-depth N] [--limit N]
+  node bin/apex.js workspace write <path> --content <text> [--expected-sha256 <current hash>]
+                                                 create, or replace only when you supply the exact current hash
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js memory health         store-wide record, provenance, and corruption counts (read-only)
   node bin/apex.js world [--limit N]     stored beliefs, contradictions, decisions, and unknowns (read-only)
@@ -57,6 +65,7 @@ Usage:
   node bin/apex.js knowledge health          store-wide counts, conflicts, and lifecycle anomalies (read-only)
   node bin/apex.js knowledge list [--limit N]
   node bin/apex.js knowledge search <query words...>
+  node bin/apex.js knowledge digest [query words...] [--limit N]   memory and knowledge together, with conflicts and history (read-only)
   node bin/apex.js knowledge show <id>
   node bin/apex.js experience record <operation-id> --subject <text> [--replaces <id[,id...]>]
   node bin/apex.js experience list [--limit N]
@@ -120,6 +129,7 @@ Usage:
   node bin/apex.js recover                interrupted, uncertain, resumable, and blocked work (read-only)
   node bin/apex.js work [--limit N]      ranked next work from the records (read-only, executes nothing)
   node bin/apex.js next                  the single top recommendation and why (read-only)
+  node bin/apex.js review [--limit N] [--days N]   the whole board: goals, plans, and tasks with what needs attention (read-only)
   node bin/apex.js propose [--kind goal_create|goal_clarify|plan_create|plan_revise|advice] [--goal <id>] [--plan <id>] <request>
   node bin/apex.js proposal list [--limit N]
   node bin/apex.js proposal show <id>
@@ -136,6 +146,8 @@ Usage:
   node bin/apex.js task resume <id>      continue a paused task (never re-runs a completed step)
   node bin/apex.js task retry <id> <stepId>   retry a failed read-only step
   node bin/apex.js task cancel <id>
+  node bin/apex.js task feedback <id> <assessment> [--guidance text] [--reason text] [--supersedes id]
+                                     your assessment of a completed task's verified outcome; changes nothing yet
   node bin/apex.js queue                 deferred task summaries and their state (read-only)
   node bin/apex.js audit health          operation-log integrity and outcome counts (read-only)
   node bin/apex.js repair locks          inspect task, queue, memory, knowledge, experience, prediction and world model write locks; remove only abandoned takeover tokens
@@ -161,6 +173,10 @@ Request examples (no model needed; use them with ask, or type the same words in 
   status
   list src/             list one directory inside the authorized root (no model needed)
   read README.md        read a bounded text file inside the authorized root
+  summarize notes.md    deterministic counts, headings, and frequent terms (no model)
+  find files named notes under docs/    bounded discovery inside the authorized root
+  compare notes.md with docs/notes.md   positional line comparison (no model)
+  workspace report      file counts, extensions, largest and newest files (read-only)
   task plan "calc 1+1; calc 2+2"   plan a checked task; nothing runs yet
                                      task run <task-id> runs it, task show <task-id> shows the record
   diagnose              read-only preflight, including recovery guidance
@@ -348,7 +364,7 @@ function parseFlags(args, allowed, repeat = []) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--days needs a whole number', 'USAGE');
         flags.days = Number(v);
         i += 1;
-      } else if (name === 'priority' || name === 'estimate' || name === 'depth') {
+      } else if (name === 'priority' || name === 'estimate' || name === 'depth' || name === 'max-depth' || name === 'max-bytes') {
         const v = args[i + 1];
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError(`--${name} needs a whole number`, 'USAGE');
         flags[name] = Number(v);
@@ -371,7 +387,7 @@ function parseFlags(args, allowed, repeat = []) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--in-days needs a whole number of days', 'USAGE');
         flags['in-days'] = Number(v);
         i += 1;
-      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use'].includes(name)) {
+      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use', 'extension', 'content', 'expected-sha256'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -898,8 +914,8 @@ export async function main(argv, {
           : 'Model: no inference was tested. The endpoint you configured did not answer; re-running "status --model" is safe because that probe only reads the model list. APEX does not install, start, or recommend a model server; check that the server you configured is running and reachable at that URL.');
       }
       out(filesystem.state === State.OK
-        ? `Filesystem root: ${safeText(filesystem.root)} (root validated at startup, read-only)`
-        : 'Filesystem root: none configured. Filesystem inspection is unavailable.');
+        ? `Filesystem root: ${safeText(filesystem.root)} (validated at startup; reads are bounded, and only a user-origin command can write)`
+        : 'Filesystem root: none configured. Workspace commands and filesystem inspection are unavailable.');
       if (diag.needsAttention) {
         // A model probe failure is not a storage or audit failure. Only say
         // "integrity" when a local check actually found something.
@@ -942,6 +958,82 @@ export async function main(argv, {
       out(`Started a new session: ${state.sessionId}`);
       out('Earlier conversation stays in history but is not sent to the model.');
       return 0;
+    }
+
+    if (command === 'workspace') {
+      const [sub, ...rest] = args;
+      const usage = 'workspace list [path] [--limit N] | find [path] --name <text>|--extension <ext> [--max-depth N] [--limit N] | read <path> [--max-bytes N] | summarize <path> [--max-bytes N] | compare <a> <b> [--max-bytes N] | report [path] [--max-depth N] [--limit N] | write <path> --content <text> [--expected-sha256 <hash>]';
+      if (sub === 'list') {
+        const { flags, rest: paths } = parseFlags(rest, ['limit']);
+        if (paths.length > 1) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        return emit(await app.controller.workspaceList({
+          path: paths[0] ?? '.',
+          ...(flags.limit === undefined ? {} : { limit: flags.limit }),
+        }));
+      }
+      if (sub === 'find') {
+        const { flags, rest: paths } = parseFlags(rest, ['name', 'extension', 'max-depth', 'limit']);
+        if (paths.length > 1 || (flags.name === undefined && flags.extension === undefined)) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        const input = { path: paths[0] ?? '.' };
+        if (flags.name !== undefined) input.name = flags.name;
+        if (flags.extension !== undefined) input.extension = flags.extension;
+        if (flags['max-depth'] !== undefined) input.maxDepth = flags['max-depth'];
+        if (flags.limit !== undefined) input.limit = flags.limit;
+        return emit(await app.controller.workspaceFind(input));
+      }
+      if (sub === 'read' || sub === 'summarize') {
+        const { flags, rest: paths } = parseFlags(rest, ['max-bytes']);
+        if (paths.length !== 1) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        const input = { path: paths[0] };
+        if (flags['max-bytes'] !== undefined) input.maxBytes = flags['max-bytes'];
+        return emit(sub === 'read'
+          ? await app.controller.workspaceRead(input)
+          : await app.controller.workspaceSummarize(input));
+      }
+      if (sub === 'compare') {
+        const { flags, rest: paths } = parseFlags(rest, ['max-bytes']);
+        if (paths.length !== 2) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        const input = { a: paths[0], b: paths[1] };
+        if (flags['max-bytes'] !== undefined) input.maxBytes = flags['max-bytes'];
+        return emit(await app.controller.workspaceCompare(input));
+      }
+      if (sub === 'report') {
+        const { flags, rest: paths } = parseFlags(rest, ['max-depth', 'limit']);
+        if (paths.length > 1) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        const input = { path: paths[0] ?? '.' };
+        if (flags['max-depth'] !== undefined) input.maxDepth = flags['max-depth'];
+        if (flags.limit !== undefined) input.limit = flags.limit;
+        return emit(await app.controller.workspaceReport(input));
+      }
+      if (sub === 'write') {
+        const { flags, rest: paths } = parseFlags(rest, ['content', 'expected-sha256']);
+        if (paths.length !== 1 || typeof flags.content !== 'string') {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        return emit(await app.controller.workspaceWrite({
+          path: paths[0],
+          content: flags.content,
+          expectedSha256: flags['expected-sha256'] ?? null,
+        }));
+      }
+      err(`usage: ${usage}`);
+      return 2;
     }
 
     if (command === 'memory') {
@@ -1042,6 +1134,13 @@ export async function main(argv, {
         }
         return emit(await app.controller.knowledgeSearch(words.join(' ')));
       }
+      if (sub === 'digest') {
+        const { flags, rest: words } = parseFlags(rest, ['limit']);
+        return emit(await app.controller.knowledgeDigest({
+          query: words.length > 0 ? words.join(' ') : null,
+          limit: flags.limit ?? 5,
+        }));
+      }
       if (sub === 'show') {
         const { rest: ids } = parseFlags(rest, []);
         if (ids.length !== 1) {
@@ -1054,7 +1153,7 @@ export async function main(argv, {
         out(res.display ?? res.output ?? '(none)');
         return res.status === Outcome.SUCCESS_VERIFIED ? 0 : 1;
       }
-      err('usage: knowledge add|retract|resolve|history|health|list|search|show');
+      err('usage: knowledge add|retract|resolve|history|health|list|search|digest|show');
       return 2;
     }
 
@@ -2244,6 +2343,15 @@ export async function main(argv, {
       return res.problems.length > 0 ? 1 : 0;
     }
 
+    if (command === 'review') {
+      const { flags, rest: extra } = parseFlags(args, ['limit', 'days']);
+      rejectUnexpected(extra, 'review [--limit N] [--days N]');
+      return emit(await app.controller.workReview({
+        limit: flags.limit ?? 20,
+        horizonDays: flags.days ?? 7,
+      }));
+    }
+
     if (command === 'task') {
       const [sub, ...rest] = args;
       if (sub === 'plan') {
@@ -2308,7 +2416,19 @@ export async function main(argv, {
         if (ids.length !== 1) throw new ValidationError('usage: task cancel <id>', 'USAGE');
         return emit(await app.controller.cancelTask(ids[0]));
       }
-      err('usage: task plan|list|show|explain|approve|run|resume|retry|cancel');
+      if (sub === 'feedback') {
+        const { flags, rest: words } = parseFlags(rest, ['guidance', 'reason', 'supersedes'], ['supersedes']);
+        if (words.length !== 2) {
+          throw new ValidationError('usage: task feedback <id> <assessment> [--guidance text] [--reason text] [--supersedes id]', 'USAGE');
+        }
+        return emit(await app.controller.taskFeedback(words[0], {
+          assessment: words[1],
+          guidance: flags.guidance ?? null,
+          reason: flags.reason ?? null,
+          supersedes: flags.supersedes === undefined ? [] : [].concat(flags.supersedes),
+        }));
+      }
+      err('usage: task plan|list|show|explain|approve|run|resume|retry|cancel|feedback');
       return 2;
     }
 

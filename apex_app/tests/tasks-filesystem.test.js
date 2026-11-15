@@ -78,7 +78,10 @@ describe('task execution: filesystem steps', () => {
     assert.equal(typeof app.controller.runTask, 'function');
     assert.equal(typeof app.then, 'undefined', 'createApp must return the app, not a promise');
     assert.equal(app.filesystemRoot, fs.realpathSync(dirs[dirs.length - 1]));
-    assert.deepEqual(app.registry.names().filter((n) => n.startsWith('filesystem.')), ['filesystem.list', 'filesystem.read']);
+    assert.deepEqual(
+      app.registry.names().filter((n) => n.startsWith('filesystem.')),
+      ['filesystem.compare', 'filesystem.find', 'filesystem.list', 'filesystem.read', 'filesystem.report', 'filesystem.summarize', 'filesystem.write'],
+    );
   });
 
   test('a valid read-only filesystem task plans, runs, verifies, and is recorded step by step', async () => {

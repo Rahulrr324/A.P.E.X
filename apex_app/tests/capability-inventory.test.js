@@ -106,12 +106,13 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 94, 'the default registry has 94 actions');
+    assert.equal(plain.registry.list().length, 97, 'the default registry has 97 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
-      [...plain.registry.names(), 'filesystem.list', 'filesystem.read'].sort(),
-      'a configured root adds exactly the two inspection actions',
+      [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
+        'filesystem.summarize', 'filesystem.compare', 'filesystem.report', 'filesystem.write'].sort(),
+      'a configured root adds exactly the two inspection actions and the five workspace capabilities',
     );
     const documented = inventoryRows().flatMap((row) => row.names);
     for (const name of rooted.registry.names()) {
@@ -137,7 +138,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 44, 'the inventory counts forty-four write actions');
+    assert.equal(writes.length, 46, 'the inventory counts forty-six write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -211,7 +212,7 @@ describe('AF-19: the registry is the inventory', () => {
     const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 52, 'the inventory counts fifty-two read actions with a root configured');
+    assert.equal(reads.length, 58, 'the inventory counts fifty-eight read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -223,6 +224,12 @@ describe('AF-19: the registry is the inventory', () => {
         'prediction.history': { target: pr.result.data.id },
         'filesystem.list': { path: '.' },
         'filesystem.read': { path: 'session.json' },
+        'filesystem.find': { path: '.', extension: 'json' },
+        'filesystem.summarize': { path: 'session.json' },
+        'filesystem.compare': { a: 'session.json', b: 'session.json' },
+        'filesystem.report': { path: '.' },
+        'knowledge.digest': { query: 'gate' },
+        'work.review': {},
         'world.entity.show': { target: 'e-probe' },
         'plan.candidates': { goal: g.result.data.goalId },
         'plan.replan': { plan: gp.result.data.planId, reason: 'the inventory probe asks what a revision would take' },
@@ -345,7 +352,17 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
       if (!def) continue;
       assert.equal(row.class, def.permission, `${name}: the README class disagrees with the registry`);
       assert.equal(row.origins, def.origins.length === 1 ? 'user' : 'user + model', `${name}: README origins`);
-      assert.equal(row.belief, def.permission === 'write' ? 'yes' : 'no', `${name}: README belief-state`);
+      // Every APEX write except filesystem.write changes cognitive state. A file write changes the
+      // configured workspace, which the inventory's own definition of cognitive state excludes; it
+      // is the one write that must say so rather than being counted as a belief change.
+      if (def.permission === 'write' && name !== 'filesystem.write') {
+        assert.equal(row.belief, 'yes', `${name}: README belief-state`);
+      } else if (def.permission === 'read') {
+        assert.equal(row.belief, 'no', `${name}: README belief-state`);
+      } else {
+        assert.equal(name, 'filesystem.write', 'only the file write may be a write that is not a belief change');
+        assert.equal(row.belief, 'no (a file is not a belief)', `${name}: README belief-state`);
+      }
     }
     assert.equal(documented.get('filesystem.list').plan, 'never offered to a model plan');
     assert.equal(documented.get('world.state').origins, 'user');
@@ -355,19 +372,22 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
 });
 
 describe('AF-19: the planning prompt and the plan checker agree', () => {
-  test('a model-origin prompt offers exactly the twenty reads it may propose', () => {
+  test('a model-origin prompt offers exactly the twenty-two reads it may propose', () => {
     const app = appWith(tempDir(), tempDir());
     const { system } = planningPrompt({ goal: 'anything', registry: app.registry, memoryLines: [], origin: 'model' });
     assert.deepEqual(offeredNames(system), [
       'adaptation.list', 'app.status', 'calc.evaluate', 'experience.compare', 'experience.list',
       'experience.patterns', 'experience.show', 'experience.timeline', 'experience.trends',
-      'knowledge.list', 'knowledge.search', 'memory.list', 'memory.search',
+      'knowledge.digest', 'knowledge.list', 'knowledge.search', 'memory.list', 'memory.search',
       // Batch AL: each of these three answers only from the recorded goal, the recorded plan and the
       // live registry, and a proposal that contains one is still a proposal - it authorizes nothing.
       // The outcome read reports what a plan's records establish; recording an assessment is not among
       // them, since plan.assess is a user act and is refused for a model origin.
       'plan.candidates', 'plan.outcome', 'plan.replan', 'prediction.history',
       'prediction.list', 'prediction.show', 'prediction.summary',
+      // Batch PC: both read only what memory, knowledge, goal, plan and task records already hold, so
+      // a proposal that contains one authorizes nothing; neither writes a store.
+      'work.review',
     ]);
     // The defect AF-19 found and fixed: this line used to be present while checkSteps() always refused
     // the step it invited.
@@ -396,7 +416,7 @@ describe('AF-19: the planning prompt and the plan checker agree', () => {
       }
     }
     const user = offeredNames(planningPrompt({ goal: 'anything', registry: app.registry, memoryLines: [], origin: 'user' }).system);
-    assert.equal(user.length, 44, 'a user-origin prompt offers the forty-four plannable actions with a root');
+    assert.equal(user.length, 50, 'a user-origin prompt offers the fifty plannable actions with a root');
     assert.ok(user.includes('memory.add'), 'a user plan may still contain memory.add');
     assert.ok(user.includes('world.entity.show'), 'a user plan may read the World Model');
     assert.ok(!user.includes('world.fact.add'), 'a World Model write is never plannable');

@@ -262,6 +262,23 @@ const AUDIT_TEXT_FIELDS = Object.freeze({
     text: ['query'],
     arrays: [],
   }),
+  'knowledge.digest': Object.freeze({
+    allowed: ['query', 'limit'],
+    text: ['query'],
+    arrays: [],
+  }),
+  'work.review': Object.freeze({
+    allowed: ['limit', 'horizonDays'],
+    text: [],
+    arrays: [],
+  }),
+  // The feedback fields are the user's own words about a retained task run. They are audit input
+  // like any other; the experience store holds the record itself, and the mask runs on top.
+  'task.feedback': Object.freeze({
+    allowed: ['taskId', 'assessment', 'guidance', 'reason', 'supersedes'],
+    text: ['taskId', 'assessment', 'guidance', 'reason'],
+    arrays: ['supersedes'],
+  }),
   'knowledge.retract': Object.freeze({
     allowed: ['target', 'reason'],
     text: ['target', 'reason'],
@@ -298,6 +315,16 @@ const AUDIT_TEXT_FIELDS = Object.freeze({
   }),
   'prediction.summary': Object.freeze({
     allowed: ['capability', 'limit'], text: ['capability'], arrays: [], objects: [],
+  }),
+  // The file content is the effect the user asked for; the file itself holds it. The audit
+  // records where it went and what hash it had, and omits the bytes so a write does not
+  // duplicate a document (possibly a sensitive one) into the operation log.
+  'filesystem.write': Object.freeze({
+    allowed: ['path', 'content', 'expectedSha256'],
+    text: ['path', 'expectedSha256'],
+    arrays: [],
+    objects: [],
+    omit: ['content'],
   }),
 });
 
@@ -345,6 +372,11 @@ function auditInputFor(name, rawInput) {
     const out = {};
     for (const key of fields.allowed) {
       if (!(key in rawInput)) continue;
+      if ((fields.omit ?? []).includes(key)) {
+        const value = rawInput[key];
+        out[key] = typeof value === 'string' ? `[value omitted: ${value.length} chars]` : '[value omitted]';
+        continue;
+      }
       const value = rawInput[key];
       out[key] = !secret
         ? value
@@ -620,6 +652,10 @@ export class CognitiveController {
       } else if (routed.kind === 'action' && routed.action === 'memory.add') {
         const verb = request.split(/\s+/)[0];
         op.request = `${verb} [content omitted: ${routed.input.content.length} chars]`;
+      } else if (routed.kind === 'action' && routed.action === 'filesystem.write' && typeof routed.input.content === 'string') {
+        // The file itself holds the content. The audit keeps where it went and how much was
+        // written, never the bytes, so a document is not duplicated into the operation log.
+        op.request = `write ${routed.input.path} [content omitted: ${routed.input.content.length} chars]`;
       } else if (splitGoal(request).some((part) => route(part).action === 'memory.add')) {
         // A memory write mixed with other requests: its text is not kept in the audit.
         op.request = `[request omitted: it combined a memory write with other requests; ${request.length} chars]`;
@@ -1265,6 +1301,57 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // Cross-source read over both stores. The query is kept out of the audit line when it looks like a
+  // credential, exactly as knowledge.search does; the digest itself is a read, so nothing is written
+  // except the operation record that says the read happened.
+  async knowledgeDigest({ query = null, limit = 5 } = {}) {
+    const safeQuery = typeof query === 'string' ? query.trim() : '';
+    const request = safeQuery === ''
+      ? 'knowledge digest'
+      : containsSecret(safeQuery)
+        ? 'knowledge digest [query omitted: contained a password, key, or token]'
+        : `knowledge digest [${safeQuery}]`;
+    const op = this.#knowledgeOp('knowledge.digest');
+    op.request = request;
+    const input = safeQuery === '' ? { limit } : { query: safeQuery, limit };
+    const step = await this.runAction('knowledge.digest', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // The portfolio read over recorded goals, plans, and tasks. It is a command operation because
+  // the user asked for it, but it changes nothing: only the read operation is recorded, and the
+  // independent verifier re-reads all three stores.
+  async workReview({ limit = 20, horizonDays = 7 } = {}) {
+    const op = this.#newOp({
+      capability: 'work.review',
+      origin: 'user',
+      request: `work review (limit ${limit}, horizon ${horizonDays} day(s))`,
+    });
+    const step = await this.runAction('work.review', { limit, horizonDays }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // The user's assessment of a completed task's outcome. The action refuses unless the task log
+  // and the audit show a verified completion; this method only names the operation and relays the
+  // result. Because it can write an experience and a feedback record, an audit failure after that
+  // write is reported as an integrity failure rather than as a clean refusal.
+  async taskFeedback(ref, { assessment = null, guidance = null, reason = null, supersedes = [] } = {}) {
+    const trimmed = typeof ref === 'string' ? ref.trim() : '';
+    const shown = trimmed.length === 0
+      ? '[missing task]'
+      : containsSecret(trimmed)
+        ? '[id omitted: contained a password, key, or token]'
+        : trimmed;
+    const op = this.#newOp({ capability: 'task.feedback', origin: 'user', request: `task feedback [${shown}]` });
+    const step = await this.runAction(
+      'task.feedback',
+      { taskId: ref, assessment, guidance, reason, supersedes },
+      'user',
+      op.id,
+    );
+    return this.#finishCommandOp(op, step, 'The feedback may have been recorded, but its audit record could not be written.');
+  }
+
   async knowledgeShow(idPrefix) {
     if (!this.knowledge) throw new ValidationError('knowledge store is not available in this configuration');
     if (typeof idPrefix !== 'string' || idPrefix.trim().length === 0) throw new ValidationError('knowledge show requires a record id');
@@ -1475,6 +1562,81 @@ export class CognitiveController {
       recordError: null,
       health,
     };
+  }
+
+  // ---- workspace operations ---------------------------------------------------
+  // Every workspace command runs through `runAction`, so path containment belongs to the
+  // action, authorization to the registry, and verification to the independent verifier.
+  // The request line names the path and the mode; a write's content stays out of the audit
+  // record and lives only in the file.
+
+  #requireFilesystemRoot(capability) {
+    if (!this.rootForContext) {
+      throw new ValidationError(`no filesystem root is configured, so ${capability} is unavailable`);
+    }
+  }
+
+  async workspaceList(input = {}) {
+    this.#requireFilesystemRoot('filesystem.list');
+    const where = typeof input.path === 'string' && input.path.trim() !== '' ? input.path.trim() : '.';
+    const op = this.#newOp({ capability: 'filesystem.list', origin: 'user', request: `workspace list [${where}]` });
+    const step = await this.runAction('filesystem.list', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceRead({ path: target, maxBytes } = {}) {
+    this.#requireFilesystemRoot('filesystem.read');
+    const input = maxBytes === undefined ? { path: target } : { path: target, maxBytes };
+    const op = this.#newOp({ capability: 'filesystem.read', origin: 'user', request: `workspace read [${target ?? ''}]` });
+    const step = await this.runAction('filesystem.read', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceFind(input = {}) {
+    this.#requireFilesystemRoot('filesystem.find');
+    const where = typeof input.path === 'string' && input.path.trim() !== '' ? input.path.trim() : '.';
+    const op = this.#newOp({ capability: 'filesystem.find', origin: 'user', request: `workspace find [${where}]` });
+    const step = await this.runAction('filesystem.find', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceSummarize(input = {}) {
+    this.#requireFilesystemRoot('filesystem.summarize');
+    const op = this.#newOp({ capability: 'filesystem.summarize', origin: 'user', request: `workspace summarize [${input.path ?? ''}]` });
+    const step = await this.runAction('filesystem.summarize', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceCompare(input = {}) {
+    this.#requireFilesystemRoot('filesystem.compare');
+    const op = this.#newOp({ capability: 'filesystem.compare', origin: 'user', request: `workspace compare [${input.a ?? ''}] [${input.b ?? ''}]` });
+    const step = await this.runAction('filesystem.compare', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceReport(input = {}) {
+    this.#requireFilesystemRoot('filesystem.report');
+    const where = typeof input.path === 'string' && input.path.trim() !== '' ? input.path.trim() : '.';
+    const op = this.#newOp({ capability: 'filesystem.report', origin: 'user', request: `workspace report [${where}]` });
+    const step = await this.runAction('filesystem.report', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceWrite({ path: target, content, expectedSha256 = null } = {}) {
+    this.#requireFilesystemRoot('filesystem.write');
+    const replace = typeof expectedSha256 === 'string' && expectedSha256.trim() !== '';
+    const op = this.#newOp({
+      capability: 'filesystem.write',
+      origin: 'user',
+      request: `workspace write ${replace ? 'replace' : 'create'} [${target ?? ''}]`,
+    });
+    const input = replace ? { path: target, content, expectedSha256 } : { path: target, content };
+    const step = await this.runAction('filesystem.write', input, 'user', op.id);
+    return this.#finishCommandOp(
+      op,
+      step,
+      'The file may have been written, but its audit record could not be written; the write is not reported as verified.',
+    );
   }
 
   // ---- experience, feedback, and adaptation operations -------------------------

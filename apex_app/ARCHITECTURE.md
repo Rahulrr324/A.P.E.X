@@ -1337,6 +1337,19 @@ loopback stub that speaks the model HTTP protocol so the denial path is exercise
 is performed. The fixtures are synthetic, so the report is not a real-world intelligence
 benchmark.
 
+### Practical capability evaluation (Batch PC)
+
+`tests/practical-eval.test.js` measures the practical capabilities added in Batch PC over the real
+controller, stores and CLI entry points in temporary directories, with no model configured. Ten
+dimensions are counted separately — capability coverage, supported completion, correct
+clarification, unsupported refusal, authorization correctness, execution verification, recovery
+correctness, outcome-reporting accuracy, feedback integrity, and multi-step workflow completion —
+and a dimension reports its own checked/total counts, never a score, grade, or combined total. It is
+a test file, not a second evaluation harness: there is no new module, store, registry or action, and
+the only test double is an in-memory task-action fixture for the workflow cases. The fixtures are
+synthetic; passing dimensions are evidence that the documented request, refusal, verification and
+recovery paths behave as specified on those fixtures, not that any real-world outcome was achieved.
+
 ### Benchmark methodology and limits
 
 - Deterministic fixtures written through the stores' own validated paths; no model, no network.
@@ -1460,6 +1473,11 @@ The only authority owner is the action registry. Everything else observes, propo
 | Historical memory and knowledge reconstruction (AP-18) | `IMPLEMENTED_AND_TESTED` | `src/history/memory-knowledge.js` (`memorySection`, `knowledgeSection`, `MEMORY_KNOWLEDGE_CUTOFF_SEMANTICS`, `MEMORY_KNOWLEDGE_LIMITATIONS`), the stores' existing `historicalView(cutoff)` reads inside the same certified window, memory/knowledge sections and merged limitations in `src/history/reconstruct.js`, rendering in `src/actions/history-actions.js`; same action, no new action/store/index; private memory excluded by count; free-text knowledge evidence never treated as a citation | `memory-knowledge-history.test.js` (31 cases, including real CLI child processes) |
 | Offline deterministic answering | `IMPLEMENTED_AND_TESTED` | `cognition/response.js` (`buildDeterministicAnswer`), `controller/controller.js` (`#offlineAnswer`, the no-backend branch of `answerWithModel`), `outcomes.js` (`success_deterministic`), `cli.js` (exit 0 and a note). The model-free analysis already ran for every request, so this adds no store, action, or model call; only prompt-eligible memory/knowledge claims are rendered, cited and bounded, and the audited output is content-free. A contradiction is disclosed with both sides, an ambiguity is clarified before any prompt, and an unsupported question still reports `model_unavailable` | `offline-answer.test.js` (13 cases, real controller/stores/CLI child processes) |
 | Task-to-plan outcome sync on run/resume/retry | `IMPLEMENTED_AND_TESTED` | `controller/controller.js` (`#syncPlanFromTask`, called from `runTask` after the handoff) and `plans/model.js` (`reconcilableOutcomes`, the reducer's own rule stated once). A sync reads the plan before writing and records only outcomes it does not already hold: the same status again is a no-op, an uncertain result may be replaced by a later reading, and a failed result may be replaced only by a non-completed one, because completing a step that failed earlier needs a new plan revision. Status changes follow only the reducer's table, and a blocked plan is reopened only when every step holds a completed verified outcome. Never completes a goal and never executes; a plan-write problem is a display note, not a rewrite of the task's own verified result | `task-plan-sync.test.js` (2 cases) and `task-plan-reconciliation.test.js` (8 cases: partial recorded outcomes, uncertain recovery, failed step stays failed, repeated sync idempotent, standalone task, plan-write failure disclosed, real cross-process interruption) |
+| Personal workspace assistance (Batch PC) | `IMPLEMENTED_AND_TESTED` | `filesystem/workspace.js` (`filesystem.find`, `summarize`, `compare`, `report`, `write`), registered beside the existing `filesystem.list`/`read` only when `APEX_FILESYSTEM_ROOT` is set. Every action is user-origin only and every path is re-resolved inside the root at execution time; reads are independently re-checked, and the write is create-only unless its current SHA-256 is supplied, atomic, and not `plannable`. No new store, registry, authorization rule or model call | `workspace.test.js`, `practical-eval.test.js` (real CLI create/read/compare/summarize/report, refused unguarded overwrite, verified guarded replacement, audit payload omitted) |
+| Cross-source knowledge digest (Batch PC) | `IMPLEMENTED_AND_TESTED` | `knowledge/digest.js` (`buildKnowledgeDigest`, `renderDigest`), `knowledge.digest` read action in `actions/knowledge-actions.js` with an independent two-store re-read, and the `knowledge digest` CLI. Reads memory and knowledge separately, with each store's counts, health, current records and stored correction/supersession/retraction/conflict links; never merges, ranks or links the two sources, and excludes private memory from a model-origin read | `knowledge-digest.test.js`, `practical-eval.test.js` |
+| Recorded work portfolio review (Batch PC) | `IMPLEMENTED_AND_TESTED` | `work/review.js` (`buildWorkReview`, `renderWorkReview`), `work.review` read action in `actions/work-actions.js` with a three-store verifier, and the `review` CLI. Reports open goals, plans and tasks with stored status, recorded deadlines, blockers and step counts, plus a closed-vocabulary, severity-ordered attention list; ranks nothing, decides nothing, and reports an unreadable store as unavailable rather than empty | `work-review.test.js`, `practical-eval.test.js` |
+| User-confirmed task outcome feedback (Batch PC) | `IMPLEMENTED_AND_TESTED` | `actions/task-feedback-actions.js` (`task.feedback`), user-origin only and `plannable:false`, plus the `task feedback` CLI. Refuses unless the task and every step are completed, every step has an audit record, and a recorded run ended `success_verified` with the task completed; records your assessment against that run with user provenance and derives or applies no rule | `task-feedback.test.js`, `practical-eval.test.js` (model-origin write denied) |
+| Practical capability evaluation (Batch PC) | `IMPLEMENTED_AND_TESTED` | `tests/practical-eval.test.js` only; no runtime component. Ten dimensions measured separately through the real controller, stores and CLI in temporary directories; no combined score and no model | `practical-eval.test.js` (13 tests, 10 suites) |
 | Temporal experience | `IMPLEMENTED_AND_TESTED` | `experience/temporal.js`, `experience-store.js` | `experience-temporal*.test.js` |
 | Model gateway protocol (stub) | `IMPLEMENTED_AND_TESTED` | `model/gateway.js` | `gateway.test.js`, `model-workflow.test.js`; no test runs a real model |
 | Real-model answer quality | `DESCRIPTIVE_ONLY` | — | One dated observation (2026-10-31); no automated evidence |
@@ -1624,6 +1642,16 @@ knowledge resolution is a recorded decision, not truth; that free-text `evidence
 citation; and that both listings replay the whole log, so the output is bounded but the read cost is
 not.
 
+Batch PC added five capability rows without adding a store, registry, controller, authorization rule
+or model call. The limits it states are that the workspace surface has no delete, move, rename or
+directory create and cannot replace a file without its current hash; that the digest reports the two
+stores separately and decides which source is right for neither; that the work portfolio reports
+stored status and recorded dates without scheduling, prioritizing or acting, and a missing date is
+"no date recorded"; that outcome feedback is refused unless a verified run supports it and changes
+nothing until a derived candidate is explicitly approved; and that the practical evaluation is a
+deterministic fixture set over APEX's own paths, so it says nothing about real-world task success or
+answer quality.
+
 ## 10. Running the verification
 
 ```sh
@@ -1642,6 +1670,7 @@ node --test tests/cognition-response-integrity.test.js
 node --test tests/semantic-consistency.test.js tests/semantic-acceptance.test.js
 node --test tests/temporal-belief.test.js tests/history-reconstruction.test.js tests/executive-history.test.js tests/memory-knowledge-history.test.js
 node --test tests/capability-eval.test.js
+node --test tests/practical-eval.test.js tests/workspace.test.js tests/knowledge-digest.test.js tests/work-review.test.js tests/task-feedback.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs
@@ -1705,3 +1734,12 @@ only to fresh temporary directories. The complete measured tables and their cave
   causal argument is detected; those fall outside the rules and are reported as insufficient or not
   checked. The vocabulary is finite, the fixtures were written to be decidable by it, and no model
   was consulted.
+- It does not claim Batch PC makes APEX a general personal assistant. It claims that bounded
+  workspace reads, one hash-guarded write, a cross-source digest, a recorded-work portfolio and
+  user-confirmed task feedback run through the existing controller, stores, audit and authorization
+  paths, and that the adversarial cases in their suites are refused as documented. It does not claim
+  file deletion, movement, renaming, directory creation, automated replacement, or execution of file
+  content; that the digest decides which source is right or merges stores; that the portfolio
+  schedules, ranks or infers a missing date; or that feedback changes anything before the existing
+  derivation and user approval run. A deterministic fixture passing a practical dimension is not
+  evidence that the corresponding real-world outcome was achieved.

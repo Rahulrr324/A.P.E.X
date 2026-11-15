@@ -296,6 +296,68 @@ export class OperationLog {
     result.missing.push(...wanted.values());
     return result;
   }
+
+  // The most recent runs recorded for one task, newest first. The whole log is read because the
+  // newest matches are at the end and the file is append-only; the answer is bounded to `limit`
+  // records held in memory while the scan continues, so a large history costs one pass and no
+  // proportional memory. Each run is returned as the structural facts a caller needs to tell one
+  // run from another - never its output, request, or prompt, which are the text fields a feedback
+  // reader has no reason to hold. Damaged lines are counted and never used as evidence; a log that
+  // does not exist yet is a real empty answer; a log that cannot be read throws, because it
+  // establishes nothing either way. `truncated` says more runs matched than were returned.
+  async findTaskRuns(taskId, { limit = 5 } = {}) {
+    const bound = Math.max(1, Math.min(20, Number.isInteger(limit) ? limit : 5));
+    const result = { runs: [], matched: 0, inspected: 0, corrupt: 0, truncated: false };
+    if (typeof taskId !== 'string' || taskId.length === 0) return result;
+
+    const recent = [];
+    const stream = fs.createReadStream(this.filePath, { encoding: 'utf8' });
+    const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    let streamError = null;
+    stream.on('error', (err) => { streamError = err; });
+    try {
+      for await (const line of lines) {
+        result.inspected += 1;
+        if (line.trim() === '') continue;
+        let record;
+        try {
+          record = JSON.parse(line);
+        } catch {
+          result.corrupt += 1;
+          continue;
+        }
+        if (validateOperation(record)) {
+          result.corrupt += 1;
+          continue;
+        }
+        if (record.capability !== 'task.run' || record.task?.id !== taskId) continue;
+        result.matched += 1;
+        if (recent.length === bound) recent.shift();
+        recent.push({
+          id: record.id,
+          status: record.status,
+          decision: record.decision ?? null,
+          origin: record.origin ?? null,
+          requestedAt: record.requestedAt ?? null,
+          finishedAt: record.finishedAt ?? null,
+          taskStatus: record.task?.status ?? null,
+        });
+      }
+    } catch (err) {
+      streamError = streamError ?? err;
+    } finally {
+      lines.close();
+      stream.destroy();
+    }
+
+    if (streamError) {
+      if (streamError.code === 'ENOENT' && result.inspected === 0) return result;
+      throw new StoreError(`cannot read ${path.basename(this.filePath)}: ${streamError.code || streamError.message}`);
+    }
+    result.runs = recent.reverse();
+    result.truncated = result.matched > result.runs.length;
+    return result;
+  }
 }
 
 // A record written before the audit write boundary masked every field can still hold a credential in

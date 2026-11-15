@@ -91,6 +91,9 @@ const MODEL_WRITE_ATTEMPTS = [
   ['knowledge.resolve', { target: 'no-such-conflict', choose: 'no-such-record' }],
   ['experience.record', { operationId: 'op1', subject: 'the model wrote its own account' }],
   ['feedback.record', { target: 'no-such-experience', assessment: 'incorrect' }],
+  // The user's judgement of a task's outcome is theirs alone; a reply cannot record one, even about
+  // a run it performed.
+  ['task.feedback', { taskId: 'no-such-task', assessment: 'incorrect' }],
   ['adaptation.derive', { minSupport: 1 }],
   ['adaptation.decide', { target: 'no-such-candidate', decision: 'approved' }],
   ['adaptation.retire', { target: 'no-such-adaptation', reason: 'the model retired it' }],

@@ -6,6 +6,7 @@ import { ValidationError } from '../errors.js';
 import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { MAX_RETRACTION_REASON_CHARS, MAX_SUPERSEDES } from '../knowledge/knowledge-store.js';
+import { buildKnowledgeDigest, renderDigest, DIGEST_DEFAULT_LIMIT, DIGEST_MAX_LIMIT } from '../knowledge/digest.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
 
 const MAX_FIELD_CHARS = 500;
@@ -426,6 +427,70 @@ export function knowledgeActions(knowledge) {
           return { ok: false, detail: 'record ids differ from an independent store read' };
         }
         return { ok: true, detail: `${fresh.length} record(s) confirmed against the store` };
+      },
+    },
+
+    {
+      name: 'knowledge.digest',
+      description: 'Cross-source digest of what memory and knowledge hold, optionally for a topic, with conflicts, supersession, retraction, and corrections shown. Read-only; the two sources stay separate.',
+      inputHint: '{"query": optional text, "limit": optional 1-10}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        const o = expectObject(input ?? {}, ['query', 'limit']);
+        const limit = o.limit === undefined ? DIGEST_DEFAULT_LIMIT : o.limit;
+        if (!Number.isInteger(limit) || limit < 1 || limit > DIGEST_MAX_LIMIT) {
+          throw new ValidationError(`limit must be an integer from 1 to ${DIGEST_MAX_LIMIT}`);
+        }
+        return { query: optionalTextField(o.query, 'query', 500), limit };
+      },
+      async execute(ctx, { query, limit }) {
+        // Private memory never reaches a model-origin caller, the same rule memory.search applies.
+        const includePrivate = ctx.origin !== ORIGIN_MODEL;
+        const data = await buildKnowledgeDigest({
+          memory: ctx.memory, knowledge: ctx.knowledge, query, limit, includePrivate,
+        });
+        const topic = data.topic === null ? '' : ` for "${data.topic}"`;
+        return {
+          summary: `digest${topic}: ${data.knowledge.counts.claims} knowledge claim(s), ${data.memory.counts.records} memory record(s)`,
+          data,
+          display: renderDigest(data),
+        };
+      },
+      async verify(ctx, { query, limit }, result) {
+        const includePrivate = ctx.origin !== ORIGIN_MODEL;
+        const fresh = await buildKnowledgeDigest({
+          memory: ctx.memory, knowledge: ctx.knowledge, query, limit, includePrivate,
+        });
+        const ids = (records) => (records ?? []).map((record) => record.id).join(',');
+        const checks = [
+          ['knowledge claim count', result.data.knowledge.counts.claims, fresh.knowledge.counts.claims],
+          ['knowledge state', result.data.knowledge.state, fresh.knowledge.state],
+          ['knowledge conflict groups', result.data.knowledge.counts.conflicts?.groups, fresh.knowledge.counts.conflicts?.groups],
+          ['knowledge corrupt lines', result.data.knowledge.counts.corruptLines, fresh.knowledge.counts.corruptLines],
+          ['knowledge records', ids(result.data.knowledge.records), ids(fresh.knowledge.records)],
+          ['memory record count', result.data.memory.counts.records, fresh.memory.counts.records],
+          ['memory state', result.data.memory.state, fresh.memory.state],
+          ['memory corrections', result.data.memory.counts.corrections, fresh.memory.counts.corrections],
+          ['memory corrupt lines', result.data.memory.counts.corruptLines, fresh.memory.counts.corruptLines],
+          ['memory records', ids(result.data.memory.records), ids(fresh.memory.records)],
+        ];
+        if (query !== null) {
+          checks.push(
+            ['knowledge matches', ids(result.data.knowledge.search?.results), ids(fresh.knowledge.search?.results)],
+            ['knowledge matched count', result.data.knowledge.search?.matched, fresh.knowledge.search?.matched],
+            ['memory matches', ids(result.data.memory.search?.results), ids(fresh.memory.search?.results)],
+            ['memory matched count', result.data.memory.search?.matched, fresh.memory.search?.matched],
+          );
+        }
+        const changed = checks.find(([, claimed, reread]) => claimed !== reread);
+        if (changed) {
+          return { ok: false, detail: `${changed[0]} differs from an independent re-read of the stores` };
+        }
+        return {
+          ok: true,
+          detail: `${fresh.knowledge.counts.claims} claim(s) and ${fresh.memory.counts.records} memory record(s) confirmed against the stores`,
+        };
       },
     },
 

@@ -52,6 +52,11 @@ from a milestone number or a passing build.
 | Adaptive planning, outcome evaluation and goal progression | Implemented as four read paths and one recorded reading over the stores Batch AG to AK already own: the candidate approaches a recorded goal supports (`plan.candidates`), a revision of a plan that stopped being viable (`plan.replan`), what a plan's execution established and left open as seven separate questions (`plan.outcome`), and the assessment derived from those records as the one write (`plan.assess`). Every step a candidate names is a registered action, every candidate is a draft on screen until the user records and approves it, the comparison is a disclosed gate-then-Pareto rule with no score, weight, or probability, and no candidate, comparison, or verdict changes a goal's status or grants permission. Batch AM added four things over the same records: the blockers, prerequisites and limits a goal actually has, and which of them are allowed to exclude a candidate (`plan-constraints.test.js`); one disclosed influence of an approved adaptation on selection, which cannot override a gate, a constraint, an approval or a permission (`plan-guidance.test.js`); two more ranked dimensions in the comparison - whether a step's own action can re-check it, and what the plan records say happened the last time that capability ran - with the reason each remaining dimension stays disclosed printed beside it (`plan-dimensions.test.js`); and the continuation pair - `plan.continuation` reads the nine states of a partially executed run from its own records, `plan.continue` takes up only the steps proven never to have started (`plan-continuation.test.js`, with real child processes stopped at eight interruption boundaries); and that reading is now answered where a user looks - continuation readiness grew a seventh state, `ready to continue`, read only from that derivation, and `work`/`next` rank the interrupted run as one `continue-plan` candidate instead of two task and plan entries (`executive-readiness.test.js`). Batch AP then made that one ordering influence auditable at the decision level: every comparison now carries `adaptationDecision`, a counterfactual computed by the same dominance rule over the same candidate bytes with only `approved_adaptation_fit` removed, disclosing which candidate led before and after, the exact rule id/version/hash and evidence ids, every record considered with its ledger state and why, an explicit declined reason when nothing applied, and `authorizes: false` (`adaptation-decision.test.js`, 23 cases). Batch AP-02 then let a second evidence kind reach that same one influence: a completed, current evaluation of a user-recorded prediction can be derived as a bounded, typed candidate, stays inert until the user approves it through the same `adaptation.decide` record, and is disclosed through `sources.predictionEvidence`; stale, withdrawn or unreadable prediction lineage withdraws its effect on read (`prediction-adaptation-learning.test.js`, 21 cases). Batch AP-03 then described repeated recorded outcomes instead of single ones: a closed eight-kind pattern analysis over one capability's bounded history, with chronological ordering, deduplicated citations, exclusions by kind, and calibration kept separate with its 20-evaluation floor; a directional pattern may become an unapproved candidate citing up to 20 observations, and only the user's explicit approval can let it reach the same dimension (`longitudinal-outcome-analysis.test.js`, 29 cases). Batch AP-13 then let a recorded verdict move one recommendation without an approved candidate in between: an approved, valid plan whose step capability carries a live, evidence-confirmed `contradicted` expectation is recommended for review (`review-expectation`, base 62) instead of start (`start-plan`, base 75), with the caution and its evidence printed, `requiresAuthorization: false`, and the plan's approval, bytes and readiness unchanged; a withdrawn expectation or a corrected experience that makes the verdict stale restores start (`expectation-caution.test.js`, 38 cases). It adds no parallel learning system, no new decision dimension, and no authority. | `plan-generation.test.js`, `plan-candidates.test.js`, `plan-evaluation.test.js`, `plan-assessment.test.js`, `plan-learning.test.js`, `plan-adversarial.test.js` (15 adversarial cases), `plan-scenarios.test.js` (the 30 numbered end-to-end scenarios), `plan-cli.test.js` (9 scenarios through the real `node bin/apex.js`), `plan-constraints.test.js`, `plan-guidance.test.js`, `plan-dimensions.test.js`, `plan-continuation.test.js`, `learning-read-equivalence.test.js`, `goal-evidence-consistency.test.js`, `executive-readiness.test.js`, `adversarial-batch-am.test.js` (the 16 adversarial cases I-01 to I-16), `plan-scenarios-am.test.js` (the 30 Batch AM acceptance scenarios, 31 tests), `adaptation-decision.test.js` (23 cases), `prediction-adaptation-learning.test.js` (21 cases), `longitudinal-outcome-analysis.test.js` (29 cases), `expectation-caution.test.js` (38 cases) - and `goal-provenance.test.js`, `goal-assessment.test.js`. See [Batch AL](#batch-al-adaptive-planning-outcome-evaluation-and-goal-progression-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Cognitive runtime contract, gateway boundary and continuation reliability | Implemented as an explicit, tested boundary over the request path that already exists. `src/cognition/contract.js` states the ten stages of one request, which component owns each, what each stage did, two invariants (no step executed without an allow decision, and none without an authorization record), and a fixed authority block in which `action_registry` owns authorization; the audit copy carries counts and fixed labels, never the request, evidence, model text or reasoning. `src/model/gateway.js` classifies every reply as `valid`, `empty`, `refused`, `unavailable`, `malformed`, `context_limit` or `cancelled`, records provenance with `verified:false`, and keeps caller cancellation distinct from timeout. Grounded claims carry one of six evidence states derived from the cited records (the weakest cited record wins), and a model-declared `supported` may rest only on `directly_supported`. A model proposal is a typed value (`mp:N`, `authority:'none'`) with only `action` and `input`; any authority-shaped or unknown root key rejects the line whole. The continuation path re-reads plan, task and validity inside the task lock, reports nine states from its own records, and never replays a step whose effect cannot be established. `src/cognition/trace.js` records bounded counts, fixed labels, refusals, validation and an explicit `authorizes:false`. No store, registry, planner, controller, runner or authorization rule is added. | `cognition-contract.test.js` (11 tests), `cognition-evidence-states.test.js` (5), `cognition-trace.test.js` (9), `proposal-boundary-an.test.js` (3), `continuation-cross-process-an.test.js` (3, real child processes stopped at the eight interruption boundaries), `integration-runtime-an.test.js` (15 end-to-end and adversarial tests through the assembled app). See [Batch AN](#batch-an-cognitive-runtime-contracts-executive-integration-and-continuation-reliability-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Offline deterministic answering and executive loop closure | Implemented over the request path that already exists. With no backend configured, a model-shaped question runs the same model-free cognitive analysis and, when the retrieved records support a conclusion, returns a cited, bounded reading (`success_deterministic`) whose audited output is content-free; only prompt-eligible memory/knowledge claims are rendered, private and below-relevance records stay out, a contradiction is shown as disputed with both sides, an ambiguity is clarified before any prompt exists, and an unsupported question still reports `model_unavailable`. Separately, a task that belongs to a plan brings the plan's recorded outcomes and status up to date when it is run, resumed, or retried (`#syncPlanFromTask`). A sync reads the plan first and records only outcomes it does not already hold: a repeated sync appends nothing, an uncertain result may be replaced by a later reading, and a step that failed earlier cannot silently become completed without a new plan revision. It never completes a goal and never executes. No new store, action, or model call is added. | `offline-answer.test.js` (13 cases, real controller/stores/CLI), `task-plan-sync.test.js` (2 cases), `task-plan-reconciliation.test.js` (8 cases). A model is never consulted. |
+| Personal workspace assistance | Implemented when `APEX_FILESYSTEM_ROOT` is set: bounded discovery (`filesystem.find`), deterministic extraction (`filesystem.summarize`), positional comparison (`filesystem.compare`), a directory report (`filesystem.report`), and an explicitly authorized `filesystem.write` that creates a file or replaces one only with its current SHA-256. Every path is re-resolved inside the configured root, links are never followed, no action executes the content of a file, every read is independently re-checked, and the write's verifier re-reads the bytes. The write is user-origin only, is not offered as a plan step, and the audit stores its content as `[value omitted: N chars]`. | `workspace.test.js`, `practical-eval.test.js` (real CLI create, read, compare, summarize and report; an unguarded overwrite refused with the original bytes intact; a guarded update verified). |
+| Cross-source knowledge digest | Implemented as a read action (`knowledge.digest`) and the `knowledge digest` command: what memory and knowledge hold, optionally for a topic, with each store's own counts and health, its current records, and the stored correction, supersession, retraction and conflict links. The stores stay separate: the digest does not merge, rank or infer a relationship between a memory record and a knowledge claim, and it states that a stored record is not proof the claim is true. | `knowledge-digest.test.js`, `practical-eval.test.js` (the memory-plus-knowledge chain ends in a digest that names both stores separately). |
+| Recorded work portfolio review | Implemented as a read action (`work.review`) and the `review` command: open goals, plans and tasks in one place, each with its stored status, recorded deadline, blocker and step counts, plus a severity-ordered list of items needing attention - blocked records, passed or near deadlines, approved plans waiting for activation, paused or failed tasks, and goals with no linked plan. It ranks no work, invents no priority and decides nothing; `work`/`next` remain the continuation recommendation. | `work-review.test.js`, `practical-eval.test.js`. |
+| User-confirmed task outcome feedback | Implemented as a user-only write action (`task.feedback`) and the `task feedback` command: your own assessment of a completed task's outcome, tied to the audited run that verified it. It refuses unless the task is completed, every step is completed, every step has an audit record, and a recorded run ended `success_verified` with the task completed. The run's evidence and your judgement stay separate records, and nothing derives or applies a behaviour change without `adaptation.derive` and your explicit approval. | `task-feedback.test.js`, `practical-eval.test.js` (a completed task's feedback recorded; a model-origin write denied). |
+| Practical capability evaluation | Implemented as a deterministic suite (`tests/practical-eval.test.js`) that drives the real controller, stores and CLI in temporary directories and measures ten dimensions separately: capability coverage, supported completion, correct clarification, unsupported refusal, authorization correctness, execution verification, recovery correctness, outcome-reporting accuracy, feedback/adaptation integrity, and multi-step workflow completion. A dimension is counted only on the cases that exercise it; no combined score is produced, and no model is consulted. | `practical-eval.test.js` (13 tests, 10 suites). |
 | General planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
 
 The model path depends entirely on a backend you configure yourself. Without one,
@@ -316,6 +321,14 @@ suites re-hash the directory afterwards to prove it.
 | `plan cancel <id> --reason <text>`, `plan supersede <id> --by <plan-id> --reason <text>` | Closes a plan record. A task already created from it is not cancelled by these commands. |
 | `recover` | Read-only recovery inspection across goals, plans, and tasks: interrupted work, uncertain steps, records that contradict each other (a missing goal, a stale goal revision, an active plan whose goal closed, a missing activation task, a completed task with unrecorded plan outcomes), resumable items, matters needing the user, and closed work. Never resumes, retries, approves, reconciles, or cancels. Exit 1 when anything needs attention. |
 | `work [--limit N]`, `next` | Read-only, deterministic ranking of the next work from goals, plans, tasks, recovery state, and execution evidence. `next` prints the single top recommendation and why. Neither executes anything, invents a priority, or treats a recommendation as permission. |
+| `review [--limit N] [--days N]` | Read-only portfolio view of open goals, plans and tasks with their stored status, recorded deadlines, blockers and step counts, and a severity-ordered attention list. `--days` sets the deadline horizon (default 7). It ranks nothing, executes nothing, and writes only its own operation record; `work`/`next` remain the continuation recommendation. |
+| `workspace list [path] [--limit N]` | Read-only: one directory inside `APEX_FILESYSTEM_ROOT` with names, types, sizes and a truncation flag. |
+| `workspace find [path] --name <text>\|--extension <ext> [--max-depth N] [--limit N]` | Read-only bounded discovery by name substring or extension inside the root, with a scan cap and depth bound. Links are counted, never followed. |
+| `workspace read <path> [--max-bytes N]` | Read-only bounded UTF-8 read of one file, refused for binary content and above the byte limit. |
+| `workspace summarize <path> [--max-bytes N]` | Read-only deterministic extract: line, word and character counts, headings, opening lines and frequent terms. The verifier recomputes it from an independent read; no model is consulted and the file is not republished in full. |
+| `workspace compare <a> <b> [--max-bytes N]` | Read-only positional comparison of two text files: identity, sizes, hashes, differing lines and extra trailing lines. |
+| `workspace report [path] [--max-depth N] [--limit N]` | Read-only directory overview: file and directory counts, total size, extensions, largest and newest files. |
+| `workspace write <path> --content <text> [--expected-sha256 <hash>]` | Creates a text file inside the root, or replaces one only when `--expected-sha256` names its current SHA-256. User origin only; refuses an existing file without the hash, never overwrites silently, never executes content, is not offered as a plan step, and the audit stores the content as `[value omitted: N chars]`. |
 | `propose [--kind goal_create\|goal_clarify\|plan_create\|plan_revise\|advice] [--goal <id>] [--plan <id>] <request>` | Asks a configured model for a structured proposal. The model-origin proposal is stored in `proposals.jsonl` with its evidence references, assumptions, unknowns, risk, invalidation conditions, and live validation result. Nothing is applied, approved, activated, or executed, and a proposal is not a user-origin record. |
 | `proposal list [--limit N]`, `proposal show <id>` | Read-only views of stored proposals, their decisions, and their live staleness assessment. |
 | `proposal accept <id> [--reason <text>]`, `proposal reject <id> --reason <text>`, `proposal invalidate <id> --reason <text>` | Records your decision on one proposal. Acceptance is a separate user-origin action that applies only a `goal_create`, `goal_clarify`, `plan_create`, or `plan_revise` proposal, only after live revalidation; it never approves or starts a plan and never changes an existing goal's provenance. Rejection and invalidation change nothing else. |
@@ -329,8 +342,10 @@ suites re-hash the directory afterwards to prove it.
 | `task resume <id>` | Continues a paused task. A completed step is never run again. |
 | `task retry <id> <stepId>` | Retries one failed or uncertain step, only if it is read-only. |
 | `task cancel <id>` | Cancels a task that has not finished. Steps that have not run are cancelled. |
+| `task feedback <id> <assessment> [--guidance <text>] [--reason <text>] [--supersedes <id>]` | Records your own assessment (`correct`, `incorrect`, `partially_correct`, `useful`, `not_useful`, `user_correction`, `outcome_succeeded`, `outcome_failed`) of a completed task's outcome, tied to the audited run that verified it. Refused unless the task and every step are completed, every step has an audit record, and a recorded run ended `success_verified`; nothing changes behaviour without a derived candidate and your approval. |
 | `queue` | Read-only view of the task-summary retry queue: what is owed, its state, and whether the queue file or its lock needs attention. |
 | `repair locks` | Inspects the task, queue, memory and knowledge write locks and removes only abandoned takeover tokens whose number no live process owns. It never takes a lock, never deletes a lock claim, and refuses while any holder or takeover number is live. A dead claim is taken over by the next normal run. A claim whose number has been recycled by an unrelated process looks live and is refused; resolving that needs the manual check described under Known limitations. |
+| `knowledge digest [query words...] [--limit N]` | Read-only cross-source digest: what memory and knowledge hold, optionally for a topic, with each store's own counts, current records, and stored correction, supersession, retraction and conflict links. The two sources are reported separately and never merged, ranked against each other, or linked. |
 | `knowledge add --subject <s> --relationship <r> --object <o> [--evidence <e>] [--supersedes <id[,id...]>]` | Stores an explicit relationship triple. User origin only. Optional `--supersedes` retires named conflicting records as historical, without deleting them. |
 | `knowledge retract <id> [--reason <text>]` | Marks an existing active claim as retracted without supplying a replacement. The original claim, evidence, and provenance are preserved. User origin only. |
 | `knowledge resolve <target-id> --choose <claim-id> [--reason <text>]` | Records an explicit user decision among a live conflict group. Every named claim must be active and conflicting; the choice must be one of them. The event names the whole group, the chosen claim, and an optional reason. No claim is deleted, merged, or rewritten, and the status stays `conflicting`. A repeated identical decision is refused; a changed decision is a new event that supersedes the earlier decision for that same group. User origin only; a model proposal cannot appear in a plan. |
@@ -352,6 +367,12 @@ Request forms recognised without a model:
   replacement must be a conflicting claim. The correction is a new append-only record.
 - `calc <expression>`, `calculate ...`, or `what is 2+3*4?`: plain arithmetic (`+ - * /`, parentheses).
 - `status`: application status.
+- `list files in <dir>`, `find files named <name> [in <dir>]`, `find files with extension .md [in <dir>]`: workspace discovery, only inside `APEX_FILESYSTEM_ROOT`. A target that is not path-shaped keeps the request on the model path, so "list services" is not a directory request.
+- `summarize <path>`, `compare <a> with <b>`, `workspace report [path]`: the rest of the read-only workspace surface. Each action re-validates the path inside the root; routing is never authorization.
+- `create file <path> with content: <text>`: the one workspace write. It creates a new file and refuses one that already exists; a replacement needs the action's `expectedSha256`, which this phrasing does not supply.
+- `knowledge digest [about <topic>]`, `digest my knowledge [for <topic>]`, `summarize what you know about <topic>`: the cross-source digest over memory and knowledge.
+- `work review`, `review my work`, `what am I working on?`, `what needs my attention?`: the recorded work portfolio.
+- `rate task <id> <assessment>`, `feedback on task <id>: <assessment>`: your own assessment of a completed task's outcome. Whether the records support it is the action's decision.
 - `what conflicts do you have`, `which contradictions are stored`, `what is currently
   unresolved`, `what do you believe`: the read-only
   [world-state projection](#world-state-the-read-only-epistemic-projection). No model is
@@ -909,7 +930,8 @@ src/actions/
   executor.js         input validation + action body; reports what happened only
   calc.js             arithmetic: recursive-descent executor, shunting-yard verifier
   builtin.js          the built-in actions (input schema, permission, verify)
-  knowledge-actions.js the knowledge actions: add, retract, resolve, list, search
+  knowledge-actions.js the knowledge actions: add, retract, resolve, digest, list, search
+  task-feedback-actions.js the user-only `task.feedback` write: your assessment of a completed task's outcome, tied to the audited run that verified it
   experience-actions.js the experience, feedback and adaptation actions
   prediction-actions.js the prediction ledger actions: three user-only writes and four reads, each with an independent re-read verify
   goal-actions.js     five user-origin goal writes: add, update, evidence, complete, link
@@ -923,6 +945,9 @@ src/memory/
   conversation-store.js  conversation turns with origin; credential-like text is never stored
 src/knowledge/
   knowledge-store.js  triples, validation, conflict detection, lifecycle events (retraction, resolution), store-wide health, one-read `projectionRead`
+  digest.js           read-only cross-source digest: memory and knowledge reported separately, with each store's counts, health, current records and stored lifecycle links; never merges or links the two sources
+src/work/
+  review.js           read-only portfolio of goals, plans and tasks with stored status, recorded deadlines, blockers and a severity-ordered attention list; ranks nothing and decides nothing
 src/experience/
   experience-store.js append-only `experiences.jsonl`: audited events, user feedback, adaptation records and their lifecycle; `evidenceSnapshot` / `evidenceIndex` for a horizon read
   derivation.js       the deterministic adaptation derivation: repeated user corrections in one capability scope yield one candidate rule, carrying the user's own words; approves nothing
@@ -947,6 +972,7 @@ src/cognition/
 src/filesystem/
   path.js             absolute path validation: no traversal, no drive root, no UNC
   actions.js          bounded, read-only listing and reading
+  workspace.js        bounded find, summarize, compare, report, and the create-only/guarded write; every path re-resolved inside the root and every read independently re-checked
 src/session.js        conversation session id (persists until `new`)
 src/security/
   secrets.js          credential-like text detection (five pattern families), the bounded persistence
@@ -1003,6 +1029,14 @@ holds identity, memory, control, or persistence.
 | `calc.evaluate` | read | user, model | `expression` (digits, `+ - * / ( )`, max 200 chars) | a different algorithm (shunting-yard) gives the same value |
 | `filesystem.list` | read | user | `path`, `limit` | a second listing matches names, types, count, and truncation flag |
 | `filesystem.read` | read | user | `path`, `maxBytes` | a second read matches size, SHA-256, and text |
+| `filesystem.find` | read | user | `path`, `name` or `extension`, `maxDepth`, `limit` | a second bounded scan matches paths, types and the truncation flag |
+| `filesystem.summarize` | read | user | `path`, `maxBytes` | counts, headings, extract and frequent terms recomputed from an independent read; the file is not republished |
+| `filesystem.compare` | read | user | `a`, `b`, `maxBytes` | identity, sizes, hashes and differing lines re-read from both files |
+| `filesystem.report` | read | user | `path`, `maxDepth`, `limit` | counts, extensions, largest and newest files re-read from a second scan |
+| `filesystem.write` | **write** | user | `path`, `content`, `expectedSha256` | the new bytes are re-read and hashed; a replacement requires the file's current hash |
+| `knowledge.digest` | read | user, model | `query` (optional), `limit` | both stores re-read; counts, source states, record ids and any matches agree |
+| `work.review` | read | user, model | `limit`, `horizonDays` | goals, plans and tasks re-read; counts, ids, source states and attention items agree |
+| `task.feedback` | **write** | user | `taskId`, `assessment`, `guidance`, `reason`, `supersedes` | the completed task, every step, every step record and the cited verified run are re-checked, and the stored feedback is read back with user provenance |
 
 `filesystem.*` actions are registered only when `APEX_FILESYSTEM_ROOT` is set. They are
 not offered to the model origin, so a model proposal cannot trigger a file read.
@@ -1175,6 +1209,11 @@ uses an in-process fixture backend and writes only into temporary directories
 | 52. Integrated cognitive reasoning runs through the real request path and invents no evidence (AJ) | `cognition-understanding.test.js` (18 tests: intent and referent classification, evidence identity, claim labelling, contradiction symmetry, uncertainty categories, clarification before any model call, and the brief's bounded content); `cognition-reasoning.test.js` (24 tests: deliberation over supported, partial, conflicting historical and unknown evidence, inference and assumption kept distinct from support, recommendations, no confidence percentages, and deterministic trace steps); `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through `controller.handle` with a capturing backend: grounded answer, unsupported question, contradiction, clarification, bounded retrieval, prompt size, trace, and audit; the backend is a stub, so no claim is made about a real model's behaviour) |
 | 53. A user's own words reach a verified run, and nothing on that path grants itself permission (AK) | `executive-bridge.test.js` (21 tests: prepare → approve → run as three recorded acts on one audit chain; every preview field read from the stored plan and the live registry; the printed content hash is the stored hash and the approval records it; mapping takes only what it can carry and leaves the router's own answers, single-task questions and model-origin requests alone; status runs nothing and prints only states a record supports; a failed step is failed, an uncheckable one uncertain, never done; verified outcomes reach the existing learning path and nothing else does); `executive-acceptance.test.js` (the 25 numbered scenarios K-01…K-25, asserted against the persisted files: an empty portfolio reported as empty, the nine questions answered from the records, a failed run that stops its dependants and promises no retry, an uncertain step never replayed, an unapproved plan that cannot start and writes nothing, a plan that ran refused a second run, an unmappable request refused, an approval naming no plan asked about, a twin draft left a draft, a credential-carrying request not taken as an act, and the same lifecycle reachable from the CLI); `executive-adversarial.test.js` (11 tests J-01…J-11: a model that claims it ran and approved a plan changes no record, a non-identifier reference asks instead of approving, `approve and start` approves and stops, three persuasion prefixes leave the store byte-identical, a non-user origin cannot approve through the bridge, a stored instruction claiming authority authorizes nothing, an unregistered destructive capability records no plan, a plan cannot contain its own approval or its own start, and the action-claim correction is shown to the user without becoming model text). Every one uses a stub or no backend, so none is evidence about a real model |
 | 54. Thirteen scenario classes, each with its own expected and actual record | `capability-eval.test.js` (single action, multi-step composition, missing-input clarification, contradictory evidence, unsupported request, authorization denial, execution failure, interrupted recovery, partial success, outcome verification, user correction, repeated-request idempotency, and context continuity; every scenario runs through the real controller and stores in its own temporary directory, and each of the six metrics - task success, planning correctness, evidence correctness, safety compliance, recovery correctness, usability - is counted only on the scenarios that exercise it, never combined into one score) |
+| 55. Both stores can be read together without being merged | `knowledge-digest.test.js` (the digest's counts, current records and stored conflict/supersession/retraction/correction links; a topic query; private memory excluded from a model-origin read; a damaged store reported as damaged rather than empty; byte-identical stores after the read; an independent re-read as the verifier) |
+| 56. Recorded work is shown as one portfolio, ranked by nothing | `work-review.test.js` (open goals, plans and tasks with stored status and counts; blocked, overdue, near-deadline, approved-not-active, paused, failed and unapproved-proposal attention items in severity order; a model-origin read; unavailable stores reported rather than shown as empty; the verifier's independent re-read) |
+| 57. An outcome assessment is the user's, and only against a verified run | `task-feedback.test.js` (a completed verified task accepts feedback with user provenance; a model-origin write is denied; an incomplete, paused or unverified task is refused with nothing written; a task step without an audit record is refused; guidance, reason and supersession are stored; the record is read back by the verifier) |
+| 58. Workspace assistance stays inside its root and never overwrites silently | `workspace.test.js` (bounded find, summarize and compare with independent verification; a report; binary and over-limit refusals; traversal, absolute, UNC and symlink targets refused or skipped; a create-only write; an unguarded overwrite refused with the original bytes intact; a guarded replacement verified; the write payload left out of the audit) |
+| 59. Ten practical dimensions, measured separately, through the real paths | `practical-eval.test.js` (capability coverage, supported completion, correct clarification, unsupported refusal, authorization correctness, execution verification, recovery correctness, outcome-reporting accuracy, feedback/adaptation integrity and multi-step workflow completion; every case drives the real controller, stores or CLI in a temporary directory, no model is consulted, and the report contains no score or overall grade) |
 
 The capability evaluation lives in `src/evaluation/capability.js` and is run by
 `tests/capability-eval.test.js`. Each scenario declares what it expected and reports what the
@@ -1182,6 +1221,14 @@ records actually show; a metric a scenario does not exercise is `null`, not a pa
 metrics are reported separately. The fixtures are synthetic and deterministic, and the one stub
 speaks only the HTTP protocol so the authorization path is exercised; the report ends with the
 sentence that it is not a real-world intelligence benchmark.
+
+The practical evaluation is `tests/practical-eval.test.js` and has no separate harness: each case
+drives the real `createApp` controller, stores or `node bin/apex.js` in its own temporary
+directory and pushes a pass or fail into its own dimension. The ten dimensions are printed as
+counts per dimension (`17/17`, `5/5`, and so on) with the case that failed named; there is no
+combined score, and the one test double is a task action used to create a deterministic failure
+and a retryable read, not a model. It configures no model at all, so it is a statement about
+deterministic capability behaviour, not about answer quality.
 
 Running one suite, which is what most review work needs:
 
@@ -1200,6 +1247,8 @@ node --test tests/corruption-recovery-boundaries.test.js tests/lock-ownership-an
 node --test tests/executive-bridge.test.js tests/executive-acceptance.test.js \
   tests/executive-adversarial.test.js
 node --test tests/capability-eval.test.js
+node --test tests/practical-eval.test.js tests/workspace.test.js \
+  tests/knowledge-digest.test.js tests/work-review.test.js tests/task-feedback.test.js
 ```
 
 The first two lines are the Batch AF security suites that run in-process plus spawn CLI children; the
@@ -1209,7 +1258,8 @@ real model; the fifth is the integrity set, and of those `tests/cross-process-st
 `tests/lock-ownership-and-recovery.test.js` spawn the most real processes and are the slowest and most
 timing-sensitive - run them alone if a shared machine makes one flaky; the sixth is the Batch AK
 executive bridge set, which builds every application with `NoBackend` and asserts against the
-persisted plan, task, audit and memory files.
+persisted plan, task, audit and memory files; and the seventh is the Batch PC practical set, which
+also configures no model and drives the real controller, stores and CLI in temporary directories.
 
 On Windows, redirect to a file rather than piping the runner into `grep` or `tee`: the test runner
 writes as it goes and a closed pipe makes it fail with `EPIPE` for a reason that has nothing to do with
@@ -3612,7 +3662,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 94 registered actions declare both `validate()` and `verify()` - 96 with a
+- **Verification.** All 97 registered actions declare both `validate()` and `verify()` - 104 with a
   filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
@@ -3637,8 +3687,10 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `knowledge.retract` | user | write | never in a plan | `knowledge.jsonl` | yes | yes |
 | `knowledge.resolve` | user | write | never in a plan | `knowledge.jsonl` | yes | yes |
 | `knowledge.list`, `knowledge.search` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `knowledge.digest` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `experience.record` | user | write | never in a plan | `experiences.jsonl` | no (self-bookkeeping) | yes |
 | `feedback.record` | user | write | never in a plan | `experiences.jsonl` | no (self-bookkeeping) | yes |
+| `task.feedback` | user | write | never in a plan | `experiences.jsonl` (one experience for the cited run when none exists, one feedback line) | no (self-bookkeeping) | yes |
 | `adaptation.derive` | user | write | never in a plan | `experiences.jsonl`, or nothing when no group qualifies | no (self-bookkeeping) | yes |
 | `adaptation.decide` | user | write | never in a plan | `experiences.jsonl` (one decision line) | no (self-bookkeeping) | yes |
 | `adaptation.retire` | user | write | never in a plan | `experiences.jsonl` | no (self-bookkeeping) | yes |
@@ -3663,7 +3715,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `world.entity.add`, `world.entity.alias`, `world.entity.retire`, `world.entity.merge`, `world.entity.unmerge`, `world.identity.decide`, `world.fact.add`, `world.relationship.add`, `world.event.add`, `world.statement.retract`, `world.statement.supersede` | user | write | never in a plan | `world-model.jsonl` (append-only; each record names its evidence) | no (world-model) | yes |
 | `world.entity.list`, `world.entity.show`, `world.entity.find`, `world.facts`, `world.attributes`, `world.relationships`, `world.events`, `world.conflicts`, `world.related`, `world.history`, `world.statement.history`, `world.identity.candidates`, `world.identity.decision`, `world.pair`, `world.evidence`, `world.belief.trace`, `world.changes`, `world.state_at`, `world.inspect`, `world.status` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
 | `history.reconstruct` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
-| `filesystem.list`, `filesystem.read` | user | read | never offered to a model plan | nothing (measured) | no (filesystem) | no |
+| `filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.compare`, `filesystem.report` | user | read | never offered to a model plan | nothing (measured) | no (filesystem) | no |
+| `filesystem.write` | user | write | never in a plan | the named file under the configured root; the audit stores the content as `[value omitted: N chars]` | no (filesystem) | no (a file is not a belief) |
 | `goal.add`, `goal.revise`, `goal.confirm`, `goal.update`, `goal.evidence`, `goal.complete`, `goal.link` | user | write | never in a plan | `goals.jsonl` (and `operations.jsonl`; a revision resets criterion evidence, completion re-checks the audit log) | no (executive) | yes |
 | `goal.list`, `goal.show` | user | read | - | nothing (measured) | no (read) | no |
 | `proposal.create` | user request; the proposal itself is model-origin | not a registered action | its proposals are checked step by step | `proposals.jsonl` + `operations.jsonl` | no (executive) | no (a suggestion, not a belief) |
@@ -3672,6 +3725,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `plan.list`, `plan.show`, `plan.validate` | user | read | - | nothing (measured) | no (read) | no |
 | `plan.candidates`, `plan.replan` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `plan.outcome` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `work.review` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `plan.assess` | user | write | never in a plan | `plans.jsonl` (one `plan_assessment` event; the plan record's own bytes, status, approval and timestamp are unchanged) | no (executive) | yes |
 | `plan.activate`, `plan.reconcile` | user | not a registered action | - | `plans.jsonl`, `tasks.jsonl`, `operations.jsonl` when a plan is activated | no (executive) | through the created task only |
 | `plan.continuation` | user | not a registered action | - | `operations.jsonl` (its own audit line); the plan, task, goal and belief stores are unchanged, measured byte for byte | no (read) | no |
@@ -3690,9 +3744,10 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `executive.clarify` | user | not a registered action | - | `operations.jsonl` + the question it produced | no (no-action) | no |
 | `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
 
-`filesystem.list` and `filesystem.read` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
-configured; there is no default root, and a model proposal cannot supply one, so the count is 94
-registered actions by default and 96 with a root. Batch AG added ten user-origin write actions
+`filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.compare`,
+`filesystem.report` and `filesystem.write` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
+configured; there is no default root, and a model proposal cannot supply one, so the count is 97
+registered actions by default and 104 with a root. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
 two more user-origin writes (`goal.confirm`, the user's own decision about a success criterion APEX
@@ -3708,11 +3763,15 @@ reconstruction; no action was added. Batch AP-16 added one unplannable cross-sto
 lifecycle kept whole, and every source's availability stated - it writes nothing and authorizes
 nothing; `history --at` in the CLI). No World
 Model write is plannable and every World Model read is user-origin, so the planning prompt offers
-exactly 20 reads to a model origin and 44 actions to a user origin with a root configured (42 without
+exactly 22 reads to a model origin and 50 actions to a user origin with a root configured (44 without
 one). The AP-16 read is offered to neither plan. Batch AP-17 added no action: it extended that same
 read to the goal, plan and task logs and to the operations audit log, so every count above is
 unchanged. Batch AP-18 also added no action: it extended that read to bounded memory and knowledge
-listings at the cutoff, and the counts are still unchanged.
+listings at the cutoff, and the counts are still unchanged. Batch PC added eight actions: four
+user-origin filesystem reads, the user-only `filesystem.write`, and three actions that need no root
+(`knowledge.digest` and `work.review`, both user + model reads, and the user-only `task.feedback`
+write). The two new reads are plannable and appear in both prompts; the write is unplannable; the
+filesystem reads are offered to a user plan and never to a model plan.
 
 ### The inconsistencies this found, and what became of them
 
@@ -8029,6 +8088,128 @@ as a separate, content-free action rather than by widening this one. Batch X too
 option in the form this note reserved: the model-facing view is a system-generated,
 counts-only section built inside prompt assembly for the request at hand, not a new action the
 model can call, and `world.state` was not widened.
+
+## Batch PC: practical capability expansion and personal-assistant completion (as implemented)
+
+This batch added capabilities a person would use, on top of the runtime Batches Z-AP already
+built, and changed nothing about authority. It adds four action groups and one read surface, no
+new store, no second registry, no second controller, no extra authorization rule, and no model
+call. Every new action goes through the existing `runAction` path: authorization, execution, an
+independent verifier, one operation record, and the same audit minimization.
+
+### Workspace assistance (filesystem)
+
+Five read-only actions and one write join the existing `filesystem.list`/`filesystem.read` when
+`APEX_FILESYSTEM_ROOT` is set. All of them are registered for the user origin only, so a model
+proposal cannot read or write a file.
+
+| Action | What it establishes | Bounds and refusals |
+|---|---|---|
+| `filesystem.find` | Paths under a directory matching a name substring or an extension, with type and size | Scan cap and depth bound; truncation is reported; links are counted, never followed |
+| `filesystem.summarize` | Line, word and character counts, headings, a bounded opening extract, and frequent terms | One regular UTF-8 file above the byte limit or containing binary data is refused; the verifier recomputes the extract from an independent read |
+| `filesystem.compare` | Identity, sizes, SHA-256, differing lines and trailing extra lines of two files | Both files are re-read by the verifier; a difference is reported as a position, never as a judgement about which file is right |
+| `filesystem.report` | File and directory counts, total size, extension tally, largest and newest files | Scan cap and depth bound; links counted, not followed |
+| `filesystem.write` | A created file, or a replaced file only when the caller supplied its current SHA-256 | User origin only; create-only without the hash; atomic publish through a temporary file; content is never executed; not `plannable`; the audit record keeps `[value omitted: N chars]` in place of the payload |
+
+Every path is re-resolved inside the configured root at execution time, so the router's decision
+is never authorization. Traversal, absolute paths, UNC paths and links that leave the root are
+refused by the same resolver the earlier filesystem actions use.
+
+The one routing change is that `list files in <dir>` and `list the files in <dir>` now reach
+`filesystem.list` with `<dir>` as the path, instead of failing with "path does not exist". The
+listing rules still match only path-shaped text, so "list services" remains an ordinary request.
+
+### Cross-source knowledge digest
+
+`knowledge.digest` (and `knowledge digest [query]`) reads memory and knowledge in one pass and
+reports each store separately: its own counts and health, its current records (or its matches for
+a topic), and the stored links that mark a record as corrected, superseded, retracted or in
+conflict. It is a read action with a real verifier: the stores are re-read and the counts, source
+states, record ids and matches must agree.
+
+What it deliberately does not do is merge the two sources. No record in either store names an
+identity or a relationship between a memory record and a knowledge claim, so the digest cannot
+report one; it says so in its own output. It also states that a stored record is what APEX holds,
+not proof the claim is true, and that no match means no term matched - not that the claim is
+false. Private memory is excluded from a model-origin read, the same rule `memory.search` applies.
+
+### Recorded work portfolio
+
+`work.review` (and the `review` command) reads the goal, plan and task logs together and prints
+the whole board: open records with their stored status, recorded deadlines, blockers and step
+counts, then a severity-ordered attention list. The attention kinds are closed: a blocked goal or
+plan, a passed or near recorded deadline, an approved plan that no task has run, a paused task, a
+failed task, a task proposal awaiting the owner, and an accepted or active goal with no linked
+plan. Items are ordered blocked, overdue, deadline, failed, waiting, unplanned, and are tie-broken
+by the record's own timestamp and subject, so the same records produce the same order.
+
+It ranks nothing. `work` and `next` remain the continuation recommendation, with their own rules
+and their own disclosure; this read answers "what is on the board", not "what should be done
+first". A store that cannot be read is reported `unavailable` and the other stores are still
+shown, so one damaged log does not hide the rest of the work. The verifier re-reads all three
+stores and compares counts, ids, source states and the attention list.
+
+### The user's own outcome assessment
+
+Execution success and intended outcome are different facts, and this batch keeps them apart.
+`task.feedback` is a user-origin-only write that records your assessment of a completed task's
+outcome, tied to the audited run that verified it. It refuses rather than guesses:
+
+- the task must be `completed`, and every step must be `completed`;
+- every step must have its own record in the audit log;
+- a recorded run must have ended `success_verified` with the task completed, and that run is the
+  one cited by the feedback;
+- the experience the feedback attaches to must cite that run, and the feedback's provenance must
+  be the user's own.
+
+Nothing derived from a successful command is treated as an outcome claim: a verified run is
+evidence that the steps executed, and only your recorded assessment says whether the result was
+the one you wanted. The action derives no rule and applies no change. A candidate still needs
+`adaptation.derive`, and only your explicit approval through `adaptation.decide` can make it
+influence a later decision.
+
+### What a complete workflow looks like now
+
+The new surfaces close several paths end to end without a model:
+
+- **Knowledge to a structured record**: store a fact, add a knowledge triple, then `knowledge
+  digest` shows both stores with their own status and any stored conflict or supersession.
+- **Workspace to a project summary**: `workspace list`, `find` and `read` to see the tree,
+  `summarize` and `compare` to read and contrast files, `report` for the directory shape, and
+  `workspace write` to create a note about it - with the create and the read both recorded.
+- **Goal to plan to tracked progress**: `goal add`, `plan add`, `plan approve`, `plan start`, then
+  `review` (or `work`/`next`) to see the board and the next recommendation, and `task explain
+  outcome` to separate intended, executed, verified and achieved.
+- **Failure to cause to safe recovery**: a failed step stops its dependants, `task explain why`
+  and `recovery` name the boundary, `task retry` takes up only a read step, and `task feedback`
+  records your assessment only after the run the records show as verified.
+- **Outcome to user-confirmed improvement**: a completed task, your feedback, `adaptation derive`,
+  and only then your explicit approval - with `adaptation effectiveness` and `adaptation reviews`
+  available to inspect what the rule did and whether it should stay.
+
+### The practical evaluation
+
+`tests/practical-eval.test.js` measures ten dimensions separately - capability coverage, supported
+completion, correct clarification, unsupported refusal, authorization correctness, execution
+verification, recovery correctness, outcome-reporting accuracy, feedback/adaptation integrity, and
+multi-step workflow completion. Each case drives the real controller, real stores or the real CLI
+in a temporary directory. It compares no dimensions into a score, consults no model, and its one
+test double is a task action that fails once so recovery and retry are exercised deterministically.
+
+### What Batch PC does not claim
+
+- It is not a general file manager or editor: there is no delete, move, rename, directory create,
+  arbitrary patch or execution of file content, and a write cannot replace a file without its
+  current hash.
+- The digest does not search the web, call a model, or decide which source is right; it reports
+  both and their recorded lifecycle.
+- The portfolio read does not schedule, prioritize or act; it reports stored status and recorded
+  dates, and a missing deadline means "no date recorded", never "no deadline".
+- The outcome feedback is not an automatic quality signal: it is your record, it is refused when
+  the run it would rest on is not verifiable, and it changes nothing until a candidate is derived
+  and you approve it.
+- The evaluation suite is a deterministic fixture set over APEX's own paths; it says nothing about
+  real-world task success, answer quality, or a real model.
 
 ## Future learning interface (not implemented)
 

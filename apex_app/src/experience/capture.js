@@ -41,7 +41,7 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   'model-words': 'what it stores or produces is a model conclusion, which is evidence only that a model said it',
   'self-bookkeeping': 'the experience log must not fill itself with records about its own bookkeeping, which would make the counts meaningless',
   task: 'one task operation covers several steps with separate outcomes, so a single experience would say less than the task log already says',
-  filesystem: 'the read result is other people\'s file content, and no outcome here needs it',
+  filesystem: 'it reads or writes a file outside APEX\'s stores, and no outcome here needs that file\'s content in the experience log',
   'no-action': 'the request ran no action, so there is no postcondition that could have been verified',
   // The prediction ledger's own operations. This is a separate category from `self-bookkeeping`
   // because the reason is not about filling a log with its own traffic: an experience answers "what
@@ -125,6 +125,7 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'model.answer': 'model-words',
   'experience.record': 'self-bookkeeping',
   'feedback.record': 'self-bookkeeping',
+  'task.feedback': 'self-bookkeeping',
   'adaptation.derive': 'self-bookkeeping',
   'adaptation.decide': 'self-bookkeeping',
   'adaptation.retire': 'self-bookkeeping',
@@ -193,6 +194,13 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'executive.clarify': 'no-action',
   'filesystem.list': 'filesystem',
   'filesystem.read': 'filesystem',
+  'filesystem.find': 'filesystem',
+  'filesystem.summarize': 'filesystem',
+  'filesystem.compare': 'filesystem',
+  'filesystem.report': 'filesystem',
+  'filesystem.write': 'filesystem',
+  'knowledge.digest': 'read',
+  'work.review': 'read',
   none: 'no-action',
 });
 

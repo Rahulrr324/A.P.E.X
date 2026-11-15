@@ -1,4 +1,5 @@
-// Path containment for the read-only filesystem inspection capability.
+// Path containment for the filesystem capabilities: bounded reads, and the
+// create-or-hash-guarded replace whose target may not exist yet.
 //
 // The configured root is a security boundary, not a hint. Every path is resolved
 // and checked before any filesystem call, and the process working directory is
@@ -181,4 +182,74 @@ export function resolveInside(root, rawPath) {
     isLink = true; // cannot prove it is not a link: refuse conservatively
   }
   return { realPath: real, isLink };
+}
+
+// Resolve a path that does not exist yet, for a create-only write. resolveInside()
+// cannot be used: it requires the target to exist so it can resolve links. Here the
+// parent is resolved instead, and the requested name is appended to the parent's real
+// path, so a symlinked directory inside the root cannot redirect the write outside it.
+// The target itself is never followed or created; a caller must still check `exists`
+// and refuse to overwrite. Refusal codes match resolveInside:
+//   INVALID_INPUT     not a usable relative path
+//   ACCESS_DENIED     absolute, UNC, traversal, or a parent outside the root
+//   PATH_NOT_FOUND    the parent directory does not exist or is not a directory
+export function resolveNewFile(root, rawPath) {
+  if (typeof rawPath !== 'string') {
+    throw new ValidationError('path must be text', 'INVALID_INPUT');
+  }
+  const input = rawPath.trim();
+  if (input.length === 0) throw new ValidationError('path is empty', 'INVALID_INPUT');
+  if (input.length > MAX_PATH_CHARS) {
+    throw new ValidationError(`path exceeds ${MAX_PATH_CHARS} characters`, 'INVALID_INPUT');
+  }
+  if (hasControlChars(input)) {
+    throw new ValidationError('path contains control characters', 'INVALID_INPUT');
+  }
+  if (looksLikeUnc(input)) {
+    throw new ValidationError('UNC paths are not allowed', 'ACCESS_DENIED');
+  }
+  if (looksAbsolute(input)) {
+    throw new ValidationError('absolute paths are not allowed', 'ACCESS_DENIED');
+  }
+  if (looksLikeTraversal(input)) {
+    throw new ValidationError('path contains a traversal component', 'ACCESS_DENIED');
+  }
+
+  const joined = path.resolve(root, input);
+  const parent = path.dirname(joined);
+  if (parent === joined) {
+    throw new ValidationError('path names a directory, not a file', 'INVALID_INPUT');
+  }
+  let parentReal;
+  try {
+    parentReal = fs.realpathSync(parent);
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      throw new ValidationError('the parent directory does not exist', 'PATH_NOT_FOUND');
+    }
+    throw new ValidationError(`the parent directory cannot be resolved (${err?.code ?? 'error'})`, 'ACCESS_DENIED');
+  }
+  if (!isInside(parentReal, root)) {
+    throw new ValidationError('the parent directory resolves outside the authorized root', 'ACCESS_DENIED');
+  }
+  let parentStat;
+  try {
+    parentStat = fs.statSync(parentReal);
+  } catch (err) {
+    throw new ValidationError(`the parent directory cannot be inspected (${err?.code ?? 'error'})`, 'PATH_NOT_FOUND');
+  }
+  if (!parentStat.isDirectory()) {
+    throw new ValidationError('the parent path is not a directory', 'PATH_NOT_FOUND');
+  }
+  const target = path.join(parentReal, path.basename(joined));
+  let exists = false;
+  try {
+    fs.lstatSync(target);
+    exists = true;
+  } catch (err) {
+    if (err?.code !== 'ENOENT') {
+      throw new ValidationError(`the target cannot be inspected (${err?.code ?? 'error'})`, 'ACCESS_DENIED');
+    }
+  }
+  return { targetPath: target, parentPath: parentReal, exists };
 }

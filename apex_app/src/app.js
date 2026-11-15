@@ -26,6 +26,7 @@ import {
 } from './config.js';
 import { resolveRoot, validateRoot } from './filesystem/path.js';
 import { listAction, readAction } from './filesystem/actions.js';
+import { workspaceActions } from './filesystem/workspace.js';
 import { TaskStore } from './tasks/store.js';
 import { SummaryQueue } from './tasks/summary-queue.js';
 import { KnowledgeStore } from './knowledge/knowledge-store.js';
@@ -40,6 +41,8 @@ import { ProposalStore } from './proposals/store.js';
 import { goalActions } from './actions/goal-actions.js';
 import { planActions } from './actions/plan-actions.js';
 import { proposalActions } from './actions/proposal-actions.js';
+import { workActions } from './actions/work-actions.js';
+import { taskFeedbackActions } from './actions/task-feedback-actions.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 
 export function createApp({
@@ -178,12 +181,13 @@ export function createApp({
     fsActions.push(
       listAction(rootForContext, { defaultLimit: filesystemListDefaultLimit, maxEntries: filesystemListMaxLimit }),
       readAction(rootForContext, { maxBytes: filesystemMaxReadBytes }),
+      ...workspaceActions(rootForContext),
     );
   }
 
   for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
-    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
+    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is
   // reported as absent; a damaged state still raises (it must not look empty).
