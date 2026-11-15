@@ -4,6 +4,11 @@ export const OPERATION_SCHEMA = 1;
 
 export const Outcome = Object.freeze({
   SUCCESS_VERIFIED: 'success_verified',
+  // A deterministic, evidence-grounded answer derived from the stores with no model call. The wording
+  // is APEX's own bounded reading of cited records, checked by the cognitive artifact contract; it is
+  // not independently verified prose and not a verified action. Distinct from SUCCESS_VERIFIED (an
+  // action's postcondition was confirmed) and VERIFICATION_UNAVAILABLE (model text was produced).
+  SUCCESS_DETERMINISTIC: 'success_deterministic',
   EXECUTION_FAILED: 'execution_failed',
   VERIFICATION_FAILED: 'verification_failed',
   VERIFICATION_UNAVAILABLE: 'verification_unavailable',

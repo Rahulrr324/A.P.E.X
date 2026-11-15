@@ -448,9 +448,9 @@ describe('decision: refuse or block', () => {
 
     const res = await app.controller.handle('where is the meeting room?');
 
-    assert.equal(res.status, Outcome.MODEL_UNAVAILABLE);
-    assert.equal(res.decision, Decision.REFUSE_OR_BLOCK);
-    assert.match(res.display, /No inference backend is configured/);
+    assert.equal(res.status, Outcome.SUCCESS_DETERMINISTIC);
+    assert.equal(res.decision, Decision.ANSWER);
+    assert.match(res.display, /Deterministic answer from APEX's stored records/);
     assert.match(res.display, /B-204/, 'relevant stored evidence is shown directly');
     assert.doesNotMatch(res.output ?? '', /B-204/, 'record content is not copied into the audited output');
   });

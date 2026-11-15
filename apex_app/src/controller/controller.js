@@ -24,7 +24,7 @@ import { buildContract, contractAudit } from '../cognition/contract.js';
 import { LifecycleStatus, lifecycleAudit } from '../cognition/lifecycle.js';
 import { SpanRecorder, buildRuntimeDiagnostics, StageOutcome } from '../cognition/runtime-diagnostics.js';
 import { ArtifactKind, validateArtifact } from '../cognition/artifacts.js';
-import { structuredDisclosureNotice, actionClaimNotice } from '../cognition/response.js';
+import { structuredDisclosureNotice, actionClaimNotice, buildDeterministicAnswer } from '../cognition/response.js';
 import {
   assessResponseIntegrity, attributionNotice, buildResponseContract, responseContractAudit,
   responseIntegrityAudit, semanticNotice, citationCompletenessNotice,
@@ -4133,6 +4133,37 @@ export class CognitiveController {
     }
   }
 
+  // Brings a plan's recorded outcomes and status in line with a task that just finished, whichever
+  // command finished it. planActivate and planContinue do this inline; a task run/resume/retry that
+  // belongs to a plan must do the same, or the plan stays active with stale step results until the
+  // user reconciles by hand. This records outcomes and moves the plan to completed/blocked exactly as
+  // activation does; it never completes a goal (a goal is completed only by the user against its own
+  // criteria) and never executes anything. Notes are returned for the display, not raised as errors,
+  // so a plan-write problem does not rewrite the task's own verified result.
+  async #syncPlanFromTask(planId, task) {
+    const notes = [];
+    const recorded = await this.#recordPlanOutcomes(planId, task);
+    if (recorded.error) {
+      notes.push(`The step outcomes were not recorded against the plan: ${redactSecrets(recorded.error.message)}.`);
+      return notes;
+    }
+    try {
+      const fresh = await this.plans.get(planId);
+      if (!fresh) return notes;
+      const progress = planProgress(fresh);
+      if (task.status === TaskStatus.COMPLETED && progress.completed === progress.total) {
+        await this.plans.setStatus(planId, PlanStatus.COMPLETED, { reason: 'every step has a completed, verified operation' });
+        notes.push(`Plan ${shortId(planId)} is completed against ${progress.total} verified step outcome(s). No goal is completed by this: a goal is completed only by the user against its own criteria.`);
+      } else if ((progress.failed || progress.uncertain || progress.skipped || task.status === TaskStatus.FAILED) && fresh.status === PlanStatus.ACTIVE) {
+        await this.plans.setStatus(planId, PlanStatus.BLOCKED, { reason: 'a step did not complete; the task record states why' });
+        notes.push(`Plan ${shortId(planId)} is blocked. Resolve the obstacle, then reconcile: node bin/apex.js plan reconcile ${shortId(planId)}`);
+      }
+    } catch (err) {
+      notes.push(`The plan status was not updated: ${redactSecrets(err.message)}.`);
+    }
+    return notes;
+  }
+
   // Reconciles a plan with the task it activated and the audit log. Nothing is executed.
   async planReconcile(ref) {
     const op = this.#newOp({ capability: 'plan.reconcile', origin: 'user', request: 'plan reconcile' });
@@ -5358,10 +5389,17 @@ export class CognitiveController {
       // Written after the lock is released, from the task state the runner left behind.
       await this.#recordTaskSummary(op, result.task, { recovery: result.recovery, auditGaps: result.auditGaps });
       finishHandoff(result.task);
+      // A task that belongs to a plan brings the plan's outcomes and status up to date here too, so a
+      // run/resume/retry closes the loop the same way activation does instead of leaving the plan stale.
+      let planNotes = '';
+      if (found?.planId && this.plans) {
+        const notes = await this.#syncPlanFromTask(found.planId, result.task);
+        if (notes.length > 0) planNotes = `\n${notes.join('\n')}`;
+      }
       return this.#finishTaskOp(
         op,
         result.status,
-        `${renderTask(result.task)}${warning}${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}`,
+        `${renderTask(result.task)}${warning}${planNotes}${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}`,
         result.task,
         {
           auditGaps: gaps,
@@ -5765,6 +5803,78 @@ export class CognitiveController {
     };
   }
 
+  // The no-backend result. When the deterministic analysis supports a conclusion, the answer is that
+  // reading of the stores (SUCCESS_DETERMINISTIC): cited, bounded, contract-checked, and explicitly not
+  // model prose. Otherwise the matching records are shown directly and the outcome stays
+  // MODEL_UNAVAILABLE, exactly as before. Private and credential-like memory never reaches this path:
+  // `relevant` was already filtered by selectPromptMemory, and the analysis seeds use the same records.
+  #offlineAnswer({ relevant, knowledge, knowledgeUnavailable, adaptations, adaptationsOmitted, adaptationsUnavailable, cognition, lifecycle, op }) {
+    // The deterministic reading may only rest on the same prompt-eligible records the direct display
+    // shows, so it can never surface a private, credential-like, or below-relevance record that the
+    // offline path already filters out. Experience/feedback telemetry is excluded by the same rule.
+    const eligible = new Set();
+    for (const hit of relevant) eligible.add(`ev:memory:${hit.record.id}`);
+    for (const record of knowledge) eligible.add(`ev:knowledge:${record.id}`);
+    const grounded = cognition?.available === true ? buildDeterministicAnswer(cognition, { eligible }) : { hasAnswer: false };
+
+    const sections = [];
+    if (relevant.length > 0) {
+      sections.push(`Relevant memory found (shown directly, not summarised by a model):\n${renderShown(relevant)}`);
+    }
+    let failureNotice = '';
+    if (knowledgeUnavailable) {
+      const code = op.errors.find((error) => error.stage === 'knowledge')?.code || 'STORE_ERROR';
+      failureNotice = `[Knowledge context was unavailable (${code}); this display did not use stored knowledge.]`;
+      sections.push(failureNotice);
+    } else if (knowledge.length > 0) {
+      sections.push(`Relevant knowledge found (shown directly, not summarised by a model):\n${knowledge.map(knowledgeLine).join('\n')}`);
+    }
+    if (adaptations.length > 0) {
+      const omitted = adaptationOmittedNote(adaptationsOmitted);
+      sections.push(`Approved adaptations covering this request (shown directly; without a model APEX did not apply them):\n${adaptations.map(adaptationLine).join('\n')}${omitted ? `\nNote: ${omitted}.` : ''}`);
+    } else if (adaptationsUnavailable) {
+      sections.push('[APEX could not read its approved adaptations for this request, so a behaviour rule you approved may be missing from what is shown here.]');
+    }
+
+    if (grounded.hasAnswer) {
+      lifecycle?.closeRemaining({ fromOrder: 6, status: LifecycleStatus.NOT_REACHED });
+      const contract = buildResponseContract({ requestId: op.id, analysis: cognition, lifecycle, finalAnswer: true });
+      op.cognition = {
+        ...analysisAudit(cognition),
+        responseContract: responseContractAudit(contract),
+        // No model output exists to qualify, so the trust assessment records no wording; the evidence
+        // finding still describes the records the answer rests on. The grounding is guaranteed by the
+        // artifact contract and by the renderer emitting only cited, eligible claims.
+        responseIntegrity: responseIntegrityAudit(assessResponseIntegrity({
+          analysis: cognition, text: '', classification: 'deterministic',
+        })),
+      };
+      return {
+        status: Outcome.SUCCESS_DETERMINISTIC,
+        // The audited answer is content-free: stored record content lives only in the display, never
+        // in the audit output or a conversation turn.
+        answer: grounded.summary,
+        display: [grounded.text, ...sections].join('\n\n'),
+        modelText: null,
+        hasText: false,
+        backend: null,
+        error: null,
+        annotation: '',
+        lifecycle,
+      };
+    }
+    return {
+      status: Outcome.MODEL_UNAVAILABLE,
+      answer: failureNotice ? `${NO_MODEL_MESSAGE}\n\n${failureNotice}` : NO_MODEL_MESSAGE,
+      display: [NO_MODEL_MESSAGE, ...sections].join('\n\n'),
+      hasText: false,
+      backend: null,
+      error: null,
+      annotation: '',
+      lifecycle,
+    };
+  }
+
   async answerWithModel(request, { relevant, turns, historyUnavailable = false, signal = null, memorySearch = null }, op, onProgress = null, diagnostics = null) {
     const retrievalError = op.errors.find((error) => error.stage === 'retrieval');
     if (retrievalError) {
@@ -5777,50 +5887,6 @@ export class CognitiveController {
         annotation: '',
       };
     }
-    if (!this.gateway.isConfigured()) {
-      // Without a model, relevant stored records are shown directly. Only records
-      // eligible for a model prompt are shown: private and credential-like memory
-      // stays out of this path too. The record content appears in the display but
-      // never in the audited output.
-      const sections = [];
-      if (relevant.length > 0) {
-        sections.push(`Relevant memory found (shown directly, not summarised by a model):\n${renderShown(relevant)}`);
-      }
-      let failureNotice = '';
-      if (this.knowledge) {
-        try {
-          const khits = await this.knowledge.search(request, { limit: KNOWLEDGE_PROMPT_LIMIT });
-          const records = dedupeKnowledge(selectPromptKnowledge(khits));
-          if (records.length > 0) {
-            sections.push(`Relevant knowledge found (shown directly, not summarised by a model):\n${records.map(knowledgeLine).join('\n')}`);
-          }
-        } catch (err) {
-          const code = err.code || 'STORE_ERROR';
-          op.errors.push({ stage: 'knowledge', code, message: err.message });
-          failureNotice = `[Knowledge context was unavailable (${code}); this display did not use stored knowledge.]`;
-          sections.push(failureNotice);
-        }
-      }
-      const shown = await this.#adaptationsFor(request, op);
-      if (shown.adaptations.length > 0) {
-        // Shown, not applied: with no model there is nothing to follow a rule, and saying that
-        // plainly is part of the disclosure. The record is the user's own approved wording.
-        const omitted = adaptationOmittedNote(shown.omitted);
-        sections.push(`Approved adaptations covering this request (shown directly; without a model APEX did not apply them):\n${shown.adaptations.map(adaptationLine).join('\n')}${omitted ? `\nNote: ${omitted}.` : ''}`);
-      } else if (shown.unavailable) {
-        sections.push('[APEX could not read its approved adaptations for this request, so a behaviour rule you approved may be missing from what is shown here.]');
-      }
-      return {
-        status: Outcome.MODEL_UNAVAILABLE,
-        answer: failureNotice ? `${NO_MODEL_MESSAGE}\n\n${failureNotice}` : NO_MODEL_MESSAGE,
-        display: [NO_MODEL_MESSAGE, ...sections].join('\n\n'),
-        hasText: false,
-        backend: null,
-        error: null,
-        annotation: '',
-      };
-    }
-
     // A damaged conversation log or session is not silently ignored. The model is
     // told that history is unavailable; the user gets the same limitation. The
     // notice is added to the display only, never to the stored model turn, so it
@@ -6083,6 +6149,16 @@ export class CognitiveController {
         annotation: '',
         lifecycle,
       };
+    }
+    // With no inference backend APEX still reasons over its stores: the analysis above is model-free,
+    // so when it supports a conclusion the answer is that bounded, cited reading rather than generated
+    // prose. When the records support no answer, the honest result remains that no model is configured
+    // and the matching records are shown directly. The clarification gate above already fired offline.
+    if (!this.gateway.isConfigured()) {
+      return this.#offlineAnswer({
+        relevant, knowledge, knowledgeUnavailable, adaptations, adaptationsOmitted, adaptationsUnavailable,
+        cognition, lifecycle, op,
+      });
     }
     const built = buildPrompt({
       request,

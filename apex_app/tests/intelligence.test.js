@@ -182,13 +182,15 @@ describe('conversation and grounding', () => {
     assert.equal(stored.some((t) => t.origin === 'model'), false);
   });
 
-  test('with no model configured, relevant memory is shown directly and nothing is generated', async () => {
+  test('with no model configured, a stored fact yields a deterministic cited answer and the records are still shown directly', async () => {
     const app = appWith();
     await app.controller.handle('remember that the project codename is Lighthouse');
     const res = await app.controller.handle('what is the codename of the project?');
-    assert.equal(res.status, Outcome.MODEL_UNAVAILABLE);
+    assert.equal(res.status, Outcome.SUCCESS_DETERMINISTIC);
+    assert.match(res.display, /Deterministic answer from APEX's stored records/);
     assert.match(res.display, /Lighthouse/);
     assert.match(res.display, /not summarised by a model/);
+    assert.doesNotMatch(res.output ?? '', /Lighthouse/, 'stored content stays out of the audited output');
   });
 
   test('a deterministic calculation is still handled by an action, not sent to the model', async () => {

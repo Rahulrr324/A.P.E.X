@@ -167,6 +167,66 @@ export function buildGroundingBrief(analysis, {
   };
 }
 
+// A deterministic, user-facing answer built from the analysis when no model is configured. It is not
+// generated prose: every factual line is a claim the deterministic layer extracted from a stored
+// record, cited to an evidence id this request actually retrieved. To preserve the offline privacy and
+// relevance contracts, only claims resting on the prompt-eligible memory/knowledge records (the same
+// set the direct display shows) are rendered; experience, feedback, and other operational telemetry
+// are never turned into a free-form answer here. `eligible` is the set of evidence ids allowed.
+//
+// Record content appears only in `text` (the display). `summary` is content-free and is what the
+// audited output carries, so stored content is never copied into the audit log. Returns hasAnswer:false
+// when no eligible claim supports a conclusion, so the caller falls back to the honest no-model result.
+export function buildDeterministicAnswer(analysis, { eligible = null } = {}) {
+  const empty = { hasAnswer: false, text: '', summary: '', claims: [] };
+  if (analysis?.available !== true || !analysis.deliberation || !analysis.understanding) return empty;
+  const byId = analysis.claims?.byId ?? new Map();
+  const evidenceById = analysis.retrieval?.byId ?? new Map();
+  const allowed = (claim) => Array.isArray(claim?.evidenceIds) && claim.evidenceIds.length > 0
+    && (eligible === null || claim.evidenceIds.every((id) => eligible.has(id)));
+  const conclusionIds = analysis.deliberation.conclusion?.claimIds ?? [];
+  const rendered = conclusionIds.map((id) => byId.get(id)).filter((claim) => claim && allowed(claim));
+  if (rendered.length === 0) return empty;
+
+  const lines = [
+    "Deterministic answer from APEX's stored records. No model was used: this is a bounded reading of what is recorded, cited to evidence ids, not generated prose.",
+    '',
+    'Records this rests on:',
+  ];
+  const shown = [];
+  let contradicted = 0;
+  for (const claim of rendered.slice(0, 8)) {
+    const cites = claim.evidenceIds.slice(0, 3).map((eid) => {
+      const item = evidenceById.get(eid);
+      return item ? `${eid} (${item.source})` : eid;
+    }).join(', ');
+    const flags = [claim.kind, `evidence ${claim.evidenceState}`];
+    if (claim.current === false) flags.push('not current');
+    if ((claim.contradicts ?? []).length > 0) { flags.push(`${claim.contradicts.length} contradiction link(s)`); contradicted += 1; }
+    lines.push(`- ${truncate(claim.text, 200)} [${flags.join('; ')}]${cites ? ` <- ${cites}` : ''}`);
+    shown.push({ claimId: claim.claimId, kind: claim.kind, evidenceState: claim.evidenceState, evidenceIds: [...claim.evidenceIds] });
+  }
+  if (rendered.length > 8) lines.push(`- ${rendered.length - 8} further claim(s) were extracted but are not listed here.`);
+  if (contradicted > 0) {
+    lines.push('', `Disputed: ${contradicted} claim(s) are contradicted by another stored record. Both sides are kept; neither is chosen by recency, source rank, or repetition.`);
+  }
+  if (analysis.deliberation.uncertainty) {
+    lines.push('', `Uncertainty: ${uncertaintyPhrase(analysis.deliberation.uncertainty)}`);
+  }
+  const counts = analysis.retrieval?.counts ?? {};
+  const integrity = [];
+  if ((counts.unavailable ?? []).length > 0) integrity.push(Disclosure.SOURCE_UNAVAILABLE);
+  if ((counts.damaged ?? []).length > 0) integrity.push(Disclosure.SOURCE_DAMAGED);
+  if (analysis.retrieval?.read?.state === 'inconsistent') integrity.push(Disclosure.EVIDENCE_NOT_SINGLE_INSTANT);
+  if (analysis.retrieval?.read?.state === 'unverifiable') integrity.push(Disclosure.EVIDENCE_SNAPSHOT_UNVERIFIED);
+  if (integrity.length > 0) lines.push('', `Grounding: ${integrity.map(disclosurePhrase).join('; ')}.`);
+
+  const summary = `APEX answered deterministically from ${shown.length} stored record(s) with no model call; `
+    + `the cited reading is shown in the display only and is not copied into this audit record.`
+    + (contradicted > 0 ? ' The records disagree; both sides are shown and neither is chosen.' : '');
+  return { hasAnswer: true, text: truncate(lines.join('\n'), MAX_GROUNDING_ANSWER_CHARS), summary, claims: shown };
+}
+
 function emergencyIntentNote() {
   return 'Intent describes the request and grants no authorization; every action still passes through the action registry.';
 }

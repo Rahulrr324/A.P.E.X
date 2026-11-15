@@ -21,6 +21,11 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   `apex-bench-` - so a mistake in the harness cannot turn a benchmark run into a delete.
 - `run-cognition-benchmark.mjs` builds every app on a `mkdtemp` directory prefixed `apex-bench-cog-`
   and uses the same refusing cleanup. It starts no child process and constructs no backend.
+- `run-offline-answer-benchmark.mjs` builds every app on a `mkdtemp` directory prefixed
+  `apex-offline-bench-` and removes only the directories it created. It constructs `NoBackend` (never
+  contacted), starts no child process, and touches no network. It measures the offline deterministic
+  answer path through the real controller at progressive memory sizes and reports in-run ratios only:
+  the supported answer against the no-evidence fallback that shares the same model-free analysis.
 - `run-executive-bridge-benchmark.mjs` builds every app on a `mkdtemp` directory prefixed
   `apex-bench-akx-` with the same refusing cleanup, and gives **every sample its own fresh copy of its
   row fixture**, so no measurement can be taken on a store a previous measurement enlarged. It starts

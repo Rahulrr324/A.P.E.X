@@ -439,9 +439,10 @@ describe('AP-10 §7 citation completeness through the request path', () => {
     });
     await app.memory.add({ content: 'the lighthouse status is green', kind: 'user_fact', source: 'user' });
     const res = await app.controller.handle('tell me about the lighthouse status', { origin: 'user' });
-    assert.equal(res.status, Outcome.MODEL_UNAVAILABLE);
-    // The no-model path shows records directly and does not run the cognitive analysis, so no
-    // retrieval report is fabricated for it; the answer still states that no model summarised it.
+    assert.equal(res.status, Outcome.SUCCESS_DETERMINISTIC);
+    // The no-model path now runs the model-free cognitive analysis and answers deterministically from
+    // the eligible stored record, while still showing the record directly; the audited output stays
+    // content-free.
     assert.match(res.display, /shown directly/);
   });
 });

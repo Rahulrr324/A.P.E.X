@@ -286,7 +286,7 @@ describe('E. the request path applies an approved rule within its bounds', () =>
     const app = appNoModel();
     const rule = await ruleInEffect(app, 'put the date at the top of every report');
     const res = await app.controller.handle('how should I write the quarterly report?', { origin: 'user' });
-    assert.equal(res.status, Outcome.MODEL_UNAVAILABLE);
+    assert.equal(res.status, Outcome.SUCCESS_DETERMINISTIC);
     assert.match(res.display, /Approved adaptations covering this request \(shown directly; without a model APEX did not apply them\)/);
     assert.ok(res.display.includes('"put the date at the top of every report"'), 'the user\'s own wording is reproduced');
     assert.match(res.display, new RegExp(`\\[${rule.id.slice(0, 8)}\\] scope memory\\.add`));
@@ -326,7 +326,7 @@ describe('E. the request path applies an approved rule within its bounds', () =>
     await ruleInEffect(app);
     corrupt(app);
     const res = await app.controller.handle('how should I write the quarterly report?', { origin: 'user' });
-    assert.equal(res.status, Outcome.MODEL_UNAVAILABLE);
+    assert.equal(res.status, Outcome.SUCCESS_DETERMINISTIC);
     assert.match(res.display, /\[APEX could not read its approved adaptations for this request, so a behaviour rule you approved may be missing from what is shown here\.\]/);
     assert.ok(!res.display.includes('Approved adaptations covering this request'), 'an unreadable store is never shown as an empty one');
     const adaptation = res.operation.errors.find((e) => e.stage === 'adaptation');

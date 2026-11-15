@@ -748,7 +748,7 @@ test('knowledge - without a model, an incidental match is not shown as relevant 
   await app.controller.knowledgeAdd({ subject: 'office printer', relationship: 'budget_code', object: 'sigma 9' });
 
   const res = await app.controller.handle('which team owns the martinez account budget review');
-  assert.equal(res.status, Outcome.MODEL_UNAVAILABLE);
+  assert.equal(res.status, Outcome.SUCCESS_DETERMINISTIC);
   assert.ok(res.display.includes('martinez account --[owned_by]--> finance team'));
   assert.ok(!res.display.includes('office printer'), 'the direct display uses the same relevance rule');
 });
@@ -975,7 +975,7 @@ test('knowledge - without a model, memory and knowledge are displayed directly b
   await app.controller.knowledgeAdd({ subject: 'Project', relationship: 'codename', object: 'Lighthouse' });
 
   const res = await app.controller.handle('what is the project codename?');
-  assert.equal(res.status, Outcome.MODEL_UNAVAILABLE);
+  assert.equal(res.status, Outcome.SUCCESS_DETERMINISTIC);
   assert.match(res.display, /Relevant memory found \(shown directly, not summarised by a model\):/);
   assert.match(res.display, /Relevant knowledge found \(shown directly, not summarised by a model\):/);
   assert.ok(res.display.includes('Project --[codename]--> Lighthouse'));
@@ -983,7 +983,7 @@ test('knowledge - without a model, memory and knowledge are displayed directly b
 
   const ops = fs.readFileSync(path.join(dir, 'operations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   const last = ops.at(-1);
-  assert.equal(last.status, Outcome.MODEL_UNAVAILABLE);
+  assert.equal(last.status, Outcome.SUCCESS_DETERMINISTIC);
   assert.ok(!String(last.output).includes('Lighthouse'), 'the audit record must not copy stored content');
   assert.equal(last.prompt, null);
 });
@@ -1010,7 +1010,7 @@ test('knowledge - without a model, an unavailable knowledge store is reported', 
   fs.appendFileSync(path.join(dir, 'knowledge.jsonl'), 'CORRUPT\n', 'utf8');
 
   const res = await app.controller.handle('what is the project codename?');
-  assert.equal(res.status, Outcome.MODEL_UNAVAILABLE);
+  assert.equal(res.status, Outcome.SUCCESS_DETERMINISTIC);
   assert.match(res.display, /Relevant memory found/);
   assert.match(res.display, /Knowledge context was unavailable \(STORE_UNAVAILABLE\)/);
   assert.equal(res.operation.errors.find((error) => error.stage === 'knowledge').code, 'STORE_UNAVAILABLE');

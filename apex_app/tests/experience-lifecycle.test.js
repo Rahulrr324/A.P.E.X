@@ -130,7 +130,7 @@ describe('Batch Z §9: the experience-to-adaptation lifecycle through the real C
     await step('health-after-derive', ['experience', 'health']);
     await step('derive-again', ['adaptation', 'derive']);
     await step('list-candidates', ['adaptation', 'list']);
-    await step('ask-candidates', ['ask', 'what did I ask you to hold about the review'], { expectExit: 1 });
+    await step('ask-candidates', ['ask', 'what did I ask you to hold about the review'], { expectExit: 0 });
 
     // 6. The user approves one rule, for a stated reason.
     const decision = await step('approve-concise', [
@@ -140,7 +140,7 @@ describe('Batch Z §9: the experience-to-adaptation lifecycle through the real C
     prefixAfterApproval = fs.readFileSync(logPath, 'utf8');
 
     // 7. The approved rule now reaches a later request.
-    await step('ask-one-active', ['ask', 'what did I ask you to hold about the review'], { expectExit: 1 });
+    await step('ask-one-active', ['ask', 'what did I ask you to hold about the review'], { expectExit: 0 });
 
     // 8. A second, different rule in the same scope: both stay visible, neither is chosen.
     const decision2 = await step('approve-nocode', [
@@ -148,7 +148,7 @@ describe('Batch Z §9: the experience-to-adaptation lifecycle through the real C
     ]);
     ids.decision2 = DECISION_ID.exec(decision2)[1];
     await step('list-conflicting', ['adaptation', 'list']);
-    await step('ask-conflicting', ['ask', 'what did I ask you to hold about the review'], { expectExit: 1 });
+    await step('ask-conflicting', ['ask', 'what did I ask you to hold about the review'], { expectExit: 0 });
     await step('health-conflicting', ['experience', 'health'], { expectExit: 1 });
 
     // 9. The user corrects one of the experiences both rules were supported by.
@@ -158,7 +158,7 @@ describe('Batch Z §9: the experience-to-adaptation lifecycle through the real C
     ]);
     ids.exp3 = EXPERIENCE_ID.exec(corrected)[1];
     await step('list-stale', ['adaptation', 'list']);
-    await step('ask-stale', ['ask', 'what did I ask you to hold about the review'], { expectExit: 1 });
+    await step('ask-stale', ['ask', 'what did I ask you to hold about the review'], { expectExit: 0 });
     await step('health-stale', ['experience', 'health'], { expectExit: 1 });
 
     // 10. The user retires one rule. Everything recorded before it stays readable.
@@ -263,7 +263,7 @@ describe('Batch Z §9: the experience-to-adaptation lifecycle through the real C
 
     // An undecided candidate is absent from the next request entirely.
     const asked = out('ask-candidates');
-    assert.match(asked, /Status:    model_unavailable/);
+    assert.match(asked, /Status:    success_deterministic/);
     assert.match(asked, /Relevant memory found \(shown directly, not summarised by a model\):/);
     assert.doesNotMatch(asked, /Approved adaptations covering this request/);
   });
@@ -282,9 +282,9 @@ describe('Batch Z §9: the experience-to-adaptation lifecycle through the real C
 
   test('7. the approved rule reaches a later request, labelled as a rule and not as a fact', () => {
     const text = out('ask-one-active');
-    assert.match(text, /Status:    model_unavailable/);
-    // No inference happened on the way to showing the rule.
-    assert.match(text, /No inference backend is configured, so APEX cannot write a free-form answer\. Nothing has been generated\./);
+    assert.match(text, /Status:    success_deterministic/);
+    // No inference happened on the way to showing the rule: the answer is a deterministic reading.
+    assert.match(text, /Deterministic answer from APEX's stored records\. No model was used/);
     assert.match(
       text,
       /Approved adaptations covering this request \(shown directly; without a model APEX did not apply them\):/,

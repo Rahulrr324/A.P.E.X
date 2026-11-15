@@ -524,6 +524,9 @@ export function formatResult(res) {
   if (res.status === Outcome.VERIFICATION_UNAVAILABLE && res.operation.capability === 'model.answer') {
     lines.push('Note:      model answer; APEX cannot independently verify a model conclusion.');
   }
+  if (res.status === Outcome.SUCCESS_DETERMINISTIC) {
+    lines.push('Note:      deterministic answer derived from stored records; no model was used and no action was executed.');
+  }
   // A corrupt store refuses before the action runs. Say that plainly: nothing was
   // changed, and a retry is only meaningful after repair, not while the damage remains.
   if (res.operation.steps.some((s) => s.execution?.status === 'failed' && /corrupt/i.test(s.execution?.error?.message ?? ''))) {
@@ -603,6 +606,9 @@ function errorText(e) {
 function exitCodeFor(res) {
   if (!res.recorded) return 3;
   if (res.status === Outcome.SUCCESS_VERIFIED) return 0;
+  // A deterministic answer derived from the stores with no model call is a completed answer. It is
+  // not a verified action and not model prose; the record's own status says what it means.
+  if (res.status === Outcome.SUCCESS_DETERMINISTIC) return 0;
   // A plan that was checked and stored is a success of planning. Nothing has run yet.
   if (res.status === Outcome.PLAN_CREATED || res.status === Outcome.PLAN_PROPOSED) return 0;
   // A goal or plan record that was written and read back is a completed command. It is not

@@ -44,8 +44,11 @@ preserved for provenance.
   Execution success is never reported as real-world success, and none of this grants permission.
   It answers
   deterministic requests with no model and sends
-  everything else to a local model backend **you** configure; without one it reports
-  `model_unavailable` and generates nothing. Its model-path tests use local stand-in
+  everything else to a local model backend **you** configure; without one it still answers from its
+  stored records when they support a conclusion - a cited, bounded, deterministic reading, not generated
+  prose - and otherwise reports `model_unavailable`. A task that belongs to a plan now brings that plan's
+  recorded outcomes and status up to date when it is run, resumed, or retried, so the executive loop closes
+  without a manual reconcile. Its model-path tests use local stand-in
   servers, and the only real-model observations are the dated ones recorded in its README
   (the most recent bounded local run is dated 2026-10-31).
 
