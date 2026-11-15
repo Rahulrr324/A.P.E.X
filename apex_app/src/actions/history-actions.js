@@ -1,8 +1,9 @@
 // The user-facing surface of cross-store cognitive history: one read-only action that replays the
-// experience log, the prediction ledger, the world model, and the goal, plan, and task logs to a
-// cutoff, and reports what each store had recorded by then, what changed later, and what it cannot
-// answer at all. The operations audit log is read current, because it has no recorded-at: every row
-// is classified against the cutoff instead of pretending the log can be queried as of an instant.
+// experience log, the prediction ledger, the world model, the goal, plan, and task logs, and the
+// memory and knowledge stores to a cutoff, and reports what each store had recorded by then, what
+// changed later, and what it cannot answer at all. The operations audit log is read current, because
+// it has no recorded-at: every row is classified against the cutoff instead of pretending the log can
+// be queried as of an instant.
 //
 // The action is a read in the registry's sense: it writes no store, takes no model call, and cannot
 // authorize anything. It is deliberately not plannable. A plan step that names this action would make
@@ -94,6 +95,22 @@ function taskMarks(row) {
   if (row.later.stepCompletedLater) marks.push('steps completed later');
   if (row.later.statusChangedLater && !row.later.stepCompletedLater) marks.push('changed later');
   if (row.later.recoveredLater) marks.push('recovered later');
+  return marks.length === 0 ? '' : ` [${marks.join('; ')}]`;
+}
+
+function memoryMarks(row) {
+  const marks = [];
+  if (row.later.replacedLater) marks.push('corrected later');
+  if (row.later.conflictChangedLater) marks.push('conflict changed later');
+  return marks.length === 0 ? '' : ` [${marks.join('; ')}]`;
+}
+
+function knowledgeMarks(row) {
+  const marks = [];
+  if (row.later.retractedLater) marks.push('retracted later');
+  if (row.later.supersededLater) marks.push('superseded later');
+  if (row.later.resolutionRecordedLater) marks.push('resolved later');
+  if (row.later.conflictChangedLater) marks.push('conflict changed later');
   return marks.length === 0 ? '' : ` [${marks.join('; ')}]`;
 }
 
@@ -190,6 +207,37 @@ function render(view) {
     lines.push(`tasks: ${tasks.status} - ${tasks.reason}`);
   }
 
+  const memory = view.memory;
+  lines.push('');
+  if (memory.available) {
+    const private_ = memory.privateExcluded > 0 ? `, ${memory.privateExcluded} private record(s) excluded` : '';
+    lines.push(`memory: ${memory.counts.memories} record(s) recorded by then, ${memory.counts.corrections} correction(s), ${memory.counts.conflictGroups} conflict group(s); ${memory.excluded} later record(s) excluded${private_}; statuses ${JSON.stringify(memory.counts.byStatus)}`);
+    if (memory.problemCount > 0) lines.push(`  link problems: ${memory.problemCount}; the reconstructed memory lifecycle is not reliable`);
+    for (const row of memory.rows) {
+      const conflict = row.conflict === null ? '' : `, conflict on ${row.conflict.subject}`;
+      const replaces = row.provenance.replaces.length === 0 ? '' : `, replaces ${row.provenance.replaces.length} record(s)`;
+      lines.push(`  ${row.createdAt}  ${row.id}  ${row.kind}/${row.source}  ${row.status}${conflict}${replaces}${memoryMarks(row)}`);
+    }
+    if (memory.truncated) lines.push(`  (${memory.total - memory.rows.length} older record(s) not shown)`);
+  } else {
+    lines.push(`memory: ${memory.status} - ${memory.reason}`);
+  }
+
+  const knowledge = view.knowledge;
+  lines.push('');
+  if (knowledge.available) {
+    lines.push(`knowledge: ${knowledge.counts.claims} claim(s) recorded by then, ${knowledge.counts.retractions} retraction(s), ${knowledge.counts.resolutions} resolution(s), ${knowledge.counts.active} active; ${knowledge.excluded} later record(s) excluded; lifecycle ${JSON.stringify(knowledge.counts.byLifecycleState)}; conflicts ${knowledge.counts.conflicts.total} (${knowledge.counts.conflicts.unresolved} unresolved)`);
+    if (knowledge.problemCount > 0) lines.push(`  link problems: ${knowledge.problemCount}; the reconstructed knowledge lifecycle is not reliable`);
+    for (const row of knowledge.rows) {
+      const evidence = row.evidence === null ? '' : ' (free-text evidence, not a record reference)';
+      const resolution = row.resolution === null ? '' : `, resolved by user decision (not verified truth)`;
+      lines.push(`  ${row.createdAt}  ${row.id}  ${row.subject} --[${row.relationship}]--> ${row.object}  ${row.lifecycleState}${evidence}${resolution}${knowledgeMarks(row)}`);
+    }
+    if (knowledge.truncated) lines.push(`  (${knowledge.total - knowledge.rows.length} older claim(s) not shown)`);
+  } else {
+    lines.push(`knowledge: ${knowledge.status} - ${knowledge.reason}`);
+  }
+
   const operations = view.operations;
   lines.push('');
   if (operations.available) {
@@ -222,8 +270,8 @@ function render(view) {
   }
 
   lines.push('');
-  lines.push(`later: experiences ${view.later.experiencesRecorded ?? '?'}, feedback ${view.later.feedbackRecorded ?? '?'}, predictions ${view.later.predictionsRecorded ?? '?'}, evaluations ${view.later.evaluationsRecorded ?? '?'}, withdrawals ${view.later.invalidationsRecorded ?? '?'}, world changes ${view.later.worldRecordsAdded ?? '?'}, goal events ${view.later.goalsRecorded ?? '?'}, plan events ${view.later.plansRecorded ?? '?'}, task events ${view.later.tasksRecorded ?? '?'}, operations finished after ${view.later.operationsFinishedLater ?? '?'}`);
-  lines.push(`unsupported: ${view.unsupported.map((item) => item.source).join(', ')}`);
+  lines.push(`later: experiences ${view.later.experiencesRecorded ?? '?'}, feedback ${view.later.feedbackRecorded ?? '?'}, predictions ${view.later.predictionsRecorded ?? '?'}, evaluations ${view.later.evaluationsRecorded ?? '?'}, withdrawals ${view.later.invalidationsRecorded ?? '?'}, world changes ${view.later.worldRecordsAdded ?? '?'}, goal events ${view.later.goalsRecorded ?? '?'}, plan events ${view.later.plansRecorded ?? '?'}, task events ${view.later.tasksRecorded ?? '?'}, memory records ${view.later.memoryRecordsAdded ?? '?'}, memory corrections ${view.later.memoryCorrectionsRecorded ?? '?'}, knowledge claims ${view.later.knowledgeClaimsRecorded ?? '?'}, retractions ${view.later.knowledgeRetractionsRecorded ?? '?'}, resolutions ${view.later.knowledgeResolutionsRecorded ?? '?'}, operations finished after ${view.later.operationsFinishedLater ?? '?'}`);
+  lines.push(`unsupported: ${view.unsupported.length === 0 ? 'none - every integrated store answers a cutoff listing' : view.unsupported.map((item) => item.source).join(', ')}`);
   lines.push(`rule: ${view.rule}`);
   lines.push(view.note);
   return lines.join('\n');
@@ -238,6 +286,8 @@ function reconstruct(ctx, { at, limit }, fallback) {
     goals: ctx?.goals ?? fallback.goals,
     plans: ctx?.plans ?? fallback.plans,
     tasks: ctx?.taskStore ?? fallback.tasks,
+    memory: ctx?.memory ?? fallback.memory,
+    knowledge: ctx?.knowledge ?? fallback.knowledge,
     operations: ctx?.operations ?? fallback.operations,
     limit,
     now: ctx?.now,
@@ -252,15 +302,16 @@ function comparable(view) {
 }
 
 export function historyActions({
-  experience = null, predictions = null, world = null, goals = null, plans = null, tasks = null, operations = null,
+  experience = null, predictions = null, world = null, goals = null, plans = null, tasks = null,
+  memory = null, knowledge = null, operations = null,
 } = {}) {
   const fallback = {
-    experience, predictions, world, goals, plans, tasks, operations,
+    experience, predictions, world, goals, plans, tasks, memory, knowledge, operations,
   };
   return [
     {
       name: 'history.reconstruct',
-      description: 'Reconstruct what the experience log, the prediction ledger, the world model, and the goal, plan, and task logs had recorded by a cutoff, with what the stores recorded later kept separate. The operations audit log is read current and each row is classified against the cutoff because it has no recorded-at field. Records are filtered by recorded time, not event or valid time; a source that cannot be read or cannot answer a cutoff is named rather than omitted. Read-only; it writes nothing, calls no model, and authorizes nothing.',
+      description: 'Reconstruct what the experience log, the prediction ledger, the world model, the goal, plan, and task logs, and the memory and knowledge stores had recorded by a cutoff, with what the stores recorded later kept separate. The operations audit log is read current and each row is classified against the cutoff because it has no recorded-at field. Records are filtered by recorded time, not event or valid time; a source that cannot be read or cannot answer a cutoff is named rather than omitted. Read-only; it writes nothing, calls no model, and authorizes nothing.',
       inputHint: '{"at":"required ISO date or zoned date-time cutoff","limit":optional 1-50 rows per store}',
       permission: 'read',
       origins: [ORIGIN_USER, ORIGIN_MODEL],
@@ -274,7 +325,7 @@ export function historyActions({
         const view = await reconstruct(ctx, query, fallback);
         const count = (section, pick) => (section.available ? pick(section) : 'unavailable');
         return {
-          summary: `history at ${view.cutoff}: ${count(view.experience, (s) => `${s.counts.experiences} experience(s)`)}, ${count(view.predictions, (s) => `${s.recorded} prediction(s)`)}, ${count(view.goals, (s) => `${s.counts.goals} goal(s)`)}, ${count(view.plans, (s) => `${s.counts.plans} plan(s)`)}, ${count(view.tasks, (s) => `${s.counts.tasks} task(s)`)}, ${count(view.operations, (s) => `${s.records} operation(s) current`)}; snapshot ${view.asOf.state}; nothing written`,
+          summary: `history at ${view.cutoff}: ${count(view.experience, (s) => `${s.counts.experiences} experience(s)`)}, ${count(view.predictions, (s) => `${s.recorded} prediction(s)`)}, ${count(view.goals, (s) => `${s.counts.goals} goal(s)`)}, ${count(view.plans, (s) => `${s.counts.plans} plan(s)`)}, ${count(view.tasks, (s) => `${s.counts.tasks} task(s)`)}, ${count(view.memory, (s) => `${s.counts.memories} memory record(s)`)}, ${count(view.knowledge, (s) => `${s.counts.claims} knowledge claim(s)`)}, ${count(view.operations, (s) => `${s.records} operation(s) current`)}; snapshot ${view.asOf.state}; nothing written`,
           data: { query, view },
           display: render(view),
         };

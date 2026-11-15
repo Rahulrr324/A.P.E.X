@@ -1,7 +1,7 @@
 // Cross-store cognitive history: one read-only reconstruction of what APEX had recorded by a cutoff,
 // across the stores that can honestly answer it.
 //
-// Seven stores are integrated, and each keeps its own record model and lifecycle vocabulary:
+// Nine stores are integrated, and each keeps its own record model and lifecycle vocabulary:
 //
 //   experience   what happened, the user's feedback on it, and the review/adaptation records derived
 //                from it. The store replays only records stored at or before the cutoff and derives
@@ -20,12 +20,17 @@
 //                a later approval cannot authorize an earlier version.
 //   tasks        which task and step states were recorded by then; a task open at the cutoff stays
 //                open, and nothing here starts or resumes it.
+//   memory       which facts and model conclusions had been recorded by then, and which correction
+//                links existed. Memory stores only `createdAt`; a correction is a later record naming
+//                the claim it replaces, so a later correction is absent from the past derivation and
+//                shown beside the row instead. Private records are excluded and counted.
+//   knowledge    which claims, retractions, and resolutions had been recorded by then. The lifecycle
+//                is derived from the record set filtered to the cutoff, so a later retraction,
+//                supersession, or resolution is absent rather than applied backwards; `evidence` is
+//                free text and is disclosed as unresolved, not treated as a record reference.
 //   operations   the audit log cannot answer a cutoff: it has no recorded-at and is appended only at
 //                finalization. It is read current and every row is classified against the cutoff, so
 //                what finished by then and what provably did not exist then are kept apart.
-//
-// Memory and knowledge expose id-based as-of reads, not a bounded as-of listing, and are disclosed as
-// unsupported rather than approximated. Naming that boundary is part of the answer, not an omission.
 //
 // What this is not: a transaction, a claim of objective historical truth, or an authorization. Each
 // store's read is internally consistent and the snapshot certifies that no contributing file changed
@@ -43,6 +48,9 @@ import { occurredAtOf } from '../experience/experience-store.js';
 import {
   CUTOFF_SEMANTICS, EXECUTIVE_LIMITATIONS, goalRow, planRow, taskRow, operationsSection, operationCitations,
 } from './executive.js';
+import {
+  memorySection, knowledgeSection, MEMORY_KNOWLEDGE_CUTOFF_SEMANTICS, MEMORY_KNOWLEDGE_LIMITATIONS,
+} from './memory-knowledge.js';
 
 export const COGNITIVE_HISTORY_SCHEMA = 'apex.cognitive-history.v1';
 export const MAX_HISTORY_ROWS = 50;
@@ -50,25 +58,16 @@ export const MAX_HISTORY_CITATIONS = 40;
 export const DEFAULT_HISTORY_ROWS = 20;
 export const HISTORY_RULE = 'a cutoff replays only records stored at or before it; recorded time is not event time, and a record dated after the cutoff is disclosed as later rather than used to settle the past';
 
-const SOURCE_NAMES = Object.freeze(['experience', 'predictions', 'world', 'goals', 'plans', 'tasks', 'operations']);
+const SOURCE_NAMES = Object.freeze(['experience', 'predictions', 'world', 'goals', 'plans', 'tasks', 'memory', 'knowledge', 'operations']);
 // The sources whose own records carry a recorded time a cutoff can filter on. Operations deliberately
 // is not one: its section is a current read with an explicit per-row cutoff classification.
-const CUTOFF_CAPABLE = Object.freeze(['experience', 'predictions', 'world', 'goals', 'plans', 'tasks']);
+const CUTOFF_CAPABLE = Object.freeze(['experience', 'predictions', 'world', 'goals', 'plans', 'tasks', 'memory', 'knowledge']);
 const MAX_LATER_CHANGES = 10;
 const MAX_PROBLEMS_SHOWN = 5;
 
-export const UNSUPPORTED_SOURCES = Object.freeze([
-  {
-    source: 'memory',
-    status: 'unsupported',
-    reason: 'as-of reads are by record id (memory traceMany), not a bounded listing of every record stored by a cutoff; enumerating memory at a cutoff would need a read this milestone did not add',
-  },
-  {
-    source: 'knowledge',
-    status: 'unsupported',
-    reason: 'as-of reads are by record id (knowledge getMany), not a bounded listing of every statement stored by a cutoff; the cross-store belief trace already covers a named record at a cutoff',
-  },
-]);
+// Every store integrated here can now answer a bounded cutoff listing. The export remains because
+// callers read it, and it is the honest place to name a source that a later change removes again.
+export const UNSUPPORTED_SOURCES = Object.freeze([]);
 
 function messageOf(err) {
   return err?.message ?? String(err);
@@ -353,14 +352,19 @@ function sourceStatuses(reads, verdict, views) {
           : 'read';
     const historical = name === 'goals' ? views.goalView
       : name === 'plans' ? views.planView
-        : name === 'tasks' ? views.taskView : null;
+        : name === 'tasks' ? views.taskView
+          : name === 'memory' ? views.memoryView
+            : name === 'knowledge' ? views.knowledgeView : null;
     const problems = replayProblem(historical);
+    const lifecycle = name === 'memory' || name === 'knowledge';
     const corrupt = name === 'operations' ? (views.operationRead?.corrupt?.length ?? 0) : 0;
     if (status === 'read' && problems > 0) {
       out[name] = {
         name,
         status: 'inconsistent',
-        detail: `${problems} event(s) at or before the cutoff did not apply; the stored file parsed, but the replayed state is not reliable and was not reordered`,
+        detail: lifecycle
+          ? `${problems} stored link(s) at or before the cutoff do not resolve; the file parsed, but the reconstructed lifecycle is not reliable and was not repaired`
+          : `${problems} event(s) at or before the cutoff did not apply; the stored file parsed, but the replayed state is not reliable and was not reordered`,
         inspectable: true,
         supportsCutoff,
       };
@@ -387,7 +391,9 @@ function sourceStatuses(reads, verdict, views) {
   return out;
 }
 
-async function readSources({ snapshot, cutoff, experience, predictions, world, goals, plans, tasks, operations, limit }) {
+async function readSources({
+  snapshot, cutoff, experience, predictions, world, goals, plans, tasks, memory, knowledge, operations, limit,
+}) {
   const historical = (store) => Boolean(store) && typeof store.historicalView === 'function';
   const reads = {
     experience: { configured: Boolean(experience) && historical(experience), error: null, damaged: false },
@@ -396,6 +402,8 @@ async function readSources({ snapshot, cutoff, experience, predictions, world, g
     goals: { configured: Boolean(goals) && historical(goals), error: null, damaged: false },
     plans: { configured: Boolean(plans) && historical(plans), error: null, damaged: false },
     tasks: { configured: Boolean(tasks) && historical(tasks), error: null, damaged: false },
+    memory: { configured: Boolean(memory) && historical(memory), error: null, damaged: false },
+    knowledge: { configured: Boolean(knowledge) && historical(knowledge), error: null, damaged: false },
     operations: { configured: Boolean(operations) && typeof operations.inspect === 'function', error: null, damaged: false },
   };
   const fail = (name, err) => {
@@ -432,6 +440,8 @@ async function readSources({ snapshot, cutoff, experience, predictions, world, g
   const goalView = await replay('goals', goals);
   const planView = await replay('plans', plans);
   const taskView = await replay('tasks', tasks);
+  const memoryView = await replay('memory', memory);
+  const knowledgeView = await replay('knowledge', knowledge);
   let operationRead = null;
   if (reads.operations.configured) {
     try {
@@ -441,7 +451,7 @@ async function readSources({ snapshot, cutoff, experience, predictions, world, g
     }
   }
   return {
-    reads, experienceView, predictionView, worldView, goalView, planView, taskView, operationRead,
+    reads, experienceView, predictionView, worldView, goalView, planView, taskView, memoryView, knowledgeView, operationRead,
   };
 }
 
@@ -635,6 +645,8 @@ function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit })
   const goalView = value.goalView;
   const planView = value.planView;
   const taskView = value.taskView;
+  const memoryView = value.memoryView;
+  const knowledgeView = value.knowledgeView;
   const operationRead = value.operationRead;
 
   const experienceCurrentById = new Map((experienceView?.current?.experiences ?? []).map((record) => [record.id, record]));
@@ -761,6 +773,8 @@ function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit })
   const goals = goalSection(goalView, statuses.goals, cutoff, limit);
   const plans = planSection(planView, statuses.plans, cutoff, limit);
   const tasks = taskSection(taskView, statuses.tasks, cutoff, limit);
+  const memory = memorySection(memoryView, statuses.memory, cutoff, limit);
+  const knowledge = knowledgeSection(knowledgeView, statuses.knowledge, cutoff, limit);
   const operations = operationsSection(operationRead, { cutoff, status: statuses.operations.status, limit });
 
   // Only the displayed rows are resolved, so the citation list is bounded by the row bound already in
@@ -770,6 +784,12 @@ function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit })
       ...goals.rows.map((row) => ({ kind: 'goal', id: row.id, operationIds: row.operationIds })),
       ...plans.rows.map((row) => ({ kind: 'plan', id: row.id, operationIds: row.operationIds })),
       ...tasks.rows.map((row) => ({ kind: 'task', id: row.id, operationIds: row.operationIds })),
+      ...memory.rows
+        .filter((row) => row.provenance.operationId !== null)
+        .map((row) => ({ kind: 'memory', id: row.id, operationIds: [row.provenance.operationId] })),
+      ...knowledge.rows
+        .filter((row) => row.provenance?.operationId !== null && row.provenance?.operationId !== undefined)
+        .map((row) => ({ kind: 'knowledge', id: row.id, operationIds: [row.provenance.operationId] })),
     ],
     read: operationRead,
     status: statuses.operations.status,
@@ -794,6 +814,12 @@ function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit })
     goalsRecorded: goalView?.excluded ?? null,
     plansRecorded: planView?.excluded ?? null,
     tasksRecorded: taskView?.excluded ?? null,
+    memoryRecordsAdded: memoryView?.later?.recordsRecorded ?? null,
+    memoryCorrectionsRecorded: memoryView?.later?.correctionsRecorded ?? null,
+    knowledgeClaimsRecorded: knowledgeView?.later?.claimsRecorded ?? null,
+    knowledgeRetractionsRecorded: knowledgeView?.later?.retractionsRecorded ?? null,
+    knowledgeResolutionsRecorded: knowledgeView?.later?.resolutionsRecorded ?? null,
+    knowledgeSupersessionsRecorded: knowledgeView?.later?.supersessionsRecorded ?? null,
     operationsFinishedLater: operations.counts?.byStateAtCutoff?.later ?? null,
     correctedShown: experienceSection.rows.filter((row) => row.correctedLater).length,
     feedbackAddedShown: experienceSection.rows.filter((row) => row.feedbackAddedLater).length,
@@ -807,6 +833,11 @@ function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit })
     planActivationsShownLater: plans.rows.filter((row) => row.later.activatedLater).length,
     planRevisionsShownLater: plans.rows.filter((row) => row.later.revisedLater).length,
     taskCompletionsShownLater: tasks.rows.filter((row) => row.later.stepCompletedLater).length,
+    memoriesReplacedShownLater: memory.rows.filter((row) => row.later.replacedLater).length,
+    knowledgeRetractedShownLater: knowledge.rows.filter((row) => row.later.retractedLater).length,
+    knowledgeSupersededShownLater: knowledge.rows.filter((row) => row.later.supersededLater).length,
+    knowledgeResolutionsShownLater: knowledge.rows.filter((row) => row.later.resolutionRecordedLater).length,
+    knowledgeConflictsShownLater: knowledge.rows.filter((row) => row.later.conflictChangedLater).length,
     note: 'records dated after the cutoff are counted and shown as later; none of them is used to decide the past reading',
   };
 
@@ -844,13 +875,15 @@ function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit })
     goals,
     plans,
     tasks,
+    memory,
+    knowledge,
     operations,
     citations,
     operationCitations: executiveCitations,
-    cutoffSemantics: { ...CUTOFF_SEMANTICS },
+    cutoffSemantics: { ...CUTOFF_SEMANTICS, ...MEMORY_KNOWLEDGE_CUTOFF_SEMANTICS },
     later,
     unsupported: UNSUPPORTED_SOURCES.map((item) => ({ ...item })),
-    limitations: [...EXECUTIVE_LIMITATIONS],
+    limitations: [...EXECUTIVE_LIMITATIONS, ...MEMORY_KNOWLEDGE_LIMITATIONS],
     limits: { rows: limit, citations: MAX_HISTORY_CITATIONS },
     rule: HISTORY_RULE,
     authorizes: false,
@@ -869,6 +902,8 @@ export async function reconstructCognition({
   goals = null,
   plans = null,
   tasks = null,
+  memory = null,
+  knowledge = null,
   operations = null,
   limit = DEFAULT_HISTORY_ROWS,
   now = () => new Date(),
@@ -880,11 +915,11 @@ export async function reconstructCognition({
   const size = rowLimit(limit);
   const readAtMs = parseInstant(typeof now === 'function' ? now() : now);
   const readAt = readAtMs === null ? null : new Date(readAtMs).toISOString();
-  const stores = contributingStores({ experience, predictions, world, goals, plans, tasks, operations });
+  const stores = contributingStores({ experience, predictions, world, goals, plans, tasks, memory, knowledge, operations });
   const outcome = await runConsistentEvidenceRead({
     stores,
     read: (snapshot) => readSources({
-      snapshot, cutoff: normalized, experience, predictions, world, goals, plans, tasks, operations, limit: size,
+      snapshot, cutoff: normalized, experience, predictions, world, goals, plans, tasks, memory, knowledge, operations, limit: size,
     }),
   });
   const statuses = sourceStatuses(outcome.value.reads, outcome.snapshot, outcome.value);

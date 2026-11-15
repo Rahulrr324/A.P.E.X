@@ -350,6 +350,22 @@ as such, and the read reconstructs state without resuming, retrying or authorizi
 ([details](apex_app/README.md#batch-ap-17-historical-executive-state-as-implemented);
 tests: `tests/executive-history.test.js`, 34 cases including real CLI child processes).
 
+Batch AP-18 then closed the last gap AP-16 had named: bounded historical listings for memory and
+knowledge. The same `history.reconstruct` action and `history --at` CLI now read both stores as of the
+cutoff, through their own `historicalView` derivations, and state each store's cutoff rule. A memory
+record's later correction is absent from the past listing and reported beside it as a later change,
+so the earlier claim stays the belief recorded then, and a derived conflict group is the one the
+stored records implied at that cutoff; private records are excluded by count because the read may be
+run for a model origin. A knowledge retraction, supersession or resolution recorded after the cutoff
+is likewise absent from the earlier view and disclosed as later, so it can neither claim the conflict
+was already resolved at the earlier cutoff nor erase the fact that a claim existed then; a free-text
+`evidence` field is never presented as a record citation. Both stores are read in the same
+content-certified window as the other seven sources, one damaged store is named while the other still
+answers, and the combined read is bounded, writes nothing and authorizes nothing. With this, the
+`unsupported` list of the reconstruction is empty
+([details](apex_app/README.md#batch-ap-18-historical-memory-and-knowledge-reconstruction-as-implemented);
+tests: `tests/memory-knowledge-history.test.js`, 31 cases including real CLI child processes).
+
 Batch AP-11 (Runtime Performance, Cognitive Efficiency & End-to-End Latency Optimization) first
 corrected the measurement it was asked to optimize. The AP-10 benchmark shared one corpus across phases
 and only ever grew it, so after the retrieval phase reached 10,000 records every later `context` and

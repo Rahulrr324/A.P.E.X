@@ -215,6 +215,64 @@ function buildLifecycle(records) {
   return { ...split, supersededByMap, conflictIndex, resolutionIndex };
 }
 
+// The lifecycle one record set implies, with every claim annotated from the same indexes. The
+// historical read derives it once for the cutoff record set and, when asked, once for the whole
+// store, so a row's past and present readings cannot come from different rules. `prebuilt` is a
+// derivation already computed from these exact records (the store's certified snapshot state).
+// Problems are bounded and only report links that do not resolve inside the record set; a cycle is
+// left to the health view, which can describe it without implying a replay failed.
+function deriveKnowledgeLifecycle(records, prebuilt = null) {
+  const state = prebuilt ?? buildLifecycle(records);
+  const statements = state.claims.map((record) => annotate(
+    record, state.supersededByMap, state.conflictIndex, state.retractionsByTarget, state.resolutionIndex,
+  ));
+  const claimIds = new Set(state.claims.map((record) => record.id));
+  const problems = [];
+  const note = (message) => { if (problems.length < MAX_HEALTH_SAMPLES) problems.push(message); };
+  for (const record of state.claims) {
+    for (const id of new Set(record.supersededBy ?? [])) {
+      if (!claimIds.has(id)) {
+        note(`[${shortId(record.id)}] names [${shortId(id)}] as superseded, but that claim is not among the records in this view`);
+      }
+    }
+  }
+  for (const event of state.retractionEvents) {
+    if (!claimIds.has(event.targetId)) {
+      note(`retraction event [${shortId(event.id)}] targets a claim that is not among the records in this view`);
+    }
+  }
+  for (const event of state.resolutionEvents) {
+    for (const id of event.targetIds ?? []) {
+      if (!claimIds.has(id)) {
+        note(`resolution event [${shortId(event.id)}] names a claim that is not among the records in this view`);
+      }
+    }
+  }
+  return { ...state, statements, problems };
+}
+
+function countByState(statements) {
+  const counts = {};
+  for (const claim of statements) counts[claim.lifecycleState] = (counts[claim.lifecycleState] ?? 0) + 1;
+  return counts;
+}
+
+// Live groups with at least two different objects, split by whether an applicable resolution in the
+// same record set already names exactly that group. A resolved group keeps its conflict visible;
+// `unresolved` is what a reader still has to weigh.
+function conflictSummary(state) {
+  let total = 0;
+  let resolved = 0;
+  let claims = 0;
+  for (const group of state.conflictIndex.values()) {
+    if (new Set(group.map((record) => normalizedTriple(record.subject, record.relationship, record.object))).size < 2) continue;
+    total += 1;
+    if (state.resolutionIndex?.applicableGroups?.has(claimSetKey(group.map((record) => record.id)))) resolved += 1;
+    else claims += group.length;
+  }
+  return { total, unresolved: total - resolved, resolved, claims };
+}
+
 // The newest `limit` claims, newest first, annotated with supersession, conflict and
 // resolution state. Shared by list() and projectionRead() so the two can never apply
 // different lifecycle rules to the same record. Only the final window is bounded; the
@@ -682,6 +740,134 @@ export class KnowledgeStore {
   // re-validates the whole store. Records from a reused state are exactly the records a full
   // re-read would have produced, and such a state only ever exists for a file with no damage in it,
   // so the refusal below still fires on a damaged store.
+  // The whole log replayed to a cutoff, with the lifecycle the claims and events stored by then
+  // imply. A claim, a retraction and a resolution each carry only `createdAt`, so that is the only
+  // field a cutoff compares. Filtering the record set before deriving is what makes the view
+  // historical: a retraction or resolution recorded after the cutoff is absent, and a successor
+  // claim recorded after it cannot supersede anything, so neither is ever applied to the past.
+  // The chosen claim of an in-cutoff resolution is reported as a recorded decision, never as proof
+  // that the claim is true, and every alternative stays readable.
+  async historicalView(cutoff, { withCurrent = true } = {}) {
+    const parsed = parseIsoInstant(cutoff);
+    if (parsed === null) throw new ValidationError('cutoff must be an ISO date or an ISO date-time with a time zone');
+    const cutoffMs = Date.parse(parsed);
+    const certification = { key: null };
+    const records = await this.#loadComplete({ certification });
+
+    const known = [];
+    const laterRecords = [];
+    for (const record of records) {
+      const created = Date.parse(record.createdAt);
+      if (created <= cutoffMs) known.push(record);
+      else laterRecords.push(record);
+    }
+
+    const past = deriveKnowledgeLifecycle(known);
+    const current = withCurrent ? deriveKnowledgeLifecycle(records, this.#derive(records, certification.key)) : null;
+    const currentById = new Map((current?.statements ?? []).map((claim) => [claim.id, claim]));
+
+    const laterSupersedes = new Map();
+    const laterRetractions = new Map();
+    const laterResolutions = new Map();
+    for (const record of laterRecords) {
+      if (record.kind === RETRACTION_KIND) {
+        laterRetractions.set(record.targetId, [...(laterRetractions.get(record.targetId) ?? []), record.id]);
+      } else if (record.kind === RESOLUTION_KIND) {
+        for (const id of record.targetIds ?? []) {
+          laterResolutions.set(id, [...(laterResolutions.get(id) ?? []), record.id]);
+        }
+      } else {
+        for (const id of record.supersededBy ?? []) {
+          laterSupersedes.set(id, [...(laterSupersedes.get(id) ?? []), record.id]);
+        }
+      }
+    }
+
+    const statements = past.statements.map((claim) => {
+      const now = currentById.get(claim.id) ?? null;
+      const conflictThen = new Set(claim.conflictsWith ?? []);
+      const conflictNow = new Set(now?.conflictsWith ?? []);
+      const conflictChangedLater = conflictThen.size !== conflictNow.size
+        || [...conflictThen].some((id) => !conflictNow.has(id));
+      const retractedLater = (laterRetractions.get(claim.id)?.length ?? 0) > 0;
+      const supersededLater = (laterSupersedes.get(claim.id)?.length ?? 0) > 0;
+      const resolutionRecordedLater = (laterResolutions.get(claim.id)?.length ?? 0) > 0;
+      return {
+        id: claim.id,
+        subject: claim.subject,
+        relationship: claim.relationship,
+        object: claim.object,
+        evidence: claim.evidence ?? null,
+        createdAt: claim.createdAt,
+        status: claim.status,
+        lifecycleState: claim.lifecycleState,
+        active: claim.active === true,
+        conflictsWith: [...(claim.conflictsWith ?? [])],
+        conflictState: claim.conflictState,
+        resolution: claim.resolution === null ? null : {
+          id: claim.resolution.id,
+          chosenId: claim.resolution.chosenId,
+          chosen: claim.resolution.chosen === true,
+          reason: claim.resolution.reason ?? null,
+          createdAt: claim.resolution.createdAt,
+        },
+        replaces: [...(claim.replaces ?? [])],
+        replacedBy: [...(claim.supersededBy ?? [])],
+        retraction: claim.retraction === null ? null : { ...claim.retraction },
+        retractionAmbiguous: claim.retractionAmbiguous === true,
+        provenance: {
+          origin: claim.provenance?.origin ?? null,
+          operationId: claim.provenance?.operationId ?? null,
+          updateMode: claim.provenance?.updateMode ?? null,
+        },
+        later: {
+          retractedLater,
+          supersededLater,
+          resolutionRecordedLater,
+          conflictChangedLater,
+          standingChangedLater: retractedLater || supersededLater || resolutionRecordedLater || conflictChangedLater,
+          retractedByIds: [...(laterRetractions.get(claim.id) ?? [])],
+          supersededByIds: [...(laterSupersedes.get(claim.id) ?? [])],
+        },
+        now: now === null ? null : {
+          status: now.status,
+          lifecycleState: now.lifecycleState,
+          active: now.active === true,
+          conflictsWith: [...(now.conflictsWith ?? [])],
+          conflictState: now.conflictState,
+        },
+      };
+    });
+
+    return {
+      cutoff: parsed,
+      records: known.length,
+      excluded: laterRecords.length,
+      undated: 0,
+      statements,
+      claimsRecorded: past.statements.length,
+      retractionEvents: past.retractionEvents.length,
+      resolutionEvents: past.resolutionEvents.length,
+      byLifecycleState: countByState(past.statements),
+      conflicts: conflictSummary(past),
+      problems: past.problems,
+      later: {
+        recordsRecorded: laterRecords.length,
+        claimsRecorded: laterRecords.filter((record) => record.kind === undefined).length,
+        retractionsRecorded: laterRecords.filter((record) => record.kind === RETRACTION_KIND).length,
+        resolutionsRecorded: laterRecords.filter((record) => record.kind === RESOLUTION_KIND).length,
+        supersessionsRecorded: laterSupersedes.size,
+      },
+      current: current === null ? null : {
+        records: records.length,
+        claims: current.statements.length,
+        byLifecycleState: countByState(current.statements),
+        conflicts: current.conflicts,
+      },
+      note: 'knowledge records carry only createdAt, the time a claim or lifecycle event was appended; a retraction or resolution recorded later is absent from the earlier lifecycle rather than applied backwards, and `evidence` is stored free text that is not a record reference',
+    };
+  }
+
   async #loadComplete({ beforeAppend = false, certification = null } = {}) {
     const { records, corrupt } = beforeAppend
       ? await this.log.loadForAppend()

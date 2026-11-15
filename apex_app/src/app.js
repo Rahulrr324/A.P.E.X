@@ -182,7 +182,7 @@ export function createApp({
   }
 
   for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...historyActions({
-      experience, predictions, world: worldModel, goals, plans, tasks: taskStore, operations,
+      experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
     }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is

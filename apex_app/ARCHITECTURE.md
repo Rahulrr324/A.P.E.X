@@ -1153,7 +1153,8 @@ contract, not a forced schema.
   a pure reducer but no cutoff read; the operations audit log has no recorded-at field and is appended
   only on completion; memory and knowledge expose id-based as-of reads, not a bounded as-of listing.
   All six were listed in `unsupported` with a reason instead of being approximated. AP-17 now answers
-  the three executive logs and classifies the audit log; memory and knowledge remain unsupported.
+  the three executive logs and classifies the audit log; AP-18 answers the memory and knowledge
+  listings.
 - **Statuses and verifiability.** `asOf` reports the snapshot state, `complete`, `verifiable`, the
   attempt count, and per-source statuses (`read`, `absent`, `not_configured`, `unavailable`,
   `damaged`) with reasons. A damaged or uninspectable source is named, the other answers are still
@@ -1183,7 +1184,7 @@ same bounds and `authorizes: false`.
 - **One action, more sources.** `src/history/executive.js` shapes the new sections; `reconstruct.js`
   reads each executive store through the store's own `historicalView(cutoff)` inside the existing
   `runConsistentEvidenceRead` window. `supportsCutoff` is true for goals, plans and tasks and false
-  for operations, and the seven sources are listed in one `asOf.sources` array.
+  for operations, and the nine sources are listed in one `asOf.sources` array.
 - **Goals.** The replay is the goal reducer over events with `.at <= cutoff`. A row carries its
   recorded status, request, revision, per-criterion `basis` (`user_stated`, `system_inferred`,
   `assumption`, `verified_fact`), `requirement` (`required`, `suggested`, `declined`), evidence
@@ -1235,6 +1236,59 @@ same bounds and `authorizes: false`.
   missing, unreadable and inconsistent; a damaged goal log, a cutoff subsequence that does not apply,
   a store moving during the read; a cross-process append; determinism, bounds, adversarial input,
   model-origin refusal of writes, and the CLI listing. No model is contacted.
+
+### Historical memory and knowledge reconstruction (Batch AP-18)
+
+AP-16 named memory and knowledge as the last sources its cutoff read could not answer with a
+bounded listing. AP-18 adds both sections to the same `history.reconstruct` action and `history --at`
+CLI, through each store's own existing `historicalView(cutoff)`. No action, store, schema field or
+index was added, `unsupported` is now empty, and the read remains one content-certified window with
+the same bounds and `authorizes:false`.
+
+- **One timestamp, two record models.** Both stores carry only `createdAt`, the time the record was
+  appended, and a cutoff is applied to that field - never to file order and never to an event time
+  that does not exist. `src/history/memory-knowledge.js` shapes the sections and keeps the lifecycle
+  difference visible: memory has no retraction or conflict event, while knowledge has append-only
+  retraction and resolution events and a successor-stored supersession link.
+- **Memory.** The past listing is the store's derivation over records with `createdAt <= cutoff`: the
+  earlier claim keeps the status the earlier record set implied (`user_confirmed`, `model_proposed`,
+  `superseded`, `unresolved_conflict`, `stored`), and a correction written later is absent from the
+  rows and reported as `later.replacedLater` / `later.conflictChangedLater` /
+  `later.standingChangedLater` with a separate `now` block. Multiple corrections across cutoffs
+  therefore produce a different, coherent answer at each cutoff. Conflict groups are the store's
+  read-time clause-rule groups, not recorded events, and a later correction cannot clear a past
+  disagreement retroactively. Private records are excluded from rows and disclosed by count only,
+  because the reconstruction may be produced for a model origin.
+- **Knowledge.** Claims and both lifecycle event kinds are filtered by `createdAt` before deriving,
+  so a later retraction, supersession or resolution cannot apply backwards: a claim retracted later
+  still existed at the cutoff, and a conflict unresolved then stays unresolved when a resolution
+  arrives later. A resolution recorded by the cutoff is a recorded user decision at that time, never
+  proof the chosen claim is true. A successor recorded later does not retroactively replace the
+  earlier claim. Triple hashes and record identity are displayed as stored, not re-derived.
+- **Evidence and citations.** `provenance.operationId` on either store is resolved through the
+  existing operation-citation section; a record stored by the cutoff citing an operation finishing
+  later is reported `later` and is not past evidence. Knowledge `evidence` is free text and is
+  labelled as such - it is never resolved to a record or claimed to have existed at the cutoff.
+- **Statuses and verifiability.** Both sources use the existing status vocabulary; a damaged memory
+  store is named while the knowledge section still answers, and vice versa. The combined view is then
+  not `complete` and not `verifiable`, and the operation remains `SUCCESS_VERIFIED` because it is a
+  reproducible read - damage is disclosed, not converted into a missing or empty answer.
+- **Bounds, persistence and authority.** Both sections share the AP-16 bound (20 default, 50
+  maximum) and report `total`/`truncated`; knowledge conflict samples stay capped. The read writes
+  no memory, knowledge or audit line of its own (the byte-for-byte guard covers memory and
+  knowledge; the operation is audited by the ordinary lifecycle), calls no model, stays
+  user-and-model readable and unplannable, and returns `authorizes:false`. The persisted audit copy
+  is still minimized by the shared redaction, which masks every `content` value; verbatim memory
+  content is available only from the store's own view.
+- **Tests.** `memory-knowledge-history.test.js` (31 tests) drives the real stores, controller and CLI:
+  memory before/after the cutoff, corrected once and twice across cutoffs, conflict before it,
+  private exclusion, the absent retraction event; knowledge before/after, retraction and resolution
+  after it, a resolution shown as a decision, a successor that does not retroactively supersede,
+  free-text evidence, missing and later citations; a corrupt store on either side while the other
+  answers; both stores in one certified snapshot; cross-process append and store change during the
+  read; strict cutoff refusals, offset/date-only equivalence and the inclusive boundary; recorded
+  time versus event time; determinism, bounds, read-only bytes, model-origin write denial,
+  adversarial input, a later cutoff, and the CLI display and JSON listing. No model is contacted.
 
 ## 6. D. Diagnostics and evaluation
 
@@ -1295,12 +1349,14 @@ nothing and does not call a model. It has no executive-handoff scenario; handoff
 | Governance review path, complete request (AP-05) | — | list 166.3 / 474.2 / 996.0 ms; open 151.7 / 445.1 / 640.1 ms; inspect 338.7 / 667.0 / 1,231.2 ms; reconcile 240.9 / 632.5 / 1,160.7 ms; decide 163.9 / 345.8 / 608.5 ms at 4 / 12 / 24 linked uses; list 967.8 / 997.4 / 1,049.9 ms at 1 / 8 / 20 stored adaptations | Complete verified request including its own analysis, evidence assembly and audit append; builder/detail/prepare reads are printed separately and labelled partial. At 21 stored adaptations the target is outside the 20-row window and is not reported (82.1 ms, disclosed; less lineage work, not faster execution). Five samples per figure |
 | Cross-store reads, complete request (AP-06) | — | integrity 20.9 / 23.6 / 33.5 ms; effectiveness 31.5 / 39.4 / 57.5 ms; reviews 34.9 / 41.0 / 56.9 ms at 100 / 1,000 / 4,000 memory records (9 stores, 146 / 1,046 / 4,046 records) | Complete verified requests including their own window(s), second read and audit append on identical copied bytes. The window alone took 1.07 / 0.72 / 0.78 ms and the integrity report alone 10.0 / 11.4 / 14.8 ms; those partials are printed separately and not added. The same effectiveness analysis with and without a window moved by −0.1 / +0.6 / +1.0 ms, so window cost is per store, not per record; growth is parsing and lineage. Five samples per figure |
 | Evidence consistency, complete requests (AP-07) | — | integrity 21.7 / 25.9 / 133.1 ms; candidates 22.7 / 64.1 / 70.1 ms; longitudinal 10.0 / 26.8 / 30.0 ms; outcome 33.7 / 128.0 / 154.6 ms; effectiveness 35.7 / 150.1 / 158.9 ms; reviews 33.6 / 150.8 / 122.5 ms at 100 / 1,000 / 4,000 memory records | Complete verified requests including their own content windows and audit appends. On the same run the window over the seeded retrieval control cost +1.8 / +2.8 / +15.4 ms, matching the standalone content window (+1.0 / +1.6 / +11.0 ms over metadata); world-state certification cost +2.9 / +9.7 / +16.0 ms. Complete-read spreads are wide and cross-run variation exceeds several differences; only in-run comparisons are treated as findings. See `benchmarks/README.md` |
+| Historical memory and knowledge listing (AP-18) | — | memory replay 13.0 / 34.2 / 89.1 ms; knowledge replay 14.8 / 45.1 / 170.6 ms; both 27.8 / 79.3 / 259.7 ms; complete verified `history.reconstruct` 151.8 / 221.0 / 493.6 ms at 200 / 1,000 / 4,000 records per store (1,000 audit lines) | Medians of five samples in one run on generated fixtures with no overlapping runs. Output bounds barely move runtime (limit 2 vs 50: 483.5 vs 488.2 ms at 4,000, 2,824 vs 16,951 display bytes); a cutoff including the whole log costs more (607.2 ms end-to-end at 4,000) because both derivations are full-size. Resolving 200 citing rows added about 3%. Verification re-runs the reconstruction at about 1.36x execute-only (361.7 vs 493.6 ms). Full-log replay is accepted; no index was added |
 
 Known scaling behavior: memory and knowledge searches are linear in the number of records; JSONL
 cold reads parse the whole store; the AM index removes the repeated learning read, not the initial
-one. No quadratic path is claimed or known in the request path. Unmeasured: real-model latency and
-quality, stores beyond the fixtures used, multi-user or network filesystems, and long-running
-operation logs.
+one; and every cutoff reconstruction replays the whole source log, so its output is bounded while
+its cost is not. No quadratic path is claimed or known in the request path. Unmeasured: real-model
+latency and quality, stores beyond the fixtures used, multi-user or network filesystems, and
+long-running operation logs.
 
 ## 7. Authority and trust-boundary map
 
@@ -1384,6 +1440,7 @@ The only authority owner is the action registry. Everything else observes, propo
 | Historical belief reconstruction (AP-15) | `IMPLEMENTED_AND_TESTED` | pure `world/historical.js` (`validityStanding`, `statementStanding`, `reconstructBelief`, `relevantChanges`), `WorldModelStore.historicalView`, as-of `MemoryStore.traceMany` and `KnowledgeStore.getMany`, `world.belief.trace --at` and `world.state_at` belief output, strict `parseIsoInstant`; no store, schema field or index added | `temporal-belief.test.js` (18 cases, including real CLI child processes) |
 | Cross-store cognitive history (AP-16) | `IMPLEMENTED_AND_TESTED` | `src/history/reconstruct.js` (one `runConsistentEvidenceRead` across experience, prediction and world replays; per-source status, later separation, citation resolution, bounds, `authorizes:false`), `history.reconstruct` action (read, user+model, unplannable), `history --at` CLI; no store, schema field or index added; the goal, plan, task and operations stores were disclosed as unsupported by AP-16 and are integrated by AP-17; memory and knowledge remain disclosed as unsupported | `history-reconstruction.test.js` (18 cases, including real CLI child processes) |
 | Historical executive state (AP-17) | `IMPLEMENTED_AND_TESTED` | `src/history/executive.js` (goal, plan, task and audit rows; `later` flags; `CUTOFF_SEMANTICS`; `EXECUTIVE_LIMITATIONS`), `historicalView(cutoff)` on the goal, plan and task stores, executive sections and operation citations in `src/history/reconstruct.js`, rendering in `src/actions/history-actions.js`; same action, no new action/store/index; audit rows classified because the log has no recorded-at; `approval.usable` always false | `executive-history.test.js` (34 cases, including a real CLI child process) |
+| Historical memory and knowledge reconstruction (AP-18) | `IMPLEMENTED_AND_TESTED` | `src/history/memory-knowledge.js` (`memorySection`, `knowledgeSection`, `MEMORY_KNOWLEDGE_CUTOFF_SEMANTICS`, `MEMORY_KNOWLEDGE_LIMITATIONS`), the stores' existing `historicalView(cutoff)` reads inside the same certified window, memory/knowledge sections and merged limitations in `src/history/reconstruct.js`, rendering in `src/actions/history-actions.js`; same action, no new action/store/index; private memory excluded by count; free-text knowledge evidence never treated as a citation | `memory-knowledge-history.test.js` (31 cases, including real CLI child processes) |
 | Temporal experience | `IMPLEMENTED_AND_TESTED` | `experience/temporal.js`, `experience-store.js` | `experience-temporal*.test.js` |
 | Model gateway protocol (stub) | `IMPLEMENTED_AND_TESTED` | `model/gateway.js` | `gateway.test.js`, `model-workflow.test.js`; no test runs a real model |
 | Real-model answer quality | `DESCRIPTIVE_ONLY` | — | One dated observation (2026-10-31); no automated evidence |
@@ -1475,6 +1532,14 @@ invalidate the recommended milestone, not that it blocks all work.
 | 75 | A cutoff subsequence could be silently reordered or dropped to make it apply | `historicalView()` replays the whole log first; a full log that applies while its cutoff subsequence does not is `inconsistent` with the reducer problems named, never reordered, and the other sources still answer | `executive-history.test.js` (non-monotonic clock, damaged goal log) | The combined view is then not `complete`; that is disclosed per source, so a certified conclusion is not produced | Low | No |
 | 76 | The persisted audit copy could disagree with the read it records | Bounded history rows nest evidence ids deeper than earlier payloads, so the shared redaction depth cap was raised from 8 to 10 and a test asserts the criterion-to-operation id survives in `step.result` | `executive-history.test.js` (completion citation in the action result) | A future payload deeper than 10 would again be replaced by a length marker; the cap remains a hard bound | Low | No |
 | 77 | A reconstruction could be mistaken for replay, resumption or authority | The action is read-only and unplannable, carries `authorizes:false`, and refuses unexpected input fields; tests assert the data directory is byte-identical after goal, plan and task reads and that a read never resumes a task | `executive-history.test.js` (action contract, adversarial input, model origin, read never resumes) | Model origin may read history; it still cannot create, approve, execute or resume anything | Low | No |
+| 78 | A later memory correction could rewrite what an earlier cutoff is shown to have held | The past listing derives from records appended by the cutoff; a correction written later is absent from the rows and reported as `later` flags plus a separate `now` block | `memory-knowledge-history.test.js` (correction after the cutoff; multiple corrections across three cutoffs) | An earlier belief later found wrong still reads as the belief recorded then; that is the record model and is stated in the limitations | Medium (interpretive) | No |
+| 79 | A derived memory conflict could be read as a recorded event | Conflict groups are the store's read-time clause rule; the view and the limitation state that the store records no conflict event | `memory-knowledge-history.test.js` (conflict before the cutoff, later correction) | A later correction clears the present group but never the past reading | Low | No |
+| 80 | Private memory could reach a model through a historical read | Private records are excluded from rows by count in both the store view and the section; a model-origin read asserts the private content string is absent | `memory-knowledge-history.test.js` (private exclusion, model-origin read) | None observed | None | No |
+| 81 | A later knowledge resolution could claim an earlier conflict was already resolved | Claims and both event kinds are filtered by `createdAt` before deriving; a later resolution is a later count, not an earlier state | `memory-knowledge-history.test.js` (conflict unresolved at the cutoff despite a later resolution) | None observed | None | No |
+| 82 | A later knowledge retraction could erase the fact that a claim existed at the cutoff | Retraction events are later records and absent from the past derivation; the earlier claim is shown as it stood then, with the later retraction disclosed | `memory-knowledge-history.test.js` (retraction after the cutoff; successor does not retroactively supersede) | None observed | None | No |
+| 83 | Free-text knowledge evidence could be read as a record citation | The section labels `evidence` as free text; only `provenance.operationId` is resolved, against the audit log, with `later`, `missing` and `unavailable` states | `memory-knowledge-history.test.js` (free-text evidence, missing and later citations) | A reader may still over-read an evidence string; documentation states the limit | Medium (interpretive) | No |
+| 84 | A damaged memory store could hide the knowledge answer, or vice versa | Per-source status and reason; the other section still answers, the combination is not `complete` or `verifiable`, and the operation stays `SUCCESS_VERIFIED` because the read was reproducible | `memory-knowledge-history.test.js` (corrupt memory with knowledge readable and the reverse) | What a damaged source held cannot be established; absence is not proven | Low | No |
+| 85 | A historical listing could be mistaken for current memory or alter retrieval | The sections are read-only, unplannable and consumed by no retrieval path; a byte-identical guard covers both stores, and model origin may read but cannot write | `memory-knowledge-history.test.js` (read-only bytes, model-origin denial, adversarial input) | A model can read history; it cannot promote a record into current memory or knowledge | Low | No |
 
 No gap in this register was implemented in AO-10: none exposed a new concrete defect in behavior,
 and none invalidated a documented security guarantee. AP-01 closed the roadmap's "one recorded
@@ -1528,6 +1593,16 @@ operation finishing after the cutoff is disclosed as inconsistent rather than re
 cutoff subsequence which does not apply leaves that source `inconsistent` and the combined view not
 `complete`, and that a read reconstructs state without replaying, resuming or authorizing anything.
 
+AP-18 added rows 78-85 for historical memory and knowledge: the same reconstruction now lists each
+store as of the cutoff, so a later correction, retraction, supersession or resolution is disclosed
+beside the past row instead of applied backwards, private memory is excluded from a read that a
+model origin can run, and a damaged store is named while the other still answers. Its stated limits
+are that memory has no event time, valid interval, retraction or conflict event, so a later-corrected
+claim still reads as the belief recorded then and a conflict group is content-derived; that a
+knowledge resolution is a recorded decision, not truth; that free-text `evidence` is not a record
+citation; and that both listings replay the whole log, so the output is bounded but the read cost is
+not.
+
 ## 10. Running the verification
 
 ```sh
@@ -1544,7 +1619,7 @@ node --test tests/evidence-fabric.test.js
 node --test tests/evidence-read-contract.test.js tests/ap07-consistency.test.js
 node --test tests/cognition-response-integrity.test.js
 node --test tests/semantic-consistency.test.js tests/semantic-acceptance.test.js
-node --test tests/temporal-belief.test.js tests/history-reconstruction.test.js tests/executive-history.test.js
+node --test tests/temporal-belief.test.js tests/history-reconstruction.test.js tests/executive-history.test.js tests/memory-knowledge-history.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs

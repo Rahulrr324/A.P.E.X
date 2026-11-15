@@ -328,6 +328,47 @@ function memoryWindow(records, { limit, includePrivate }) {
   });
 }
 
+// The lifecycle one record set implies: which records a stored correction names, and which active
+// records the store's heuristic clause rule finds in disagreement. The historical view derives it
+// twice - once for the records stored by the cutoff, once for all records - from the same rules, so
+// the past reading and the present standing can never be computed differently.
+function deriveMemoryLifecycle(records) {
+  const replacedBy = new Map();
+  for (const record of records) {
+    for (const targetId of record.provenance?.replaces ?? []) {
+      const ids = replacedBy.get(targetId) ?? [];
+      ids.push(record.id);
+      replacedBy.set(targetId, ids);
+    }
+  }
+  const active = records.filter((record) => (replacedBy.get(record.id) ?? []).length === 0);
+  const groups = findMemoryConflictGroups(active);
+  const conflictById = new Map();
+  for (const group of groups) {
+    const recordIds = group.records.map((record) => record.id).sort();
+    for (const record of group.records) {
+      conflictById.set(record.id, {
+        subject: group.subject,
+        values: [...group.values],
+        recordIds: recordIds.filter((id) => id !== record.id),
+      });
+    }
+  }
+  return {
+    groups,
+    memories: records.map((record) => {
+      const successors = replacedBy.get(record.id) ?? [];
+      const conflict = conflictById.get(record.id) ?? null;
+      return {
+        ...record,
+        replacedBy: successors,
+        conflict,
+        status: getRecordStatus(record, conflict?.recordIds ?? [], successors),
+      };
+    }),
+  };
+}
+
 export class MemoryStore {
   // Tokenised corpus and fuzzy index for one certified snapshot. The content hash is the identity:
   // a changed file - append, same-length rewrite, replacement - produces a different key, so an
@@ -562,6 +603,116 @@ export class MemoryStore {
       });
     }
     return found;
+  }
+
+  // The whole store replayed to a cutoff, with the lifecycle derived from the records that replay
+  // handed back. Memory has exactly one stored time - `createdAt`, when the record was appended - so
+  // that is the only field a cutoff compares. A correction is itself a later record naming the claim
+  // it replaces, and there is no retraction event: supersession is derived from those names, which is
+  // why a correction recorded after the cutoff cannot retire an earlier claim in an earlier view.
+  // Conflict groups are the store's read-time heuristic, never a recorded event; a group is recomputed
+  // from the records stored by the cutoff. Private records are excluded unless asked for, because a
+  // reconstruction may be produced for a model-origin request and private memory must never reach one;
+  // the count is reported either way.
+  async historicalView(cutoff, { withCurrent = true, includePrivate = false } = {}) {
+    const parsed = parseIsoInstant(cutoff);
+    if (parsed === null) throw new ValidationError('cutoff must be an ISO date or an ISO date-time with a time zone');
+    const cutoffMs = Date.parse(parsed);
+    const certification = { key: null };
+    const records = await this.#loadComplete({ operation: 'historical reconstruction', certification });
+
+    let privateExcluded = 0;
+    const visible = [];
+    for (const record of records) {
+      if (!includePrivate && record.sensitivity === 'private') {
+        privateExcluded += 1;
+        continue;
+      }
+      visible.push(record);
+    }
+
+    const known = [];
+    const laterRecords = [];
+    for (const record of visible) {
+      // `validateMemoryRecord` refuses a record whose createdAt does not parse, so a load that
+      // reached this point produced none. Nothing here infers a time from file order.
+      const created = Date.parse(record.createdAt);
+      if (created <= cutoffMs) known.push(record);
+      else laterRecords.push(record);
+    }
+
+    const derived = deriveMemoryLifecycle(known);
+    const current = withCurrent ? deriveMemoryLifecycle(visible) : null;
+    const currentById = new Map((current?.memories ?? []).map((record) => [record.id, record]));
+    const knownIds = new Set(known.map((record) => record.id));
+
+    const problems = [];
+    for (const record of known) {
+      for (const targetId of new Set(record.provenance?.replaces ?? [])) {
+        if (targetId === record.id) {
+          problems.push(`[${shortId(record.id)}] names itself as the claim it replaces`);
+        } else if (!knownIds.has(targetId)) {
+          problems.push(`[${shortId(record.id)}] replaces [${shortId(targetId)}], which is not among the records stored by the cutoff`);
+        }
+      }
+      if (problems.length >= MAX_HEALTH_SAMPLES) break;
+    }
+
+    const laterByTarget = new Map();
+    for (const record of laterRecords) {
+      for (const targetId of record.provenance?.replaces ?? []) {
+        const list = laterByTarget.get(targetId) ?? [];
+        list.push(record.id);
+        laterByTarget.set(targetId, list);
+      }
+    }
+
+    const memories = derived.memories.map((record) => {
+      const now = currentById.get(record.id) ?? null;
+      const conflictNow = new Set(now?.conflict?.recordIds ?? []);
+      const conflictThen = new Set(record.conflict?.recordIds ?? []);
+      const conflictChangedLater = conflictNow.size !== conflictThen.size
+        || [...conflictThen].some((id) => !conflictNow.has(id));
+      const replacedLater = record.replacedBy.length === 0 && (now?.replacedBy.length ?? 0) > 0;
+      return {
+        ...record,
+        later: {
+          replacedLater,
+          conflictChangedLater,
+          standingChangedLater: replacedLater || conflictChangedLater,
+          replacedByIds: [...(laterByTarget.get(record.id) ?? [])],
+        },
+        now: now === null ? null : {
+          status: now.status,
+          replacedBy: [...now.replacedBy],
+          conflictIds: [...(now.conflict?.recordIds ?? [])],
+        },
+      };
+    });
+
+    return {
+      cutoff: parsed,
+      records: known.length,
+      excluded: laterRecords.length,
+      undated: 0,
+      privateExcluded,
+      memories,
+      corrections: known.filter((record) => (record.provenance?.replaces?.length ?? 0) > 0).length,
+      superseded: derived.memories.filter((record) => record.replacedBy.length > 0).length,
+      conflictGroups: derived.groups.length,
+      problems,
+      later: {
+        recordsRecorded: laterRecords.length,
+        correctionsRecorded: laterRecords.filter((record) => (record.provenance?.replaces?.length ?? 0) > 0).length,
+        recordsReplaced: laterByTarget.size,
+      },
+      current: current === null ? null : {
+        records: visible.length,
+        superseded: current.memories.filter((record) => record.replacedBy.length > 0).length,
+        conflictGroups: current.groups.length,
+      },
+      note: 'memory stores only createdAt, the time a record was appended; there is no event time, valid interval, or retraction event, and supersession and conflict groups are derived from the stored records rather than recorded as events',
+    };
   }
 
   async #loadComplete({ operation = 'retrieval', beforeAppend = false, certification = null } = {}) {

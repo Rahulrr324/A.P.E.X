@@ -3669,7 +3669,8 @@ Model write is plannable and every World Model read is user-origin, so the plann
 exactly 20 reads to a model origin and 44 actions to a user origin with a root configured (42 without
 one). The AP-16 read is offered to neither plan. Batch AP-17 added no action: it extended that same
 read to the goal, plan and task logs and to the operations audit log, so every count above is
-unchanged.
+unchanged. Batch AP-18 also added no action: it extended that read to bounded memory and knowledge
+listings at the cutoff, and the counts are still unchanged.
 
 ### The inconsistencies this found, and what became of them
 
@@ -7449,8 +7450,8 @@ and knowledge were listed in `unsupported` with a reason each: the goal, plan an
 recorded `.at` and a pure reducer but had no cutoff read, the operations audit log has no recorded-at
 field at all and is appended only when an operation completes, and memory/knowledge expose id-based
 as-of reads rather than a bounded as-of listing. Naming the boundary was part of the answer. AP-17
-(below) now answers the three executive logs through their own reducers and classifies the audit log;
-memory and knowledge remain disclosed as unsupported for a bounded listing.
+(below) now answers the three executive logs through their own reducers and classifies the audit log,
+and AP-18 answers the memory and knowledge listing, so no source is listed as unsupported.
 
 **Consistency and verifiability.** `asOf` reports the snapshot state, whether the combination is
 `complete`, whether it is `verifiable`, the attempt count, and each source's status (`read`,
@@ -7476,8 +7477,8 @@ input field, and a limit outside 1-50.
 | `src/app.js`, `src/controller/controller.js`, `src/experience/capture.js` | Wiring: the action is registered with the real stores, `controller.historyReconstruct()` runs it as an audited user-origin read, and it is classified as `no (read)` for capture. |
 
 **What it does not do.** AP-16 itself adds no as-of read for goals, plans, tasks, operations, memory
-or knowledge; it discloses them as unsupported, and AP-17 later answers the executive logs and
-classifies the audit log while memory and knowledge remain disclosed. It does not decide which of two
+or knowledge; it discloses them as unsupported, while AP-17 later answers the executive logs and
+classifies the audit log and AP-18 answers the memory and knowledge listing. It does not decide which of two
 conflicting records is right, does not claim an objective past beyond what the stores recorded, does
 not replace current retrieval or context assembly, and does not reach a model - no inference is
 involved at any point.
@@ -7593,9 +7594,9 @@ result payload, and without that the audited copy would disagree with the read i
 **What it does not do.** It does not prove what happened, only what each store recorded by the
 cutoff; it does not place an audit append at an instant; it does not reorder events, repair an
 inconsistent record or reconcile a citation to a later operation; it does not turn a historical
-approval into current authority; and it does not resume, retry or execute any task or operation. It
-still discloses `memory` and `knowledge` as unsupported for a bounded historical listing, and it
-reaches no model.
+approval into current authority; and it does not resume, retry or execute any task or operation. At
+the time it still disclosed `memory` and `knowledge` as unsupported for a bounded historical listing
+(Batch AP-18 now answers both), and it reaches no model.
 
 **Performance.** Measured in one run over generated fixtures (goal, plan, task and audit lines) with
 no overlapping runs: at 50 entities (100 goal events, 100 plan events, 100 task events, 50 audit
@@ -7619,6 +7620,132 @@ later-citing citations; a damaged goal log, an invalid cutoff subsequence, a sto
 read, a cross-process append, determinism at one cutoff and at a later one, bounds, adversarial extra
 fields and an oversized limit, model-origin reads that write nothing, and the CLI display and JSON
 listing. No test contacts a model.
+
+## Batch AP-18: historical memory and knowledge reconstruction (as implemented)
+
+AP-16 named memory and knowledge as the last two sources its cutoff read could not answer with a
+bounded listing, because both exposed id-based as-of reads rather than a listing. AP-18 adds the two
+sections to the same `history.reconstruct` action and `history --at` CLI - no second history surface
+and no new action, store, schema field or index. `unsupported` is now empty: every integrated store
+answers a cutoff listing.
+
+**Temporal semantics, per source.** Both stores carry exactly one timestamp on every record,
+`createdAt` - the time the store appended it - and a cutoff is applied to that field, never to file
+order or to an event the record describes. The record models differ in what a lifecycle even is, and
+the sections keep that difference visible:
+
+| Source | Recorded time | What a cutoff answers | What it cannot answer |
+|---|---|---|---|
+| memory | `createdAt` | records appended by then, their kind/source/sensitivity, provenance and `replaces` links, their derived status (`user_confirmed`, `model_proposed`, `superseded`, `unresolved_conflict`, `stored`), the derived conflict groups and the correction count as of then | event time, a validity interval or a retraction event - none exists; whether a later-corrected belief was wrong when recorded |
+| knowledge | `createdAt` on claims, retractions and resolutions | claims appended by then, their lifecycle state (`active`, `retracted`, `superseded`, `ambiguous`, `resolved`/`unresolved` conflict), the recorded retractions and resolutions, and the conflict set as of then | whether a recorded resolution is true (it is a user decision); whether free-text `evidence` referred to a record or existed then |
+
+The view reports the same five temporal names AP-16 introduced (`recordedTime`, `eventTime`,
+`validTime`, `evaluationTime`, `correctionTime`) and now states a rule for memory and knowledge in
+`cutoffSemantics`; both are `supportsCutoff: true`. The cutoff parser is still AP-15's strict
+`parseIsoInstant`, so a zone-less date-time is refused rather than read in the local zone.
+
+**Memory.** The past listing is `MemoryStore.historicalView(cutoff)` over records with
+`createdAt <= cutoff`, and it is derived the same way the current read derives it, from that record
+set alone. A correction is a later record whose `provenance.replaces` names the record it replaces;
+because it is not in the past record set, the earlier record is not retroactively rewritten - it is
+shown with the status the earlier record set implied, and its row carries `later.replacedLater`,
+`later.conflictChangedLater` and `later.standingChangedLater` plus a separate `now` block when the
+present differs. Multiple corrections across several cutoffs therefore produce a different, coherent
+listing at each cutoff. Conflict groups are read-time clause-rule groups, not recorded events: a group
+reported at a cutoff is the disagreement the stored content implied then, and a correction written
+later does not clear it from the earlier view. Private records are excluded from the rows and only
+their count is disclosed, because the reconstruction may be produced for a model-origin request; a
+model never receives private memory content through this read. A record corrected later appears in
+the `later` counts (`memoryRecordsAdded`, `memoryCorrectionsRecorded`) rather than in the past rows.
+
+**Knowledge.** The past listing filters claims and both lifecycle event kinds by `createdAt` before
+deriving the lifecycle, so a retraction, supersession or resolution written after the cutoff cannot
+apply backwards. A claim retracted later is still shown as existing at the earlier cutoff, with the
+later retraction disclosed as a later change; an unresolved conflict at the cutoff is reported as
+unresolved even when a resolution was recorded later; and a resolution recorded by the cutoff is
+shown as the user's decision at that time, never as proof the chosen claim is true. Supersession is a
+link stored on the successor, so a successor recorded after the cutoff does not retroactively replace
+the earlier claim. The triple hash and record identity are unchanged - the view displays the stored
+claim, it does not re-derive or re-hash a different one. `WRITE_REQUIRES_USER_ORIGIN` is untouched:
+this feature adds no write path at all, and model-origin requests can read history but cannot write
+memory or knowledge through it.
+
+**Evidence and citations.** Memory `provenance.operationId` and knowledge `provenance.operationId`
+are the only structured citations either store holds; both are resolved against the audit log by the
+existing operation-citation section, so an operation finishing after the cutoff is `later` and a
+missing line is `missing` or `unavailable`, never support from that time. A knowledge `evidence`
+value is free text: the section labels it as free text and never presents it as a record reference or
+as something that can be resolved at a cutoff. A memory record citing an operation recorded after the
+cutoff is therefore shown as recorded then, with its citation state `later` - the record existed, the
+cited evidence did not. What cannot be established is disclosed rather than inferred: the
+reconstruction never claims a record's real-world truth, and it never manufactures a timestamp for
+either store.
+
+**Consistency and failure behaviour.** Memory and knowledge are read once per attempt inside the
+same AP-07/AP-12 `runConsistentEvidenceRead` window as the other seven sources, through their own
+`historicalView(cutoff)`, and they contribute `['knowledge','memory']` to `contributingStores`.
+A damaged memory store is reported `damaged` in `asOf.sources` with its reason while the knowledge
+section still answers, and vice versa; the combined read is then not `complete` and not `verifiable`,
+and the operation still reports `success_verified` because the reconstruction itself was reproducible
+- the damage is a finding, not a missing answer. A cross-process append or a store changed during the
+read yields `concurrent_modification` and the bounded retry, as for the other sources.
+
+**Bounds and persistence.** Both sections share the existing row bound (20 default, 50 maximum),
+report `total`/`truncated`, and hold no more than the conflict sample cap for knowledge. Every
+response still carries `authorizes: false`; the action remains read-class, user-and-model readable
+and unplannable, and refuses unknown input fields. The reconstruction writes no store, appends no
+audit line of its own beyond the operation that ran it, and reads no model. The persisted copy is
+produced by the shared audit redaction, which masks every `content` value; the verbatim memory
+content remains readable only through `MemoryStore.historicalView`, and the operation row shows
+`[omitted N chars]`.
+
+**Where it lives.**
+
+| File | Responsibility |
+|---|---|
+| `src/history/memory-knowledge.js` | `memorySection`, `knowledgeSection`, `MEMORY_KNOWLEDGE_CUTOFF_SEMANTICS`, `MEMORY_KNOWLEDGE_LIMITATIONS`: row shaping, later/now separation, counts, and the two cutoff rules. Writes nothing. |
+| `src/memory/memory-store.js`, `src/knowledge/knowledge-store.js` | Existing `historicalView(cutoff)` derivations: complete-log validation, cutoff filtering, and the store's own status/conflict/supersession rules; no new schema, field or index. |
+| `src/history/reconstruct.js` | Reads both stores inside the existing certified window, assembles the sections, merges the two cutoff rules and adds the seven memory/knowledge limitations to the view. |
+| `src/actions/history-actions.js` | Same action and CLI; the display renders memory and knowledge counts, later marks and citation caveats, and `--json` returns the full bounded view. |
+
+**What it does not do.** It does not prove a record was true at the cutoff; it does not place a
+memory record at an event time or a knowledge claim at a validity interval, because neither exists;
+it does not resolve free-text knowledge evidence to a record; it does not apply a later correction,
+retraction, supersession or resolution to an earlier view; it does not show private memory content to
+a model-origin read; and it does not alter current retrieval ranking or promote a historical record
+into current memory. It reaches no model.
+
+**Performance.** Measured in one run over generated fixtures (memory and knowledge JSONL plus 1,000
+audit lines) with no overlapping runs, five samples per figure: at 200 memory and 200 knowledge
+records one direct memory replay took 13.0 ms, one knowledge replay 14.8 ms, both 27.8 ms, and the
+complete verified `history.reconstruct` 151.8 ms; at 1,000/1,000 the figures were 34.2, 45.1, 79.3
+and 221.0 ms; at 4,000/4,000 they were 89.1, 170.6, 259.7 and 493.6 ms. The output bound barely
+changes runtime - limit 2 versus 50 at 4,000 records measured 483.5 versus 488.2 ms (2,824 versus
+16,951 display bytes) - because the full-log replay to the cutoff dominates and the bound only slices
+already-derived rows. A cutoff that includes the whole log costs more than an early one, because both
+the historical and the current derivation are full-size (memory 135.5 ms, knowledge 213.1 ms,
+end-to-end 607.2 ms at 4,000). Resolving 200 citing rows against 1,000 audit lines added about 3%
+(228.1 versus 221.0 ms). The independent verifier re-runs the whole reconstruction; with execute-only
+measured at 361.7 ms versus 493.6 ms complete, verification costs about 1.36x execute, and it does not
+cache across operations. Every figure is a single-machine observation, not a target. No persistent
+index was added for historical queries; the cost is accepted because answering a cutoff is an
+explicit historical query, not the request path.
+
+**Tests.** `tests/memory-knowledge-history.test.js` (31 tests) drives the real stores, controller and
+CLI child processes: memory before and after the cutoff, corrected once and twice across three
+cutoffs, conflict before the cutoff, private exclusion, the absent memory retraction event, a later
+correction that does not rewrite the past; knowledge before and after the cutoff, retracted after it,
+a conflict unresolved at the cutoff despite a later resolution, a resolution shown as a decision, a
+successor that does not retroactively supersede, free-text evidence that is never a citation,
+missing and later-ending operation citations; a corrupt memory store with knowledge readable and a
+corrupt knowledge store with memory readable; both stores in one certified window and
+`contributingStores`; a cross-process append and a store modified during the read; strict cutoff
+refusals, offset/date-only normalization and the inclusive boundary; recorded time versus event time;
+determinism; bounded rows and refused limits; a byte-identical memory/knowledge store with the read's
+own operation audited normally, no model call, and a model-origin denial of every memory and
+knowledge write; adversarial extra fields; a later cutoff that
+sees every lifecycle change without moving the past; and the CLI `--json` and display listings. No
+test contacts a model.
 
 
 
@@ -7687,9 +7814,14 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    Batch AP-17 closed the executive part of that remainder: the same read now replays the goal,
    plan and task logs through their own reducers and classifies the operations audit log, which
    cannot answer a cutoff at all, with per-row states and citations that never convert a missing
-   line into success. No index was added; the replay remains linear in stored events. Memory and
-   knowledge still expose id-based as-of reads rather than a bounded historical listing, so this
-   stage remains open.
+   line into success. No index was added; the replay remains linear in stored events.
+   Batch AP-18 closed the memory and knowledge part: the same read now derives each store's
+   historical listing from records appended by the cutoff, keeps corrections, retractions,
+   supersessions, conflicts and resolutions at the state they had then, and reports every later
+   change beside the past row. The stage remains open for its other clauses - entities and
+   participants beyond the World Model's own records, arbitrary event kinds, a non-derivation
+   store, and a projection whose cost does not grow with total records (stage 2) - so no stage
+   is closed.
 4. **Retrieval, evidence, uncertainty, and contradiction handling.** Evidence-linked belief
    records with explicit confidence, provenance-aware retrieval, and contradiction handling
    that is not a text heuristic. Depends on 3 (a claim must name what it is about).

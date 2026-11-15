@@ -196,7 +196,7 @@ describe('AP-16 the cross-store reconstruction is a read', () => {
     assert.deepEqual(bytesOf(dir), before, 'a refused cutoff reads and writes nothing');
   });
 
-  test('unsupported sources are named with a reason, and the answer authorizes nothing', async () => {
+  test('every integrated source answers a cutoff, and each cutoff rule is stated', async () => {
     const dir = tempDir();
     const { app } = await lifecycleFixture(dir);
     const view = await history(app, CUTOFF);
@@ -204,12 +204,11 @@ describe('AP-16 the cross-store reconstruction is a read', () => {
     assert.equal(view.authorizes, false);
     assert.equal(view.schema, 'apex.cognitive-history.v1');
     assert.match(view.rule, /recorded time is not event time/);
-    // AP-17 integrated the executive logs; memory and knowledge remain the disclosed boundary.
-    assert.deepEqual(view.unsupported.map((entry) => entry.source), ['memory', 'knowledge']);
-    for (const entry of view.unsupported) {
-      assert.equal(entry.status, 'unsupported');
-      assert.ok(entry.reason.length > 20, `${entry.source} must state why it cannot answer`);
-    }
+    // AP-18 closed the last disclosed boundary: memory and knowledge now answer a bounded cutoff
+    // listing, so there is no unsupported source left to name.
+    assert.deepEqual(view.unsupported, []);
+    assert.match(view.cutoffSemantics.memory, /only `createdAt`/);
+    assert.match(view.cutoffSemantics.knowledge, /retraction and resolution events carry only `createdAt`/);
     // The operations audit log is the one an unwary reader would assume is queryable: its
     // `requestedAt` is not a recorded-at field, and the answer must say so even though a current
     // audit view is included.
@@ -230,21 +229,23 @@ describe('AP-16 what each store had recorded by a cutoff', () => {
     assert.equal(view.asOf.state, 'consistent');
     assert.equal(view.asOf.complete, true);
     assert.equal(view.asOf.verifiable, true);
-    assert.deepEqual(view.asOf.sources.map((entry) => entry.name), ['experience', 'predictions', 'world', 'goals', 'plans', 'tasks', 'operations']);
+    assert.deepEqual(view.asOf.sources.map((entry) => entry.name), ['experience', 'predictions', 'world', 'goals', 'plans', 'tasks', 'memory', 'knowledge', 'operations']);
     const sourceStatus = Object.fromEntries(view.asOf.sources.map((entry) => [entry.name, entry.status]));
     assert.deepEqual(sourceStatus, {
       experience: 'read',
       predictions: 'read',
       world: 'read',
-      // This fixture records no executive events, so those logs do not exist yet; that is `absent`,
-      // which the snapshot still certifies, rather than an omission.
+      // This fixture records no executive, memory, or knowledge events, so those logs do not exist
+      // yet; that is `absent`, which the snapshot still certifies, rather than an omission.
       goals: 'absent',
       plans: 'absent',
       tasks: 'absent',
+      memory: 'absent',
+      knowledge: 'absent',
       operations: 'read',
     });
     for (const entry of view.asOf.sources) assert.equal(entry.inspectable, true);
-    // The three executive logs answer the cutoff; the audit log is a current read and says so.
+    // Eight record stores answer the cutoff; the audit log is a current read and says so.
     assert.deepEqual(view.asOf.sources.filter((entry) => entry.supportsCutoff === false).map((entry) => entry.name), ['operations']);
 
     // Experience: the two events recorded by the cutoff, neither correction nor feedback yet.
@@ -516,6 +517,8 @@ describe('AP-16 adverse and edge conditions', () => {
       goals: view.goals,
       plans: view.plans,
       tasks: view.tasks,
+      memory: view.memory,
+      knowledge: view.knowledge,
       citations: view.citations,
       operationCitations: view.operationCitations,
       cutoffSemantics: view.cutoffSemantics,
@@ -583,7 +586,7 @@ describe('AP-16 the CLI history command', () => {
     const display = await runCli(['history', '--at', CUTOFF], env);
     assert.equal(display.code, 0, display.stderr);
     assert.match(display.stdout, /Cognitive history at 2026-01-15T12:00:00.000Z/);
-    assert.match(display.stdout, /unsupported: memory, knowledge/);
+    assert.match(display.stdout, /unsupported: none - every integrated store answers a cutoff listing/);
 
     // Without --at the command is still the unaudited audit-log listing it has always been.
     const listing = await runCli(['history'], env);
@@ -608,12 +611,18 @@ describe('AP-16 no store read is duplicated for one historical query', () => {
     let experienceReads = 0;
     let predictionReads = 0;
     let worldReads = 0;
+    let memoryReads = 0;
+    let knowledgeReads = 0;
     const e = app.experience.historicalView.bind(app.experience);
     const p = app.predictions.historicalView.bind(app.predictions);
     const w = app.worldModel.historicalView.bind(app.worldModel);
+    const m = app.memory.historicalView.bind(app.memory);
+    const k = app.knowledge.historicalView.bind(app.knowledge);
     app.experience.historicalView = async (...args) => { experienceReads += 1; return e(...args); };
     app.predictions.historicalView = async (...args) => { predictionReads += 1; return p(...args); };
     app.worldModel.historicalView = async (...args) => { worldReads += 1; return w(...args); };
+    app.memory.historicalView = async (...args) => { memoryReads += 1; return m(...args); };
+    app.knowledge.historicalView = async (...args) => { knowledgeReads += 1; return k(...args); };
 
     const res = await app.controller.historyReconstruct({ at: CUTOFF });
     assert.equal(res.status, Outcome.SUCCESS_VERIFIED, res.output);
@@ -622,5 +631,7 @@ describe('AP-16 no store read is duplicated for one historical query', () => {
     assert.equal(experienceReads, 2);
     assert.equal(predictionReads, 2);
     assert.equal(worldReads, 2);
+    assert.equal(memoryReads, 2);
+    assert.equal(knowledgeReads, 2);
   });
 });

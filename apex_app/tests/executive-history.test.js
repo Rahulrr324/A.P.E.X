@@ -199,7 +199,7 @@ describe('AP-17 the reconstruction is one read-only action', () => {
     assert.equal(app.registry.authorize('history.reconstruct', 'model').decision, 'allow');
   });
 
-  test('the view names all seven sources, and only operations is not cutoff-capable', async () => {
+  test('the view names all nine sources, and only operations is not cutoff-capable', async () => {
     const dir = tempDir();
     const { app } = appOn(dir);
     const view = await history(app, CUTOFF);
@@ -207,11 +207,11 @@ describe('AP-17 the reconstruction is one read-only action', () => {
     assert.equal(view.schema, 'apex.cognitive-history.v1');
     assert.equal(view.cutoff, CUTOFF);
     assert.equal(view.authorizes, false);
-    assert.deepEqual(view.asOf.sources.map((entry) => entry.name), ['experience', 'predictions', 'world', 'goals', 'plans', 'tasks', 'operations']);
+    assert.deepEqual(view.asOf.sources.map((entry) => entry.name), ['experience', 'predictions', 'world', 'goals', 'plans', 'tasks', 'memory', 'knowledge', 'operations']);
     assert.deepEqual(
       Object.fromEntries(view.asOf.sources.map((entry) => [entry.name, entry.supportsCutoff])),
       {
-        experience: true, predictions: true, world: true, goals: true, plans: true, tasks: true, operations: false,
+        experience: true, predictions: true, world: true, goals: true, plans: true, tasks: true, memory: true, knowledge: true, operations: false,
       },
     );
     assert.equal(view.asOf.state, 'consistent');
@@ -224,29 +224,33 @@ describe('AP-17 the reconstruction is one read-only action', () => {
     const view = await history(app, CUTOFF);
 
     assert.deepEqual(Object.keys(view.cutoffSemantics).sort(), [
-      'correctionTime', 'cutoff', 'evaluationTime', 'eventTime', 'goals', 'operations', 'plans', 'recordedTime', 'tasks', 'validTime',
+      'correctionTime', 'cutoff', 'evaluationTime', 'eventTime', 'goals', 'knowledge', 'memory', 'operations', 'plans', 'recordedTime', 'tasks', 'validTime',
     ]);
     assert.match(view.cutoffSemantics.recordedTime, /\.at` for goal, plan, and task events/);
     assert.match(view.cutoffSemantics.eventTime, /occurredAt/);
     assert.match(view.cutoffSemantics.goals, /goal reducer/);
     assert.match(view.cutoffSemantics.plans, /content hash/);
     assert.match(view.cutoffSemantics.tasks, /open at the cutoff remains open/);
+    assert.match(view.cutoffSemantics.memory, /only `createdAt`/);
+    assert.match(view.cutoffSemantics.knowledge, /retraction and resolution events carry only `createdAt`/);
     assert.match(view.cutoffSemantics.operations, /no recorded-at/);
-    assert.equal(view.limitations.length, 7);
+    assert.equal(view.limitations.length, 14, 'seven executive limitations and seven memory/knowledge limitations');
     assert.ok(view.limitations.some((line) => /historical plan approval.*not a current authorization/.test(line)));
     assert.ok(view.limitations.some((line) => /never resumes, retries, or executes/.test(line)));
+    assert.ok(view.limitations.some((line) => /memory has no event time, valid interval, or retraction event/.test(line)));
     assert.match(view.rule, /a cutoff replays only records stored at or before it/);
     assert.match(view.note, /not what was objectively true/);
   });
 
-  test('sources that cannot answer a cutoff stay disclosed with a reason', async () => {
+  test('every integrated source now answers a cutoff, so nothing stays unsupported', async () => {
     const dir = tempDir();
     const { app } = appOn(dir);
     const view = await history(app, CUTOFF);
-    assert.deepEqual(view.unsupported.map((entry) => entry.source), ['memory', 'knowledge']);
-    for (const entry of view.unsupported) {
-      assert.equal(entry.status, 'unsupported');
-      assert.ok(entry.reason.length > 20, `${entry.source} must state why it cannot answer`);
+    assert.deepEqual(view.unsupported, [], 'the memory and knowledge cutoff listing closed the last unsupported source');
+    for (const name of ['memory', 'knowledge']) {
+      const entry = view.asOf.sources.find((source) => source.name === name);
+      assert.equal(entry.supportsCutoff, true);
+      assert.equal(entry.status, 'absent');
     }
   });
 });
@@ -1004,7 +1008,7 @@ describe('AP-17 cross-process reads, bounds, authority, and the CLI', () => {
     assert.match(display.stdout, /Cognitive history at 2026-01-15T12:00:00.000Z/);
     assert.match(display.stdout, /goals: 1 goal\(s\) recorded by then, 1 live, 0 completed/);
     assert.match(display.stdout, /operations: \d+ audit record\(s\), current read only/);
-    assert.match(display.stdout, /unsupported: memory, knowledge/);
+    assert.match(display.stdout, /unsupported: none - every integrated store answers a cutoff listing/);
     assert.match(display.stdout, /rule: a cutoff replays only records stored at or before it/);
   });
 });
