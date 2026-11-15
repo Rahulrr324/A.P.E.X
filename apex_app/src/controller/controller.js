@@ -44,7 +44,7 @@ import { renderAssessment, renderGoal, renderGoalList } from '../goals/format.js
 import { assessGoal, completionConsistency } from '../goals/assess.js';
 import { GoalStatus, goalProgress, isOpenStatus } from '../goals/model.js';
 import { renderPlan, renderPlanList } from '../plans/format.js';
-import { PlanStatus, isOpenPlan, planProgress, validatePlanContent } from '../plans/model.js';
+import { PlanStatus, isOpenPlan, planProgress, reconcilableOutcomes, validatePlanContent } from '../plans/model.js';
 import { assessPlanValidity, renderValidity } from '../plans/validity.js';
 import { constraintLedger, readConstraintRecords } from '../plans/constraints.js';
 import { outcomesForGoal } from '../plans/outcomes.js';
@@ -4118,17 +4118,28 @@ export class CognitiveController {
     );
   }
 
-  // Reads the task log for the task a plan activated and records its terminal step
-  // outcomes against the plan. It never runs anything. A completed outcome is accepted
-  // only when its own audit record is still a verified success.
+  // Reads the task log for the task a plan activated and records the terminal step outcomes the
+  // plan does not already hold. It never runs anything. A completed outcome is accepted only when
+  // its own audit record is still a verified success, and the plan store re-checks that.
+  //
+  // The plan is read first because an activation, a continuation, or an earlier sync may already
+  // have recorded some of these outcomes; re-sending one would make the store refuse the whole
+  // event and leave every new outcome unrecorded. `reconcilableOutcomes` is the reducer's own rule,
+  // so what this sends is exactly what a replay would accept - the store's validation is unchanged.
   async #recordPlanOutcomes(planId, task) {
     const outcomes = terminalStepOutcomes(task);
-    if (outcomes.length === 0) return { outcomes, error: null };
+    const empty = { outcomes: [], recorded: [], alreadyFinal: [], needsRevision: [], error: null };
+    if (outcomes.length === 0) return empty;
     try {
-      await this.plans.recordOutcome(planId, { taskId: task.id, steps: outcomes });
-      return { outcomes, error: null };
+      const plan = await this.plans.get(planId);
+      if (!plan) throw new ValidationError(`no plan matches "${singleLine(planId, 40)}"`);
+      const { record, alreadyFinal, needsRevision } = reconcilableOutcomes(plan, outcomes);
+      if (record.length > 0) await this.plans.recordOutcome(planId, { taskId: task.id, steps: record });
+      return { outcomes, recorded: record, alreadyFinal, needsRevision, error: null };
     } catch (err) {
-      if (err instanceof ValidationError || err instanceof StoreError) return { outcomes, error: err };
+      if (err instanceof ValidationError || err instanceof StoreError) {
+        return { ...empty, outcomes, error: err };
+      }
       throw err;
     }
   }
@@ -4136,10 +4147,13 @@ export class CognitiveController {
   // Brings a plan's recorded outcomes and status in line with a task that just finished, whichever
   // command finished it. planActivate and planContinue do this inline; a task run/resume/retry that
   // belongs to a plan must do the same, or the plan stays active with stale step results until the
-  // user reconciles by hand. This records outcomes and moves the plan to completed/blocked exactly as
-  // activation does; it never completes a goal (a goal is completed only by the user against its own
-  // criteria) and never executes anything. Notes are returned for the display, not raised as errors,
-  // so a plan-write problem does not rewrite the task's own verified result.
+  // user reconciles by hand. Only outcomes the plan does not already hold are sent, so a second
+  // pass is a no-op rather than a refused duplicate. Status moves only along the reducer's own
+  // table: a plan left blocked by a step that did not complete is reopened and completed only when
+  // every step now holds a completed, verified operation. It never completes a goal (a goal is
+  // completed only by the user against its own criteria) and never executes anything. Notes are
+  // returned for the display, not raised as errors, so a plan-write problem does not rewrite the
+  // task's own verified result.
   async #syncPlanFromTask(planId, task) {
     const notes = [];
     const recorded = await this.#recordPlanOutcomes(planId, task);
@@ -4147,11 +4161,23 @@ export class CognitiveController {
       notes.push(`The step outcomes were not recorded against the plan: ${redactSecrets(recorded.error.message)}.`);
       return notes;
     }
+    if (recorded.recorded.length > 0) {
+      notes.push(`Recorded ${recorded.recorded.length} step outcome(s) against plan ${shortId(planId)} that it did not already hold.`);
+    }
+    if (recorded.needsRevision.length > 0) {
+      notes.push(`Step(s) ${recorded.needsRevision.map((id) => shortId(id)).join(', ')} failed earlier and completed now; the plan keeps the earlier failure, and recording the completion needs a new plan revision.`);
+    }
     try {
       const fresh = await this.plans.get(planId);
       if (!fresh) return notes;
       const progress = planProgress(fresh);
       if (task.status === TaskStatus.COMPLETED && progress.completed === progress.total) {
+        if (fresh.status === PlanStatus.COMPLETED) return notes;
+        if (fresh.status === PlanStatus.BLOCKED) {
+          await this.plans.setStatus(planId, PlanStatus.ACTIVE, {
+            reason: 'every step now holds a completed, verified operation, so the block the records described no longer holds',
+          });
+        }
         await this.plans.setStatus(planId, PlanStatus.COMPLETED, { reason: 'every step has a completed, verified operation' });
         notes.push(`Plan ${shortId(planId)} is completed against ${progress.total} verified step outcome(s). No goal is completed by this: a goal is completed only by the user against its own criteria.`);
       } else if ((progress.failed || progress.uncertain || progress.skipped || task.status === TaskStatus.FAILED) && fresh.status === PlanStatus.ACTIVE) {
@@ -4213,17 +4239,11 @@ export class CognitiveController {
     if (outcomes.length === 0) {
       return refuse(`the task ${shortId(task.id)} has no terminal step outcome yet; nothing was reconciled`);
     }
-    // A step outcome that is already final is never re-written: the plan store refuses it,
-    // and reconciling twice must be a truthful no-op rather than an error. An uncertain or
-    // non-completed failed step is the only kind a later read may replace, and only when the
-    // later read actually differs; the same status adds no new outcome.
-    const reconcilable = outcomes.filter((o) => {
-      const prior = plan.stepResults?.[o.stepId];
-      if (!prior) return true;
-      if (prior.status === o.status) return false;
-      if (prior.status === StepStatus.UNCERTAIN) return true;
-      return prior.status === StepStatus.FAILED && o.status !== StepStatus.COMPLETED;
-    });
+    // A step outcome that is already final is never re-written: the plan store refuses it, and
+    // reconciling twice must be a truthful no-op rather than an error. The filter is the reducer's
+    // own rule, shared with the automatic synchronization a finished plan-linked task performs.
+    const reconciled = reconcilableOutcomes(plan, outcomes);
+    const reconcilable = reconciled.record;
     let outcomeError = null;
     if (reconcilable.length > 0) {
       try {
@@ -4240,6 +4260,9 @@ export class CognitiveController {
     const notes = reconcilable.length === 0
       ? ['No new terminal outcome was recorded: the plan already holds a final outcome for every finished step.']
       : [`Recorded ${reconcilable.length} new terminal step outcome(s).`];
+    if (reconciled.needsRevision.length > 0) {
+      notes.push(`Step(s) ${reconciled.needsRevision.map((id) => shortId(id)).join(', ')} failed earlier and completed now; the plan keeps the earlier failure, and recording the completion needs a new plan revision.`);
+    }
     try {
       const fresh = await this.plans.get(plan.id);
       const progress = planProgress(fresh);

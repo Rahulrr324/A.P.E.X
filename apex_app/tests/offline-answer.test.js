@@ -12,6 +12,7 @@ import { createApp } from '../src/app.js';
 import { ModelGateway, NoBackend } from '../src/model/gateway.js';
 import { Outcome } from '../src/outcomes.js';
 import { Decision } from '../src/controller/decision.js';
+import { CAPTURE_VERIFIED_SUCCESS } from '../src/experience/capture.js';
 import { makeTempDataDir, cleanup, cleanEnv, runCli } from './helpers.js';
 
 const dirs = [];
@@ -111,6 +112,68 @@ describe('offline deterministic answering', () => {
     assert.equal(asked.status, Outcome.SUCCESS_DETERMINISTIC);
     assert.equal(app.registry.authorize('knowledge.add', 'model').decision, 'deny');
     assert.equal(app.registry.authorize('memory.add', 'model').decision, 'deny');
+  });
+
+  test('contradictory records are presented as disputed, not settled by either side', async () => {
+    const app = appOn();
+    await app.controller.knowledgeAdd({ subject: 'Project', relationship: 'codename', object: 'Lighthouse' });
+    await app.controller.knowledgeAdd({ subject: 'Project', relationship: 'codename', object: 'Bluebird' });
+    const res = await app.controller.handle('what is the project codename?');
+    assert.equal(res.status, Outcome.SUCCESS_DETERMINISTIC);
+    assert.ok(res.display.includes('Lighthouse') && res.display.includes('Bluebird'), 'both sides are shown');
+    assert.match(res.display, /Disputed: 2 claim\(s\) are contradicted/);
+    assert.match(res.display, /neither is chosen by recency, source rank, or repetition/);
+    assert.match(res.output, /The records disagree; both sides are shown and neither is chosen/);
+    assert.doesNotMatch(res.output ?? '', /Lighthouse|Bluebird/, 'content stays out of the audited output');
+  });
+
+  test('an ambiguous reference is clarified with no model configured', async () => {
+    const app = appOn();
+    const UE = [{ relation: 'supports', sourceType: 'user', sourceId: 'user' }];
+    for (const [id, name] of [['atlas-one', 'Atlas One'], ['atlas-two', 'Atlas Two']]) {
+      const added = await app.controller.worldWrite('world.entity.add', {
+        id, category: 'project', name, evidence: UE, aliases: ['Atlas'],
+      });
+      assert.equal(added.status, Outcome.SUCCESS_VERIFIED, added.output);
+    }
+    const res = await app.controller.handle('what is the status of Atlas?');
+    assert.equal(res.status, Outcome.CLARIFICATION_REQUIRED);
+    assert.equal(res.decision, Decision.CLARIFY);
+    assert.match(res.display, /Which entity do you mean\?/);
+    assert.equal(res.operation.prompt, null, 'the question is decided before any prompt is built');
+  });
+
+  test('a deterministic answer is never a verified success and creates no experience or executive record', async () => {
+    const dir = tempDir();
+    const app = createApp({
+      dataDir: dir,
+      gateway: new ModelGateway({ backend: new NoBackend() }),
+      now: () => new Date(NOW),
+      // Capture is enabled so the test proves the answer is excluded on its own outcome, not because
+      // automatic capture happens to be off.
+      experienceCapture: CAPTURE_VERIFIED_SUCCESS,
+    });
+    await app.controller.handle('remember that the staging window is Thursday night');
+    const res = await app.controller.handle('what is the staging window?');
+    assert.equal(res.status, Outcome.SUCCESS_DETERMINISTIC);
+    assert.notEqual(res.status, Outcome.SUCCESS_VERIFIED);
+
+    const ops = fs.readFileSync(path.join(dir, 'operations.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(ops.at(-1).status, Outcome.SUCCESS_DETERMINISTIC);
+    assert.ok(!String(ops.at(-1).output).includes('Thursday'), 'the audit output is content-free');
+
+    const experiences = fs.existsSync(path.join(dir, 'experience.jsonl'))
+      ? fs.readFileSync(path.join(dir, 'experience.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+      : [];
+    assert.ok(!experiences.some((record) => record.operationId === res.operation.id), 'a deterministic reading is not captured as a verified experience');
+    assert.ok(!fs.existsSync(path.join(dir, 'goals.jsonl')), 'no goal is created');
+    assert.ok(!fs.existsSync(path.join(dir, 'plans.jsonl')), 'no plan is created');
+
+    const turns = fs.readFileSync(path.join(dir, 'conversation.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const replies = turns.filter((turn) => turn.operationId === res.operation.id && turn.role === 'assistant');
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].text, res.output, 'the stored turn is the content-free summary, not the shown reading');
+    assert.ok(!replies[0].text.includes('Thursday'));
   });
 
   test('the CLI answers deterministically and exits 0 with no backend', async () => {

@@ -163,6 +163,28 @@ export function planProgress(plan) {
   };
 }
 
+// Which of a task's terminal step outcomes a plan may still accept. This is the reducer's own rule
+// (applyEvent's `plan_outcome` branch) stated once, so a caller that reads the plan before writing
+// and a replay of the log agree: a completed or skipped result is final, an uncertain result may be
+// replaced by a later reading, and a failed result may be replaced only by a non-completed one,
+// because completing a step that failed earlier needs a new plan revision. A later reading with the
+// same status adds nothing, so synchronizing twice records nothing twice.
+export function reconcilableOutcomes(plan, outcomes) {
+  const record = [];
+  const alreadyFinal = [];
+  const needsRevision = [];
+  for (const outcome of outcomes) {
+    const prior = plan.stepResults?.[outcome.stepId];
+    if (!prior) { record.push(outcome); continue; }
+    if (prior.status === outcome.status) { alreadyFinal.push(outcome.stepId); continue; }
+    if (prior.status === StepStatus.UNCERTAIN) { record.push(outcome); continue; }
+    if (prior.status === StepStatus.FAILED && outcome.status !== StepStatus.COMPLETED) { record.push(outcome); continue; }
+    if (prior.status === StepStatus.FAILED) { needsRevision.push(outcome.stepId); continue; }
+    alreadyFinal.push(outcome.stepId);
+  }
+  return { record, alreadyFinal, needsRevision };
+}
+
 function assertionContent(a) {
   const content = { kind: a.kind, text: a.text, ref: a.ref ?? null };
   // Included only when recorded, so plans written before world expected values existed keep
