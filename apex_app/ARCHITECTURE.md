@@ -1322,6 +1322,21 @@ Nine dimensions (`request_interpretation`, `evidence_retrieval`, `contradiction_
 `unsupported_claim`, `inappropriate_proposal`). There is no composite score. The harness writes
 nothing and does not call a model. It has no executive-handoff scenario; handoff has its own suites.
 
+### Capability evaluation
+
+`evaluation/capability.js` runs thirteen scenario classes through the real controller, registry,
+stores and shipped read actions: single action, multi-step composition, missing-input
+clarification, contradictory evidence, unsupported request, authorization denial, execution
+failure, interrupted recovery, partial success, outcome verification, user correction,
+repeated-request idempotency, and context continuity. Each scenario states what it expected and
+what the records showed, and every step runs in its own temporary data directory. Six metrics
+(`task_success`, `planning_correctness`, `evidence_correctness`, `safety_compliance`,
+`recovery_correctness`, `usability`) are counted only over the scenarios that exercise them; an
+unexercised metric is `null`, never a pass, and there is no composite score. One scenario uses a
+loopback stub that speaks the model HTTP protocol so the denial path is exercised; no inference
+is performed. The fixtures are synthetic, so the report is not a real-world intelligence
+benchmark.
+
 ### Benchmark methodology and limits
 
 - Deterministic fixtures written through the stores' own validated paths; no model, no network.
@@ -1626,6 +1641,7 @@ node --test tests/evidence-read-contract.test.js tests/ap07-consistency.test.js
 node --test tests/cognition-response-integrity.test.js
 node --test tests/semantic-consistency.test.js tests/semantic-acceptance.test.js
 node --test tests/temporal-belief.test.js tests/history-reconstruction.test.js tests/executive-history.test.js tests/memory-knowledge-history.test.js
+node --test tests/capability-eval.test.js
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs

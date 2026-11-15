@@ -77,8 +77,22 @@ export function route(request) {
     return { kind: 'action', capability: 'memory.list', action: 'memory.list', input: {} };
   }
 
-  if (/^(?:status|who\s+are\s+you|what\s+can\s+you\s+do)\s*\??$/i.test(r)) {
+  if (/^(?:status|who\s+are\s+you)\s*\??$/i.test(r)) {
     return { kind: 'action', capability: 'app.status', action: 'app.status', input: {} };
+  }
+
+  // "What can you do" is a question about the registered capabilities, so it is answered from
+  // the live registry. A topic narrows the answer ("... about memory?"); it is passed as a
+  // plain substring query, and the action says so when nothing matches rather than inventing
+  // a capability.
+  m = /^(?:what\s+can\s+you\s+do|what\s+can\s+you\s+help\s+(?:me\s+)?with|what\s+are\s+you\s+able\s+to\s+do|what\s+are\s+(?:your|the)\s+capabilities|(?:list|show)\s+(?:me\s+)?(?:all\s+)?(?:your\s+)?capabilities|capabilities)(?:\s+(?:with|about|for|on)\s+(.+?))?\s*\??$/i.exec(r);
+  if (m) {
+    return {
+      kind: 'action',
+      capability: 'app.capabilities',
+      action: 'app.capabilities',
+      input: m[1] ? { query: m[1].trim() } : {},
+    };
   }
 
   m = /^(?:calc|calculate|compute)\s*:?\s+([\s\S]+)$/i.exec(r);

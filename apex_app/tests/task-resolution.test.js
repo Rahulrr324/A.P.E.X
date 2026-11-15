@@ -169,6 +169,10 @@ describe('053: a follow-up is read as a question class with a referent, not as a
       ['can it carry on?', 'recovery'],
       ['is it back on track?', 'recovery'],
       ['how did it go?', 'status'],
+      ['what did it achieve?', 'achieved'],
+      ['what was the outcome?', 'achieved'],
+      ['did it work?', 'achieved'],
+      ['did that task accomplish anything?', 'achieved'],
     ];
     for (const [text, expected] of indirect) {
       const c = taskQuestionCandidate(text);
@@ -176,6 +180,23 @@ describe('053: a follow-up is read as a question class with a referent, not as a
       assert.equal(c.intent, expected, text);
       assert.deepEqual(c.ids, [], `${text} names no id`);
     }
+  });
+
+  test('a question about a result is not about a record unless the records are what it names', () => {
+    // A result question with another thing in it is about that thing, and no record here
+    // answers it. "Did it succeed?" and "has it been verified?" stay the completion
+    // question they were: they ask whether the work finished, not what it produced.
+    for (const text of ['what was the outcome of the election?', 'did the review work?', 'what did the audit accomplish?']) {
+      assert.equal(taskQuestionCandidate(text), null, `${text} is not a question about a recorded task`);
+    }
+    assert.equal(intentOf('did it succeed?'), 'finished');
+    assert.equal(intentOf('has it been verified?'), 'finished');
+
+    // A general question about outcomes is not about one recorded task. With a task still in the
+    // conversation, reading a bare "outcomes" as task language would answer a history question
+    // from a single task; the determiner is what makes it a result question about that task.
+    assert.equal(taskQuestionCandidate('how have recent outcomes gone?'), null);
+    assert.equal(intentOf('what was the outcome?'), 'achieved');
   });
 
   test('a bare pronoun only stands for the task when nothing else could be its referent', () => {

@@ -23,6 +23,7 @@ import { Outcome, OPERATION_SCHEMA } from '../src/outcomes.js';
 import { shortId } from '../src/util.js';
 import { Decision } from '../src/controller/decision.js';
 import { TaskStatus, StepStatus } from '../src/tasks/model.js';
+import { explainTask } from '../src/tasks/format.js';
 import { buildTaskSummary, taskStateSignature, MAX_TASK_SUMMARY_CHARS } from '../src/tasks/summary.js';
 import { SummaryQueue, MAX_QUEUED_SUMMARIES, SUMMARIES_PER_DELIVERY } from '../src/tasks/summary-queue.js';
 import { OperationLog } from '../src/operations/operation-log.js';
@@ -1714,3 +1715,139 @@ describe('091: audit damage is not reported as established absence', () => {
       'the follow-up does not claim a record was proven absent');
   });
 });
+
+// 056: "did it achieve what I asked?" is a different question from "did it run?", "was each
+// step verified?" and "did it finish?". The outcome view answers the first one from records
+// only: the task log supplies intent, execution and verification, and a statement about the
+// result can only come from a record that states one. No record, an unreadable record and a
+// record that is gone are three different answers, and none of them is success.
+describe('056: the outcome view separates intent, execution, verification and result', () => {
+  const TASK_ID = '3f2a1b0c-4d5e-6f70-8192-a3b4c5d6e7f8';
+  const PLAN_ID = 'aaaaaaaa-0000-0000-0000-000000000000';
+  const GOAL_ID = 'bbbbbbbb-0000-0000-0000-000000000000';
+
+  const step = (id, status = StepStatus.COMPLETED, outcome = Outcome.SUCCESS_VERIFIED) => ({
+    id,
+    description: null,
+    action: 'calc.evaluate',
+    permission: 'read',
+    input: {},
+    dependsOn: [],
+    status,
+    operationId: null,
+    outcome,
+    summary: null,
+    approval: null,
+  });
+
+  const record = ({ status = TaskStatus.COMPLETED, steps = [step('s1'), step('s2')], planId = null, goalId = null } = {}) => ({
+    id: TASK_ID,
+    goal: 'produce the quarterly report',
+    origin: 'user',
+    status,
+    planId,
+    goalId,
+    createdAt: '2026-11-01T00:00:00.000Z',
+    updatedAt: '2026-11-01T00:00:00.000Z',
+    steps,
+  });
+
+  const achievedLine = (text) => text.split('\n').find((line) => line.startsWith('Achieved: '));
+
+  test('a recorded assessment is quoted as the user\'s record, never as a confirmation', () => {
+    const plan = {
+      id: PLAN_ID,
+      version: 3,
+      assessments: [{ planVersion: 3, verdict: 'successful', summary: 'the report now carries the audited numbers' }],
+    };
+    const text = explainTask(record({ planId: PLAN_ID }), 'achieved', { plan, planState: 'ok' });
+
+    assert.match(text, /Intended: produce the quarterly report/);
+    assert.match(text, /Executed: 2 of 2 step\(s\) ran: s1 \(calc\.evaluate\) - completed: success_verified; s2 \(calc\.evaluate\) - completed: success_verified/);
+    assert.match(text, /Verified: all 2 step result\(s\) the task log records as verified have an operation record of their own/);
+    assert.match(achievedLine(text), /^Achieved: plan aaaaaaaa holds your recorded assessment: successful - "the report now carries the audited numbers"\. That is a record APEX holds, not a confirmation about anything outside it; only you can confirm the result in the world\.$/);
+    assert.equal(/not established/.test(text), false);
+  });
+
+  test('an assessment recorded for an earlier plan version is marked as stale', () => {
+    const plan = {
+      id: PLAN_ID,
+      version: 4,
+      assessments: [{ planVersion: 3, verdict: 'partial', summary: 'two of the three sections were checked' }],
+    };
+    const line = achievedLine(explainTask(record({ planId: PLAN_ID }), 'achieved', { plan, planState: 'ok' }));
+    assert.match(line, /holds your recorded assessment \(recorded for an earlier version of the plan\): partial/);
+  });
+
+  test('a goal that states a result is quoted; one that does not is not turned into success', () => {
+    const completed = achievedLine(explainTask(record({ goalId: GOAL_ID }), 'achieved', {
+      goal: { id: GOAL_ID, status: 'completed', revision: 5 },
+      goalState: 'ok',
+    }));
+    assert.match(completed, /^Achieved: goal bbbbbbbb is recorded as completed at revision 5\./);
+
+    const failed = achievedLine(explainTask(record({ goalId: GOAL_ID }), 'achieved', {
+      goal: { id: GOAL_ID, status: 'failed', revision: 6 },
+      goalState: 'ok',
+    }));
+    assert.match(failed, /^Achieved: goal bbbbbbbb is recorded as failed at revision 6\./);
+
+    const active = achievedLine(explainTask(record({ goalId: GOAL_ID }), 'achieved', {
+      goal: { id: GOAL_ID, status: 'active', revision: 6 },
+      goalState: 'ok',
+    }));
+    assert.match(active, /^Achieved: not established - /);
+    assert.match(active, /goal bbbbbbbb is recorded as active at revision 6, which states no result\.$/);
+    assert.equal(/recorded as (?:completed|successful|met)/.test(active), false);
+  });
+
+  test('a plan record that is gone, unreadable or unavailable is named as what it is', () => {
+    const task = record({ planId: PLAN_ID });
+    assert.match(achievedLine(explainTask(task, 'achieved', { planState: 'missing' })),
+      /the plan this task records \(aaaaaaaa\) is no longer in the plan log/);
+    assert.match(achievedLine(explainTask(task, 'achieved', { planState: 'unreadable' })),
+      /the plan record aaaaaaaa could not be read/);
+    assert.match(achievedLine(explainTask(task, 'achieved', { planState: 'unavailable' })),
+      /the plan store is not available in this configuration/);
+    // An unread record is not evidence that no result was assessed: each of these is
+    // reported as a missing reading, never as "nothing was recorded".
+    for (const state of ['missing', 'unreadable', 'unavailable']) {
+      const line = achievedLine(explainTask(task, 'achieved', { planState: state }));
+      assert.match(line, /^Achieved: not established - /);
+    }
+  });
+
+  test('a reading that could not be completed says so even when another record states a result', () => {
+    const plan = { id: PLAN_ID, version: 2, assessments: [{ planVersion: 2, verdict: 'successful', summary: 'checked' }] };
+    const line = achievedLine(explainTask(record({ planId: PLAN_ID, goalId: GOAL_ID }), 'achieved', {
+      plan,
+      planState: 'ok',
+      goalState: 'unreadable',
+    }));
+    assert.match(line, /the goal record bbbbbbbb could not be read, so a fuller reading cannot be given/);
+  });
+
+  test('a task that has not run establishes nothing about the result', () => {
+    const text = explainTask(record({ status: TaskStatus.PENDING, steps: [step('s1', StepStatus.PENDING, null)] }), 'achieved');
+    assert.match(text, /Executed: no step has run/);
+    assert.match(text, /Verified: no step result is recorded as verified/);
+    assert.match(achievedLine(text), /^Achieved: not established - the task has not run\.$/);
+  });
+
+  test('a follow-up about the result is answered from the records without a model', async () => {
+    // The app has no backend at all, so a model-routed request could not succeed. The answer
+    // below comes from the task log and the (absent) plan/goal links it records.
+    const app = appOn({});
+    const ran = await app.controller.handle('calc 2+2; calc 3+3');
+    assert.equal(ran.status, Outcome.SUCCESS_VERIFIED);
+
+    const asked = await app.controller.handle('what did that achieve?');
+    assert.equal(asked.status, Outcome.SUCCESS_VERIFIED);
+    assert.match(asked.display, /^Intended: calc 2\+2; calc 3\+3$/m);
+    assert.match(asked.display, /^Executed: 2 of 2 step\(s\) ran:/m);
+    assert.match(asked.display, /^Achieved: not established - every step ran and was verified, but no record states that the goal itself was met/m);
+    assert.equal(/^Achieved: (?!not established)/m.test(asked.display), false,
+      'no record states a result, so the view does not claim one');
+  });
+});
+

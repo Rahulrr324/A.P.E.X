@@ -13,7 +13,7 @@
 import { route } from '../controller/router.js';
 import { singleLine, truncate } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
-import { splitGoal, checkSteps, describeStep } from '../tasks/planner.js';
+import { splitGoal, checkSteps, describeStep, duplicateSteps } from '../tasks/planner.js';
 import { MAX_STEPS } from '../tasks/model.js';
 import {
   MAX_ASSERTIONS, MAX_EXPECTED_CHARS, MAX_PLAN_OUTCOME_CHARS, MAX_PRECONDITIONS,
@@ -458,6 +458,18 @@ export function synthesizePlan({ request, workText, registry, goalId = null, now
   })), registry, 'user');
   if (checked.problems.length > 0) {
     return { ok: false, reason: 'policy-refused', problems: checked.problems, segments, mapped, unmapped, content: null };
+  }
+  const repeated = duplicateSteps(mapped);
+  if (repeated) {
+    return {
+      ok: false,
+      reason: 'duplicates',
+      problems: [`part ${repeated.first.index + 1} and part ${repeated.second.index + 1} ask for the same step (${repeated.second.action} with the same input); one plan would run it twice`],
+      segments,
+      mapped,
+      unmapped,
+      content: null,
+    };
   }
   const steps = checked.steps.map((s, i) => {
     const def = registry.get(s.action);

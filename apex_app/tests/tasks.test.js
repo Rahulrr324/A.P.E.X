@@ -788,6 +788,7 @@ describe('command line', () => {
 
     const views = {
       finished: /Yes, it finished: all 2 step\(s\) ran and each one was verified\./,
+      outcome: /Achieved: not established - every step ran and was verified, but no record states that the goal itself was met/,
       steps: /Verified complete: s1 \(calc\.evaluate\), s2 \(calc\.evaluate\)\./,
       pending: /Still to run: nothing - every step is accounted for\./,
       why: /It did not stop: every step ran and was verified\./,
@@ -799,6 +800,13 @@ describe('command line', () => {
       assert.equal(res.code, 0, `${view}: ${res.stdout}${res.stderr}`);
       assert.match(res.stdout, expected);
     }
+
+    const outcome = await runCli(['task', 'explain', short, 'outcome'], env);
+    assert.equal(outcome.code, 0, outcome.stdout + outcome.stderr);
+    assert.match(outcome.stdout, /Intended: calc 2\+3; calc 10\/2/);
+    assert.match(outcome.stdout, /Executed: 2 of 2 step\(s\) ran: s1 \(calc\.evaluate\) - completed: success_verified; s2 \(calc\.evaluate\) - completed: success_verified/);
+    assert.match(outcome.stdout, /Verified: all 2 step result\(s\) the task log records as verified have an operation record of their own/);
+    assert.match(outcome.stdout, /^Achieved: not established - /m, 'a verified step is not a claim about the goal');
 
     assert.deepEqual(stores.map((f) => readRaw(dataDir, f)), before, 'explaining runs, resumes, retries, approves, or records nothing');
     assert.equal(/No inference backend/.test(`${status.stdout}${status.stderr}${notRun.stdout}`), false, 'explaining a task never asks a model');
@@ -890,7 +898,7 @@ describe('command line', () => {
 
     const badView = await runCli(['task', 'explain', 'abcdef01', 'diagram'], env);
     assert.equal(badView.code, 2);
-    assert.match(badView.stderr, /unknown view "diagram"; use status, finished, steps, pending, why, approval, recovery/);
+    assert.match(badView.stderr, /unknown view "diagram"; use status, finished, outcome, steps, pending, why, approval, recovery/);
 
     const tooMany = await runCli(['task', 'explain', 'abcdef01', 'status', 'steps'], env);
     assert.equal(tooMany.code, 2);

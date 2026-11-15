@@ -10,6 +10,7 @@ function storedText(value) {
   return containsSecret(text) ? SECRET_OMITTED : text;
 }
 import { progressOf, TaskStatus, StepStatus, MAX_DESCRIPTION_CHARS } from './model.js';
+import { GoalStatus } from '../goals/model.js';
 
 const CLI = 'node bin/apex.js';
 
@@ -103,7 +104,64 @@ function openNote(s) {
   }
 }
 
-export function explainTask(task, intent, { missingAudit = [], unreadableAudit = false, damagedAudit = 0 } = {}) {
+// The reading behind the "achieved" line. Execution evidence is in the task log; a statement about
+// the result can only come from a record that states one - the assessment the user recorded on the
+// plan, or the goal's own status. Each is quoted with the record it came from and is never reported
+// as a confirmation about the world. A record that cannot be read is reported as unreadable, because
+// an unread record is not evidence that no result was assessed.
+function achievementReading(task, { done, total, gap, plan, planState, goal, goalState }) {
+  const results = [];
+  const context = [];
+  const unreadable = [];
+  if (planState === 'unreadable') unreadable.push(`the plan record ${shortId(task.planId)} could not be read`);
+  else if (planState === 'unavailable') unreadable.push('the plan store is not available in this configuration');
+  else if (planState === 'missing') unreadable.push(`the plan this task records (${shortId(task.planId)}) is no longer in the plan log`);
+  else if (plan) {
+    const assessment = (plan.assessments ?? []).at(-1) ?? null;
+    if (assessment) {
+      const stale = Number.isInteger(plan.version) && assessment.planVersion !== plan.version ? ' (recorded for an earlier version of the plan)' : '';
+      results.push(`plan ${shortId(plan.id)} holds your recorded assessment${stale}: ${assessment.verdict} - "${truncate(storedText(assessment.summary), 200)}"`);
+    }
+  }
+  if (goalState === 'unreadable') unreadable.push(`the goal record ${shortId(task.goalId)} could not be read`);
+  else if (goalState === 'unavailable') unreadable.push('the goal store is not available in this configuration');
+  else if (goalState === 'missing') unreadable.push(`the goal this task records (${shortId(task.goalId)}) is no longer in the goal log`);
+  else if (goal) {
+    const at = `at revision ${goal.revision ?? '?'}`;
+    if (goal.status === GoalStatus.COMPLETED) results.push(`goal ${shortId(goal.id)} is recorded as completed ${at}`);
+    else if (goal.status === GoalStatus.FAILED) results.push(`goal ${shortId(goal.id)} is recorded as failed ${at}`);
+    else context.push(`goal ${shortId(goal.id)} is recorded as ${goal.status} ${at}, which states no result`);
+  }
+  const aside = context.length ? ` ${context.join('; ')}.` : '';
+  if (results.length > 0) {
+    const partial = unreadable.length ? ` ${unreadable.join('; ')}, so a fuller reading cannot be given.` : '';
+    return `${results.join('; ')}. That is a record APEX holds, not a confirmation about anything outside it; only you can confirm the result in the world.${aside}${partial}`;
+  }
+  const why = unreadable.length > 0
+    ? unreadable.join('; ')
+    : task.status === TaskStatus.PENDING || task.status === TaskStatus.PROPOSED
+      ? 'the task has not run'
+      : task.status === TaskStatus.CANCELLED
+        ? 'the task was cancelled'
+        : task.status !== TaskStatus.COMPLETED
+          ? `the task is ${task.status}`
+          : done.length < total
+            ? `${total - done.length} of ${total} step(s) have no verified result`
+            : gap
+              ? 'the verified step results have no operation record of their own (see Verified above)'
+              : 'every step ran and was verified, but no record states that the goal itself was met; only you can confirm it, or record it with "plan assess" on the plan';
+  return `not established - ${why}.${aside}`;
+}
+
+export function explainTask(task, intent, {
+  missingAudit = [],
+  unreadableAudit = false,
+  damagedAudit = 0,
+  plan = null,
+  planState = 'none',
+  goal = null,
+  goalState = 'none',
+} = {}) {
   const { completed, total } = progressOf(task);
   const id = shortId(task.id);
   const by = (status) => task.steps.filter((s) => s.status === status);
@@ -129,6 +187,26 @@ export function explainTask(task, intent, { missingAudit = [], unreadableAudit =
 
   let text;
   switch (intent) {
+    case 'achieved': {
+      const ran = task.steps.filter((s) => s.status === StepStatus.COMPLETED || s.status === StepStatus.FAILED || s.status === StepStatus.UNCERTAIN || s.status === StepStatus.RUNNING);
+      const executed = ran.length === 0
+        ? 'no step has run'
+        : `${ran.length} of ${total} step(s) ran: ${ran.map((s) => `${s.id}${s.action ? ` (${s.action})` : ''} - ${s.status}${s.outcome ? `: ${s.outcome}` : ''}`).join('; ')}`;
+      const verified = done.length === 0
+        ? 'no step result is recorded as verified'
+        : gap
+          ? `${done.length} step result(s) are recorded as verified, but ${gap}`
+          : `all ${done.length} step result(s) the task log records as verified have an operation record of their own`;
+      text = [
+        head,
+        `Intended: ${truncate(storedText(task.goal), 200)}`,
+        `Executed: ${executed}`,
+        `Verified: ${verified}`,
+        `Achieved: ${achievementReading(task, { done, total, gap, plan, planState, goal, goalState })}`,
+      ].join('\n');
+      gapStated = true;
+      break;
+    }
     case 'finished':
       if (task.status === TaskStatus.COMPLETED) {
         text = gap

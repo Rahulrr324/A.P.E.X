@@ -39,22 +39,56 @@ export function redactGoal(goal) {
     .join('; ');
 }
 
-// Deterministic plan. Returns { ok, problems, steps, segmentCount }.
+// Two steps that ask for the same action with the same input would run twice: a write would store
+// the same record twice, and the result would count one action as two steps. Returns the first
+// repeated pair, or null.
+export function duplicateSteps(steps) {
+  const seen = new Map();
+  for (let i = 0; i < (steps ?? []).length; i += 1) {
+    const step = steps[i];
+    if (!step || typeof step.action !== 'string') continue;
+    let key;
+    try {
+      key = `${step.action}\u0000${JSON.stringify(step.input ?? {})}`;
+    } catch {
+      continue;
+    }
+    const first = seen.get(key);
+    if (first) return { first, second: { id: step.id, index: i, action: step.action } };
+    seen.set(key, { id: step.id, index: i, action: step.action });
+  }
+  return null;
+}
+
+// Deterministic plan. Returns { ok, problems, steps, segmentCount, parts, duplicates }.
+//
+// `parts` describes each part of the request as this check saw it: whether a registered action took
+// it (`routed`), the description that may be shown (a memory payload is redacted by describeStep),
+// and, when the whole-plan check refused it, the reason. `duplicates` names a repeated step. Both
+// are what lets the controller refuse a partly supported request instead of running one part over
+// the text of another.
 export function planFromText(goal, registry) {
   const segments = splitGoal(goal);
-  if (segments.length === 0) return { ok: false, problems: ['the goal is empty'], steps: [], segmentCount: 0 };
+  if (segments.length === 0) {
+    return { ok: false, problems: ['the goal is empty'], steps: [], segmentCount: 0, parts: [], duplicates: [] };
+  }
   const problems = [];
   const steps = [];
+  const parts = [];
   segments.forEach((seg, i) => {
     const label = `part ${i + 1}`;
+    const part = { index: i, id: `s${i + 1}`, label, routed: false, refused: null, action: null, description: null, text: seg, reason: null };
+    parts.push(part);
     const r = route(seg);
     if (r.kind !== 'action') {
+      part.reason = 'no registered action matches this part';
       problems.push(`${label} is not a supported action: "${truncate(seg, 80)}"`);
       return;
     }
     const def = registry.get(r.action);
     if (!def) {
       // For example a filesystem step when no authorised root is configured.
+      part.reason = `the action ${r.action} is not available in this configuration`;
       problems.push(`${label}: action ${r.action} is not available in this configuration`);
       return;
     }
@@ -62,12 +96,16 @@ export function planFromText(goal, registry) {
     try {
       input = def.validate(r.input);
     } catch (err) {
+      part.reason = err?.message ?? String(err);
       problems.push(`${label}: ${err?.message ?? err}`);
       return;
     }
+    part.routed = true;
+    part.action = r.action;
+    part.description = describeStep(seg, r.action, input);
     steps.push({
       id: `s${i + 1}`,
-      description: describeStep(seg, r.action, input),
+      description: part.description,
       action: r.action,
       input,
       dependsOn: i === 0 ? [] : [`s${i}`],
@@ -77,7 +115,21 @@ export function planFromText(goal, registry) {
   // normalised steps (with their permission) are what gets stored.
   const checked = checkSteps(steps, registry, 'user');
   problems.push(...checked.problems);
-  return { ok: problems.length === 0, problems, steps: checked.steps, segmentCount: segments.length };
+  // A part that routed but did not survive the whole-plan check is reported with its reason, so the
+  // refusal can name it as the one that cannot be a step rather than as text nothing understood.
+  for (const problem of checked.problems) {
+    const m = /^step (s\d+): ([\s\S]*)$/.exec(problem);
+    if (!m) continue;
+    const part = parts.find((p) => p.id === m[1]);
+    if (part && part.refused === null) part.refused = m[2];
+  }
+  const repeated = duplicateSteps(steps);
+  const duplicates = [];
+  if (repeated) {
+    duplicates.push(repeated);
+    problems.push(`${parts[repeated.first.index].label} and ${parts[repeated.second.index].label} ask for the same step (${repeated.second.action} with the same input); one plan would run it twice`);
+  }
+  return { ok: problems.length === 0, problems, steps: checked.steps, segmentCount: segments.length, parts, duplicates };
 }
 
 // Checks step structure, dependencies, actions, authorization, and inputs. Returns

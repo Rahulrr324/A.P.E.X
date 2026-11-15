@@ -377,6 +377,49 @@ function isMixedPrivateWrite(request) {
   return parts.length > 1 && parts.some(isPrivateWrite);
 }
 
+// An explicit separator makes a request a sequence of parts. "then" does not: it is ordinary prose
+// in a memory write ("remember that we met and then left"), while a semicolon or a line break is a
+// list the user wrote as one.
+const EXPLICIT_SEQUENCE = /[;\n]/;
+
+// A request of two or more parts is either one plan or one request, never half of each. When the
+// parts do not all check out as steps, the whole request is refused here, before any part runs:
+// the single-request path would route all of the text to the one action its first words name - a
+// memory write would store the rest of the request as its payload, and a model would answer around
+// it - while the other parts went unmentioned. Nothing here authorizes or runs anything; it only
+// decides that this request cannot be carried out as written.
+function compositionRefusal(planned, request) {
+  if (planned.segmentCount < 2) return null;
+  if (planned.duplicates.length > 0) {
+    const d = planned.duplicates[0];
+    const one = planned.parts[d.first.index]?.label ?? d.first.id;
+    const two = planned.parts[d.second.index]?.label ?? d.second.id;
+    return [
+      `APEX did not run this request: ${two} repeats ${one} - both ask for ${d.action} with the same input.`,
+      'Nothing ran and nothing was stored; running the same step twice would count one action as two steps, and a write would store the same record twice.',
+      `Send ${d.action} once, or change ${two} so it asks for something else.`,
+    ].join('\n');
+  }
+  if (planned.ok) return null;
+  if (!EXPLICIT_SEQUENCE.test(request)) return null;
+  // Only a part that named a registered action is evidence that the request was meant as a sequence
+  // of steps. When no part does, the request is a question or a plan request, and the paths that
+  // answer those (the bridge, the model) say what they can and cannot do.
+  if (!planned.parts.some((p) => p.routed)) return null;
+  const lines = ['APEX did not run this request, and nothing is half done: it asks for more than one step, and not every part can be one.', ''];
+  for (const part of planned.parts) {
+    if (!part.routed) lines.push(`  - ${part.label}: "${truncate(part.text, 120)}" - ${part.reason}`);
+    else if (part.refused) lines.push(`  - ${part.label}: ${part.description} - refused: ${truncate(part.refused, 160)}`);
+    else lines.push(`  - ${part.label}: ${part.description}`);
+  }
+  lines.push('', 'No part ran, and the request was not sent to a model.');
+  lines.push('Send the part APEX supports on its own, or say "prepare a plan to <the whole request>": that plan records the parts APEX cannot carry out as unknown instead of dropping them.');
+  if (planned.parts[0].action === 'memory.add') {
+    lines.push('If the words after the separator were meant to be remembered as written, send them as one sentence without a separator.');
+  }
+  return lines.join('\n');
+}
+
 // A late re-check can only speak about the sources it re-read. A claim that also cites a world
 // record, an experience, or a goal keeps only its re-readable references here, so a source this
 // check did not read is never reported as missing and a claim with nothing re-readable is left out.
@@ -545,7 +588,20 @@ export class CognitiveController {
       // A request of two or more parts, each a supported action, is a task. Anything
       // else (including a part that is not an action) keeps the single-request path.
       const planned = origin === 'user' && this.tasks && !containsSecret(request) ? planFromText(request, this.registry) : null;
-      if (planned && planned.ok && planned.segmentCount >= 2) {
+      const composition = planned && !this.#preparesPlan(request) ? compositionRefusal(planned, request) : null;
+      if (composition) {
+        // Refused as a whole, before any part runs or any model is called. The audit keeps the request
+        // with its memory payload redacted, exactly as the task path stores it.
+        op.capability = 'none';
+        op.request = redactGoal(request);
+        op.errors.push({ stage: 'input', code: 'COMPOSITION_REFUSED', message: composition });
+        status = Outcome.ACTION_DENIED;
+        output = composition;
+        displayText = composition;
+        await this.#recordTurns(op, sid, op.request, [
+          { origin: TURN_ORIGINS.NOTICE, text: composition, verified: false },
+        ]);
+      } else if (planned && planned.ok && planned.segmentCount >= 2) {
         const t = await this.#runPlannedRequest(op, sid, request, planned);
         status = t.status;
         output = t.output;
@@ -2091,6 +2147,33 @@ export class CognitiveController {
     if (!wrote) await this.#queueSummaryIntent(op, sid, summary);
   }
 
+  // The context an action receives. Everything here is readable data, never permission:
+  // runAction asks the registry for authorization before this is built.
+  #actionContext(operationId, origin) {
+    return {
+      memory: this.memory,
+      knowledge: this.knowledge,
+      experience: this.experience,
+      now: this.now,
+      getStatus: this.getStatus,
+      operationId,
+      origin,
+      root: this.rootForContext,
+      // Goal, plan and task references are readable so an action's own verifier can check them.
+      // They remain data: authorization is still the registry's, decided above.
+      goals: this.goals,
+      plans: this.plans,
+      operations: this.operations,
+      worldModel: this.worldModel,
+      registry: this.registry,
+      taskStore: this.taskStore,
+      // The prediction ledger, readable and optional. A plan answer discloses the user's recorded
+      // expectations beside the comparison; it does not authorize one, and a configuration without the
+      // ledger receives a disclosure that says the ledger is absent rather than that it is empty.
+      predictions: this.predictions,
+    };
+  }
+
   async runAction(name, rawInput, origin, operationId, timing = null) {
     const step = {
       action: typeof name === 'string' ? name : null,
@@ -2120,28 +2203,7 @@ export class CognitiveController {
     }
 
     const def = this.registry.get(name);
-    const ctx = {
-      memory: this.memory,
-      knowledge: this.knowledge,
-      experience: this.experience,
-      now: this.now,
-      getStatus: this.getStatus,
-      operationId,
-      origin,
-      root: this.rootForContext,
-      // Goal, plan and task references are readable so an action's own verifier can check them.
-      // They remain data: authorization is still the registry's, decided above.
-      goals: this.goals,
-      plans: this.plans,
-      operations: this.operations,
-      worldModel: this.worldModel,
-      registry: this.registry,
-      taskStore: this.taskStore,
-      // The prediction ledger, readable and optional. A plan answer discloses the user's recorded
-      // expectations beside the comparison; it does not authorize one, and a configuration without the
-      // ledger receives a disclosure that says the ledger is absent rather than that it is empty.
-      predictions: this.predictions,
-    };
+    const ctx = this.#actionContext(operationId, origin);
     // The filesystem actions receive the authorized root on ctx.root. It is set only by the
     // composition root and cannot be supplied by a model proposal, so the boundary cannot be
     // expanded from model output.
@@ -2512,6 +2574,19 @@ export class CognitiveController {
     return Boolean(this.plans && this.tasks && this.taskStore && this.registry);
   }
 
+  // A request that asks for a plan is answered by the bridge, which maps every part and records the
+  // ones no capability can take as explicit unknowns. The composition refusal must not preempt that
+  // answer: it would refuse a request the plan path can describe in full.
+  #preparesPlan(request) {
+    if (!this.#executiveAvailable()) return false;
+    try {
+      return executiveSignal(request, { plansAvailable: true })?.mode === RequestMode.PREPARE;
+    } catch {
+      // An unreadable request keeps the path it had; the guard is not a reason to fail it here.
+      return false;
+    }
+  }
+
   // Inside handle(): the executive reading of one request, or null when the request is not one.
   // The outer operation keeps its own audit record either way; a mode that runs a registry action
   // pushes that step onto this operation, so the audit shows the authorization and the independent
@@ -2613,6 +2688,10 @@ export class CognitiveController {
         lines.push('The registered policies refuse this combination:');
         for (const p of synth.problems.slice(0, 8)) lines.push(`  - ${truncate(p, 200)}`);
         if (synth.problems.length > 8) lines.push(`  - ... and ${synth.problems.length - 8} more`);
+      } else if (synth.reason === 'duplicates') {
+        lines.push('The request would record the same step more than once, so no plan was recorded:');
+        for (const p of synth.problems.slice(0, 8)) lines.push(`  - ${truncate(p, 200)}`);
+        lines.push('', 'Change the repeated part so it asks for something else, or send it once.');
       } else if (synth.unmapped.length === 0) {
         // Nothing was left to map once the goal reference was taken out, so there is no part of the
         // request this answer can quote back as unmapped. Printing an empty list under a count would
@@ -5629,7 +5708,8 @@ export class CognitiveController {
     }
 
     const { missing, unreadable, corrupt } = await this.#missingStepEvidence(task);
-    const text = explainTask(task, intent, { missingAudit: missing, unreadableAudit: unreadable, damagedAudit: corrupt });
+    const outcome = intent === 'achieved' ? await this.#outcomeEvidence(task) : {};
+    const text = explainTask(task, intent, { missingAudit: missing, unreadableAudit: unreadable, damagedAudit: corrupt, ...outcome });
     await this.#recordTurns(op, sid, op.request, [
       { origin: TURN_ORIGINS.ACTION, text, verified: true, taskId: task.id },
     ], { subject: 'answer' });
@@ -5638,6 +5718,48 @@ export class CognitiveController {
       output: text,
       display: `${text}${this.#historyGapNotice(op, 'answer')}${this.#historyGapNotice(op, 'task result')}${this.#owedReissueNotice(op)}${this.#reissueNotice(op)}`,
     };
+  }
+
+  // The records outside the task that can say something about the result: the assessment recorded on
+  // the plan this task came from, and the goal's own status. Both are reads; neither grants or changes
+  // anything. A store that is missing, a record that is gone, and a read that fails are three
+  // different answers, and the caller states each as what it is.
+  async #outcomeEvidence(task) {
+    const out = {
+      plan: null,
+      planState: task.planId ? 'missing' : 'none',
+      goal: null,
+      goalState: task.goalId ? 'missing' : 'none',
+    };
+    if (task.planId) {
+      try {
+        if (!this.plans) out.planState = 'unavailable';
+        else {
+          const plan = await this.plans.get(task.planId);
+          if (plan) {
+            out.plan = plan;
+            out.planState = 'ok';
+          }
+        }
+      } catch {
+        out.planState = 'unreadable';
+      }
+    }
+    if (task.goalId) {
+      try {
+        if (!this.goals) out.goalState = 'unavailable';
+        else {
+          const goal = await this.goals.get(task.goalId);
+          if (goal) {
+            out.goal = goal;
+            out.goalState = 'ok';
+          }
+        }
+      } catch {
+        out.goalState = 'unreadable';
+      }
+    }
+    return out;
   }
 
   // Read-only: no operation record. Unknown ids are usage errors for the caller.
@@ -5661,6 +5783,7 @@ export class CognitiveController {
     this.#requireTasks();
     const task = await this.taskStore.resolve(ref);
     const { missing, unreadable, corrupt } = await this.#missingStepEvidence(task);
+    const outcome = intent === 'achieved' ? await this.#outcomeEvidence(task) : {};
     const verified = task.steps.filter((s) => s.status === StepStatus.COMPLETED).length;
     const evidence = missing.length === 0
       ? verified === 0
@@ -5671,13 +5794,36 @@ export class CognitiveController {
         : corrupt > 0
           ? `Evidence: the operation log holds ${corrupt} damaged line(s), so it cannot establish that ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} no operation record; ${missing.length === 1 ? 'it is' : 'they are'} not independently supported.`
           : `Evidence: ${verified - missing.length} of ${verified} recorded step result(s) have an operation record; ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} none, so ${missing.length === 1 ? 'it is' : 'they are'} not independently supported.`;
-    const display = `${explainTask(task, intent, { missingAudit: missing, unreadableAudit: unreadable, damagedAudit: corrupt })}\n${evidence}`;
+    const display = `${explainTask(task, intent, { missingAudit: missing, unreadableAudit: unreadable, damagedAudit: corrupt, ...outcome })}\n${evidence}`;
     return { task, intent, evidenceState: unreadable ? 'unreadable' : corrupt > 0 && missing.length ? 'damaged' : missing.length ? 'gaps' : 'complete', gaps: missing, display };
   }
 
   async listTasks() {
     this.#requireTasks();
     return renderTaskList(await this.taskStore.list());
+  }
+
+  // A direct, unaudited read of the live capability list for the CLI. It runs the same action
+  // the conversation routes to, so the two answers cannot disagree; it writes no record and no
+  // audit line, and the caller decides the exit code from `verified`.
+  async capabilitiesReport({ query = null } = {}) {
+    const def = this.registry.get('app.capabilities');
+    let input;
+    try {
+      input = def.validate(query === null ? {} : { query });
+    } catch (err) {
+      return { display: `usage: ${redactSecrets(err.message)}`, verified: false, data: null };
+    }
+    const ctx = this.#actionContext(null, 'user');
+    const exec = await executeAction(def, ctx, input);
+    if (exec.status !== 'ok') {
+      return { display: `could not read the capability list: ${redactSecrets(exec.error.message)}`, verified: false, data: null };
+    }
+    const v = await this.verifier.check(def, ctx, exec.input, exec.result);
+    const display = v.outcome === Outcome.VERIFICATION_FAILED
+      ? `${exec.result.display}\nEvidence: the registry check failed: ${redactSecrets(v.detail)}`
+      : exec.result.display;
+    return { display, verified: v.outcome === Outcome.SUCCESS_VERIFIED, data: exec.result.data };
   }
 
   // Inside handle(): a deterministic multi-part request. The plan is stored, then run.

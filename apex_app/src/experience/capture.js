@@ -64,6 +64,7 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
 // new action has to be classified here or added to the subset on purpose.
 export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'app.status': 'read',
+  'app.capabilities': 'read',
   'calc.evaluate': 'read',
   'world.state': 'read',
   'world.state_at': 'read',

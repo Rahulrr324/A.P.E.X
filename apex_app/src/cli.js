@@ -25,6 +25,7 @@ Usage:
   node bin/apex.js ask [--save-answer] <request words...>
   node bin/apex.js new                   start a new conversation session
   node bin/apex.js status [--model]      subsystem counts (--model probes the endpoint; no inference)
+  node bin/apex.js capabilities [words...] [--json]   registered actions, optionally filtered (read-only)
   node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js memory health         store-wide record, provenance, and corruption counts (read-only)
@@ -129,7 +130,7 @@ Usage:
   node bin/apex.js task list
   node bin/apex.js task show <id>
   node bin/apex.js task explain <id> [view]   what the records say about one task
-                                             view: status (default) | finished | steps | pending | why | approval | recovery
+                                             view: status (default) | finished | outcome | steps | pending | why | approval | recovery
   node bin/apex.js task approve <id> [--step <stepId>]   approve a proposed plan, or one write step
   node bin/apex.js task run <id>         run a pending task, stopping at the first failure
   node bin/apex.js task resume <id>      continue a paused task (never re-runs a completed step)
@@ -311,6 +312,7 @@ Environment:
 const TASK_EXPLAIN_VIEWS = {
   status: 'status',
   finished: 'finished',
+  outcome: 'achieved',
   steps: 'steps_succeeded',
   pending: 'pending',
   why: 'why_stopped',
@@ -914,6 +916,16 @@ export async function main(argv, {
         if (unavailable) err(`data store unavailable: ${safeText(unavailable.detail)}. Check APEX_DATA_DIR and its permissions.`);
       }
       return diag.needsAttention ? 1 : 0;
+    }
+
+    if (command === 'capabilities' || command === 'capability') {
+      // A direct, unaudited read of the live registry. Positional words narrow the list; the
+      // filter is a plain substring, so the same words always return the same capabilities.
+      const { flags, rest } = parseFlags(args, ['json']);
+      const query = rest.join(' ').trim();
+      const res = await app.controller.capabilitiesReport({ query: query === '' ? null : query });
+      out(flags.json ? JSON.stringify(res.data, null, 2) : res.display);
+      return res.verified ? 0 : 1;
     }
 
     if (command === 'diagnose') {
@@ -2261,7 +2273,7 @@ export async function main(argv, {
       if (sub === 'explain') {
         const { rest: words } = parseFlags(rest, []);
         if (words.length < 1 || words.length > 2) {
-          throw new ValidationError('usage: task explain <id> [status|finished|steps|pending|why|approval|recovery]', 'USAGE');
+          throw new ValidationError('usage: task explain <id> [status|finished|outcome|steps|pending|why|approval|recovery]', 'USAGE');
         }
         const view = words[1] ?? 'status';
         if (!TASK_EXPLAIN_VIEWS[view]) {

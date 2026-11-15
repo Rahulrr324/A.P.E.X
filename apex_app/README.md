@@ -101,6 +101,7 @@ platform-specific skips.
 ```bash
 cd apex_app
 node bin/apex.js status          # or: npm run status
+node bin/apex.js capabilities    # the registered actions, read from the live registry
 node bin/apex.js help
 ```
 
@@ -322,7 +323,7 @@ suites re-hash the directory afterwards to prove it.
 | `history [--limit N]` | Lists recent operation records. |
 | `task plan <goal>` | Plans a multi-step task and stores it. Runs nothing. See [Tasks](#tasks). |
 | `task list`, `task show <id>` | Lists tasks, or shows one with its steps, status, and progress. An id may be shortened to 4 or more characters. |
-| `task explain <id> [view]` | What the records say about one task: `status` (default), `finished`, `steps`, `pending`, `why`, `approval`, `recovery`. Prints the recorded status and, separately, whether each recorded step result has an operation record of its own. Read-only: no model is asked and nothing runs. See [Tasks](#tasks). |
+| `task explain <id> [view]` | What the records say about one task: `status` (default), `finished`, `outcome`, `steps`, `pending`, `why`, `approval`, `recovery`. Prints the recorded status and, separately, whether each recorded step result has an operation record of its own. `outcome` answers whether the work produced the intended result, separating intended, executed, verified, and achieved - and achieving is only stated when a plan assessment or goal status records one. Read-only: no model is asked and nothing runs. See [Tasks](#tasks). |
 | `task run <id>` | Runs a pending task step by step. Stops at the first failed or uncertain step, and pauses before a write that needs approval. |
 | `task approve <id>` | Approves a model-proposed plan. `task approve <id> --step <stepId>` approves one write step that is waiting for it. |
 | `task resume <id>` | Continues a paused task. A completed step is never run again. |
@@ -360,6 +361,16 @@ Request forms recognised without a model:
 A request of two or more parts separated by `;` or `then`, where every part is one of
 the forms above, runs as a task (see [Tasks](#tasks)). For example:
 `calc (2+3)*4; calc 10/2`.
+
+A multi-part request is carried out in full or not at all. When the parts are separated by
+`;` or a line break and any part names no registered action, or is refused as a plan step,
+APEX refuses the whole request before anything runs or is sent to a model: it names each
+part and stores nothing. It never stores the rest of a request as the payload of the action
+its first words name, and it never answers one part while the others go unmentioned. Two
+parts that ask for the same action with the same input are refused the same way, because the
+task would run that step twice. A request that asks for a plan (`prepare a plan to ...`) is
+answered by the plan path instead, which records the parts no capability can take as explicit
+unknowns.
 
 Anything else goes to the model path. With no model configured, APEX still reasons over its
 stores through the model-free cognitive layer: when the retrieved records support a conclusion it
@@ -734,7 +745,8 @@ stored as model text and replayed as `APEX (model, UNVERIFIED)`.
 **Asking about a task afterwards.** A follow-up is answered from the task log, never from a
 model. What makes a request such a question is decided by question *classes*, not by a list of
 sentences APEX recognises: status, which steps succeeded, what is still pending, whether it
-finished, why it stopped, whether anything needs your approval, and whether it can be resumed
+finished, whether it achieved the intended result, why it stopped, whether anything needs your
+approval, and whether it can be resumed
 (`src/controller/task-context.js`). A request becomes a task question only when it carries one
 of those classes *and* something that points at a task: a whole task id, a short id after the
 word "task" (`did task 1f3a finish?`), a task or step word, or a short bare follow-up
@@ -751,7 +763,12 @@ cannot be checked are each reported as what they are, and nothing is run either 
 never claims more than the records establish: an uncertain step is named as unresolved, a held
 step as awaiting your approval rather than as stopped, a step whose `task.step` record could not
 be written as evidence APEX cannot show, and an approval or recovery question only describes the
-state - it approves nothing and resumes nothing.
+state - it approves nothing and resumes nothing. A question about the result ("what did that
+achieve?", "did it work?") is answered by separating what was intended, what actually ran, what
+the audit independently supports, and whether any record states the result at all: a recorded
+plan assessment or a completed or failed goal is quoted with the record it came from, and in
+every other case the answer is "not established" with the reason - running and verifying a step
+is never reported as the goal having been met.
 
 **Explaining a task without a conversation.** `node bin/apex.js task explain <id> [view]` prints
 those same views for one task named by id, straight from the records: the task log gives the
@@ -764,7 +781,12 @@ operation log that cannot be read are both reported as no independent support ra
 success, and steps are named by id only: no audit line, step output, or memory content is copied
 into the display. Exit 0 means the task is recorded as complete *and* each verified step has its
 own record; a task that is incomplete, held, failed, cancelled, or unsupported by its own evidence
-exits 1; an unknown id or a malformed view exits 2.
+exits 1; an unknown id or a malformed view exits 2. The `outcome` view is the same reading in
+four labelled lines - `Intended` (the recorded goal), `Executed` (each step that ran with its
+recorded outcome), `Verified` (the step results the audit supports, or the gap it cannot resolve),
+and `Achieved` (the record that states a result, or `not established` and why). A plan record that
+is missing, unreadable, or held in an unavailable store is reported as that state, not as proof
+that no result was assessed.
 
 **The model workflow, tested with a controlled endpoint.** `tests/model-workflow.test.js` drives
 the whole path - reply, proposal parsing, authorization, approval, execution, verification, audit,
@@ -972,6 +994,7 @@ holds identity, memory, control, or persistence.
 | Action | Permission | Origins | Input | Verification (independent check) |
 |---|---|---|---|---|
 | `app.status` | read | user, model | none | identity and memory count agree with a fresh store read |
+| `app.capabilities` | read | user, model | `query` (optional) | every listed action is registered; the total matches a fresh registry read |
 | `memory.search` | read | user, model | `query`, `limit` | returned ids equal a fresh store search; each record's content matches the store |
 | `memory.list` | read | user, model | `limit` | count equals the store count (up to limit); newest-first; content matches |
 | `memory.add` | **write** | user | `content` | record exists by id; content SHA-256 matches; provenance is `user` / `user_fact` |
@@ -1111,7 +1134,7 @@ uses an in-process fixture backend and writes only into temporary directories
 | 16. Cancel and safe resume | `tasks.test.js` "cancel"; "interrupted running step" |
 | 17. Bounded read-only filesystem inspection | `filesystem.test.js` (listing, reading, bounds, traversal, absolute and UNC paths, links, model origin, audit failure) |
 | 18. Filesystem steps in controlled tasks | `tasks-filesystem.test.js` (plan, run, verify, model-plan rejection, traversal step, changed file, audit gaps, restart and retry, CLI exit codes) |
-| 19. A task explained from the records, with no model and no run | `tasks.test.js` "command line" (every view, incomplete work, missing `task.step` records, an unreadable operation log, malformed arguments) and "task explain as the CLI reads it" (a held write step stays held) |
+| 19. A task explained from the records, with no model and no run | `tasks.test.js` "command line" (every view including `outcome`, incomplete work, missing `task.step` records, an unreadable operation log, malformed arguments), "task explain as the CLI reads it" (a held write step stays held), and `task-history.test.js` "056" (intent/execution/verification/result kept apart; a recorded assessment quoted; missing, unreadable and unavailable records distinguished) |
 | 20. A real process lost mid-step, recovered by a second one | `process-recovery.test.js` (terminate at the `running` event, stale task lock replaced, no step re-run, uncertain write never retried, recovery summary, follow-up answered from the records, recovery idempotent) |
 | 21. The full model workflow, reply to record, with every APEX component real | `model-workflow.test.js` (proposal executed and audited, user-only proposal denied, malformed proposal refused and replayed, plan → approve → run → verify → explain → follow-up, model claim of undone work stays unverified, endpoint unreachable/invalid/empty/slow; the model itself is a stub, so no real-model behaviour or latency is claimed) |
 | 22. Batch D as one story across the four stores | `acceptance-batch-d.test.js` (model plan with a held write step told identically by task log, audit log and history; a refused summary disclosed, owed once, reissued without re-executing; follow-up referent resolved or clarified; a real child process killed mid-write recovered, with repeated recovery changing nothing; missing and unreadable evidence never reported as verification; registry, plan and proposal write limits for the model origin) |
@@ -1151,6 +1174,14 @@ uses an in-process fixture backend and writes only into temporary directories
 | 51. Executive context and recovery are bounded, labelled, and read-only | `executive-control.test.js` G (assertion classification; the executive prompt section is gated, capped at eight lines, labelled intent rather than evidence; a tight budget drops it and announces the loss; the real request path receives the recorded state), the recovery test (every store keeps its exact bytes), `executive-cli.test.js` (4 real CLI lifecycle tests), and `executive-interruption.test.js` D (a real child process killed inside a plan step is reported uncertain, never re-run, and reconcile blocks the plan at the user's explicit command) |
 | 52. Integrated cognitive reasoning runs through the real request path and invents no evidence (AJ) | `cognition-understanding.test.js` (18 tests: intent and referent classification, evidence identity, claim labelling, contradiction symmetry, uncertainty categories, clarification before any model call, and the brief's bounded content); `cognition-reasoning.test.js` (24 tests: deliberation over supported, partial, conflicting historical and unknown evidence, inference and assumption kept distinct from support, recommendations, no confidence percentages, and deterministic trace steps); `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through `controller.handle` with a capturing backend: grounded answer, unsupported question, contradiction, clarification, bounded retrieval, prompt size, trace, and audit; the backend is a stub, so no claim is made about a real model's behaviour) |
 | 53. A user's own words reach a verified run, and nothing on that path grants itself permission (AK) | `executive-bridge.test.js` (21 tests: prepare → approve → run as three recorded acts on one audit chain; every preview field read from the stored plan and the live registry; the printed content hash is the stored hash and the approval records it; mapping takes only what it can carry and leaves the router's own answers, single-task questions and model-origin requests alone; status runs nothing and prints only states a record supports; a failed step is failed, an uncheckable one uncertain, never done; verified outcomes reach the existing learning path and nothing else does); `executive-acceptance.test.js` (the 25 numbered scenarios K-01…K-25, asserted against the persisted files: an empty portfolio reported as empty, the nine questions answered from the records, a failed run that stops its dependants and promises no retry, an uncertain step never replayed, an unapproved plan that cannot start and writes nothing, a plan that ran refused a second run, an unmappable request refused, an approval naming no plan asked about, a twin draft left a draft, a credential-carrying request not taken as an act, and the same lifecycle reachable from the CLI); `executive-adversarial.test.js` (11 tests J-01…J-11: a model that claims it ran and approved a plan changes no record, a non-identifier reference asks instead of approving, `approve and start` approves and stops, three persuasion prefixes leave the store byte-identical, a non-user origin cannot approve through the bridge, a stored instruction claiming authority authorizes nothing, an unregistered destructive capability records no plan, a plan cannot contain its own approval or its own start, and the action-claim correction is shown to the user without becoming model text). Every one uses a stub or no backend, so none is evidence about a real model |
+| 54. Thirteen scenario classes, each with its own expected and actual record | `capability-eval.test.js` (single action, multi-step composition, missing-input clarification, contradictory evidence, unsupported request, authorization denial, execution failure, interrupted recovery, partial success, outcome verification, user correction, repeated-request idempotency, and context continuity; every scenario runs through the real controller and stores in its own temporary directory, and each of the six metrics - task success, planning correctness, evidence correctness, safety compliance, recovery correctness, usability - is counted only on the scenarios that exercise it, never combined into one score) |
+
+The capability evaluation lives in `src/evaluation/capability.js` and is run by
+`tests/capability-eval.test.js`. Each scenario declares what it expected and reports what the
+records actually show; a metric a scenario does not exercise is `null`, not a pass, and the six
+metrics are reported separately. The fixtures are synthetic and deterministic, and the one stub
+speaks only the HTTP protocol so the authorization path is exercised; the report ends with the
+sentence that it is not a real-world intelligence benchmark.
 
 Running one suite, which is what most review work needs:
 
@@ -1168,6 +1199,7 @@ node --test tests/corruption-recovery-boundaries.test.js tests/lock-ownership-an
   tests/append-audit-failure-semantics.test.js tests/cross-process-stress.test.js
 node --test tests/executive-bridge.test.js tests/executive-acceptance.test.js \
   tests/executive-adversarial.test.js
+node --test tests/capability-eval.test.js
 ```
 
 The first two lines are the Batch AF security suites that run in-process plus spawn CLI children; the
@@ -3580,7 +3612,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 93 registered actions declare both `validate()` and `verify()` - 95 with a
+- **Verification.** All 94 registered actions declare both `validate()` and `verify()` - 96 with a
   filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
@@ -3625,6 +3657,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `prediction.list`, `prediction.show`, `prediction.history`, `prediction.summary` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `prediction.longitudinal` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `app.status` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `app.capabilities` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `calc.evaluate` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `world.state` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
 | `world.entity.add`, `world.entity.alias`, `world.entity.retire`, `world.entity.merge`, `world.entity.unmerge`, `world.identity.decide`, `world.fact.add`, `world.relationship.add`, `world.event.add`, `world.statement.retract`, `world.statement.supersede` | user | write | never in a plan | `world-model.jsonl` (append-only; each record names its evidence) | no (world-model) | yes |
@@ -3658,8 +3691,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
 
 `filesystem.list` and `filesystem.read` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
-configured; there is no default root, and a model proposal cannot supply one, so the count is 93
-registered actions by default and 95 with a root. Batch AG added ten user-origin write actions
+configured; there is no default root, and a model proposal cannot supply one, so the count is 94
+registered actions by default and 96 with a root. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
 two more user-origin writes (`goal.confirm`, the user's own decision about a success criterion APEX

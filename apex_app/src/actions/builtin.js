@@ -4,7 +4,7 @@
 // `verify` returns { ok, detail }, or null when no independent check is possible.
 import { ValidationError } from '../errors.js';
 import { sha256Hex, validateContent } from '../memory/memory-store.js';
-import { CONTROL_CHARS, round3, shortId, singleLine } from '../util.js';
+import { CONTROL_CHARS, round3, shortId, singleLine, truncate } from '../util.js';
 import { evaluateExpression, evaluateRpn, validateExpression } from './calc.js';
 import { APP_NAME, APP_STAGE, APP_VERSION } from '../identity.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
@@ -91,6 +91,100 @@ export function builtinActions() {
           return { ok: false, detail: `reported ${result.data.memoryRecords} memory records; store holds ${fresh.records}` };
         }
         return { ok: true, detail: 'identity and memory count agree with an independent store read' };
+      },
+    },
+
+    {
+      // What APEX can actually do is the live registry, not a hand-written list. A read of it
+      // is how a request ("what can you do about memory?") is answered without a model, and it
+      // is the same list a plan is checked against, so the answer cannot offer an action the
+      // planner would refuse. It is deliberately not plannable: listing capabilities is not a
+      // step toward a goal, and offering it to a model plan would add a step that does nothing.
+      name: 'app.capabilities',
+      description: 'List the registered actions APEX can perform, optionally filtered by keyword. Reads the live registry; changes nothing.',
+      inputHint: '{"query": optional text}',
+      plannable: false,
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        const o = expectObject(input ?? {}, ['query']);
+        return { query: o.query === undefined || o.query === null ? null : textField(o.query, 'query', 1, 200) };
+      },
+      async execute(ctx, { query }) {
+        const defs = ctx.registry.list().sort((a, b) => a.name.localeCompare(b.name));
+        const terms = query === null ? [] : query.toLowerCase().split(/\s+/).filter(Boolean);
+        // Every term must appear in the name, description, or input hint. Matching is a plain
+        // substring over data the registry already holds - no scoring, so the same query always
+        // returns the same set.
+        const matched = defs.filter((d) => {
+          if (terms.length === 0) return true;
+          const haystack = `${d.name} ${d.description} ${d.inputHint ?? ''}`.toLowerCase();
+          return terms.every((t) => haystack.includes(t));
+        });
+        const actions = matched.map((d) => ({
+          name: d.name,
+          permission: d.permission,
+          origins: [...d.origins],
+          plannable: d.plannable !== false,
+          description: truncate(d.description, 160),
+          inputHint: d.plannable === false ? null : (d.inputHint ?? null),
+        }));
+        const reads = actions.filter((a) => a.permission === 'read').length;
+        const writes = actions.length - reads;
+        const families = [];
+        for (const a of actions) {
+          const family = a.name.split('.')[0];
+          const existing = families.find((f) => f.family === family);
+          if (existing) existing.count += 1;
+          else families.push({ family, count: 1 });
+        }
+        const plannable = actions.filter((a) => a.plannable).length;
+        const data = { query, total: defs.length, matched: actions.length, reads, writes, plannable, families, actions };
+
+        const headline = query === null
+          ? `${APP_NAME} has ${defs.length} registered action(s): ${reads} read, ${writes} write; ${plannable} can appear as a plan step.`
+          : `${matched.length} of ${defs.length} registered action(s) match "${query}": ${reads} read, ${writes} write; ${plannable} can appear as a plan step.`;
+        const lines = [
+          headline,
+          'Only these registered actions can run. A step runs only if the registry authorizes its action for the request origin, and a write action is never run on a model\'s own authority.',
+        ];
+        if (actions.length === 0) {
+          lines.push('', `No registered action matches "${query}". Try a broader word such as "memory", "knowledge", "world", "plan", or "prediction".`);
+        }
+        let current = null;
+        for (const a of actions) {
+          const family = a.name.split('.')[0];
+          if (family !== current) {
+            current = family;
+            lines.push('', `${family} (${families.find((f) => f.family === family).count})`);
+          }
+          const origins = a.origins.length === 1 ? a.origins[0] : a.origins.join(' + ');
+          const tag = `${a.permission}; ${origins}${a.plannable ? '; plan step' : ''}`;
+          lines.push(`  ${a.name} [${tag}] ${a.description}`);
+          // The input shape is most useful when the list is narrow enough to act on; printing
+          // it for every action would bury the names.
+          if (query !== null && a.inputHint) lines.push(`      input: ${a.inputHint}`);
+        }
+        return {
+          summary: `${actions.length} registered action(s) listed${query === null ? '' : ` for "${query}"`}`,
+          data,
+          display: truncate(lines.join('\n'), 12000),
+        };
+      },
+      async verify(ctx, _input, result) {
+        // The answer is a claim about the live registry, so it is checked against a fresh read
+        // of that registry rather than against the list the execute body built.
+        const names = ctx.registry.names();
+        if (result.data.total !== names.length) {
+          return { ok: false, detail: `reported ${result.data.total} actions; the registry holds ${names.length}` };
+        }
+        const unknown = result.data.actions.map((a) => a.name).filter((n) => !names.includes(n));
+        if (unknown.length > 0) return { ok: false, detail: `listed actions the registry does not hold: ${unknown.join(', ')}` };
+        if (result.data.actions.length !== result.data.matched) {
+          return { ok: false, detail: `listed ${result.data.actions.length} actions but reported ${result.data.matched} matches` };
+        }
+        if (result.data.matched > result.data.total) return { ok: false, detail: 'more matches than registered actions' };
+        return { ok: true, detail: 'every listed action is registered and the total matches a fresh registry read' };
       },
     },
 

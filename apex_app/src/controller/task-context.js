@@ -68,6 +68,14 @@ const OUTCOME_INTENTS = [
   ['why_stopped', /\bwhy\b[^?!.]*\b(?:stop\w*|fail\w*|failure|pause\w*|cancel\w*|abort\w*|halt\w*|error\w*|crash\w*|break\w*|stuck|never ran|did not run)\b/i],
   ['steps_succeeded', /\b(?:which|what)\b[^?!.]*\b(?:steps?|ones?)\b[^?!.]*\b(?:succeed\w*|complete\w*|verif\w*|passed|ran|worked|finished)\b/i],
   ['pending', /\b(?:pending|left|remaining|yet to (?:run|do)|to go|unstarted|still to (?:do|run|be done)|not (?:yet )?(?:been )?(?:run|done|finished|completed|started))\b/i],
+  // Whether the work produced the intended result is a different question from whether it ran,
+  // whether each result was verified, or whether it finished. It is decided before `finished`
+  // because "did it work?" asks about the result. "Succeed" is left to the completion class on
+  // purpose: in this vocabulary it is the completion question, and moving it would silently
+  // change what "did it succeed?" answers. "Outcome" needs a determiner: "the outcome?" asks
+  // about one recorded task's result, while "how have recent outcomes gone?" is a general
+  // question about the history, and reading it as a task question would answer it from one task.
+  ['achieved', /\b(?:achiev\w*|accomplish\w*)\b|\b(?:the|its|their|that|this)\s+outcomes?\b|\bwhat did (?:it|that|the task) (?:do|produce|deliver|get done)\b|\bdid (?:it|that|the task) (?:work|help|do (?:it|the job))\b/i],
   ['finished', /\b(?:finish(?:ed|es)?|complet\w*|done|over|succe\w*|success\w*|worked|went through|verif\w*|verified)\b/i],
   ['status', /\b(?:status|state|progress|update|explain|what happened|how did|tell me about|where is it)\b/i],
 ];
