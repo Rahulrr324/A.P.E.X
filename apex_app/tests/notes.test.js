@@ -203,12 +203,13 @@ test('the natural-language routes reach the note actions without capturing ordin
 test('a private note write combined with another request is refused before anything runs', async () => {
   const dir = tempDir();
   const app = appOn(dir);
-  const res = await app.controller.handle('save a private note titled Keys: abc; list my notes');
+  const secret = 'ZEBRA-SECRET-1947';
+  const res = await app.controller.handle(`save a private note titled Keys: ${secret}; list my notes`);
   assert.equal(res.status, Outcome.INPUT_REJECTED);
   assert.equal(res.operation.errors[0].code, 'PRIVATE_WRITE_COMBINED');
   assert.match(res.display, /private memory or note write/);
   assert.equal((await app.notes.list()).length, 0, 'nothing was stored');
-  assert.ok(!fs.readFileSync(path.join(dir, 'operations.jsonl'), 'utf8').includes('abc'));
+  assert.ok(!fs.readFileSync(path.join(dir, 'operations.jsonl'), 'utf8').includes(secret));
 });
 
 test('a note write through the conversation path is audited without its body', async () => {

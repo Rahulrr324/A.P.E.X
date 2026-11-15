@@ -102,6 +102,13 @@ export function backupActions({ dataDir, appVersion }) {
       },
       async execute(ctx, input) {
         const result = await inspectArchive({ source: input.path });
+        // The inspector keeps each file's stored text so other callers can use it; the operation
+        // record must not. This is a read, and copying every store's contents into the audit log
+        // would duplicate the notes and conversations the archive holds on every inspection.
+        const data = {
+          ...result,
+          files: result.files.map(({ name, bytes, sha256: digest, lines, unparsed }) => ({ name, bytes, sha256: digest, lines, unparsed })),
+        };
         const lines = [
           result.ok
             ? `Archive "${result.path}" is valid and can be restored.`
@@ -121,7 +128,7 @@ export function backupActions({ dataDir, appVersion }) {
         const summary = result.ok
           ? `archive "${result.path}" is valid (sha256 ${result.archiveSha256.slice(0, 12)})`
           : `archive "${result.path}" is not restorable (${result.problems.length} problem(s))`;
-        return { summary, data: result, display };
+        return { summary, data, display };
       },
       async verify(ctx, input, result) {
         const read = result.data;
@@ -173,7 +180,8 @@ export function backupActions({ dataDir, appVersion }) {
           ...(result.safetyPath === null
             ? ['  pre-restore:    no existing file was replaced, so none was written']
             : [`  pre-restore:    ${result.safetyPath}`]),
-          `  replaced:       ${result.replaced.length === 0 ? 'none (the files already matched)' : result.replaced.join(', ')}`,
+          `  created:        ${result.created.length === 0 ? 'none (every file was already present)' : result.created.join(', ')}`,
+          `  replaced:       ${result.replaced.length === 0 ? 'none' : result.replaced.join(', ')}`,
         ];
         if (result.unchanged.length > 0) lines.push(`  already equal:  ${result.unchanged.join(', ')}`);
         if (result.leftInPlace.length > 0) {

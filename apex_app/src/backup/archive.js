@@ -377,6 +377,10 @@ export async function restoreArchive({
     throw new StoreError(`a store lock is present (${busy.join(', ')}), so another APEX process may be writing; stop it and retry`, 'BACKUP_STORE_BUSY');
   }
 
+  // A file the directory does not hold is created, not replaced: there is nothing to overwrite and
+  // nothing to preserve, so it neither needs replaceExisting nor justifies a pre-restore copy. Only
+  // a file that exists with different bytes is a replacement.
+  const create = [];
   const replace = [];
   const unchanged = [];
   for (const file of loaded.files) {
@@ -387,7 +391,8 @@ export async function restoreArchive({
     } catch (err) {
       if (err?.code !== 'ENOENT') throw new StoreError(`cannot read ${file.name}: ${err?.code || err?.message}`);
     }
-    if (current !== null && sha256(current) === file.sha256) unchanged.push(file.name);
+    if (current === null) create.push(file);
+    else if (sha256(current) === file.sha256) unchanged.push(file.name);
     else replace.push(file);
   }
   const archived = new Set(loaded.files.map((file) => file.name));
@@ -424,7 +429,7 @@ export async function restoreArchive({
   } catch (err) {
     await Promise.all(staged.filter((entry) => !applied.includes(entry.file.name)).map((entry) => fs.unlink(entry.temp).catch(() => {})));
     throw new StoreError(
-      `restore stopped after replacing ${applied.length} file(s)${applied.length > 0 ? ` (${applied.join(', ')})` : ''}; ${safetyPath === null ? 'no pre-restore archive was needed because nothing existed before' : `the pre-restore archive at "${safetyPath}" holds what was there before`}: ${err?.code || err?.message}`,
+      `restore stopped after writing ${applied.length} file(s)${applied.length > 0 ? ` (${applied.join(', ')})` : ''}; ${safetyPath === null ? 'no pre-restore archive was written because no existing file was replaced' : `the pre-restore archive at "${safetyPath}" holds what was there before`}: ${err?.code || err?.message}`,
       'BACKUP_RESTORE_PARTIAL',
     );
   }
@@ -437,7 +442,10 @@ export async function restoreArchive({
       throw new StoreError(`restored ${file.name} cannot be read back: ${err?.code || err?.message}`, 'BACKUP_RESTORE_MISMATCH');
     }
     if (sha256(current) !== file.sha256) {
-      throw new StoreError(`restored ${file.name} does not match the archive; the pre-restore archive at "${safetyPath}" holds what was there before`, 'BACKUP_RESTORE_MISMATCH');
+      throw new StoreError(
+        `restored ${file.name} does not match the archive${safetyPath === null ? '' : `; the pre-restore archive at "${safetyPath}" holds what was there before`}`,
+        'BACKUP_RESTORE_MISMATCH',
+      );
     }
   }
 
@@ -446,6 +454,7 @@ export async function restoreArchive({
     archiveSha256: loaded.archiveSha256,
     archiveCreatedAt: loaded.archive.createdAt,
     safetyPath,
+    created: create.map((file) => file.name),
     replaced: replace.map((file) => file.name),
     unchanged,
     leftInPlace,

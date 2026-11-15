@@ -59,6 +59,12 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   each review stage on a fresh copy of the seeded store, constructs `NoBackend` (never contacted) and
   touches no network. Complete stage, partial reads and concurrency runs are printed separately and
   never added together.
+- `run-release-benchmark.mjs` builds every fixture on `mkdtemp` directories prefixed
+  `apex-release-bench-` and removes only the directories it created. It constructs `NoBackend` (never
+  contacted), starts no child process, and touches no network. It measures the usable-offline release
+  paths through the real controller - note search, the cross-store knowledge digest, bounded CSV
+  extraction, deadline listing and the work review, and the backup export / inspect / restore cycle -
+  at progressive corpus sizes and reports medians and in-run ratios only.
 
 - `run-evidence-benchmark.mjs` builds every fixture on a `mkdtemp` directory prefixed
   `apex-bench-evidence-`, asserts each directory with `assertIsolatedDataDir`, and uses the same
@@ -2675,3 +2681,74 @@ The AP-11 limitations apply unchanged. In addition:
 - The 4,000-record heap samples show the current side above the baseline; memory is reported, not
   optimized for, and no memory claim is made beyond the single 10,000-record observation.
 - Query-shape AP-11 numbers quoted for context come from a different run; compare only within a table.
+
+## Usable offline release benchmark (R-06)
+
+```sh
+node benchmarks/run-release-benchmark.mjs
+node benchmarks/run-release-benchmark.mjs --repeats 9 [--keep]
+```
+
+Network-free. Every application is built with `NoBackend` behind a `ModelGateway`, so no model is
+contacted, and no child process or socket is used. Each corpus is real records in the stores'
+append-only JSONL formats - they pass the same validators a controller write would - seeded directly
+so the run measures reading and exporting, not the cost of writing the fixture. Every measured
+operation goes through the real controller, including its independent verifier and its own audit
+line; a cold call per operation is discarded before the recorded samples.
+
+### What it measures
+
+| Phase | Through the controller | Sizes |
+| --- | --- | --- |
+| note search | `noteSearch` over every note for a two-term query, five results | 200 / 2,000 / 12,000 knowledge records with 1/3 as many notes |
+| knowledge digest | `knowledgeDigest` with a topic query over knowledge **and** notes | same |
+| CSV extraction | `workspaceExtract` on a CSV with one row per corpus record | same |
+| backup export | `backupExport` to a fresh destination per sample (an export refuses to overwrite) | same |
+| backup inspect | `backupInspect` on the last archive | same |
+| backup restore | `backupRestore` into an empty data directory, once per size | same |
+| deadline list / review | `deadlineList` and `workReview` over a ledger of 100 and 500 entries | 100 / 500 (the store's import bound) |
+
+### Measured
+
+One run on 2026-11-15, Windows, Node 26.4.0, medians of 5 samples after one discarded warm-up; restore is
+a single run and import a single run. These are observations, not a latency specification.
+
+| Records | Notes | Data MiB | Archive MiB | Note search ms | Digest ms | Extract ms | Export ms | Inspect ms | Restore ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 200 | 66 | 0.25 | 0.25 | 12.8 | 11.7 | 9.3 | 28.5 | 14.8 | 46.9 |
+| 2,000 | 666 | 1.16 | 1.26 | 37.1 | 18.7 | 14.9 | 54.1 | 37.4 | 64.2 |
+| 12,000 | 4,000 | 6.25 | 6.93 | 393.3 | 200.7 | 53.2 | 455.3 | 331.9 | 382.5 |
+
+In-run scaling from 200 to 12,000 records (a 60x corpus): note search 30.7x, digest 17.1x, extraction
+5.7x, export 16.0x, inspect 22.5x. No measured operation grew faster than the corpus; the full-store
+reads and the export are the closest to linear, and fixed command overhead keeps the small sizes from
+scaling proportionally. Every restore reported `success_verified`.
+
+| Deadline entries | Import ms (one run) | List ms | Review ms |
+| ---: | ---: | ---: | ---: |
+| 100 | 1,390.9 | 29.7 | 32.1 |
+| 500 | 7,865.3 | 35.7 | 45.7 |
+
+In-run scaling from 100 to 500 deadlines: list 1.2x, review 1.4x. The list returns at most 50 items and
+the review at most 20, but each sorts the whole ledger, so the read follows the ledger size. Import is
+dominated by one fsynced append per record, not by parsing.
+
+The first measurement of this benchmark found that `backup.inspect` copied the archive's full stored
+text into its operation record: 7.2 MB per inspection at 12,000 records, growing `operations.jsonl` by
+43 MB over the run. The action now returns the manifest only (name, bytes, digest, line counts), and
+`backup.test.js` pins that the inspection record does not contain the store text.
+
+### What it does not establish
+
+- Only in-run ratios are reported. Absolute timings swing with machine load and with the OS file
+  cache; the note-search samples at 12,000 records ranged from 222 to 877 ms in this run, so the
+  median is representative of this run, not a bound.
+- The corpus is synthetic but shaped like the real stores: distinct triples, real body hashes, and
+  provenance that passes validation. A real corpus with different record sizes shifts every cost.
+- The export column includes the action's own verifier, which re-inspects the written archive, so it
+  is a complete-command cost, not a file-write cost.
+- Restore is one sample per size and consumes an archive into an empty directory, so it is not a
+  median and it does not measure replacing existing bytes with a pre-restore copy.
+- No model is configured, contacted, or needed. These numbers say nothing about model latency.
+
+This script is not part of `npm test` and no test depends on it.

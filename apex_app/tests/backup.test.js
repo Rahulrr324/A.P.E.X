@@ -221,6 +221,31 @@ describe('backup.inspect', () => {
     assert.equal(res.status, Outcome.EXECUTION_FAILED);
     assert.equal(failureCode(res), 'BACKUP_NOT_FOUND');
   });
+
+  test('the inspection record carries the manifest, not the store contents', async () => {
+    const { app, dataDir, elsewhere } = appFor();
+    await seed(app);
+    const marker = `MARKER-${'x'.repeat(4000)}`;
+    const noted = await app.controller.noteAdd({ title: 'Inspection privacy', body: marker });
+    assert.equal(noted.status, Outcome.SUCCESS_VERIFIED, noted.display);
+    const destination = archivePath(elsewhere);
+    const exported = await app.controller.backupExport({ path: destination });
+    assert.equal(exported.status, Outcome.SUCCESS_VERIFIED, exported.display);
+
+    const res = await app.controller.backupInspect({ path: destination });
+    assert.equal(res.status, Outcome.SUCCESS_VERIFIED, res.display);
+    const data = res.operation.steps[0].result.data;
+    assert.ok(data.files.every((file) => !('text' in file)));
+
+    const record = readJsonl(path.join(dataDir, 'operations.jsonl'))
+      .find((op) => op.capability === 'backup.inspect');
+    assert.ok(record);
+    assert.ok(!JSON.stringify(record).includes('MARKER-'), 'the inspection record must not copy the archive contents');
+
+    // The module still returns the stored text for callers that need it; only the audit record omits it.
+    const read = await inspectArchive({ source: destination });
+    assert.ok(read.files.some((file) => file.name === 'notes.jsonl' && file.text.includes('MARKER-')));
+  });
 });
 
 describe('backup.restore', () => {
@@ -289,6 +314,35 @@ describe('backup.restore', () => {
     assert.match(res.operation.steps[0].execution.error.message, /knowledge\.jsonl/);
     assert.deepEqual(fs.readFileSync(path.join(dataDir, 'knowledge.jsonl')), before);
     assert.equal(fs.existsSync(path.join(dataDir, 'backups')), false);
+  });
+
+  test('restores into a data directory whose files are missing without replaceExisting', async () => {
+    const { app, dataDir, elsewhere } = appFor();
+    await seed(app);
+    const destination = archivePath(elsewhere);
+    const exported = await app.controller.backupExport({ path: destination });
+    const digest = exported.operation.steps[0].result.data.archiveSha256;
+    const archived = exported.operation.steps[0].result.data.files.map((file) => file.name);
+
+    // The data directory still exists, but the stores are gone (for example after a mistaken
+    // delete). Nothing here overwrites an existing file, so nothing needs preserving.
+    for (const name of archived) fs.unlinkSync(path.join(dataDir, name));
+
+    const res = await app.controller.backupRestore({ path: destination, confirm: digest.slice(0, 12) });
+    assert.equal(res.status, Outcome.SUCCESS_VERIFIED, res.operation.steps[0].verification.detail);
+    const data = res.operation.steps[0].result.data;
+    assert.deepEqual(data.replaced, [], 'no existing file was replaced');
+    assert.deepEqual(data.unchanged, [], 'no file was already equal');
+    assert.deepEqual([...data.created].sort(), [...archived].sort(), 'every archived file was created');
+    assert.equal(data.safetyPath, null, 'no pre-restore archive is needed when nothing is overwritten');
+    assert.equal(fs.existsSync(path.join(dataDir, 'backups')), false);
+    assert.match(res.display, /created:\s+.*knowledge\.jsonl/);
+    assert.match(res.display, /no existing file was replaced, so none was written/);
+    for (const name of archived) assert.ok(fs.existsSync(path.join(dataDir, name)), `${name} was written`);
+
+    const reopened = createApp({ dataDir, now: () => NOW });
+    const listed = await reopened.controller.knowledgeList({ limit: 10 });
+    assert.match(listed.display, /Alpha/);
   });
 
   test('a snapshot never holds its own export record, so even an immediate restore asks to replace the audit file', async () => {
