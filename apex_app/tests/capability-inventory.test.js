@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { APP_ROOT, makeTempDataDir, cleanup } from './helpers.js';
 import { createApp } from '../src/app.js';
+import { exportArchive } from '../src/backup/archive.js';
 import { checkSteps, planningPrompt } from '../src/tasks/planner.js';
 import {
   AUTO_CAPTURE_CAPABILITIES,
@@ -106,7 +107,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 105, 'the default registry has 105 actions');
+    assert.equal(plain.registry.list().length, 108, 'the default registry has 108 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -140,7 +141,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 55, 'the inventory counts fifty-five write actions with a root configured');
+    assert.equal(writes.length, 57, 'the inventory counts fifty-seven write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -214,11 +215,16 @@ describe('AF-19: the registry is the inventory', () => {
     // wrote the note log still shows up as a change.
     const note = await c.runAction('note.add', { title: 'Inventory probe note', body: 'the gate is open' }, 'user', 'seednote');
     assert.equal(note.outcome, 'success_verified', note.summary);
+    // The backup inspection reads an archive, so one is written outside the data directory before the
+    // snapshot. The module writes no store file and records no audit line, unlike a command.
+    const archiveDir = tempDir();
+    const backupPath = path.join(archiveDir, 'inventory-probe.json');
+    await exportArchive({ dataDir: dir, destination: backupPath, now: () => new Date('2026-11-15T12:00:00.000Z'), appVersion: 'inventory' });
     const afterSeeds = sizes(dir);
     const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 65, 'the inventory counts sixty-five read actions with a root configured');
+    assert.equal(reads.length, 66, 'the inventory counts sixty-six read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -263,6 +269,7 @@ describe('AF-19: the registry is the inventory', () => {
         'history.reconstruct': { at: '2030-01-01T00:00:00.000Z' },
         'adaptation.review.inspect': { target: adaptationId },
         'adaptation.review.reconcile': { target: adaptationId },
+        'backup.inspect': { path: backupPath },
       }[def.name] ?? {};
       const step = await c.runAction(def.name, input, 'user', `rd${def.name.replace(/[^A-Za-z0-9]/g, '')}`);
       assert.ok(['success_verified', 'verification_unavailable'].includes(step.outcome),
@@ -364,10 +371,13 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
       assert.equal(row.class, def.permission, `${name}: the README class disagrees with the registry`);
       assert.equal(row.origins, def.origins.length === 1 ? 'user' : 'user + model', `${name}: README origins`);
       // Every APEX write except the filesystem writes and the note writes changes cognitive state.
-      // A file write or a directory lifecycle change acts on the configured workspace, and a note
-      // is the user's own text in its own log: neither is a belief or an intention APEX reasons
-      // from, so each says so instead of being counted as a belief change.
-      if (def.permission === 'write' && !name.startsWith('filesystem.') && !name.startsWith('note.')) {
+      // A file write or a directory lifecycle change acts on the configured workspace, a note is the
+      // user's own text in its own log, and an export writes a copy outside the data directory: none
+      // is a belief or an intention APEX reasons from, so each says so instead of being counted as a
+      // belief change. A restore replaces the belief stores, so it is counted.
+      if (name === 'backup.export') {
+        assert.equal(row.belief, 'no (a copy is not a belief)', `${name}: README belief-state`);
+      } else if (def.permission === 'write' && !name.startsWith('filesystem.') && !name.startsWith('note.')) {
         assert.equal(row.belief, 'yes', `${name}: README belief-state`);
       } else if (def.permission === 'read') {
         assert.equal(row.belief, 'no', `${name}: README belief-state`);

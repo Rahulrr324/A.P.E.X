@@ -106,6 +106,10 @@ const MODEL_WRITE_ATTEMPTS = [
   // user's own; a reply may read neither into existence.
   ['adaptation.review.open', { target: 'no-such-adaptation', reason: 'the model opened a review' }],
   ['adaptation.review.decide', { review: 'no-such-review', decision: 'retire', reason: 'the model decided' }],
+  // An archive holds the notes, conversations, and audit log, and a restore replaces every store.
+  // Neither may be produced or applied by a reply.
+  ['backup.export', { path: 'model-archive.json' }],
+  ['backup.restore', { path: 'model-archive.json', confirm: '00000000', replaceExisting: true }],
   ['prediction.record', { capability: 'memory.add', expectation: 'success', subject: 'the model expects success', inDays: 7 }],
   ['prediction.evaluate', { target: 'no-such-prediction' }],
   ['prediction.invalidate', { target: 'no-such-prediction', reason: 'the model withdrew it' }],

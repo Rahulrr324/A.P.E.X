@@ -50,6 +50,10 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // ledger already carries the source path, digest, and line; capturing an import would put the
   // owner's schedule into the log the pattern and adaptation reads draw from.
   deadlines: 'it reads or writes the deadline ledger, whose records are the owner\'s imported dates with their own source provenance; an experience of one would copy that schedule into the log the pattern and adaptation reads draw from',
+  // Backup acts on the data directory as a whole, including this experience log. An experience of
+  // an export or a restore would be a record of APEX's own files - and, after a restore, one written
+  // into a log that was just replaced - so the archive and the pre-restore copy carry that account.
+  backup: 'it reads or replaces the whole data directory, so an experience of one would describe APEX\'s own stores rather than an event, and a restore would write the experience into a log it just replaced',
   'no-action': 'the request ran no action, so there is no postcondition that could have been verified',
   // The prediction ledger's own operations. This is a separate category from `self-bookkeeping`
   // because the reason is not about filling a log with its own traffic: an experience answers "what
@@ -226,6 +230,9 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'note.history': 'read',
   'deadline.list': 'read',
   'deadline.import': 'deadlines',
+  'backup.export': 'backup',
+  'backup.inspect': 'backup',
+  'backup.restore': 'backup',
   'knowledge.digest': 'read',
   'work.review': 'read',
   none: 'no-action',

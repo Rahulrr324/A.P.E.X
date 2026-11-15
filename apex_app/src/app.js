@@ -42,6 +42,7 @@ import { PlanStore } from './plans/store.js';
 import { ProposalStore } from './proposals/store.js';
 import { DeadlineStore } from './deadlines/store.js';
 import { deadlineActions } from './actions/deadline-actions.js';
+import { backupActions } from './actions/backup-actions.js';
 import { goalActions } from './actions/goal-actions.js';
 import { planActions } from './actions/plan-actions.js';
 import { proposalActions } from './actions/proposal-actions.js';
@@ -203,7 +204,7 @@ export function createApp({
 
   for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
-    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
+    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is
   // reported as absent; a damaged state still raises (it must not look empty).
@@ -310,6 +311,7 @@ export function createApp({
     proposals,
     worldModel,
     deadlines,
+    dataDir,
   });
   return {
     controller,

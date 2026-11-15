@@ -148,6 +148,10 @@ Usage:
   node bin/apex.js review [--limit N] [--days N]   the whole board: goals, plans, tasks, and recorded deadlines (read-only)
   node bin/apex.js deadline list [--days N] [--limit N]   recorded deadlines within a horizon, with their source file and line (read-only)
   node bin/apex.js deadline import <path> [--max-bytes N] [--workspace <name>]   import dates from a JSONL, NDJSON, CSV, or TSV file
+  node bin/apex.js backup export <archive-path>   one versioned archive of the APEX data files, with a digest per file (user only)
+  node bin/apex.js backup inspect <archive-path>  check an archive without restoring anything (read-only)
+  node bin/apex.js backup restore <archive-path> --confirm <digest-prefix> [--replace-existing]
+                                     replace the APEX data files from a validated archive; a pre-restore archive is written first
   node bin/apex.js propose [--kind goal_create|goal_clarify|plan_create|plan_revise|advice] [--goal <id>] [--plan <id>] <request>
   node bin/apex.js proposal list [--limit N]
   node bin/apex.js proposal show <id>
@@ -414,7 +418,7 @@ function parseFlags(args, allowed, repeat = []) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--in-days needs a whole number of days', 'USAGE');
         flags['in-days'] = Number(v);
         i += 1;
-      } else if (['title', 'body', 'subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use', 'extension', 'content', 'expected-sha256', 'workspace', 'operations'].includes(name)) {
+      } else if (['title', 'body', 'subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use', 'extension', 'content', 'expected-sha256', 'workspace', 'operations', 'confirm'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -2601,6 +2605,39 @@ export async function main(argv, {
           path: paths[0],
           ...(flags['max-bytes'] === undefined ? {} : { maxBytes: flags['max-bytes'] }),
           ...(flags.workspace === undefined ? {} : { workspace: flags.workspace }),
+        }));
+      }
+      err(`usage: ${usage}`);
+      return 2;
+    }
+
+    if (command === 'backup') {
+      const [sub, ...rest] = args;
+      const usage = 'backup export <archive-path> | backup inspect <archive-path> | backup restore <archive-path> --confirm <digest-prefix> [--replace-existing]';
+      if (sub === 'export' || sub === 'inspect') {
+        const { rest: paths } = parseFlags(rest, []);
+        if (paths.length !== 1) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        return emit(
+          sub === 'export'
+            ? await app.controller.backupExport({ path: paths[0] })
+            : await app.controller.backupInspect({ path: paths[0] }),
+        );
+      }
+      if (sub === 'restore') {
+        const { flags, rest: paths } = parseFlags(rest, ['confirm', 'replace-existing']);
+        if (paths.length !== 1) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        // The confirmation is passed through as given. Whether it matches this archive is decided
+        // from the archive's own digest, not from anything the command line asserts about it.
+        return emit(await app.controller.backupRestore({
+          path: paths[0],
+          confirm: flags.confirm,
+          replaceExisting: flags['replace-existing'] === true,
         }));
       }
       err(`usage: ${usage}`);

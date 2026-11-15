@@ -3718,7 +3718,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 105 registered actions declare both `validate()` and `verify()` - 120 with a
+- **Verification.** All 108 registered actions declare both `validate()` and `verify()` - 123 with a
   filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
@@ -3782,6 +3782,9 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `filesystem.batch` | user | write | never in a plan | the effects of up to twenty mkdir/move/delete operations, every one preflighted against the state the batch starts from | no (filesystem) | no (a file is not a belief) |
 | `deadline.list` | user | read | offered to a user plan, never to a model plan | nothing (measured) | no (read) | no |
 | `deadline.import` | user | write | never in a plan | `deadlines.jsonl` (append-only; each record names its source path, digest, and line) | no (deadlines) | yes |
+| `backup.export` | user | write | never in a plan | the named archive file outside the data directory; the audit stores its path | no (backup) | no (a copy is not a belief) |
+| `backup.inspect` | user | read | never in a plan | nothing (measured) | no (backup) | no |
+| `backup.restore` | user | write | never in a plan | every APEX data file the archive holds, a pre-restore archive under `backups/`, then `operations.jsonl` for its own audit line | no (backup) | yes |
 | `goal.add`, `goal.revise`, `goal.confirm`, `goal.update`, `goal.evidence`, `goal.complete`, `goal.link` | user | write | never in a plan | `goals.jsonl` (and `operations.jsonl`; a revision resets criterion evidence, completion re-checks the audit log) | no (executive) | yes |
 | `goal.list`, `goal.show` | user | read | - | nothing (measured) | no (read) | no |
 | `proposal.create` | user request; the proposal itself is model-origin | not a registered action | its proposals are checked step by step | `proposals.jsonl` + `operations.jsonl` | no (executive) | no (a suggestion, not a belief) |
@@ -3812,8 +3815,9 @@ the action ran to `success_verified` in an isolated data directory and no store 
 `filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.extract`,
 `filesystem.compare`, `filesystem.report`, the filesystem lifecycle and write actions, and
 `deadline.import` appear in the registry only when a workspace root is configured; there is no default
-root, and a model proposal cannot supply one, so the count is 105 registered actions by default and
-120 with a root. `deadline.list` needs no root: it reads the ledger, not a workspace. Batch AG added ten user-origin write actions
+root, and a model proposal cannot supply one, so the count is 108 registered actions by default and
+123 with a root. `deadline.list` needs no root: it reads the ledger, not a workspace, and the three
+`backup.*` actions need no root either: they read and replace the data directory itself. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
 two more user-origin writes (`goal.confirm`, the user's own decision about a success criterion APEX
@@ -3850,8 +3854,12 @@ read that pulls bounded text out of a PDF, DOCX, XLSX, CSV or UTF-8 text file. I
 plan and never to a model plan, which is why the model count stays at 22 and the user count rises to
 52. The deadline work added two more user-origin actions: `deadline.list`, a plannable read of the
 recorded dates in the ledger, and `deadline.import`, a write that is never plannable and is registered
-only with a root. The model count stays at 22 and the user count rises to 53 (45 without a root). The
-default registry holds 105 actions and 120 with a root.
+only with a root. The backup work added three more user-origin actions that need no root:
+`backup.export` writes one versioned archive outside the data directory, `backup.inspect` reads and
+validates an archive, and `backup.restore` replaces the data files from a validated, confirmed archive
+after writing a pre-restore copy. None is plannable and none is offered to either prompt. The model
+count stays at 22 and the user count rises to 53 (45 without a root). The
+default registry holds 108 actions and 123 with a root.
 
 ### The inconsistencies this found, and what became of them
 

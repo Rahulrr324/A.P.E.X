@@ -286,6 +286,18 @@ const AUDIT_TEXT_FIELDS = Object.freeze({
     arrays: [],
     objects: [],
   }),
+  // Backup commands name a file system path and, for a restore, the digest prefix that confirms
+  // the exact archive. Both are user text, so they go through the same credential masking as any
+  // other audit input rather than being copied unexamined.
+  'backup.export': Object.freeze({
+    allowed: ['path'], text: ['path'], arrays: [], objects: [],
+  }),
+  'backup.inspect': Object.freeze({
+    allowed: ['path'], text: ['path'], arrays: [], objects: [],
+  }),
+  'backup.restore': Object.freeze({
+    allowed: ['path', 'confirm', 'replaceExisting'], text: ['path', 'confirm'], arrays: [], objects: [],
+  }),
   // The feedback fields are the user's own words about a retained task run. They are audit input
   // like any other; the experience store holds the record itself, and the mask runs on top.
   'task.feedback': Object.freeze({
@@ -571,6 +583,7 @@ export class CognitiveController {
     proposals = null,
     worldModel = null,
     deadlines = null,
+    dataDir = null,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -621,6 +634,9 @@ export class CognitiveController {
     // Deadlines are dates the owner imported from a local file. The ledger holds no schedule and no
     // completion state; the portfolio review reads it for recorded dates and nothing else.
     this.deadlines = deadlines;
+    // The data directory the backup commands read and replace. The actions close over it at
+    // composition time; this field only decides whether the commands are available at all.
+    this.dataDir = dataDir;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -1462,6 +1478,63 @@ export class CognitiveController {
     });
     const step = await this.runAction('deadline.list', { limit, horizonDays }, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
+  }
+
+  // ---- backup and restore -----------------------------------------------------
+  // An export writes outside the data directory, an inspect reads without writing, and a restore
+  // validates and confirms before replacing anything. None is plannable and none accepts a model
+  // origin, so neither an archive of the user's notes and audit log nor the replacement of the
+  // stores can be produced or applied by a plan step. Replacing files while the process runs is
+  // safe because every JsonlStore re-reads its bytes per operation; the restore's own audit record
+  // is appended to the restored log afterwards by the ordinary command path.
+
+  #requireBackup(capability = 'backup commands') {
+    if (!this.dataDir) throw new ValidationError(`${capability} are not available in this configuration`);
+  }
+
+  async backupExport({ path: destination } = {}) {
+    this.#requireBackup();
+    const shown = typeof destination === 'string' && destination.trim() !== ''
+      ? truncate(destination.trim(), 120)
+      : '[missing path]';
+    const op = this.#newOp({ capability: 'backup.export', origin: 'user', request: `backup export [${shown}]` });
+    const step = await this.runAction('backup.export', { path: destination }, 'user', op.id);
+    return this.#finishCommandOp(
+      op,
+      step,
+      'The archive may have been written, but its audit record could not be written; it is not reported as verified success.',
+    );
+  }
+
+  // A read of an archive is like any other read: it changes nothing, so an audit failure cannot be
+  // reported as an integrity failure of a change that never happened.
+  async backupInspect({ path: source } = {}) {
+    this.#requireBackup();
+    const shown = typeof source === 'string' && source.trim() !== ''
+      ? truncate(source.trim(), 120)
+      : '[missing path]';
+    const op = this.#newOp({ capability: 'backup.inspect', origin: 'user', request: `backup inspect [${shown}]` });
+    const step = await this.runAction('backup.inspect', { path: source }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async backupRestore({ path: source, confirm, replaceExisting = false } = {}) {
+    this.#requireBackup();
+    const shown = typeof source === 'string' && source.trim() !== ''
+      ? truncate(source.trim(), 120)
+      : '[missing path]';
+    const op = this.#newOp({ capability: 'backup.restore', origin: 'user', request: `backup restore [${shown}]` });
+    const step = await this.runAction(
+      'backup.restore',
+      { path: source, confirm, replaceExisting },
+      'user',
+      op.id,
+    );
+    return this.#finishCommandOp(
+      op,
+      step,
+      'The restore may have replaced files, but its audit record could not be written into the restored log; the pre-restore archive named in the result is the record of what was there before.',
+    );
   }
 
   // The user's assessment of a completed task's outcome. The action refuses unless the task log
