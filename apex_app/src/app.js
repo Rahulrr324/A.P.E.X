@@ -24,7 +24,7 @@ import {
   FILESYSTEM_LIST_DEFAULT_LIMIT,
   FILESYSTEM_LIST_MAX_LIMIT,
 } from './config.js';
-import { resolveRoot, validateRoot } from './filesystem/path.js';
+import { createWorkspaces } from './filesystem/roots.js';
 import { listAction, readAction } from './filesystem/actions.js';
 import { workspaceActions } from './filesystem/workspace.js';
 import { TaskStore } from './tasks/store.js';
@@ -40,6 +40,8 @@ import { historyActions } from './actions/history-actions.js';
 import { GoalStore } from './goals/store.js';
 import { PlanStore } from './plans/store.js';
 import { ProposalStore } from './proposals/store.js';
+import { DeadlineStore } from './deadlines/store.js';
+import { deadlineActions } from './actions/deadline-actions.js';
 import { goalActions } from './actions/goal-actions.js';
 import { planActions } from './actions/plan-actions.js';
 import { proposalActions } from './actions/proposal-actions.js';
@@ -55,6 +57,7 @@ export function createApp({
   now,
   idFactory,
   filesystemRoot = null,
+  filesystemWorkspaces = [],
   filesystemMaxReadBytes = DEFAULT_FILESYSTEM_MAX_READ_BYTES,
   filesystemListDefaultLimit = FILESYSTEM_LIST_DEFAULT_LIMIT,
   filesystemListMaxLimit = FILESYSTEM_LIST_MAX_LIMIT,
@@ -101,6 +104,10 @@ export function createApp({
   // Proposals are model suggestions. The store records them and the user's decision about them;
   // it cannot approve, activate, or execute anything, and it is not a source of authority.
   const proposals = new ProposalStore(path.join(dataDir, 'proposals.jsonl'), { now: clock, idFactory });
+  // Recorded deadlines: dates the owner imported from a local file. The ledger stores the date,
+  // its source file, that file's digest, and the line. It is not a scheduler and holds no
+  // completion state; a date passing changes nothing here.
+  const deadlines = new DeadlineStore(path.join(dataDir, 'deadlines.jsonl'), { now: clock });
 
   // The World Model is a separate append-only record of entities, facts, relationships, and events.
   // Every evidence reference is checked against the store that owns the cited record, so each
@@ -176,24 +183,27 @@ export function createApp({
     },
   });
 
-  // Filesystem inspection exists only when a root is configured. The root is resolved
-  // and validated here, once, and captured by the action closures: no request, model
-  // proposal, or task step can change it. A configured-but-invalid root is a startup
+  // Filesystem assistance exists only when at least one root is configured. Every root is
+  // resolved and validated here, once, and captured by the action closures: no request, model
+  // proposal, or task step can add or widen one. A configured-but-invalid root is a startup
   // error rather than a silently disabled capability.
   let rootForContext = null;
+  let workspaces = null;
   const fsActions = [];
-  if (filesystemRoot !== null && filesystemRoot !== undefined) {
-    rootForContext = validateRoot(resolveRoot(filesystemRoot));
+  const hasNamedRoots = Array.isArray(filesystemWorkspaces) && filesystemWorkspaces.length > 0;
+  if ((filesystemRoot !== null && filesystemRoot !== undefined) || hasNamedRoots) {
+    workspaces = createWorkspaces({ root: filesystemRoot, extra: filesystemWorkspaces });
+    rootForContext = workspaces?.defaultRoot ?? null;
     fsActions.push(
-      listAction(rootForContext, { defaultLimit: filesystemListDefaultLimit, maxEntries: filesystemListMaxLimit }),
-      readAction(rootForContext, { maxBytes: filesystemMaxReadBytes }),
-      ...workspaceActions(rootForContext),
+      listAction(workspaces, { defaultLimit: filesystemListDefaultLimit, maxEntries: filesystemListMaxLimit }),
+      readAction(workspaces, { maxBytes: filesystemMaxReadBytes }),
+      ...workspaceActions(workspaces),
     );
   }
 
   for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
-    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
+    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is
   // reported as absent; a damaged state still raises (it must not look empty).
@@ -209,6 +219,9 @@ export function createApp({
     // The world model reports damage instead of throwing from this read, so a damaged log is
     // displayed as unavailable-with-detail and never counted as an empty world.
     const wm = await worldModel.status();
+    // A deadline count is what was imported from the owner's files; it is not a count of what is
+    // due, which depends on a horizon and belongs to a reader that states it.
+    const dl = await deadlines.status();
     const current = await session.peek();
     if (current.status === 'corrupt') {
       throw new StoreError(`${current.detail}; run "apex new" to start a new session`);
@@ -249,6 +262,8 @@ export function createApp({
       proposalRecords: pr.records,
       proposalCount: pr.proposals,
       corruptProposalLines: pr.corrupt,
+      deadlineRecords: dl.records,
+      corruptDeadlineLines: dl.corrupt,
       // The world model is a record of claims, not verified world state. A count says what is
       // stored; conflictGroups says how many disagreements are stored unresolved.
       worldModelAvailable: wm.available,
@@ -264,6 +279,8 @@ export function createApp({
       sessionId: current.state?.sessionId ?? null,
       model: gateway.describe(),
       filesystemRoot: rootForContext,
+      // Names are selectors, not authority: every listed root was already validated at startup.
+      filesystemWorkspaces: workspaces === null ? [] : workspaces.list(),
     };
   };
 
@@ -282,6 +299,7 @@ export function createApp({
     taskStore,
     summaryQueue,
     rootForContext,
+    workspaces,
     knowledge,
     notes,
     experience,
@@ -291,6 +309,7 @@ export function createApp({
     plans,
     proposals,
     worldModel,
+    deadlines,
   });
   return {
     controller,
@@ -305,6 +324,7 @@ export function createApp({
     taskStore,
     summaryQueue,
     filesystemRoot: rootForContext,
+    filesystemWorkspaces: workspaces,
     knowledge,
     notes,
     experience,
@@ -314,6 +334,7 @@ export function createApp({
     plans,
     proposals,
     worldModel,
+    deadlines,
   };
 }
 
@@ -325,6 +346,7 @@ export function createAppFromEnv(env = process.env) {
     gateway,
     contextTurns: config.contextTurns,
     filesystemRoot: config.filesystem.root,
+    filesystemWorkspaces: config.filesystem.workspaces,
     filesystemMaxReadBytes: config.filesystem.maxReadBytes,
     filesystemListDefaultLimit: config.filesystem.listDefaultLimit,
     filesystemListMaxLimit: config.filesystem.listMaxLimit,

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ValidationError } from './errors.js';
 import { resolveRoot } from './filesystem/path.js';
+import { parseWorkspaceSpec } from './filesystem/roots.js';
 import { CONTROL_CHARS, singleLine } from './util.js';
 import { CAPTURE_MODES, CAPTURE_OFF } from './experience/capture.js';
 
@@ -160,6 +161,16 @@ export function loadConfig(env = process.env) {
   );
   const rawRoot = (env.APEX_FILESYSTEM_ROOT || '').trim();
   if (rawRoot) filesystemRoot = resolveRoot(rawRoot);
+  // Named roots are additional boundaries, never a replacement for the configured base: a
+  // selector than cannot fall back to a default root would make every unnamed request ambiguous.
+  const workspaceSpec = (env.APEX_WORKSPACES || '').trim();
+  const workspaces = parseWorkspaceSpec(workspaceSpec);
+  if (workspaces.length > 0 && filesystemRoot === null) {
+    throw new ValidationError(
+      'APEX_WORKSPACES requires APEX_FILESYSTEM_ROOT; the default root remains the base every relative path resolves against',
+      'INVALID_CONFIG',
+    );
+  }
 
   // Whether APEX may record an experience of a verified outcome on its own. The default is `off`
   // for the same reason nothing else in APEX is on by default: a capability becomes active only
@@ -193,6 +204,7 @@ export function loadConfig(env = process.env) {
     experienceCapture,
     filesystem: {
       root: filesystemRoot,
+      workspaces,
       maxReadBytes: filesystemMaxReadBytes,
       listDefaultLimit: FILESYSTEM_LIST_DEFAULT_LIMIT,
       listMaxLimit: FILESYSTEM_LIST_MAX_LIMIT,

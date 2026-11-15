@@ -80,7 +80,10 @@ describe('task execution: filesystem steps', () => {
     assert.equal(app.filesystemRoot, fs.realpathSync(dirs[dirs.length - 1]));
     assert.deepEqual(
       app.registry.names().filter((n) => n.startsWith('filesystem.')),
-      ['filesystem.compare', 'filesystem.find', 'filesystem.list', 'filesystem.read', 'filesystem.report', 'filesystem.summarize', 'filesystem.write'],
+      ['filesystem.batch', 'filesystem.compare', 'filesystem.delete', 'filesystem.extract',
+        'filesystem.find', 'filesystem.list', 'filesystem.mkdir', 'filesystem.move',
+        'filesystem.read', 'filesystem.report', 'filesystem.restore', 'filesystem.summarize',
+        'filesystem.trash', 'filesystem.write'],
     );
   });
 
@@ -96,7 +99,7 @@ describe('task execution: filesystem steps', () => {
     assert.deepEqual(task.steps.map((s) => s.action), ['filesystem.list', 'filesystem.read']);
     assert.deepEqual(task.steps.map((s) => s.permission), ['read', 'read']);
     assert.deepEqual(task.steps[1].dependsOn, ['s1']);
-    assert.deepEqual(Object.keys(task.steps[0].input).sort(), ['limit', 'path']);
+    assert.deepEqual(Object.keys(task.steps[0].input).sort(), ['limit', 'path', 'workspace']);
 
     const run = await app.controller.runTask(task.id, 'run');
     assert.equal(run.status, Outcome.SUCCESS_VERIFIED, run.display);

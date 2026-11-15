@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { ValidationError, ExecutionError } from '../errors.js';
 import { resolveInside, hasControlChars } from './path.js';
+import { workspaceField } from './roots.js';
 import { singleLine } from '../util.js';
 import { ORIGIN_USER } from '../actions/origins.js';
 
@@ -90,16 +91,16 @@ function resolveForAction(root, inputPath) {
 
 // ---- filesystem.list --------------------------------------------------------
 
-export function listAction(root, { maxEntries = MAX_LIST_LIMIT, defaultLimit = DEFAULT_LIST_LIMIT } = {}) {
+export function listAction(roots, { maxEntries = MAX_LIST_LIMIT, defaultLimit = DEFAULT_LIST_LIMIT } = {}) {
   const limitCap = Math.min(maxEntries, MAX_LIST_LIMIT);
   return {
     name: 'filesystem.list',
-    description: 'List one directory inside the authorized root. Read-only, one level, bounded.',
-    inputHint: `{"path": "relative/dir", "limit": optional ${MIN_LIST_LIMIT}-${limitCap}}`,
+    description: 'List one directory inside an authorized workspace root. Read-only, one level, bounded.',
+    inputHint: `{"path": "relative/dir", "workspace": optional root name, "limit": optional ${MIN_LIST_LIMIT}-${limitCap}}`,
     permission: 'read',
     origins: [ORIGIN_USER],
     validate(input) {
-      const o = expectObject(input, ['path', 'limit']);
+      const o = expectObject(input, ['path', 'workspace', 'limit']);
       const p = pathField(o.path);
       let limit = defaultLimit;
       if (o.limit !== undefined) {
@@ -108,9 +109,10 @@ export function listAction(root, { maxEntries = MAX_LIST_LIMIT, defaultLimit = D
         }
         limit = o.limit;
       }
-      return { path: p, limit };
+      return { path: p, workspace: workspaceField(o.workspace, roots), limit };
     },
-    async execute(ctx, { path: inputPath, limit }) {
+    async execute(ctx, { path: inputPath, workspace, limit }) {
+      const root = roots.pick(workspace);
       const dir = resolveForAction(root, inputPath);
       let stat;
       try {
@@ -150,7 +152,7 @@ export function listAction(root, { maxEntries = MAX_LIST_LIMIT, defaultLimit = D
     // Independent check: re-list the same directory and compare what was reported.
     async verify(ctx, input, result) {
       try {
-        const dir = resolveForAction(ctx.root ?? root, input.path);
+        const dir = resolveForAction(roots.pick(input.workspace), input.path);
         const fresh = fs.readdirSync(dir, { withFileTypes: true }).sort(byName);
         const reported = result.data.entries;
         if (!Array.isArray(reported)) return { ok: false, detail: 'result contains no entry list' };
@@ -180,15 +182,15 @@ export function listAction(root, { maxEntries = MAX_LIST_LIMIT, defaultLimit = D
 
 // ---- filesystem.read --------------------------------------------------------
 
-export function readAction(root, { maxBytes = 1_048_576 } = {}) {
+export function readAction(roots, { maxBytes = 1_048_576 } = {}) {
   return {
     name: 'filesystem.read',
-    description: 'Read a bounded UTF-8 text file inside the authorized root. Read-only.',
-    inputHint: `{"path": "relative/file.txt", "maxBytes": optional 1-${maxBytes}}`,
+    description: 'Read a bounded UTF-8 text file inside an authorized workspace root. Read-only.',
+    inputHint: `{"path": "relative/file.txt", "workspace": optional root name, "maxBytes": optional 1-${maxBytes}}`,
     permission: 'read',
     origins: [ORIGIN_USER],
     validate(input) {
-      const o = expectObject(input, ['path', 'maxBytes']);
+      const o = expectObject(input, ['path', 'workspace', 'maxBytes']);
       const p = pathField(o.path);
       let limit = maxBytes;
       if (o.maxBytes !== undefined) {
@@ -197,9 +199,10 @@ export function readAction(root, { maxBytes = 1_048_576 } = {}) {
         }
         limit = o.maxBytes;
       }
-      return { path: p, maxBytes: limit };
+      return { path: p, workspace: workspaceField(o.workspace, roots), maxBytes: limit };
     },
-    async execute(ctx, { path: inputPath, maxBytes: limit }) {
+    async execute(ctx, { path: inputPath, workspace, maxBytes: limit }) {
+      const root = roots.pick(workspace);
       const file = resolveForAction(root, inputPath);
       let stat;
       try {
@@ -254,7 +257,7 @@ export function readAction(root, { maxBytes = 1_048_576 } = {}) {
     // Independent check: re-read the file and compare size, hash, and content.
     async verify(ctx, input, result) {
       try {
-        const file = resolveForAction(ctx.root ?? root, input.path);
+        const file = resolveForAction(roots.pick(input.workspace), input.path);
         const stat = fs.statSync(file);
         if (!stat.isFile()) return { ok: false, detail: 'path is no longer a regular file' };
         if (stat.size !== result.data.size) {

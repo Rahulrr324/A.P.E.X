@@ -45,6 +45,8 @@ export function workActions() {
           goals: ctx.goals,
           plans: ctx.plans,
           tasks: ctx.taskStore,
+          // Optional: a configuration with no deadline ledger shows the same board it always did.
+          deadlines: ctx.deadlines ?? undefined,
           now: ctx.now(),
           horizonDays,
           limit,
@@ -60,6 +62,7 @@ export function workActions() {
           goals: ctx.goals,
           plans: ctx.plans,
           tasks: ctx.taskStore,
+          deadlines: ctx.deadlines ?? undefined,
           now: ctx.now(),
           horizonDays: input.horizonDays,
           limit: input.limit,
@@ -79,6 +82,21 @@ export function workActions() {
           ['source states', Object.values(claimed.sources).map((s) => s.state).join(','), Object.values(fresh.sources).map((s) => s.state).join(',')],
           ['attention items', claimed.attention.map((item) => `${item.kind}:${item.subject}`).join('|'), fresh.attention.map((item) => `${item.kind}:${item.subject}`).join('|')],
         ];
+        // Only when the deadline ledger was part of the read: its ids, day counts, and overdue count
+        // are re-derived from a fresh read against the same `now`, exactly like the other sources.
+        if (claimed.counts.deadlines && fresh.counts.deadlines) {
+          checks.push(
+            ['deadline count', claimed.counts.deadlines.total, fresh.counts.deadlines.total],
+            ['deadlines within horizon', claimed.counts.deadlines.within, fresh.counts.deadlines.within],
+            ['overdue deadlines', claimed.counts.deadlines.overdue, fresh.counts.deadlines.overdue],
+            ['deadline records', ids(claimed.deadlines ?? []), ids(fresh.deadlines ?? [])],
+            [
+              'deadline day counts',
+              (claimed.deadlines ?? []).map((item) => `${item.id}:${item.daysUntil}`).join(','),
+              (fresh.deadlines ?? []).map((item) => `${item.id}:${item.daysUntil}`).join(','),
+            ],
+          );
+        }
         const changed = checks.find(([, a, b]) => a !== b);
         if (changed) return { ok: false, detail: `${changed[0]} differs from an independent re-read of the stores` };
         return {

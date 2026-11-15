@@ -46,6 +46,10 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // note operation would copy the user's text into the experience log that the pattern and
   // adaptation reads draw from, which would turn a personal note into behavioural evidence.
   notes: 'it reads or writes the personal note log, whose records are the user\'s own composition; an experience of one would copy that note into the log the pattern and adaptation reads draw from',
+  // Deadlines are dates the owner read from a file. An experience answers what APEX did, and the
+  // ledger already carries the source path, digest, and line; capturing an import would put the
+  // owner's schedule into the log the pattern and adaptation reads draw from.
+  deadlines: 'it reads or writes the deadline ledger, whose records are the owner\'s imported dates with their own source provenance; an experience of one would copy that schedule into the log the pattern and adaptation reads draw from',
   'no-action': 'the request ran no action, so there is no postcondition that could have been verified',
   // The prediction ledger's own operations. This is a separate category from `self-bookkeeping`
   // because the reason is not about filling a log with its own traffic: an experience answers "what
@@ -200,9 +204,19 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'filesystem.read': 'filesystem',
   'filesystem.find': 'filesystem',
   'filesystem.summarize': 'filesystem',
+  'filesystem.extract': 'filesystem',
   'filesystem.compare': 'filesystem',
   'filesystem.report': 'filesystem',
   'filesystem.write': 'filesystem',
+  // The lifecycle acts on files under the configured root, including moving an entry into the
+  // quarantine; like the other filesystem actions, no outcome here needs the file's content or
+  // path in the experience log.
+  'filesystem.mkdir': 'filesystem',
+  'filesystem.move': 'filesystem',
+  'filesystem.delete': 'filesystem',
+  'filesystem.restore': 'filesystem',
+  'filesystem.trash': 'filesystem',
+  'filesystem.batch': 'filesystem',
   'note.add': 'notes',
   'note.update': 'notes',
   'note.from_digest': 'notes',
@@ -210,6 +224,8 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'note.show': 'read',
   'note.search': 'read',
   'note.history': 'read',
+  'deadline.list': 'read',
+  'deadline.import': 'deadlines',
   'knowledge.digest': 'read',
   'work.review': 'read',
   none: 'no-action',

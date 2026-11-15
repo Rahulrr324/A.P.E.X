@@ -86,6 +86,10 @@ const MODEL_WRITE_ATTEMPTS = [
   ['memory.add', { content: 'the model decided this' }],
   ['memory.correct', { targetId: '00000000-0000-4000-8000-000000000000', content: 'the model corrected it', resolve: true }],
   ['memory.save_conclusion', { content: 'model text', operationId: 'op1', backend: 'stub-reply' }],
+  // A note is the user's own composition and may cite a reply, but a reply may not write one.
+  ['note.add', { title: 'The model wrote this', body: 'the model said so' }],
+  ['note.from_digest', {}],
+  ['note.update', { target: '00000000-0000-4000-8000-000000000000', body: 'the model rewrote it' }],
   ['knowledge.add', { subject: 'gate', relationship: 'opens', object: 'on time' }],
   ['knowledge.retract', { target: 'no-such-claim', reason: 'the model decided' }],
   ['knowledge.resolve', { target: 'no-such-conflict', choose: 'no-such-record' }],

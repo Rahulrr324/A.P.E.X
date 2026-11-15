@@ -127,7 +127,7 @@ describe('workspace.summarize', () => {
     const app = appFor(root);
     const step = await app.controller.runAction('filesystem.summarize', { path: 'data.bin' }, 'user', 'op-b');
     assert.equal(step.outcome, Outcome.EXECUTION_FAILED);
-    assert.match(step.summary, /not valid UTF-8|binary/i);
+    assert.match(step.summary, /not valid UTF-8|not UTF-8 text|binary/i);
   });
 
   test('refuses a file above the configured byte bound', async () => {

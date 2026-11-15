@@ -87,8 +87,10 @@ describe('AB-1 the capability inventory is complete, exclusive, and source-backe
     const app = createApp({ dataDir: dir, now: CLOCK, filesystemRoot: dir });
     const registered = app.registry.names();
     assert.deepEqual(registered.filter((n) => n.startsWith('filesystem.')),
-      ['filesystem.compare', 'filesystem.find', 'filesystem.list', 'filesystem.read',
-        'filesystem.report', 'filesystem.summarize', 'filesystem.write']);
+      ['filesystem.batch', 'filesystem.compare', 'filesystem.delete', 'filesystem.extract',
+        'filesystem.find', 'filesystem.list', 'filesystem.mkdir', 'filesystem.move',
+        'filesystem.read', 'filesystem.report', 'filesystem.restore', 'filesystem.summarize',
+        'filesystem.trash', 'filesystem.write']);
 
     const all = [...new Set([...registered, ...NON_REGISTRY_CAPABILITIES])];
     for (const name of all) {

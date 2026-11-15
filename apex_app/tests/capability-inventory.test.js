@@ -106,13 +106,15 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 104, 'the default registry has 104 actions');
+    assert.equal(plain.registry.list().length, 105, 'the default registry has 105 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
-        'filesystem.summarize', 'filesystem.compare', 'filesystem.report', 'filesystem.write'].sort(),
-      'a configured root adds exactly the two inspection actions and the five workspace capabilities',
+        'filesystem.summarize', 'filesystem.extract', 'filesystem.compare', 'filesystem.report', 'filesystem.write',
+        'filesystem.mkdir', 'filesystem.move', 'filesystem.delete', 'filesystem.restore',
+        'filesystem.trash', 'filesystem.batch', 'deadline.import'].sort(),
+      'a configured root adds exactly the two inspection actions, the eleven workspace capabilities, and the deadline import',
     );
     const documented = inventoryRows().flatMap((row) => row.names);
     for (const name of rooted.registry.names()) {
@@ -138,7 +140,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 49, 'the inventory counts forty-nine write actions with a root configured');
+    assert.equal(writes.length, 55, 'the inventory counts fifty-five write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -216,7 +218,7 @@ describe('AF-19: the registry is the inventory', () => {
     const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 62, 'the inventory counts sixty-two read actions with a root configured');
+    assert.equal(reads.length, 65, 'the inventory counts sixty-five read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -230,8 +232,10 @@ describe('AF-19: the registry is the inventory', () => {
         'filesystem.read': { path: 'session.json' },
         'filesystem.find': { path: '.', extension: 'json' },
         'filesystem.summarize': { path: 'session.json' },
+        'filesystem.extract': { path: 'session.json' },
         'filesystem.compare': { a: 'session.json', b: 'session.json' },
         'filesystem.report': { path: '.' },
+        'filesystem.trash': {},
         'knowledge.digest': { query: 'gate' },
         'note.show': { target: note.result.data.id },
         'note.history': { target: note.result.data.id },
@@ -359,18 +363,18 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
       if (!def) continue;
       assert.equal(row.class, def.permission, `${name}: the README class disagrees with the registry`);
       assert.equal(row.origins, def.origins.length === 1 ? 'user' : 'user + model', `${name}: README origins`);
-      // Every APEX write except filesystem.write and the note writes changes cognitive state. A file
-      // write changes the configured workspace, and a note is the user's own text in its own log:
-      // neither is a belief or an intention APEX reasons from, so each says so instead of being
-      // counted as a belief change.
-      if (def.permission === 'write' && name !== 'filesystem.write' && !name.startsWith('note.')) {
+      // Every APEX write except the filesystem writes and the note writes changes cognitive state.
+      // A file write or a directory lifecycle change acts on the configured workspace, and a note
+      // is the user's own text in its own log: neither is a belief or an intention APEX reasons
+      // from, so each says so instead of being counted as a belief change.
+      if (def.permission === 'write' && !name.startsWith('filesystem.') && !name.startsWith('note.')) {
         assert.equal(row.belief, 'yes', `${name}: README belief-state`);
       } else if (def.permission === 'read') {
         assert.equal(row.belief, 'no', `${name}: README belief-state`);
       } else if (name.startsWith('note.')) {
         assert.equal(row.belief, "no (the user's own composition, not a belief)", `${name}: README belief-state`);
       } else {
-        assert.equal(name, 'filesystem.write', 'only the file and note writes may be writes that are not belief changes');
+        assert.ok(name.startsWith('filesystem.'), 'only the file and note writes may be writes that are not belief changes');
         assert.equal(row.belief, 'no (a file is not a belief)', `${name}: README belief-state`);
       }
     }
@@ -426,7 +430,9 @@ describe('AF-19: the planning prompt and the plan checker agree', () => {
       }
     }
     const user = offeredNames(planningPrompt({ goal: 'anything', registry: app.registry, memoryLines: [], origin: 'user' }).system);
-    assert.equal(user.length, 50, 'a user-origin prompt offers the fifty plannable actions with a root');
+    assert.equal(user.length, 53, 'a user-origin prompt offers the fifty-three plannable actions with a root');
+    assert.ok(user.includes('deadline.list'), 'a user plan may read the recorded deadlines');
+    assert.ok(!user.includes('deadline.import'), 'a deadline import is a write and is never plannable');
     assert.ok(user.includes('memory.add'), 'a user plan may still contain memory.add');
     assert.ok(user.includes('world.entity.show'), 'a user plan may read the World Model');
     assert.ok(!user.includes('world.fact.add'), 'a World Model write is never plannable');

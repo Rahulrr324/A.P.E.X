@@ -105,13 +105,15 @@ export function resolveRoot(rawRoot) {
 // Validate the configured root once, at startup: it must exist, be a directory,
 // and be reachable. Returns its real path, which is the form used for every
 // containment comparison.
-export function validateRoot(root) {
+// `label` names the setting being validated, so a named workspace's failure does not
+// claim APEX_FILESYSTEM_ROOT is wrong.
+export function validateRoot(root, label = 'APEX_FILESYSTEM_ROOT') {
   let real;
   try {
     real = fs.realpathSync(root);
   } catch (err) {
     throw new ValidationError(
-      `APEX_FILESYSTEM_ROOT does not exist or cannot be read (${err?.code ?? 'error'})`,
+      `${label} does not exist or cannot be read (${err?.code ?? 'error'})`,
       'INVALID_CONFIG',
     );
   }
@@ -120,12 +122,12 @@ export function validateRoot(root) {
     stat = fs.statSync(real);
   } catch (err) {
     throw new ValidationError(
-      `APEX_FILESYSTEM_ROOT cannot be inspected (${err?.code ?? 'error'})`,
+      `${label} cannot be inspected (${err?.code ?? 'error'})`,
       'INVALID_CONFIG',
     );
   }
   if (!stat.isDirectory()) {
-    throw new ValidationError('APEX_FILESYSTEM_ROOT is not a directory', 'INVALID_CONFIG');
+    throw new ValidationError(`${label} is not a directory`, 'INVALID_CONFIG');
   }
   return real;
 }

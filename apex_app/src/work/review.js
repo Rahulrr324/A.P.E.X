@@ -93,7 +93,7 @@ function taskCitation(task) {
   };
 }
 
-function attentionFor({ goals, plans, tasks, now, horizonDays }) {
+function attentionFor({ goals, plans, tasks, deadlines = [], now, horizonDays }) {
   const items = [];
   for (const goal of goals) {
     if (goal.status === 'blocked') {
@@ -154,6 +154,25 @@ function attentionFor({ goals, plans, tasks, now, horizonDays }) {
         refs: { planId: plan.id, ...(plan.goalId ? { goalId: plan.goalId } : {}) },
       });
     }
+  }
+
+  // A recorded deadline is a date the owner read from a file. It is called out only when it falls
+  // inside the requested horizon, and it is never treated as an instruction to act: the detail says
+  // where the date came from so it can be checked against that source.
+  for (const item of deadlines) {
+    const days = item.daysUntil;
+    if (days === null || days > horizonDays) continue;
+    const overdue = days < 0;
+    items.push({
+      kind: overdue ? 'deadline_overdue' : 'deadline_due',
+      severity: overdue ? 'overdue' : 'deadline',
+      subject: `deadline ${shortId(item.id)}: ${truncate(item.title, 120)}`,
+      detail: overdue
+        ? `recorded date ${item.dueAt} passed ${Math.abs(days)} day(s) ago (from ${item.source.path}:${item.source.line})`
+        : `recorded date ${item.dueAt} is ${days === 0 ? 'today' : `in ${days} day(s)`} (from ${item.source.path}:${item.source.line})`,
+      at: item.dueAt,
+      refs: { deadlineId: item.id },
+    });
   }
 
   for (const task of tasks) {
@@ -218,21 +237,29 @@ export async function buildWorkReview({
   goals,
   plans,
   tasks,
+  deadlines,
   now = new Date(),
   horizonDays = WORK_DEFAULT_HORIZON_DAYS,
   limit = WORK_DEFAULT_LIMIT,
 } = {}) {
   const bound = Math.max(1, Math.min(WORK_MAX_LIMIT, Number.isInteger(limit) ? limit : WORK_DEFAULT_LIMIT));
   const horizon = Math.max(0, Math.min(WORK_MAX_HORIZON_DAYS, Number.isInteger(horizonDays) ? horizonDays : WORK_DEFAULT_HORIZON_DAYS));
-  const [goalRead, planRead, taskRead] = await Promise.all([
+  // The deadline ledger is optional: a configuration without it shows the same board as before,
+  // rather than an extra section that would look like an empty schedule.
+  const includeDeadlines = deadlines !== undefined && deadlines !== null;
+  const [goalRead, planRead, taskRead, deadlineRead] = await Promise.all([
     readStore(goals, (store) => store.list()),
     readStore(plans, (store) => store.list()),
     readStore(tasks, (store) => store.list()),
+    includeDeadlines ? readStore(deadlines, (store) => store.list({ now })) : Promise.resolve(null),
   ]);
 
   const goalRecords = goalRead.records ?? [];
   const planRecords = planRead.records ?? [];
   const taskRecords = taskRead.records ?? [];
+  // Already earliest-first, with its day count measured against this read's `now`.
+  const deadlineRecords = deadlineRead?.records ?? [];
+  const deadlineWithin = deadlineRecords.filter((item) => item.daysUntil !== null && item.daysUntil <= horizon);
 
   const data = {
     generatedAt: now.toISOString(),
@@ -263,9 +290,29 @@ export async function buildWorkReview({
     goals: newestFirst(goalRecords, bound).map(goalCitation),
     plans: newestFirst(planRecords, bound).map(planCitation),
     tasks: newestFirst(taskRecords, bound).map(taskCitation),
-    attention: attentionFor({ goals: goalRecords, plans: planRecords, tasks: taskRecords, now, horizonDays: horizon }),
+    attention: attentionFor({
+      goals: goalRecords,
+      plans: planRecords,
+      tasks: taskRecords,
+      deadlines: deadlineRead?.records === null ? [] : deadlineRecords,
+      now,
+      horizonDays: horizon,
+    }),
     notes: [],
   };
+
+  if (includeDeadlines) {
+    data.sources.deadlines = {
+      state: deadlineRead.state,
+      records: deadlineRead.records === null ? null : deadlineRecords.length,
+    };
+    data.counts.deadlines = {
+      total: deadlineRecords.length,
+      within: deadlineWithin.length,
+      overdue: deadlineWithin.filter((item) => item.daysUntil < 0).length,
+    };
+    data.deadlines = deadlineRecords.slice(0, bound);
+  }
 
   const unavailable = Object.entries(data.sources).filter(([, s]) => s.state !== 'ok').map(([name]) => name);
   if (unavailable.length > 0) {
@@ -273,6 +320,9 @@ export async function buildWorkReview({
   }
   data.notes.push('This is a listing of stored work, not a claim that any of it happened. Completion and failure come from the records, and an empty board is not evidence that nothing needs doing.');
   data.notes.push('Attention items are derived from recorded status and recorded deadlines only; APEX does not score urgency or invent a priority.');
+  if (includeDeadlines) {
+    data.notes.push('Deadlines here are dates recorded from an imported file, with the source file and line each came from. APEX does not infer a due date, schedule a reminder, or act when one passes.');
+  }
   return data;
 }
 
@@ -291,6 +341,11 @@ function renderCitation(citation, kind) {
     lines.push(`  [${citation.shortId}] ${citation.status} v${citation.version} - ${citation.outcome}`);
     lines.push(`      ${citation.completedSteps}/${citation.steps} step(s) completed${citation.goalId ? `; goal ${citation.goalId}` : ''}${citation.taskId ? `; task ${citation.taskId}` : ''}`);
     if (citation.blockedReason) lines.push(`      blocked: ${citation.blockedReason}`);
+  } else if (kind === 'deadline') {
+    const days = citation.daysUntil;
+    const when = days === null ? 'date unreadable' : days < 0 ? `overdue by ${Math.abs(days)} day(s)` : days === 0 ? 'due today' : `in ${days} day(s)`;
+    lines.push(`  [${citation.shortId}] ${citation.dueAt} (${when}) - ${citation.title}`);
+    lines.push(`      from ${citation.source.path}:${citation.source.line}`);
   } else {
     lines.push(`  [${citation.shortId}] ${citation.status} - ${citation.goal}`);
     lines.push(`      ${citation.steps.completed}/${citation.steps.total} step(s) completed; ${citation.origin}${citation.goalId ? `; goal ${citation.goalId}` : ''}${citation.planId ? `; plan ${citation.planId}` : ''}`);
@@ -308,6 +363,9 @@ export function renderWorkReview(data) {
   const lines = [`Work review (read-only; records as stored, generated ${String(data.generatedAt).slice(0, 16).replace('T', ' ')} UTC)`];
   const c = data.counts;
   lines.push(`  goals: ${c.goals.total} total, ${c.goals.open} open`, `  plans: ${c.plans.total} total, ${c.plans.open} open`, `  tasks: ${c.tasks.total} total, ${c.tasks.open} open/unfinished`);
+  if (c.deadlines) {
+    lines.push(`  deadlines: ${c.deadlines.total} recorded, ${c.deadlines.within} within ${data.horizonDays} day(s), ${c.deadlines.overdue} overdue`);
+  }
   lines.push('');
   if (data.attention.length === 0) {
     lines.push('Needs attention: nothing derived from the stored statuses and deadlines.');
@@ -321,6 +379,10 @@ export function renderWorkReview(data) {
   lines.push(...renderSection('Plans', data.sources.plans, data.plans, 'plan'));
   lines.push('');
   lines.push(...renderSection('Tasks', data.sources.tasks, data.tasks, 'task'));
+  if (data.sources.deadlines) {
+    lines.push('');
+    lines.push(...renderSection('Deadlines', data.sources.deadlines, data.deadlines, 'deadline'));
+  }
   lines.push('');
   lines.push('Notes:');
   for (const note of data.notes) lines.push(`  - ${note}`);

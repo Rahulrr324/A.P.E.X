@@ -52,8 +52,9 @@ from a milestone number or a passing build.
 | Adaptive planning, outcome evaluation and goal progression | Implemented as four read paths and one recorded reading over the stores Batch AG to AK already own: the candidate approaches a recorded goal supports (`plan.candidates`), a revision of a plan that stopped being viable (`plan.replan`), what a plan's execution established and left open as seven separate questions (`plan.outcome`), and the assessment derived from those records as the one write (`plan.assess`). Every step a candidate names is a registered action, every candidate is a draft on screen until the user records and approves it, the comparison is a disclosed gate-then-Pareto rule with no score, weight, or probability, and no candidate, comparison, or verdict changes a goal's status or grants permission. Batch AM added four things over the same records: the blockers, prerequisites and limits a goal actually has, and which of them are allowed to exclude a candidate (`plan-constraints.test.js`); one disclosed influence of an approved adaptation on selection, which cannot override a gate, a constraint, an approval or a permission (`plan-guidance.test.js`); two more ranked dimensions in the comparison - whether a step's own action can re-check it, and what the plan records say happened the last time that capability ran - with the reason each remaining dimension stays disclosed printed beside it (`plan-dimensions.test.js`); and the continuation pair - `plan.continuation` reads the nine states of a partially executed run from its own records, `plan.continue` takes up only the steps proven never to have started (`plan-continuation.test.js`, with real child processes stopped at eight interruption boundaries); and that reading is now answered where a user looks - continuation readiness grew a seventh state, `ready to continue`, read only from that derivation, and `work`/`next` rank the interrupted run as one `continue-plan` candidate instead of two task and plan entries (`executive-readiness.test.js`). Batch AP then made that one ordering influence auditable at the decision level: every comparison now carries `adaptationDecision`, a counterfactual computed by the same dominance rule over the same candidate bytes with only `approved_adaptation_fit` removed, disclosing which candidate led before and after, the exact rule id/version/hash and evidence ids, every record considered with its ledger state and why, an explicit declined reason when nothing applied, and `authorizes: false` (`adaptation-decision.test.js`, 23 cases). Batch AP-02 then let a second evidence kind reach that same one influence: a completed, current evaluation of a user-recorded prediction can be derived as a bounded, typed candidate, stays inert until the user approves it through the same `adaptation.decide` record, and is disclosed through `sources.predictionEvidence`; stale, withdrawn or unreadable prediction lineage withdraws its effect on read (`prediction-adaptation-learning.test.js`, 21 cases). Batch AP-03 then described repeated recorded outcomes instead of single ones: a closed eight-kind pattern analysis over one capability's bounded history, with chronological ordering, deduplicated citations, exclusions by kind, and calibration kept separate with its 20-evaluation floor; a directional pattern may become an unapproved candidate citing up to 20 observations, and only the user's explicit approval can let it reach the same dimension (`longitudinal-outcome-analysis.test.js`, 29 cases). Batch AP-13 then let a recorded verdict move one recommendation without an approved candidate in between: an approved, valid plan whose step capability carries a live, evidence-confirmed `contradicted` expectation is recommended for review (`review-expectation`, base 62) instead of start (`start-plan`, base 75), with the caution and its evidence printed, `requiresAuthorization: false`, and the plan's approval, bytes and readiness unchanged; a withdrawn expectation or a corrected experience that makes the verdict stale restores start (`expectation-caution.test.js`, 38 cases). It adds no parallel learning system, no new decision dimension, and no authority. | `plan-generation.test.js`, `plan-candidates.test.js`, `plan-evaluation.test.js`, `plan-assessment.test.js`, `plan-learning.test.js`, `plan-adversarial.test.js` (15 adversarial cases), `plan-scenarios.test.js` (the 30 numbered end-to-end scenarios), `plan-cli.test.js` (9 scenarios through the real `node bin/apex.js`), `plan-constraints.test.js`, `plan-guidance.test.js`, `plan-dimensions.test.js`, `plan-continuation.test.js`, `learning-read-equivalence.test.js`, `goal-evidence-consistency.test.js`, `executive-readiness.test.js`, `adversarial-batch-am.test.js` (the 16 adversarial cases I-01 to I-16), `plan-scenarios-am.test.js` (the 30 Batch AM acceptance scenarios, 31 tests), `adaptation-decision.test.js` (23 cases), `prediction-adaptation-learning.test.js` (21 cases), `longitudinal-outcome-analysis.test.js` (29 cases), `expectation-caution.test.js` (38 cases) - and `goal-provenance.test.js`, `goal-assessment.test.js`. See [Batch AL](#batch-al-adaptive-planning-outcome-evaluation-and-goal-progression-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Cognitive runtime contract, gateway boundary and continuation reliability | Implemented as an explicit, tested boundary over the request path that already exists. `src/cognition/contract.js` states the ten stages of one request, which component owns each, what each stage did, two invariants (no step executed without an allow decision, and none without an authorization record), and a fixed authority block in which `action_registry` owns authorization; the audit copy carries counts and fixed labels, never the request, evidence, model text or reasoning. `src/model/gateway.js` classifies every reply as `valid`, `empty`, `refused`, `unavailable`, `malformed`, `context_limit` or `cancelled`, records provenance with `verified:false`, and keeps caller cancellation distinct from timeout. Grounded claims carry one of six evidence states derived from the cited records (the weakest cited record wins), and a model-declared `supported` may rest only on `directly_supported`. A model proposal is a typed value (`mp:N`, `authority:'none'`) with only `action` and `input`; any authority-shaped or unknown root key rejects the line whole. The continuation path re-reads plan, task and validity inside the task lock, reports nine states from its own records, and never replays a step whose effect cannot be established. `src/cognition/trace.js` records bounded counts, fixed labels, refusals, validation and an explicit `authorizes:false`. No store, registry, planner, controller, runner or authorization rule is added. | `cognition-contract.test.js` (11 tests), `cognition-evidence-states.test.js` (5), `cognition-trace.test.js` (9), `proposal-boundary-an.test.js` (3), `continuation-cross-process-an.test.js` (3, real child processes stopped at the eight interruption boundaries), `integration-runtime-an.test.js` (15 end-to-end and adversarial tests through the assembled app). See [Batch AN](#batch-an-cognitive-runtime-contracts-executive-integration-and-continuation-reliability-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Offline deterministic answering and executive loop closure | Implemented over the request path that already exists. With no backend configured, a model-shaped question runs the same model-free cognitive analysis and, when the retrieved records support a conclusion, returns a cited, bounded reading (`success_deterministic`) whose audited output is content-free; only prompt-eligible memory/knowledge claims are rendered, private and below-relevance records stay out, a contradiction is shown as disputed with both sides, an ambiguity is clarified before any prompt exists, and an unsupported question still reports `model_unavailable`. Separately, a task that belongs to a plan brings the plan's recorded outcomes and status up to date when it is run, resumed, or retried (`#syncPlanFromTask`). A sync reads the plan first and records only outcomes it does not already hold: a repeated sync appends nothing, an uncertain result may be replaced by a later reading, and a step that failed earlier cannot silently become completed without a new plan revision. It never completes a goal and never executes. No new store, action, or model call is added. | `offline-answer.test.js` (13 cases, real controller/stores/CLI), `task-plan-sync.test.js` (2 cases), `task-plan-reconciliation.test.js` (8 cases). A model is never consulted. |
-| Personal workspace assistance | Implemented when `APEX_FILESYSTEM_ROOT` is set: bounded discovery (`filesystem.find`), deterministic extraction (`filesystem.summarize`), positional comparison (`filesystem.compare`), a directory report (`filesystem.report`), and an explicitly authorized `filesystem.write` that creates a file or replaces one only with its current SHA-256. Every path is re-resolved inside the configured root, links are never followed, no action executes the content of a file, every read is independently re-checked, and the write's verifier re-reads the bytes. The write is user-origin only, is not offered as a plan step, and the audit stores its content as `[value omitted: N chars]`. | `workspace.test.js`, `practical-eval.test.js` (real CLI create, read, compare, summarize and report; an unguarded overwrite refused with the original bytes intact; a guarded update verified). |
+| Personal workspace assistance | Implemented when `APEX_FILESYSTEM_ROOT` is set: bounded discovery (`filesystem.find`), deterministic extraction (`filesystem.summarize`), bounded document text extraction (`filesystem.extract`: PDF, DOCX, XLSX, CSV and UTF-8 text, with explicit format and size limits and clear errors for a damaged, encrypted, unsupported or over-complex file), positional comparison (`filesystem.compare`), a directory report (`filesystem.report`), and an explicitly authorized `filesystem.write` that creates a file or replaces one only with its current SHA-256. Every path is re-resolved inside the configured root, links are never followed, no action executes the content of a file, every read is independently re-checked, and the write's verifier re-reads the bytes. The write is user-origin only, is not offered as a plan step, and the audit stores its content as `[value omitted: N chars]`. Document extraction returns the extracted text to the caller only; the audit record keeps counts, a text hash and the stated limitations, not the text. | `workspace.test.js`, `practical-eval.test.js` (real CLI create, read, compare, summarize and report; an unguarded overwrite refused with the original bytes intact; a guarded update verified), `document-extraction.test.js` (24 cases with real PDF, DOCX, XLSX and CSV fixtures). |
 | Cross-source knowledge digest | Implemented as a read action (`knowledge.digest`) and the `knowledge digest` command: what memory and knowledge hold, optionally for a topic, with each store's own counts and health, its current records, and the stored correction, supersession, retraction and conflict links. The stores stay separate: the digest does not merge, rank or infer a relationship between a memory record and a knowledge claim, and it states that a stored record is not proof the claim is true. | `knowledge-digest.test.js`, `practical-eval.test.js` (the memory-plus-knowledge chain ends in a digest that names both stores separately). |
+| Recorded deadlines | Implemented as an append-only `deadlines.jsonl` ledger with two user-origin actions: `deadline.import` reads a bounded JSONL, NDJSON, CSV or TSV file inside a workspace root and records each date with its source file, SHA-256 and line, refusing the whole file on any malformed line; `deadline.list` reads the ledger within a horizon. `review` discloses the ledger as an optional fourth source. No date is inferred, nothing is scheduled, and a passing date changes nothing. The import is a write and is never plannable; the list is a plannable read. | `deadlines.test.js`, `work-review.test.js`. |
 | Recorded work portfolio review | Implemented as a read action (`work.review`) and the `review` command: open goals, plans and tasks in one place, each with its stored status, recorded deadline, blocker and step counts, plus a severity-ordered list of items needing attention - blocked records, passed or near deadlines, approved plans waiting for activation, paused or failed tasks, and goals with no linked plan. It ranks no work, invents no priority and decides nothing; `work`/`next` remain the continuation recommendation. | `work-review.test.js`, `practical-eval.test.js`. |
 | User-confirmed task outcome feedback | Implemented as a user-only write action (`task.feedback`) and the `task feedback` command: your own assessment of a completed task's outcome, tied to the audited run that verified it. It refuses unless the task is completed, every step is completed, every step has an audit record, and a recorded run ended `success_verified` with the task completed. The run's evidence and your judgement stay separate records, and nothing derives or applies a behaviour change without `adaptation.derive` and your explicit approval. | `task-feedback.test.js`, `practical-eval.test.js` (a completed task's feedback recorded; a model-origin write denied). |
 | Practical capability evaluation | Implemented as a deterministic suite (`tests/practical-eval.test.js`) that drives the real controller, stores and CLI in temporary directories and measures ten dimensions separately: capability coverage, supported completion, correct clarification, unsupported refusal, authorization correctness, execution verification, recovery correctness, outcome-reporting accuracy, feedback/adaptation integrity, and multi-step workflow completion. A dimension is counted only on the cases that exercise it; no combined score is produced, and no model is consulted. | `practical-eval.test.js` (13 tests, 10 suites). |
@@ -211,13 +212,14 @@ exits 2, names the setting, and reports that no data was read or changed.
 | `APEX_MODEL_MAX_TOKENS` | 1-8192 | 512 |
 | `APEX_MODEL_RETRIES` | 0-3 | 1 |
 | `APEX_CONTEXT_TURNS` | 0-50 | 6 |
-| `APEX_FILESYSTEM_ROOT` | absolute directory; filesystem inspection is off when unset | none |
+| `APEX_FILESYSTEM_ROOT` | absolute directory; filesystem access is off when unset | none |
+| `APEX_WORKSPACES` | `name=absolute-path` entries separated by `;` (at most 16, each name distinct); requires `APEX_FILESYSTEM_ROOT` | none |
 | `APEX_FILESYSTEM_MAX_READ_BYTES` | 4096-10485760 | 1048576 |
 | `APEX_EXPERIENCE_CAPTURE` | `off`, `verified-success` | `off` |
 
-Both filesystem settings are validated on every run, whether or not
-`APEX_FILESYSTEM_ROOT` is set, so a mistyped limit is named at startup instead of
-lying dormant until the capability is switched on.
+All filesystem settings are validated on every run, whether or not
+`APEX_FILESYSTEM_ROOT` is set, so a mistyped limit or a missing named root is named
+at startup instead of lying dormant until the capability is switched on.
 
 `APEX_EXPERIENCE_CAPTURE` is the one switch for automatic experience capture; see
 [Batch AA: automatic experience capture](#batch-aa-automatic-experience-capture-as-implemented).
@@ -325,7 +327,8 @@ suites re-hash the directory afterwards to prove it.
 | `workspace list [path] [--limit N]` | Read-only: one directory inside `APEX_FILESYSTEM_ROOT` with names, types, sizes and a truncation flag. |
 | `workspace find [path] --name <text>\|--extension <ext> [--max-depth N] [--limit N]` | Read-only bounded discovery by name substring or extension inside the root, with a scan cap and depth bound. Links are counted, never followed. |
 | `workspace read <path> [--max-bytes N]` | Read-only bounded UTF-8 read of one file, refused for binary content and above the byte limit. |
-| `workspace summarize <path> [--max-bytes N]` | Read-only deterministic extract: line, word and character counts, headings, opening lines and frequent terms. The verifier recomputes it from an independent read; no model is consulted and the file is not republished in full. |
+| `workspace summarize <path> [--max-bytes N]` | Read-only deterministic extract: line, word and character counts, headings, opening lines and frequent terms. The verifier recomputes it from an independent read; no model is consulted and the file is not republished in full. A PDF, DOCX, XLSX or CSV is read through the same bounded document extraction, and the format and any limitations are stated. |
+| `workspace extract <path> [--max-bytes N] [--workspace <name>]` | Read-only bounded text extraction from a PDF, DOCX, XLSX, CSV or UTF-8 text file inside the root. Embedded content is never executed, no model is consulted, the input is capped at 4 MB and the extracted text at 200,000 characters, and a damaged, encrypted, unsupported or over-complex document is a named error rather than a partial answer. The verifier re-reads the bytes and re-extracts; the audit keeps a text hash and the limitations, not the text. |
 | `workspace compare <a> <b> [--max-bytes N]` | Read-only positional comparison of two text files: identity, sizes, hashes, differing lines and extra trailing lines. |
 | `workspace report [path] [--max-depth N] [--limit N]` | Read-only directory overview: file and directory counts, total size, extensions, largest and newest files. |
 | `workspace write <path> --content <text> [--expected-sha256 <hash>]` | Creates a text file inside the root, or replaces one only when `--expected-sha256` names its current SHA-256. User origin only; refuses an existing file without the hash, never overwrites silently, never executes content, is not offered as a plan step, and the audit stores the content as `[value omitted: N chars]`. |
@@ -576,10 +579,12 @@ the command exits 0 unless a proposed action was denied, failed, or could not be
 verified. Fluency is not evidence of correctness either: an unverified answer should
 be treated as a model assertion, not as an established fact.
 
-## Optional: bounded filesystem inspection
+## Optional: bounded filesystem workspace access
 
-APEX can look at one directory you explicitly authorise. It cannot write, rename,
-delete, or execute anything, and there is no default: with no root configured the
+APEX can inspect and organise the directories you explicitly authorise. It never
+executes the content of a file, never follows a link, never overwrites an existing
+entry silently, and a delete is a reversible move into a quarantine inside the same
+root - nothing is erased. There is no default root: with none configured the
 capability is not registered at all.
 
 ```bash
@@ -587,24 +592,65 @@ capability is not registered at all.
 APEX_FILESYSTEM_ROOT=E:\Projects\thing node bin/apex.js ask list .
 APEX_FILESYSTEM_ROOT=/home/you/project node bin/apex.js ask read README.md
 
-APEX_FILESYSTEM_ROOT=/home/you/project APEX_FILESYSTEM_MAX_READ_BYTES=65536 node bin/apex.js chat
+# Named roots are selectors for the same boundary, never a wider one.
+APEX_FILESYSTEM_ROOT=/home/you/project \
+APEX_WORKSPACES="docs=/home/you/project-docs;archive=/home/you/project-archive" \
+  node bin/apex.js workspace roots
+APEX_FILESYSTEM_ROOT=/home/you/project node bin/apex.js workspace read notes.txt --workspace docs
+
+# Lifecycle operations. Every one is user-origin, unplannable, and verified.
+node bin/apex.js workspace mkdir reports/2026 --parents
+node bin/apex.js workspace move notes.txt reports/2026/notes.txt
+node bin/apex.js workspace delete reports/2026/notes.txt   # prints a quarantine id
+node bin/apex.js workspace trash                            # what can be restored
+node bin/apex.js workspace restore <quarantine-id>
+node bin/apex.js workspace batch --operations '[{"type":"move","path":"a.txt","to":"b.txt"}]'
 ```
 
 | Action | Permission | Origins | Input | Independent verification |
 |---|---|---|---|---|
 | `filesystem.list` | read | user only | `path` (relative), `limit` (1-1000, default 200) | a second listing of the same directory must return the same names, types, count, and truncation flag |
 | `filesystem.read` | read | user only | `path` (relative), `maxBytes` (1 to the configured cap) | a second read must match the reported size, SHA-256, and text |
+| `filesystem.mkdir` | write | user only | `path` (relative), `parents` (optional) | the directory is re-read; every created level is present |
+| `filesystem.move` | write | user only | `path`, `to` (relative) | source absent and destination present with the same content; a destination that is a directory ancestor is refused |
+| `filesystem.delete` | write | user only | `path` (relative) | the entry is gone from its path and present under `.apex-trash/<id>/` with a matching manifest |
+| `filesystem.restore` | write | user only | `id` (quarantine UUID) | the entry is back at its original path with the recorded hash; the quarantine item is gone |
+| `filesystem.trash` | read | user only | `limit` (1-200) | a bounded re-read of the quarantine manifests |
+| `filesystem.batch` | write | user only | `operations` (1-20 mkdir/move/delete) | every applied effect is re-checked individually and each failed operation is named |
 
 Requests that look like paths are routed to these actions, for example `list .`,
-`list src/`, `read README.md`, `cat notes/todo.txt`. Requests that do not look like
-paths (for example `list services`) still go to the model, so ordinary questions are
-not turned into directory reads.
+`list src/`, `read README.md`, `cat notes/todo.txt`. `create directory reports`,
+`rename notes.txt to reports/notes.txt`, `delete reports/notes.txt`, `workspace trash`
+and `restore <uuid>` also route to the lifecycle actions. Requests that do not name a
+plausible target (for example `list services` or `delete the production database`) stay
+on the model or refusal path, so ordinary sentences are not turned into filesystem writes.
+
+How the lifecycle stays recoverable and bounded:
+
+- A delete moves the entry into `.apex-trash/<uuid>/entry` and writes
+  `manifest.json` (version, id, original relative path, name, kind, size, SHA-256,
+  timestamp) before the rename. The trash is reserved at the top of the root, is not
+  discoverable through `filesystem.find` or `filesystem.report`, cannot itself be
+  deleted or moved, and is bounded to 200 entries.
+- Restore refuses an occupied original path. It moves the entry back first and removes
+  the quarantine item only after the rename succeeds, so an interrupted restore leaves
+  the entry in the trash where it can still be restored.
+- A batch is all-or-nothing up to execution: every operation is planned against the
+  filesystem as it is when the batch starts, before anything changes. Two operations
+  may not touch the same source, the same destination, or a destination that is another
+  operation's source, and every source and destination parent must already exist. A
+  batch that fails partway reports `complete: false` and names the operations that
+  failed; nothing is rolled back, and the verifier states exactly what stands.
 
 How the boundary is enforced:
 
 - The root is resolved and validated once, at startup, and captured by the action
   definitions. No request, model proposal, or task step can widen it, and a request
   that includes `root` or `authorizedRoot` is rejected as an unexpected field.
+- Named roots are fixed at startup. A name is a selector, never an authorization: it
+  must be one of the configured names, every named path is independently validated,
+  and an unknown name is refused rather than treated as a path or mapped to the
+  default.
 - Paths are relative. Absolute paths, UNC paths, drive-letter paths, and any `..`
   component are refused before any filesystem call.
 - The path is resolved (`realpath`), then the resolved target is compared against the
@@ -612,7 +658,8 @@ How the boundary is enforced:
   elsewhere, and boundary-exact, so `/data/allowed-2` is not inside `/data/allowed`.
 - A symbolic link or reparse point is never followed: a link whose target is outside
   the root is refused by containment, and a link inside the root is refused outright
-  (`SYMLINK_REFUSED`).
+  (`SYMLINK_REFUSED`). A move or delete of a path whose parent resolves through a link
+  is refused.
 - Reads are limited to regular files. Anything larger than the configured maximum is
   refused (`FILE_TOO_LARGE`), and content that is not valid UTF-8 text or that contains
   binary control characters is refused (`FILE_NOT_TEXT`) instead of being returned
@@ -1031,15 +1078,24 @@ holds identity, memory, control, or persistence.
 | `filesystem.read` | read | user | `path`, `maxBytes` | a second read matches size, SHA-256, and text |
 | `filesystem.find` | read | user | `path`, `name` or `extension`, `maxDepth`, `limit` | a second bounded scan matches paths, types and the truncation flag |
 | `filesystem.summarize` | read | user | `path`, `maxBytes` | counts, headings, extract and frequent terms recomputed from an independent read; the file is not republished |
+| `filesystem.extract` | read | user | `path`, `maxBytes` | the format, text SHA-256, counts, truncation and limitation flags are re-derived from a second read and extraction |
 | `filesystem.compare` | read | user | `a`, `b`, `maxBytes` | identity, sizes, hashes and differing lines re-read from both files |
 | `filesystem.report` | read | user | `path`, `maxDepth`, `limit` | counts, extensions, largest and newest files re-read from a second scan |
 | `filesystem.write` | **write** | user | `path`, `content`, `expectedSha256` | the new bytes are re-read and hashed; a replacement requires the file's current hash |
+| `filesystem.mkdir` | **write** | user | `path`, `parents` | every created level is re-read as a directory |
+| `filesystem.move` | **write** | user | `path`, `to` | source absent and destination present with the same content; an existing destination is refused |
+| `filesystem.delete` | **write** | user | `path` | the path is gone and the entry plus its manifest are re-read under `.apex-trash/<id>/` |
+| `filesystem.restore` | **write** | user | `id` | the entry is back at its original path with the recorded hash and the quarantine item is gone |
+| `filesystem.trash` | read | user | `limit` | a bounded re-read of the quarantine manifests |
+| `filesystem.batch` | **write** | user | `operations` | every applied effect is re-checked individually; each failed operation is named |
 | `knowledge.digest` | read | user, model | `query` (optional), `limit` | both stores re-read; counts, source states, record ids and any matches agree |
 | `work.review` | read | user, model | `limit`, `horizonDays` | goals, plans and tasks re-read; counts, ids, source states and attention items agree |
 | `task.feedback` | **write** | user | `taskId`, `assessment`, `guidance`, `reason`, `supersedes` | the completed task, every step, every step record and the cited verified run are re-checked, and the stored feedback is read back with user provenance |
 
 `filesystem.*` actions are registered only when `APEX_FILESYSTEM_ROOT` is set. They are
-not offered to the model origin, so a model proposal cannot trigger a file read.
+not offered to the model origin, so a model proposal cannot trigger a file read or a
+filesystem change. `APEX_WORKSPACES` adds named roots beside the default one; the name
+selects a boundary, it never widens or replaces it.
 
 ### Outcomes
 
@@ -3662,7 +3718,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 104 registered actions declare both `validate()` and `verify()` - 111 with a
+- **Verification.** All 105 registered actions declare both `validate()` and `verify()` - 120 with a
   filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
@@ -3717,8 +3773,15 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `world.entity.add`, `world.entity.alias`, `world.entity.retire`, `world.entity.merge`, `world.entity.unmerge`, `world.identity.decide`, `world.fact.add`, `world.relationship.add`, `world.event.add`, `world.statement.retract`, `world.statement.supersede` | user | write | never in a plan | `world-model.jsonl` (append-only; each record names its evidence) | no (world-model) | yes |
 | `world.entity.list`, `world.entity.show`, `world.entity.find`, `world.facts`, `world.attributes`, `world.relationships`, `world.events`, `world.conflicts`, `world.related`, `world.history`, `world.statement.history`, `world.identity.candidates`, `world.identity.decision`, `world.pair`, `world.evidence`, `world.belief.trace`, `world.changes`, `world.state_at`, `world.inspect`, `world.status` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
 | `history.reconstruct` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
-| `filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.compare`, `filesystem.report` | user | read | never offered to a model plan | nothing (measured) | no (filesystem) | no |
+| `filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.extract`, `filesystem.compare`, `filesystem.report`, `filesystem.trash` | user | read | never offered to a model plan | nothing (measured) | no (filesystem) | no |
 | `filesystem.write` | user | write | never in a plan | the named file under the configured root; the audit stores the content as `[value omitted: N chars]` | no (filesystem) | no (a file is not a belief) |
+| `filesystem.mkdir` | user | write | never in a plan | a new directory under the configured root (parents only when asked); the audit records the path | no (filesystem) | no (a file is not a belief) |
+| `filesystem.move` | user | write | never in a plan | renames one entry inside the configured root; an existing destination is refused | no (filesystem) | no (a file is not a belief) |
+| `filesystem.delete` | user | write | never in a plan | moves the entry into `.apex-trash/<id>/` with a manifest; nothing is erased | no (filesystem) | no (a file is not a belief) |
+| `filesystem.restore` | user | write | never in a plan | renames a quarantined entry back to its original path; an occupied path is refused | no (filesystem) | no (a file is not a belief) |
+| `filesystem.batch` | user | write | never in a plan | the effects of up to twenty mkdir/move/delete operations, every one preflighted against the state the batch starts from | no (filesystem) | no (a file is not a belief) |
+| `deadline.list` | user | read | offered to a user plan, never to a model plan | nothing (measured) | no (read) | no |
+| `deadline.import` | user | write | never in a plan | `deadlines.jsonl` (append-only; each record names its source path, digest, and line) | no (deadlines) | yes |
 | `goal.add`, `goal.revise`, `goal.confirm`, `goal.update`, `goal.evidence`, `goal.complete`, `goal.link` | user | write | never in a plan | `goals.jsonl` (and `operations.jsonl`; a revision resets criterion evidence, completion re-checks the audit log) | no (executive) | yes |
 | `goal.list`, `goal.show` | user | read | - | nothing (measured) | no (read) | no |
 | `proposal.create` | user request; the proposal itself is model-origin | not a registered action | its proposals are checked step by step | `proposals.jsonl` + `operations.jsonl` | no (executive) | no (a suggestion, not a belief) |
@@ -3746,10 +3809,11 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `executive.clarify` | user | not a registered action | - | `operations.jsonl` + the question it produced | no (no-action) | no |
 | `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
 
-`filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.compare`,
-`filesystem.report` and `filesystem.write` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
-configured; there is no default root, and a model proposal cannot supply one, so the count is 97
-registered actions by default and 111 with a root. Batch AG added ten user-origin write actions
+`filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.extract`,
+`filesystem.compare`, `filesystem.report`, the filesystem lifecycle and write actions, and
+`deadline.import` appear in the registry only when a workspace root is configured; there is no default
+root, and a model proposal cannot supply one, so the count is 105 registered actions by default and
+120 with a root. `deadline.list` needs no root: it reads the ledger, not a workspace. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
 two more user-origin writes (`goal.confirm`, the user's own decision about a success criterion APEX
@@ -3765,7 +3829,7 @@ reconstruction; no action was added. Batch AP-16 added one unplannable cross-sto
 lifecycle kept whole, and every source's availability stated - it writes nothing and authorizes
 nothing; `history --at` in the CLI). No World
 Model write is plannable and every World Model read is user-origin, so the planning prompt offers
-exactly 22 reads to a model origin and 50 actions to a user origin with a root configured (44 without
+exactly 22 reads to a model origin and 53 actions to a user origin with a root configured (45 without
 one). The AP-16 read is offered to neither plan. Batch AP-17 added no action: it extended that same
 read to the goal, plan and task logs and to the operations audit log, so every count above is
 unchanged. Batch AP-18 also added no action: it extended that read to bounded memory and knowledge
@@ -3777,7 +3841,17 @@ filesystem reads are offered to a user plan and never to a model plan. The usabl
 added seven more user-origin actions for the personal note log: `note.add`, `note.update` and
 `note.from_digest` write it, and `note.list`, `note.show`, `note.search` and `note.history` read it.
 None is plannable and none is offered to either planning prompt, so the offered counts above are
-unchanged; the default registry holds 104 actions and 111 with a root.
+unchanged. The workspace-lifecycle work added six more user-origin filesystem actions: the five
+writes `filesystem.mkdir`, `filesystem.move`, `filesystem.delete` (a reversible move into
+`.apex-trash`), `filesystem.restore` and `filesystem.batch`, which are unplannable and offered to
+neither prompt, and the read-only `filesystem.trash`, which is offered to a user plan and never to a
+model plan. The document-support work added one more: `filesystem.extract`, a user-origin, plannable
+read that pulls bounded text out of a PDF, DOCX, XLSX, CSV or UTF-8 text file. It is offered to a user
+plan and never to a model plan, which is why the model count stays at 22 and the user count rises to
+52. The deadline work added two more user-origin actions: `deadline.list`, a plannable read of the
+recorded dates in the ledger, and `deadline.import`, a write that is never plannable and is registered
+only with a root. The model count stays at 22 and the user count rises to 53 (45 without a root). The
+default registry holds 105 actions and 120 with a root.
 
 ### The inconsistencies this found, and what became of them
 
@@ -8200,6 +8274,30 @@ The CLI mirrors the actions: `note add`, `note update`, `note list`, `note show`
 Keys: ...", "show note 1234abcd", "list my notes", "save a note from the digest about backups")
 reach the same actions; ordinary prose that merely mentions a note stays on the model path.
 
+### Recorded deadlines
+
+A deadline in APEX is a date the user read from a local file, not a date APEX inferred. Two
+user-origin actions cover it: `deadline.import` reads one bounded JSONL, NDJSON, CSV or TSV file
+inside a named workspace root and writes `deadlines.jsonl`; `deadline.list` reads the ledger back.
+`deadline.import` is a write and is never plannable; `deadline.list` is a plannable read offered to
+a user plan and never to a model plan. Neither accepts a model origin.
+
+- A date must be a strict `YYYY-MM-DD` calendar date or a UTC instant ending in `Z`. An impossible
+  calendar date (`2026-02-30`), a missing time zone, a malformed row, or an unsupported extension
+  refuses the whole file with the line number of each problem: a partial import is never written.
+- Every stored record names the source file, that file's SHA-256 at import time, and the line it
+  came from. The verifier re-reads and re-parses the source, re-checks every recorded identity, and
+  fails if the file changed.
+- A title or date that looks like a secret is refused before anything is stored, and a repeated
+  entry (same title and date) is not appended twice.
+- `review` shows the ledger as a fourth source, counting what falls inside the chosen horizon and
+  listing each recorded date with its source file and line. A date inside the horizon appears in
+  the attention list with `deadline_due` or `deadline_overdue`. APEX does not schedule a reminder,
+  change a record when a date passes, or treat a date as an instruction.
+- The CLI is `deadline import <path>` and `deadline list [--days N] [--limit N]`; the natural-language
+  routes ("import the deadlines from plan.csv", "what is due within 14 days") reach the same actions.
+  Prose that merely mentions a deadline stays on the model path.
+
 ### What a complete workflow looks like now
 
 The new surfaces close several paths end to end without a model:
@@ -8212,6 +8310,9 @@ The new surfaces close several paths end to end without a model:
 - **Workspace to a project summary**: `workspace list`, `find` and `read` to see the tree,
   `summarize` and `compare` to read and contrast files, `report` for the directory shape, and
   `workspace write` to create a note about it - with the create and the read both recorded.
+- **File to a date ledger**: `deadline import deadlines.csv`, then `deadline list --days 14`, then
+  `review` to see the recorded dates beside the open goals and tasks - each date still naming the
+  source file and line it came from, with nothing scheduled.
 - **Goal to plan to tracked progress**: `goal add`, `plan add`, `plan approve`, `plan start`, then
   `review` (or `work`/`next`) to see the board and the next recommendation, and `task explain
   outcome` to separate intended, executed, verified and achieved.

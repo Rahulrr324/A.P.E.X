@@ -15,6 +15,9 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { ValidationError, ExecutionError } from '../errors.js';
 import { resolveInside, resolveNewFile, hasControlChars } from './path.js';
+import { workspaceField } from './roots.js';
+import { lifecycleActions, TRASH_DIR } from './lifecycle.js';
+import { extractDocument, detectFormat, MAX_DOCUMENT_BYTES, MAX_EXTRACTED_CHARS } from './documents.js';
 import { singleLine } from '../util.js';
 import { ORIGIN_USER } from '../actions/origins.js';
 
@@ -22,10 +25,17 @@ export const MAX_FIND_LIMIT = 500;
 export const DEFAULT_FIND_LIMIT = 100;
 export const MAX_SCAN_ENTRIES = 10_000;
 export const MAX_SCAN_DEPTH = 12;
-export const MAX_SUMMARY_BYTES = 512 * 1024;
 export const MAX_COMPARE_BYTES = 512 * 1024;
 export const MAX_WRITE_BYTES = 1_048_576;
 export const MAX_REPORT_FILES = 50;
+
+const DOCUMENT_LIMITATION_NOTE = 'A deterministic extraction, not an interpretation: it reads what the document format exposes and does not execute embedded content.';
+
+// Extracted text can carry bytes that were never meant for a terminal (a PDF octal
+// escape, a quoted CSV field). Display keeps newlines and tabs and replaces the rest.
+function displayText(text) {
+  return String(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '?');
+}
 
 const NON_TEXT_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -41,11 +51,11 @@ const STOPWORDS = new Set([
   'just', 'like', 'make', 'made', 'does', 'most', 'even', 'well', 'here', 'both', 'same',
 ]);
 
-function sha256(buf) {
+export function sha256(buf) {
   return createHash('sha256').update(buf).digest('hex');
 }
 
-function expectObject(input, allowedKeys) {
+export function expectObject(input, allowedKeys) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
     throw new ValidationError('input must be an object');
   }
@@ -55,7 +65,7 @@ function expectObject(input, allowedKeys) {
   return input;
 }
 
-function pathField(value, name = 'path') {
+export function pathField(value, name = 'path') {
   if (typeof value !== 'string') throw new ValidationError(`${name} must be text`);
   const t = value.trim();
   if (t.length === 0) throw new ValidationError(`${name} is empty`);
@@ -63,16 +73,16 @@ function pathField(value, name = 'path') {
   return t;
 }
 
-function optionalPath(value, fallback) {
+export function optionalPath(value, fallback) {
   if (value === undefined || value === null) return fallback;
   return pathField(value);
 }
 
-function displaySafe(text, max = 160) {
+export function displaySafe(text, max = 160) {
   return String(text).replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, max);
 }
 
-function ioCode(err) {
+export function ioCode(err) {
   const code = err?.code;
   if (code === 'EACCES' || code === 'EPERM') return 'PERMISSION_DENIED';
   if (code === 'ENOENT') return 'PATH_NOT_FOUND';
@@ -81,7 +91,7 @@ function ioCode(err) {
   return 'IO_ERROR';
 }
 
-function resolveForAction(root, inputPath) {
+export function resolveForAction(root, inputPath) {
   const resolved = resolveInside(root, inputPath);
   if (resolved.isLink) {
     throw new ExecutionError('SYMLINK_REFUSED', 'refusing to follow a symbolic link');
@@ -89,7 +99,7 @@ function resolveForAction(root, inputPath) {
   return resolved.realPath;
 }
 
-function readBuf(file, limit) {
+export function readBuf(file, limit) {
   let stat;
   try {
     stat = fs.statSync(file);
@@ -117,7 +127,7 @@ function readBuf(file, limit) {
   return buf;
 }
 
-function decodeText(buf) {
+export function decodeText(buf) {
   let text;
   try {
     text = decoder.decode(buf);
@@ -130,7 +140,7 @@ function decodeText(buf) {
   return text;
 }
 
-function relativeTo(root, full) {
+export function relativeTo(root, full) {
   return path.relative(root, full).split(path.sep).join('/');
 }
 
@@ -176,6 +186,10 @@ function findEntries(root, startDir, { name = null, extension = null, maxDepth, 
           : dirent.isFile()
             ? 'file'
             : 'other';
+      // A deleted entry is quarantined, not gone; it stays out of ordinary discovery so a
+      // scan does not report what the user asked to remove. "workspace trash" is the view
+      // for it, and naming the directory directly still reaches it.
+      if (type === 'directory' && depth === 0 && dirent.name === TRASH_DIR) continue;
       if (type === 'link') skippedLinks += 1;
       if (type === 'directory') subdirectories.push({ dir: full, depth: depth + 1 });
       const entryExt = type === 'file' ? path.extname(dirent.name).toLowerCase().replace(/^\./, '') : '';
@@ -199,17 +213,17 @@ function findEntries(root, startDir, { name = null, extension = null, maxDepth, 
   return { matches, scanned, skippedLinks, unreadable, truncated };
 }
 
-export function findAction(root, { maxScan = MAX_SCAN_ENTRIES, defaultLimit = DEFAULT_FIND_LIMIT, maxLimit = MAX_FIND_LIMIT } = {}) {
+export function findAction(roots, { maxScan = MAX_SCAN_ENTRIES, defaultLimit = DEFAULT_FIND_LIMIT, maxLimit = MAX_FIND_LIMIT } = {}) {
   const scanCap = Math.min(maxScan, MAX_SCAN_ENTRIES);
   const limitCap = Math.min(maxLimit, MAX_FIND_LIMIT);
   return {
     name: 'filesystem.find',
-    description: 'Find files or directories by name or extension inside the authorized root. Bounded, read-only, never follows links.',
-    inputHint: `{"path": optional "relative/dir", "name": optional text, "extension": optional "txt", "maxDepth": optional 1-${MAX_SCAN_DEPTH}, "limit": optional 1-${limitCap}}`,
+    description: 'Find files or directories by name or extension inside an authorized workspace root. Bounded, read-only, never follows links.',
+    inputHint: `{"path": optional "relative/dir", "workspace": optional root name, "name": optional text, "extension": optional "txt", "maxDepth": optional 1-${MAX_SCAN_DEPTH}, "limit": optional 1-${limitCap}}`,
     permission: 'read',
     origins: [ORIGIN_USER],
     validate(input) {
-      const o = expectObject(input, ['path', 'name', 'extension', 'maxDepth', 'limit']);
+      const o = expectObject(input, ['path', 'workspace', 'name', 'extension', 'maxDepth', 'limit']);
       let name = null;
       if (o.name !== undefined) {
         name = pathField(o.name, 'name');
@@ -234,9 +248,10 @@ export function findAction(root, { maxScan = MAX_SCAN_ENTRIES, defaultLimit = DE
         }
         limit = o.limit;
       }
-      return { path: optionalPath(o.path, '.'), name, extension, maxDepth, limit };
+      return { path: optionalPath(o.path, '.'), workspace: workspaceField(o.workspace, roots), name, extension, maxDepth, limit };
     },
-    async execute(_ctx, { path: inputPath, name, extension, maxDepth, limit }) {
+    async execute(_ctx, { path: inputPath, workspace, name, extension, maxDepth, limit }) {
+      const root = roots.pick(workspace);
       const dir = resolveForAction(root, inputPath);
       let stat;
       try {
@@ -279,8 +294,9 @@ export function findAction(root, { maxScan = MAX_SCAN_ENTRIES, defaultLimit = DE
     },
     async verify(ctx, input, result) {
       try {
-        const dir = resolveForAction(ctx.root ?? root, input.path);
-        const fresh = findEntries(ctx.root ?? root, dir, {
+        const root = roots.pick(input.workspace);
+        const dir = resolveForAction(root, input.path);
+        const fresh = findEntries(root, dir, {
           name: input.name,
           extension: input.extension,
           maxDepth: input.maxDepth,
@@ -339,15 +355,15 @@ function analyseText(text) {
 
 // ---- filesystem.summarize ---------------------------------------------------
 
-export function summarizeAction(root, { maxBytes = MAX_SUMMARY_BYTES } = {}) {
+export function summarizeAction(roots, { maxBytes = MAX_DOCUMENT_BYTES } = {}) {
   return {
     name: 'filesystem.summarize',
-    description: 'Produce a deterministic extractive summary of one bounded UTF-8 text file: counts, headings, opening lines, and frequent terms. Read-only; no model is consulted.',
-    inputHint: `{"path": "relative/file.txt", "maxBytes": optional 1-${maxBytes}}`,
+    description: 'Produce a deterministic extractive summary of one bounded file: text, PDF, DOCX, XLSX or CSV. Counts, headings, opening lines, and frequent terms. Read-only; nothing in a document is executed and no model is consulted.',
+    inputHint: `{"path": "relative/file.txt", "workspace": optional root name, "maxBytes": optional 1-${maxBytes}}`,
     permission: 'read',
     origins: [ORIGIN_USER],
     validate(input) {
-      const o = expectObject(input, ['path', 'maxBytes']);
+      const o = expectObject(input, ['path', 'workspace', 'maxBytes']);
       const p = pathField(o.path);
       let limit = maxBytes;
       if (o.maxBytes !== undefined) {
@@ -356,29 +372,44 @@ export function summarizeAction(root, { maxBytes = MAX_SUMMARY_BYTES } = {}) {
         }
         limit = o.maxBytes;
       }
-      return { path: p, maxBytes: limit };
+      return { path: p, workspace: workspaceField(o.workspace, roots), maxBytes: limit };
     },
-    async execute(_ctx, { path: inputPath, maxBytes: limit }) {
+    async execute(_ctx, { path: inputPath, workspace, maxBytes: limit }) {
+      const root = roots.pick(workspace);
       const file = resolveForAction(root, inputPath);
       const buf = readBuf(file, limit);
-      const text = decodeText(buf);
-      const analysis = analyseText(text);
+      const document = extractDocument(inputPath, buf);
+      const analysis = analyseText(document.text);
       const digest = sha256(buf);
+      const facts = [
+        document.pages === undefined ? null : `${document.pages} page(s)`,
+        document.rows === undefined ? null : `${document.rows} row(s)`,
+        document.columns === undefined ? null : `${document.columns} column(s)`,
+      ].filter(Boolean).join(', ');
       const lines = [
-        `Summary of "${inputPath}" (${buf.length} bytes, sha256 ${digest.slice(0, 16)}…):`,
+        `Summary of "${inputPath}" (${document.format}${facts ? `, ${facts}` : ''}; ${buf.length} bytes, sha256 ${digest.slice(0, 16)}…):`,
         `  lines: ${analysis.lines}; words: ${analysis.words}; characters: ${analysis.chars}`,
         `  opening: ${analysis.summary || '(no prose found)'}`,
       ];
       if (analysis.headings.length > 0) lines.push(`  headings: ${analysis.headings.map((h) => displaySafe(h, 80)).join(' | ')}`);
       if (analysis.keywords.length > 0) lines.push(`  frequent terms: ${analysis.keywords.map((k) => `${k.word}(${k.count})`).join(', ')}`);
+      if (document.truncated) lines.push(`  (text truncated at ${MAX_EXTRACTED_CHARS} characters)`);
+      for (const limitation of document.limitations) lines.push(`  (limitation: ${displaySafe(limitation, 200)})`);
       lines.push('  (deterministic extract; it states what the file contains, not what it means)');
       return {
-        summary: `summarized "${inputPath}": ${analysis.lines} line(s), ${analysis.words} word(s), ${analysis.keywords.length} frequent term(s)`,
+        summary: `summarized "${inputPath}" (${document.format}): ${analysis.lines} line(s), ${analysis.words} word(s), ${analysis.keywords.length} frequent term(s)`,
         data: {
           path: inputPath,
+          format: document.format,
           size: buf.length,
           sha256: digest,
+          textSha256: document.textSha256,
           maxBytes: limit,
+          truncated: document.truncated,
+          limitations: document.limitations,
+          ...(document.pages === undefined ? {} : { pages: document.pages }),
+          ...(document.rows === undefined ? {} : { rows: document.rows }),
+          ...(document.columns === undefined ? {} : { columns: document.columns }),
           ...analysis,
         },
         display: lines.join('\n'),
@@ -386,7 +417,7 @@ export function summarizeAction(root, { maxBytes = MAX_SUMMARY_BYTES } = {}) {
     },
     async verify(ctx, input, result) {
       try {
-        const file = resolveForAction(ctx.root ?? root, input.path);
+        const file = resolveForAction(roots.pick(input.workspace), input.path);
         const fresh = readBuf(file, input.maxBytes);
         if (fresh.length !== result.data.size) {
           return { ok: false, detail: 'file size changed since the summary was produced' };
@@ -394,7 +425,17 @@ export function summarizeAction(root, { maxBytes = MAX_SUMMARY_BYTES } = {}) {
         if (sha256(fresh) !== result.data.sha256) {
           return { ok: false, detail: 'file content changed since the summary was produced' };
         }
-        const analysis = analyseText(decodeText(fresh));
+        const document = extractDocument(input.path, fresh);
+        if (document.format !== result.data.format) {
+          return { ok: false, detail: 'the detected format does not match an independent extraction' };
+        }
+        if (document.textSha256 !== result.data.textSha256) {
+          return { ok: false, detail: 'the extracted text does not match an independent extraction' };
+        }
+        if (document.truncated !== result.data.truncated) {
+          return { ok: false, detail: 'the truncation state does not match an independent extraction' };
+        }
+        const analysis = analyseText(document.text);
         if (analysis.lines !== result.data.lines || analysis.words !== result.data.words || analysis.chars !== result.data.chars) {
           return { ok: false, detail: 'the reported counts do not match the file' };
         }
@@ -404,9 +445,96 @@ export function summarizeAction(root, { maxBytes = MAX_SUMMARY_BYTES } = {}) {
         if (JSON.stringify(analysis.keywords) !== JSON.stringify(result.data.keywords)) {
           return { ok: false, detail: 'the reported frequent terms do not match the file' };
         }
-        return { ok: true, detail: `${fresh.length} bytes confirmed; counts, extract, and terms recomputed from an independent read` };
+        return { ok: true, detail: `${fresh.length} bytes confirmed; ${document.format} text and counts recomputed from an independent read` };
       } catch (err) {
         return { ok: false, detail: `summary could not be re-checked: ${err?.message ?? err}` };
+      }
+    },
+  };
+}
+
+// ---- filesystem.extract -----------------------------------------------------
+
+// The extracted text is shown in full to the terminal but is not written into the
+// operation record: the data carries the format, bounds, and text hash instead.
+export function extractAction(roots, { maxBytes = MAX_DOCUMENT_BYTES } = {}) {
+  return {
+    name: 'filesystem.extract',
+    description: 'Extract bounded text from a PDF, DOCX, XLSX, CSV or UTF-8 text file inside an authorized workspace root. Read-only; embedded content is never executed and no model is consulted.',
+    inputHint: `{"path": "relative/report.pdf", "workspace": optional root name, "maxBytes": optional 1-${maxBytes}}`,
+    permission: 'read',
+    origins: [ORIGIN_USER],
+    validate(input) {
+      const o = expectObject(input, ['path', 'workspace', 'maxBytes']);
+      const p = pathField(o.path);
+      let limit = maxBytes;
+      if (o.maxBytes !== undefined) {
+        if (!Number.isInteger(o.maxBytes) || o.maxBytes < 1 || o.maxBytes > maxBytes) {
+          throw new ValidationError(`maxBytes must be an integer from 1 to ${maxBytes}`);
+        }
+        limit = o.maxBytes;
+      }
+      return { path: p, workspace: workspaceField(o.workspace, roots), maxBytes: limit };
+    },
+    async execute(_ctx, { path: inputPath, workspace, maxBytes: limit }) {
+      const root = roots.pick(workspace);
+      const file = resolveForAction(root, inputPath);
+      const buf = readBuf(file, limit);
+      const document = extractDocument(inputPath, buf);
+      const digest = sha256(buf);
+      const facts = [
+        document.pages === undefined ? null : `${document.pages} page(s)`,
+        document.rows === undefined ? null : `${document.rows} row(s)`,
+        document.columns === undefined ? null : `${document.columns} column(s)`,
+      ].filter(Boolean).join(', ');
+      const lines = [
+        `Extracted ${document.chars} character(s) from "${inputPath}" (${document.format}${facts ? `, ${facts}` : ''}; ${buf.length} bytes, sha256 ${digest.slice(0, 16)}…):`,
+      ];
+      if (document.text.length === 0) lines.push('  (no text could be extracted)');
+      else lines.push(displayText(document.text));
+      if (document.truncated) lines.push(`  (text truncated at ${MAX_EXTRACTED_CHARS} characters)`);
+      for (const limitation of document.limitations) lines.push(`  (limitation: ${displaySafe(limitation, 200)})`);
+      lines.push(`  (${DOCUMENT_LIMITATION_NOTE})`);
+      return {
+        summary: `extracted ${document.chars} character(s) from "${inputPath}" (${document.format})`,
+        data: {
+          path: inputPath,
+          format: document.format,
+          size: buf.length,
+          sha256: digest,
+          textSha256: document.textSha256,
+          chars: document.chars,
+          words: document.words,
+          lines: document.lines,
+          truncated: document.truncated,
+          limitations: document.limitations,
+          maxBytes: limit,
+          ...(document.pages === undefined ? {} : { pages: document.pages }),
+          ...(document.rows === undefined ? {} : { rows: document.rows }),
+          ...(document.columns === undefined ? {} : { columns: document.columns }),
+        },
+        display: lines.join('\n'),
+      };
+    },
+    async verify(ctx, input, result) {
+      try {
+        const file = resolveForAction(roots.pick(input.workspace), input.path);
+        const fresh = readBuf(file, input.maxBytes);
+        if (fresh.length !== result.data.size) {
+          return { ok: false, detail: 'file size changed since the extraction' };
+        }
+        if (sha256(fresh) !== result.data.sha256) {
+          return { ok: false, detail: 'file content changed since the extraction' };
+        }
+        const document = extractDocument(input.path, fresh);
+        for (const field of ['format', 'textSha256', 'chars', 'words', 'lines', 'truncated']) {
+          if (document[field] !== result.data[field]) {
+            return { ok: false, detail: `the extracted ${field} does not match an independent extraction` };
+          }
+        }
+        return { ok: true, detail: `${document.chars} character(s) from ${document.format} confirmed by an independent extraction` };
+      } catch (err) {
+        return { ok: false, detail: `extraction could not be re-checked: ${err?.message ?? err}` };
       }
     },
   };
@@ -446,15 +574,15 @@ function compareText(textA, textB, sampleLimit) {
   };
 }
 
-export function compareAction(root, { maxBytes = MAX_COMPARE_BYTES } = {}) {
+export function compareAction(roots, { maxBytes = MAX_COMPARE_BYTES } = {}) {
   return {
     name: 'filesystem.compare',
-    description: 'Compare two bounded UTF-8 text files inside the authorized root by position: identity, sizes, hashes, differing lines, and extra trailing lines. Read-only.',
-    inputHint: `{"a": "relative/file-a.txt", "b": "relative/file-b.txt", "maxBytes": optional 1-${maxBytes}}`,
+    description: 'Compare two bounded UTF-8 text files inside an authorized workspace root by position: identity, sizes, hashes, differing lines, and extra trailing lines. Read-only.',
+    inputHint: `{"a": "relative/file-a.txt", "b": "relative/file-b.txt", "workspace": optional root name, "maxBytes": optional 1-${maxBytes}}`,
     permission: 'read',
     origins: [ORIGIN_USER],
     validate(input) {
-      const o = expectObject(input, ['a', 'b', 'maxBytes']);
+      const o = expectObject(input, ['a', 'b', 'workspace', 'maxBytes']);
       const a = pathField(o.a, 'a');
       const b = pathField(o.b, 'b');
       let limit = maxBytes;
@@ -464,9 +592,10 @@ export function compareAction(root, { maxBytes = MAX_COMPARE_BYTES } = {}) {
         }
         limit = o.maxBytes;
       }
-      return { a, b, maxBytes: limit };
+      return { a, b, workspace: workspaceField(o.workspace, roots), maxBytes: limit };
     },
-    async execute(_ctx, { a, b, maxBytes: limit }) {
+    async execute(_ctx, { a, b, workspace, maxBytes: limit }) {
+      const root = roots.pick(workspace);
       const fileA = resolveForAction(root, a);
       const fileB = resolveForAction(root, b);
       const bufA = readBuf(fileA, limit);
@@ -499,7 +628,7 @@ export function compareAction(root, { maxBytes = MAX_COMPARE_BYTES } = {}) {
     },
     async verify(ctx, input, result) {
       try {
-        const rootNow = ctx.root ?? root;
+        const rootNow = roots.pick(input.workspace);
         const fileA = resolveForAction(rootNow, input.a);
         const fileB = resolveForAction(rootNow, input.b);
         const bufA = readBuf(fileA, input.maxBytes);
@@ -550,6 +679,7 @@ function scanReport(root, startDir, { maxDepth, maxScan, largestLimit }) {
         continue;
       }
       if (dirent.isDirectory()) {
+        if (depth === 0 && dirent.name === TRASH_DIR) continue;
         totals.directories += 1;
         subdirectories.push({ dir: full, depth: depth + 1 });
         continue;
@@ -589,17 +719,17 @@ function scanReport(root, startDir, { maxDepth, maxScan, largestLimit }) {
   };
 }
 
-export function reportAction(root, { maxScan = MAX_SCAN_ENTRIES, maxDepth = MAX_SCAN_DEPTH } = {}) {
+export function reportAction(roots, { maxScan = MAX_SCAN_ENTRIES, maxDepth = MAX_SCAN_DEPTH } = {}) {
   const scanCap = Math.min(maxScan, MAX_SCAN_ENTRIES);
   const depthCap = Math.min(maxDepth, MAX_SCAN_DEPTH);
   return {
     name: 'filesystem.report',
-    description: 'Bounded overview of a directory inside the authorized root: file and directory counts, total size, extensions, largest and newest files. Read-only; links are counted, never followed.',
-    inputHint: `{"path": optional "relative/dir", "maxDepth": optional 1-${depthCap}, "limit": optional 1-${MAX_REPORT_FILES}}`,
+    description: 'Bounded overview of a directory inside an authorized workspace root: file and directory counts, total size, extensions, largest and newest files. Read-only; links are counted, never followed.',
+    inputHint: `{"path": optional "relative/dir", "workspace": optional root name, "maxDepth": optional 1-${depthCap}, "limit": optional 1-${MAX_REPORT_FILES}}`,
     permission: 'read',
     origins: [ORIGIN_USER],
     validate(input) {
-      const o = expectObject(input, ['path', 'maxDepth', 'limit']);
+      const o = expectObject(input, ['path', 'workspace', 'maxDepth', 'limit']);
       let maxDepthValue = 4;
       if (o.maxDepth !== undefined) {
         if (!Number.isInteger(o.maxDepth) || o.maxDepth < 1 || o.maxDepth > depthCap) {
@@ -614,9 +744,10 @@ export function reportAction(root, { maxScan = MAX_SCAN_ENTRIES, maxDepth = MAX_
         }
         limit = o.limit;
       }
-      return { path: optionalPath(o.path, '.'), maxDepth: maxDepthValue, limit };
+      return { path: optionalPath(o.path, '.'), workspace: workspaceField(o.workspace, roots), maxDepth: maxDepthValue, limit };
     },
-    async execute(_ctx, { path: inputPath, maxDepth: depth, limit }) {
+    async execute(_ctx, { path: inputPath, workspace, maxDepth: depth, limit }) {
+      const root = roots.pick(workspace);
       const dir = resolveForAction(root, inputPath);
       let stat;
       try {
@@ -643,8 +774,9 @@ export function reportAction(root, { maxScan = MAX_SCAN_ENTRIES, maxDepth = MAX_
     },
     async verify(ctx, input, result) {
       try {
-        const dir = resolveForAction(ctx.root ?? root, input.path);
-        const fresh = scanReport(ctx.root ?? root, dir, {
+        const root = roots.pick(input.workspace);
+        const dir = resolveForAction(root, input.path);
+        const fresh = scanReport(root, dir, {
           maxDepth: input.maxDepth,
           maxScan: scanCap,
           largestLimit: input.limit,
@@ -760,11 +892,11 @@ function publish(root, inputPath, buf, { expectedSha256, create }) {
   return { target, previousSha256 };
 }
 
-export function writeAction(root, { maxBytes = MAX_WRITE_BYTES } = {}) {
+export function writeAction(roots, { maxBytes = MAX_WRITE_BYTES } = {}) {
   return {
     name: 'filesystem.write',
-    description: 'Create a text file inside the authorized root, or replace one only when the caller supplies its current sha256. Write: user origin only; never overwrites silently and never executes content.',
-    inputHint: '{"path": "relative/file.txt", "content": "text", "expectedSha256": optional "64-hex current hash to replace"}',
+    description: 'Create a text file inside an authorized workspace root, or replace one only when the caller supplies its current sha256. Write: user origin only; never overwrites silently and never executes content.',
+    inputHint: '{"path": "relative/file.txt", "content": "text", "workspace": optional root name, "expectedSha256": optional "64-hex current hash to replace"}',
     permission: 'write',
     origins: [ORIGIN_USER],
     // A file write is a consequential action the user asked for. It is never offered as a plan
@@ -772,7 +904,7 @@ export function writeAction(root, { maxBytes = MAX_WRITE_BYTES } = {}) {
     // action's content is the effect.
     plannable: false,
     validate(input) {
-      const o = expectObject(input, ['path', 'content', 'expectedSha256']);
+      const o = expectObject(input, ['path', 'content', 'workspace', 'expectedSha256']);
       const p = pathField(o.path);
       const buf = writeBytes(o.content);
       if (buf.length > maxBytes) throw new ValidationError(`content exceeds ${maxBytes} bytes`);
@@ -783,9 +915,10 @@ export function writeAction(root, { maxBytes = MAX_WRITE_BYTES } = {}) {
         }
         expectedSha256 = o.expectedSha256.trim().toLowerCase();
       }
-      return { path: p, content: o.content, expectedSha256, size: buf.length, sha256: sha256(buf) };
+      return { path: p, content: o.content, workspace: workspaceField(o.workspace, roots), expectedSha256, size: buf.length, sha256: sha256(buf) };
     },
-    async execute(_ctx, { path: inputPath, content, expectedSha256 }) {
+    async execute(_ctx, { path: inputPath, content, workspace, expectedSha256 }) {
+      const root = roots.pick(workspace);
       const buf = Buffer.from(content, 'utf8');
       const create = expectedSha256 === null;
       const { target, previousSha256 } = publish(root, inputPath, buf, { expectedSha256, create });
@@ -809,7 +942,7 @@ export function writeAction(root, { maxBytes = MAX_WRITE_BYTES } = {}) {
     },
     async verify(ctx, input, result) {
       try {
-        const rootNow = ctx.root ?? root;
+        const rootNow = roots.pick(input.workspace);
         const file = resolveForAction(rootNow, input.path);
         const fresh = fs.readFileSync(file);
         if (fresh.length !== result.data.size) {
@@ -832,12 +965,14 @@ export function writeAction(root, { maxBytes = MAX_WRITE_BYTES } = {}) {
   };
 }
 
-export function workspaceActions(root, options = {}) {
+export function workspaceActions(roots, options = {}) {
   return [
-    findAction(root, options),
-    summarizeAction(root, options),
-    compareAction(root, options),
-    reportAction(root, options),
-    writeAction(root, options),
+    findAction(roots, options),
+    summarizeAction(roots, options),
+    extractAction(roots, options),
+    compareAction(roots, options),
+    reportAction(roots, options),
+    writeAction(roots, options),
+    ...lifecycleActions(roots),
   ];
 }

@@ -46,6 +46,17 @@ function workspacePath(token) {
   return looksLikePathToken(path) ? path : null;
 }
 
+// "create directory reports" names one new directory, and a bare name is a normal way to say
+// it. Only the directory-creation routes accept this: a delete or move target keeps requiring
+// path shape, because a bare word there is more likely to be part of an ordinary sentence.
+function directoryNameToken(token) {
+  const shaped = workspacePath(token);
+  if (shaped !== null) return shaped;
+  const name = typeof token === 'string' ? token.trim().replace(/^["']|["']$/g, '') : '';
+  if (name === '.' || name === '..') return null;
+  return /^[A-Za-z0-9._-]{1,64}$/.test(name) ? name : null;
+}
+
 // A follow-up question about a task is answered from APEX's own records rather than
 // from a model: whether a step ran, was verified, or was interrupted is a fact in the
 // task log and the audit, and a model must not be the one to say it. What makes a
@@ -107,6 +118,27 @@ export function route(request) {
   // It is answered from the three stores, not by a model asked to guess what is pending.
   if (/^(?:work\s+review|review\s+(?:my\s+)?work|what\s+am\s+i\s+working\s+on|what(?:'s|\s+is)\s+blocked|what\s+needs\s+(?:my\s+)?attention)(?:\s+now)?\s*\??$/i.test(r)) {
     return { kind: 'action', capability: 'work.review', action: 'work.review', input: {} };
+  }
+
+  // Recorded deadlines. The ledger holds dates the owner imported from a file; neither route
+  // infers one. The import is offered only for a path-shaped target, and the action itself
+  // bounds the read, refuses an unsupported format, and records provenance per entry.
+  m = /^(?:import|load|read|ingest)\s+(?:the\s+)?deadlines?\s+from\s+(.+)$/i.exec(r);
+  if (m) {
+    const path = workspacePath(m[1]);
+    if (path !== null) {
+      return { kind: 'action', capability: 'deadline.import', action: 'deadline.import', input: { path } };
+    }
+  }
+
+  m = /^(?:(?:the\s+|my\s+)?deadlines?|deadline\s+list|list\s+(?:the\s+|my\s+)?deadlines?|what(?:'s|\s+is)\s+due)(?:\s+within\s+(\d+)\s+days?)?\s*\??$/i.exec(r);
+  if (m) {
+    return {
+      kind: 'action',
+      capability: 'deadline.list',
+      action: 'deadline.list',
+      input: m[1] === undefined ? {} : { horizonDays: Number(m[1]) },
+    };
   }
 
   // The user's own assessment of a completed task. The pattern only decides that the user is
@@ -255,6 +287,17 @@ export function route(request) {
     }
   }
 
+  // Document text extraction. Only a path-shaped target is routed, so "extract text from my
+  // notes" stays a normal request; the action bounds the read and never executes anything the
+  // document contains.
+  m = /^(?:extract|pull)\s+(?:the\s+)?(?:text|content|contents)\s+(?:from|out\s+of)\s+(?:the\s+)?(?:file\s+)?(.+)$/i.exec(r);
+  if (m) {
+    const path = workspacePath(m[1]);
+    if (path !== null) {
+      return { kind: 'action', capability: 'filesystem.extract', action: 'filesystem.extract', input: { path } };
+    }
+  }
+
   m = /^(?:summari[sz]e|summary\s+of|give\s+(?:me\s+)?a\s+summary\s+of)\s+(?:the\s+)?(?:file\s+)?(.+)$/i.exec(r);
   if (m) {
     const path = workspacePath(m[1]);
@@ -293,6 +336,46 @@ export function route(request) {
     const content = m[2].trim();
     if (path !== null && content.length > 0) {
       return { kind: 'action', capability: 'filesystem.write', action: 'filesystem.write', input: { path, content } };
+    }
+  }
+
+  // Workspace lifecycle. These are writes, but a request typed by the user is the user origin,
+  // and the actions re-validate every path, never overwrite, and put a delete into a reversible
+  // quarantine. A request that does not name a plausible path stays on the model path.
+  m = /^(?:create|make)\s+(?:a\s+)?(?:new\s+)?(?:directory|folder|dir)\s+(.+)$/i.exec(r) || /^mkdir\s+(.+)$/i.exec(r);
+  if (m) {
+    const path = directoryNameToken(m[1]);
+    if (path !== null) {
+      return { kind: 'action', capability: 'filesystem.mkdir', action: 'filesystem.mkdir', input: { path } };
+    }
+  }
+
+  m = /^(?:move|rename)\s+(?:the\s+)?(?:file\s+|directory\s+|folder\s+)?(.+?)\s+(?:to|into)\s+(.+)$/i.exec(r);
+  if (m) {
+    const from = workspacePath(m[1]);
+    const to = workspacePath(m[2]);
+    if (from !== null && to !== null) {
+      return { kind: 'action', capability: 'filesystem.move', action: 'filesystem.move', input: { path: from, to } };
+    }
+  }
+
+  if (/^(?:workspace\s+trash|list\s+(?:the\s+)?(?:workspace\s+)?trash|show\s+(?:the\s+)?(?:workspace\s+)?quarantine)\s*\??$/i.test(r)) {
+    return { kind: 'action', capability: 'filesystem.trash', action: 'filesystem.trash', input: {} };
+  }
+
+  m = /^(?:restore|undelete)\s+(?:the\s+)?(?:quarantined\s+)?(?:entry\s+)?(.+)$/i.exec(r);
+  if (m) {
+    const id = m[1].trim().replace(/^["']|["']$/g, '');
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return { kind: 'action', capability: 'filesystem.restore', action: 'filesystem.restore', input: { id } };
+    }
+  }
+
+  m = /^(?:delete|remove)\s+(?:the\s+)?(?:file\s+|directory\s+|folder\s+)?(.+)$/i.exec(r);
+  if (m) {
+    const path = workspacePath(m[1]);
+    if (path !== null) {
+      return { kind: 'action', capability: 'filesystem.delete', action: 'filesystem.delete', input: { path } };
     }
   }
 

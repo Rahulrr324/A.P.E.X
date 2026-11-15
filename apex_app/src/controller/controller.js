@@ -272,6 +272,20 @@ const AUDIT_TEXT_FIELDS = Object.freeze({
     text: [],
     arrays: [],
   }),
+  // The import names the file it read and the root it was read from; the dates themselves live in
+  // the deadline ledger, which points back at the source line. The read has no text input at all.
+  'deadline.import': Object.freeze({
+    allowed: ['path', 'workspace', 'maxBytes'],
+    text: ['path', 'workspace'],
+    arrays: [],
+    objects: [],
+  }),
+  'deadline.list': Object.freeze({
+    allowed: ['limit', 'horizonDays'],
+    text: [],
+    arrays: [],
+    objects: [],
+  }),
   // The feedback fields are the user's own words about a retained task run. They are audit input
   // like any other; the experience store holds the record itself, and the mask runs on top.
   'task.feedback': Object.freeze({
@@ -355,11 +369,19 @@ const AUDIT_TEXT_FIELDS = Object.freeze({
   // records where it went and what hash it had, and omits the bytes so a write does not
   // duplicate a document (possibly a sensitive one) into the operation log.
   'filesystem.write': Object.freeze({
-    allowed: ['path', 'content', 'expectedSha256'],
-    text: ['path', 'expectedSha256'],
+    allowed: ['path', 'content', 'workspace', 'expectedSha256'],
+    text: ['path', 'workspace', 'expectedSha256'],
     arrays: [],
     objects: [],
     omit: ['content'],
+  }),
+  // A batch is a list of moves/creations/deletions inside a workspace; the paths are the audit
+  // evidence and the list is bounded by the action's own validator.
+  'filesystem.batch': Object.freeze({
+    allowed: ['operations', 'workspace'],
+    text: ['workspace'],
+    arrays: [],
+    objects: ['operations'],
   }),
 });
 
@@ -538,6 +560,7 @@ export class CognitiveController {
     taskStore = null,
     summaryQueue = null,
     rootForContext = null,
+    workspaces = null,
     knowledge = null,
     notes = null,
     experience = null,
@@ -547,6 +570,7 @@ export class CognitiveController {
     plans = null,
     proposals = null,
     worldModel = null,
+    deadlines = null,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -564,6 +588,9 @@ export class CognitiveController {
     this.taskStore = taskStore;
     this.summaryQueue = summaryQueue;
     this.rootForContext = rootForContext;
+    // The fixed set of named roots, validated once at startup by the composition root. A command
+    // may name one; nothing here can add one or widen a boundary.
+    this.workspaces = workspaces;
     this.knowledge = knowledge;
     // Notes are the user's own compositions. They are never prompt evidence and never a source of
     // permission; this store is held so the explicit user commands have one entry point.
@@ -591,6 +618,9 @@ export class CognitiveController {
     // a bounded, relevance-gated view to the prompt; nothing it holds is permission, and every write
     // to it is a separate user-origin action.
     this.worldModel = worldModel;
+    // Deadlines are dates the owner imported from a local file. The ledger holds no schedule and no
+    // completion state; the portfolio review reads it for recorded dates and nothing else.
+    this.deadlines = deadlines;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -717,7 +747,13 @@ export class CognitiveController {
         op.request = `[request omitted: it combined a memory or note write with other requests; ${request.length} chars]`;
       }
 
-      const blocked = unsupportedOperationFor(request);
+      // A request the router mapped to a registered lifecycle action asks APEX to quarantine or
+      // move one named path inside a workspace root - not to run a shell delete - so the
+      // destructive-sentence guard does not apply. The action still re-validates the path and
+      // refuses anything outside the root. Phrasing the router does not recognise, such as
+      // "delete the production database" or "rm -rf /", keeps the refusal.
+      const routedIsCapability = routed.kind === 'action' && this.registry.get(routed.action) !== null;
+      const blocked = routedIsCapability ? null : unsupportedOperationFor(request);
       // A lookup with no topic or a file request with no target cannot proceed.
       // Ask before any retrieval, action, or model call. Follow-ups that depend on
       // conversation context are checked after recent turns are loaded.
@@ -1387,6 +1423,47 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // ---- deadlines --------------------------------------------------------------
+  // A deadline is a date the owner read from a local file. The import reads one bounded file inside
+  // an authorized root and records each date with its source path, digest, and line; the list reads
+  // the ledger back. Neither infers a date, schedules anything, or accepts a model origin.
+
+  #requireDeadlines(capability = 'the deadline ledger') {
+    if (!this.deadlines) throw new ValidationError(`${capability} is not available in this configuration`);
+  }
+
+  async deadlineImport({ path: inputPath, workspace = null, maxBytes } = {}) {
+    this.#requireDeadlines();
+    const shown = typeof inputPath === 'string' && inputPath.trim() !== ''
+      ? truncate(inputPath.trim(), 120)
+      : '[missing path]';
+    const op = this.#newOp({
+      capability: 'deadline.import',
+      origin: 'user',
+      request: `deadline import [${shown}]${this.#workspaceLabel(workspace)}`,
+    });
+    const input = { path: inputPath };
+    if (workspace !== null && workspace !== undefined) input.workspace = workspace;
+    if (maxBytes !== undefined && maxBytes !== null) input.maxBytes = maxBytes;
+    const step = await this.runAction('deadline.import', input, 'user', op.id);
+    return this.#finishCommandOp(
+      op,
+      step,
+      'The deadlines may have been stored, but their audit record could not be written; they are not reported as verified success.',
+    );
+  }
+
+  async deadlineList({ limit = 50, horizonDays = 30 } = {}) {
+    this.#requireDeadlines();
+    const op = this.#newOp({
+      capability: 'deadline.list',
+      origin: 'user',
+      request: `deadline list (limit ${limit}, horizon ${horizonDays} day(s))`,
+    });
+    const step = await this.runAction('deadline.list', { limit, horizonDays }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   // The user's assessment of a completed task's outcome. The action refuses unless the task log
   // and the audit show a verified completion; this method only names the operation and relays the
   // result. Because it can write an experience and a feedback record, an audit failure after that
@@ -1721,23 +1798,40 @@ export class CognitiveController {
   // record and lives only in the file.
 
   #requireFilesystemRoot(capability) {
-    if (!this.rootForContext) {
+    if (!this.workspaces) {
       throw new ValidationError(`no filesystem root is configured, so ${capability} is unavailable`);
     }
+  }
+
+  // The fixed set of roots, by name. The default root is the base every relative path resolves
+  // against; named roots are additional validated boundaries, and naming one is a selector, not
+  // authority. A configuration with no root returns an empty list rather than claiming one.
+  workspaceRoots() {
+    if (!this.workspaces) {
+      throw new ValidationError('no filesystem root is configured, so workspace roots are unavailable');
+    }
+    return this.workspaces.list().map((entry) => ({
+      name: entry.name,
+      path: entry.path,
+      default: entry.default,
+    }));
+  }
+
+  #workspaceLabel(workspace) {
+    return typeof workspace === 'string' && workspace.trim() !== '' ? ` [workspace ${workspace}]` : '';
   }
 
   async workspaceList(input = {}) {
     this.#requireFilesystemRoot('filesystem.list');
     const where = typeof input.path === 'string' && input.path.trim() !== '' ? input.path.trim() : '.';
-    const op = this.#newOp({ capability: 'filesystem.list', origin: 'user', request: `workspace list [${where}]` });
+    const op = this.#newOp({ capability: 'filesystem.list', origin: 'user', request: `workspace list [${where}]${this.#workspaceLabel(input.workspace)}` });
     const step = await this.runAction('filesystem.list', input, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 
-  async workspaceRead({ path: target, maxBytes } = {}) {
+  async workspaceRead(input = {}) {
     this.#requireFilesystemRoot('filesystem.read');
-    const input = maxBytes === undefined ? { path: target } : { path: target, maxBytes };
-    const op = this.#newOp({ capability: 'filesystem.read', origin: 'user', request: `workspace read [${target ?? ''}]` });
+    const op = this.#newOp({ capability: 'filesystem.read', origin: 'user', request: `workspace read [${input.path ?? ''}]${this.#workspaceLabel(input.workspace)}` });
     const step = await this.runAction('filesystem.read', input, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
@@ -1745,21 +1839,28 @@ export class CognitiveController {
   async workspaceFind(input = {}) {
     this.#requireFilesystemRoot('filesystem.find');
     const where = typeof input.path === 'string' && input.path.trim() !== '' ? input.path.trim() : '.';
-    const op = this.#newOp({ capability: 'filesystem.find', origin: 'user', request: `workspace find [${where}]` });
+    const op = this.#newOp({ capability: 'filesystem.find', origin: 'user', request: `workspace find [${where}]${this.#workspaceLabel(input.workspace)}` });
     const step = await this.runAction('filesystem.find', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceExtract(input = {}) {
+    this.#requireFilesystemRoot('filesystem.extract');
+    const op = this.#newOp({ capability: 'filesystem.extract', origin: 'user', request: `workspace extract [${input.path ?? ''}]${this.#workspaceLabel(input.workspace)}` });
+    const step = await this.runAction('filesystem.extract', input, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 
   async workspaceSummarize(input = {}) {
     this.#requireFilesystemRoot('filesystem.summarize');
-    const op = this.#newOp({ capability: 'filesystem.summarize', origin: 'user', request: `workspace summarize [${input.path ?? ''}]` });
+    const op = this.#newOp({ capability: 'filesystem.summarize', origin: 'user', request: `workspace summarize [${input.path ?? ''}]${this.#workspaceLabel(input.workspace)}` });
     const step = await this.runAction('filesystem.summarize', input, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 
   async workspaceCompare(input = {}) {
     this.#requireFilesystemRoot('filesystem.compare');
-    const op = this.#newOp({ capability: 'filesystem.compare', origin: 'user', request: `workspace compare [${input.a ?? ''}] [${input.b ?? ''}]` });
+    const op = this.#newOp({ capability: 'filesystem.compare', origin: 'user', request: `workspace compare [${input.a ?? ''}] [${input.b ?? ''}]${this.#workspaceLabel(input.workspace)}` });
     const step = await this.runAction('filesystem.compare', input, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
@@ -1767,25 +1868,86 @@ export class CognitiveController {
   async workspaceReport(input = {}) {
     this.#requireFilesystemRoot('filesystem.report');
     const where = typeof input.path === 'string' && input.path.trim() !== '' ? input.path.trim() : '.';
-    const op = this.#newOp({ capability: 'filesystem.report', origin: 'user', request: `workspace report [${where}]` });
+    const op = this.#newOp({ capability: 'filesystem.report', origin: 'user', request: `workspace report [${where}]${this.#workspaceLabel(input.workspace)}` });
     const step = await this.runAction('filesystem.report', input, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 
-  async workspaceWrite({ path: target, content, expectedSha256 = null } = {}) {
+  async workspaceWrite({ path: target, content, workspace, expectedSha256 = null } = {}) {
     this.#requireFilesystemRoot('filesystem.write');
     const replace = typeof expectedSha256 === 'string' && expectedSha256.trim() !== '';
     const op = this.#newOp({
       capability: 'filesystem.write',
       origin: 'user',
-      request: `workspace write ${replace ? 'replace' : 'create'} [${target ?? ''}]`,
+      request: `workspace write ${replace ? 'replace' : 'create'} [${target ?? ''}]${this.#workspaceLabel(workspace)}`,
     });
     const input = replace ? { path: target, content, expectedSha256 } : { path: target, content };
+    if (typeof workspace === 'string' && workspace.trim() !== '') input.workspace = workspace;
     const step = await this.runAction('filesystem.write', input, 'user', op.id);
     return this.#finishCommandOp(
       op,
       step,
       'The file may have been written, but its audit record could not be written; the write is not reported as verified.',
+    );
+  }
+
+  async workspaceMkdir({ path: target, parents = false, workspace } = {}) {
+    this.#requireFilesystemRoot('filesystem.mkdir');
+    const input = { path: target };
+    if (parents === true) input.parents = true;
+    if (typeof workspace === 'string' && workspace.trim() !== '') input.workspace = workspace;
+    const op = this.#newOp({ capability: 'filesystem.mkdir', origin: 'user', request: `workspace mkdir [${target ?? ''}]${this.#workspaceLabel(workspace)}` });
+    const step = await this.runAction('filesystem.mkdir', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceMove({ path: target, to, workspace } = {}) {
+    this.#requireFilesystemRoot('filesystem.move');
+    const input = { path: target, to };
+    if (typeof workspace === 'string' && workspace.trim() !== '') input.workspace = workspace;
+    const op = this.#newOp({ capability: 'filesystem.move', origin: 'user', request: `workspace move [${target ?? ''}] -> [${to ?? ''}]${this.#workspaceLabel(workspace)}` });
+    const step = await this.runAction('filesystem.move', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceDelete({ path: target, workspace } = {}) {
+    this.#requireFilesystemRoot('filesystem.delete');
+    const input = { path: target };
+    if (typeof workspace === 'string' && workspace.trim() !== '') input.workspace = workspace;
+    const op = this.#newOp({ capability: 'filesystem.delete', origin: 'user', request: `workspace delete [${target ?? ''}]${this.#workspaceLabel(workspace)}` });
+    const step = await this.runAction('filesystem.delete', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceRestore({ id, workspace } = {}) {
+    this.#requireFilesystemRoot('filesystem.restore');
+    const input = { id };
+    if (typeof workspace === 'string' && workspace.trim() !== '') input.workspace = workspace;
+    const op = this.#newOp({ capability: 'filesystem.restore', origin: 'user', request: `workspace restore [${id ?? ''}]${this.#workspaceLabel(workspace)}` });
+    const step = await this.runAction('filesystem.restore', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceTrash({ workspace, limit } = {}) {
+    this.#requireFilesystemRoot('filesystem.trash');
+    const input = {};
+    if (typeof workspace === 'string' && workspace.trim() !== '') input.workspace = workspace;
+    if (limit !== undefined) input.limit = limit;
+    const op = this.#newOp({ capability: 'filesystem.trash', origin: 'user', request: `workspace trash${this.#workspaceLabel(workspace)}` });
+    const step = await this.runAction('filesystem.trash', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workspaceBatch({ operations, workspace } = {}) {
+    this.#requireFilesystemRoot('filesystem.batch');
+    const input = { operations };
+    if (typeof workspace === 'string' && workspace.trim() !== '') input.workspace = workspace;
+    const op = this.#newOp({ capability: 'filesystem.batch', origin: 'user', request: `workspace batch [${Array.isArray(operations) ? operations.length : 0} operation(s)]${this.#workspaceLabel(workspace)}` });
+    const step = await this.runAction('filesystem.batch', input, 'user', op.id);
+    return this.#finishCommandOp(
+      op,
+      step,
+      'The batch may have changed the workspace, but its audit record could not be written; the result is not reported as verified.',
     );
   }
 
@@ -2484,6 +2646,9 @@ export class CognitiveController {
       // expectations beside the comparison; it does not authorize one, and a configuration without the
       // ledger receives a disclosure that says the ledger is absent rather than that it is empty.
       predictions: this.predictions,
+      // The deadline ledger, readable and optional. work.review discloses the recorded dates it
+      // holds; a configuration without the ledger omits the section rather than showing an empty one.
+      deadlines: this.deadlines,
     };
   }
 

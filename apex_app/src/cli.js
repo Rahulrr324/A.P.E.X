@@ -27,14 +27,22 @@ Usage:
   node bin/apex.js status [--model]      subsystem counts (--model probes the endpoint; no inference)
   node bin/apex.js capabilities [words...] [--json]   registered actions, optionally filtered (read-only)
   node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
-  node bin/apex.js workspace list [path] [--limit N]        one directory inside the authorized root (read-only)
-  node bin/apex.js workspace find [path] --name <text>|--extension <ext> [--max-depth N] [--limit N]
-  node bin/apex.js workspace read <path> [--max-bytes N]
-  node bin/apex.js workspace summarize <path> [--max-bytes N]   deterministic extract; no model is consulted
-  node bin/apex.js workspace compare <a> <b> [--max-bytes N]
-  node bin/apex.js workspace report [path] [--max-depth N] [--limit N]
-  node bin/apex.js workspace write <path> --content <text> [--expected-sha256 <current hash>]
+  node bin/apex.js workspace roots                     configured workspace roots and their names (read-only)
+  node bin/apex.js workspace list [path] [--limit N] [--workspace <name>]        one directory inside a root (read-only)
+  node bin/apex.js workspace find [path] --name <text>|--extension <ext> [--max-depth N] [--limit N] [--workspace <name>]
+  node bin/apex.js workspace read <path> [--max-bytes N] [--workspace <name>]
+  node bin/apex.js workspace extract <path> [--max-bytes N] [--workspace <name>]     PDF, DOCX, XLSX, CSV or text; nothing is executed
+  node bin/apex.js workspace summarize <path> [--max-bytes N] [--workspace <name>]   deterministic extract; no model is consulted
+  node bin/apex.js workspace compare <a> <b> [--max-bytes N] [--workspace <name>]
+  node bin/apex.js workspace report [path] [--max-depth N] [--limit N] [--workspace <name>]
+  node bin/apex.js workspace write <path> --content <text> [--expected-sha256 <current hash>] [--workspace <name>]
                                                  create, or replace only when you supply the exact current hash
+  node bin/apex.js workspace mkdir <path> [--parents] [--workspace <name>]      create a directory; never replaces a file
+  node bin/apex.js workspace move <path> <destination> [--workspace <name>]     rename inside the root; never overwrites
+  node bin/apex.js workspace delete <path> [--workspace <name>]                 move to the quarantine; reversible
+  node bin/apex.js workspace trash [--limit N] [--workspace <name>]             list the quarantine (read-only)
+  node bin/apex.js workspace restore <quarantine-id> [--workspace <name>]       restore a quarantined entry
+  node bin/apex.js workspace batch --operations <json> [--workspace <name>]     up to 20 mkdir/move/delete, refused before any change
   node bin/apex.js memory correct --resolve <record-id> <replacement claim...>
   node bin/apex.js memory health         store-wide record, provenance, and corruption counts (read-only)
   node bin/apex.js world [--limit N]     stored beliefs, contradictions, decisions, and unknowns (read-only)
@@ -137,7 +145,9 @@ Usage:
   node bin/apex.js recover                interrupted, uncertain, resumable, and blocked work (read-only)
   node bin/apex.js work [--limit N]      ranked next work from the records (read-only, executes nothing)
   node bin/apex.js next                  the single top recommendation and why (read-only)
-  node bin/apex.js review [--limit N] [--days N]   the whole board: goals, plans, and tasks with what needs attention (read-only)
+  node bin/apex.js review [--limit N] [--days N]   the whole board: goals, plans, tasks, and recorded deadlines (read-only)
+  node bin/apex.js deadline list [--days N] [--limit N]   recorded deadlines within a horizon, with their source file and line (read-only)
+  node bin/apex.js deadline import <path> [--max-bytes N] [--workspace <name>]   import dates from a JSONL, NDJSON, CSV, or TSV file
   node bin/apex.js propose [--kind goal_create|goal_clarify|plan_create|plan_revise|advice] [--goal <id>] [--plan <id>] <request>
   node bin/apex.js proposal list [--limit N]
   node bin/apex.js proposal show <id>
@@ -181,6 +191,7 @@ Request examples (no model needed; use them with ask, or type the same words in 
   status
   list src/             list one directory inside the authorized root (no model needed)
   read README.md        read a bounded text file inside the authorized root
+  extract report.pdf    bounded PDF/DOCX/XLSX/CSV text extraction (no model, nothing executed)
   summarize notes.md    deterministic counts, headings, and frequent terms (no model)
   find files named notes under docs/    bounded discovery inside the authorized root
   compare notes.md with docs/notes.md   positional line comparison (no model)
@@ -403,7 +414,7 @@ function parseFlags(args, allowed, repeat = []) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--in-days needs a whole number of days', 'USAGE');
         flags['in-days'] = Number(v);
         i += 1;
-      } else if (['title', 'body', 'subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use', 'extension', 'content', 'expected-sha256'].includes(name)) {
+      } else if (['title', 'body', 'subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use', 'extension', 'content', 'expected-sha256', 'workspace', 'operations'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -991,9 +1002,15 @@ export async function main(argv, {
 
     if (command === 'workspace') {
       const [sub, ...rest] = args;
-      const usage = 'workspace list [path] [--limit N] | find [path] --name <text>|--extension <ext> [--max-depth N] [--limit N] | read <path> [--max-bytes N] | summarize <path> [--max-bytes N] | compare <a> <b> [--max-bytes N] | report [path] [--max-depth N] [--limit N] | write <path> --content <text> [--expected-sha256 <hash>]';
+      const usage = 'workspace roots | list [path] [--limit N] [--workspace <name>] | find [path] --name <text>|--extension <ext> [--max-depth N] [--limit N] [--workspace <name>] | read <path> [--max-bytes N] [--workspace <name>] | extract <path> [--max-bytes N] [--workspace <name>] | summarize <path> [--max-bytes N] [--workspace <name>] | compare <a> <b> [--max-bytes N] [--workspace <name>] | report [path] [--max-depth N] [--limit N] [--workspace <name>] | write <path> --content <text> [--expected-sha256 <hash>] [--workspace <name>] | mkdir <path> [--parents] [--workspace <name>] | move <path> <destination> [--workspace <name>] | delete <path> [--workspace <name>] | trash [--limit N] [--workspace <name>] | restore <quarantine-id> [--workspace <name>] | batch --operations <json> [--workspace <name>]';
+      if (sub === 'roots') {
+        rejectUnexpected(rest, 'workspace roots');
+        const roots = app.controller.workspaceRoots();
+        out(roots.length === 0 ? '(no workspace roots configured)' : roots.map((entry) => `${entry.name}${entry.default ? ' (default)' : ''}  ${entry.path}`).join('\n'));
+        return 0;
+      }
       if (sub === 'list') {
-        const { flags, rest: paths } = parseFlags(rest, ['limit']);
+        const { flags, rest: paths } = parseFlags(rest, ['limit', 'workspace']);
         if (paths.length > 1) {
           err(`usage: ${usage}`);
           return 2;
@@ -1001,10 +1018,11 @@ export async function main(argv, {
         return emit(await app.controller.workspaceList({
           path: paths[0] ?? '.',
           ...(flags.limit === undefined ? {} : { limit: flags.limit }),
+          ...(flags.workspace === undefined ? {} : { workspace: flags.workspace }),
         }));
       }
       if (sub === 'find') {
-        const { flags, rest: paths } = parseFlags(rest, ['name', 'extension', 'max-depth', 'limit']);
+        const { flags, rest: paths } = parseFlags(rest, ['name', 'extension', 'max-depth', 'limit', 'workspace']);
         if (paths.length > 1 || (flags.name === undefined && flags.extension === undefined)) {
           err(`usage: ${usage}`);
           return 2;
@@ -1014,32 +1032,35 @@ export async function main(argv, {
         if (flags.extension !== undefined) input.extension = flags.extension;
         if (flags['max-depth'] !== undefined) input.maxDepth = flags['max-depth'];
         if (flags.limit !== undefined) input.limit = flags.limit;
+        if (flags.workspace !== undefined) input.workspace = flags.workspace;
         return emit(await app.controller.workspaceFind(input));
       }
-      if (sub === 'read' || sub === 'summarize') {
-        const { flags, rest: paths } = parseFlags(rest, ['max-bytes']);
+      if (sub === 'read' || sub === 'summarize' || sub === 'extract') {
+        const { flags, rest: paths } = parseFlags(rest, ['max-bytes', 'workspace']);
         if (paths.length !== 1) {
           err(`usage: ${usage}`);
           return 2;
         }
         const input = { path: paths[0] };
         if (flags['max-bytes'] !== undefined) input.maxBytes = flags['max-bytes'];
-        return emit(sub === 'read'
-          ? await app.controller.workspaceRead(input)
-          : await app.controller.workspaceSummarize(input));
+        if (flags.workspace !== undefined) input.workspace = flags.workspace;
+        if (sub === 'read') return emit(await app.controller.workspaceRead(input));
+        if (sub === 'extract') return emit(await app.controller.workspaceExtract(input));
+        return emit(await app.controller.workspaceSummarize(input));
       }
       if (sub === 'compare') {
-        const { flags, rest: paths } = parseFlags(rest, ['max-bytes']);
+        const { flags, rest: paths } = parseFlags(rest, ['max-bytes', 'workspace']);
         if (paths.length !== 2) {
           err(`usage: ${usage}`);
           return 2;
         }
         const input = { a: paths[0], b: paths[1] };
         if (flags['max-bytes'] !== undefined) input.maxBytes = flags['max-bytes'];
+        if (flags.workspace !== undefined) input.workspace = flags.workspace;
         return emit(await app.controller.workspaceCompare(input));
       }
       if (sub === 'report') {
-        const { flags, rest: paths } = parseFlags(rest, ['max-depth', 'limit']);
+        const { flags, rest: paths } = parseFlags(rest, ['max-depth', 'limit', 'workspace']);
         if (paths.length > 1) {
           err(`usage: ${usage}`);
           return 2;
@@ -1047,10 +1068,11 @@ export async function main(argv, {
         const input = { path: paths[0] ?? '.' };
         if (flags['max-depth'] !== undefined) input.maxDepth = flags['max-depth'];
         if (flags.limit !== undefined) input.limit = flags.limit;
+        if (flags.workspace !== undefined) input.workspace = flags.workspace;
         return emit(await app.controller.workspaceReport(input));
       }
       if (sub === 'write') {
-        const { flags, rest: paths } = parseFlags(rest, ['content', 'expected-sha256']);
+        const { flags, rest: paths } = parseFlags(rest, ['content', 'expected-sha256', 'workspace']);
         if (paths.length !== 1 || typeof flags.content !== 'string') {
           err(`usage: ${usage}`);
           return 2;
@@ -1059,6 +1081,82 @@ export async function main(argv, {
           path: paths[0],
           content: flags.content,
           expectedSha256: flags['expected-sha256'] ?? null,
+          ...(flags.workspace === undefined ? {} : { workspace: flags.workspace }),
+        }));
+      }
+      if (sub === 'mkdir') {
+        const { flags, rest: paths } = parseFlags(rest, ['parents', 'workspace']);
+        if (paths.length !== 1) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        return emit(await app.controller.workspaceMkdir({
+          path: paths[0],
+          parents: flags.parents === true,
+          ...(flags.workspace === undefined ? {} : { workspace: flags.workspace }),
+        }));
+      }
+      if (sub === 'move') {
+        const { flags, rest: paths } = parseFlags(rest, ['workspace']);
+        if (paths.length !== 2) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        return emit(await app.controller.workspaceMove({
+          path: paths[0],
+          to: paths[1],
+          ...(flags.workspace === undefined ? {} : { workspace: flags.workspace }),
+        }));
+      }
+      if (sub === 'delete') {
+        const { flags, rest: paths } = parseFlags(rest, ['workspace']);
+        if (paths.length !== 1) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        return emit(await app.controller.workspaceDelete({
+          path: paths[0],
+          ...(flags.workspace === undefined ? {} : { workspace: flags.workspace }),
+        }));
+      }
+      if (sub === 'trash') {
+        const { flags, rest: paths } = parseFlags(rest, ['limit', 'workspace']);
+        if (paths.length > 0) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        return emit(await app.controller.workspaceTrash({
+          ...(flags.limit === undefined ? {} : { limit: flags.limit }),
+          ...(flags.workspace === undefined ? {} : { workspace: flags.workspace }),
+        }));
+      }
+      if (sub === 'restore') {
+        const { flags, rest: paths } = parseFlags(rest, ['workspace']);
+        if (paths.length !== 1) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        return emit(await app.controller.workspaceRestore({
+          id: paths[0],
+          ...(flags.workspace === undefined ? {} : { workspace: flags.workspace }),
+        }));
+      }
+      if (sub === 'batch') {
+        const { flags, rest: paths } = parseFlags(rest, ['operations', 'workspace']);
+        if (paths.length > 0 || typeof flags.operations !== 'string') {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        let operations;
+        try {
+          operations = JSON.parse(flags.operations);
+        } catch {
+          err('usage: --operations must be a JSON array of {type, path, ...} objects');
+          return 2;
+        }
+        return emit(await app.controller.workspaceBatch({
+          operations,
+          ...(flags.workspace === undefined ? {} : { workspace: flags.workspace }),
         }));
       }
       err(`usage: ${usage}`);
@@ -2480,6 +2578,33 @@ export async function main(argv, {
         limit: flags.limit ?? 20,
         horizonDays: flags.days ?? 7,
       }));
+    }
+
+    if (command === 'deadline') {
+      const [sub, ...rest] = args;
+      const usage = 'deadline list [--days N] [--limit N] | deadline import <path> [--max-bytes N] [--workspace <name>]';
+      if (sub === 'list') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit', 'days']);
+        rejectUnexpected(extra, 'deadline list [--days N] [--limit N]');
+        return emit(await app.controller.deadlineList({
+          limit: flags.limit ?? 50,
+          horizonDays: flags.days ?? 30,
+        }));
+      }
+      if (sub === 'import') {
+        const { flags, rest: paths } = parseFlags(rest, ['max-bytes', 'workspace']);
+        if (paths.length !== 1) {
+          err(`usage: ${usage}`);
+          return 2;
+        }
+        return emit(await app.controller.deadlineImport({
+          path: paths[0],
+          ...(flags['max-bytes'] === undefined ? {} : { maxBytes: flags['max-bytes'] }),
+          ...(flags.workspace === undefined ? {} : { workspace: flags.workspace }),
+        }));
+      }
+      err(`usage: ${usage}`);
+      return 2;
     }
 
     if (command === 'task') {
