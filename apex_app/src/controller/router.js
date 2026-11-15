@@ -122,6 +122,64 @@ export function route(request) {
     return { kind: 'action', capability: 'task.feedback', action: 'task.feedback', input: { taskId: m[1], assessment: feedbackAssessment(m[2]) } };
   }
 
+  // Notes are the user's own compositions. The patterns below only decide that the user is writing
+  // or reading one; the note store validates, the action authorizes, and no model is asked to
+  // compose or rewrite the text. A request that merely mentions a note stays on the model path.
+  m = /^(?:save\s+|write\s+)?(?:a\s+)?note\s+from\s+(?:the\s+)?(?:knowledge\s+)?digest(?:\s+(?:about|for|on|of)\s+(.+?))?(?:\s+as\s+(.+))?$/i.exec(r);
+  if (m) {
+    const input = {};
+    if (m[1] !== undefined && m[1].trim() !== '') input.query = m[1].trim();
+    if (m[2] !== undefined && m[2].trim() !== '') input.title = m[2].trim();
+    return { kind: 'action', capability: 'note.from_digest', action: 'note.from_digest', input };
+  }
+
+  // The CLI's subcommand spelling, so the same workflow is reachable both ways.
+  m = /^note\s+save-digest(?:\s+([\s\S]+))?$/i.exec(r);
+  if (m) {
+    const input = {};
+    if (m[1] !== undefined && m[1].trim() !== '') input.query = m[1].trim();
+    return { kind: 'action', capability: 'note.from_digest', action: 'note.from_digest', input };
+  }
+
+  m = /^(?:save\s+|write\s+)?(?:a\s+)?priv(?:ate|ately)\s+note\s+(?:titled|called)\s+(.+?)\s*:\s*([\s\S]+)$/i.exec(r);
+  if (m) {
+    return {
+      kind: 'action',
+      capability: 'note.add',
+      action: 'note.add',
+      input: { title: m[1], body: m[2], sensitivity: 'private' },
+    };
+  }
+
+  m = /^(?:save\s+|write\s+)?(?:a\s+)?note\s+(?:titled|called)\s+(.+?)\s*:\s*([\s\S]+)$/i.exec(r);
+  if (m) {
+    return { kind: 'action', capability: 'note.add', action: 'note.add', input: { title: m[1], body: m[2] } };
+  }
+
+  if (/^(?:list|show)\s+(?:my\s+)?notes$/i.test(r)) {
+    return { kind: 'action', capability: 'note.list', action: 'note.list', input: {} };
+  }
+
+  m = /^(?:show|open|read|display)\s+(?:the\s+)?private\s+note\s+([A-Za-z0-9-]{1,64})$/i.exec(r);
+  if (m) {
+    return { kind: 'action', capability: 'note.show', action: 'note.show', input: { target: m[1], includePrivate: true } };
+  }
+
+  m = /^(?:show|open|read|display)\s+(?:the\s+)?note\s+([A-Za-z0-9-]{1,64})$/i.exec(r);
+  if (m) {
+    return { kind: 'action', capability: 'note.show', action: 'note.show', input: { target: m[1] } };
+  }
+
+  m = /^(?:search|find)\s+(?:my\s+)?notes\s+(?:for|about)\s+([\s\S]+)$/i.exec(r);
+  if (m) {
+    return { kind: 'action', capability: 'note.search', action: 'note.search', input: { query: m[1].trim() } };
+  }
+
+  m = /^(?:note\s+history|history\s+of\s+(?:the\s+)?note)\s*:?\s*([A-Za-z0-9-]{1,64})$/i.exec(r);
+  if (m) {
+    return { kind: 'action', capability: 'note.history', action: 'note.history', input: { target: m[1] } };
+  }
+
   if (/^(?:status|who\s+are\s+you)\s*\??$/i.test(r)) {
     return { kind: 'action', capability: 'app.status', action: 'app.status', input: {} };
   }

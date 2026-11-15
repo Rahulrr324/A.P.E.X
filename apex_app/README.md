@@ -3662,7 +3662,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 97 registered actions declare both `validate()` and `verify()` - 104 with a
+- **Verification.** All 104 registered actions declare both `validate()` and `verify()` - 111 with a
   filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
@@ -3688,6 +3688,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `knowledge.resolve` | user | write | never in a plan | `knowledge.jsonl` | yes | yes |
 | `knowledge.list`, `knowledge.search` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `knowledge.digest` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `note.add`, `note.update`, `note.from_digest` | user | write | never in a plan | `notes.jsonl` (append-only revisions; a private note's title and body stay out of the audit) | no (notes) | no (the user's own composition, not a belief) |
+| `note.list`, `note.show`, `note.search`, `note.history` | user | read | never in a plan | nothing (measured) | no (read) | no |
 | `experience.record` | user | write | never in a plan | `experiences.jsonl` | no (self-bookkeeping) | yes |
 | `feedback.record` | user | write | never in a plan | `experiences.jsonl` | no (self-bookkeeping) | yes |
 | `task.feedback` | user | write | never in a plan | `experiences.jsonl` (one experience for the cited run when none exists, one feedback line) | no (self-bookkeeping) | yes |
@@ -3747,7 +3749,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 `filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.compare`,
 `filesystem.report` and `filesystem.write` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
 configured; there is no default root, and a model proposal cannot supply one, so the count is 97
-registered actions by default and 104 with a root. Batch AG added ten user-origin write actions
+registered actions by default and 111 with a root. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
 two more user-origin writes (`goal.confirm`, the user's own decision about a success criterion APEX
@@ -3771,7 +3773,11 @@ listings at the cutoff, and the counts are still unchanged. Batch PC added eight
 user-origin filesystem reads, the user-only `filesystem.write`, and three actions that need no root
 (`knowledge.digest` and `work.review`, both user + model reads, and the user-only `task.feedback`
 write). The two new reads are plannable and appear in both prompts; the write is unplannable; the
-filesystem reads are offered to a user plan and never to a model plan.
+filesystem reads are offered to a user plan and never to a model plan. The usable-offline batch
+added seven more user-origin actions for the personal note log: `note.add`, `note.update` and
+`note.from_digest` write it, and `note.list`, `note.show`, `note.search` and `note.history` read it.
+None is plannable and none is offered to either planning prompt, so the offered counts above are
+unchanged; the default registry holds 104 actions and 111 with a root.
 
 ### The inconsistencies this found, and what became of them
 
@@ -8168,12 +8174,41 @@ the one you wanted. The action derives no rule and applies no change. A candidat
 `adaptation.derive`, and only your explicit approval through `adaptation.decide` can make it
 influence a later decision.
 
+### Personal notes
+
+A note is the user's own composition, stored in its own append-only `notes.jsonl` log rather than
+in memory or knowledge. Seven user-origin actions cover it: `note.add`, `note.update` and
+`note.from_digest` write; `note.list`, `note.show`, `note.search` and `note.history` read. None is
+plannable, so no model plan contains one, and none is offered to the planning prompt at all.
+
+- Every revision names the operation that wrote it. `note.update` carries the revision the user
+  read, and a stale revision is refused as a conflicting revision rather than overwriting the newer
+  text. `note.history` shows the chain, with the current head marked.
+- A note may cite sources as `{kind, ref}` pairs, for example `knowledge:<id>`, `memory:<id>` or
+  `file:notes.txt`. A citation says what the note was built from, never that the source agrees with
+  it. `note.from_digest` stores the cross-source digest as a note and cites every record the digest
+  used; private memory is excluded, and the action re-resolves each cited record in its verifier.
+- A note marked private keeps its body out of `note.list`, `note.search` and an unqualified
+  `note.show`, and out of the audit record's result data; `--include-private` is required to read
+  it. A private write sent together with another request is refused before anything runs, and its
+  title and body are never copied into the audit.
+- Note text is never placed in the append-only audit log: the note log is the one copy. The audit
+  keeps the operation, its identifier, and a summary.
+
+The CLI mirrors the actions: `note add`, `note update`, `note list`, `note show`, `note search`,
+`note history` and `note save-digest`. The natural-language routes ("save a private note titled
+Keys: ...", "show note 1234abcd", "list my notes", "save a note from the digest about backups")
+reach the same actions; ordinary prose that merely mentions a note stays on the model path.
+
 ### What a complete workflow looks like now
 
 The new surfaces close several paths end to end without a model:
 
 - **Knowledge to a structured record**: store a fact, add a knowledge triple, then `knowledge
   digest` shows both stores with their own status and any stored conflict or supersession.
+- **Research to a cited note**: seed memory or knowledge, then `note save-digest <topic>` stores
+  the digest as a note that cites every record it used; `note show` reads it, `note history`
+  shows its revisions, and `note update` corrects it against the revision the user read.
 - **Workspace to a project summary**: `workspace list`, `find` and `read` to see the tree,
   `summarize` and `compare` to read and contrast files, `report` for the directory shape, and
   `workspace write` to create a note about it - with the create and the read both recorded.

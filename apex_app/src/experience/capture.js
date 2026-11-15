@@ -42,6 +42,10 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   'self-bookkeeping': 'the experience log must not fill itself with records about its own bookkeeping, which would make the counts meaningless',
   task: 'one task operation covers several steps with separate outcomes, so a single experience would say less than the task log already says',
   filesystem: 'it reads or writes a file outside APEX\'s stores, and no outcome here needs that file\'s content in the experience log',
+  // A note is the user's own composition, held in its own append-only revision log. Capturing a
+  // note operation would copy the user's text into the experience log that the pattern and
+  // adaptation reads draw from, which would turn a personal note into behavioural evidence.
+  notes: 'it reads or writes the personal note log, whose records are the user\'s own composition; an experience of one would copy that note into the log the pattern and adaptation reads draw from',
   'no-action': 'the request ran no action, so there is no postcondition that could have been verified',
   // The prediction ledger's own operations. This is a separate category from `self-bookkeeping`
   // because the reason is not about filling a log with its own traffic: an experience answers "what
@@ -199,6 +203,13 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'filesystem.compare': 'filesystem',
   'filesystem.report': 'filesystem',
   'filesystem.write': 'filesystem',
+  'note.add': 'notes',
+  'note.update': 'notes',
+  'note.from_digest': 'notes',
+  'note.list': 'read',
+  'note.show': 'read',
+  'note.search': 'read',
+  'note.history': 'read',
   'knowledge.digest': 'read',
   'work.review': 'read',
   none: 'no-action',

@@ -67,6 +67,14 @@ Usage:
   node bin/apex.js knowledge search <query words...>
   node bin/apex.js knowledge digest [query words...] [--limit N]   memory and knowledge together, with conflicts and history (read-only)
   node bin/apex.js knowledge show <id>
+  node bin/apex.js note add --title <text> --body <text> [--tag <tag>]... [--source <kind:ref>]... [--private]
+  node bin/apex.js note update <id> [--title <text>] [--body <text>] [--tag <tag>]... [--source <kind:ref>]... [--private|--normal]
+  node bin/apex.js note list [--limit N] [--include-private]
+  node bin/apex.js note show <id> [--include-private]
+  node bin/apex.js note search <query words...> [--limit N] [--include-private]
+  node bin/apex.js note history <id>
+  node bin/apex.js note save-digest [query words...] [--title <text>] [--tag <tag>]... [--limit N] [--private]
+                                                 store what APEX holds as a note citing every record it used
   node bin/apex.js experience record <operation-id> --subject <text> [--replaces <id[,id...]>]
   node bin/apex.js experience list [--limit N]
   node bin/apex.js experience show <experience-or-operation-id>
@@ -193,6 +201,14 @@ Knowledge examples (explicit relationships; user-origin write only):
   knowledge list
   knowledge search subsystem
   knowledge show <record-id>
+
+Note examples (your own composition; every revision is kept):
+  note add --title "Release checklist" --body "Verify export/restore before tagging." --tag release
+  note add --title "Server note" --body "..." --private    excluded from list bodies and search unless asked for
+  note save-digest backup restore --title "What APEX holds about backups"
+  note show <note-id>              the current revision, its sources, and its history
+  note history <note-id>           every revision, oldest first, with the conflict state
+  note update <note-id> --body "..."   appends a revision; refuses if another edit moved the head first
 
 Experience and adaptation examples (what APEX did, what you thought, what to change):
   history                     find the operation id of something APEX already did
@@ -387,7 +403,7 @@ function parseFlags(args, allowed, repeat = []) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--in-days needs a whole number of days', 'USAGE');
         flags['in-days'] = Number(v);
         i += 1;
-      } else if (['subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use', 'extension', 'content', 'expected-sha256'].includes(name)) {
+      } else if (['title', 'body', 'subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use', 'extension', 'content', 'expected-sha256'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -412,6 +428,19 @@ function rejectUnexpected(rest, usage) {
 // "a,,b" is the same list as "a,b" instead of a reference to nothing.
 function idList(value) {
   return typeof value === 'string' ? value.split(',').map((item) => item.trim()).filter(Boolean) : [];
+}
+
+// Note source references are "kind:ref". Only the first colon is a separator, so a Windows path
+// after "file:" survives intact. The kind is checked by the note store, not guessed here.
+function noteSources(values) {
+  if (values === undefined) return [];
+  return values.map((value) => {
+    const at = value.indexOf(':');
+    if (at <= 0 || at === value.length - 1) {
+      throw new ValidationError('--source needs <kind:ref>, for example knowledge:<id> or file:notes.txt', 'USAGE');
+    }
+    return { kind: value.slice(0, at), ref: value.slice(at + 1) };
+  });
 }
 
 // Steps and assertions are JSON objects given one per repeated option. A value that is not
@@ -1154,6 +1183,107 @@ export async function main(argv, {
         return res.status === Outcome.SUCCESS_VERIFIED ? 0 : 1;
       }
       err('usage: knowledge add|retract|resolve|history|health|list|search|digest|show');
+      return 2;
+    }
+
+    if (command === 'note') {
+      const [sub, ...rest] = args;
+      if (sub === 'add') {
+        const { flags, rest: extra } = parseFlags(rest, ['title', 'body', 'tag', 'source', 'private', 'normal'], ['tag', 'source']);
+        rejectUnexpected(extra, 'note add --title <text> --body <text> [--tag <tag>]... [--source <kind:ref>]... [--private]');
+        if (typeof flags.title !== 'string' || typeof flags.body !== 'string') {
+          err('usage: note add --title <text> --body <text> [--tag <tag>]... [--source <kind:ref>]... [--private]');
+          return 2;
+        }
+        if (flags.private && flags.normal) {
+          err('usage: choose --private or --normal, not both');
+          return 2;
+        }
+        return emit(await app.controller.noteAdd({
+          title: flags.title,
+          body: flags.body,
+          tags: flags.tag ?? [],
+          sources: noteSources(flags.source),
+          sensitivity: flags.private ? 'private' : 'normal',
+        }));
+      }
+      if (sub === 'update') {
+        const { flags, rest: ids } = parseFlags(rest, ['title', 'body', 'tag', 'source', 'private', 'normal'], ['tag', 'source']);
+        if (ids.length !== 1) {
+          err('usage: note update <note-id> [--title <text>] [--body <text>] [--tag <tag>]... [--source <kind:ref>]... [--private|--normal]');
+          return 2;
+        }
+        if (flags.private && flags.normal) {
+          err('usage: choose --private or --normal, not both');
+          return 2;
+        }
+        const input = { target: ids[0] };
+        if (typeof flags.title === 'string') input.title = flags.title;
+        if (typeof flags.body === 'string') input.body = flags.body;
+        if (flags.tag !== undefined) input.tags = flags.tag;
+        if (flags.source !== undefined) input.sources = noteSources(flags.source);
+        if (flags.private) input.sensitivity = 'private';
+        if (flags.normal) input.sensitivity = 'normal';
+        if (Object.keys(input).length === 1) {
+          err('usage: note update <note-id> needs at least one of --title, --body, --tag, --source, --private, --normal');
+          return 2;
+        }
+        return emit(await app.controller.noteUpdate(input));
+      }
+      if (sub === 'list') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit', 'include-private']);
+        rejectUnexpected(extra, 'note list [--limit N] [--include-private]');
+        return emit(await app.controller.noteList({
+          limit: flags.limit ?? 20,
+          includePrivate: flags['include-private'] === true,
+        }));
+      }
+      if (sub === 'show') {
+        const { flags, rest: ids } = parseFlags(rest, ['include-private']);
+        if (ids.length !== 1) {
+          err('usage: note show <note-id> [--include-private]');
+          return 2;
+        }
+        return emit(await app.controller.noteShow({
+          target: ids[0],
+          includePrivate: flags['include-private'] === true,
+        }));
+      }
+      if (sub === 'search') {
+        const { flags, rest: words } = parseFlags(rest, ['limit', 'include-private']);
+        if (words.length === 0) {
+          err('usage: note search <query words...> [--limit N] [--include-private]');
+          return 2;
+        }
+        return emit(await app.controller.noteSearch({
+          query: words.join(' '),
+          limit: flags.limit ?? 5,
+          includePrivate: flags['include-private'] === true,
+        }));
+      }
+      if (sub === 'history') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) {
+          err('usage: note history <note-id>');
+          return 2;
+        }
+        return emit(await app.controller.noteHistory({ target: ids[0] }));
+      }
+      if (sub === 'save-digest') {
+        const { flags, rest: words } = parseFlags(rest, ['title', 'tag', 'limit', 'private', 'normal'], ['tag']);
+        if (flags.private && flags.normal) {
+          err('usage: choose --private or --normal, not both');
+          return 2;
+        }
+        return emit(await app.controller.noteFromDigest({
+          query: words.length > 0 ? words.join(' ') : null,
+          limit: flags.limit ?? 5,
+          title: typeof flags.title === 'string' ? flags.title : null,
+          tags: flags.tag ?? [],
+          sensitivity: flags.private ? 'private' : 'normal',
+        }));
+      }
+      err('usage: note add|update|list|show|search|history|save-digest');
       return 2;
     }
 

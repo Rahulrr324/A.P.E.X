@@ -316,6 +316,41 @@ const AUDIT_TEXT_FIELDS = Object.freeze({
   'prediction.summary': Object.freeze({
     allowed: ['capability', 'limit'], text: ['capability'], arrays: [], objects: [],
   }),
+  // A note's body is the content the user composed, and the note log itself holds it. The audit
+  // records the title, tags, sensitivity, and cited sources, and omits the body so personal text is
+  // not duplicated into the operation log. A revision names the record it replaces.
+  'note.add': Object.freeze({
+    allowed: ['title', 'body', 'tags', 'sources', 'sensitivity'],
+    text: ['title', 'sensitivity'],
+    arrays: ['tags'],
+    objects: ['sources'],
+    omit: ['body'],
+  }),
+  'note.update': Object.freeze({
+    allowed: ['target', 'title', 'body', 'tags', 'sources', 'sensitivity'],
+    text: ['target', 'title', 'sensitivity'],
+    arrays: ['tags'],
+    objects: ['sources'],
+    omit: ['body'],
+  }),
+  'note.from_digest': Object.freeze({
+    allowed: ['query', 'limit', 'title', 'tags', 'sensitivity'],
+    text: ['query', 'title', 'sensitivity'],
+    arrays: ['tags'],
+    objects: [],
+  }),
+  'note.list': Object.freeze({
+    allowed: ['limit', 'includePrivate'], text: [], arrays: [], objects: [],
+  }),
+  'note.show': Object.freeze({
+    allowed: ['target', 'includePrivate'], text: ['target'], arrays: [], objects: [],
+  }),
+  'note.search': Object.freeze({
+    allowed: ['query', 'limit', 'includePrivate'], text: ['query'], arrays: [], objects: [],
+  }),
+  'note.history': Object.freeze({
+    allowed: ['target'], text: ['target'], arrays: [], objects: [],
+  }),
   // The file content is the effect the user asked for; the file itself holds it. The audit
   // records where it went and what hash it had, and omits the bytes so a write does not
   // duplicate a document (possibly a sensitive one) into the operation log.
@@ -402,11 +437,19 @@ function auditInputFor(name, rawInput) {
 function isMixedPrivateWrite(request) {
   const isPrivateWrite = (text) => {
     const r = route(text);
-    return r.kind === 'action' && r.action === 'memory.add' && (r.input.sensitivity ?? 'normal') === 'private';
+    if (r.kind !== 'action') return false;
+    return (r.action === 'memory.add' || r.action === 'note.add' || r.action === 'note.from_digest')
+      && (r.input.sensitivity ?? 'normal') === 'private';
   };
-  if (isPrivateWrite(request)) return false;
   const parts = splitGoal(request);
-  return parts.length > 1 && parts.some(isPrivateWrite);
+  if (parts.length <= 1) return false;
+  // The whole text can route as one private write even when it contains a separator the user meant
+  // as a list, because the router takes the body greedily. In that case it is a composition only
+  // when another part is itself a recognized action; otherwise the separators are inside the body.
+  if (isPrivateWrite(request)) {
+    return parts.some((part) => !isPrivateWrite(part) && route(part).kind === 'action');
+  }
+  return parts.some(isPrivateWrite);
 }
 
 // An explicit separator makes a request a sequence of parts. "then" does not: it is ordinary prose
@@ -496,6 +539,7 @@ export class CognitiveController {
     summaryQueue = null,
     rootForContext = null,
     knowledge = null,
+    notes = null,
     experience = null,
     experienceCapture = CAPTURE_OFF,
     predictions = null,
@@ -521,6 +565,9 @@ export class CognitiveController {
     this.summaryQueue = summaryQueue;
     this.rootForContext = rootForContext;
     this.knowledge = knowledge;
+    // Notes are the user's own compositions. They are never prompt evidence and never a source of
+    // permission; this store is held so the explicit user commands have one entry point.
+    this.notes = notes;
     // The experience store contributes only approved behaviour rules to a prompt. It is optional:
     // with no store configured the section is simply absent, and nothing claims rules were checked.
     this.experience = experience;
@@ -610,8 +657,8 @@ export class CognitiveController {
 
     if (request !== null && isMixedPrivateWrite(request)) {
       op.capability = 'none';
-      op.request = '[request omitted: a private memory write was combined with other requests]';
-      output = 'A private memory write must be sent on its own. Nothing was stored, and nothing was sent to a model.';
+      op.request = '[request omitted: a private memory or note write was combined with other requests]';
+      output = 'A private memory or note write must be sent on its own. Nothing was stored, and nothing was sent to a model.';
       displayText = output;
       status = Outcome.INPUT_REJECTED;
       op.errors.push({ stage: 'input', code: 'PRIVATE_WRITE_COMBINED', message: output });
@@ -656,9 +703,18 @@ export class CognitiveController {
         // The file itself holds the content. The audit keeps where it went and how much was
         // written, never the bytes, so a document is not duplicated into the operation log.
         op.request = `write ${routed.input.path} [content omitted: ${routed.input.content.length} chars]`;
-      } else if (splitGoal(request).some((part) => route(part).action === 'memory.add')) {
-        // A memory write mixed with other requests: its text is not kept in the audit.
-        op.request = `[request omitted: it combined a memory write with other requests; ${request.length} chars]`;
+      } else if (routed.kind === 'action' && (routed.action === 'note.add' || routed.action === 'note.update')) {
+        // The note log holds the text the user composed; the audit records that a note operation
+        // happened and its size, never a second copy of personal text.
+        op.request = `${routed.action.replace('.', ' ')} [content omitted: ${request.length} chars]`;
+      } else if (splitGoal(request).some((part) => {
+        const partRoute = route(part);
+        return partRoute.action === 'memory.add' || partRoute.action === 'note.add'
+          || partRoute.action === 'note.update' || partRoute.action === 'note.from_digest';
+      })) {
+        // A write that carries the user's own text mixed with other requests: its text is not kept
+        // in the audit.
+        op.request = `[request omitted: it combined a memory or note write with other requests; ${request.length} chars]`;
       }
 
       const blocked = unsupportedOperationFor(request);
@@ -1350,6 +1406,100 @@ export class CognitiveController {
       op.id,
     );
     return this.#finishCommandOp(op, step, 'The feedback may have been recorded, but its audit record could not be written.');
+  }
+
+  // ---- notes ------------------------------------------------------------------
+  // A note is the user's own composition. No model route reaches these commands, a note action is
+  // `plannable: false`, and the store itself refuses a non-user origin, so nothing here can be
+  // written by model output or as a side effect of an approved plan step.
+
+  #requireNotes(capability = 'the note store') {
+    if (!this.notes) throw new ValidationError(`${capability} is not available in this configuration`);
+  }
+
+  async noteAdd({ title, body = '', tags = [], sources = [], sensitivity = 'normal' } = {}) {
+    this.#requireNotes();
+    const shown = sensitivity === 'private'
+      ? 'private note [title and content omitted]'
+      : (typeof title === 'string' && title.trim() !== ''
+        ? (containsSecret(title) ? '[title omitted: contained a password, key, or token]' : truncate(title.trim(), 80))
+        : '[missing title]');
+    const op = this.#newOp({ capability: 'note.add', origin: 'user', request: `note add [${shown}]` });
+    const step = await this.runAction('note.add', { title, body, tags, sources, sensitivity }, 'user', op.id);
+    return this.#finishCommandOp(
+      op,
+      step,
+      'The note may have been stored, but its audit record could not be written; it is not reported as verified success.',
+    );
+  }
+
+  async noteUpdate({ target, title, body, tags, sources, sensitivity } = {}) {
+    this.#requireNotes();
+    const op = this.#newOp({ capability: 'note.update', origin: 'user', request: `note update [${truncate(String(target ?? ''), 64)}]` });
+    const input = { target };
+    for (const [key, value] of Object.entries({ title, body, tags, sources, sensitivity })) {
+      if (value !== undefined && value !== null) input[key] = value;
+    }
+    const step = await this.runAction('note.update', input, 'user', op.id);
+    return this.#finishCommandOp(
+      op,
+      step,
+      'The revision may have been stored, but its audit record could not be written; it is not reported as verified success.',
+    );
+  }
+
+  async noteList({ limit = 20, includePrivate = false } = {}) {
+    this.#requireNotes();
+    const op = this.#newOp({ capability: 'note.list', origin: 'user', request: `note list (limit ${limit}${includePrivate ? ', private included' : ''})` });
+    const step = await this.runAction('note.list', { limit, includePrivate }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async noteShow({ target, includePrivate = false } = {}) {
+    this.#requireNotes();
+    const op = this.#newOp({ capability: 'note.show', origin: 'user', request: `note show [${truncate(String(target ?? ''), 64)}]` });
+    const step = await this.runAction('note.show', { target, includePrivate }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async noteSearch({ query, limit = 5, includePrivate = false } = {}) {
+    this.#requireNotes();
+    const safeQuery = typeof query === 'string' ? query.trim() : '';
+    const request = containsSecret(safeQuery)
+      ? 'note search [query omitted: contained a password, key, or token]'
+      : `note search [${truncate(safeQuery, 200)}]`;
+    const op = this.#newOp({ capability: 'note.search', origin: 'user', request });
+    const step = await this.runAction('note.search', { query, limit, includePrivate }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async noteHistory({ target } = {}) {
+    this.#requireNotes();
+    const op = this.#newOp({ capability: 'note.history', origin: 'user', request: `note history [${truncate(String(target ?? ''), 64)}]` });
+    const step = await this.runAction('note.history', { target }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // The research-to-note workflow: the action reads the digest, excludes private memory, and stores
+  // the reading as the user's note, citing every record it was built from by its exact id. The
+  // note write is one audited, independently verified action.
+  async noteFromDigest({ query = null, limit = 5, title = null, tags = [], sensitivity = 'normal' } = {}) {
+    this.#requireNotes();
+    const topic = typeof query === 'string' ? query.trim() : '';
+    const op = this.#newOp({
+      capability: 'note.from_digest',
+      origin: 'user',
+      request: topic === '' ? 'note from digest' : `note from digest [${truncate(topic, 200)}]`,
+    });
+    const input = { limit, tags, sensitivity };
+    if (topic !== '') input.query = topic;
+    if (title !== null && title !== undefined) input.title = title;
+    const step = await this.runAction('note.from_digest', input, 'user', op.id);
+    return this.#finishCommandOp(
+      op,
+      step,
+      'The note may have been stored, but its audit record could not be written; it is not reported as verified success.',
+    );
   }
 
   async knowledgeShow(idPrefix) {
@@ -2315,6 +2465,7 @@ export class CognitiveController {
     return {
       memory: this.memory,
       knowledge: this.knowledge,
+      notes: this.notes,
       experience: this.experience,
       now: this.now,
       getStatus: this.getStatus,

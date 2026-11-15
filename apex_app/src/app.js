@@ -30,6 +30,8 @@ import { workspaceActions } from './filesystem/workspace.js';
 import { TaskStore } from './tasks/store.js';
 import { SummaryQueue } from './tasks/summary-queue.js';
 import { KnowledgeStore } from './knowledge/knowledge-store.js';
+import { NoteStore } from './notes/note-store.js';
+import { noteActions } from './actions/note-actions.js';
 import { ExperienceStore } from './experience/experience-store.js';
 import { experienceActions } from './actions/experience-actions.js';
 import { PredictionStore } from './prediction/prediction-store.js';
@@ -74,6 +76,10 @@ export function createApp({
   // never task state or audit evidence, so the two authoritative logs are unaffected by it.
   const summaryQueue = new SummaryQueue(path.join(dataDir, 'task-summary-queue.json'), { now: clock, idFactory });
   const knowledge = new KnowledgeStore(path.join(dataDir, 'knowledge.jsonl'), { now: clock });
+  // A note is the user's own composition with its own append-only revision log. It may cite a
+  // memory record, a knowledge claim, or a file, but nothing is derived from it: it is not a
+  // memory, not a claim, and not an instruction.
+  const notes = new NoteStore(path.join(dataDir, 'notes.jsonl'), { now: clock });
   // An experience is a verified reference to one audit record, so this store is given the audit
   // log: a write whose operation cannot be found there is refused instead of recorded, and every
   // later read can recompute the evidence hash against it.
@@ -185,7 +191,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...historyActions({
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
     }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
@@ -277,6 +283,7 @@ export function createApp({
     summaryQueue,
     rootForContext,
     knowledge,
+    notes,
     experience,
     experienceCapture,
     predictions,
@@ -299,6 +306,7 @@ export function createApp({
     summaryQueue,
     filesystemRoot: rootForContext,
     knowledge,
+    notes,
     experience,
     experienceCapture,
     predictions,
