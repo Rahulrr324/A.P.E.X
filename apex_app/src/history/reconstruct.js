@@ -1,7 +1,7 @@
 // Cross-store cognitive history: one read-only reconstruction of what APEX had recorded by a cutoff,
 // across the stores that can honestly answer it.
 //
-// Three stores are integrated, and each keeps its own record model and lifecycle vocabulary:
+// Seven stores are integrated, and each keeps its own record model and lifecycle vocabulary:
 //
 //   experience   what happened, the user's feedback on it, and the review/adaptation records derived
 //                from it. The store replays only records stored at or before the cutoff and derives
@@ -12,12 +12,20 @@
 //                and appears only in the current one, beside the past reading.
 //   world        what was asserted as fact, relationship, or event. AP-15's replay supplies the state
 //                at the cutoff; this module summarizes it and reports what changed later.
+//   goals        which intentions existed, and which acceptance, activation, completion, stop,
+//                criterion decision, or evidence record was in the log by then. A later completion or
+//                cancellation is absent from the past view and shown beside it as later.
+//   plans        which plan version, approval, activation, step outcome, assessment, and status was
+//                recorded by then. Approval is bound to the version and content hash recorded then, so
+//                a later approval cannot authorize an earlier version.
+//   tasks        which task and step states were recorded by then; a task open at the cutoff stays
+//                open, and nothing here starts or resumes it.
+//   operations   the audit log cannot answer a cutoff: it has no recorded-at and is appended only at
+//                finalization. It is read current and every row is classified against the cutoff, so
+//                what finished by then and what provably did not exist then are kept apart.
 //
-// Everything else is disclosed as unsupported rather than approximated. The goal, plan, and task logs
-// carry a recorded `.at` on every event but have no cutoff read, and the operations audit log has no
-// recorded-time field at all - it is appended when an operation completes, so its `requestedAt` cannot
-// prove a record existed at that instant. Memory and knowledge expose id-based as-of reads, not a
-// bounded as-of listing. Naming that boundary is part of the answer, not an omission from it.
+// Memory and knowledge expose id-based as-of reads, not a bounded as-of listing, and are disclosed as
+// unsupported rather than approximated. Naming that boundary is part of the answer, not an omission.
 //
 // What this is not: a transaction, a claim of objective historical truth, or an authorization. Each
 // store's read is internally consistent and the snapshot certifies that no contributing file changed
@@ -32,6 +40,9 @@ import { parseIsoInstant, singleLine } from '../util.js';
 import { contributingStores, runConsistentEvidenceRead } from '../evidence/snapshot.js';
 import { outcomeClass, parseInstant } from '../experience/temporal.js';
 import { occurredAtOf } from '../experience/experience-store.js';
+import {
+  CUTOFF_SEMANTICS, EXECUTIVE_LIMITATIONS, goalRow, planRow, taskRow, operationsSection, operationCitations,
+} from './executive.js';
 
 export const COGNITIVE_HISTORY_SCHEMA = 'apex.cognitive-history.v1';
 export const MAX_HISTORY_ROWS = 50;
@@ -39,30 +50,14 @@ export const MAX_HISTORY_CITATIONS = 40;
 export const DEFAULT_HISTORY_ROWS = 20;
 export const HISTORY_RULE = 'a cutoff replays only records stored at or before it; recorded time is not event time, and a record dated after the cutoff is disclosed as later rather than used to settle the past';
 
-const SOURCE_NAMES = Object.freeze(['experience', 'predictions', 'world']);
+const SOURCE_NAMES = Object.freeze(['experience', 'predictions', 'world', 'goals', 'plans', 'tasks', 'operations']);
+// The sources whose own records carry a recorded time a cutoff can filter on. Operations deliberately
+// is not one: its section is a current read with an explicit per-row cutoff classification.
+const CUTOFF_CAPABLE = Object.freeze(['experience', 'predictions', 'world', 'goals', 'plans', 'tasks']);
 const MAX_LATER_CHANGES = 10;
+const MAX_PROBLEMS_SHOWN = 5;
 
 export const UNSUPPORTED_SOURCES = Object.freeze([
-  {
-    source: 'goals',
-    status: 'unsupported',
-    reason: 'the goal log records a `.at` on every event and has a pure reducer, but no cutoff read exists yet; replaying it here would be a second, independent temporal implementation rather than reuse of a tested contract',
-  },
-  {
-    source: 'plans',
-    status: 'unsupported',
-    reason: 'the plan log records a `.at` on every event and has a pure reducer, but no cutoff read exists yet; a plan status at a cutoff needs the same replay contract as the goal log, which this milestone did not add',
-  },
-  {
-    source: 'tasks',
-    status: 'unsupported',
-    reason: 'the task log records a `.at` on every event and has a pure reducer, but no cutoff read exists yet; a task record also carries no single completion instant that a cutoff could be judged against',
-  },
-  {
-    source: 'operations',
-    status: 'unsupported',
-    reason: 'the operations audit log carries requestedAt and finishedAt but no recorded-at field, and a line is appended only when the operation completes; a cutoff judged on requestedAt would claim a record existed before it was written',
-  },
   {
     source: 'memory',
     status: 'unsupported',
@@ -319,14 +314,26 @@ function countPredictions(projections) {
   return byStatus;
 }
 
-function sourceStatuses(reads, verdict) {
+// The per-source status names what happened to the read, and nothing more. `inconsistent` is added
+// beside the snapshot's own numbers because it is a different statement: the file was read, but the
+// replayed event sequence did not apply cleanly, so the reconstructed state cannot be relied on. It is
+// never repaired by reordering and never downgraded to `read`.
+function sourceStatuses(reads, verdict, views) {
   const byName = new Map((verdict?.stores ?? []).map((entry) => [entry.name, entry]));
   const out = {};
+  const replayProblem = (view) => (view?.problems ?? []).length;
   for (const name of SOURCE_NAMES) {
     const read = reads[name] ?? { configured: false };
     const entry = byName.get(name);
+    const supportsCutoff = CUTOFF_CAPABLE.includes(name);
     if (!read.configured) {
-      out[name] = { name, status: 'not_configured', detail: `the ${name} store is not part of this configuration`, inspectable: null };
+      out[name] = {
+        name,
+        status: 'not_configured',
+        detail: `the ${name} store is not part of this configuration`,
+        inspectable: null,
+        supportsCutoff,
+      };
       continue;
     }
     if (read.error) {
@@ -335,6 +342,7 @@ function sourceStatuses(reads, verdict) {
         status: read.damaged ? 'damaged' : 'unavailable',
         detail: read.error,
         inspectable: entry === undefined ? null : entry.state !== 'unavailable',
+        supportsCutoff,
       };
       continue;
     }
@@ -343,34 +351,67 @@ function sourceStatuses(reads, verdict) {
       : inspect === 'unavailable' ? 'unavailable'
         : inspect === 'not_configured' ? 'not_configured'
           : 'read';
+    const historical = name === 'goals' ? views.goalView
+      : name === 'plans' ? views.planView
+        : name === 'tasks' ? views.taskView : null;
+    const problems = replayProblem(historical);
+    const corrupt = name === 'operations' ? (views.operationRead?.corrupt?.length ?? 0) : 0;
+    if (status === 'read' && problems > 0) {
+      out[name] = {
+        name,
+        status: 'inconsistent',
+        detail: `${problems} event(s) at or before the cutoff did not apply; the stored file parsed, but the replayed state is not reliable and was not reordered`,
+        inspectable: true,
+        supportsCutoff,
+      };
+      continue;
+    }
+    if (status === 'read' && corrupt > 0) {
+      out[name] = {
+        name,
+        status: 'damaged',
+        detail: `${corrupt} audit line(s) could not be read; absence of a record is not established`,
+        inspectable: true,
+        supportsCutoff,
+      };
+      continue;
+    }
     out[name] = {
       name,
       status,
       detail: status === 'unavailable' ? (entry?.detail ?? 'the store file could not be inspected') : null,
       inspectable: inspect !== 'unavailable' && inspect !== 'not_configured',
+      supportsCutoff,
     };
   }
   return out;
 }
 
-async function readSources({ snapshot, cutoff, experience, predictions, world, limit }) {
+async function readSources({ snapshot, cutoff, experience, predictions, world, goals, plans, tasks, operations, limit }) {
+  const historical = (store) => Boolean(store) && typeof store.historicalView === 'function';
   const reads = {
-    experience: { configured: Boolean(experience), error: null, damaged: false },
-    predictions: { configured: Boolean(predictions), error: null, damaged: false },
-    world: { configured: Boolean(world) && typeof world.historicalView === 'function', error: null, damaged: false },
+    experience: { configured: Boolean(experience) && historical(experience), error: null, damaged: false },
+    predictions: { configured: Boolean(predictions) && historical(predictions), error: null, damaged: false },
+    world: { configured: Boolean(world) && historical(world), error: null, damaged: false },
+    goals: { configured: Boolean(goals) && historical(goals), error: null, damaged: false },
+    plans: { configured: Boolean(plans) && historical(plans), error: null, damaged: false },
+    tasks: { configured: Boolean(tasks) && historical(tasks), error: null, damaged: false },
+    operations: { configured: Boolean(operations) && typeof operations.inspect === 'function', error: null, damaged: false },
   };
   const fail = (name, err) => {
     reads[name].error = messageOf(err);
     reads[name].damaged = err instanceof StoreError;
   };
-  let experienceView = null;
-  if (reads.experience.configured) {
+  const replay = async (name, store) => {
+    if (!reads[name].configured) return null;
     try {
-      experienceView = await snapshot.read('experience:historical', () => experience.historicalView(cutoff, { withCurrent: true }));
+      return await snapshot.read(`${name}:historical`, () => store.historicalView(cutoff, { withCurrent: true }));
     } catch (err) {
-      fail('experience', err);
+      fail(name, err);
+      return null;
     }
-  }
+  };
+  const experienceView = await replay('experience', experience);
   let predictionView = null;
   if (reads.predictions.configured) {
     try {
@@ -387,21 +428,214 @@ async function readSources({ snapshot, cutoff, experience, predictions, world, l
       fail('predictions', err);
     }
   }
-  let worldView = null;
-  if (reads.world.configured) {
+  const worldView = await replay('world', world);
+  const goalView = await replay('goals', goals);
+  const planView = await replay('plans', plans);
+  const taskView = await replay('tasks', tasks);
+  let operationRead = null;
+  if (reads.operations.configured) {
     try {
-      worldView = await snapshot.read('world:historical', () => world.historicalView(cutoff, { withCurrent: true }));
+      operationRead = await snapshot.read('operations:inspect', () => operations.inspect());
     } catch (err) {
-      fail('world', err);
+      fail('operations', err);
     }
   }
-  return { reads, experienceView, predictionView, worldView };
+  return {
+    reads, experienceView, predictionView, worldView, goalView, planView, taskView, operationRead,
+  };
+}
+
+// Executive entities are ordered newest first by the recorded time the store wrote, with the id only as
+// a tie-break. File order is never used: the log append order is not a claim about when an event
+// happened beyond the `.at` each event carries.
+function orderedEntities(map) {
+  return [...(map?.values() ?? [])].sort((a, b) => {
+    if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+  });
+}
+
+function countStatuses(entities) {
+  const counts = {};
+  for (const entity of entities) counts[entity.status] = (counts[entity.status] ?? 0) + 1;
+  return counts;
+}
+
+function boundedProblems(view) {
+  const problems = view?.problems ?? [];
+  return {
+    problemCount: problems.length,
+    problems: problems.slice(0, MAX_PROBLEMS_SHOWN).map((problem) => ({
+      index: problem.index,
+      eventId: problem.eventId ?? null,
+      reason: problem.reason,
+    })),
+    problemsTruncated: problems.length > MAX_PROBLEMS_SHOWN,
+  };
+}
+
+function goalSection(view, status, cutoff, limit) {
+  if (!view) {
+    return {
+      available: false,
+      status: status.status,
+      reason: status.detail ?? 'the goal log was not read at this cutoff',
+      cutoff,
+      records: null,
+      excluded: null,
+      undated: null,
+      counts: null,
+      problemCount: null,
+      problems: [],
+      problemsTruncated: false,
+      rows: [],
+      total: 0,
+      truncated: false,
+      current: null,
+      note: null,
+    };
+  }
+  const ordered = orderedEntities(view.goals);
+  const shown = ordered.slice(0, limit);
+  const currentById = new Map([...(view.current?.goals.values() ?? [])].map((goal) => [goal.id, goal]));
+  const problems = boundedProblems(view);
+  return {
+    available: true,
+    status: status.status,
+    reason: status.detail,
+    cutoff,
+    records: view.records,
+    excluded: view.excluded,
+    undated: view.undated,
+    counts: {
+      goals: view.goals.size,
+      byStatus: countStatuses(ordered),
+      live: ordered.filter((goal) => ['proposed', 'accepted', 'active', 'blocked'].includes(goal.status)).length,
+      completed: ordered.filter((goal) => goal.status === 'completed').length,
+    },
+    ...problems,
+    rows: shown.map((goal) => goalRow(goal, currentById.get(goal.id) ?? null)),
+    total: ordered.length,
+    truncated: ordered.length > shown.length,
+    current: view.current === null ? null : {
+      goals: view.current.goals.size,
+      byStatus: countStatuses([...view.current.goals.values()]),
+      completed: [...view.current.goals.values()].filter((goal) => goal.status === 'completed').length,
+    },
+    note: view.note,
+  };
+}
+
+function planSection(view, status, cutoff, limit) {
+  if (!view) {
+    return {
+      available: false,
+      status: status.status,
+      reason: status.detail ?? 'the plan log was not read at this cutoff',
+      cutoff,
+      records: null,
+      excluded: null,
+      undated: null,
+      counts: null,
+      problemCount: null,
+      problems: [],
+      problemsTruncated: false,
+      rows: [],
+      total: 0,
+      truncated: false,
+      current: null,
+      note: null,
+    };
+  }
+  const ordered = orderedEntities(view.plans);
+  const shown = ordered.slice(0, limit);
+  const currentById = new Map([...(view.current?.plans.values() ?? [])].map((plan) => [plan.id, plan]));
+  const problems = boundedProblems(view);
+  return {
+    available: true,
+    status: status.status,
+    reason: status.detail,
+    cutoff,
+    records: view.records,
+    excluded: view.excluded,
+    undated: view.undated,
+    counts: {
+      plans: view.plans.size,
+      byStatus: countStatuses(ordered),
+      approved: ordered.filter((plan) => plan.approval !== null).length,
+      active: ordered.filter((plan) => plan.activation !== null).length,
+    },
+    ...problems,
+    rows: shown.map((plan) => planRow(plan, currentById.get(plan.id) ?? null)),
+    total: ordered.length,
+    truncated: ordered.length > shown.length,
+    current: view.current === null ? null : {
+      plans: view.current.plans.size,
+      byStatus: countStatuses([...view.current.plans.values()]),
+    },
+    note: view.note,
+  };
+}
+
+function taskSection(view, status, cutoff, limit) {
+  if (!view) {
+    return {
+      available: false,
+      status: status.status,
+      reason: status.detail ?? 'the task log was not read at this cutoff',
+      cutoff,
+      records: null,
+      excluded: null,
+      undated: null,
+      counts: null,
+      problemCount: null,
+      problems: [],
+      problemsTruncated: false,
+      rows: [],
+      total: 0,
+      truncated: false,
+      current: null,
+      note: null,
+    };
+  }
+  const ordered = orderedEntities(view.tasks);
+  const shown = ordered.slice(0, limit);
+  const currentById = new Map([...(view.current?.tasks.values() ?? [])].map((task) => [task.id, task]));
+  const problems = boundedProblems(view);
+  const rows = shown.map((task) => taskRow(task, currentById.get(task.id) ?? null));
+  return {
+    available: true,
+    status: status.status,
+    reason: status.detail,
+    cutoff,
+    records: view.records,
+    excluded: view.excluded,
+    undated: view.undated,
+    counts: {
+      tasks: view.tasks.size,
+      byStatus: countStatuses(ordered),
+      interrupted: rows.filter((row) => row.interruptedAtCutoff).length,
+    },
+    ...problems,
+    rows,
+    total: ordered.length,
+    truncated: ordered.length > shown.length,
+    current: view.current === null ? null : {
+      tasks: view.current.tasks.size,
+      byStatus: countStatuses([...view.current.tasks.values()]),
+    },
+    note: view.note,
+  };
 }
 
 function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit }) {
   const experienceView = value.experienceView;
   const predictionView = value.predictionView;
   const worldView = value.worldView;
+  const goalView = value.goalView;
+  const planView = value.planView;
+  const taskView = value.taskView;
+  const operationRead = value.operationRead;
 
   const experienceCurrentById = new Map((experienceView?.current?.experiences ?? []).map((record) => [record.id, record]));
   let experienceSection;
@@ -524,6 +758,25 @@ function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit })
     cutoff,
   });
 
+  const goals = goalSection(goalView, statuses.goals, cutoff, limit);
+  const plans = planSection(planView, statuses.plans, cutoff, limit);
+  const tasks = taskSection(taskView, statuses.tasks, cutoff, limit);
+  const operations = operationsSection(operationRead, { cutoff, status: statuses.operations.status, limit });
+
+  // Only the displayed rows are resolved, so the citation list is bounded by the row bound already in
+  // force rather than by how much history exists.
+  const executiveCitations = operationCitations({
+    citations: [
+      ...goals.rows.map((row) => ({ kind: 'goal', id: row.id, operationIds: row.operationIds })),
+      ...plans.rows.map((row) => ({ kind: 'plan', id: row.id, operationIds: row.operationIds })),
+      ...tasks.rows.map((row) => ({ kind: 'task', id: row.id, operationIds: row.operationIds })),
+    ],
+    read: operationRead,
+    status: statuses.operations.status,
+    cutoff,
+    max: MAX_HISTORY_CITATIONS,
+  });
+
   const later = {
     cutoff,
     experiencesRecorded: experienceView?.current == null
@@ -538,11 +791,22 @@ function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit })
     evaluationsRecorded: predictionView?.later.evaluations ?? null,
     invalidationsRecorded: predictionView?.later.invalidations ?? null,
     worldRecordsAdded: worldView?.later?.changes?.length ?? null,
+    goalsRecorded: goalView?.excluded ?? null,
+    plansRecorded: planView?.excluded ?? null,
+    tasksRecorded: taskView?.excluded ?? null,
+    operationsFinishedLater: operations.counts?.byStateAtCutoff?.later ?? null,
     correctedShown: experienceSection.rows.filter((row) => row.correctedLater).length,
     feedbackAddedShown: experienceSection.rows.filter((row) => row.feedbackAddedLater).length,
     evaluationsShownLater: predictionRows.filter((row) => row.evaluationRecordedLater).length,
     invalidationsShownLater: predictionRows.filter((row) => row.invalidatedLater).length,
     replacementsShownLater: predictionRows.filter((row) => row.supersededLater).length,
+    goalStatusChangesShownLater: goals.rows.filter((row) => row.later.statusChangedLater).length,
+    goalsStoppedShownLater: goals.rows.filter((row) => row.later.stoppedLater).length,
+    goalsCompletedShownLater: goals.rows.filter((row) => row.later.completionRecordedLater).length,
+    planApprovalsShownLater: plans.rows.filter((row) => row.later.approvedLater).length,
+    planActivationsShownLater: plans.rows.filter((row) => row.later.activatedLater).length,
+    planRevisionsShownLater: plans.rows.filter((row) => row.later.revisedLater).length,
+    taskCompletionsShownLater: tasks.rows.filter((row) => row.later.stepCompletedLater).length,
     note: 'records dated after the cutoff are counted and shown as later; none of them is used to decide the past reading',
   };
 
@@ -577,9 +841,16 @@ function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit })
     experience: experienceSection,
     predictions: predictionSection,
     world: worldSection(worldView, statuses.world, limit),
+    goals,
+    plans,
+    tasks,
+    operations,
     citations,
+    operationCitations: executiveCitations,
+    cutoffSemantics: { ...CUTOFF_SEMANTICS },
     later,
     unsupported: UNSUPPORTED_SOURCES.map((item) => ({ ...item })),
+    limitations: [...EXECUTIVE_LIMITATIONS],
     limits: { rows: limit, citations: MAX_HISTORY_CITATIONS },
     rule: HISTORY_RULE,
     authorizes: false,
@@ -587,14 +858,18 @@ function assemble({ cutoff, readAt, attempts, verdict, value, statuses, limit })
   };
 }
 
-// The whole reconstruction, one bounded read of every integrated store. `experience`, `predictions`,
-// and `world` are the stores themselves; a store that is not supplied is reported as not configured,
-// and one that cannot be read is reported as damaged or unavailable without hiding the others.
+// The whole reconstruction, one bounded read of every integrated store. Each store argument is the
+// store itself; a store that is not supplied is reported as not configured, and one that cannot be
+// read is reported as damaged or unavailable without hiding the others.
 export async function reconstructCognition({
   cutoff,
   experience = null,
   predictions = null,
   world = null,
+  goals = null,
+  plans = null,
+  tasks = null,
+  operations = null,
   limit = DEFAULT_HISTORY_ROWS,
   now = () => new Date(),
 } = {}) {
@@ -605,12 +880,14 @@ export async function reconstructCognition({
   const size = rowLimit(limit);
   const readAtMs = parseInstant(typeof now === 'function' ? now() : now);
   const readAt = readAtMs === null ? null : new Date(readAtMs).toISOString();
-  const stores = contributingStores({ experience, predictions, world });
+  const stores = contributingStores({ experience, predictions, world, goals, plans, tasks, operations });
   const outcome = await runConsistentEvidenceRead({
     stores,
-    read: (snapshot) => readSources({ snapshot, cutoff: normalized, experience, predictions, world, limit: size }),
+    read: (snapshot) => readSources({
+      snapshot, cutoff: normalized, experience, predictions, world, goals, plans, tasks, operations, limit: size,
+    }),
   });
-  const statuses = sourceStatuses(outcome.value.reads, outcome.snapshot);
+  const statuses = sourceStatuses(outcome.value.reads, outcome.snapshot, outcome.value);
   return assemble({
     cutoff: normalized,
     readAt,

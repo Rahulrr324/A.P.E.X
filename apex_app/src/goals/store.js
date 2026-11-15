@@ -17,7 +17,7 @@ import { JsonlStore } from '../memory/jsonl-store.js';
 import { WriterLock } from '../memory/writer-lock.js';
 import { ValidationError, StoreError } from '../errors.js';
 import { Outcome } from '../outcomes.js';
-import { shortId, singleLine } from '../util.js';
+import { parseIsoInstant, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { maskSecretLeaves } from '../security/secrets.js';
 import {
@@ -180,6 +180,47 @@ export class GoalStore {
   async load() {
     const { records, goals } = await this.#readComplete();
     return { goals, events: records.length };
+  }
+
+  // The log replayed to one cutoff: only events stamped at or before it, derived by the reducer
+  // every other read uses. `at` is when the event was recorded, so a completion, cancellation,
+  // supersession, evidence record, criterion decision, or revision recorded later is not in the
+  // replay and cannot change the past lifecycle.
+  //
+  // Filtering by `at` preserves append order among the events it keeps. When the clock was not
+  // monotonic a surviving subsequence can fail to apply, and those problems are reported rather
+  // than hidden: reordering events to make the replay succeed would invent a chronology the
+  // records do not carry. A damaged full log still refuses the whole read, as it does everywhere
+  // else in this store.
+  async historicalView(knownAt, { withCurrent = true } = {}) {
+    const cutoff = parseIsoInstant(knownAt);
+    if (cutoff === null) {
+      throw new ValidationError(`"${singleLine(knownAt, 60)}" is not an ISO date or an ISO date-time with a time zone`);
+    }
+    const cutoffMs = Date.parse(cutoff);
+    const { records } = await this.#readComplete();
+    const known = [];
+    const later = [];
+    let undated = 0;
+    for (const record of records) {
+      const at = Date.parse(record.at);
+      if (Number.isNaN(at)) undated += 1;
+      else if (at <= cutoffMs) known.push(record);
+      else later.push({ at: record.at, type: record.type, goalId: record.goalId });
+    }
+    const derived = reduceEvents(known);
+    const current = withCurrent ? reduceEvents(records) : null;
+    return {
+      cutoff,
+      records: known.length,
+      excluded: later.length,
+      undated,
+      goals: derived.goals,
+      problems: derived.problems,
+      later,
+      current: withCurrent ? { goals: current.goals, problems: current.problems } : null,
+      note: `replayed ${known.length} goal-log event(s) recorded at or before ${cutoff}; ${later.length} later event(s) are not included, so a later completion, cancellation, supersession, evidence record, criterion decision, or revision does not apply`,
+    };
   }
 
   // Read-only diagnostics: it reports damage instead of refusing, so an empty store and a

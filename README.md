@@ -333,6 +333,23 @@ listings for memory and knowledge
 ([details](apex_app/README.md#batch-ap-16-cross-store-cognitive-history-as-implemented);
 tests: `tests/history-reconstruction.test.js`, 18 cases including real CLI child processes).
 
+Batch AP-17 then closed the cutoff gap AP-16 had named for the executive stores. The same
+`history.reconstruct` action and `history --at` CLI now also replay the goal, plan and task logs to
+the cutoff through each store's own reducer, so the answer says which goals were open, completed,
+cancelled or superseded then; which plan version existed, what approval bound it by content hash, and
+which steps had recorded outcomes; and which task steps had started, completed, failed or remained
+uncertain. A completion, approval, revision, assessment, cancellation or step outcome written after
+the cutoff is absent from the past row and reported beside it as a later change, never merged into it.
+A historical plan approval is always shown as not usable: it records what the user authorized then,
+and running that plan today revalidates its version and hash. The operations audit log is displayed
+as what it is - a current read whose lines carry no recorded-at and are appended only at finalization
+- with each line marked as finishing after the cutoff, finishing by it, or unplaceable, and a missing
+line is never read as success; a record stored by the cutoff that cites an operation finishing later
+is reported as inconsistent rather than repaired. A cutoff subsequence that does not replay is named
+as such, and the read reconstructs state without resuming, retrying or authorizing anything
+([details](apex_app/README.md#batch-ap-17-historical-executive-state-as-implemented);
+tests: `tests/executive-history.test.js`, 34 cases including real CLI child processes).
+
 Batch AP-11 (Runtime Performance, Cognitive Efficiency & End-to-End Latency Optimization) first
 corrected the measurement it was asked to optimize. The AP-10 benchmark shared one corpus across phases
 and only ever grew it, so after the retrieval phase reached 10,000 records every later `context` and

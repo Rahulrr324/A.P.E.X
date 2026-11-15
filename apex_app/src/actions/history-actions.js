@@ -1,6 +1,8 @@
 // The user-facing surface of cross-store cognitive history: one read-only action that replays the
-// experience log, the prediction ledger, and the world model to a cutoff and reports what each store
-// had recorded by then, what changed later, and what it cannot answer at all.
+// experience log, the prediction ledger, the world model, and the goal, plan, and task logs to a
+// cutoff, and reports what each store had recorded by then, what changed later, and what it cannot
+// answer at all. The operations audit log is read current, because it has no recorded-at: every row
+// is classified against the cutoff instead of pretending the log can be queried as of an instant.
 //
 // The action is a read in the registry's sense: it writes no store, takes no model call, and cannot
 // authorize anything. It is deliberately not plannable. A plan step that names this action would make
@@ -64,6 +66,37 @@ function predictionMarks(row) {
   return marks.length === 0 ? '' : ` [${marks.join('; ')}]`;
 }
 
+function goalMarks(row) {
+  const marks = [];
+  if (row.later.completionRecordedLater) marks.push('completed later');
+  else if (row.later.stoppedLater) marks.push('stopped later');
+  else if (row.later.statusChangedLater) marks.push('changed later');
+  if (row.later.revisionAdvancedLater) marks.push('revised later');
+  if (row.later.evidenceAddedLater) marks.push('evidence added later');
+  return marks.length === 0 ? '' : ` [${marks.join('; ')}]`;
+}
+
+function planMarks(row) {
+  const marks = [];
+  if (row.later.approvedLater) marks.push('approved later');
+  if (row.later.activatedLater) marks.push('activated later');
+  if (row.later.revisedLater) marks.push('revised later');
+  if (row.later.supersededLater) marks.push('superseded later');
+  else if (row.later.statusChangedLater) marks.push('changed later');
+  if (row.later.outcomeRecordedLater) marks.push('outcomes added later');
+  if (row.later.assessedLater) marks.push('assessed later');
+  return marks.length === 0 ? '' : ` [${marks.join('; ')}]`;
+}
+
+function taskMarks(row) {
+  const marks = [];
+  if (row.interruptedAtCutoff) marks.push('open or uncertain at cutoff');
+  if (row.later.stepCompletedLater) marks.push('steps completed later');
+  if (row.later.statusChangedLater && !row.later.stepCompletedLater) marks.push('changed later');
+  if (row.later.recoveredLater) marks.push('recovered later');
+  return marks.length === 0 ? '' : ` [${marks.join('; ')}]`;
+}
+
 // Every part of the answer appears here: what was replayed, what is shown, what is later, what could
 // not be read, and the cutoff rule. The printed rows are the same bounded rows the data carries, so
 // nothing in the display can exceed what the operation recorded.
@@ -113,6 +146,72 @@ function render(view) {
     lines.push(`world: ${world.status} - ${world.reason}`);
   }
 
+  const goals = view.goals;
+  lines.push('');
+  if (goals.available) {
+    lines.push(`goals: ${goals.counts.goals} goal(s) recorded by then, ${goals.counts.live} live, ${goals.counts.completed} completed; ${goals.excluded} later event(s) excluded; statuses ${JSON.stringify(goals.counts.byStatus)}`);
+    if (goals.problemCount > 0) lines.push(`  replay problems: ${goals.problemCount}; the replayed goal state is not reliable`);
+    for (const row of goals.rows) {
+      lines.push(`  ${row.createdAt}  ${row.id}  ${row.status}  priority ${row.priority}  rev ${row.revision}  ${row.progress.satisfied}/${row.progress.total} satisfied (${row.progress.gatingSatisfied}/${row.progress.gating} required)${goalMarks(row)}`);
+      if (row.completion !== null) lines.push(`    completion recorded ${row.completion.at}: ${row.completion.criteria.length} criterion evidence reference(s), ${row.completion.declined.length} declined`);
+    }
+    if (goals.truncated) lines.push(`  (${goals.total - goals.rows.length} older goal(s) not shown)`);
+  } else {
+    lines.push(`goals: ${goals.status} - ${goals.reason}`);
+  }
+
+  const plans = view.plans;
+  lines.push('');
+  if (plans.available) {
+    lines.push(`plans: ${plans.counts.plans} plan(s) recorded by then, ${plans.counts.approved} approved, ${plans.counts.active} activated; ${plans.excluded} later event(s) excluded; statuses ${JSON.stringify(plans.counts.byStatus)}`);
+    if (plans.problemCount > 0) lines.push(`  replay problems: ${plans.problemCount}; the replayed plan state is not reliable`);
+    for (const row of plans.rows) {
+      const approval = row.approval === null
+        ? 'not approved then'
+        : `approved by the user ${row.approval.at} at version ${row.approval.version} (historical, not a current authorization)`;
+      const activation = row.activation === null ? '' : `; activated ${row.activation.at} as task ${row.activation.taskId}`;
+      lines.push(`  ${row.createdAt}  ${row.id}  v${row.version}  ${row.status}  risk ${row.risk}  ${row.progress.completed}/${row.progress.total} completed; ${approval}${activation}${planMarks(row)}`);
+    }
+    if (plans.truncated) lines.push(`  (${plans.total - plans.rows.length} older plan(s) not shown)`);
+  } else {
+    lines.push(`plans: ${plans.status} - ${plans.reason}`);
+  }
+
+  const tasks = view.tasks;
+  lines.push('');
+  if (tasks.available) {
+    lines.push(`tasks: ${tasks.counts.tasks} task(s) recorded by then, ${tasks.counts.interrupted} open or uncertain; ${tasks.excluded} later event(s) excluded; statuses ${JSON.stringify(tasks.counts.byStatus)}`);
+    if (tasks.problemCount > 0) lines.push(`  replay problems: ${tasks.problemCount}; the replayed task state is not reliable`);
+    for (const row of tasks.rows) {
+      lines.push(`  ${row.createdAt}  ${row.id}  ${row.status}  ${row.progress.completed}/${row.progress.total} step(s) completed${taskMarks(row)}`);
+    }
+    if (tasks.truncated) lines.push(`  (${tasks.total - tasks.rows.length} older task(s) not shown)`);
+  } else {
+    lines.push(`tasks: ${tasks.status} - ${tasks.reason}`);
+  }
+
+  const operations = view.operations;
+  lines.push('');
+  if (operations.available) {
+    lines.push(`operations: ${operations.records} audit record(s), current read only; ${operations.counts.byStateAtCutoff.finished_by_cutoff ?? 0} finished by the cutoff (line existence at the cutoff not recorded), ${operations.counts.later} provably later${operations.corrupt > 0 ? `, ${operations.corrupt} unreadable line(s)` : ''}`);
+    for (const row of operations.rows) {
+      lines.push(`  ${row.finishedAt ?? row.requestedAt ?? '(no timestamp)'}  ${row.id}  ${row.capability ?? '(no capability)'}  ${row.status ?? 'no status'}  ${row.stateAtCutoff}`);
+    }
+    if (operations.truncated) lines.push(`  (${operations.total - operations.rows.length} older record(s) not shown)`);
+  } else {
+    lines.push(`operations: ${operations.status} - ${operations.reason}`);
+  }
+
+  const operationCitations = view.operationCitations;
+  const notable = operationCitations.rows.filter((row) => row.state !== 'finished_by_cutoff');
+  if (notable.length > 0) {
+    lines.push('');
+    lines.push(`operation citations: ${operationCitations.total} cited, ${operationCitations.inconsistent} inconsistent with the cutoff`);
+    for (const row of notable) {
+      lines.push(`  operation ${row.id}: ${row.state}${row.inconsistent ? ' (inconsistent)' : ''}${row.reason ? ` - ${row.reason}` : ''}`);
+    }
+  }
+
   if (view.citations.rows.length > 0) {
     lines.push('');
     lines.push(`citations: ${view.citations.total} record(s) cited, ${view.citations.references} reference(s)`);
@@ -123,7 +222,7 @@ function render(view) {
   }
 
   lines.push('');
-  lines.push(`later: experiences ${view.later.experiencesRecorded ?? '?'}, feedback ${view.later.feedbackRecorded ?? '?'}, predictions ${view.later.predictionsRecorded ?? '?'}, evaluations ${view.later.evaluationsRecorded ?? '?'}, withdrawals ${view.later.invalidationsRecorded ?? '?'}, world changes ${view.later.worldRecordsAdded ?? '?'}`);
+  lines.push(`later: experiences ${view.later.experiencesRecorded ?? '?'}, feedback ${view.later.feedbackRecorded ?? '?'}, predictions ${view.later.predictionsRecorded ?? '?'}, evaluations ${view.later.evaluationsRecorded ?? '?'}, withdrawals ${view.later.invalidationsRecorded ?? '?'}, world changes ${view.later.worldRecordsAdded ?? '?'}, goal events ${view.later.goalsRecorded ?? '?'}, plan events ${view.later.plansRecorded ?? '?'}, task events ${view.later.tasksRecorded ?? '?'}, operations finished after ${view.later.operationsFinishedLater ?? '?'}`);
   lines.push(`unsupported: ${view.unsupported.map((item) => item.source).join(', ')}`);
   lines.push(`rule: ${view.rule}`);
   lines.push(view.note);
@@ -136,6 +235,10 @@ function reconstruct(ctx, { at, limit }, fallback) {
     experience: ctx?.experience ?? fallback.experience,
     predictions: ctx?.predictions ?? fallback.predictions,
     world: ctx?.worldModel ?? fallback.world,
+    goals: ctx?.goals ?? fallback.goals,
+    plans: ctx?.plans ?? fallback.plans,
+    tasks: ctx?.taskStore ?? fallback.tasks,
+    operations: ctx?.operations ?? fallback.operations,
     limit,
     now: ctx?.now,
   });
@@ -148,12 +251,16 @@ function comparable(view) {
   return JSON.stringify({ ...view, readAt: null, asOf: { ...view.asOf, attempts: null } });
 }
 
-export function historyActions({ experience = null, predictions = null, world = null } = {}) {
-  const fallback = { experience, predictions, world };
+export function historyActions({
+  experience = null, predictions = null, world = null, goals = null, plans = null, tasks = null, operations = null,
+} = {}) {
+  const fallback = {
+    experience, predictions, world, goals, plans, tasks, operations,
+  };
   return [
     {
       name: 'history.reconstruct',
-      description: 'Reconstruct what the experience log, the prediction ledger, and the world model had recorded by a cutoff, with what the stores recorded later kept separate. Records are filtered by recorded time, not event or valid time; a source that cannot be read or cannot answer a cutoff is named rather than omitted. Read-only; it writes nothing, calls no model, and authorizes nothing.',
+      description: 'Reconstruct what the experience log, the prediction ledger, the world model, and the goal, plan, and task logs had recorded by a cutoff, with what the stores recorded later kept separate. The operations audit log is read current and each row is classified against the cutoff because it has no recorded-at field. Records are filtered by recorded time, not event or valid time; a source that cannot be read or cannot answer a cutoff is named rather than omitted. Read-only; it writes nothing, calls no model, and authorizes nothing.',
       inputHint: '{"at":"required ISO date or zoned date-time cutoff","limit":optional 1-50 rows per store}',
       permission: 'read',
       origins: [ORIGIN_USER, ORIGIN_MODEL],
@@ -165,10 +272,9 @@ export function historyActions({ experience = null, predictions = null, world = 
       },
       async execute(ctx, query) {
         const view = await reconstruct(ctx, query, fallback);
-        const experienceCount = view.experience.available ? view.experience.counts.experiences : null;
-        const predictionCount = view.predictions.available ? view.predictions.recorded : null;
+        const count = (section, pick) => (section.available ? pick(section) : 'unavailable');
         return {
-          summary: `cognition at ${view.cutoff}: ${experienceCount === null ? 'experience unavailable' : `${experienceCount} experience(s)`}, ${predictionCount === null ? 'predictions unavailable' : `${predictionCount} prediction(s)`}; snapshot ${view.asOf.state}; nothing written`,
+          summary: `history at ${view.cutoff}: ${count(view.experience, (s) => `${s.counts.experiences} experience(s)`)}, ${count(view.predictions, (s) => `${s.recorded} prediction(s)`)}, ${count(view.goals, (s) => `${s.counts.goals} goal(s)`)}, ${count(view.plans, (s) => `${s.counts.plans} plan(s)`)}, ${count(view.tasks, (s) => `${s.counts.tasks} task(s)`)}, ${count(view.operations, (s) => `${s.records} operation(s) current`)}; snapshot ${view.asOf.state}; nothing written`,
           data: { query, view },
           display: render(view),
         };

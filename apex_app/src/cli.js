@@ -48,7 +48,7 @@ Usage:
   node bin/apex.js world changes --from <iso> --to <iso>|state-at --at <iso>|inspect|health|lock   (read-only; state-at reconstructs beliefs at that time)
   node bin/apex.js world entity|fact|relationship|event|statement writes are user-origin only; a model cannot write the world model
   node bin/apex.js history [--limit N]     audited operations, newest first (read-only)
-  node bin/apex.js history --at <iso> [--limit N]   what the stores had recorded by a cutoff (read-only)
+  node bin/apex.js history --at <iso> [--limit N]   what the stores had recorded by a cutoff: experience, predictions, world, goals, plans, tasks, and a cutoff-classified current audit view (read-only)
   node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]
   node bin/apex.js knowledge retract <id> [--reason <text>]
   node bin/apex.js knowledge resolve <target-id> --choose <claim-id> [--reason <text>]

@@ -82,8 +82,13 @@ export function shortId(id) {
 // Remove bulky personal content before anything is written to the audit log.
 // Keys named `content` are replaced by a length marker. `display` is never
 // persisted (it is only for the interactive user).
+// The depth cap bounds untrusted nesting. It is 10 rather than a tighter bound because a bounded
+// history row nests evidence references four levels below the result payload (rows, completion,
+// criteria, entry), and dropping those ids would make the persisted record disagree with the read.
+const REDACT_MAX_DEPTH = 10;
+
 export function redact(value, depth = 0) {
-  if (depth > 8) return '[truncated]';
+  if (depth > REDACT_MAX_DEPTH) return '[truncated]';
   if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
   if (value && typeof value === 'object') {
     const out = {};

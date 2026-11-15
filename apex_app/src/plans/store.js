@@ -14,7 +14,7 @@ import { JsonlStore } from '../memory/jsonl-store.js';
 import { WriterLock } from '../memory/writer-lock.js';
 import { ValidationError, StoreError } from '../errors.js';
 import { Outcome } from '../outcomes.js';
-import { shortId, singleLine } from '../util.js';
+import { parseIsoInstant, shortId, singleLine } from '../util.js';
 import { containsSecret, maskSecretLeaves } from '../security/secrets.js';
 import {
   PLAN_SCHEMA,
@@ -82,6 +82,47 @@ export class PlanStore {
   async load() {
     const { records, plans } = await this.#readComplete();
     return { plans, events: records.length };
+  }
+
+  // The log replayed to one cutoff: only events stamped at or before it, derived by the reducer
+  // every other read uses. Version, approval, activation, step outcomes, and assessments are the
+  // ones recorded by then, so a later approval cannot authorize an earlier version and a later
+  // revision cannot rewrite what was approved. A historical approval is a record of what the user
+  // authorized then, never a current authorization.
+  //
+  // Filtering by `at` preserves append order among the events it keeps. A non-monotonic clock can
+  // leave a subsequence that does not apply (a revision without the version it revises, for
+  // example); those problems are reported instead of being repaired by reordering, because the
+  // records carry no chronology other than the timestamps they report.
+  async historicalView(knownAt, { withCurrent = true } = {}) {
+    const cutoff = parseIsoInstant(knownAt);
+    if (cutoff === null) {
+      throw new ValidationError(`"${singleLine(knownAt, 60)}" is not an ISO date or an ISO date-time with a time zone`);
+    }
+    const cutoffMs = Date.parse(cutoff);
+    const { records } = await this.#readComplete();
+    const known = [];
+    const later = [];
+    let undated = 0;
+    for (const record of records) {
+      const at = Date.parse(record.at);
+      if (Number.isNaN(at)) undated += 1;
+      else if (at <= cutoffMs) known.push(record);
+      else later.push({ at: record.at, type: record.type, planId: record.planId });
+    }
+    const derived = reduceEvents(known);
+    const current = withCurrent ? reduceEvents(records) : null;
+    return {
+      cutoff,
+      records: known.length,
+      excluded: later.length,
+      undated,
+      plans: derived.plans,
+      problems: derived.problems,
+      later,
+      current: withCurrent ? { plans: current.plans, problems: current.problems } : null,
+      note: `replayed ${known.length} plan-log event(s) recorded at or before ${cutoff}; ${later.length} later event(s) are not included, so a later approval, revision, activation, step outcome, assessment, or status change does not apply`,
+    };
   }
 
   async inspect() {

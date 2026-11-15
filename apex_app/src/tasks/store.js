@@ -8,7 +8,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
-import { singleLine } from '../util.js';
+import { parseIsoInstant, singleLine } from '../util.js';
 import { StoreError, ValidationError } from '../errors.js';
 import { TASK_SCHEMA, reduceEvents, validateEventShape } from './model.js';
 import { maskSecretLeaves } from '../security/secrets.js';
@@ -84,6 +84,45 @@ export class TaskStore {
   async load() {
     const { records, tasks, problems } = await this.#readComplete();
     return { tasks, problems, corrupt: 0, events: records.length };
+  }
+
+  // The log replayed to one cutoff: only events stamped at or before it. A step is running,
+  // awaiting approval, completed, failed, uncertain, or skipped as it was recorded by then, and a
+  // later retry, recovery, or completion is not folded back. This is a read: no runner is started
+  // and no step resumes, which is what keeps a historical view from becoming a replay of work.
+  //
+  // Filtering by `at` preserves append order among the events it keeps. A non-monotonic clock can
+  // leave a subsequence whose transitions do not apply; those problems are reported rather than
+  // repaired by reordering, because the records carry no chronology other than their timestamps.
+  async historicalView(knownAt, { withCurrent = true } = {}) {
+    const cutoff = parseIsoInstant(knownAt);
+    if (cutoff === null) {
+      throw new ValidationError(`"${singleLine(knownAt, 60)}" is not an ISO date or an ISO date-time with a time zone`);
+    }
+    const cutoffMs = Date.parse(cutoff);
+    const { records } = await this.#readComplete();
+    const known = [];
+    const later = [];
+    let undated = 0;
+    for (const record of records) {
+      const at = Date.parse(record.at);
+      if (Number.isNaN(at)) undated += 1;
+      else if (at <= cutoffMs) known.push(record);
+      else later.push({ at: record.at, type: record.type, taskId: record.taskId });
+    }
+    const derived = reduceEvents(known);
+    const current = withCurrent ? reduceEvents(records) : null;
+    return {
+      cutoff,
+      records: known.length,
+      excluded: later.length,
+      undated,
+      tasks: derived.tasks,
+      problems: derived.problems,
+      later,
+      current: withCurrent ? { tasks: current.tasks, problems: current.problems } : null,
+      note: `replayed ${known.length} task-log event(s) recorded at or before ${cutoff}; ${later.length} later event(s) are not included, so a later start, completion, failure, retry, approval, or cancellation does not apply`,
+    };
   }
 
   // Read-only diagnostics view. It does not throw on corrupt lines or events that

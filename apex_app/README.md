@@ -3667,7 +3667,9 @@ lifecycle kept whole, and every source's availability stated - it writes nothing
 nothing; `history --at` in the CLI). No World
 Model write is plannable and every World Model read is user-origin, so the planning prompt offers
 exactly 20 reads to a model origin and 44 actions to a user origin with a root configured (42 without
-one). The AP-16 read is offered to neither plan.
+one). The AP-16 read is offered to neither plan. Batch AP-17 added no action: it extended that same
+read to the goal, plan and task logs and to the operations audit log, so every count above is
+unchanged.
 
 ### The inconsistencies this found, and what became of them
 
@@ -7442,12 +7444,13 @@ after the cutoff. A record dated after the cutoff is `excluded`, never folded in
 the same cutoff asked again later still returns the same past reading, with the intervening records
 in the later counts.
 
-**Sources that cannot answer a cutoff are named.** Goals, plans, tasks, operations, memory and
-knowledge are listed in `unsupported` with a reason each: the goal, plan and task logs carry a
-recorded `.at` and a pure reducer but have no cutoff read (writing one here would be a second,
-untested temporal implementation), the operations audit log has no recorded-at field at all and is
-appended only when an operation completes, and memory/knowledge expose id-based as-of reads rather
-than a bounded as-of listing. Naming the boundary is part of the answer.
+**Sources that cannot answer a cutoff are named.** At AP-16, goals, plans, tasks, operations, memory
+and knowledge were listed in `unsupported` with a reason each: the goal, plan and task logs carried a
+recorded `.at` and a pure reducer but had no cutoff read, the operations audit log has no recorded-at
+field at all and is appended only when an operation completes, and memory/knowledge expose id-based
+as-of reads rather than a bounded as-of listing. Naming the boundary was part of the answer. AP-17
+(below) now answers the three executive logs through their own reducers and classifies the audit log;
+memory and knowledge remain disclosed as unsupported for a bounded listing.
 
 **Consistency and verifiability.** `asOf` reports the snapshot state, whether the combination is
 `complete`, whether it is `verifiable`, the attempt count, and each source's status (`read`,
@@ -7472,10 +7475,12 @@ input field, and a limit outside 1-50.
 | `src/cli.js` | `history --at <iso> [--limit N] [--json]`; the plain `history` listing keeps its fixed line format and refuses `--json`. |
 | `src/app.js`, `src/controller/controller.js`, `src/experience/capture.js` | Wiring: the action is registered with the real stores, `controller.historyReconstruct()` runs it as an audited user-origin read, and it is classified as `no (read)` for capture. |
 
-**What it does not do.** It does not add as-of reads for goals, plans, tasks, operations, memory or
-knowledge; it discloses them as unsupported. It does not decide which of two conflicting records is
-right, does not claim an objective past beyond what the stores recorded, does not replace current
-retrieval or context assembly, and does not reach a model - no inference is involved at any point.
+**What it does not do.** AP-16 itself adds no as-of read for goals, plans, tasks, operations, memory
+or knowledge; it discloses them as unsupported, and AP-17 later answers the executive logs and
+classifies the audit log while memory and knowledge remain disclosed. It does not decide which of two
+conflicting records is right, does not claim an objective past beyond what the stores recorded, does
+not replace current retrieval or context assembly, and does not reach a model - no inference is
+involved at any point.
 
 **Tests.** `tests/history-reconstruction.test.js` (18 tests) drives the real controller, stores and
 CLI child processes: a prediction recorded before and after the cutoff, evaluated after it, and
@@ -7488,7 +7493,133 @@ offset/date-only equivalence and zone-less refusal; the CLI read and its usage r
 measured check that one reconstruction reads each contributing store once per attempt. No test
 contacts a model.
 
-## Roadmap toward persistent cognition (dependency-ordered)
+## Batch AP-17: historical executive state (as implemented)
+
+AP-16 named the goal, plan and task logs as sources its cutoff read could not answer for, and the
+operations audit log as one that cannot answer a cutoff at all. AP-17 answers the three executive
+logs and states precisely what the audit log can and cannot say, through the same
+`history.reconstruct` action and `history --at` CLI - one action, one certified window, no second
+history surface and no new action, store, schema field or index. This is a historical read: it
+reconstructs what was recorded, never replays, resumes or retries work, and grants nothing.
+
+**Temporal semantics, per source.** Every executive event carries the time the store wrote it
+(`.at`), and the goal, plan and task stores have pure reducers, so a cutoff replay is the store's own
+replay: a later event is simply absent from the past state. The sources differ in what that means:
+
+| Source | Recorded time | What a cutoff answers | What it cannot answer |
+|---|---|---|---|
+| goals | event `.at` | status, revision, criteria and their basis/requirement, recorded evidence counts, operation ids, completion record and links as of the cutoff | whether the user's request was wise, or whether a criterion's evidence is true |
+| plans | event `.at` | the one plan version current at the cutoff, its content-hash-bound approval, activation, step results and assessments, and supersession links | whether a historical approval is usable now; running the plan today revalidates version and hash |
+| tasks | event `.at` | status, step statuses, progress, recorded step outcomes and interruption at the cutoff | what an interrupted or uncertain step actually did; the read never resumes it |
+| operations | `requestedAt`, `finishedAt`; no recorded-at | a current audit read with each line classified against the cutoff | whether a line existed at an instant; a line is appended only at finalization |
+
+The view reports the same five temporal names AP-16 introduced (`recordedTime`, `eventTime`,
+`validTime`, `evaluationTime`, `correctionTime`) and states the rule for each, so a cutoff read of the
+executive logs is not confused with an event-time query. `supportsCutoff` is true for goals, plans
+and tasks and false for operations.
+
+**Goals.** A row reports the recorded status, request, revision, priority, deadline, per-criterion
+`basis` (`user_stated`, `system_inferred`, `assumption`, `verified_fact`) and `requirement`
+(`required`, `suggested`, `declined`), evidence counts, cited operation ids, the completion record
+(criterion-to-operation pairs and declined criteria) and links to plans, tasks, entities and world
+events. User-stated criteria stay distinguishable from system-inferred ones, and recorded evidence
+stays distinguishable from verified completion: a completion citation resolves to an audit record's
+existence and status, not to the truth of the evidence. A completion, decision, revision, evidence
+record, cancellation or supersession written later is absent from the past row and reported beside it
+(`statusChangedLater`, `stoppedLater`, `revisionAdvancedLater`, `completionRecordedLater`,
+`evidenceAddedLater`), with a separate `now` block.
+
+**Plans.** The reducer keeps the version current at the cutoff, so a row reports exactly that
+version's steps, approval, activation, results and latest assessment. A later approval cannot
+authorize an earlier version: an approval names the version and content hash it bound, and a revision
+after the cutoff appears only as a `later` flag plus the current version in `now`. `approval.usable`
+is always false - a historical approval records what the user authorized then - and `planRow` never
+implies that running the old plan now is authorized. Later approval, activation, revision, status
+change, outcome, assessment and supersession are separate flags.
+
+**Tasks.** A task is reconstructed from its own event log: status, steps, step counts, progress and
+recorded outcomes at the cutoff. `interruptedAtCutoff` is true for a running or paused task and for a
+task holding a running, uncertain or awaiting-approval step; the row states that its effects are
+unresolved. A completed step is shown only with the outcome the log recorded (for example
+`verification_unavailable`), never promoted to success, and an uncertain step is never shown as
+successful. Reading a task does not resume, retry or execute it, and a test asserts the data
+directory is byte-identical after the read.
+
+**Operations, and what an audit line can say.** The audit record carries `requestedAt` and
+`finishedAt`, no recorded-at, and is written only when an operation finalizes. The section is
+therefore a current read with `supportsCutoff: false` and `recordedAtKnown: false`, and each row is
+classified: `later` when the latest of its two timestamps is after the cutoff (the line provably did
+not exist then, `existedAtCutoff: false`), `finished_by_cutoff` when it finished by then (whether the
+line was written by then is not recorded, so `existedAtCutoff: 'unknown'`), `unrecorded_finish`, or
+`unknown`. Authorized, attempted, executed, verified and audited remain distinct: an authorized
+operation that had not finished by the cutoff is not reported as executed then, an executed operation
+without a verification record is not reported as verified, and a missing line is never read as
+success. A later audit line or reconciliation is not presented as earlier knowledge.
+
+**Citations across the executive rows.** Every operation id named by a displayed goal, plan or task
+row is resolved against the audit log: `finished_by_cutoff`, `later`, `missing` when no line parses
+and none is corrupt, `unavailable` when the log was not read or contains unreadable lines (absence is
+not established), and `unknown`. A record stored by the cutoff that names an operation finishing after
+it is reported `later`, `inconsistent: true`, with the reason that it was not used as past evidence;
+the record is never rewritten.
+
+**Consistency and integrity.** Each executive store is read once per attempt through its own
+`historicalView(cutoff)` inside AP-07/AP-12's `runConsistentEvidenceRead` window, so one
+reconstruction describes one quiescent window and each source keeps its own status (`read`, `absent`,
+`not_configured`, `unavailable`, `damaged`, `inconsistent`). `historicalView()` replays the whole log
+first: a damaged file is `damaged`, and a full log that applies while its cutoff subsequence does not
+(a non-monotonic clock can produce this) is `inconsistent` with the reducer problems named - events
+are never reordered to make the subsequence fit - and the other sources still answer. An incomplete
+source makes the combination not `complete` and not `verifiable`; a short answer is never presented
+as a complete conclusion.
+
+**Bounds and persistence.** Rows share AP-16's bound (20 default, 50 maximum) and citations stay at
+40; each section reports `total`, `truncated` and its own counts. Every response carries
+`authorizes: false`, and the action stays read-class, user-and-model readable, unplannable, and
+refuses unknown input fields. The persisted audit copy is produced by the shared redaction; its depth
+cap was raised from 8 to 10 because a bounded history row nests evidence ids four levels below the
+result payload, and without that the audited copy would disagree with the read it records.
+
+**Where it lives.**
+
+| File | Responsibility |
+|---|---|
+| `src/history/executive.js` | `goalRow`, `planRow`, `taskRow`, `operationsSection`, `operationCitations`, `CUTOFF_SEMANTICS`, `EXECUTIVE_LIMITATIONS`: row shaping, later/now separation, audit classification and citation resolution. Writes nothing. |
+| `src/goals/store.js`, `src/plans/store.js`, `src/tasks/store.js` | `historicalView(cutoff)`: complete-log validation, cutoff filtering and replay, `later` counts and current state for the store's own entities; no new schema, field or index. |
+| `src/history/reconstruct.js` | Reads the executive stores inside the existing certified window, assembles the sections, resolves citations and folds completeness/verifiability in with the AP-16 sources. |
+| `src/actions/history-actions.js`, `src/cli.js` | Same action and CLI; the display renders executive counts, later changes and citation states, and `--json` returns the full bounded view. |
+| `src/util.js` | Shared audit redaction depth raised to 10 for the bounded evidence ids above. |
+
+**What it does not do.** It does not prove what happened, only what each store recorded by the
+cutoff; it does not place an audit append at an instant; it does not reorder events, repair an
+inconsistent record or reconcile a citation to a later operation; it does not turn a historical
+approval into current authority; and it does not resume, retry or execute any task or operation. It
+still discloses `memory` and `knowledge` as unsupported for a bounded historical listing, and it
+reaches no model.
+
+**Performance.** Measured in one run over generated fixtures (goal, plan, task and audit lines) with
+no overlapping runs: at 50 entities (100 goal events, 100 plan events, 100 task events, 50 audit
+lines) one reconstruction cost 207.7 ms cold and 172.9/165.3/157.5 ms warm; at 200 entities (400,
+400, 400 and 200) it cost 373.3 ms cold and 453.7/387.8/352.2 ms warm, about 2.35x for 4x the data in
+the same run. A single direct `historicalView` read at 50/200 entities took 18.3/96.6 ms (goals),
+19.5/30.8 ms (plans), 4.2/10.9 ms (tasks) and 4.7/7.4 ms (operations). The end-to-end figure is
+roughly double the source sum because the action's independent verifier re-runs the whole
+reconstruction. Every source is a full-log replay, so cost grows with total records; that is accepted
+for an explicit historical query, no index was added for a synthetic benchmark, and cold and warm
+differ little because nothing is cached across operations by design.
+
+**Tests.** `tests/executive-history.test.js` (34 tests) drives the real stores, controller and CLI
+child processes: a goal completed, cancelled and superseded after the cutoff and one completed by it
+with a declined inferred criterion; plan approval after the cutoff, an approval invalidated by a
+later blocked/revision cycle, a later draft revision, a later assessment, and a failed plan replaced
+later; a task started before and completed after, an interrupted step with an uncertain effect, a
+task completed by the cutoff, and a read that never resumes it; an operation finished later, one
+finished without verification, and a verification recorded later; missing, unreadable and
+later-citing citations; a damaged goal log, an invalid cutoff subsequence, a store moving during the
+read, a cross-process append, determinism at one cutoff and at a later one, bounds, adversarial extra
+fields and an oversized limit, model-origin reads that write nothing, and the CLI display and JSON
+listing. No test contacts a model.
+
 
 
 This is a plan, not a status report. **No stage below is closed.** Five of the eight hold
@@ -7553,6 +7684,12 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    memory, knowledge) instead of approximating them. What keeps the clause open: the goal,
    plan and task logs still have no cutoff read of their own, and memory and knowledge expose
    id-based as-of reads rather than a bounded historical listing.
+   Batch AP-17 closed the executive part of that remainder: the same read now replays the goal,
+   plan and task logs through their own reducers and classifies the operations audit log, which
+   cannot answer a cutoff at all, with per-row states and citations that never convert a missing
+   line into success. No index was added; the replay remains linear in stored events. Memory and
+   knowledge still expose id-based as-of reads rather than a bounded historical listing, so this
+   stage remains open.
 4. **Retrieval, evidence, uncertainty, and contradiction handling.** Evidence-linked belief
    records with explicit confidence, provenance-aware retrieval, and contradiction handling
    that is not a text heuristic. Depends on 3 (a claim must name what it is about).
