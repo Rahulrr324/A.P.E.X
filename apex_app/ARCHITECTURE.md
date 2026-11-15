@@ -1121,6 +1121,55 @@ changes recorded later. No store, schema field, persisted index or model call is
   date-only cutoffs, rejected malformed timestamps, read-only determinism, and cross-process and CLI
   reads. No model is contacted.
 
+### Cross-store cognitive history (Batch AP-16)
+
+AP-15 answered a cutoff for world statements and for named memory/knowledge records. AP-16 answers it
+for the three stores that hold a whole lifecycle each - experience, predictions and the world model -
+in one read, so "what had APEX recorded by this cutoff?" is a single certified answer instead of three
+unrelated ones. Each store keeps its own record model and vocabulary; the shared part is the cutoff
+contract, not a forced schema.
+
+- **Reuse, not a second temporal stack.** The cutoff goes through AP-15's strict `parseIsoInstant`;
+  the experience and prediction replays are the stores' own `historicalView()`; the world replay is
+  AP-15's `WorldModelStore.historicalView()`. `reconstructCognition()` in `src/history/reconstruct.js`
+  only orchestrates and shapes rows.
+- **One certified window.** The three store reads run inside `runConsistentEvidenceRead` (AP-07), so
+  the combination describes a quiescent window, the retry is bounded, and each store is read once per
+  attempt. The prediction replay is judged against the *replayed* experience log; when the experience
+  source cannot be read, an explicit `null` snapshot makes open horizons `evidence_unavailable`
+  rather than consulting the live log.
+- **Lifecycles stay separate.** Experience: a correction, feedback or review written later is
+  `excluded` from the past view and flagged `correctedLater` / `feedbackAddedLater`. Predictions:
+  status and decision as of then; an evaluation, withdrawal or replacement recorded later is
+  `evaluationRecordedLater` / `invalidatedLater` / `supersededLater`, so a prediction evaluated after
+  the cutoff is never reported as evaluated before it. World: AP-15's replayed counts plus the later
+  change window summarized by kind. Each section also carries a `current` block read at the read
+  time; the past and current answers are never merged.
+- **Citations are resolved at the cutoff.** A prediction's cited experience/feedback ids are
+  `recorded` (with supersession as of then), `recorded_later` (with the reason it was not evidence),
+  `missing`, or `unavailable` when the source could not be read - an unreadable source never becomes
+  `missing`.
+- **The boundary is part of the answer.** Goals, plans and tasks carry a recorded `.at` and a pure
+  reducer but no cutoff read; the operations audit log has no recorded-at field and is appended only
+  on completion; memory and knowledge expose id-based as-of reads, not a bounded as-of listing. All
+  six are listed in `unsupported` with a reason instead of being approximated.
+- **Statuses and verifiability.** `asOf` reports the snapshot state, `complete`, `verifiable`, the
+  attempt count, and per-source statuses (`read`, `absent`, `not_configured`, `unavailable`,
+  `damaged`) with reasons. A damaged or uninspectable source is named, the other answers are still
+  returned, and `verifiable` becomes false: a certificate proves the files did not move, not that a
+  file that could not be parsed was read.
+- **Bounds, no authority.** 20 rows per source by default, 50 at most; 40 citations; 10 later world
+  changes; every bound reports `total` and `truncated`. The action is read-class, user and model
+  origins, `plannable: false`; it writes no store, calls no model, and returns `authorizes: false`.
+  The independent verifier re-runs the reconstruction and masks only `readAt` and the attempt count.
+- **Tests.** `history-reconstruction.test.js` (18 tests) covers a prediction recorded before and
+  after the cutoff, evaluated after it, and invalidated after it; feedback and a correction written
+  later; a citation to a later record; a later cutoff; damaged experience and prediction stores; a
+  ledger line with a missing or malformed stored time refused as damage; a cross-process append; a
+  store moving during the read; bounds; repeat determinism; offset/date-only equivalence and
+  zone-less refusal; the CLI read and its usage refusals; and one store read per attempt. No model is
+  contacted.
+
 ## 6. D. Diagnostics and evaluation
 
 ### Runtime diagnostics
@@ -1267,6 +1316,7 @@ The only authority owner is the action registry. Everything else observes, propo
 | Expectation caution on the continuation recommendation (AP-13) | `IMPLEMENTED_AND_TESTED` | `prediction/caution.js`, `PredictionStore.expectationCautions`, `continuation/engine.js`, `executive/readiness.js`, controller wiring | `expectation-caution.test.js` (38 cases) |
 | Cross-store belief trace and retrieval contradiction link (AP-14) | `IMPLEMENTED_AND_TESTED` | reverse citation index in `world/query.js`, pure `world/belief-trace.js`, `MemoryStore.traceMany`, `world.belief.trace` action and CLI, `linkCrossStoreCitations` in `cognition/evidence.js` | `belief-trace.test.js` (18 cases) |
 | Historical belief reconstruction (AP-15) | `IMPLEMENTED_AND_TESTED` | pure `world/historical.js` (`validityStanding`, `statementStanding`, `reconstructBelief`, `relevantChanges`), `WorldModelStore.historicalView`, as-of `MemoryStore.traceMany` and `KnowledgeStore.getMany`, `world.belief.trace --at` and `world.state_at` belief output, strict `parseIsoInstant`; no store, schema field or index added | `temporal-belief.test.js` (18 cases, including real CLI child processes) |
+| Cross-store cognitive history (AP-16) | `IMPLEMENTED_AND_TESTED` | `src/history/reconstruct.js` (one `runConsistentEvidenceRead` across experience, prediction and world replays; per-source status, later separation, citation resolution, bounds, `authorizes:false`), `history.reconstruct` action (read, user+model, unplannable), `history --at` CLI; no store, schema field or index added; goals/plans/tasks/operations/memory/knowledge disclosed as unsupported | `history-reconstruction.test.js` (18 cases, including real CLI child processes) |
 | Temporal experience | `IMPLEMENTED_AND_TESTED` | `experience/temporal.js`, `experience-store.js` | `experience-temporal*.test.js` |
 | Model gateway protocol (stub) | `IMPLEMENTED_AND_TESTED` | `model/gateway.js` | `gateway.test.js`, `model-workflow.test.js`; no test runs a real model |
 | Real-model answer quality | `DESCRIPTIVE_ONLY` | — | One dated observation (2026-10-31); no automated evidence |

@@ -316,6 +316,23 @@ the read is bounded
 ([details](apex_app/README.md#batch-ap-15-historical-belief-reconstruction-as-implemented);
 tests: `tests/temporal-belief.test.js`, 18 cases including real CLI child processes).
 
+Batch AP-16 then advanced the roadmap's "consistent temporal semantics across existing stores"
+clause. `history.reconstruct` (CLI `history --at`) replays the experience log, the prediction ledger
+and the world model at one cutoff through a single content-certified read, and keeps each store's own
+lifecycle rather than forcing one schema: a prediction evaluated, withdrawn or replaced after the
+cutoff is reported as later and is never shown as evaluated before it; feedback and a correction
+written later stay out of the past view; and a prediction's citation of an experience record dated
+after the cutoff is `recorded_later`, not evidence from that time. The past reading, the current
+reading and the later counts are separate answers. Goals, plans, tasks, operations, memory and
+knowledge are named as sources this read cannot answer for, with a reason each, instead of being
+approximated; a damaged or unreadable source is named and makes the combination unverifiable without
+hiding the others. The read reuses AP-15's strict cutoff parsing and AP-07's snapshot contract, is
+bounded (20 rows per source by default, 50 at most; 40 citations), writes nothing and authorizes
+nothing. What stays open: cutoff reads for the goal, plan and task logs, and bounded historical
+listings for memory and knowledge
+([details](apex_app/README.md#batch-ap-16-cross-store-cognitive-history-as-implemented);
+tests: `tests/history-reconstruction.test.js`, 18 cases including real CLI child processes).
+
 Batch AP-11 (Runtime Performance, Cognitive Efficiency & End-to-End Latency Optimization) first
 corrected the measurement it was asked to optimize. The AP-10 benchmark shared one corpus across phases
 and only ever grew it, so after the retrieval phase reached 10,000 records every later `context` and

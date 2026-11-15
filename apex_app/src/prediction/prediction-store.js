@@ -30,7 +30,7 @@ import { randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { WriterLock } from '../memory/writer-lock.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { shortId, singleLine } from '../util.js';
+import { shortId, singleLine, parseIsoInstant } from '../util.js';
 import { isScopableCapability } from '../experience/experience-store.js';
 import { MAX_TEMPORAL_EVENTS, PATTERN_KINDS, parseInstant } from '../experience/temporal.js';
 import { MAX_LONGITUDINAL_PREDICTIONS, analyzeLongitudinal } from './longitudinal.js';
@@ -207,17 +207,30 @@ export class PredictionStore {
   // now describes the same instant of the log, where reading it record by record could mix an
   // experience appended in the middle of the read into some horizons and leave it out of others.
   // Nothing is retained between operations, so the next read sees whatever was appended since.
-  async #project({ records, nowMs, only = null }) {
+  // `snapshot` and `liveEvidence` exist for the cutoff read. Omitted, this behaves exactly as it
+  // always has: the live experience log is snapshotted for an aggregate read and read per horizon
+  // otherwise. Supplied, it comes from a replay of the experience log at one cutoff, and the live log
+  // is never touched - which is the whole point, because reading it would judge a past horizon against
+  // outcomes recorded after it. A supplied `null` therefore means "no cutoff snapshot exists", and with
+  // `liveEvidence: false` every opened horizon reports that instead of falling back to a later record.
+  async #project({ records, nowMs, only = null, snapshot: suppliedSnapshot = undefined, liveEvidence = true }) {
     const { predictions } = splitPredictionRecords(records);
     const opened = only === null ? predictions : predictions.filter((record) => only.has(record.id));
-    let snapshot = null;
-    if (opened.length > 1 && typeof this.experiences?.evidenceSnapshot === 'function') {
+    let snapshot = suppliedSnapshot === undefined ? null : suppliedSnapshot;
+    if (suppliedSnapshot === undefined && liveEvidence && opened.length > 1 && typeof this.experiences?.evidenceSnapshot === 'function') {
       // A snapshot that cannot be taken falls back to one read per horizon, which is the cost and
       // the reporting the read had before; no projection is allowed to lose a horizon silently.
       try { snapshot = await this.experiences.evidenceSnapshot(); } catch { snapshot = null; }
     }
     const evidence = new Map();
     for (const record of opened) {
+      if (suppliedSnapshot !== undefined && !liveEvidence && snapshot === null) {
+        evidence.set(record.id, {
+          available: false,
+          reason: 'this historical read ran without an experience snapshot taken at its cutoff, so no horizon was opened against the live log',
+        });
+        continue;
+      }
       evidence.set(record.id, await this.#evidenceFor(record, snapshot));
     }
     return projectLedger({
@@ -228,6 +241,107 @@ export class PredictionStore {
         reason: 'this read did not open a horizon for this prediction; ask for it by id to see its state',
       }),
     });
+  }
+
+  // The ledger replayed to one cutoff: only predictions, withdrawals, and evaluations stored at or
+  // before it. A verdict recorded after the cutoff is not in this replay, so the expectation reads as
+  // it did then - pending, expired, or awaiting evaluation - and its real verdict is only visible in
+  // `currentLedger`, beside the past one rather than folded into it.
+  //
+  // The cutoff is applied to recorded time, the field all three kinds carry, and `nowMs` is the cutoff
+  // itself. That is what keeps "expired" honest: a horizon that had not yet ended at the cutoff cannot
+  // be reported as expired, and one that had is judged against outcomes that existed by then.
+  //
+  // Outcome evidence comes from `experienceSnapshot`, which must be a replay of the experience log at
+  // the same cutoff. Supplied with `experienceSnapshot: undefined`, this method takes its own cutoff
+  // replay of the attached experience store - a second read of that file, which the caller can avoid
+  // by passing the snapshot it already holds. It never consults the live experience log: that would
+  // judge a past horizon against outcomes recorded after it.
+  async historicalView(knownAt, {
+    limit = MAX_PREDICTION_LIST,
+    experienceSnapshot,
+    currentExperienceSnapshot,
+    withCurrent = true,
+  } = {}) {
+    const cutoff = parseIsoInstant(knownAt);
+    if (cutoff === null) {
+      throw new ValidationError(`"${singleLine(knownAt, 60)}" is not an ISO date or an ISO date-time with a time zone`);
+    }
+    const cutoffMs = Date.parse(cutoff);
+    const records = await this.#loadComplete();
+    const known = [];
+    let excluded = 0;
+    let undated = 0;
+    for (const record of records) {
+      const at = parseInstant(record.createdAt);
+      if (at === null) undated += 1;
+      else if (at <= cutoffMs) known.push(record);
+      else excluded += 1;
+    }
+    const knownParts = splitPredictionRecords(known);
+    const allParts = splitPredictionRecords(records);
+    const size = Number.isInteger(limit) && limit >= 1 ? Math.min(limit, MAX_PREDICTION_LIST) : 20;
+    const ordered = [...knownParts.predictions].sort((a, b) => {
+      const at = parseInstant(a.createdAt);
+      const bt = parseInstant(b.createdAt);
+      if (at !== bt && at !== null && bt !== null) return at - bt;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    const opened = ordered.slice(-size);
+    const only = new Set(opened.map((record) => record.id));
+    let snapshot = experienceSnapshot;
+    let snapshotUnavailable = null;
+    if (snapshot === undefined) {
+      if (this.experiences && typeof this.experiences.historicalView === 'function') {
+        try {
+          snapshot = (await this.experiences.historicalView(cutoff, { withCurrent: false })).snapshot;
+        } catch (err) {
+          snapshot = null;
+          snapshotUnavailable = `the experience log could not be replayed at ${cutoff}: ${err?.message ?? String(err)}`;
+        }
+      } else {
+        snapshot = null;
+      }
+    }
+    const ledger = await this.#project({
+      records: known,
+      nowMs: cutoffMs,
+      only,
+      snapshot,
+      liveEvidence: false,
+    });
+    const currentLedger = withCurrent
+      ? await this.#project({
+        records,
+        nowMs: parseInstant(this.now()),
+        only,
+        snapshot: currentExperienceSnapshot,
+        // A caller that passed `null` has already established that no current experience view is
+        // available. Falling back to a live read would contradict that statement and read a log the
+        // caller reported unreadable, so the current projection reports the horizons as unread.
+        liveEvidence: currentExperienceSnapshot !== null,
+      })
+      : null;
+    return {
+      cutoff,
+      records: known.length,
+      excluded,
+      undated,
+      predictions: knownParts.predictions.length,
+      opened: opened.length,
+      openedIds: opened.map((record) => record.id),
+      truncated: knownParts.predictions.length > opened.length,
+      ledger,
+      currentLedger,
+      snapshotSupplied: experienceSnapshot !== undefined,
+      snapshotUnavailable,
+      later: {
+        predictions: allParts.predictions.length - knownParts.predictions.length,
+        invalidations: allParts.invalidations.length - knownParts.invalidations.length,
+        evaluations: allParts.evaluations.length - knownParts.evaluations.length,
+      },
+      note: `replayed ${known.length} prediction-ledger record(s) stored at or before ${cutoff}; ${excluded} later record(s) are not included, so a later evaluation, withdrawal, or replacement does not apply`,
+    };
   }
 
   // Record counts only. Anything a reader would act on needs the experience log, and the operational

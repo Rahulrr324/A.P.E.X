@@ -3395,6 +3395,22 @@ export class CognitiveController {
     );
   }
 
+  // ---- cross-store history ----------------------------------------------------
+  // One read-only reconstruction of what the experience log, the prediction ledger, and the world
+  // model had recorded by a cutoff. It runs through the registry like every other read, so the
+  // operation is audited and the answer is independently verified; it writes no store and calls no
+  // model. The cutoff is required by the action rather than defaulted here: "now" is what every
+  // ordinary read already answers, and a historical reading must name the instant it is about.
+  #historyOp(capability, request = capability) {
+    return this.#newOp({ capability, origin: 'user', request });
+  }
+
+  async historyReconstruct({ at, limit } = {}) {
+    const op = this.#historyOp('history.reconstruct', `history at ${at ?? '(no cutoff)'}`);
+    const step = await this.runAction('history.reconstruct', { at, limit }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   // ---- proposals --------------------------------------------------------------
   // A proposal is a model's suggestion, recorded separately from goals and plans. Generating one
   // calls the configured gateway with bounded, provenance-labelled context. Recording one executes

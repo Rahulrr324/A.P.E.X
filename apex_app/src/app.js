@@ -33,6 +33,7 @@ import { ExperienceStore } from './experience/experience-store.js';
 import { experienceActions } from './actions/experience-actions.js';
 import { PredictionStore } from './prediction/prediction-store.js';
 import { predictionActions } from './actions/prediction-actions.js';
+import { historyActions } from './actions/history-actions.js';
 import { GoalStore } from './goals/store.js';
 import { PlanStore } from './plans/store.js';
 import { ProposalStore } from './proposals/store.js';
@@ -180,7 +181,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...experienceActions(experience), ...predictionActions(predictions), ...historyActions({ experience, predictions, world: worldModel }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
   // Reporting must not create a session as a side effect. A missing session is
   // reported as absent; a damaged state still raises (it must not look empty).

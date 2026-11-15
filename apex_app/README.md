@@ -3571,7 +3571,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 92 registered actions declare both `validate()` and `verify()` - 94 with a
+- **Verification.** All 93 registered actions declare both `validate()` and `verify()` - 95 with a
   filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
@@ -3620,6 +3620,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `world.state` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
 | `world.entity.add`, `world.entity.alias`, `world.entity.retire`, `world.entity.merge`, `world.entity.unmerge`, `world.identity.decide`, `world.fact.add`, `world.relationship.add`, `world.event.add`, `world.statement.retract`, `world.statement.supersede` | user | write | never in a plan | `world-model.jsonl` (append-only; each record names its evidence) | no (world-model) | yes |
 | `world.entity.list`, `world.entity.show`, `world.entity.find`, `world.facts`, `world.attributes`, `world.relationships`, `world.events`, `world.conflicts`, `world.related`, `world.history`, `world.statement.history`, `world.identity.candidates`, `world.identity.decision`, `world.pair`, `world.evidence`, `world.belief.trace`, `world.changes`, `world.state_at`, `world.inspect`, `world.status` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
+| `history.reconstruct` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `filesystem.list`, `filesystem.read` | user | read | never offered to a model plan | nothing (measured) | no (filesystem) | no |
 | `goal.add`, `goal.revise`, `goal.confirm`, `goal.update`, `goal.evidence`, `goal.complete`, `goal.link` | user | write | never in a plan | `goals.jsonl` (and `operations.jsonl`; a revision resets criterion evidence, completion re-checks the audit log) | no (executive) | yes |
 | `goal.list`, `goal.show` | user | read | - | nothing (measured) | no (read) | no |
@@ -3648,8 +3649,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `none` | either | a request that routed to no action | - | `operations.jsonl` (+ the turn it produced) | no (no-action) | no |
 
 `filesystem.list` and `filesystem.read` appear in the registry only when `APEX_FILESYSTEM_ROOT` is
-configured; there is no default root, and a model proposal cannot supply one, so the count is 92
-registered actions by default and 94 with a root. Batch AG added ten user-origin write actions
+configured; there is no default root, and a model proposal cannot supply one, so the count is 93
+registered actions by default and 95 with a root. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
 two more user-origin writes (`goal.confirm`, the user's own decision about a success criterion APEX
@@ -3660,10 +3661,13 @@ them recording or approving anything). Batch AP-14 added one more World Model re
 (`world.belief.trace`: which stored records a claim rests on, which contradict it, and which world
 statements cite a memory or knowledge record - descriptive only, and it authorizes nothing), and
 Batch AP-15 gave that read an optional historical cutoff and `world.state_at` a belief
-reconstruction; no action was added. No World
+reconstruction; no action was added. Batch AP-16 added one unplannable cross-store read
+(`history.reconstruct`: the experience, prediction and world state one cutoff reconstructs, each
+lifecycle kept whole, and every source's availability stated - it writes nothing and authorizes
+nothing; `history --at` in the CLI). No World
 Model write is plannable and every World Model read is user-origin, so the planning prompt offers
 exactly 20 reads to a model origin and 44 actions to a user origin with a root configured (42 without
-one).
+one). The AP-16 read is offered to neither plan.
 
 ### The inconsistencies this found, and what became of them
 
@@ -7399,13 +7403,99 @@ timestamps (at the action and at the store), repeated queries that write nothing
 additions visible to a historical read, and two CLI traces whose readings agree. No test contacts a
 model; none is evidence about a real model.
 
+## Batch AP-16: cross-store cognitive history (as implemented)
+
+AP-15 could replay the World Model and read memory and knowledge records as of a cutoff. The
+experience log, the prediction ledger and the world model each already answered "what do you hold?"
+for the present, but no single read answered "what had APEX recorded by this cutoff?" across them,
+and the roadmap's "consistent temporal semantics across existing stores" clause stayed open. AP-16
+adds that one read: `history.reconstruct` (CLI `history --at`) replays the three stores that can
+honestly answer a cutoff, keeps each store's own record model and lifecycle vocabulary, and names the
+stores it cannot answer for instead of approximating them. It adds no store, no schema field, no
+index and no model call.
+
+**Reused, not reimplemented.** The cutoff is parsed by AP-15's strict `parseIsoInstant` (a date or a
+date-time with an explicit zone; zone-less and impossible instants are refused). The experience and
+prediction replays are the stores' own `historicalView()`, and the world replay is AP-15's
+`WorldModelStore.historicalView()`. The combined read runs inside AP-07/AP-12's
+`runConsistentEvidenceRead` content-certified window, with its bounded retry, so one reconstruction
+describes one quiescent window; each store is read once per attempt and the prediction replay is
+judged against the *replayed* experience log, not the live one.
+
+**What each store contributes by the cutoff.**
+
+| Source | Cutoff read | Lifecycle kept |
+|---|---|---|
+| experience | records with `createdAt <= cutoff`; experiences, feedback, adaptations and reviews derived from that replay; the current log read separately | a correction written later is counted as `excluded` and shown as `correctedLater`, and feedback added later as `feedbackAddedLater` - neither changes what the past view says about the record |
+| predictions | ledger records stored by the cutoff, opened horizons projected against the replayed experience log | status and decision as of then; an evaluation, invalidation or replacement recorded later is `evaluationRecordedLater` / `invalidatedLater` / `supersededLater`, and a prediction evaluated after the cutoff is not reported as evaluated before it |
+| world | AP-15's replayed state: entities, facts, relationships, events, merges, identity decisions, retractions and supersessions | counts at the cutoff, the later change window summarized by kind, and the replay's own excluded/problem disclosure |
+
+**Citations are resolved twice over.** A prediction's cited experience and feedback ids are checked
+against the experience log as it stood at the cutoff: `recorded` (and whether it was already
+superseded then), `recorded_later` with the reason that it was not evidence at that instant,
+`missing` when no such id exists at either time, and `unavailable` when the experience source could
+not be read - a source that could not be read never turns its citations into `missing`.
+
+**Separate answers, never one merged timeline.** `experience`, `predictions` and `world` each carry
+the past reading plus a `current` block read at the read time, and `later` counts what was written
+after the cutoff. A record dated after the cutoff is `excluded`, never folded into the past result;
+the same cutoff asked again later still returns the same past reading, with the intervening records
+in the later counts.
+
+**Sources that cannot answer a cutoff are named.** Goals, plans, tasks, operations, memory and
+knowledge are listed in `unsupported` with a reason each: the goal, plan and task logs carry a
+recorded `.at` and a pure reducer but have no cutoff read (writing one here would be a second,
+untested temporal implementation), the operations audit log has no recorded-at field at all and is
+appended only when an operation completes, and memory/knowledge expose id-based as-of reads rather
+than a bounded as-of listing. Naming the boundary is part of the answer.
+
+**Consistency and verifiability.** `asOf` reports the snapshot state, whether the combination is
+`complete`, whether it is `verifiable`, the attempt count, and each source's status (`read`,
+`absent`, `not_configured`, `unavailable`, `damaged`) with its reason. A damaged experience log makes
+the prediction horizons `evidence_unavailable` rather than consulting the live log; a damaged
+prediction ledger leaves the experience and world answers intact; any damaged or uninspectable
+source sets `verifiable: false` while the answer is still returned. A snapshot certificate says the
+files did not move during the read - not that the records are true - and every response carries
+`authorizes: false` and the rule that a cutoff replays only records stored at or before it.
+
+**Bounds.** Rows are 20 by default and 50 at most per source, citations 40, later world changes 10;
+each bound is reported (`total`, `truncated`, `limits`) so a short answer is never presented as a
+complete one. The action refuses a missing cutoff, a zone-less or impossible instant, an unknown
+input field, and a limit outside 1-50.
+
+**Where it lives.**
+
+| File | Responsibility |
+|---|---|
+| `src/history/reconstruct.js` | `reconstructCognition()`: strict cutoff, one consistent read across the three stores, row shaping and citation resolution, source statuses, bounds, `authorizes: false`. Writes nothing. |
+| `src/actions/history-actions.js` | `history.reconstruct`: read-class, user and model origins, `plannable: false`, validated `at`/`limit`, bounded text rendering, and an independent verifier that re-runs the reconstruction while masking only the two read instants. |
+| `src/cli.js` | `history --at <iso> [--limit N] [--json]`; the plain `history` listing keeps its fixed line format and refuses `--json`. |
+| `src/app.js`, `src/controller/controller.js`, `src/experience/capture.js` | Wiring: the action is registered with the real stores, `controller.historyReconstruct()` runs it as an audited user-origin read, and it is classified as `no (read)` for capture. |
+
+**What it does not do.** It does not add as-of reads for goals, plans, tasks, operations, memory or
+knowledge; it discloses them as unsupported. It does not decide which of two conflicting records is
+right, does not claim an objective past beyond what the stores recorded, does not replace current
+retrieval or context assembly, and does not reach a model - no inference is involved at any point.
+
+**Tests.** `tests/history-reconstruction.test.js` (18 tests) drives the real controller, stores and
+CLI child processes: a prediction recorded before and after the cutoff, evaluated after it, and
+invalidated after it; feedback and a correction written after the cutoff; a ledger line citing a
+record dated after the cutoff (`recorded_later`, never past evidence); the same fixture at a later
+cutoff; damaged experience and prediction stores; a ledger line with a missing or malformed stored
+time refused as damage; a record appended by another process; a store moving during the read
+(`concurrent_modification`); row and citation bounds; two reads agreeing except in read time;
+offset/date-only equivalence and zone-less refusal; the CLI read and its usage refusals; and a
+measured check that one reconstruction reads each contributing store once per attempt. No test
+contacts a model.
+
 ## Roadmap toward persistent cognition (dependency-ordered)
 
 
 This is a plan, not a status report. **No stage below is closed.** Five of the eight hold
 a partial implementation and the notes name both the clause each batch advanced and the
 remainder that keeps the stage open: stage 2's read-only projection, stage 3's
-event-with-time and historical-world-state clauses (Batches AC, AD and AP-15), stage 4's
+event-with-time, historical-world-state and cross-store-cutoff clauses (Batches AC, AD, AP-15
+and AP-16), stage 4's
 contradiction-surfacing clause (Batch X) and its cross-store evidence trace (Batches AP-14
 and AP-15),
 stage 5's feedback-to-surface path (Batches Z, AA and AB), and stage 6's expectation ledger,
@@ -7453,9 +7543,16 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    unknown then, recorded but not yet valid, in force, expired, or superseded by a later
    record without the past answer being rewritten. The current standing and the later changes
    are returned as separate answers. This is still a read-time replay over the existing
-   append-only log: no as-of read exists for experience, prediction, goal, plan, task or
-   operation records, and those are disclosed as unavailable at a cutoff rather than reused
-   from the present.
+   append-only log.
+   Batch AP-16 extended that replay across stores: `history.reconstruct` reads the experience
+   log, the prediction ledger and the world model at one cutoff through a single certified
+   window, keeping each store's own lifecycle - a prediction evaluated or withdrawn after the
+   cutoff is reported as later, feedback and corrections written later stay out of the past
+   view, and a citation to a record dated after the cutoff is `recorded_later` rather than
+   evidence. The read names the sources it cannot answer for (goals, plans, tasks, operations,
+   memory, knowledge) instead of approximating them. What keeps the clause open: the goal,
+   plan and task logs still have no cutoff read of their own, and memory and knowledge expose
+   id-based as-of reads rather than a bounded historical listing.
 4. **Retrieval, evidence, uncertainty, and contradiction handling.** Evidence-linked belief
    records with explicit confidence, provenance-aware retrieval, and contradiction handling
    that is not a text heuristic. Depends on 3 (a claim must name what it is about).

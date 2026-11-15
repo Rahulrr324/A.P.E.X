@@ -47,7 +47,8 @@ Usage:
   node bin/apex.js world trace <memory|knowledge|fact|relationship|event> <id> [--at <iso historical cutoff>] [--limit N]   (read-only; rebinds nothing to the present)
   node bin/apex.js world changes --from <iso> --to <iso>|state-at --at <iso>|inspect|health|lock   (read-only; state-at reconstructs beliefs at that time)
   node bin/apex.js world entity|fact|relationship|event|statement writes are user-origin only; a model cannot write the world model
-  node bin/apex.js history [--limit N]
+  node bin/apex.js history [--limit N]     audited operations, newest first (read-only)
+  node bin/apex.js history --at <iso> [--limit N]   what the stores had recorded by a cutoff (read-only)
   node bin/apex.js knowledge add --subject <text> --relationship <text> --object <text> [--evidence <text>] [--supersedes <id[,id...]>]
   node bin/apex.js knowledge retract <id> [--reason <text>]
   node bin/apex.js knowledge resolve <target-id> --choose <claim-id> [--reason <text>]
@@ -1391,7 +1392,17 @@ export async function main(argv, {
     }
 
     if (command === 'history') {
-      const { flags, rest } = parseFlags(args, ['limit']);
+      const { flags, rest } = parseFlags(args, ['limit', 'at', 'json']);
+      if (flags.at !== undefined) {
+        // A cutoff reconstruction across the stores that can answer one. It runs as an audited,
+        // verified read; the plain listing below stays an unaudited direct read of the audit log.
+        rejectUnexpected(rest, 'history --at <iso> [--limit N]');
+        const res = await app.controller.historyReconstruct({ at: flags.at, limit: flags.limit });
+        return emitRead(res, flags);
+      }
+      // The listing is a fixed line format, not a structured answer: accepting `--json` and
+      // printing text would claim a form the command does not have.
+      if (flags.json !== undefined) throw new ValidationError('usage: history --at <iso> [--limit N] --json', 'USAGE');
       rejectUnexpected(rest, 'history [--limit N]');
       let listed;
       try {

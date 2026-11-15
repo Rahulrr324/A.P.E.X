@@ -49,7 +49,7 @@ import { JsonlStore } from '../memory/jsonl-store.js';
 import { WriterLock } from '../memory/writer-lock.js';
 import { sha256Hex, tokenize } from '../memory/memory-store.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS, shortId, singleLine } from '../util.js';
+import { CONTROL_CHARS, parseIsoInstant, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { stableStringify } from '../tasks/model.js';
 import { OUTCOME_VALUES } from '../outcomes.js';
@@ -964,6 +964,22 @@ function deriveStore(records) {
   return { index, retiredExperiences, retiredFeedback, experiences, adaptations, reviews };
 }
 
+// The shape every temporal reader consumes, built over one record list and its derivation. The
+// position map spans every record kind, because the file holds all of them and a tie inside one
+// timestamp is broken by where the record sits in the log. Both the live read and the cutoff replay
+// are built here, so a historical view cannot quietly differ from the current one in how it is shaped.
+function temporalSourceOf(records, derived) {
+  const position = new Map();
+  for (let i = 0; i < records.length; i += 1) position.set(records[i].id, i);
+  return {
+    experiences: derived.experiences,
+    feedback: derived.index.feedback,
+    retiredFeedback: derived.retiredFeedback,
+    adaptations: derived.adaptations,
+    position,
+  };
+}
+
 function annotateExperience(record, { feedbackByExperience, replacedBy, retiredExperiences, retiredFeedback }) {
   const entries = feedbackByExperience.get(record.id) ?? [];
   const current = entries.filter((f) => !retiredFeedback.has(f.id));
@@ -1146,8 +1162,9 @@ function indexIdList(values, label) {
 
 // When an event happened, and which field said so. Same precedence the temporal view uses: a finished
 // operation is timed by its completion, then its request, then its record. `source` is reported so a
-// reader can see which of the three a timestamp came from.
-function occurredAtOf(record) {
+// reader can see which of the three a timestamp came from. Exported because a cross-store historical
+// read must report event time exactly as this store's own temporal view does.
+export function occurredAtOf(record) {
   for (const source of ['finishedAt', 'requestedAt', 'createdAt']) {
     const ms = parseInstant(record?.[source]);
     if (ms !== null) return { ms, source };
@@ -2459,18 +2476,7 @@ export class ExperienceStore {
   // persisted, so a log written by an older process is read the same way as one written now.
   async #temporalSource() {
     const records = await this.#loadComplete();
-    const derived = deriveStore(records);
-    // Order within one timestamp comes from the file, and the file holds every record kind, so the
-    // position map is built over all of them rather than over the derived experience array.
-    const position = new Map();
-    for (let i = 0; i < records.length; i += 1) position.set(records[i].id, i);
-    return {
-      experiences: derived.experiences,
-      feedback: derived.index.feedback,
-      retiredFeedback: derived.retiredFeedback,
-      adaptations: derived.adaptations,
-      position,
-    };
+    return temporalSourceOf(records, deriveStore(records));
   }
 
   // The derived log, read once, for a caller that must answer questions about many windows inside one
@@ -2479,6 +2485,66 @@ export class ExperienceStore {
   // operation describe one instant of the log instead of one instant per window.
   async evidenceSnapshot() {
     return this.#temporalSource();
+  }
+
+  // The same log replayed to one cutoff: only records stored at or before it, derived by the one
+  // derivation every other reader uses. This is what makes "what did APEX know at 09:00" a different
+  // question from "what is true now" rather than a filter applied to the current answer: a feedback
+  // record, a correction, a review, or an adaptation written after the cutoff is not in the replay at
+  // all, so it cannot retire, supersede, or support anything in it.
+  //
+  // The filter is on recorded time (`createdAt`), the only time every one of the eight kinds carries.
+  // Event time is reported by the derived rows and is never used as a cutoff: an operation that
+  // requested at 08:59 but finished at 09:01 was recorded after 09:00, and pretending otherwise would
+  // rewrite the order in which APEX learned things. A record whose `createdAt` cannot be parsed is
+  // excluded and counted, never guessed at; record validation already refuses such a line, so the
+  // count is expected to be zero and is reported anyway.
+  //
+  // `current` is derived from every record and kept separate. Nothing in this method merges the two
+  // views, and a later correction cannot reach the historical one. `withCurrent: false` skips the
+  // second derivation for a caller that only needs the past view.
+  async historicalView(knownAt, { withCurrent = true } = {}) {
+    const cutoff = parseIsoInstant(knownAt);
+    if (cutoff === null) {
+      throw new ValidationError(`"${singleLine(knownAt, 60)}" is not an ISO date or an ISO date-time with a time zone`);
+    }
+    const cutoffMs = Date.parse(cutoff);
+    const records = await this.#loadComplete();
+    const known = [];
+    let excluded = 0;
+    let undated = 0;
+    for (const record of records) {
+      const at = parseInstant(record.createdAt);
+      if (at === null) undated += 1;
+      else if (at <= cutoffMs) known.push(record);
+      else excluded += 1;
+    }
+    const derived = deriveStore(known);
+    const snapshot = temporalSourceOf(known, derived);
+    const current = withCurrent ? deriveStore(records) : null;
+    return {
+      cutoff,
+      records: known.length,
+      excluded,
+      undated,
+      // The derived log at the cutoff, in the shape `evidenceIndex` accepts, so a prediction read at
+      // the same cutoff can judge its horizon against exactly these records instead of the live log.
+      snapshot,
+      experiences: derived.experiences,
+      feedback: derived.index.feedback,
+      adaptations: derived.adaptations,
+      reviews: derived.reviews,
+      retiredExperiences: [...derived.retiredExperiences].sort(),
+      retiredFeedback: [...derived.retiredFeedback].sort(),
+      currentSnapshot: withCurrent ? temporalSourceOf(records, current) : null,
+      current: withCurrent ? {
+        experiences: current.experiences,
+        feedback: current.index.feedback,
+        adaptations: current.adaptations,
+        reviews: current.reviews,
+      } : null,
+      note: `replayed ${known.length} experience-log record(s) stored at or before ${cutoff}; ${excluded} later record(s) are not included, so a later feedback, correction, review, or adaptation does not apply`,
+    };
   }
 
   async temporalAnalysis({ since, until, days, capability = null, limit = MAX_TEMPORAL_EVENTS, minEvents = MIN_PATTERN_EVENTS, maxPatterns = MAX_PATTERNS } = {}) {
