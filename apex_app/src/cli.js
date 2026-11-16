@@ -17,6 +17,7 @@ import { MAX_QUEUED_SUMMARIES } from './tasks/summary-queue.js';
 import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
 import { State, collectDiagnostics, dataDirLabel, renderDiagnostics, safeText } from './diagnostics.js';
 import { MAX_WORLD_LIMIT } from './world/world-state.js';
+import { runRuntimeCommand } from './runtime/cli.js';
 
 export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION})
 
@@ -123,6 +124,14 @@ Usage:
                                                             record your choice; choose execute only with a named registered action
   node bin/apex.js situation execute <decision-id> --input <json>
                                                             run the one action that decision approved (the registry authorizes it again)
+  node bin/apex.js runtime start [--interval <ms>]         start the opt-in executive runtime in the foreground (Ctrl+C stops it)
+  node bin/apex.js runtime tick                            run one bounded cycle: publish, process, schedule, record
+  node bin/apex.js runtime status|diagnose                 lifecycle, queue, schedule, retries, health and dependencies
+  node bin/apex.js runtime stop                            graceful shutdown; queued work and checkpoints are preserved
+  node bin/apex.js runtime pause|resume                    stop or resume scheduling without stopping event processing
+  node bin/apex.js runtime schedule <plan-id> --at <iso> [--reason <text>]
+  node bin/apex.js runtime unschedule|cancel <plan-id> [--reason <text>]
+  node bin/apex.js runtime notifications [--all]           active, suppressed and expired notices (acknowledge <id> clears one)
   node bin/apex.js evidence integrity                      cross-store read consistency and per-store health (read-only; repairs nothing)
   node bin/apex.js prediction record --capability <name> --expect <kind> --subject <text> (--expires <iso> | --in-days N) [--supports <id[,id...]>] [--contradicts <id[,id...]>] [--feedback <id[,id...]>] [--pattern <kind[,kind...]>] [--replaces <id[,id...]>]
   node bin/apex.js prediction list [--limit N] [--capability <name>] [--status <name>]
@@ -1796,6 +1805,10 @@ export async function main(argv, {
       }
       err('usage: situation ingest|evaluate|decide|execute|state|events|decisions|status');
       return 2;
+    }
+
+    if (command === 'runtime') {
+      return runRuntimeCommand({ app, args, out, err, parseFlags, rejectUnexpected });
     }
 
     if (command === 'evidence') {

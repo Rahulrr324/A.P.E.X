@@ -14,7 +14,10 @@ export const EVENT_CATEGORIES = Object.freeze([
   'observation', 'external', 'system',
 ]);
 
-export const EVENT_SOURCES = Object.freeze(['apex', 'user', 'test_provider', 'external_provider']);
+// `runtime` is the T-10 executive runtime publishing a lifecycle transition it observed. It is a
+// distinct source from `apex` because the runtime, not the action that made the change, is the
+// reporter, and from `user` because the user did not state it.
+export const EVENT_SOURCES = Object.freeze(['apex', 'user', 'runtime', 'test_provider', 'external_provider']);
 
 // The responses are ordered from least to most consequential. Only `execute` changes anything, and
 // only after the user has recorded it as a decision; no event can choose it.

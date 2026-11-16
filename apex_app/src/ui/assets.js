@@ -45,6 +45,11 @@ export const UI_PAGE = `<!doctype html>
     <ul id="plans" class="work"></ul>
   </section>
   <section class="panel">
+    <h2>Executive runtime</h2>
+    <p class="meta">Opt-in local process. Starting, stopping and approving remain explicit acts; this view only reports what the runtime has persisted.</p>
+    <ul id="runtime" class="work"></ul>
+  </section>
+  <section class="panel">
     <h2>Situational awareness</h2>
     <p class="meta">Recorded observations, alerts and pending decisions. Decisions and execution are made with the CLI; this view only reads.</p>
     <ul id="situation" class="work"></ul>
@@ -99,6 +104,7 @@ const els = {
   tasks: document.getElementById('tasks'),
   plans: document.getElementById('plans'),
   situation: document.getElementById('situation'),
+  runtime: document.getElementById('runtime'),
   banner: document.getElementById('banner'),
 };
 
@@ -253,11 +259,46 @@ function renderSituation(state) {
   if ((state.recent || []).length === 0) els.situation.append(el('li', 'meta', 'No events recorded.'));
 }
 
+function renderRuntime(runtime) {
+  els.runtime.replaceChildren();
+  if (!runtime) {
+    els.runtime.append(el('li', 'meta', 'The executive runtime is not configured.'));
+    return;
+  }
+  if (runtime.unavailable) {
+    els.runtime.append(el('li', 'meta', runtime.unavailable));
+    return;
+  }
+  const head = el('li', 'item');
+  const row = el('div', 'row');
+  row.append(el('span', 'title', 'Runtime ' + String(runtime.runtimeId).slice(0, 8)));
+  row.append(el('span', 'badge', runtime.lifecycle + (runtime.paused ? ' \\u00b7 paused' : '')));
+  head.append(row);
+  head.append(el('div', 'meta', 'boot ' + runtime.boots + ' \\u00b7 ' + runtime.ticks + ' tick(s) \\u00b7 last ' + (runtime.lastTickAt || 'never')));
+  head.append(el('div', 'meta', (runtime.notifications ? runtime.notifications.active : 0) + ' active notice(s) \\u00b7 backlog ' + (runtime.backlog === null ? 'unavailable' : runtime.backlog) + ' \\u00b7 ' + runtime.activePlans.length + ' active plan(s)'));
+  els.runtime.append(head);
+  for (const plan of runtime.activePlans.slice(0, 3)) {
+    const item = el('li', 'item');
+    item.append(el('div', 'title', String(plan.id).slice(0, 8) + ' \\u00b7 ' + plan.status));
+    item.append(el('div', 'meta', plan.outcome || ''));
+    els.runtime.append(item);
+  }
+  for (const task of runtime.interrupted.slice(0, 3)) {
+    els.runtime.append(el('li', 'meta', 'Interrupted task ' + String(task.id).slice(0, 8) + ' (' + task.status + '); not re-run automatically.'));
+  }
+  for (const notice of (runtime.notifications.recent || [])) {
+    els.runtime.append(el('li', 'meta', notice.level + ' \\u00b7 ' + notice.reason));
+  }
+  if (runtime.lastError) els.runtime.append(el('li', 'meta', 'Last error: ' + runtime.lastError));
+  if (runtime.deadLetters.length > 0) els.runtime.append(el('li', 'meta', runtime.deadLetters.length + ' dead letter(s) recorded.'));
+}
+
 async function refresh() {
   const state = await api('/api/state');
   renderTurns(state.turns);
   renderTasks(state.tasks);
   renderPlans(state.plans);
+  renderRuntime(state.runtime);
   renderSituation(state.situation);
   els.session.textContent = state.session && state.session.id ? 'session ' + String(state.session.id).slice(0, 8) : 'no session yet';
   if (state.session && state.session.unavailable) showBanner(state.session.unavailable);

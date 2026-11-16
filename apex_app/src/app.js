@@ -39,6 +39,7 @@ import { learningActions } from './actions/learning-actions.js';
 import { SituationStore } from './situational/store.js';
 import { SituationService } from './situational/service.js';
 import { situationActions } from './actions/situation-actions.js';
+import { ExecutiveRuntime } from './runtime/executive-runtime.js';
 import { PredictionStore } from './prediction/prediction-store.js';
 import { predictionActions } from './actions/prediction-actions.js';
 import { historyActions } from './actions/history-actions.js';
@@ -355,6 +356,22 @@ export function createApp({
     dataDir,
     neural: neuralRuntime,
   });
+  // T-10 runtime: an opt-in process over the same controller. Constructing it starts nothing; no
+  // timer, lease, or write exists until `runtime.start()` is called explicitly.
+  const runtime = new ExecutiveRuntime({
+    controller,
+    situation,
+    taskStore,
+    plans,
+    goals,
+    learning,
+    experience,
+    predictions,
+    operations,
+    dataDir,
+    now: clock,
+    idFactory,
+  });
   return {
     controller,
     memory,
@@ -381,6 +398,7 @@ export function createApp({
     deadlines,
     learning,
     situation,
+    runtime,
   };
 }
 

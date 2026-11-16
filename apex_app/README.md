@@ -8720,3 +8720,80 @@ listener, no sensor driver and no external integration; therefore this is verifi
 processing and must not be described as real-world situational awareness. Significance is a rule
 total, not a probability or a cause. An approved action is run exactly once, but APEX cannot prove
 that the action had the effect the event described.
+## Batch T-10: continuous executive runtime and autonomous orchestration
+
+T-10 turns the nine existing milestones into a process that can be started once and left running. It
+adds no second controller, planner or task runner. One cycle is bounded and deterministic:
+
+```
+RUNTIME START -> STATE RECOVERY -> EVENT PUBLICATION -> EVENT PROCESSING -> SCHEDULING
+              -> AUTHORIZED EXECUTION -> OUTCOME RECORDING -> T-08 LEARNING
+```
+
+The runtime is opt-in and local. `apex runtime start` runs it in the foreground with a timed cycle;
+Ctrl+C performs a graceful stop. It never installs a service, scheduled task or startup entry, and it
+opens no network listener. Without an external provider or a model, it still schedules and runs
+approved deterministic plans, evaluates events against goals and world state, and records health.
+
+State lives in `runtime.json` next to the other stores. The document carries a version, the persistent
+runtime identity, lifecycle, configuration, bounded checkpoints, schedules, retries, dead letters,
+notifications and recent history, and a SHA-256 checksum over its own content. A damaged checkpoint is
+moved to `runtime.corrupt-<timestamp>.json` and reported at start; it is never silently deleted or
+trusted. `runtime.lock` holds a pid and a random nonce. A live holder always wins, a lease left by a
+process that no longer exists is taken over deliberately, and a second start in the same process is
+refused before the file is read. A runtime can be paused (scheduling stops, event processing and
+notifications continue) without stopping it.
+
+Automatic events. The runtime reads stored lifecycle transitions on every tick and publishes each one
+once, with `source: "runtime"`, a stable source identity, provenance naming the runtime, and the
+records it refers to. Covered transitions include task running/completed/failed and failed or uncertain
+steps, plan approved/blocked/completed/failed/cancelled, goal accepted/active/completed/blocked/
+cancelled/failed, failed audited operations, active adaptations, recorded user corrections and
+approaching or passed goal deadlines. A failed task, failed plan, failed operation, invalidated plan
+or passed deadline is escalated to `notify` even when the generic significance score says "record".
+The runtime decides `record`/`ignore`/`notify`/`recommend`/`request_approval`; it never chooses
+`execute`. Event text never becomes action input.
+
+The scheduler. Only an approved plan can run, and only through the existing
+`controller.planActivate(planId, { mode: "run" })`, so registry authorization, execution and
+independent verification are the same as a manual run. Before a plan is eligible the scheduler checks
+the plan status, the goal's status and unmet goal dependencies, an explicit `runtime schedule` time,
+tasks already in flight for that plan, paused state, and retry backoff. Candidates are ordered by goal
+priority, then earliest deadline, then plan id; at most one runs per tick by default. A failed run is
+retried with exponential backoff up to three attempts, then dead-lettered. When a run completes, the
+plan is linked to T-08 with `learning.evaluate` and `experience.recordEvaluation`; a failure in that
+link is recorded and does not turn a completed plan into a failed one.
+
+Recovery. The event checkpoint records processed event ids and published identities. A replay after a
+crash therefore sees the event as done; the situational log's own source-identity deduplication
+covers the crash window before the checkpoint is written. Tasks recorded as running or paused are
+listed at start as interrupted work and are never re-run automatically: the task runner's own
+recovery path and the user's decision remain the authority. A completed plan is no longer approved, so
+a restart cannot execute it again. The retry and dead-letter tables survive restart.
+
+Commands:
+
+```
+apex runtime start [--interval <ms>]      foreground process; Ctrl+C stops it gracefully
+apex runtime tick                         one bounded cycle (useful in scripts and tests)
+apex runtime status | diagnose            lifecycle, backlog, lease, schedules, retries, health
+apex runtime stop                         graceful stop; queued work and checkpoints stay
+apex runtime pause | resume               pause/resume scheduling only
+apex runtime schedule <plan-id> --at <iso> [--reason <text>]
+apex runtime unschedule <plan-id>
+apex runtime cancel <plan-id> [--reason <text>]
+apex runtime notifications [--all]
+apex runtime acknowledge <notification-id>
+```
+
+`GET /api/runtime` and the "Executive runtime" panel in the local UI show the same persisted status:
+lifecycle, boot count and ticks, backlog, active plans, interrupted work, active notices, retries and
+dead letters. The UI adds no start, stop or approve control.
+
+Limitations: the foreground cycle is a timer in one process, not an operating-system service. There
+is no network listener, no external event source, no multi-host coordination, no inference and no
+model call; event arrival still requires the published ingestion contract or a lifecycle transition
+in the local stores. The lease distinguishes a live pid from a dead one, not a recycled pid on every
+platform. Notification cooldown and significance remain documented rule totals, not probabilities.
+Approval is still required for consequential actions, and an approved plan is the only thing the
+scheduler executes.

@@ -1776,3 +1776,56 @@ eight registered capabilities; `controller.situationExecute` is the only path th
 it uses the existing `runAction`, registry, verifier and audit finalisation. Responses are recorded
 as ordinary experiences, which is how T-08 sees them. The CLI and `ui/server.js` read the same
 service; neither adds an authorization rule or a store.
+## T-10 executive runtime (as implemented)
+
+`src/runtime/` adds a process around the existing executive. It does not add a capability to the
+registry and does not change the authority map: `controller.planActivate` remains the single path
+from an approved plan to an action.
+
+| Module | Responsibility | Authority | Failure behaviour |
+| --- | --- | --- | --- |
+| `vocabulary.js` | Closed lifecycle, default config, retry policy, failure statuses, bounded queue names | None | A value outside the vocabulary is a validation error |
+| `state.js` | `runtime.json` checkpoint, canonical SHA-256 checksum, atomic replace, writer lock, quarantine | Reads and writes only its own file | Unparseable or checksum-mismatched state is moved to `runtime.corrupt-<ts>.json` and reported, never restored |
+| `lease.js` | `runtime.lock` with pid, runtime id and nonce; exclusive create; stale-lease takeover; heartbeat | Exclusion only; grants no action | A live holder is never evicted; a failed heartbeat stops the tick without claiming work |
+| `executive-runtime.js` | Lifecycle, automatic publication, event decisions, scheduler, notifications, diagnostics, T-08 link | Calls the situational service and `controller.planActivate`; never executes an action itself | A tick failure is recorded and the runtime stays running; retries are bounded and dead-lettered |
+| `cli.js` | Start/stop/status/diagnose/tick/pause/resume/schedule/notifications | User-origin commands only | Usage errors exit 2; a refused start or tick exits 1 with the reason |
+
+Lifecycle is `stopped -> starting -> running -> stopping -> stopped`. `start()` loads the checkpoint,
+takes the lease, verifies dependencies (controller, situational service, task store, plan store, audit
+log), records interrupted tasks, then enters `running` and publishes `runtime_started`. `stop()` clears
+the timer, waits for an in-flight tick, publishes `runtime_stopped` and releases the lease. The
+in-process active set and the file lease are independent duplicate-worker guards.
+
+Publication uses one source identity per stored transition, e.g. `task:<id>:completed` or
+`plan:<id>:cancelled`; identities longer than the situational log's 64-character source-id limit are
+digested. A published key is checkpointed only after ingestion succeeds, and ingestion is itself
+deduplicated by source identity, so a crash between the two writes cannot create a second event.
+Runtime-published `runtime_*` events are marked processed without a decision, which terminates the
+publication/processing loop.
+
+Event processing reads at most the configured batch (five by default) from the bounded backlog,
+orders by significance level then ingestion time, skips event ids already in the checkpoint, and
+records one decision per event through `situation.decide`. It never calls `situation.execute` and
+never supplies action input from an event. A processing error gets one retry and then a dead letter;
+dead letters are bounded and never retried silently.
+
+Scheduling mirrors, but does not replace, the runner's gates: plan must be `approved`, goal must be
+open, goal dependencies must be `completed`, an explicit schedule must be due, no task for the plan
+may be `proposed`/`running`/`paused`, and a retry's `nextAt` must have passed. One plan runs per tick.
+`planActivate` re-reads authorization and verifies every step. Successful completion removes the
+schedule and records a T-08 evaluation; failure schedules a retry with `baseDelay * multiplier^(n-1)`
+and dead-letters at the limit.
+
+Notifications are derived from recorded decisions, keyed by decision id, so replay cannot duplicate
+them. They carry a level, expiry, suppression flag from T-09's cooldown/dedupe decision, and
+acknowledgement. Acknowledgement is a state change only; it does not execute anything.
+
+`runtime.status()` is a read model over the checkpoint plus task, plan and situational summaries. It
+reports the lease holder, backlog, schedules, retries, dead letters, interrupted work, active plans,
+recent history, configuration and the last error. `runtime.diagnose()` checks identity, checkpoint
+integrity, dependencies, single instance, runner/audit availability, the situational log, the task
+log, interrupted work and the absence of an inference handle. The UI exposes the status at
+`GET /api/runtime` and in a read-only panel; the CLI renders the same fields.
+
+The runtime uses no model gateway, downloads nothing, launches no inference server and makes no
+network request. `neural` contracts remain untouched and unconnected.

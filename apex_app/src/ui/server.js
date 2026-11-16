@@ -291,6 +291,17 @@ export function createUiServer({
       situation = { unavailable: `situational state is unavailable: ${err.message}` };
     }
 
+    // T-10: the runtime reports its own persisted state. A stopped runtime is shown as stopped;
+    // nothing here starts a timer or a lease.
+    let runtime = null;
+    try {
+      runtime = app.runtime && typeof app.runtime.status === 'function'
+        ? await app.runtime.status()
+        : { unavailable: 'the executive runtime is not configured' };
+    } catch (err) {
+      runtime = { unavailable: `runtime state is unavailable: ${err.message}` };
+    }
+
     return {
       at: now().toISOString(),
       session,
@@ -298,6 +309,7 @@ export function createUiServer({
       tasks,
       plans,
       situation,
+      runtime,
       limits: {
         maxMessageChars: UI_LIMITS.maxMessageChars,
         maxTurns: UI_LIMITS.maxTurns,
@@ -476,6 +488,14 @@ export function createUiServer({
         sendJson(res, 200, await app.situation.state({ limit: 10 }));
       } catch (err) {
         sendJson(res, 503, { error: `the situational state is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/runtime') {
+      try {
+        sendJson(res, 200, await app.runtime.status());
+      } catch (err) {
+        sendJson(res, 503, { error: `the runtime state is unavailable: ${err.message}` });
       }
       return;
     }

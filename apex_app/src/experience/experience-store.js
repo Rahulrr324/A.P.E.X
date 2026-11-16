@@ -2742,6 +2742,15 @@ export class ExperienceStore {
     return deriveStore(records).index.feedback.filter((r) => matchesRef(r, p)).reverse();
   }
 
+  // A bounded read of the corrections the user has recorded, newest last. The runtime publishes
+  // one event per correction so T-09 can evaluate it; the text is never copied into the event.
+  async recentFeedback({ limit = 20 } = {}) {
+    const records = await this.#loadComplete();
+    const { index, retiredFeedback } = deriveStore(records);
+    const size = Number.isInteger(limit) && limit >= 1 ? Math.min(limit, 50) : 20;
+    return index.feedback.filter((row) => !retiredFeedback.has(row.id)).slice(-size);
+  }
+
   // Read-only lifecycle view for one experience: its current feedback and the full history, so a
   // correction never hides what the user said first, even when the two disagree.
   async feedbackFor(target, { limit = 20 } = {}) {
