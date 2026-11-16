@@ -107,7 +107,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 111, 'the default registry has 111 actions');
+    assert.equal(plain.registry.list().length, 117, 'the default registry has 117 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -141,7 +141,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 57, 'the inventory counts fifty-seven write actions with a root configured');
+    assert.equal(writes.length, 61, 'the inventory counts sixty-one write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -224,7 +224,7 @@ describe('AF-19: the registry is the inventory', () => {
     const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 69, 'the inventory counts sixty-nine read actions with a root configured');
+    assert.equal(reads.length, 71, 'the inventory counts seventy-one read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -403,7 +403,11 @@ describe('AF-19: the planning prompt and the plan checker agree', () => {
     assert.deepEqual(offeredNames(system), [
       'adaptation.list', 'app.status', 'calc.evaluate', 'experience.compare', 'experience.list',
       'experience.patterns', 'experience.show', 'experience.timeline', 'experience.trends',
-      'knowledge.digest', 'knowledge.list', 'knowledge.search', 'memory.list', 'memory.search',
+      'knowledge.digest', 'knowledge.list', 'knowledge.search',
+      // Batch T-08: both read only the recorded outcome evaluations, proposals, measurements and
+      // rollbacks; a proposal that contains one authorizes nothing and neither writes a store.
+      'learning.patterns', 'learning.status',
+      'memory.list', 'memory.search',
       // Batch AL: each of these three answers only from the recorded goal, the recorded plan and the
       // live registry, and a proposal that contains one is still a proposal - it authorizes nothing.
       // The outcome read reports what a plan's records establish; recording an assessment is not among
@@ -441,7 +445,7 @@ describe('AF-19: the planning prompt and the plan checker agree', () => {
       }
     }
     const user = offeredNames(planningPrompt({ goal: 'anything', registry: app.registry, memoryLines: [], origin: 'user' }).system);
-    assert.equal(user.length, 54, 'a user-origin prompt offers the fifty-four plannable actions with a root');
+    assert.equal(user.length, 56, 'a user-origin prompt offers the fifty-six plannable actions with a root');
     assert.ok(user.includes('deadline.list'), 'a user plan may read the recorded deadlines');
     assert.ok(!user.includes('deadline.import'), 'a deadline import is a write and is never plannable');
     assert.ok(user.includes('memory.add'), 'a user plan may still contain memory.add');

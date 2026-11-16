@@ -167,10 +167,21 @@ export function builtinActions() {
           // it for every action would bury the names.
           if (query !== null && a.inputHint) lines.push(`      input: ${a.inputHint}`);
         }
+        // A long registry must not truncate the answer into a partial one: an action that is
+        // registered but missing from "what can you do" is a capability the user cannot discover.
+        // The full form carries descriptions while it fits; past the bound the same list is printed
+        // compactly, one action per line, so every name survives and the omission is stated.
+        const full = lines.join('\n');
+        const compact = [
+          headline,
+          'Descriptions are omitted because the full list exceeds the display bound. Every registered action is still named.',
+          '',
+          ...actions.map((a) => `  ${a.name} [${a.permission}; ${a.origins.join(' + ')}${a.plannable ? '; plan step' : ''}]`),
+        ].join('\n');
         return {
           summary: `${actions.length} registered action(s) listed${query === null ? '' : ` for "${query}"`}`,
           data,
-          display: truncate(lines.join('\n'), 12000),
+          display: truncate(full.length <= 12000 ? full : compact, 20000),
         };
       },
       async verify(ctx, _input, result) {

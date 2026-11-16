@@ -3822,6 +3822,12 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `adaptation.review.open` | user | write | never in a plan | `experiences.jsonl` (one review line) | no (self-bookkeeping) | yes |
 | `adaptation.review.decide` | user | write | never in a plan | `experiences.jsonl` (one decision line; a retirement also appends the existing retirement line) | no (self-bookkeeping) | yes |
 | `evidence.integrity` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
+| `learning.observe` | user | write | never in a plan | `experiences.jsonl` (one outcome evaluation per completed run, or nothing when the run is still open) | no (learning) | yes |
+| `learning.propose` | user | write | never in a plan | `experiences.jsonl` (one candidate per supported pattern, or nothing when no pattern is supported) | no (learning) | yes |
+| `learning.measure` | user | write | never in a plan | `experiences.jsonl` (one measurement line comparing the windows around the approval) | no (learning) | yes |
+| `learning.rollback` | user | write | never in a plan | `experiences.jsonl` (one rollback line, only after a recorded regression) | no (learning) | yes |
+| `learning.patterns` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `learning.status` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `experience.list`, `experience.show`, `experience.timeline`, `experience.trends`, `experience.patterns`, `experience.compare` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `prediction.record` | user | write | never in a plan | `predictions.jsonl` | no (expectation) | yes |
 | `prediction.evaluate` | user | write | never in a plan | `predictions.jsonl`, or nothing when no outcome has resolved yet (measured: verified, nothing written) | no (expectation) | yes |

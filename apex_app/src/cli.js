@@ -106,6 +106,14 @@ Usage:
   node bin/apex.js adaptation review open <id> [--reason <text>] open a review on the evidence the stores now hold
   node bin/apex.js adaptation review keep|dismiss|retire <review-id> [--reason <text>]
                                                             record your lifecycle decision; retire uses adaptation.retire
+  node bin/apex.js learning observe <plan-id>              judge a plan run against its objective and criteria, and record the evaluation
+  node bin/apex.js learning patterns [--capability <name>] [--min-observations N] [--limit N]
+                                                            repeated success, failure, corrections, inefficiency, ordering (read-only)
+  node bin/apex.js learning propose [--min-observations N]  turn a supported pattern into a candidate adaptation with its risks and validation
+  node bin/apex.js learning measure <adaptation-id>        compare recorded outcomes before and after your approval (read of counts, not a cause)
+  node bin/apex.js learning rollback <adaptation-id> [--measurement <id>] [--reason <text>]
+                                                            take a rule out of force after a measured regression; history stays
+  node bin/apex.js learning status [--limit N]             what was learned, what it proposes, what improved, what was reversed
   node bin/apex.js evidence integrity                      cross-store read consistency and per-store health (read-only; repairs nothing)
   node bin/apex.js prediction record --capability <name> --expect <kind> --subject <text> (--expires <iso> | --in-days N) [--supports <id[,id...]>] [--contradicts <id[,id...]>] [--feedback <id[,id...]>] [--pattern <kind[,kind...]>] [--replaces <id[,id...]>]
   node bin/apex.js prediction list [--limit N] [--capability <name>] [--status <name>]
@@ -608,6 +616,7 @@ export function formatResult(res) {
   const writeActions = new Set([
     'memory.add', 'memory.correct', 'memory.save_conclusion', 'knowledge.add', 'knowledge.retract', 'knowledge.resolve',
     'experience.record', 'feedback.record', 'adaptation.derive', 'adaptation.decide', 'adaptation.guide', 'adaptation.retire',
+    'learning.observe', 'learning.propose', 'learning.measure', 'learning.rollback',
     'prediction.record', 'prediction.evaluate', 'prediction.invalidate',
   ]);
   const refusedBeforeWriting = (s) => s.execution?.error?.code === 'LOCKED'
@@ -1613,6 +1622,59 @@ export async function main(argv, {
         return emit(await app.controller.adaptationRetire({ target: ids[0], reason: flags.reason ?? null }));
       }
       err('usage: adaptation derive|eligibility|effectiveness|list|approve|reject|guide|retire|reviews|review');
+      return 2;
+    }
+
+    if (command === 'learning') {
+      const [sub, ...rest] = args;
+      if (sub === 'observe') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) {
+          err('usage: learning observe <plan-id>');
+          return 2;
+        }
+        return emit(await app.controller.learningObserve({ plan: ids[0] }));
+      }
+      if (sub === 'patterns') {
+        const { flags, rest: extra } = parseFlags(rest, ['capability', 'min-observations', 'limit']);
+        rejectUnexpected(extra, 'learning patterns [--capability <name>] [--min-observations N] [--limit N]');
+        return emit(await app.controller.learningPatterns({
+          capability: flags.capability ?? null,
+          minObservations: flags['min-observations'],
+          limit: flags.limit,
+        }));
+      }
+      if (sub === 'propose') {
+        const { flags, rest: extra } = parseFlags(rest, ['min-observations']);
+        rejectUnexpected(extra, 'learning propose [--min-observations N]');
+        return emit(await app.controller.learningPropose({ minObservations: flags['min-observations'] }));
+      }
+      if (sub === 'measure') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) {
+          err('usage: learning measure <adaptation-id>');
+          return 2;
+        }
+        return emit(await app.controller.learningMeasure({ target: ids[0] }));
+      }
+      if (sub === 'rollback') {
+        const { flags, rest: ids } = parseFlags(rest, ['measurement', 'reason']);
+        if (ids.length !== 1) {
+          err('usage: learning rollback <adaptation-id> [--measurement <id>] [--reason <text>]');
+          return 2;
+        }
+        return emit(await app.controller.learningRollback({
+          target: ids[0],
+          measurement: flags.measurement ?? null,
+          reason: flags.reason ?? null,
+        }));
+      }
+      if (sub === 'status') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit']);
+        rejectUnexpected(extra, 'learning status [--limit N]');
+        return emit(await app.controller.learningStatus({ limit: flags.limit }));
+      }
+      err('usage: learning observe|patterns|propose|measure|rollback|status');
       return 2;
     }
 

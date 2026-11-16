@@ -585,6 +585,7 @@ export class CognitiveController {
     proposals = null,
     worldModel = null,
     deadlines = null,
+    learning = null,
     dataDir = null,
     neural = null,
   }) {
@@ -637,6 +638,10 @@ export class CognitiveController {
     // Deadlines are dates the owner imported from a local file. The ledger holds no schedule and no
     // completion state; the portfolio review reads it for recorded dates and nothing else.
     this.deadlines = deadlines;
+    // Outcome learning reads the plan, goal, task, experience and prediction stores and appends its
+    // evaluations, measurements and rollbacks to the experience log. It is optional: without it the
+    // commands refuse rather than reporting that nothing was learned.
+    this.learning = learning;
     // The data directory the backup commands read and replace. The actions close over it at
     // composition time; this field only decides whether the commands are available at all.
     this.dataDir = dataDir;
@@ -2037,6 +2042,58 @@ export class CognitiveController {
   // There is deliberately no natural-language route to them: a model choosing words like
   // "remember that this worked" must not be able to record the user's assessment or approve a
   // behaviour rule, so this explicit, user-origin call is the only entry point besides the CLI.
+
+  // ---- outcome learning (T-08) ------------------------------------------------
+  // Each command runs through the same registry, independent verifier and finalisation path as every
+  // other command. The four writes are user-origin only; the two reads may be made for a model origin,
+  // because a model may ask what was learned and may not record or authorise any of it.
+
+  #learningOp(capability) {
+    if (!this.learning) throw new ValidationError('the outcome-learning service is not available in this configuration');
+    return this.#newOp({ capability, origin: 'user', request: capability });
+  }
+
+  async learningObserve({ plan } = {}) {
+    const op = this.#learningOp('learning.observe');
+    const step = await this.runAction('learning.observe', { plan }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The evaluation may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  async learningPatterns({ capability, minObservations, limit } = {}) {
+    const op = this.#learningOp('learning.patterns');
+    const input = {};
+    if (capability !== undefined && capability !== null) input.capability = capability;
+    if (minObservations !== undefined && minObservations !== null) input.minObservations = minObservations;
+    if (limit !== undefined && limit !== null) input.limit = limit;
+    const step = await this.runAction('learning.patterns', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async learningPropose({ minObservations } = {}) {
+    const op = this.#learningOp('learning.propose');
+    const input = minObservations === undefined || minObservations === null ? {} : { minObservations };
+    const step = await this.runAction('learning.propose', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'Candidates may have been recorded, but their audit record could not be written; they are not reported as verified success.');
+  }
+
+  async learningMeasure({ target } = {}) {
+    const op = this.#learningOp('learning.measure');
+    const step = await this.runAction('learning.measure', { target }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'A measurement may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  async learningRollback({ target, measurement = null, reason = null } = {}) {
+    const op = this.#learningOp('learning.rollback');
+    const step = await this.runAction('learning.rollback', { target, measurement, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'A rollback may have been recorded, but its audit record could not be written; it is not reported as verified success.');
+  }
+
+  async learningStatus({ limit } = {}) {
+    const op = this.#learningOp('learning.status');
+    const input = limit === undefined || limit === null ? {} : { limit };
+    const step = await this.runAction('learning.status', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
 
   #experienceOp(capability) {
     if (!this.experience) throw new ValidationError('the experience store is not available in this configuration');

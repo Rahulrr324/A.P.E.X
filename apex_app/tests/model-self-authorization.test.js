@@ -93,6 +93,12 @@ const MODEL_WRITE_ATTEMPTS = [
   ['knowledge.add', { subject: 'gate', relationship: 'opens', object: 'on time' }],
   ['knowledge.retract', { target: 'no-such-claim', reason: 'the model decided' }],
   ['knowledge.resolve', { target: 'no-such-conflict', choose: 'no-such-record' }],
+  // Batch T-08: outcome learning judges APEX's own behaviour, so a reply may not evaluate, propose,
+  // measure, or roll back anything.
+  ['learning.observe', { operationId: 'op1' }],
+  ['learning.propose', {}],
+  ['learning.measure', { target: '00000000-0000-4000-8000-000000000000' }],
+  ['learning.rollback', { target: '00000000-0000-4000-8000-000000000000', reason: 'the model rolled it back' }],
   ['experience.record', { operationId: 'op1', subject: 'the model wrote its own account' }],
   ['feedback.record', { target: 'no-such-experience', assessment: 'incorrect' }],
   // The user's judgement of a task's outcome is theirs alone; a reply cannot record one, even about

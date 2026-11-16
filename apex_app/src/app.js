@@ -34,6 +34,8 @@ import { NoteStore } from './notes/note-store.js';
 import { noteActions } from './actions/note-actions.js';
 import { ExperienceStore } from './experience/experience-store.js';
 import { experienceActions } from './actions/experience-actions.js';
+import { LearningService } from './learning/service.js';
+import { learningActions } from './actions/learning-actions.js';
 import { PredictionStore } from './prediction/prediction-store.js';
 import { predictionActions } from './actions/prediction-actions.js';
 import { historyActions } from './actions/history-actions.js';
@@ -113,6 +115,12 @@ export function createApp({
   // its source file, that file's digest, and the line. It is not a scheduler and holds no
   // completion state; a date passing changes nothing here.
   const deadlines = new DeadlineStore(path.join(dataDir, 'deadlines.jsonl'), { now: clock });
+  // T-08 outcome learning composes reads over the stores above and appends its three record kinds to
+  // the experience log. It holds no state, opens no file, and takes no lock of its own; the ordinary
+  // action registry authorizes every write and the experience store's writer lock covers the append.
+  const learning = new LearningService({
+    experience, plans, goals, tasks: taskStore, predictions, registry, now: clock,
+  });
 
   // The World Model is a separate append-only record of entities, facts, relationships, and events.
   // Every evidence reference is checked against the store that owns the cited record, so each
@@ -206,7 +214,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...predictionActions(predictions), ...historyActions({
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
     }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
@@ -315,6 +323,7 @@ export function createApp({
     proposals,
     worldModel,
     deadlines,
+    learning,
     dataDir,
     neural: neuralRuntime,
   });
@@ -342,6 +351,7 @@ export function createApp({
     proposals,
     worldModel,
     deadlines,
+    learning,
   };
 }
 

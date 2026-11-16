@@ -69,6 +69,11 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // own append-only log is the record of the assertion. Capturing a world write would put a second
   // account of the same claim into the experience log the pattern and adaptation reads draw from.
   'world-model': 'it reads or writes the world model, whose records already carry their own evidence, validity, and provenance; an experience of one would copy that claim into the log the pattern and adaptation reads draw from',
+  // Outcome learning judges APEX's own behaviour from the records it holds. Capturing one of these
+  // operations would put that judgement - an evaluation, a proposal, a measurement, a rollback - into
+  // the very log the pattern and adaptation reads draw from, so the learning loop would start counting
+  // its own conclusions as events that happened.
+  learning: 'it records or reads APEX\'s own outcome evaluations, adaptation measurements, and rollbacks; an experience of one would put APEX\'s judgement about its own behaviour into the log the pattern and adaptation reads draw from',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
@@ -127,6 +132,12 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'adaptation.review.inspect': 'read',
   'adaptation.review.reconcile': 'read',
   'evidence.integrity': 'read',
+  'learning.observe': 'learning',
+  'learning.propose': 'learning',
+  'learning.measure': 'learning',
+  'learning.rollback': 'learning',
+  'learning.patterns': 'read',
+  'learning.status': 'read',
   'history.reconstruct': 'read',
   'prediction.list': 'read',
   'prediction.show': 'read',

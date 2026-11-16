@@ -110,6 +110,15 @@ import {
   validateReviewDecisionRecord,
   validateReviewRecord,
 } from './review.js';
+import {
+  EVALUATION_KIND,
+  MEASUREMENT_KIND,
+  OBSERVED_OUTCOME_METHOD,
+  ROLLBACK_KIND,
+} from '../learning/vocabulary.js';
+import { evaluationDigest, validateEvaluationRecord } from '../learning/evaluate.js';
+import { buildMeasurement, validateMeasurementRecord } from '../learning/measurement.js';
+import { validateOutcomeProposal } from '../learning/proposals.js';
 
 export const EXPERIENCE_SCHEMA = 1;
 
@@ -120,9 +129,13 @@ export const DECISION_KIND = 'adaptation_decision';
 export const RETIREMENT_KIND = 'adaptation_retirement';
 export const GUIDANCE_KIND = 'adaptation_guidance';
 export { REVIEW_KIND, REVIEW_DECISION_KIND };
+// T-08 adds three record kinds to this same log rather than a second ledger: what a run achieved, what
+// an adaptation measured afterwards, and the user's rollback of a rule a measurement showed regressing.
+// They share this store's append-only history, writer lock, recovery and health read.
+export { EVALUATION_KIND, MEASUREMENT_KIND, ROLLBACK_KIND };
 export const RECORD_KINDS = Object.freeze([
   EXPERIENCE_KIND, FEEDBACK_KIND, ADAPTATION_KIND, DECISION_KIND, RETIREMENT_KIND, GUIDANCE_KIND,
-  REVIEW_KIND, REVIEW_DECISION_KIND,
+  REVIEW_KIND, REVIEW_DECISION_KIND, EVALUATION_KIND, MEASUREMENT_KIND, ROLLBACK_KIND,
 ]);
 
 // The vocabulary an approved adaptation's guidance may be expressed in, and nothing else. Batch AM's
@@ -193,6 +206,11 @@ const PROVENANCE_BY_KIND = Object.freeze({
   // either record; it may not write one.
   [REVIEW_KIND]: { origin: 'user_review', updateMode: 'user_confirmed' },
   [REVIEW_DECISION_KIND]: { origin: 'user_review_decision', updateMode: 'user_confirmed' },
+  // An evaluation, a measurement, and a rollback are all the user's own recorded reads of evidence.
+  // The derivation is deterministic, but the act of recording one is a user-origin operation.
+  [EVALUATION_KIND]: { origin: 'recorded_evaluation', updateMode: 'user_confirmed' },
+  [MEASUREMENT_KIND]: { origin: 'recorded_measurement', updateMode: 'user_confirmed' },
+  [ROLLBACK_KIND]: { origin: 'user_rollback', updateMode: 'user_confirmed' },
 });
 
 // An experience can arrive two ways, and the difference must stay visible forever: the user named
@@ -305,6 +323,15 @@ function storedIdListProblem(value, name, max) {
 
 function optionalIdListProblem(value, name, max) {
   if (value === undefined) return null;
+  return storedIdListProblem(value, name, max);
+}
+
+// A list that must be present but may be empty. An outcome-derived candidate cites no feedback for
+// most patterns but may cite the user's own corrections for one of them, so absence and emptiness are
+// different answers and the record has to say which it means.
+function allowanceListProblem(value, name, max) {
+  if (!Array.isArray(value)) return `${name} must be a list`;
+  if (value.length === 0) return null;
   return storedIdListProblem(value, name, max);
 }
 
@@ -449,6 +476,9 @@ export function validateExperienceRecord(r) {
   if (r.kind === GUIDANCE_KIND) return validateGuidance(r);
   if (r.kind === REVIEW_KIND) return validateReviewRecord(r);
   if (r.kind === REVIEW_DECISION_KIND) return validateReviewDecisionRecord(r);
+  if (r.kind === EVALUATION_KIND) return validateEvaluationRecord(r);
+  if (r.kind === MEASUREMENT_KIND) return validateMeasurementRecord(r);
+  if (r.kind === ROLLBACK_KIND) return validateRollback(r);
   return 'unknown record kind';
 }
 
@@ -645,10 +675,13 @@ function validateAdaptation(r) {
   if (rule) return rule;
   if (typeof r.ruleHash !== 'string' || r.ruleHash.length !== 64) return 'adaptation has missing or invalid ruleHash';
   if (r.ruleHash !== sha256Hex(normalizeRuleText(r.rule))) return 'adaptation ruleHash does not match its rule';
-  if (!ADAPTATION_METHODS.includes(r.method)) return 'adaptation was not produced by a recorded derivation method';
+  if (!ADAPTATION_METHODS.includes(r.method) && r.method !== OBSERVED_OUTCOME_METHOD) {
+    return 'adaptation was not produced by a recorded derivation method';
+  }
   if (!Number.isInteger(r.minSupport) || r.minSupport < 1 || r.minSupport > MAX_SUPPORT_REFS) return 'adaptation minSupport is out of range';
   const single = r.method === PREDICTION_DERIVATION_METHOD;
   const repeated = r.method === LONGITUDINAL_DERIVATION_METHOD;
+  const outcomeDerived = r.method === OBSERVED_OUTCOME_METHOD;
   if (single && r.minSupport !== 1) return 'a prediction-derived adaptation rests on one evaluation, so its minSupport must be 1';
   // A longitudinal candidate's support count is its observation count, and a pattern needs at least two
   // observations before it can repeat anything. The upper bound is the same reference bound everything
@@ -657,11 +690,17 @@ function validateAdaptation(r) {
     return `a longitudinal adaptation rests on between ${MIN_REPEATED_OBSERVATIONS} and ${MAX_LONGITUDINAL_OBSERVATIONS} observations`;
   }
   if (!r.support || typeof r.support !== 'object' || Array.isArray(r.support)) return 'adaptation has no supporting evidence';
-  const experiences = storedIdListProblem(r.support.experienceIds, 'adaptation supporting experiences', MAX_SUPPORT_REFS);
+  // An outcome-derived candidate normally rests on evaluations rather than on recorded experiences;
+  // the field must still be present, and any id it does name must be well formed.
+  const experiences = outcomeDerived
+    ? allowanceListProblem(r.support.experienceIds, 'adaptation supporting experiences', MAX_SUPPORT_REFS)
+    : storedIdListProblem(r.support.experienceIds, 'adaptation supporting experiences', MAX_SUPPORT_REFS);
   if (experiences) return experiences;
   const feedback = single || repeated
     ? emptyIdListProblem(r.support.feedbackIds, 'adaptation supporting feedback')
-    : storedIdListProblem(r.support.feedbackIds, 'adaptation supporting feedback', MAX_SUPPORT_REFS);
+    : outcomeDerived
+      ? allowanceListProblem(r.support.feedbackIds, 'adaptation supporting feedback', MAX_SUPPORT_REFS)
+      : storedIdListProblem(r.support.feedbackIds, 'adaptation supporting feedback', MAX_SUPPORT_REFS);
   if (feedback) return feedback;
   if (single) {
     const predictions = storedIdListProblem(r.support.predictionIds, 'adaptation supporting predictions', 1);
@@ -688,6 +727,20 @@ function validateAdaptation(r) {
     for (let i = 0; i < verdicts.length; i += 1) {
       if (r.support.predictionIds[i] !== verdicts[i].predictionId) return 'adaptation support names a different prediction than its proposal';
       if (r.support.evaluationIds[i] !== verdicts[i].evaluationId) return 'adaptation support names a different evaluation than its proposal';
+    }
+  } else if (outcomeDerived) {
+    const evaluations = storedIdListProblem(r.support.evaluationIds, 'adaptation supporting evaluations', MAX_SUPPORT_REFS);
+    if (evaluations) return evaluations;
+    if (Array.isArray(r.support.predictionIds) && r.support.predictionIds.length > 0) {
+      return 'an outcome-derived adaptation must not carry prediction evidence';
+    }
+    if (r.support.predictionIds !== undefined && !Array.isArray(r.support.predictionIds)) {
+      return 'adaptation supporting predictions must be a list';
+    }
+    const proposalProblem = validateOutcomeProposal(r);
+    if (proposalProblem) return proposalProblem;
+    if (r.minSupport !== r.proposal.pattern.observations) {
+      return 'adaptation minSupport does not match the observations its proposal states';
     }
   } else {
     if (r.support.predictionIds !== undefined || r.support.evaluationIds !== undefined) return 'a feedback-derived adaptation must not carry prediction evidence';
@@ -720,6 +773,19 @@ function validateRetirement(r) {
   const created = validateTimestamp(r.createdAt, 'createdAt');
   if (created) return created;
   return validateProvenance(r, RETIREMENT_KIND);
+}
+
+// A rollback is a user act on one measured regression. It names both the adaptation and the
+// measurement that justified it, so a reader can always re-read the evidence behind a deactivation.
+function validateRollback(r) {
+  if (typeof r.id !== 'string' || !ID_RE.test(r.id)) return 'rollback record has missing or invalid id';
+  if (typeof r.targetId !== 'string' || !ID_RE.test(r.targetId)) return 'rollback record has missing or invalid targetId';
+  if (typeof r.measurementId !== 'string' || !ID_RE.test(r.measurementId)) return 'rollback record has missing or invalid measurementId';
+  const reason = optionalStoredTextProblem(r.reason, 'reason', MAX_REASON_CHARS);
+  if (reason) return reason;
+  const created = validateTimestamp(r.createdAt, 'createdAt');
+  if (created) return created;
+  return validateProvenance(r, ROLLBACK_KIND);
 }
 
 // A guidance record is allowed to name nothing but its own reason, because "I recorded the shape of
@@ -757,6 +823,9 @@ function splitRecords(records) {
   const guidance = [];
   const reviews = [];
   const reviewDecisions = [];
+  const evaluations = [];
+  const measurements = [];
+  const rollbacks = [];
   for (const record of records) {
     if (record.kind === EXPERIENCE_KIND) experiences.push(record);
     else if (record.kind === FEEDBACK_KIND) feedback.push(record);
@@ -766,6 +835,9 @@ function splitRecords(records) {
     else if (record.kind === GUIDANCE_KIND) guidance.push(record);
     else if (record.kind === REVIEW_KIND) reviews.push(record);
     else if (record.kind === REVIEW_DECISION_KIND) reviewDecisions.push(record);
+    else if (record.kind === EVALUATION_KIND) evaluations.push(record);
+    else if (record.kind === MEASUREMENT_KIND) measurements.push(record);
+    else if (record.kind === ROLLBACK_KIND) rollbacks.push(record);
     // A line that is none of the eight kinds is damage, and `deriveStore` has reported it that way
     // since Batch AD: it is counted by `health()` rather than filed under whichever kind happens to
     // be the last branch, which is what an `else` here would have done to a guidance record's
@@ -773,6 +845,7 @@ function splitRecords(records) {
   }
   return {
     experiences, feedback, adaptations, decisions, retirements, guidance, reviews, reviewDecisions,
+    evaluations, measurements, rollbacks,
   };
 }
 
@@ -874,6 +947,40 @@ function summarizeGuidance(event) {
     avoid: [...(event.avoid ?? [])],
     prefer: [...(event.prefer ?? [])],
     maxSteps: event.maxSteps ?? null,
+    reason: event.reason ?? null,
+    createdAt: event.createdAt,
+    operationId: event.provenance?.operationId ?? null,
+  };
+}
+
+// One measurement, reduced to the counts and the verdict a reader needs. The windows' evaluation ids
+// stay in the record; a summary that carried them would be a second, partial copy of the evidence.
+function summarizeMeasurement(event) {
+  return {
+    id: event.id,
+    verdict: event.verdict,
+    baseline: {
+      observations: event.baseline.observations,
+      achieved: event.baseline.achieved,
+      partiallyAchieved: event.baseline.partiallyAchieved,
+      notAchieved: event.baseline.notAchieved,
+    },
+    followUp: {
+      observations: event.followUp.observations,
+      achieved: event.followUp.achieved,
+      partiallyAchieved: event.followUp.partiallyAchieved,
+      notAchieved: event.followUp.notAchieved,
+    },
+    minObservations: event.minObservations,
+    createdAt: event.createdAt,
+    operationId: event.provenance?.operationId ?? null,
+  };
+}
+
+function summarizeRollback(event) {
+  return {
+    id: event.id,
+    measurementId: event.measurementId,
     reason: event.reason ?? null,
     createdAt: event.createdAt,
     operationId: event.provenance?.operationId ?? null,
@@ -1012,6 +1119,8 @@ function annotateAdaptations(index, { retiredExperiences, retiredFeedback }) {
   const retirementsByTarget = groupBy(index.retirements, (r) => r.targetId);
   const decisionsByTarget = groupBy(index.decisions, (r) => r.targetId);
   const guidanceByTarget = groupBy(index.guidance ?? [], (g) => g.targetId);
+  const measurementsByTarget = groupBy(index.measurements ?? [], (m) => m.targetId);
+  const rollbacksByTarget = groupBy(index.rollbacks ?? [], (r) => r.targetId);
 
   const annotated = index.adaptations.map((record) => {
     const events = decisionsByTarget.get(record.id) ?? [];
@@ -1041,12 +1150,36 @@ function annotateAdaptations(index, { retiredExperiences, retiredFeedback }) {
         : 'a piece of supporting feedback has been corrected by later feedback';
     }
 
+    // Measurement and rollback are derived the same way every other state here is: from the events
+    // that name this adaptation. A measurement never activates anything, and a rollback never erases
+    // the approval or the evidence behind it - it only takes the rule out of force.
+    const measurementEvents = measurementsByTarget.get(record.id) ?? [];
+    const latestMeasurement = measurementEvents.length > 0 ? measurementEvents.at(-1) : null;
+    const rollbackEvents = rollbacksByTarget.get(record.id) ?? [];
+    const rolledBack = rollbackEvents.length > 0;
+    if (decisionState === 'approved' && rolledBack) {
+      inactiveReason = 'a recorded measurement showed a regression, and you rolled this rule back';
+    }
+    const inForce = decisionState === 'approved' && supportIntact && !rolledBack;
+    let stage;
+    if (rolledBack) stage = 'rolled_back';
+    else if (decisionState === 'retired') stage = 'retired';
+    else if (decisionState === 'ambiguous') stage = 'ambiguous';
+    else if (decisionState === 'rejected') stage = 'rejected';
+    else if (decisionState === 'approved') {
+      if (!inForce) stage = 'authorized';
+      else if (latestMeasurement && latestMeasurement.verdict !== 'insufficient_evidence') {
+        stage = latestMeasurement.verdict === 'regressed' ? 'measured' : 'retained';
+      } else stage = 'active';
+    } else stage = record.proposal ? 'evaluated' : 'proposed';
+
     // A prediction-derived candidate arrives carrying its own shape: the typed proposal is what the
     // recorded outcome states, so approval alone can put it in force. A guidance record the user writes
     // afterwards restates the shape and supersedes the proposal's, exactly as it supersedes an earlier
     // guidance record. `source` says which of the two a reader is looking at, and `basis` says whether
     // the rule rests on one evaluation or on a supported longitudinal pattern.
-    const proposal = isPredictionDerived(record.method) ? record.proposal ?? null : null;
+    const outcomeDerived = record.method === OBSERVED_OUTCOME_METHOD;
+    const proposal = isPredictionDerived(record.method) || outcomeDerived ? record.proposal ?? null : null;
     const recordedGuidance = guidanceEvents.length > 0 ? guidanceEvents.at(-1) : null;
     const effectiveGuidance = recordedGuidance
       ? { ...summarizeGuidance(recordedGuidance), source: 'record' }
@@ -1070,13 +1203,20 @@ function annotateAdaptations(index, { retiredExperiences, retiredFeedback }) {
       // a rule the user's corrections support from one a recorded outcome proposes, and neither claims
       // the other. `basis` separates the single observation from the supported pattern inside the
       // prediction source, because the two rest on different amounts of evidence.
-      source: isPredictionDerived(record.method) ? 'prediction' : 'feedback',
-      basis: derivationBasis(record.method),
+      source: isPredictionDerived(record.method) ? 'prediction' : outcomeDerived ? 'outcome' : 'feedback',
+      basis: outcomeDerived ? 'recorded_outcome_pattern' : derivationBasis(record.method),
       proposal,
       pattern: proposal?.pattern ? { ...proposal.pattern } : null,
       decisionState,
-      active: decisionState === 'approved' && supportIntact,
+      active: inForce,
       inactiveReason,
+      // The governed lifecycle, stated from the records that exist. `authorized` is approval whose rule
+      // is not in force; `measured`/`retained` are a measurement's two non-regressing answers.
+      stage,
+      rolledBack,
+      rollback: rollbackEvents.length > 0 ? summarizeRollback(rollbackEvents.at(-1)) : null,
+      measurement: latestMeasurement ? summarizeMeasurement(latestMeasurement) : null,
+      measurementCount: measurementEvents.length,
       retired: decisionState === 'retired',
       ambiguous: decisionState === 'ambiguous',
       retirement: retirements.length === 1 ? summarizeRetirement(retirements[0]) : null,
@@ -1133,6 +1273,13 @@ function scopeMatches(adaptation, { capability }) {
 // bound on the number of adaptations cuts the ones least related to the request first.
 function scopesNamedIn(adaptation, terms) {
   return tokenize(String(adaptation.capability).toLowerCase()).some((t) => terms.has(t));
+}
+
+// Whether one capability name falls inside another's scope. The same family rule the existing
+// retrieval uses: `memory` covers `memory.add`, and a name never matches one it does not prefix.
+function scopeIncludes(name, scope) {
+  if (typeof name !== 'string' || typeof scope !== 'string') return false;
+  return name === scope || name.startsWith(`${scope}.`) || scope.startsWith(`${name}.`);
 }
 
 function matchesRef(record, ref, extraIds = []) {
@@ -2088,7 +2235,262 @@ export class ExperienceStore {
     };
   }
 
-  // --- reads -----------------------------------------------------------------
+  // --- outcome learning (T-08) -------------------------------------------------
+  //
+  // These writes share this store's log, lock, validation and derived state. The computation they
+  // accept is bounded and re-checked here: an evaluation's classification is re-derived from its own
+  // step counts, a measurement's verdict from its own windows, and a proposal's digest from the
+  // evaluations it cites. Nothing in this block approves anything.
+
+  async recordEvaluation(spec, { provenance = {}, origin } = {}) {
+    this.#requireUser(origin, 'recording an outcome evaluation');
+    if (!spec || typeof spec !== 'object') throw new ValidationError('an evaluation is required');
+    const recorded = sanitizeProvenance(provenance, EVALUATION_KIND);
+    return this.writeLock.run(() => this.#recordEvaluationFromAuthority({ spec, recorded }));
+  }
+
+  async #recordEvaluationFromAuthority({ spec, recorded }) {
+    const records = await this.#loadComplete({ beforeAppend: true });
+    const { index } = deriveStore(records);
+    const id = randomUUID();
+    if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
+    const record = {
+      schema: EXPERIENCE_SCHEMA,
+      kind: EVALUATION_KIND,
+      id,
+      planId: spec.planId,
+      planVersion: spec.planVersion,
+      goalId: spec.goalId ?? null,
+      taskId: spec.taskId ?? null,
+      objective: spec.objective,
+      objectiveKey: spec.objectiveKey ?? null,
+      activated: spec.activated === true,
+      planStatus: spec.planStatus ?? null,
+      classification: spec.classification,
+      confidence: spec.confidence,
+      steps: { ...spec.steps },
+      capabilities: (spec.capabilities ?? []).map((row) => ({ ...row })),
+      sequence: [...(spec.sequence ?? [])],
+      criteria: (spec.criteria ?? []).map((c) => ({ ...c })),
+      evidence: {
+        operationIds: [...(spec.evidence?.operationIds ?? [])],
+        experienceIds: [...(spec.evidence?.experienceIds ?? [])],
+        feedbackIds: [...(spec.evidence?.feedbackIds ?? [])],
+        predictionIds: [...(spec.evidence?.predictionIds ?? [])],
+      },
+      limitations: [...(spec.limitations ?? [])],
+      createdAt: this.now().toISOString(),
+      provenance: recorded,
+    };
+    // The digest is recomputed here, not copied from the caller: the record can only carry a hash of
+    // the evidence it actually contains.
+    record.evidenceSha256 = evaluationDigest(record);
+    const duplicate = index.evaluations.find((e) => e.planId === record.planId
+      && e.planVersion === record.planVersion
+      && e.evidenceSha256 === record.evidenceSha256);
+    if (duplicate) {
+      throw new ValidationError(
+        `plan [${shortId(record.planId)}] already has this exact evaluation recorded as [${shortId(duplicate.id)}]; nothing was written`,
+        'EVALUATION_EXISTS',
+      );
+    }
+    const problem = validateExperienceRecord(record);
+    if (problem) throw new StoreError(`the recorded evaluation failed validation (${problem}); nothing written`);
+    await this.log.append(record);
+    return { record };
+  }
+
+  async measureAdaptation({ target, provenance = {}, origin } = {}) {
+    this.#requireUser(origin, 'measuring an adaptation');
+    const ref = validateRef(target, 'adaptation reference');
+    const recorded = sanitizeProvenance(provenance, MEASUREMENT_KIND);
+    return this.writeLock.run(() => this.#measureFromAuthority({ ref, recorded }));
+  }
+
+  async #measureFromAuthority({ ref, recorded }) {
+    const records = await this.#loadComplete({ beforeAppend: true });
+    const derived = deriveStore(records);
+    const adaptation = resolveAdaptationRef(derived.adaptations, ref, 'measurement target');
+    const retired = new Set(derived.index.retirements.map((r) => r.targetId));
+    if (retired.has(adaptation.id)) {
+      throw new ValidationError(`adaptation [${shortId(adaptation.id)}] was retired; there is no rule in force to measure`);
+    }
+    if (adaptation.decisionState === 'ambiguous') {
+      throw new ValidationError(`adaptation [${shortId(adaptation.id)}] has contradictory lifecycle events; APEX cannot say what is in force`);
+    }
+    if (adaptation.decisionState !== 'approved') {
+      throw new ValidationError(
+        `adaptation [${shortId(adaptation.id)}] is ${adaptation.decisionState}; only a rule you approved can be measured`,
+        'ADAPTATION_NOT_AUTHORIZED',
+      );
+    }
+    if (adaptation.rolledBack) {
+      throw new ValidationError(`adaptation [${shortId(adaptation.id)}] was rolled back; it is no longer in force, so there is nothing to measure`);
+    }
+    if (adaptation.supportState !== 'intact') {
+      throw new ValidationError(`adaptation [${shortId(adaptation.id)}] is not in force because ${adaptation.inactiveReason ?? 'its support no longer stands'}`);
+    }
+    const decisions = derived.index.decisions.filter((d) => d.targetId === adaptation.id);
+    const approval = decisions.at(-1);
+    const position = new Map(records.map((record, index) => [record.id, index]));
+    const cut = position.get(approval?.id) ?? position.get(adaptation.id) ?? records.length;
+    const scoped = derived.index.evaluations.filter((e) =>
+      e.capabilities.some((row) => scopeIncludes(row.capability, adaptation.capability)));
+    const baseline = scoped.filter((e) => (position.get(e.id) ?? 0) < cut);
+    const followUp = scoped.filter((e) => (position.get(e.id) ?? 0) > cut);
+    const id = randomUUID();
+    if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
+    const measurement = buildMeasurement({
+      targetId: adaptation.id,
+      targetRule: adaptation.rule,
+      capability: adaptation.capability,
+      activation: approval ? { decisionId: approval.id, at: approval.createdAt } : null,
+      split: { baseline, followUp },
+      now: this.now().toISOString(),
+    });
+    const record = {
+      schema: EXPERIENCE_SCHEMA,
+      kind: MEASUREMENT_KIND,
+      id,
+      ...measurement,
+      provenance: recorded,
+    };
+    const problem = validateExperienceRecord(record);
+    if (problem) throw new StoreError(`the recorded measurement failed validation (${problem}); nothing written`);
+    await this.log.append(record);
+    return { record, adaptation };
+  }
+
+  // Deactivation is the user's act on measured evidence. It never rewrites the approval, the rule or
+  // the supporting records; it appends one more event that takes the rule out of force.
+  async rollbackAdaptation({
+    target, measurement = null, reason = null, provenance = {}, origin,
+  } = {}) {
+    this.#requireUser(origin, 'rolling back an adaptation');
+    const ref = validateRef(target, 'adaptation reference');
+    const measurementRef = measurement === null || measurement === undefined ? null : validateRef(measurement, 'measurement reference');
+    const reasonText = validateTextField(reason, 'reason', { required: false, max: MAX_REASON_CHARS });
+    const recorded = sanitizeProvenance(provenance, ROLLBACK_KIND);
+    return this.writeLock.run(() => this.#rollbackFromAuthority({
+      ref, measurementRef, reasonText, recorded,
+    }));
+  }
+
+  async #rollbackFromAuthority({
+    ref, measurementRef, reasonText, recorded,
+  }) {
+    const records = await this.#loadComplete({ beforeAppend: true });
+    const derived = deriveStore(records);
+    const adaptation = resolveAdaptationRef(derived.adaptations, ref, 'rollback target');
+    const retired = new Set(derived.index.retirements.map((r) => r.targetId));
+    if (retired.has(adaptation.id)) throw new ValidationError(`adaptation [${shortId(adaptation.id)}] was retired; nothing is in force to roll back`);
+    if (adaptation.rolledBack) throw new ValidationError(`adaptation [${shortId(adaptation.id)}] has already been rolled back`);
+    if (adaptation.decisionState !== 'approved') {
+      throw new ValidationError(`adaptation [${shortId(adaptation.id)}] is ${adaptation.decisionState}; only an approved rule can be rolled back`);
+    }
+    const events = derived.index.measurements.filter((m) => m.targetId === adaptation.id);
+    const chosen = measurementRef === null
+      ? (events.length > 0 ? events.at(-1) : null)
+      : events.find((m) => matchesRef(m, measurementRef));
+    if (!chosen) {
+      throw new ValidationError(
+        measurementRef === null
+          ? `adaptation [${shortId(adaptation.id)}] has no recorded measurement, so there is no evidence a rollback could rest on`
+          : `no measurement of adaptation [${shortId(adaptation.id)}] matches that reference`,
+      );
+    }
+    if (chosen.verdict !== 'regressed') {
+      throw new ValidationError(
+        `measurement [${shortId(chosen.id)}] recorded ${chosen.verdict}, not a regression; only measured evidence of harm can justify a rollback`,
+        'ROLLBACK_UNSUPPORTED',
+      );
+    }
+    const id = randomUUID();
+    if (records.some((r) => r.id === id)) throw new StoreError('identifier collision; nothing written');
+    const record = {
+      schema: EXPERIENCE_SCHEMA,
+      kind: ROLLBACK_KIND,
+      id,
+      targetId: adaptation.id,
+      measurementId: chosen.id,
+      ...(reasonText ? { reason: reasonText } : {}),
+      createdAt: this.now().toISOString(),
+      provenance: recorded,
+    };
+    const problem = validateExperienceRecord(record);
+    if (problem) throw new StoreError(`the recorded rollback failed validation (${problem}); nothing written`);
+    await this.log.append(record);
+    return { record, adaptation, measurement: chosen };
+  }
+
+  // Candidate adaptations derived from recorded outcomes. They are candidates until the user's own
+  // decision says otherwise; this method cannot approve one, and it refuses a support list that names
+  // an evaluation or experience the log does not hold.
+  async recordOutcomeCandidates({ specs = [] } = {}, { provenance = {}, origin } = {}) {
+    this.#requireUser(origin, 'recording proposed adaptations');
+    if (!Array.isArray(specs)) throw new ValidationError('proposed adaptations must be a list');
+    const recorded = sanitizeProvenance(provenance, ADAPTATION_KIND);
+    return this.writeLock.run(() => this.#recordOutcomeCandidatesFromAuthority({ specs, recorded }));
+  }
+
+  async #recordOutcomeCandidatesFromAuthority({ specs, recorded }) {
+    const records = await this.#loadComplete({ beforeAppend: true });
+    const derived = deriveStore(records);
+    const evaluationsById = new Map(derived.index.evaluations.map((e) => [e.id, e]));
+    const experiencesById = new Map(derived.index.experiences.map((e) => [e.id, e]));
+    const feedbackById = new Map(derived.index.feedback.map((f) => [f.id, f]));
+    const taken = new Set(derived.adaptations
+      .filter((a) => a.decisionState !== 'retired')
+      .map((a) => `${a.capability}\u0000${a.proposal?.objectiveKey ?? ''}\u0000${normalizeRuleText(a.rule)}`));
+    const created = [];
+    const skipped = [];
+    for (const spec of specs) {
+      const rule = String(spec?.rule ?? '').trim();
+      const key = `${spec?.capability}\u0000${spec?.proposal?.objectiveKey ?? ''}\u0000${normalizeRuleText(rule)}`;
+      if (taken.has(key)) {
+        skipped.push({ capability: spec?.capability ?? null, reason: 'a candidate for this scope, objective and rule is already recorded' });
+        continue;
+      }
+      const evaluationIds = [...new Set(spec?.support?.evaluationIds ?? [])];
+      if (evaluationIds.length === 0) throw new ValidationError('a proposed adaptation must cite at least one recorded evaluation');
+      const missingEvaluation = evaluationIds.find((id) => !evaluationsById.has(id));
+      if (missingEvaluation) {
+        throw new ValidationError(`a proposed adaptation cites evaluation [${shortId(missingEvaluation)}], which is not recorded`);
+      }
+      const experienceIds = [...new Set(spec?.support?.experienceIds ?? [])];
+      const missingExperience = experienceIds.find((id) => !experiencesById.has(id));
+      if (missingExperience) throw new ValidationError(`a proposed adaptation cites experience [${shortId(missingExperience)}], which is not recorded`);
+      const feedbackIds = [...new Set(spec?.support?.feedbackIds ?? [])];
+      const missingFeedback = feedbackIds.find((id) => !feedbackById.has(id));
+      if (missingFeedback) throw new ValidationError(`a proposed adaptation cites feedback [${shortId(missingFeedback)}], which is not recorded`);
+      const id = randomUUID();
+      if (records.some((r) => r.id === id) || created.some((r) => r.id === id)) {
+        throw new StoreError('identifier collision; nothing written');
+      }
+      const record = {
+        schema: EXPERIENCE_SCHEMA,
+        kind: ADAPTATION_KIND,
+        id,
+        capability: spec.capability,
+        rule,
+        ruleHash: sha256Hex(normalizeRuleText(rule)),
+        method: OBSERVED_OUTCOME_METHOD,
+        minSupport: spec.proposal.pattern.observations,
+        support: { experienceIds, feedbackIds, evaluationIds },
+        proposal: spec.proposal,
+        createdAt: this.now().toISOString(),
+        provenance: recorded,
+      };
+      const problem = validateExperienceRecord(record);
+      if (problem) throw new StoreError(`the proposed adaptation failed validation (${problem}); nothing written`);
+      await this.log.append(record);
+      created.push(record);
+      taken.add(key);
+    }
+    return { created, skipped };
+  }
+
+  //--- reads -----------------------------------------------------------------
 
   // One authoritative read. `beforeAppend` marks the read a write performs first, which may reuse
   // this instance's incrementally maintained validated records (see ../memory/jsonl-store.js).
@@ -2368,6 +2770,25 @@ export class ExperienceStore {
     const window = kept.slice(-Math.max(1, limit)).reverse();
     const current = await this.#predictionCurrentness(window, new Map(experiences.map((r) => [r.id, r])));
     return current.rows;
+  }
+
+  // The recorded outcome evaluations, oldest first so a window read is position-stable. The
+  // capability filter follows the same family rule the existing scope reads use.
+  async evaluations({ capability = null, objectiveKey = null, limit = 20 } = {}) {
+    const records = await this.#loadComplete();
+    const { index } = deriveStore(records);
+    const size = Number.isInteger(limit) && limit >= 1 ? Math.min(limit, 100) : 20;
+    const all = index.evaluations.filter((e) => {
+      if (objectiveKey !== null && e.objectiveKey !== objectiveKey) return false;
+      if (capability === null) return true;
+      return e.capabilities.some((row) => scopeIncludes(row.capability, capability));
+    });
+    return {
+      evaluations: all.slice(-size),
+      total: all.length,
+      truncated: all.length > size,
+      limit: size,
+    };
   }
 
   async adaptationDetail(target) {
@@ -2860,6 +3281,9 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
       guidance: null,
       reviews: null,
       reviewDecisions: null,
+      outcomeEvaluations: null,
+      measurements: null,
+      rollbacks: null,
       openReviews: null,
       currentReviews: null,
       activeExperiences: null,
@@ -2889,6 +3313,8 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
   const experiencesById = new Map(index.experiences.map((r) => [r.id, r]));
   const feedbackById = new Map(index.feedback.map((r) => [r.id, r]));
   const adaptationsById = new Map(index.adaptations.map((r) => [r.id, r]));
+  const evaluationsById = new Map(index.evaluations.map((r) => [r.id, r]));
+  const measurementsById = new Map(index.measurements.map((r) => [r.id, r]));
 
   const samples = [];
   let anomalyCount = 0;
@@ -2991,6 +3417,34 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
       anomaly(`decision [${shortId(lastDecision.id)}] was recorded after adaptation [${shortId(record.id)}] was retired`);
     }
   }
+  // T-08 records are checked the same way every other kind is: each citation must resolve, and a
+  // rollback must name a measurement that recorded a regression of the same adaptation.
+  for (const evaluation of index.evaluations) {
+    for (const id of evaluation.evidence.experienceIds) {
+      if (!experiencesById.has(id)) anomaly(`evaluation [${shortId(evaluation.id)}] cites experience [${shortId(id)}], which is not recorded`);
+    }
+    for (const id of evaluation.evidence.feedbackIds) {
+      if (!feedbackById.has(id)) anomaly(`evaluation [${shortId(evaluation.id)}] cites feedback [${shortId(id)}], which is not recorded`);
+    }
+  }
+  for (const measurement of index.measurements) {
+    if (!adaptationsById.has(measurement.targetId)) {
+      anomaly(`measurement [${shortId(measurement.id)}] names [${shortId(measurement.targetId)}], which is not a derived adaptation`);
+    }
+    for (const id of [...measurement.baseline.evaluationIds, ...measurement.followUp.evaluationIds]) {
+      if (!evaluationsById.has(id)) anomaly(`measurement [${shortId(measurement.id)}] cites evaluation [${shortId(id)}], which is not recorded`);
+    }
+  }
+  for (const rollback of index.rollbacks) {
+    if (!adaptationsById.has(rollback.targetId)) {
+      anomaly(`rollback [${shortId(rollback.id)}] names [${shortId(rollback.targetId)}], which is not a derived adaptation`);
+      continue;
+    }
+    const measurement = measurementsById.get(rollback.measurementId);
+    if (!measurement) anomaly(`rollback [${shortId(rollback.id)}] names measurement [${shortId(rollback.measurementId)}], which is not recorded`);
+    else if (measurement.targetId !== rollback.targetId) anomaly(`rollback [${shortId(rollback.id)}] names a measurement of a different adaptation`);
+    else if (measurement.verdict !== 'regressed') anomaly(`rollback [${shortId(rollback.id)}] rests on a measurement whose verdict is ${measurement.verdict}`);
+  }
   const scopeRule = new Map();
   for (const record of adaptations) {
     if (record.decisionState === 'retired' || record.decisionState === 'ambiguous') continue;
@@ -3019,6 +3473,9 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
     guidance: index.guidance.length,
     reviews: index.reviews.length,
     reviewDecisions: index.reviewDecisions.length,
+    outcomeEvaluations: index.evaluations.length,
+    measurements: index.measurements.length,
+    rollbacks: index.rollbacks.length,
     // A review is open when no decision has been recorded against it and no later review of the
     // same adaptation has replaced it. Both are derived, never stored.
     openReviews: reviews.filter((r) => r.decisionCount === 0 && r.supersededBy.length === 0).length,
@@ -3033,6 +3490,9 @@ export function summarizeExperienceHealth(records, corrupt = [], { path = null, 
     candidates: count('candidate'),
     approved: count('approved'),
     activeAdaptations: adaptations.filter((a) => a.active).length,
+    measuredAdaptations: adaptations.filter((a) => a.stage === 'measured').length,
+    retainedAdaptations: adaptations.filter((a) => a.stage === 'retained').length,
+    rolledBackAdaptations: adaptations.filter((a) => a.rolledBack === true).length,
     rejectedAdaptations: count('rejected'),
     retiredAdaptations: count('retired'),
     ambiguousAdaptations: count('ambiguous'),
