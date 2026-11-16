@@ -44,6 +44,11 @@ export const UI_PAGE = `<!doctype html>
     <p class="meta">Approving a plan records its hash-bound approval. Execution stays a separate command.</p>
     <ul id="plans" class="work"></ul>
   </section>
+  <section class="panel">
+    <h2>Situational awareness</h2>
+    <p class="meta">Recorded observations, alerts and pending decisions. Decisions and execution are made with the CLI; this view only reads.</p>
+    <ul id="situation" class="work"></ul>
+  </section>
 </main>
 <script src="/app.js"></script>
 </body>
@@ -93,6 +98,7 @@ const els = {
   newSession: document.getElementById('new-session'),
   tasks: document.getElementById('tasks'),
   plans: document.getElementById('plans'),
+  situation: document.getElementById('situation'),
   banner: document.getElementById('banner'),
 };
 
@@ -214,11 +220,45 @@ function renderPlans(plans) {
   }
 }
 
+function renderSituation(state) {
+  els.situation.replaceChildren();
+  if (!state) {
+    els.situation.append(el('li', 'meta', 'Situational awareness is not configured.'));
+    return;
+  }
+  if (state.unavailable) {
+    els.situation.append(el('li', 'meta', state.unavailable));
+    return;
+  }
+  const counts = state.counts || {};
+  els.situation.append(el('li', 'meta', (counts.events || 0) + ' event(s) \\u00b7 ' + (counts.alerts || 0) + ' alert(s) \\u00b7 ' + (counts.pendingApprovals || 0) + ' pending approval(s)'));
+  for (const alert of (state.alerts || [])) {
+    const item = el('li', 'item');
+    const head = el('div', 'row');
+    head.append(el('span', 'title', alert.summary));
+    head.append(el('span', 'badge', alert.level));
+    item.append(head);
+    item.append(el('div', 'meta', String(alert.eventId).slice(0, 8)));
+    els.situation.append(item);
+  }
+  for (const pending of (state.pendingApprovals || [])) {
+    const item = el('li', 'item');
+    item.append(el('div', 'title', 'Approval pending: ' + (pending.action || 'response')));
+    item.append(el('div', 'meta', String(pending.decisionId).slice(0, 8) + ' \\u00b7 ' + (pending.reason || '')));
+    els.situation.append(item);
+  }
+  for (const row of (state.recent || []).slice(0, 3)) {
+    els.situation.append(el('li', 'meta', row.type + ' \\u00b7 ' + (row.significance ? row.significance.level : 'unassessed') + (row.decision ? ' \\u00b7 ' + row.decision.response : '')));
+  }
+  if ((state.recent || []).length === 0) els.situation.append(el('li', 'meta', 'No events recorded.'));
+}
+
 async function refresh() {
   const state = await api('/api/state');
   renderTurns(state.turns);
   renderTasks(state.tasks);
   renderPlans(state.plans);
+  renderSituation(state.situation);
   els.session.textContent = state.session && state.session.id ? 'session ' + String(state.session.id).slice(0, 8) : 'no session yet';
   if (state.session && state.session.unavailable) showBanner(state.session.unavailable);
 }

@@ -99,6 +99,11 @@ const MODEL_WRITE_ATTEMPTS = [
   ['learning.propose', {}],
   ['learning.measure', { target: '00000000-0000-4000-8000-000000000000' }],
   ['learning.rollback', { target: '00000000-0000-4000-8000-000000000000', reason: 'the model rolled it back' }],
+  // Batch T-09: a reply may not feed, assess, decide, or record an event response.
+  ['situation.ingest', { source: 'test_provider', sourceEventId: 'model-event', type: 'observation', category: 'external', payload: {} }],
+  ['situation.evaluate', { event: '00000000-0000-4000-8000-000000000000' }],
+  ['situation.decide', { event: '00000000-0000-4000-8000-000000000000', response: 'record', reason: 'the model decided' }],
+  ['situation.response', { decision: '00000000-0000-4000-8000-000000000000', operationId: 'op1', action: 'memory.add', outcome: 'success_verified', status: 'executed' }],
   ['experience.record', { operationId: 'op1', subject: 'the model wrote its own account' }],
   ['feedback.record', { target: 'no-such-experience', assessment: 'incorrect' }],
   // The user's judgement of a task's outcome is theirs alone; a reply cannot record one, even about

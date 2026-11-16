@@ -3828,6 +3828,14 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `learning.rollback` | user | write | never in a plan | `experiences.jsonl` (one rollback line, only after a recorded regression) | no (learning) | yes |
 | `learning.patterns` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `learning.status` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `situation.ingest` | user | write | never in a plan | `situational.jsonl`, and the World Model when the observation carries a fact or world event | no (situation) | yes |
+| `situation.evaluate` | user | write | never in a plan | `situational.jsonl` (one assessment line) | no (situation) | yes |
+| `situation.decide` | user | write | never in a plan | `situational.jsonl` (one decision line; the approved input is stored only as a digest) | no (situation) | yes |
+| `situation.response` | user | write | never in a plan | `situational.jsonl` (one response line citing an audited operation) | no (situation) | yes |
+| `situation.state` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
+| `situation.events` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
+| `situation.decisions` | user | read | never in a plan | nothing (measured) | no (read) | no |
+| `situation.status` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `experience.list`, `experience.show`, `experience.timeline`, `experience.trends`, `experience.patterns`, `experience.compare` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `prediction.record` | user | write | never in a plan | `predictions.jsonl` | no (expectation) | yes |
 | `prediction.evaluate` | user | write | never in a plan | `predictions.jsonl`, or nothing when no outcome has resolved yet (measured: verified, nothing written) | no (expectation) | yes |
@@ -8652,3 +8660,63 @@ This is a bounded implementation under the Local Alpha mission. It does not decl
 M0 accepted, change G7, M0, or M1 gate states, or claim M1 is unlocked. It is not
 full APEX completion and is not published or merged. The status documents elsewhere
 in the repository (for example `docs/IMPLEMENTATION_STATUS.md`) were not changed.
+
+## Batch T-09: situational awareness, event intelligence and the proactive executive
+
+T-09 adds one append-only log, `situational.jsonl`, and a deterministic pipeline over the stores
+that already exist:
+
+```
+EVENT -> OBSERVATION -> WORLD STATE UPDATE -> CHANGE DETECTION -> CONTEXTUAL EVALUATION
+      -> DECISION -> AUTHORIZED ACTION -> OUTCOME -> T-08 LEARNING
+```
+
+An observation is normalised with its source, source event identity, category, type, observation and
+ingestion times, payload, confidence, provenance, related entities/goals/plans/tasks, validity end,
+SHA-256 fingerprint and validation state. A replay is recognised by source identity and content; the
+same identity with different content is refused. An observation that carries a fact or a world event
+is written through the existing World Model, so a second contradictory claim creates a conflict group
+instead of overwriting the first. An expired observation is kept as history but is never asserted as
+current world state and never raises an alert.
+
+Significance is a documented rule total (`src/situational/significance.js`): references to open goals,
+approved plans and unfinished tasks, failure and contradiction language, recorded deadlines, a
+prediction/observation mismatch, and existing world conflicts. The bands are explicit
+(none < 8, low < 25, medium < 50, high < 75, critical >= 75). The assessment lists its rules,
+affected objectives, rule-backed consequences, uncertainty and candidate responses. It recommends
+one response; it never runs one. Notification choices are deduplicated by condition key, with a
+60-minute cooldown and at most five comparable notices per hour; a repeated notice is still recorded
+as a decision but marked suppressed.
+
+A decision is the user's own record. `execute` must name one registered action and a usable input;
+the log stores only the input digest. `situation execute` re-checks the digest, runs that one action
+through the ordinary registry (authorization, execution and independent verification included), then
+records a response citing the audited operation and links it to a T-08 experience record. Event
+payloads are data: they are never used as action input, and the actions that would drive the
+awareness or approval surface are refused as responses.
+
+Commands:
+
+```
+apex situation ingest --source <s> --source-id <id> --type <text> --category <c> [--payload <json>]
+                      [--confidence 0-1] [--entity <id[,id]>] [--goal <id[,id]>] [--plan <id[,id]>]
+                      [--task <id[,id]>] [--observed-at <iso>] [--valid-until <iso>]
+apex situation state [--limit N]        current picture, alerts, pending approvals, uncertainty
+apex situation events [--limit N]       recorded events with assessment and decision
+apex situation decisions [--limit N] [--event <id>]
+apex situation evaluate <event-id>      re-read one event in the current context
+apex situation decide <event-id> --response <kind> --reason <text> [--action <name> --input <json>]
+apex situation execute <decision-id> --input <json>
+apex situation status
+```
+
+The local UI shows the same state at `GET /api/situation` and in its "Situational awareness" panel:
+recent events, alerts, and pending approvals. Decisions and execution stay in the CLI so the page
+adds no write path.
+
+Limitations: every event in this batch is supplied through the published ingestion contract (from
+the user, a test provider, or a cited APEX operation). There is no polling daemon, no network
+listener, no sensor driver and no external integration; therefore this is verified local event
+processing and must not be described as real-world situational awareness. Significance is a rule
+total, not a probability or a cause. An approved action is run exactly once, but APEX cannot prove
+that the action had the effect the event described.

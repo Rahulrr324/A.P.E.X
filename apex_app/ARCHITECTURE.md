@@ -1764,3 +1764,15 @@ only to fresh temporary directories. The complete measured tables and their cave
   schedules, ranks or infers a missing date; or that feedback changes anything before the existing
   derivation and user approval run. A deterministic fixture passing a practical dimension is not
   evidence that the corresponding real-world outcome was achieved.
+
+## T-09 situational awareness
+
+`src/situational/` is one append-only `situational.jsonl` with four record kinds: `event_observed`,
+`event_assessed`, `response_decided`, `response_recorded`. `store.js` holds the writer lock and
+replays the log for every read; `significance.js` is a pure rule function; `service.js` normalises
+events, writes facts/events through the existing `WorldModelStore`, reads goals, plans, tasks,
+predictions and world conflicts, and records the loop. `src/actions/situation-actions.js` exposes the
+eight registered capabilities; `controller.situationExecute` is the only path that runs anything and
+it uses the existing `runAction`, registry, verifier and audit finalisation. Responses are recorded
+as ordinary experiences, which is how T-08 sees them. The CLI and `ui/server.js` read the same
+service; neither adds an authorization rule or a store.

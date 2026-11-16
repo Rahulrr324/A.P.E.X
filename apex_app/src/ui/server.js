@@ -280,12 +280,24 @@ export function createUiServer({
       session.unavailable = session.unavailable ?? `plan records are unavailable: ${err.message}`;
     }
 
+    // T-09: the same service the CLI reads. A damaged or unavailable situational log is reported
+    // as unavailable-with-detail, never as an empty environment.
+    let situation = null;
+    try {
+      situation = app.situation && typeof app.situation.state === 'function'
+        ? await app.situation.state({ limit: 5 })
+        : null;
+    } catch (err) {
+      situation = { unavailable: `situational state is unavailable: ${err.message}` };
+    }
+
     return {
       at: now().toISOString(),
       session,
       turns,
       tasks,
       plans,
+      situation,
       limits: {
         maxMessageChars: UI_LIMITS.maxMessageChars,
         maxTurns: UI_LIMITS.maxTurns,
@@ -457,6 +469,14 @@ export function createUiServer({
 
     if (method === 'GET' && url.pathname === '/api/state') {
       sendJson(res, 200, await snapshot());
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/situation') {
+      try {
+        sendJson(res, 200, await app.situation.state({ limit: 10 }));
+      } catch (err) {
+        sendJson(res, 503, { error: `the situational state is unavailable: ${err.message}` });
+      }
       return;
     }
     if (method === 'GET' && url.pathname === '/api/events') {

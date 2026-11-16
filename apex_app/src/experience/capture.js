@@ -73,6 +73,11 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // operations would put that judgement - an evaluation, a proposal, a measurement, a rollback - into
   // the very log the pattern and adaptation reads draw from, so the learning loop would start counting
   // its own conclusions as events that happened.
+  // The situational log is APEX's own account of what it noticed, how it read it, and what it chose.
+  // Capturing one of those operations would feed the awareness loop's bookkeeping into the experience
+  // log that patterns and adaptations read, so an event could become evidence about APEX's response
+  // to itself.
+  situation: 'it records or reads the situational event log, its assessments, decisions, and responses; an experience of one would put the awareness bookkeeping into the log the pattern and adaptation reads draw from',
   learning: 'it records or reads APEX\'s own outcome evaluations, adaptation measurements, and rollbacks; an experience of one would put APEX\'s judgement about its own behaviour into the log the pattern and adaptation reads draw from',
 });
 
@@ -138,6 +143,14 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'learning.rollback': 'learning',
   'learning.patterns': 'read',
   'learning.status': 'read',
+  'situation.ingest': 'situation',
+  'situation.evaluate': 'situation',
+  'situation.decide': 'situation',
+  'situation.response': 'situation',
+  'situation.state': 'read',
+  'situation.events': 'read',
+  'situation.decisions': 'read',
+  'situation.status': 'read',
   'history.reconstruct': 'read',
   'prediction.list': 'read',
   'prediction.show': 'read',

@@ -586,6 +586,7 @@ export class CognitiveController {
     worldModel = null,
     deadlines = null,
     learning = null,
+    situation = null,
     dataDir = null,
     neural = null,
   }) {
@@ -642,6 +643,9 @@ export class CognitiveController {
     // evaluations, measurements and rollbacks to the experience log. It is optional: without it the
     // commands refuse rather than reporting that nothing was learned.
     this.learning = learning;
+    // T-09 reads and writes only through the situational service; the controller keeps no event or
+    // decision state of its own, so a restart reconstructs the same picture from the log.
+    this.situation = situation;
     // The data directory the backup commands read and replace. The actions close over it at
     // composition time; this field only decides whether the commands are available at all.
     this.dataDir = dataDir;
@@ -2092,6 +2096,127 @@ export class CognitiveController {
     const op = this.#learningOp('learning.status');
     const input = limit === undefined || limit === null ? {} : { limit };
     const step = await this.runAction('learning.status', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // ---- situational awareness (T-09) ------------------------------------------
+  // Ingestion, assessment, decision and recording all run through the same registry, independent
+  // verifier and finalisation path as every other command. The only method that runs anything is
+  // `situationExecute`, and it runs exactly the one action the user's decision named, after checking
+  // that the supplied input hashes to the approved digest. An event payload is never an argument:
+  // the input comes from the caller of this method, not from the observation.
+
+  #situationOp(capability, request = capability) {
+    if (!this.situation) throw new ValidationError('the situational-awareness service is not available in this configuration');
+    return this.#newOp({ capability, origin: 'user', request });
+  }
+
+  async situationIngest({
+    source, sourceEventId, type, category, observedAt = null, payload = {}, confidence = null,
+    entityRefs = [], goalRefs = [], planRefs = [], taskRefs = [], validUntil = null,
+    operationId = null, reporter = null,
+  } = {}) {
+    const op = this.#situationOp('situation.ingest', `situation ingest ${String(category ?? '')}/${String(type ?? '')}`);
+    const step = await this.runAction('situation.ingest', {
+      source, sourceEventId, type, category, observedAt, payload, confidence,
+      entityRefs, goalRefs, planRefs, taskRefs, validUntil, operationId, reporter,
+    }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The observation may have been recorded, but its audit record could not be written; it is not reported as verified.');
+  }
+
+  async situationEvaluate({ event } = {}) {
+    const op = this.#situationOp('situation.evaluate', 'situation evaluate');
+    const step = await this.runAction('situation.evaluate', { event }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'An assessment may have been recorded, but its audit record could not be written; it is not reported as verified.');
+  }
+
+  async situationDecide({ event, response, action = null, input = null, reason } = {}) {
+    const op = this.#situationOp('situation.decide', `situation decide ${String(response ?? '')}`);
+    const step = await this.runAction('situation.decide', { event, response, action, input, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, 'The decision may have been recorded, but its audit record could not be written; it is not reported as verified.');
+  }
+
+  async situationExecute({ decision, input = null } = {}) {
+    const approved = await this.situation.executionFor(decision, input ?? {});
+    const op = this.#situationOp('situation.execute', `situation execute ${approved.action}`);
+    const step = await this.runAction(approved.action, input ?? {}, 'user', op.id);
+    // Both steps stay in the operation: the audit then shows what was authorized and what ran.
+    op.steps.push(step);
+    const success = step.outcome === Outcome.SUCCESS_VERIFIED;
+    const executed = await this.#finishCommandOp(op, step, 'The approved action may have run, but its audit record could not be written; the result is not reported as verified.');
+
+    // T-08 link: the response is an ordinary audited operation, so the existing experience store can
+    // record it. No evaluator or adaptation system is duplicated here; the record is what T-08 reads.
+    let experienceId = null;
+    let learningNote = null;
+    if (this.experience) {
+      try {
+        const { record } = await this.experience.recordExperience({
+          operationId: executed.operation.id,
+          subject: `event response ${approved.action}`,
+          provenance: { operationId: executed.operation.id },
+          origin: 'user',
+        });
+        experienceId = record.id;
+      } catch (err) {
+        learningNote = `the response ran, but T-08 could not record an experience for it: ${redactSecrets(err?.message ?? String(err))}`;
+      }
+    }
+
+    const recordOp = this.#situationOp('situation.response', `situation response ${approved.action}`);
+    const recordStep = await this.runAction('situation.response', {
+      decision: approved.id,
+      operationId: executed.operation.id,
+      action: approved.action,
+      outcome: step.outcome,
+      status: success ? 'executed' : step.outcome === Outcome.ACTION_DENIED ? 'refused' : 'failed',
+      evaluationId: null,
+      experienceId,
+    }, 'user', recordOp.id);
+    const recorded = await this.#finishCommandOp(recordOp, recordStep, 'The response may have run, but its response record could not be written; it is not reported as verified.', {
+      status: step.outcome,
+    });
+    return {
+      ...recorded,
+      output: [
+        `decision ${shortId(approved.id)}: ${approved.action} -> ${step.outcome} (${step.summary})`,
+        recorded.output,
+        learningNote,
+      ].filter(Boolean).join('\n'),
+      display: [
+        `Executed the approved response to event ${shortId(approved.eventId)}: ${approved.action}`,
+        `  result: ${step.outcome} - ${step.summary}`,
+        experienceId ? `  T-08 recorded experience ${shortId(experienceId)} for that operation` : '  no T-08 experience was recorded',
+        ...(learningNote ? [`  learning link: ${learningNote}`] : []),
+        recorded.display,
+      ].filter(Boolean).join('\n'),
+    };
+  }
+
+  async situationState({ limit } = {}) {
+    const op = this.#situationOp('situation.state', 'situation state');
+    const step = await this.runAction('situation.state', limit === undefined || limit === null ? {} : { limit }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async situationEvents({ limit } = {}) {
+    const op = this.#situationOp('situation.events', 'situation events');
+    const step = await this.runAction('situation.events', limit === undefined || limit === null ? {} : { limit }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async situationDecisions({ limit, event = null } = {}) {
+    const op = this.#situationOp('situation.decisions', 'situation decisions');
+    const input = {};
+    if (limit !== undefined && limit !== null) input.limit = limit;
+    if (event !== null) input.event = event;
+    const step = await this.runAction('situation.decisions', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async situationStatus() {
+    const op = this.#situationOp('situation.status', 'situation status');
+    const step = await this.runAction('situation.status', {}, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 

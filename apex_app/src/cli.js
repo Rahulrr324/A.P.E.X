@@ -114,6 +114,15 @@ Usage:
   node bin/apex.js learning rollback <adaptation-id> [--measurement <id>] [--reason <text>]
                                                             take a rule out of force after a measured regression; history stays
   node bin/apex.js learning status [--limit N]             what was learned, what it proposes, what improved, what was reversed
+  node bin/apex.js situation ingest --source <s> --source-id <id> --type <text> --category <c> [--payload <json>] [--goal <id>] [--plan <id>] [--task <id>] [--entity <id[,id]>] [--confidence 0-1] [--valid-until <iso>]
+                                                            record one structured observation; its fact or world event goes to the World Model
+  node bin/apex.js situation state|events|decisions|status [--limit N]
+                                                            the current picture, the event log, your decisions, and log health (read-only)
+  node bin/apex.js situation evaluate <event-id>          re-read one event against current goals, plans, tasks and world conflicts
+  node bin/apex.js situation decide <event-id> --response <ignore|record|investigate|notify|recommend|request_approval|execute> --reason <text> [--action <name> --input <json>]
+                                                            record your choice; choose execute only with a named registered action
+  node bin/apex.js situation execute <decision-id> --input <json>
+                                                            run the one action that decision approved (the registry authorizes it again)
   node bin/apex.js evidence integrity                      cross-store read consistency and per-store health (read-only; repairs nothing)
   node bin/apex.js prediction record --capability <name> --expect <kind> --subject <text> (--expires <iso> | --in-days N) [--supports <id[,id...]>] [--contradicts <id[,id...]>] [--feedback <id[,id...]>] [--pattern <kind[,kind...]>] [--replaces <id[,id...]>]
   node bin/apex.js prediction list [--limit N] [--capability <name>] [--status <name>]
@@ -617,6 +626,7 @@ export function formatResult(res) {
     'memory.add', 'memory.correct', 'memory.save_conclusion', 'knowledge.add', 'knowledge.retract', 'knowledge.resolve',
     'experience.record', 'feedback.record', 'adaptation.derive', 'adaptation.decide', 'adaptation.guide', 'adaptation.retire',
     'learning.observe', 'learning.propose', 'learning.measure', 'learning.rollback',
+    'situation.ingest', 'situation.evaluate', 'situation.decide', 'situation.response',
     'prediction.record', 'prediction.evaluate', 'prediction.invalidate',
   ]);
   const refusedBeforeWriting = (s) => s.execution?.error?.code === 'LOCKED'
@@ -1675,6 +1685,116 @@ export async function main(argv, {
         return emit(await app.controller.learningStatus({ limit: flags.limit }));
       }
       err('usage: learning observe|patterns|propose|measure|rollback|status');
+      return 2;
+    }
+
+    if (command === 'situation') {
+      const [sub, ...rest] = args;
+      const ingestUsage = 'situation ingest --source <apex|user|test_provider|external_provider> --source-id <id> --type <text> --category <task|plan|goal|memory|knowledge|prediction|adaptation|observation|external|system> [--payload <json>] [--confidence 0-1] [--entity <id[,id]>] [--goal <id[,id]>] [--plan <id[,id]>] [--task <id[,id]>] [--observed-at <iso>] [--valid-until <iso>] [--operation-id <id>] [--reporter <text>]';
+      if (sub === 'ingest') {
+        const { flags, rest: extra } = parseFlags(rest, [
+          'source', 'source-id', 'type', 'category', 'observed-at', 'payload', 'confidence',
+          'entity', 'goal', 'plan', 'task', 'valid-until', 'operation-id', 'reporter',
+        ]);
+        rejectUnexpected(extra, ingestUsage);
+        if (!flags.source || !flags['source-id'] || !flags.type || !flags.category) {
+          err(`usage: ${ingestUsage}`);
+          return 2;
+        }
+        let payload = {};
+        if (flags.payload !== undefined) {
+          try {
+            payload = JSON.parse(flags.payload);
+          } catch {
+            err('--payload must be JSON');
+            return 2;
+          }
+        }
+        const list = (value) => (value === undefined ? [] : String(value).split(',').map((v) => v.trim()).filter(Boolean));
+        return emit(await app.controller.situationIngest({
+          source: flags.source,
+          sourceEventId: flags['source-id'],
+          type: flags.type,
+          category: flags.category,
+          observedAt: flags['observed-at'] ?? null,
+          payload,
+          confidence: flags.confidence === undefined ? null : Number(flags.confidence),
+          entityRefs: list(flags.entity),
+          goalRefs: list(flags.goal),
+          planRefs: list(flags.plan),
+          taskRefs: list(flags.task),
+          validUntil: flags['valid-until'] ?? null,
+          operationId: flags['operation-id'] ?? null,
+          reporter: flags.reporter ?? null,
+        }));
+      }
+      if (sub === 'evaluate') {
+        const { rest: ids } = parseFlags(rest, []);
+        if (ids.length !== 1) {
+          err('usage: situation evaluate <event-id>');
+          return 2;
+        }
+        return emit(await app.controller.situationEvaluate({ event: ids[0] }));
+      }
+      if (sub === 'decide') {
+        const { flags, rest: ids } = parseFlags(rest, ['response', 'action', 'input', 'reason']);
+        if (ids.length !== 1 || !flags.response || !flags.reason) {
+          err('usage: situation decide <event-id> --response <ignore|record|investigate|notify|recommend|request_approval|execute> --reason <text> [--action <name> --input <json>]');
+          return 2;
+        }
+        let input = null;
+        if (flags.input !== undefined) {
+          try {
+            input = JSON.parse(flags.input);
+          } catch {
+            err('--input must be JSON');
+            return 2;
+          }
+        }
+        return emit(await app.controller.situationDecide({
+          event: ids[0],
+          response: flags.response,
+          action: flags.action ?? null,
+          input,
+          reason: flags.reason,
+        }));
+      }
+      if (sub === 'execute') {
+        const { flags, rest: ids } = parseFlags(rest, ['input']);
+        if (ids.length !== 1 || flags.input === undefined) {
+          err('usage: situation execute <decision-id> --input <json> (the same input the decision approved)');
+          return 2;
+        }
+        let input;
+        try {
+          input = JSON.parse(flags.input);
+        } catch {
+          err('--input must be JSON');
+          return 2;
+        }
+        return emit(await app.controller.situationExecute({ decision: ids[0], input }));
+      }
+      if (sub === 'state') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit']);
+        rejectUnexpected(extra, 'situation state [--limit N]');
+        return emit(await app.controller.situationState({ limit: flags.limit }));
+      }
+      if (sub === 'events') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit']);
+        rejectUnexpected(extra, 'situation events [--limit N]');
+        return emit(await app.controller.situationEvents({ limit: flags.limit }));
+      }
+      if (sub === 'decisions') {
+        const { flags, rest: extra } = parseFlags(rest, ['limit', 'event']);
+        rejectUnexpected(extra, 'situation decisions [--limit N] [--event <id>]');
+        return emit(await app.controller.situationDecisions({ limit: flags.limit, event: flags.event ?? null }));
+      }
+      if (sub === 'status') {
+        const { rest: extra } = parseFlags(rest, []);
+        rejectUnexpected(extra, 'situation status');
+        return emit(await app.controller.situationStatus());
+      }
+      err('usage: situation ingest|evaluate|decide|execute|state|events|decisions|status');
       return 2;
     }
 

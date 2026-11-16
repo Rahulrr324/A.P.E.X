@@ -36,6 +36,9 @@ import { ExperienceStore } from './experience/experience-store.js';
 import { experienceActions } from './actions/experience-actions.js';
 import { LearningService } from './learning/service.js';
 import { learningActions } from './actions/learning-actions.js';
+import { SituationStore } from './situational/store.js';
+import { SituationService } from './situational/service.js';
+import { situationActions } from './actions/situation-actions.js';
 import { PredictionStore } from './prediction/prediction-store.js';
 import { predictionActions } from './actions/prediction-actions.js';
 import { historyActions } from './actions/history-actions.js';
@@ -196,6 +199,30 @@ export function createApp({
     },
   });
 
+  // T-09 situational awareness: one append-only log of observations, assessments, decisions and
+  // responses. Facts and world events are written through the World Model above; context is read
+  // from the existing goal, plan, task and prediction stores; approved responses run through the
+  // registry in the controller. Nothing here is a second world model, planner, or runner.
+  const situationStore = new SituationStore(path.join(dataDir, 'situational.jsonl'), {
+    now: clock,
+    idFactory,
+    operations,
+  });
+  const situation = new SituationService({
+    store: situationStore,
+    worldModel,
+    goals,
+    plans,
+    tasks: taskStore,
+    predictions,
+    learning,
+    experience,
+    operations,
+    registry,
+    now: clock,
+    idFactory,
+  });
+
   // Filesystem assistance exists only when at least one root is configured. Every root is
   // resolved and validated here, once, and captured by the action closures: no request, model
   // proposal, or task step can add or widen one. A configured-but-invalid root is a startup
@@ -214,7 +241,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...predictionActions(predictions), ...historyActions({
+  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
     }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
@@ -324,6 +351,7 @@ export function createApp({
     worldModel,
     deadlines,
     learning,
+    situation,
     dataDir,
     neural: neuralRuntime,
   });
@@ -352,6 +380,7 @@ export function createApp({
     worldModel,
     deadlines,
     learning,
+    situation,
   };
 }
 

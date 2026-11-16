@@ -107,7 +107,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 117, 'the default registry has 117 actions');
+    assert.equal(plain.registry.list().length, 125, 'the default registry has 125 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -141,7 +141,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 61, 'the inventory counts sixty-one write actions with a root configured');
+    assert.equal(writes.length, 65, 'the inventory counts sixty-five write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -224,7 +224,7 @@ describe('AF-19: the registry is the inventory', () => {
     const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 71, 'the inventory counts seventy-one read actions with a root configured');
+    assert.equal(reads.length, 75, 'the inventory counts seventy-five read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
