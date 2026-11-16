@@ -358,24 +358,35 @@ export function mapWorkText(workText, registry) {
   const segments = splitGoal(workText);
   const mapped = [];
   const unmapped = [];
+  // The same mapping in the order the user wrote it. `mapped` and `unmapped` are grouped by outcome,
+  // which is what a plan needs; a reader that has to show a part *beside* the text it came from needs
+  // the order, and reconstructing it from the two groups would be a guess. `parts` is additive: the
+  // mapped and unmapped lists keep their existing shape and callers.
+  const parts = [];
   for (const segment of segments) {
     const direct = resolvePart(segment, registry);
     if (direct && !direct.missing) {
-      mapped.push(asStep(segment, direct));
+      const step = asStep(segment, direct);
+      mapped.push(step);
+      parts.push({ index: parts.length, text: segment, status: 'mapped', steps: [step] });
       continue;
     }
     if (direct?.missing) {
       unmapped.push({ text: segment, reason: direct.missing });
+      parts.push({ index: parts.length, text: segment, status: 'unavailable', steps: [], reason: direct.missing });
       continue;
     }
     const split = splitIfAllResolve(segment, registry);
     if (split) {
       mapped.push(...split);
+      parts.push({ index: parts.length, text: segment, status: 'split', steps: split });
       continue;
     }
-    unmapped.push({ text: segment, reason: 'no registered action matches this part of the request' });
+    const reason = 'no registered action matches this part of the request';
+    unmapped.push({ text: segment, reason });
+    parts.push({ index: parts.length, text: segment, status: 'unmapped', steps: [], reason });
   }
-  return { segments, mapped, unmapped };
+  return { segments, mapped, unmapped, parts };
 }
 
 // What a step's expected result and verification are, said as the registry defines them: a write

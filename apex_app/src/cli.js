@@ -26,6 +26,8 @@ Usage:
   node bin/apex.js new                   start a new conversation session
   node bin/apex.js status [--model]      subsystem counts (--model probes the endpoint; no inference)
   node bin/apex.js capabilities [words...] [--json]   registered actions, optionally filtered (read-only)
+  node bin/apex.js model contracts [--json]           declared provider capabilities, limits and trust boundary (no endpoint is contacted)
+  node bin/apex.js neural contract [--json]           declared neural runtime boundary, limits and isolation (no runtime is contacted; no inference)
   node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
   node bin/apex.js workspace roots                     configured workspace roots and their names (read-only)
   node bin/apex.js workspace list [path] [--limit N] [--workspace <name>]        one directory inside a root (read-only)
@@ -130,6 +132,7 @@ Usage:
   node bin/apex.js plan validate <id>     check a stored plan against live state (read-only)
   node bin/apex.js plan history <id>       recorded versions of a plan (read-only)
   node bin/apex.js plan compare <id> [--from N] [--to N]   compare two recorded versions (read-only)
+  node bin/apex.js plan outline "<objective>" [--goal <id>] [--cannot-use <action,action>] [--json]   what a plan for a free-form objective would be (read-only)
   node bin/apex.js plan candidates <goal-id> [--work <text>] [--cannot-use <action,action>] [--json]   the approaches this goal supports now, compared gate by gate (read-only)
   node bin/apex.js plan replan <plan-id> [--reason <text>] [--cannot-use <action,action>] [--json]   revised approaches for a plan that stopped being viable (read-only)
   node bin/apex.js plan outcome <plan-id> [--json]   what a plan's run established and what it left open (read-only)
@@ -301,6 +304,7 @@ Goal and plan examples (recorded intent; never permission to execute):
   plan validate <plan-id>              live check: approval binding, goal revision, actions, evidence (read-only)
   plan history <plan-id>               every recorded version with its reason (read-only)
   plan compare <plan-id> [--from N] [--to N]   differences between two recorded versions (read-only)
+  plan outline "<objective>"           what a plan for a free-form objective would be, none recorded (read-only)
   plan candidates <goal-id>            the approaches it supports, gate by gate, none recorded (read-only)
   plan replan <plan-id>                revised approaches; the plan it answers is left as it was (read-only)
   plan outcome <plan-id>               what the run established, and what only you can confirm (read-only)
@@ -984,6 +988,32 @@ export async function main(argv, {
       const { flags, rest } = parseFlags(args, ['json']);
       const query = rest.join(' ').trim();
       const res = await app.controller.capabilitiesReport({ query: query === '' ? null : query });
+      out(flags.json ? JSON.stringify(res.data, null, 2) : res.display);
+      return res.verified ? 0 : 1;
+    }
+
+    if (command === 'model') {
+      // Declarations only. Unlike `status --model`, this never probes the endpoint: it reports what
+      // the configured backend and APEX's transport declare, each marked unverified.
+      const { flags, rest } = parseFlags(args, ['json']);
+      if (rest.length !== 1 || rest[0] !== 'contracts') {
+        err('usage: node bin/apex.js model contracts [--json]');
+        return 2;
+      }
+      const res = await app.controller.modelContracts();
+      out(flags.json ? JSON.stringify(res.data, null, 2) : res.display);
+      return res.verified ? 0 : 1;
+    }
+
+    if (command === 'neural') {
+      // A declaration only. There is no route that invokes a neural runtime, and this command
+      // contacts nothing; the deterministic simulated transport stays in tests.
+      const { flags, rest } = parseFlags(args, ['json']);
+      if (rest.length !== 1 || rest[0] !== 'contract') {
+        err('usage: node bin/apex.js neural contract [--json]');
+        return 2;
+      }
+      const res = await app.controller.neuralContract();
       out(flags.json ? JSON.stringify(res.data, null, 2) : res.display);
       return res.verified ? 0 : 1;
     }
@@ -2408,6 +2438,21 @@ export async function main(argv, {
         const res = await app.controller.planCompare(ids[0], { from: flags.from ?? null, to: flags.to ?? null });
         out(res.display);
         return res.diff.unchanged ? 0 : 1;
+      }
+      if (sub === 'outline') {
+        // The read that answers a free-form objective before anything is recorded: typed parts, the
+        // step each matched part becomes, the parts no capability can take, derived alternatives, and
+        // the risks, uncertainty, revalidation and recovery the existing machinery states. Nothing is
+        // written; recording the draft is `plan add` and approving it is the user's own decision.
+        const { flags, rest: words } = parseFlags(rest, ['goal', 'cannot-use', 'json']);
+        if (words.length !== 1) {
+          throw new ValidationError('usage: plan outline "<objective>" [--goal <id>] [--cannot-use <action,action>] [--json]', 'USAGE');
+        }
+        return emitRead(await app.controller.planOutline({
+          objective: words[0],
+          goal: flags.goal ?? null,
+          cannotUse: idList(flags['cannot-use']),
+        }), flags);
       }
       if (sub === 'candidates') {
         // The read the readiness and status answers name. It generates and compares the approaches the

@@ -107,7 +107,7 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 108, 'the default registry has 108 actions');
+    assert.equal(plain.registry.list().length, 111, 'the default registry has 111 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -224,7 +224,7 @@ describe('AF-19: the registry is the inventory', () => {
     const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 66, 'the inventory counts sixty-six read actions with a root configured');
+    assert.equal(reads.length, 69, 'the inventory counts sixty-nine read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -249,6 +249,7 @@ describe('AF-19: the registry is the inventory', () => {
         'work.review': {},
         'world.entity.show': { target: 'e-probe' },
         'plan.candidates': { goal: g.result.data.goalId },
+        'plan.outline': { objective: 'remember that the gate is open' },
         'plan.replan': { plan: gp.result.data.planId, reason: 'the inventory probe asks what a revision would take' },
         'plan.outcome': { plan: gp.result.data.planId },
         'world.entity.find': { text: 'Probe entity' },
@@ -396,7 +397,7 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
 });
 
 describe('AF-19: the planning prompt and the plan checker agree', () => {
-  test('a model-origin prompt offers exactly the twenty-two reads it may propose', () => {
+  test('a model-origin prompt offers exactly the twenty-three reads it may propose', () => {
     const app = appWith(tempDir(), tempDir());
     const { system } = planningPrompt({ goal: 'anything', registry: app.registry, memoryLines: [], origin: 'model' });
     assert.deepEqual(offeredNames(system), [
@@ -407,7 +408,7 @@ describe('AF-19: the planning prompt and the plan checker agree', () => {
       // live registry, and a proposal that contains one is still a proposal - it authorizes nothing.
       // The outcome read reports what a plan's records establish; recording an assessment is not among
       // them, since plan.assess is a user act and is refused for a model origin.
-      'plan.candidates', 'plan.outcome', 'plan.replan', 'prediction.history',
+      'plan.candidates', 'plan.outcome', 'plan.outline', 'plan.replan', 'prediction.history',
       'prediction.list', 'prediction.show', 'prediction.summary',
       // Batch PC: both read only what memory, knowledge, goal, plan and task records already hold, so
       // a proposal that contains one authorizes nothing; neither writes a store.
@@ -440,7 +441,7 @@ describe('AF-19: the planning prompt and the plan checker agree', () => {
       }
     }
     const user = offeredNames(planningPrompt({ goal: 'anything', registry: app.registry, memoryLines: [], origin: 'user' }).system);
-    assert.equal(user.length, 53, 'a user-origin prompt offers the fifty-three plannable actions with a root');
+    assert.equal(user.length, 54, 'a user-origin prompt offers the fifty-four plannable actions with a root');
     assert.ok(user.includes('deadline.list'), 'a user plan may read the recorded deadlines');
     assert.ok(!user.includes('deadline.import'), 'a deadline import is a write and is never plannable');
     assert.ok(user.includes('memory.add'), 'a user plan may still contain memory.add');

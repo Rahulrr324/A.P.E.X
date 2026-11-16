@@ -34,6 +34,7 @@ const DISCLOSURE_PHRASES = Object.freeze({
   [Disclosure.MODEL_OUTPUT_UNVERIFIED]: 'model wording has no independent verification',
   [Disclosure.MODEL_STRUCTURE_REJECTED]: 'a malformed structured model response was rejected',
   [Disclosure.RECOMMENDATION_NOT_EXECUTED]: 'the recommended next step was not executed',
+  [Disclosure.COMPETING_READINGS_NOT_SETTLED]: 'the records support more than one reading and no reading was settled',
 });
 
 export function disclosurePhrase(code) {
@@ -118,6 +119,19 @@ export function buildGroundingBrief(analysis, {
   }
   if (deliberation.assumptions.length > 0) {
     raw.push(`Assumptions to state if used: ${deliberation.assumptions.map((item) => item.code).join(', ')}.`);
+  }
+  const hypotheses = deliberation.hypotheses;
+  if (hypotheses && hypotheses.hypotheses.length > 0) {
+    const readings = hypotheses.hypotheses
+      .slice(0, 4)
+      .map((item) => `${item.kind} (${item.support.level}; claims ${item.claimIds.join('/')})`);
+    raw.push(`Competing readings (${hypotheses.counts.selected === 1 ? 'one selected by the stated rule' : 'none settled'}): ${readings.join('; ')}.`);
+    if (hypotheses.explanations.length > 0) {
+      raw.push(`Possible explanations for the disagreement: ${[...new Set(hypotheses.explanations.map((item) => item.kind))].join(', ')}. A later recording or a different source is not evidence of a later fact.`);
+    }
+    if (hypotheses.selection?.chosen) {
+      raw.push(`Selected reading: ${hypotheses.selection.chosen} because ${hypotheses.selection.reason}. It reads the records; it is not a recommendation or a permission.`);
+    }
   }
   if (deliberation.recommendation) {
     const rec = deliberation.recommendation;

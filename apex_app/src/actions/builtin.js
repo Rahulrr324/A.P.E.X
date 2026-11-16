@@ -2,12 +2,14 @@
 // and origins (authorization), an execute body, and a verify procedure that
 // checks the postcondition against the store or an independent computation.
 // `verify` returns { ok, detail }, or null when no independent check is possible.
-import { ValidationError } from '../errors.js';
+import { ExecutionError, ValidationError } from '../errors.js';
 import { sha256Hex, validateContent } from '../memory/memory-store.js';
 import { CONTROL_CHARS, round3, shortId, singleLine, truncate } from '../util.js';
 import { evaluateExpression, evaluateRpn, validateExpression } from './calc.js';
 import { APP_NAME, APP_STAGE, APP_VERSION } from '../identity.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
+import { contractProblems, renderProviderContract } from '../model/contract.js';
+import { neuralBoundaryProblems, renderNeuralBoundary } from '../neural/diagnostics.js';
 
 const OPERATION_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 const BACKEND_RE = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -185,6 +187,112 @@ export function builtinActions() {
         }
         if (result.data.matched > result.data.total) return { ok: false, detail: 'more matches than registered actions' };
         return { ok: true, detail: 'every listed action is registered and the total matches a fresh registry read' };
+      },
+    },
+
+    {
+      // A declaration, not a probe. The contract says what the configured backend and APEX's own
+      // transport declare, and marks every entry unverified. It contacts nothing, so it is safe to
+      // read at any time and cannot turn a reachable socket into a claim about generation quality.
+      // Like app.capabilities it is deliberately not plannable: inspecting the model boundary is
+      // not a step toward a goal.
+      name: 'model.contracts',
+      description: 'Report the declared model provider capabilities, protocol contracts, runtime limits and trust boundary. Contacts no endpoint.',
+      inputHint: '{}',
+      plannable: false,
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        expectObject(input ?? {}, []);
+        return {};
+      },
+      async execute(ctx) {
+        const contract = ctx.modelContract;
+        const problems = contractProblems(contract);
+        if (problems.length > 0) {
+          throw new ExecutionError(`the model contract is unavailable: ${problems[0]}`);
+        }
+        return {
+          summary: contract.configured
+            ? `model provider ${contract.provider} declared (${contract.backend}); no endpoint was contacted`
+            : 'no model backend is configured; no provider capability is claimed',
+          data: contract,
+          display: renderProviderContract(contract),
+        };
+      },
+      async verify(ctx, _input, result) {
+        const problems = contractProblems(result.data);
+        if (problems.length > 0) return { ok: false, detail: problems[0] };
+        // The identity fields are checked against a fresh status read, which asks the gateway for
+        // its description again. That is an independent check of the declaration's source; it is
+        // still not a probe, and the contract's own `probed: false` is part of the result.
+        const fresh = await ctx.getStatus();
+        const model = fresh?.model ?? {};
+        if ((result.data.configured === true) !== (model.configured === true)) {
+          return { ok: false, detail: 'the reported configuration state disagrees with a fresh status read' };
+        }
+        if (result.data.provider !== (model.provider ?? null)) {
+          return { ok: false, detail: 'the reported provider disagrees with a fresh status read' };
+        }
+        if (result.data.endpoint !== (model.endpoint ?? null)) {
+          return { ok: false, detail: 'the reported endpoint disagrees with a fresh status read' };
+        }
+        if (result.data.verified !== false || result.data.probed !== false) {
+          return { ok: false, detail: 'a declared contract must be marked unprobed and unverified' };
+        }
+        return { ok: true, detail: 'the declaration agrees with a fresh status read; no endpoint was contacted' };
+      },
+    },
+
+    {
+      // The neural boundary is declared for the same reason as the model contract: a reader must
+      // be able to see the versions, limits, isolation, and trust rules without contacting a runtime
+      // and without mistaking the deterministic simulated transport for an integrated model. The
+      // action is unplannable: inspecting a boundary is not a step toward a goal.
+      name: 'neural.contract',
+      description: 'Report the declared neural runtime boundary: contract versions, limits, isolation, simulated-transport availability and trust. Connects to no runtime and runs no inference.',
+      inputHint: '{}',
+      plannable: false,
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        expectObject(input ?? {}, []);
+        return {};
+      },
+      async execute(ctx) {
+        const declaration = ctx.neuralContract;
+        const problems = neuralBoundaryProblems(declaration);
+        if (problems.length > 0) {
+          throw new ExecutionError(`the neural boundary declaration is unavailable: ${problems[0]}`);
+        }
+        return {
+          summary: declaration.configured
+            ? `neural transport ${declaration.transport.name} declared; no inference was run`
+            : 'no neural runtime is configured; the contract and a deterministic simulated transport are declared',
+          data: declaration,
+          display: renderNeuralBoundary(declaration),
+        };
+      },
+      async verify(ctx, _input, result) {
+        const problems = neuralBoundaryProblems(result.data);
+        if (problems.length > 0) return { ok: false, detail: problems[0] };
+        const fresh = ctx.neuralContract;
+        for (const field of ['configured', 'requestSchema', 'responseSchema']) {
+          if (result.data[field] !== fresh[field]) {
+            return { ok: false, detail: `the reported ${field} disagrees with a fresh declaration` };
+          }
+        }
+        if ((result.data.transport?.name ?? null) !== (fresh.transport?.name ?? null)
+          || (result.data.transport?.simulated ?? false) !== (fresh.transport?.simulated ?? false)) {
+          return { ok: false, detail: 'the reported transport disagrees with a fresh declaration' };
+        }
+        if (JSON.stringify(result.data.limits) !== JSON.stringify(fresh.limits)) {
+          return { ok: false, detail: 'the reported limits disagree with a fresh declaration' };
+        }
+        if (result.data.verified !== false || result.data.probed !== false || result.data.inferenceTested !== false) {
+          return { ok: false, detail: 'a boundary declaration must stay unprobed, unverified, and untested' };
+        }
+        return { ok: true, detail: 'the declaration is internally consistent and agrees with a fresh read; nothing was contacted' };
       },
     },
 

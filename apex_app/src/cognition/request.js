@@ -7,6 +7,7 @@
 import { clarificationFor, unsupportedOperationFor } from '../controller/decision.js';
 import { isOpenStatus, goalProgress } from '../goals/model.js';
 import { isOpenPlan } from '../plans/model.js';
+import { decomposeObjective } from './objective.js';
 import { Intent, INTENT_NOTE, MissingInfo } from './vocabulary.js';
 
 const ID_TOKEN = /^[A-Za-z0-9-]{4,64}$/;
@@ -260,6 +261,7 @@ export function understandRequest({
   tasks = [],
   hasContext = false,
   requestId = null,
+  capabilities = null,
 } = {}) {
   const text = String(request ?? '').trim();
   const lower = norm(text);
@@ -267,6 +269,10 @@ export function understandRequest({
   const clarification = clarificationFor(text, { hasContext, checkContinuation: true });
   const matched = classify(lower);
   const { entities, ambiguities: entityAmbiguities } = matchEntities(text, worldState);
+  // The parts, conditions, unknowns, and capability mapping are read from the same words this stage
+  // already classified. When no capability catalogue is supplied the decomposition still runs and
+  // says mapping was not evaluated; it never claims every part is unsupported.
+  const objective = decomposeObjective(text, { capabilities, hasContext });
 
   let intent = matched[0] ?? Intent.GENERAL_QUESTION;
   if (unsupported) intent = Intent.UNSUPPORTED;
@@ -367,6 +373,7 @@ export function understandRequest({
     timeRange,
     historical: intent === Intent.HISTORICAL || Boolean(timeRange && (timeRange.kind === 'as-of' || timeRange.kind === 'between')),
     instructions,
+    objective,
     required: requiredFor(intent),
     missing,
     ambiguities,

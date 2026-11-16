@@ -53,8 +53,9 @@ preserved for provenance.
   (the most recent bounded local run is dated 2026-10-31).
 
 **APEX Local Alpha is a vertical slice, not the whole system.** It has a persistent World
-Model, but there is still no general-purpose planner, no persistent learning, no voice, no UI,
-and no implemented neural–cognitive bridge. `stark/` remains separate experimental research;
+Model, but there is still no general-purpose planner, no persistent learning, no voice, and no
+hosted or multi-user interface - only the loopback-only page it documents for this machine - and
+no implemented neural–cognitive bridge. `stark/` remains separate experimental research;
 `apex_app/` does not import it. Do not read a passing test suite or a milestone number
 as evidence that the broader APEX vision is complete.
 

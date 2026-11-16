@@ -50,9 +50,14 @@ describe('107: capability statements match the evidence', () => {
     assert.match(APP_README, /Stub tests prove protocol handling, not answer quality, and no test in `npm test` runs a real model\./);
     assert.match(APP_README, /\*\*Observed outside the automated suite\*\*/);
     assert.match(APP_README, /Every answer was reported as unverified\./);
-    assert.match(APP_README, /\*\*Proposed, not implemented\.\*\*/);
+    assert.match(APP_README, /Neural integration \| \*\*Contract implemented, no runtime connected\.\*\*/);
+    assert.match(APP_README, /No child process, HTTP endpoint, model, or `stark\/` import exists, and nothing is inferred\./);
     assert.match(APP_README, /World Model, entity memory and evidence graph \| Implemented as an append-only `world-model\.jsonl` of user-origin records/);
-    assert.match(APP_README, /General planner, persistent learning, voice, UI \| \*\*Not implemented\.\*\*/);
+    assert.match(APP_README, /General planner, persistent learning, voice \| \*\*Not implemented\.\*\*/);
+    // The loopback page is an implemented surface and must be described as one, with its bound.
+    assert.match(APP_README, /Local browser interface \| Implemented as a loopback-only, zero-dependency HTTP server/);
+    assert.match(APP_README, /It binds `127\.0\.0\.1` only, requires a process-random token/);
+    assert.match(APP_README, /It is a single-user local surface, not a hosted service/);
     assert.match(APP_README, /### Historical record: the controlled real-model run of 2026-10-31/);
     assert.match(APP_README, /This is a dated observation of one run, \*\*not a setup instruction\*\*\./);
     assert.match(APP_README, /one bounded `ask` completed in about 105 s and was reported as unverified\./);
@@ -79,7 +84,7 @@ describe('107: capability statements match the evidence', () => {
     assert.doesNotMatch(ROOT_README, /There is no personal APEX assistant application yet/);
     assert.match(ROOT_README, /APEX Local Alpha/);
     assert.match(ROOT_README, /\[`apex_app\/`\]\(apex_app\/README\.md\)/);
-    assert.match(ROOT_README, /It has a persistent World\s+Model, but there is still no general-purpose planner, no persistent learning, no voice, no UI,\s+and no implemented neural–cognitive bridge/);
+    assert.match(ROOT_README, /It has a persistent World\s+Model, but there is still no general-purpose planner, no persistent learning, no voice, and no\s+hosted or multi-user interface - only the loopback-only page it documents for this machine - and\s+no implemented neural–cognitive bridge/);
     assert.match(ROOT_README, /does not import it/);
     // The recorded research gates are preserved, not rewritten by this documentation change.
     assert.match(ROOT_README, /G7 FAIL \/ M0 FAIL \(NOT ACCEPTED\) \/ M1 LOCKED/);

@@ -135,6 +135,10 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'prediction.longitudinal': 'read',
   'memory.save_conclusion': 'model-words',
   'model.answer': 'model-words',
+  // The contract is a declaration read from configuration and backend metadata; it contacts no
+  // endpoint and observes nothing that could become an experience.
+  'model.contracts': 'read',
+  'neural.contract': 'read',
   'experience.record': 'self-bookkeeping',
   'feedback.record': 'self-bookkeeping',
   'task.feedback': 'self-bookkeeping',
@@ -180,6 +184,7 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // registry whenever they are asked for; capturing one would freeze a comparison of a moment that
   // no longer holds, and the candidates themselves are intentions, not events.
   'plan.candidates': 'read',
+  'plan.outline': 'read',
   'plan.replan': 'read',
   // The same reasoning covers the outcome pair: the reading of a plan's records is re-derivable from
   // those records at any time, and what plan.assess stores is that derived reading, not an event - an

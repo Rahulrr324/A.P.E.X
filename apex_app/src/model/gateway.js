@@ -17,8 +17,8 @@ import { CONTROL_CHARS } from '../util.js';
 const CONTROL_CHARS_GLOBAL = new RegExp(CONTROL_CHARS.source, 'g');
 
 export const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
-const MAX_RESPONSE_CHARS = 1000000;
-const MAX_OUTPUT_CHARS = 8000;
+export const MAX_RESPONSE_CHARS = 1000000;
+export const MAX_OUTPUT_CHARS = 8000;
 const MAX_ERROR_DETAIL_CHARS = 200;
 const RETRY_DELAY_MS = 300;
 // Failures where no answer reached APEX, so a repeat attempt is safe.
@@ -575,18 +575,51 @@ export class OllamaBackend extends HttpBackend {
   }
 }
 
+// A prompt budget is only enforceable when the operator declares the model's context window. The
+// count is a character-based estimate, named as one everywhere it is reported: APEX has no
+// tokenizer and must not present a guess as a measurement. It is used before a request is sent,
+// so an over-large prompt is refused locally instead of spending a round trip to learn the same
+// thing from the server (or, worse, receiving a truncated prompt that silently changed the task).
+export function estimateTokens(text) {
+  return typeof text === 'string' && text.length > 0 ? Math.ceil(text.length / 4) : 0;
+}
+
+export function contextBudget({ system = '', prompt = '', maxTokens = null, maxContextTokens = null } = {}) {
+  const declared = Number.isInteger(maxContextTokens) && maxContextTokens > 0 ? maxContextTokens : null;
+  const output = Number.isInteger(maxTokens) && maxTokens > 0 ? maxTokens : null;
+  const promptTokens = estimateTokens(system) + estimateTokens(prompt);
+  if (declared === null || output === null) {
+    return { enforced: false, promptTokens, outputTokens: output, maxContextTokens: declared, exceeds: false };
+  }
+  return {
+    enforced: true,
+    promptTokens,
+    outputTokens: output,
+    maxContextTokens: declared,
+    exceeds: promptTokens + output > declared,
+  };
+}
+
 export class ModelGateway {
-  constructor({ backend = new NoBackend(), timeoutMs = 30000 } = {}) {
+  constructor({ backend = new NoBackend(), timeoutMs = 30000, maxTokens = null, maxContextTokens = null } = {}) {
     this.backend = backend;
     this.timeoutMs = timeoutMs;
+    this.maxTokens = maxTokens;
+    this.maxContextTokens = maxContextTokens;
   }
 
   isConfigured() {
     return this.backend.configured === true;
   }
 
+  // The budget fields are APEX's own limits, not claims about the server. They are reported with
+  // the provider declaration so a reader can tell a configured limit from a probed capability.
   describe() {
-    return this.backend.describe();
+    return {
+      ...this.backend.describe(),
+      maxTokens: this.maxTokens,
+      maxContextTokens: this.maxContextTokens,
+    };
   }
 
   async checkAvailability({ timeoutMs = 2000 } = {}) {
@@ -628,6 +661,15 @@ export class ModelGateway {
     if (signal?.aborted === true) {
       return wrap(failure(this.backend.name, this.backend.provider, 'ABORTED', 'the request was cancelled before it was sent'));
     }
+    const budget = contextBudget({ system, prompt, maxTokens: this.maxTokens, maxContextTokens: this.maxContextTokens });
+    if (budget.exceeds) {
+      return wrap(failure(
+        this.backend.name,
+        this.backend.provider,
+        'CONTEXT_TOO_LARGE',
+        `the assembled request is about ${budget.promptTokens} prompt tokens plus ${budget.outputTokens} reserved output tokens, which exceeds the declared ${budget.maxContextTokens}-token context window; the request was not sent (the count is an estimate of about 4 characters per token, not a tokenizer measurement)`,
+      ));
+    }
     const result = await this.backend.complete({
       system: String(system),
       prompt,
@@ -640,7 +682,12 @@ export class ModelGateway {
 
 export function createGateway(modelConfig, fetchImpl = globalThis.fetch) {
   if (!modelConfig.url) {
-    return new ModelGateway({ backend: new NoBackend(), timeoutMs: modelConfig.timeoutMs });
+    return new ModelGateway({
+      backend: new NoBackend(),
+      timeoutMs: modelConfig.timeoutMs,
+      maxTokens: modelConfig.maxTokens ?? null,
+      maxContextTokens: modelConfig.contextTokens ?? null,
+    });
   }
   const common = {
     baseUrl: modelConfig.url,
@@ -651,5 +698,10 @@ export function createGateway(modelConfig, fetchImpl = globalThis.fetch) {
     fetchImpl,
   };
   const backend = modelConfig.provider === 'ollama' ? new OllamaBackend(common) : new OpenAICompatibleBackend(common);
-  return new ModelGateway({ backend, timeoutMs: modelConfig.timeoutMs });
+  return new ModelGateway({
+    backend,
+    timeoutMs: modelConfig.timeoutMs,
+    maxTokens: modelConfig.maxTokens ?? common.maxTokens,
+    maxContextTokens: modelConfig.contextTokens ?? null,
+  });
 }

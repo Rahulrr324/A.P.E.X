@@ -127,6 +127,20 @@ export function loadConfig(env = process.env) {
   }
 
   const timeoutMs = intEnv(env, 'APEX_MODEL_TIMEOUT_MS', DEFAULT_MODEL_TIMEOUT_MS, 100, 600000);
+  // Optional. APEX has no tokenizer, so a budget is only enforced when the operator states the
+  // model's context window; an estimate is not allowed to stand in for a declared limit. A window
+  // no larger than the reserved output budget would refuse every request, which is a configuration
+  // error to name at startup rather than a mystery failure on the first prompt.
+  const maxTokens = intEnv(env, 'APEX_MODEL_MAX_TOKENS', 512, 1, 8192);
+  const contextTokens = (env.APEX_MODEL_CONTEXT_TOKENS || '').trim()
+    ? intEnv(env, 'APEX_MODEL_CONTEXT_TOKENS', null, 512, 10000000)
+    : null;
+  if (contextTokens !== null && contextTokens <= maxTokens) {
+    throw new ValidationError(
+      'APEX_MODEL_CONTEXT_TOKENS must be greater than APEX_MODEL_MAX_TOKENS; otherwise no prompt could fit the declared window',
+      'INVALID_CONFIG',
+    );
+  }
 
   const modelUrl = (env.APEX_MODEL_URL || '').trim() || null;
   const modelName = (env.APEX_MODEL_NAME || '').trim();
@@ -197,7 +211,8 @@ export function loadConfig(env = process.env) {
       name: modelName || 'local',
       timeoutMs,
       retries: intEnv(env, 'APEX_MODEL_RETRIES', 1, 0, 3),
-      maxTokens: intEnv(env, 'APEX_MODEL_MAX_TOKENS', 512, 1, 8192),
+      maxTokens,
+      contextTokens,
       allowRemote: env.APEX_ALLOW_REMOTE_MODEL === '1',
     },
     contextTurns: intEnv(env, 'APEX_CONTEXT_TURNS', 6, 0, 50),

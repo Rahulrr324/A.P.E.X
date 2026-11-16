@@ -20,6 +20,9 @@ import {
   BOUNDS, CLAIM_KINDS, DecisionKind, Disclosure, EVIDENCE_VALIDITIES, EvidenceSource, EVIDENCE_STATES,
   Intent, MissingInfo, SourceStatus, Uncertainty, UncertaintyAbout,
 } from './vocabulary.js';
+import {
+  ExplanationKind, HYPOTHESIS_SCHEMA, ReadingKind, SupportLevel, UnknownKind,
+} from './hypotheses.js';
 
 export const ARTIFACT_SCHEMA = 1;
 
@@ -80,6 +83,10 @@ const SOURCES = new Set(Object.values(EvidenceSource));
 const SOURCE_STATUS = new Set(Object.values(SourceStatus));
 const VALIDITY_SET = new Set(EVIDENCE_VALIDITIES);
 const CONCLUSION_KINDS = new Set(['clarify', 'refuse', 'unknown', 'conflicting', 'partial', 'supported']);
+const READING_KINDS = new Set(Object.values(ReadingKind));
+const SUPPORT_LEVELS = new Set(Object.values(SupportLevel));
+const EXPLANATION_KINDS = new Set(Object.values(ExplanationKind));
+const UNKNOWN_KINDS = new Set(Object.values(UnknownKind));
 const RESPONSE_CLAIM_KINDS = new Set(['supported', 'partially_supported', 'historical', 'inference', 'assumption', 'general_knowledge', 'unknown', 'recommendation']);
 const REF = /^ev:[a-z_]+:[A-Za-z0-9_.:-]{1,200}$/;
 const CLAIM_ID = /^cl:[1-9][0-9]?$/;
@@ -314,6 +321,100 @@ function validateClaimAssessment(value) {
   return claimProblems(value, 'claim_assessment', { requireSupport: false });
 }
 
+function isCountObject(value, keys) {
+  return isObject(value) && keys.every((key) => Number.isInteger(value[key]) && value[key] >= 0);
+}
+
+// Competing readings and the ledger are validated at the same boundary as the deliberation that
+// produced them. The two constants the contract enforces are that no reading claims authorization
+// and that a selected reading is one of the readings this result actually contains.
+function validateHypotheses(value) {
+  const problems = [];
+  if (value.schema !== HYPOTHESIS_SCHEMA) problems.push('deliberation_result.hypotheses.schema is not apex.hypotheses.v1');
+  if (value.authorizes !== false) problems.push('deliberation_result.hypotheses must state authorizes false');
+  const ids = new Set();
+  const hypotheses = value.hypotheses;
+  if (!Array.isArray(hypotheses) || hypotheses.length > 6) {
+    problems.push('deliberation_result.hypotheses.hypotheses must be a bounded list');
+  } else {
+    hypotheses.forEach((item, index) => {
+      const at = `deliberation_result.hypotheses.hypotheses[${index}]`;
+      if (!isObject(item)) { problems.push(`${at} must be an object`); return; }
+      if (!isText(item.id, 40)) problems.push(`${at}.id must be bounded text`);
+      else if (ids.has(item.id)) problems.push(`${at}.id is a duplicate`);
+      else ids.add(item.id);
+      if (!READING_KINDS.has(item.kind)) problems.push(`${at}.kind is not a known reading kind`);
+      if (!isText(item.statement, 240)) problems.push(`${at}.statement must be bounded text`);
+      if (!isClaimIdArray(item.claimIds, BOUNDS.maxClaims)) problems.push(`${at}.claimIds must be a bounded list of claim ids`);
+      if (!isEvidenceRefArray(item.evidenceIds)) problems.push(`${at}.evidenceIds must be a bounded list of evidence references`);
+      if (!isObject(item.support) || !SUPPORT_LEVELS.has(item.support.level)) {
+        problems.push(`${at}.support must carry a known support level`);
+      } else {
+        if (!isCountObject(item.support.counts, ['direct', 'partiallySupported', 'contradicted', 'stale', 'unverified', 'unsupported'])) {
+          problems.push(`${at}.support.counts must be non-negative integers`);
+        }
+        if (!isStringArray(item.support.basis, 12)) problems.push(`${at}.support.basis must be a bounded list of labels`);
+        if (!isEvidenceRefArray(item.support.evidenceIds)) problems.push(`${at}.support.evidenceIds must be a bounded list of evidence references`);
+      }
+      if (typeof item.chosen !== 'boolean') problems.push(`${at}.chosen must be a boolean`);
+    });
+  }
+  if (!Array.isArray(value.explanations) || value.explanations.length > 6) {
+    problems.push('deliberation_result.hypotheses.explanations must be a bounded list');
+  } else {
+    value.explanations.forEach((item, index) => {
+      const at = `deliberation_result.hypotheses.explanations[${index}]`;
+      if (!isObject(item)) { problems.push(`${at} must be an object`); return; }
+      if (!EXPLANATION_KINDS.has(item.kind)) problems.push(`${at}.kind is not a known explanation kind`);
+      if (!isClaimIdArray(item.claimIds, BOUNDS.maxClaims)) problems.push(`${at}.claimIds must be a bounded list of claim ids`);
+      if (!isEvidenceRefArray(item.evidenceIds)) problems.push(`${at}.evidenceIds must be a bounded list of evidence references`);
+      if (!isText(item.detail, MAX_REASON_CHARS)) problems.push(`${at}.detail must be bounded text`);
+      if (typeof item.explains !== 'boolean') problems.push(`${at}.explains must be a boolean`);
+      if (item.settles !== false) problems.push(`${at}.settles must be false; an explanation does not settle a conflict`);
+    });
+  }
+  const selection = value.selection;
+  if (!isObject(selection)) problems.push('deliberation_result.hypotheses.selection must be an object');
+  else {
+    if (selection.chosen !== null && (typeof selection.chosen !== 'string' || !ids.has(selection.chosen))) {
+      problems.push('deliberation_result.hypotheses.selection.chosen must be null or an id in this result');
+    }
+    if (!isStringArray(selection.basis, 8)) problems.push('deliberation_result.hypotheses.selection.basis must be a bounded list of labels');
+    if (!isText(selection.reason, MAX_REASON_CHARS)) problems.push('deliberation_result.hypotheses.selection.reason must be bounded text');
+  }
+  if (selection && isObject(selection) && Array.isArray(hypotheses)) {
+    for (const item of hypotheses) {
+      if (isObject(item) && item.chosen === true && selection.chosen !== item.id) {
+        problems.push('deliberation_result.hypotheses has a reading marked chosen that the selection does not name');
+      }
+      if (isObject(item) && item.chosen === false && selection.chosen === item.id) {
+        problems.push('deliberation_result.hypotheses selection names a reading not marked chosen');
+      }
+    }
+  }
+  const reasoning = value.reasoning;
+  if (!isObject(reasoning)) {
+    problems.push('deliberation_result.hypotheses.reasoning must be an object');
+  } else {
+    if (!Array.isArray(reasoning.facts) || reasoning.facts.length > 8
+      || !reasoning.facts.every((fact) => isObject(fact) && isClaimId(fact.claimId) && isEvidenceRefArray(fact.evidenceIds ?? [], 12))) {
+      problems.push('deliberation_result.hypotheses.reasoning.facts must be a bounded list of cited claim references');
+    }
+    if (!Array.isArray(reasoning.assumptions) || reasoning.assumptions.length > 8
+      || !reasoning.assumptions.every((item) => isObject(item) && isText(item.code, 60))) {
+      problems.push('deliberation_result.hypotheses.reasoning.assumptions must be a bounded list of codes');
+    }
+    if (!Array.isArray(reasoning.unknowns) || reasoning.unknowns.length > 8
+      || !reasoning.unknowns.every((item) => isObject(item) && UNKNOWN_KINDS.has(item.kind))) {
+      problems.push('deliberation_result.hypotheses.reasoning.unknowns must be a bounded list of known kinds');
+    }
+    if (!isCountObject(reasoning.counts, ['facts', 'assumptions', 'unknowns'])) {
+      problems.push('deliberation_result.hypotheses.reasoning.counts must be non-negative integers');
+    }
+  }
+  return problems;
+}
+
 function validateDeliberationResult(value, context = {}) {
   const problems = [];
   if (!DECISIONS.has(value.decision)) problems.push('deliberation_result.decision is not a known decision');
@@ -370,6 +471,7 @@ function validateDeliberationResult(value, context = {}) {
   if (!Array.isArray(value.subquestions) || value.subquestions.length > BOUNDS.maxSubquestions) {
     problems.push('deliberation_result.subquestions must be a bounded list');
   }
+  if (value.hypotheses !== undefined) problems.push(...validateHypotheses(value.hypotheses));
   return problems;
 }
 

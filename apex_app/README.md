@@ -13,7 +13,9 @@ It is not the whole of APEX. It has a persistent, append-only
 facts, relationships, events, observations, and evidence the user records, and a separate read-only
 [projection](#world-state-the-read-only-epistemic-projection) of what memory and knowledge already
 store. It has no general-purpose planner (only
-the bounded task planner described below), no persistent learning, no voice and no UI,
+the bounded task planner described below), no persistent learning, and no voice; it has one local
+browser page that serves only this machine (see
+[Local browser interface](#local-browser-interface-loopback-only)), not a hosted or multi-user UI,
 and its model path depends entirely on a backend you configure yourself. The C++
 spiking-neuron research under `stark/` is a separate experiment, not a runtime this
 application uses.
@@ -45,7 +47,7 @@ from a milestone number or a passing build.
 | Goal and executive plan system | Implemented as two append-only stores (`goals.jsonl`, `plans.jsonl`) and a user-origin command surface: `goal add/revise/list/show/update/evidence/complete/link`, `plan add/list/show/validate/history/compare/revise/approve/start/reconcile/cancel/supersede`, `recover`, and the read-only `work`/`next`. A plan is a draft until approved; approval is bound to a content hash and version; live validation re-reads the registry, goal revision, dependencies, evidence references, and recorded outcomes; activation revalidates and creates an ordinary task; every step is authorized again when it runs. A goal is completed only against evidence that names a live `success_verified` audit operation. It is not an autonomous planner: nothing here invents a goal, starts a plan, or grants permission. | `goal-system.test.js`, `executive-control.test.js` (scenarios A, B, C, E, F, G; 13 tests), `executive-cli.test.js` (4 real CLI tests), `executive-interruption.test.js` (scenario D: a real child process killed inside a plan step, 1 test), `executive-continuation.test.js` (7 tests), `executive-reliability.test.js` (8 tests, real child processes). See [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented) and [Batch AH](#batch-ah-executive-reliability-live-validity-proposals-and-continuation-as-implemented). |
 | Executive proposal layer | Implemented as an append-only `proposals.jsonl` store plus a user-only decision surface: `propose`, `proposal list/show/accept/reject/invalidate`. A configured model may produce a structured proposal of one of five kinds; it is stored as model-origin with its evidence references, assumptions, unknowns, risk, invalidation conditions, and live validation result. It cannot create, complete, approve, activate, execute, or change any record until a separate user-origin acceptance revalidates it and applies it through the ordinary goal or plan store. `advice` applies nothing, and a proposal is never a user record. | `executive-continuation.test.js`, `executive-reliability.test.js`, `capability-inventory.test.js`. No proposal test calls a real model: responses are deterministic synthetic text. See [Batch AH](#batch-ah-executive-reliability-live-validity-proposals-and-continuation-as-implemented). |
 | `stark/` research tree | Experimental C++17 neural research, built and tested separately from this app. Not a runtime dependency and not imported by `apex_app`. | The root `README.md` describes its build and historical gate state. |
-| Neural integration | **Proposed, not implemented.** Only the boundary document at the end of this README exists; no sidecar, process, wire format, or dependency is added. | Nothing to run. The proposal states what would have to be built. |
+| Neural integration | **Contract implemented, no runtime connected.** The versioned proposal boundary, its parser and refusals, one-request lifecycle, deadlines and cancellation, diagnostics, and a deterministic test transport live in `src/neural/`; `neural contract` declares them and reports `configured: false`. No child process, HTTP endpoint, model, or `stark/` import exists, and nothing is inferred. | `tests/neural-boundary.test.js` (28 tests). The simulated transport proves the gates, not generative quality. |
 | World Model, entity memory and evidence graph | Implemented as an append-only `world-model.jsonl` of user-origin records: stable entity ids with aliases and lifecycle, subject-predicate-object facts with typed values, relationships with directionality and inverse reads, events that keep happened-at, learned-at, and stored-at apart, evidence references to existing stores (never copies), retraction and supersession as later records, conservative contradiction detection that keeps both sides, deterministic identity candidates, and explicit user confirm/reject/merge/unmerge. Reads reduce the log at read time; a cutoff can replay it to reconstruct what had been recorded, what was in force, and what was known at that instant, keeping the current standing and later corrections separate (Batch AP-15); nothing is overwritten, and a model cannot write a record. | `world-model-core.test.js` (17 tests), `world-model-scenarios.test.js` (15 end-to-end scenarios A-O, including real CLI runs and real child processes), `temporal-belief.test.js` (18 historical-replay tests, including real CLI child processes). See [Batch AI](#batch-ai-world-model-entity-memory-and-evidence-graph-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Integrated cognitive reasoning layer | Implemented as a deterministic, read-only coordinator in `src/cognition/` over the stores APEX already has: request understanding and intent classification, bounded evidence retrieval with provenance and empty/unavailable/damaged distinctions, claim extraction with symmetric contradictions, a thirteen-step deliberation, qualitative uncertainty, clarification before any model call, a bounded grounding brief, and validation of model-authored structures. No stage calls a model, writes a store, grants authorization, or invents an answer. The model receives the brief as data and its reply is parsed as untrusted input; a citation it did not retrieve, a claim of execution, or a forged structure is rejected whole. | `cognition-understanding.test.js` (18 tests), `cognition-reasoning.test.js` (24 tests), `cognition-scenarios.test.js` (15 end-to-end scenarios A-O through the real controller with a synthetic capture backend). See [Batch AJ](#batch-aj-integrated-cognitive-reasoning-deliberation-and-grounded-responses-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
 | Executive bridge: action orchestration and verified execution | Implemented as a deterministic, model-free interpretation layer in `src/executive/` inside `controller.handle()`: a user's own words are mapped to registered actions, a bounded preview names every step and its risk before anything runs, approval is bound to a content hash and version, the authorized run executes through the existing `TaskRunner`, and the answer reports progress, failure boundary, recovery class, and continuation from records. It adds no store, no registry, no second authorization rule, and no second runner. No stage calls a model: the map from words to actions is vocabulary plus the action registry, and a request the mapping cannot resolve is clarified rather than guessed. It is not a general-purpose planner: it maps a bounded request over registered actions, keeps unknowns visible, and refuses what it cannot ground. | `executive-bridge.test.js` (21 tests), `executive-acceptance.test.js` (K-01 to K-25), `executive-adversarial.test.js` (J-01 to J-11) - 57 tests, every one with a stub or no backend, so none is evidence about a real model. See [Batch AK](#batch-ak-the-executive-bridge---safe-action-orchestration-and-verified-execution-as-implemented); measured cost is in [Benchmarks](#benchmarks). |
@@ -61,7 +63,8 @@ from a milestone number or a passing build.
 | Workspace lifecycle and named roots | Implemented as six user-origin lifecycle actions beside the read surface: `filesystem.mkdir`, `filesystem.move`, `filesystem.delete`, `filesystem.restore`, and `filesystem.batch` write, `filesystem.trash` reads; the writes are unplannable, and every action is independently verified. A delete is a reversible move into a bounded `.apex-trash/<uuid>/` quarantine with a manifest, never an erase; a move and a write never overwrite silently; a batch plans every operation before executing any and names what failed rather than rolling back silently. `APEX_WORKSPACES` adds up to 16 named roots, each independently validated; a name is a selector for the same boundary, never a wider one, and `workspace roots` lists them. | `workspace-lifecycle.test.js` (28 tests). |
 | Versioned backup and confirmed restore | Implemented as three user-origin, unplannable actions: `backup.export` writes one digest-addressed archive of the fixed APEX data-file list outside the data directory and refuses an existing destination; `backup.inspect` validates format, version, per-file digests, and archive digest without writing; `backup.restore` validates and requires a confirmation prefix of at least 8 digest characters before changing anything, reports `created`, `replaced`, and `unchanged` separately, copies any file it would overwrite into `backups/` first, refuses an overwrite without `replaceExisting`, and re-reads every restored file. A file the directory does not hold is created rather than replaced, so a rebuild into an empty directory needs no pre-restore copy. The inspect operation record keeps the manifest, not the store text. | `backup.test.js` (24 tests), `release-scale.test.js` (3 tests), `offline-release.test.js` (4 tests). |
 | Practical capability evaluation | Implemented as a deterministic suite (`tests/practical-eval.test.js`) that drives the real controller, stores and CLI in temporary directories and measures ten dimensions separately: capability coverage, supported completion, correct clarification, unsupported refusal, authorization correctness, execution verification, recovery correctness, outcome-reporting accuracy, feedback/adaptation integrity, and multi-step workflow completion. A dimension is counted only on the cases that exercise it; no combined score is produced, and no model is consulted. | `practical-eval.test.js` (13 tests, 10 suites). |
-| General planner, persistent learning, voice, UI | **Not implemented.** The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
+| Local browser interface | Implemented as a loopback-only, zero-dependency HTTP server (`src/ui/server.js`, started by `node bin/apex-serve.js`): the same controller the CLI calls, a conversation view read from the conversation log (including replies the model path stores as notices), bounded live updates, and approve/retry/cancel buttons that call the same user-origin controller methods. It binds `127.0.0.1` only, requires a process-random token, refuses cross-origin or non-JSON POSTs, and enforces body, message, subscriber and timeout bounds. It is a single-user local surface, not a hosted service, and it adds no capability, store, or authorization path. | `ui-server.test.js` (15 real HTTP tests, including a real `bin/apex-serve.js` child process). |
+| General planner, persistent learning, voice | **Not implemented.** The task planner is bounded and explicit, and the Batch AG plan layer records and validates plans the user authored; neither invents goals or acts on its own. Operation logs are not learning. | The scope paragraphs in this README, [Batch AG](#batch-ag-goals-executive-plans-and-the-control-loop-as-implemented), and [Future learning interface](#future-learning-interface-not-implemented). |
 
 The model path depends entirely on a backend you configure yourself. Without one,
 APEX answers deterministic requests, and for a model-shaped question it still reasons over its
@@ -213,6 +216,7 @@ exits 2, names the setting, and reports that no data was read or changed.
 | `APEX_MODEL_NAME` | model name; Ollama requires it when a URL is set | `local` (OpenAI-compatible only) |
 | `APEX_MODEL_TIMEOUT_MS` | 100-600000 | 30000 |
 | `APEX_MODEL_MAX_TOKENS` | 1-8192 | 512 |
+| `APEX_MODEL_CONTEXT_TOKENS` | 512-10000000 and greater than `APEX_MODEL_MAX_TOKENS` | unset (no prompt budget is enforced) |
 | `APEX_MODEL_RETRIES` | 0-3 | 1 |
 | `APEX_CONTEXT_TURNS` | 0-50 | 6 |
 | `APEX_FILESYSTEM_ROOT` | absolute directory; filesystem access is off when unset | none |
@@ -315,6 +319,7 @@ suites re-hash the directory afterwards to prove it.
 | `plan list [--limit N]`, `plan show <id>`, `plan validate <id>` | Read-only views: the plan log, one plan with its steps and outcomes, and a validation of a stored plan against the live registry and the live goal, task, and audit state (`validate` exits 1 when it would not pass). |
 | `plan history <id>`, `plan compare <id> [--from N] [--to N]` | Read-only views of every recorded plan version with its reason, and of the differences between two recorded versions. Comparing runs nothing and changes no approval. |
 | `plan candidates <goal-id> [--work <text>] [--cannot-use <action,action>] [--json]`, `plan replan <plan-id> [--reason <text>] [--cannot-use <action,action>] [--json]` | Read-only: the approaches a recorded goal currently supports, and the revised approaches a plan that stopped being viable would be answered by. Each generates candidates whose steps name registered actions only, gates them, compares them under the disclosed rule, and prints what each approach settles, leaves, risks, and can be undone by. `--cannot-use` excludes registered actions from the offering, `--json` prints the read's own data instead of its bounded answer. Nothing is recorded, approved, or started; `plan.replan` leaves the plan it answers byte-identical, and a revision needs its own approval. Exit 1 when the read could not be verified. |
+| `plan outline "<objective>" [--goal <id>] [--cannot-use <action,action>] [--json]` | Read-only: what a plan for a free-form objective would be against the live registry. It reports the objective's parts in written order, the typed step each mapped part becomes, the parts no registered capability can take, any duplicate a plan would run twice, the risks the configured policy states, and the alternatives that can be derived from the same mapping (narrowed, deduplicated, or with a planner-refused step dropped and named). A draft is included only when the plan checker accepts every step; an objective that excludes a capability its draft uses withholds the draft. Nothing is recorded, approved, or started. |
 | `plan outcome <plan-id> [--json]` | Read-only: what a plan's recorded execution established and what it left open, as seven separate questions with the operation each answer cites, and a verdict read from the records - `failed`, `uncertain`, `blocked`, `partial`, `awaiting_confirmation`, or `successful`. A verified step is reported as a fact about the audit log, never as real-world success. Records nothing. |
 | `plan assess <plan-id>` | Records that derived verdict as one assessment event against the plan version it was read from. The verdict is re-derived, never accepted as input, and a second recording of the same version is refused. The plan's version, status, content hash, timestamp and approval are unchanged; no goal is completed or reopened; nothing is authorized. |
 | `plan revise <id> --outcome <text> --step <json>... --reason <text>` | Replaces a draft or blocked plan with a new version. The revision clears any approval and must be approved again. |
@@ -409,6 +414,28 @@ stores through the model-free cognitive layer: when the retrieved records suppor
 returns a cited, bounded, deterministic reading (`success_deterministic`, not generated prose), and
 otherwise it says no model is configured, shows any relevant memory and knowledge it found (without
 summarising it), and **generates nothing**.
+
+## Local browser interface (loopback only)
+
+`node bin/apex-serve.js` starts a small local page for the same controller the CLI uses. It binds
+`127.0.0.1` only (any other host is refused) and prints a URL containing a token generated for this
+process. Opening that URL exchanges the token for an `HttpOnly`, `SameSite=Strict` cookie; every API
+call then requires that cookie or a `Bearer` token. The page shows the current conversation, the
+tasks and plans the stores hold, and buttons that call the same user-origin controller methods as
+`task approve`/`retry`/`cancel` and `plan approve`. The conversation view reads the conversation
+log, so it includes replies the model path stores as notices (for example a deterministic reading)
+as well as replayed turns.
+
+The surface is bounded and local: a strict Content-Security-Policy, no remote origin in the page or
+client, text written with `textContent` only, a JSON content type and an `x-apex-ui` header required
+on POST, a same-origin check whenever an `Origin` header is present, a 64 KiB body cap, 4,000-character
+messages, one chat in flight, at most eight event-stream subscribers, and a 120 s chat timeout. It is
+a single-user local surface, not a hosted service: it has no accounts, no TLS, and no multi-user
+isolation, and it serves nothing beyond this machine.
+
+`APEX_UI_PORT` selects the port (default 8787; `0` picks a free one). The page runs no inference of
+its own: with no model configured, its answers are the deterministic readings described above, and
+with one configured it sends the same request the CLI would.
 
 ### Exit codes
 
@@ -942,6 +969,7 @@ record, so the display is derived from the same facts the audit holds.
 
 ```
 bin/apex.js           entry point
+bin/apex-serve.js     local browser interface launcher (loopback only, token in the printed URL)
 src/cli.js            command line; maps results to exit codes
 src/app.js            composition root (wires the components)
 src/config.js         environment-variable configuration
@@ -1038,6 +1066,9 @@ src/operations/
                       runs, `output` is minimized, and an unfilterable body becomes a marked shell
 src/model/
   gateway.js          Model Gateway: replaceable backend; NoBackend; OpenAI-compatible and Ollama adapters
+src/ui/
+  server.js           loopback-only HTTP server: per-process token, cookie/Bearer auth, read-only state view, chat through the controller, task and plan approval, SSE; every request bounded
+  assets.js           the page, stylesheet and client script: textContent only, no remote origin
 ```
 
 **Separation of concerns.** The executor runs an action and reports the raw
@@ -1076,6 +1107,7 @@ holds identity, memory, control, or persistence.
 |---|---|---|---|---|
 | `app.status` | read | user, model | none | identity and memory count agree with a fresh store read |
 | `app.capabilities` | read | user, model | `query` (optional) | every listed action is registered; the total matches a fresh registry read |
+| `model.contracts` | read | user, model | none | the declaration is internally consistent with the fixed capability vocabulary, its limits match APEX configuration, and its identity fields agree with a fresh `status` read; it stays marked `probed:false` and `verified:false` |
 | `memory.search` | read | user, model | `query`, `limit` | returned ids equal a fresh store search; each record's content matches the store |
 | `memory.list` | read | user, model | `limit` | count equals the store count (up to limit); newest-first; content matches |
 | `memory.add` | **write** | user | `content` | record exists by id; content SHA-256 matches; provenance is `user` / `user_fact` |
@@ -3748,7 +3780,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 108 registered actions declare both `validate()` and `verify()` - 123 with a
+- **Verification.** All 111 registered actions declare both `validate()` and `verify()` - 126 with a
   filesystem root - so the
   independent verifier runs on every one - including the reads, which are verified against a fresh
   re-read rather than trusted from the first result. Registration refuses an action that omits either.
@@ -3798,6 +3830,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `prediction.longitudinal` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `app.status` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `app.capabilities` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
+| `model.contracts` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
+| `neural.contract` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `calc.evaluate` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `world.state` | user | read | never offered to a model plan | nothing (measured) | no (read) | no |
 | `world.entity.add`, `world.entity.alias`, `world.entity.retire`, `world.entity.merge`, `world.entity.unmerge`, `world.identity.decide`, `world.fact.add`, `world.relationship.add`, `world.event.add`, `world.statement.retract`, `world.statement.supersede` | user | write | never in a plan | `world-model.jsonl` (append-only; each record names its evidence) | no (world-model) | yes |
@@ -3822,6 +3856,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `plan.add`, `plan.revise`, `plan.approve`, `plan.cancel`, `plan.supersede` | user | write | never in a plan | `plans.jsonl` (linking also updates `goals.jsonl`) | no (executive) | yes |
 | `plan.list`, `plan.show`, `plan.validate` | user | read | - | nothing (measured) | no (read) | no |
 | `plan.candidates`, `plan.replan` | user + model | read | offered to both | nothing (measured) | no (read) | no |
+| `plan.outline` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `plan.outcome` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `work.review` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `plan.assess` | user | write | never in a plan | `plans.jsonl` (one `plan_assessment` event; the plan record's own bytes, status, approval and timestamp are unchanged) | no (executive) | yes |
@@ -3845,8 +3880,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 `filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.extract`,
 `filesystem.compare`, `filesystem.report`, the filesystem lifecycle and write actions, and
 `deadline.import` appear in the registry only when a workspace root is configured; there is no default
-root, and a model proposal cannot supply one, so the count is 108 registered actions by default and
-123 with a root. `deadline.list` needs no root: it reads the ledger, not a workspace, and the three
+root, and a model proposal cannot supply one, so the count is 111 registered actions by default and
+126 with a root. `deadline.list` needs no root: it reads the ledger, not a workspace, and the three
 `backup.*` actions need no root either: they read and replace the data directory itself. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
@@ -3863,7 +3898,7 @@ reconstruction; no action was added. Batch AP-16 added one unplannable cross-sto
 lifecycle kept whole, and every source's availability stated - it writes nothing and authorizes
 nothing; `history --at` in the CLI). No World
 Model write is plannable and every World Model read is user-origin, so the planning prompt offers
-exactly 22 reads to a model origin and 53 actions to a user origin with a root configured (45 without
+exactly 23 reads to a model origin and 54 actions to a user origin with a root configured (46 without
 one). The AP-16 read is offered to neither plan. Batch AP-17 added no action: it extended that same
 read to the goal, plan and task logs and to the operations audit log, so every count above is
 unchanged. Batch AP-18 also added no action: it extended that read to bounded memory and knowledge
@@ -3888,8 +3923,19 @@ only with a root. The backup work added three more user-origin actions that need
 `backup.export` writes one versioned archive outside the data directory, `backup.inspect` reads and
 validates an archive, and `backup.restore` replaces the data files from a validated, confirmed archive
 after writing a pre-restore copy. None is plannable and none is offered to either prompt. The model
-count stays at 22 and the user count rises to 53 (45 without a root). The
-default registry holds 108 actions and 123 with a root.
+count stays at 22 and the user count rises to 53 (45 without a root). The general-objective work
+(Batch T-03) added one more: `plan.outline`, a user + model read that answers a free-form objective
+against the live registry without recording anything. It is plannable and offered to both prompts, so
+the model count rises to 23 and the user count to 54 (46 without a root). The model-architecture work
+(Batch T-04) added one more: `model.contracts`, a user + model read that reports what the configured
+backend and APEX's own transport declare, without contacting the endpoint or inferring a capability
+from a successful call. It is unplannable, like `app.capabilities`, so neither prompt count changes.
+The neural-boundary work (Batch T-05) added one more: `neural.contract`, a user + model read that
+declares the versioned proposal contract APEX would speak - schemas, limits, refused shapes, the
+lifecycle counters and the trust class - and reports that no runtime is connected. It contacts no
+runtime, executes nothing, and is unplannable, so neither prompt count changes.
+The default registry holds 111 actions and 126 with a root. No other action was added by those
+batches.
 
 ### The inconsistencies this found, and what became of them
 
@@ -5042,6 +5088,21 @@ re-reads.
   unavailable whenever the audit log holds no per-action duration, rather than estimated. An approach the
   capabilities cannot carry is reported as skipped with the reason; a goal with no open criterion
   generates nothing.
+- **General objective outline** (`src/plans/objective.js`, `plan.outline`). A free-form objective,
+  with no goal record, is read against the same live registry and the same plan checker: parts keep
+  their written order, each part that maps becomes the exported step with its input and dependencies,
+  and a part no capability can take is named with the reason. The single draft is produced by
+  `synthesizePlan` and `validatePlanContent`, so it carries every step, precondition, assertion and
+  policy the ordinary plan path enforces - this module adds no policy and no second planner.
+  Alternatives are derived only by re-synthesizing from the same part texts with an exclusion or a
+  deduplication applied, never by inventing a step: `narrowed` (unsupported parts dropped),
+  `deduplicated` (a repeated action+input dropped), and `policy-relieved` (only when the checker
+  refuses some but not all steps; the refused actions are named). `--cannot-use` withholds the primary
+  draft whenever it would contain an excluded action, and the answer states that rather than printing
+  a draft the request ruled out. Risks, uncertainty, revalidation and recovery are read from the
+  existing plan and task machinery; effort is reported as unavailable rather than estimated.
+  `authorizes`, `recorded` and `approved` are always false, and the action's verifier re-derives the
+  whole outline from the same objective and registry and refuses when the bytes differ.
 - **Evaluation and selection** (`src/plans/evaluation.js`, `src/plans/outcomes.js`, `src/executive/selection.js`).
   Six hard gates first - a candidate that fails one is excluded and says which - then eight ranked
   dimensions compared as recorded: `criterion_coverage`, `uncertainty`, `step_risk`, `reversibility`,
@@ -5079,10 +5140,11 @@ re-reads.
   plan for the same goal - and states in the same answer that this disclosure changed no gate, no ranked
   dimension, no score and no candidate digest. Adaptations are derived from repeated feedback, become
   active only through `adaptation approve`, and conflicting evidence is preserved rather than averaged.
-- **The user-facing surface.** `plan.candidates`, `plan.replan` and `plan.outcome` are audited reads that
-  record nothing outside their own operation; `plan.assess` is the one write. All four are
-  `node bin/apex.js` commands (`plan-cli.test.js`), including the `--json` view the outcome answer's own
-  bound names, so a hint in an APEX answer is a command the terminal takes.
+- **The user-facing surface.** `plan.candidates`, `plan.replan`, `plan.outline` and `plan.outcome` are
+  audited reads that record nothing outside their own operation; `plan.assess` is the one write. All
+  five are `node bin/apex.js` commands (`plan-cli.test.js`, `objective-planner.test.js`), including the
+  `--json` view the outcome answer's own bound names, so a hint in an APEX answer is a command the
+  terminal takes.
 
 ### Where the shipped behaviour differs from the brief, stated as the records support it
 
@@ -8188,7 +8250,7 @@ completion, so a later batch cannot claim progress by adding vocabulary.
    the verdict changes a recommendation, not a gate; there is no autonomous replanning from a verdict;
    and a matched verdict changes nothing at all.
 7. **Neural-runtime integration.** Only through the contract described in
-   [Neural integration boundary](#neural-integration-boundary-proposal-not-implemented):
+   [Neural runtime integration boundary](#neural-runtime-integration-boundary-contract-no-runtime-connected):
    proposals in, authority out. Depends on 6, because a proposer needs an evaluation
    channel to be measured at all. Acceptance: a real runtime answers a real request through
    the boundary, is classified as a proposer in the audit record, and cannot write to any
@@ -8400,25 +8462,39 @@ Batch AP-02 extends that exception to a completed evaluation of an expectation, 
 user-approved candidate derived from it. It changes nothing else, and an unapproved prediction verdict
 still drives no decision.
 
-## Neural integration boundary (proposal, not implemented)
+## Neural runtime integration boundary (contract, no runtime connected)
 
 `stark/` is a C++17/CMake research tree of simulation binaries and tests. It has no
 long-running service, no stable wire format, and its demos write human-readable text to
-stdout. Nothing in `apex_app` imports it, and this proposal does not add a sidecar, a
-process, or a dependency. It defines the smallest interface APEX would implement if a
-standalone neural runtime existed, so that the runtime can propose without ever gaining
-authority. No part of it is built or tested against a trained model.
+stdout. Nothing in `apex_app` imports it, and this work adds no sidecar, no process, and
+no dependency. What it does add is the smallest interface APEX would speak if a
+standalone neural runtime existed, implemented as a closed module in `src/neural/` and
+declared by the read-only `neural.contract` action. The runtime can propose; it never
+gains authority.
 
 **Review basis.** APEX already has the boundary it needs on the model side
 (`src/model/gateway.js`): a backend returns text or a classified failure, the controller
 wraps the result in its own provenance, and proposals are checked by the planner and
 registry before anything runs. The neural interface below is the same shape with one
 difference: it accepts only structured proposals, never free-form actions, and it is
-expected to be absent.
+expected to be absent. No neural model has been trained, loaded, or contacted for this
+contract, and no inference has been run.
+
+**What is implemented, and what is not.** `src/neural/contract.js` builds a bounded
+request, parses and validates a response, and classifies every refusal by name.
+`src/neural/lifecycle.js` enforces one in-flight request and keeps bounded counters.
+`src/neural/runtime.js` drives a pluggable transport with deadlines, cancellation,
+retryability rules, and provenance. `src/neural/diagnostics.js` checks a boundary
+declaration for internal consistency. `src/neural/simulated.js` is a deterministic
+transport that answers canned frames; it exists only so tests can exercise the parser and
+the gates. **No process or HTTP transport is implemented**: there is no child to spawn
+and no endpoint to call. `createApp()` accepts an injected boundary but never selects
+one, `createAppFromEnv()` passes none, and `neural.contract` reports
+`configured: false`.
 
 ### 1. Request and response schema
 
-Transport is one JSON object per line. APEX sends:
+The framing is one JSON object per line. APEX builds:
 
 ```
 {"schema":"apex.neural.request/1","requestId":"<uuid>","kind":"propose",
@@ -8427,7 +8503,7 @@ Transport is one JSON object per line. APEX sends:
  "deadlineMs":5000}
 ```
 
-The runtime replies once:
+The runtime would reply once:
 
 ```
 {"schema":"apex.neural.response/1","requestId":"<same uuid>",
@@ -8440,102 +8516,130 @@ The runtime replies once:
 
 `knowledge_claim.payload` is `{subject, relationship, object, evidence?}`.
 `memory_claim.payload` is `{content}` (never `private`). `plan.payload` is
-`{steps:[{id,description,action,input,depends_on}]}`, exactly the shape
-`parseModelPlan()` already validates. Unknown top-level fields are rejected; unknown
+`{steps:[{id,description,action,input,depends_on}]}`, and `depends_on` is mapped to the
+`dependsOn` the planner already reads. Unknown top-level fields are rejected; unknown
 proposal kinds are ignored and counted, never guessed into an action. `confidence` is
-advisory data and has no authorization meaning.
+advisory data, bounded to `0..1`, and has no authorization meaning. Accepted proposals
+and their payloads are deep-frozen: later code cannot edit a proposal into a plan.
 
 ### 2. Protocol and process boundary
 
-Either a spawned child process speaking newline-delimited JSON on stdin/stdout, or a
-loopback HTTP endpoint with the same bodies. APEX owns the lifecycle: one request at a
-time, no inherited stdin, a clean environment with no secrets, and no access to the
-APEX data directory by contract. A child is killed on deadline or cancellation; an HTTP
-connection is aborted. The runtime cannot call back into APEX, open stores, or invoke
-actions; its only output is the response line. stderr is captured as bounded,
-secret-redacted diagnostic text.
+> **Design only. Not implemented.** No child process is spawned, no socket is opened, and
+> no transport ships that could do either. The contract module is transport-agnostic and
+> the only transport in the tree is the deterministic simulated one used by tests.
+
+The intended transports are a spawned child process speaking newline-delimited JSON on
+stdin/stdout, or a loopback HTTP endpoint with the same bodies. APEX would own the
+lifecycle: one request at a time, no inherited stdin, a clean environment with no
+secrets, and no access to the APEX data directory by contract. A child would be killed on
+deadline or cancellation; an HTTP connection would be aborted. The runtime cannot call
+back into APEX, open stores, or invoke actions; its only output is the response line.
+Stderr would be captured as bounded, secret-redacted diagnostic text. What exists today
+is the client half of that shape: `runtime.propose()` takes a transport object, applies
+the deadline and abort signal, and discards a reply that arrives after cancellation.
 
 ### 3. Version compatibility
 
 APEX sends `apex.neural.request/1`. A runtime that answers with another
-`schema` value is refused as `UNSUPPORTED_VERSION`; it is never parsed leniently.
-Additive optional fields are allowed within the same major version. A response missing a
-required field, carrying a different `requestId`, or containing more proposals than the
-request limit is `MALFORMED_RESPONSE`. The runtime version is recorded with each
-proposal so later changes can be attributed.
+`schema` value is refused as `UNSUPPORTED_VERSION`; it is never parsed leniently. This is
+enforced in `parseNeuralResponse()`. Fields not in the contract are refused the same way
+(`MALFORMED_RESPONSE`), including a runtime that tries to declare its own `verified`
+state. A response missing a required field, carrying a different `requestId`, or
+containing more proposals than the request limit is `MALFORMED_RESPONSE`. The runtime
+name and version are attached to each accepted result's provenance so later changes can
+be attributed.
 
 ### 4. Message size limits
 
-The request body is capped at 64 KiB and response at 1 MiB, matching the gateway's
+The request body is capped at 64 KiB and the response at 1 MiB, matching the gateway's
 existing `MAX_RESPONSE_CHARS` bound. At most 8 proposals and 8 plan steps are accepted
 (the planner's `MAX_STEPS`), proposal text is bounded, and a larger response is
-`RESPONSE_TOO_LARGE`, not truncated into something that might parse differently.
-Reading stops at the cap, so an unbounded stream cannot exhaust memory.
+`RESPONSE_TOO_LARGE`, not truncated into something that might parse differently. The
+parser refuses an oversized string before `JSON.parse()`, so an unbounded stream cannot
+exhaust memory. Per-request limits are honoured: a reply with a ninth proposal, a plan
+step past the request's `maxPlanSteps`, or output past `maxOutputChars` is refused whole.
 
 ### 5. Timeouts and cancellation
 
-Each request carries a deadline (default 5,000 ms, hard maximum 30,000 ms). Exceeding it
-is `TIMEOUT`; killing the child is not proof that it produced no side effect outside
-APEX, so a request is never replayed automatically. Cancellation closes the input and
-terminates the process (or aborts the HTTP request); an interrupted request is
-`INTERRUPTED`, and only a request that produced no completed response may be retried by
-the caller. APEX never retries an ambiguous response, matching the gateway's rule that
-only failures with no answer are retryable.
+Each request carries a deadline (default 5,000 ms, hard maximum 30,000 ms; a larger value
+is refused when the request is built). Exceeding it is `TIMEOUT`, and `runtime.propose()`
+races the transport against a timer so a never-resolving transport cannot hang the
+caller. Killing a child would not be proof that it produced no side effect outside APEX,
+so a request is never replayed automatically. Cancellation (an `AbortSignal`) is
+`CANCELLED` and an interrupted request is `INTERRUPTED`; only a request whose failure is
+classified retryable - no completed answer, `TIMEOUT` or `UNAVAILABLE` - sets
+`retryableByCaller: true`. APEX never retries an ambiguous response, matching the
+gateway's rule that only failures with no answer are retryable.
 
 ### 6. Resource limits
 
-One in-flight request, bounded input and output, and a deadline cover the interface
-itself. On platforms that support it the child is placed in a job object or rlimit with
-a memory and CPU cap; without one, the deadline and output cap are the enforced limits
-and diagnostics say so. APEX does not trust runtime-reported usage figures for policy;
-they are recorded as claims, not measurements.
+One in-flight request is enforced by the lifecycle and a second concurrent request is
+refused as `REQUEST_IN_PROGRESS` and counted as rejected, without disturbing the
+in-flight one. Input, output, proposal count, plan-step count and the deadline bound the
+interface itself. **Job objects and rlimits are not implemented**, because there is no
+child process to constrain; with a real transport those would be the enforced limits and
+the declaration says so. APEX does not trust runtime-reported usage figures for policy;
+they would be recorded as claims, not measurements, and the current declaration carries
+none.
 
 ### 7. Error and unavailable-runtime behavior
 
-`unavailable` and transport failures map to the existing gateway outcomes
-(`UNREACHABLE`, `TIMEOUT`, `INTERRUPTED`, `MALFORMED_RESPONSE`, `EMPTY_RESPONSE`,
-`RESPONSE_TOO_LARGE`, `UNSUPPORTED_VERSION`). A failure is reported as a failure, never
-as an empty successful answer, and never as a reason to execute anything. With no
-runtime configured, the path behaves exactly as it does today: the model is unavailable
-and the request is answered honestly or refused.
+`unavailable` and transport failures map to classified outcomes
+(`NOT_CONFIGURED`, `UNREACHABLE`, `TIMEOUT`, `INTERRUPTED`, `CANCELLED`,
+`MALFORMED_RESPONSE`, `EMPTY_RESPONSE`, `RESPONSE_TOO_LARGE`, `UNSUPPORTED_VERSION`,
+`REQUEST_IN_PROGRESS`, `INVALID_REQUEST`). A failure is reported as a failure, never as
+an empty successful answer, and never as a reason to execute anything. `unavailable` and
+`error` statuses may not carry proposals, and an accepted reply with no proposals is
+`EMPTY_RESPONSE`, not a silent success. With no runtime configured - which is the only
+state APEX ships in - `propose()` returns `NOT_CONFIGURED` before touching any transport,
+and the request path is exactly what it was before this contract existed.
 
 ### 8. Provenance and trust classification
 
 A neural result is `model_proposed` at most. APEX derives the provenance itself
-(`origin: "model_output"`, `backend: "neural-runtime"`, runtime name and version), and a
-runtime cannot supply `user_supplied` or `user_confirmed`; such a field is ignored or
-rejects the response. Model-proposed knowledge and memory writes remain refused, as they
-are today; a proposal only becomes stored information after an explicit user-origin
-command. Plan proposals enter `checkSteps()` with the `model` origin, so write steps wait
-for approval and user-only actions are refused.
+(`origin: "model_output"`, `backend: "neural-runtime"`, runtime name and version,
+`verified: false`), and a runtime cannot supply `user_supplied` or `user_confirmed`; such
+a field is refused by the parser. Model-proposed knowledge and memory writes remain
+refused, as they are today: `checkSteps()` turns a `memory_claim` into a `memory.add`
+step only to refuse it ("a model-proposed memory write cannot be stored as a user fact")
+and refuses `knowledge.add` outright. A proposal only becomes stored information after an
+explicit user-origin command. Plan proposals enter `checkSteps()` with the `model`
+origin, so write steps wait for approval and user-only actions are refused.
 
 ### 9. Logging and diagnostic behavior
 
-The operation record stores the request id, kind, sizes, latency, runtime version,
-outcome code, and proposal counts - not the raw prompt or response. Stderr is bounded and
-redacted with the same secret rules as other diagnostic text. `status` and `diagnose`
-report the runtime as not configured, unavailable, listed/version-visible, or
-inference-tested; a process that merely responds is reported as reachable, never as
-healthy, and no diagnostic check starts or mutates the runtime.
+A completed request is recorded in the lifecycle as a bounded summary: request id, kind,
+sizes, latency, outcome code, runtime version, and proposal counts - never the prompt or
+the response text, which a test pins by searching the record for an input word. The
+`neural.contract` read reports the declared schemas, limits, isolation rules and lifecycle
+counters, and states `verified: false`, `probed: false`, `inferenceTested: false`. It is
+reachable as `node bin/apex.js neural contract [--json]`. **`status` and `diagnose` are
+not extended**: they do not mention a neural runtime at all, so nothing overstates what
+is configured. No diagnostic check starts, mutates, or contacts a runtime.
 
 ### 10. Proposing without authorizing
 
 There are exactly three accepted proposal kinds, and each lands on an existing,
-unchanged gate: `knowledge_claim` and `memory_claim` are shown to the user and can only
+unchanged gate: `knowledge_claim` and `memory_claim` are shown as proposals and can only
 be stored by a user-origin command; `plan` is stored as an unapproved proposal and runs
-only through the existing approve-then-execute path. The runtime cannot approve, retry,
-cancel, write a store, change policy, or select an unlisted action. Its output is data in
-the same trust class as model text today.
+only through the existing approve-then-execute path. Accepted results carry
+`authorizes: false`, `executed: false`, `recorded: false` and `verified: false`. The
+runtime cannot approve, retry, cancel, write a store, change policy, or select an
+unlisted action. Its output is data in the same trust class as model text today.
 
 ### 11. Testing without a trained neural model
 
-A protocol conformance stub (a small executable or Node script that speaks the frames
-above) exercises the interface: valid proposal, version mismatch, missing and extra
-fields, oversized request and response, wrong `requestId`, malformed JSON, empty body,
-timeout, cancellation, duplicate response, `unavailable`, and a proposal that the
-registry or planner must refuse. End-to-end tests then prove the gates: a proposed
-knowledge write is denied, a proposed plan needs approval, and a failed runtime changes
-nothing. This requires no training and does not run any `stark/` binary.
+`tests/neural-boundary.test.js` exercises the interface with a controllable deterministic
+transport: a valid proposal, version mismatch, missing and extra fields, oversized
+request and response, wrong `requestId`, malformed JSON, an empty body, a timeout, a
+cancellation with a late reply, a second concurrent request, `unavailable`, and eleven
+malformed payload shapes for known kinds. It then proves the gates end to end: a
+`memory_claim` turned into a plan step is refused by `checkSteps()`, `knowledge.add` is
+refused for either origin, the surviving read-only plan step executes nothing (no memory,
+task or operation record appears), and the declaration read creates no store file. This
+requires no training, runs no `stark/` binary, and contacts no endpoint. What it does not
+test is anything a trained model would produce - there is no model, so there is no
+generative quality to claim.
 
 
 This is a bounded implementation under the Local Alpha mission. It does not declare

@@ -6,6 +6,7 @@
 // records cannot answer is reported as unanswered rather than filled in.
 import { BOUNDS, ClaimKind, DecisionKind, Disclosure, MissingInfo, Uncertainty, UncertaintyAbout } from './vocabulary.js';
 import { validateClaims } from './claims.js';
+import { deriveHypotheses } from './hypotheses.js';
 
 const CLARIFY_PRIORITY = [
   MissingInfo.INTENT,
@@ -432,21 +433,37 @@ export function deliberate({
   record(7, 'known-vs-inferred', { known: supporting.length + contradicting.length, inferred: inferred.length, assumptions: assumptions.length });
   const interpretations = interpretationsFor(understanding, claims);
   record(8, 'interpretations', { count: interpretations.length, chosen: 0 });
-  for (const assumption of assumptions) record(9, 'assumption', { code: assumption.code });
+  // Competing readings of a disagreement, the metadata that may explain it, and the
+  // facts/assumptions/unknowns ledger. It restates the assumptions already derived above, so the
+  // ledger and the assumptions list cannot disagree about what was assumed.
+  const hypotheses = deriveHypotheses({
+    understanding,
+    retrieval,
+    claims,
+    assumptions,
+  });
+  record(9, 'hypotheses', {
+    count: hypotheses.counts.hypotheses,
+    explanations: hypotheses.counts.explanations,
+    selected: hypotheses.counts.selected,
+    facts: hypotheses.counts.facts,
+    unknowns: hypotheses.counts.unknowns,
+  });
+  for (const assumption of assumptions) record(10, 'assumption', { code: assumption.code });
   const clarification = clarificationFor(understanding, retrieval, claims);
-  record(10, 'clarification', { needed: clarification.needed, missing: clarification.missing });
+  record(11, 'clarification', { needed: clarification.needed, missing: clarification.missing });
   const uncertainty = uncertaintyFor(understanding, retrieval, claims);
   const conclusion = conclusionFor(understanding, retrieval, claims, uncertainty, clarification);
   const recommendation = recommendationFor(understanding, continuation, claims);
-  record(11, 'proposed-conclusion', { kind: conclusion.kind, claimIds: conclusion.claimIds });
+  record(12, 'proposed-conclusion', { kind: conclusion.kind, claimIds: conclusion.claimIds });
   const claimValidation = validateClaims(claims, retrieval?.byId ?? new Map());
-  record(12, 'validation', { ok: claimValidation.ok, problems: claimValidation.problems.length });
+  record(13, 'validation', { ok: claimValidation.ok, problems: claimValidation.problems.length });
   const decision = clarification.needed
     ? DecisionKind.CLARIFY
     : understanding.unsupported
       ? DecisionKind.REFUSE
       : DecisionKind.ANSWER;
-  record(13, 'decision', { decision: decision });
+  record(14, 'decision', { decision: decision });
 
   const disclosures = [];
   const disclose = (code) => {
@@ -461,6 +478,7 @@ export function deliberate({
   if (claims.some((claim) => claim.kind === ClaimKind.HISTORICAL)) disclose(Disclosure.EVIDENCE_HISTORICAL);
   if (claims.some((claim) => claim.kind === ClaimKind.UNKNOWN)) disclose(Disclosure.EVIDENCE_UNKNOWN_VALIDITY);
   if (claims.some((claim) => claim.kind === ClaimKind.EXPECTATION)) disclose(Disclosure.EXPECTATION_NOT_FACT);
+  if (hypotheses.counts.hypotheses > 0) disclose(Disclosure.COMPETING_READINGS_NOT_SETTLED);
   if (inferred.length > 0) disclose(Disclosure.INFERENCE_MARKED);
   if (assumptions.length > 0) disclose(Disclosure.ASSUMPTION_STATED);
   if (clarification.needed) disclose(Disclosure.CLARIFICATION_REQUIRED);
@@ -488,6 +506,7 @@ export function deliberate({
     conclusion,
     uncertainty,
     recommendation,
+    hypotheses,
     decision,
     disclosures,
     validation: claimValidationResult,

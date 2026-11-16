@@ -239,7 +239,7 @@ function deliberationFor({ request, evidenceList, understanding = null, continua
   };
 }
 
-test('deliberation records the thirteen stated steps and links its conclusion to claims', () => {
+test('deliberation records the fourteen stated steps and links its conclusion to claims', () => {
   const evidenceList = [
     evidence('memory', 'm-1', 'Parcel Locker is operational', { subject: { entityId: 'e-locker', name: 'Parcel Locker' } }),
   ];
@@ -249,11 +249,11 @@ test('deliberation records the thirteen stated steps and links its conclusion to
     worldState: { entities: new Map([['e-locker', { id: 'e-locker', name: 'Parcel Locker', status: 'active', aliases: [] }]]) },
   });
   const { result } = deliberationFor({ request: 'is Parcel Locker operational?', evidenceList, understanding });
-  assert.deepEqual(result.steps.map((step) => step.step), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  assert.deepEqual(result.steps.map((step) => step.step), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
   assert.deepEqual(result.steps.map((step) => step.name), [
     'question', 'subquestions', 'scope', 'supporting-evidence', 'contradicting-evidence',
-    'missing-evidence', 'known-vs-inferred', 'interpretations', 'assumption', 'clarification',
-    'proposed-conclusion', 'validation', 'decision',
+    'missing-evidence', 'known-vs-inferred', 'interpretations', 'hypotheses', 'assumption',
+    'clarification', 'proposed-conclusion', 'validation', 'decision',
   ]);
   assert.equal(result.decision, DecisionKind.ANSWER);
   assert.equal(result.conclusion.kind, 'supported');
@@ -602,7 +602,7 @@ test('the engine runs every stage over the seeds it is given', async () => {
   assert.ok(analysis.brief.lines.length > 0);
   assert.deepEqual(
     analysis.audit.stages.map((stage) => stage.name),
-    ['request', 'retrieval', 'claims', 'deliberation', 'response'],
+    ['request', 'objective', 'retrieval', 'claims', 'deliberation', 'response'],
   );
   assert.ok(Object.values(analysis.timings).every((value) => Number.isFinite(value)));
 });

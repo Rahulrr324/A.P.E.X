@@ -31,6 +31,7 @@ import {
 } from '../plans/model.js';
 import { renderPlan } from '../plans/format.js';
 import { candidatesForGoal, revisedCandidates, renderCandidates } from '../plans/candidates.js';
+import { MAX_OBJECTIVE_CHARS, outlineObjective, renderOutline } from '../plans/objective.js';
 import { evaluateCandidates, renderAdaptationDecision, renderEvaluation } from '../plans/evaluation.js';
 import {
   constraintDigest, constraintLedger, planConstraintFinding, readConstraintRecords, renderConstraints,
@@ -842,6 +843,76 @@ export function planActions(store) {
         if (plan.status !== PlanStatus.SUPERSEDED) return { ok: false, detail: `plan is ${plan.status}, not superseded` };
         if (plan.supersededBy !== by) return { ok: false, detail: 'the recorded replacement differs from the request' };
         return { ok: true, detail: 'supersession confirmed; both plans remain readable' };
+      },
+    },
+
+    {
+      name: 'plan.outline',
+      description: 'Read a free-form objective against the live registry and answer what a plan for it would be: the parts in the order they were written, the step each mapped part becomes, the parts no registered capability can take, the alternatives that can be derived from the same mapping without inventing anything, and the risks, uncertainty, revalidation, and recovery the existing plan and task machinery state. Read-only: nothing is recorded, approved, or started, and no step, parameter, or intent is invented.',
+      inputHint: '{"objective":"free-form text, 1-500 characters","goal":"optional goal id this objective serves","cannot_use":["optional registered action names this outline must not offer"]}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      validate(input) {
+        const o = expectObject(input ?? {}, ['objective', 'goal', 'goalId', 'cannot_use']);
+        const goalRef = o.goalId ?? o.goal;
+        return {
+          objective: textField(o.objective, 'objective', MAX_OBJECTIVE_CHARS),
+          goalRef: optionalTextField(goalRef, 'goal', 64),
+          cannotUse: cannotUseOf(o.cannot_use),
+        };
+      },
+      async execute(ctx, { objective, goalRef, cannotUse }) {
+        const registry = registryFor(ctx);
+        assertKnownActions(registry, cannotUse);
+        const goal = goalRef ? await goalForRead(ctx, goalRef) : null;
+        const outline = outlineObjective({ objective, registry, goal, cannotUse });
+        const draftNote = outline.draft
+          ? 'a recordable draft is part of the answer'
+          : (outline.draftWithheld ? 'the full draft is withheld because the request excluded a capability it names' : 'no recordable draft could be produced');
+        return {
+          summary: `${outline.counts.parts} part(s) read, ${outline.counts.steps} step(s) mapped, `
+            + `${outline.counts.missing} part(s) no capability can take; ${draftNote}`,
+          data: outline,
+          display: renderOutline(outline),
+        };
+      },
+      // The outline is a pure function of the objective, the live registry, and the goal record. The
+      // verifier re-runs it and compares the digest, then re-asks the registry about every action the
+      // answer listed - an outline is not permission, and a capability that moved after it was printed
+      // has to invalidate it rather than be silently reported as still available.
+      async verify(ctx, { objective, goalRef, cannotUse }, result) {
+        const registry = registryFor(ctx);
+        const goal = goalRef ? await goalForRead(ctx, goalRef) : null;
+        const again = outlineObjective({ objective, registry, goal, cannotUse });
+        if (again.digest !== result.data.digest) {
+          return {
+            ok: false,
+            detail: 'an independent read of the same objective gives different bytes, so the registry, the goal record, or a recorded capability this outline named has moved since it was read',
+          };
+        }
+        if ((again.goal?.id ?? null) !== (result.data.goal?.id ?? null)) {
+          return { ok: false, detail: 'the goal this outline was read against differs from the one the answer names' };
+        }
+        const unregistered = again.parts.filter((p) => p.action && !registry.get(p.action));
+        if (unregistered.length > 0) {
+          return {
+            ok: false,
+            detail: `a step names an action the registry no longer holds: ${[...new Set(unregistered.map((p) => p.action))].join(', ')}`,
+          };
+        }
+        const refused = again.parts.filter((p) => p.action && p.authorization.userDecision !== 'allow');
+        if (refused.length > 0) {
+          return {
+            ok: false,
+            detail: `the registry now refuses a step this outline listed: ${[...new Set(refused.map((p) => p.action))].join(', ')}`,
+          };
+        }
+        return {
+          ok: true,
+          detail: `${again.counts.steps} step(s) reproduce byte for byte from the same objective and the live registry`
+            + `${goal ? `, and the goal record ${shortId(goal.id)} v${goal.revision} still reads the same` : ''}`
+            + '; every listed action is still registered and authorized for the user; this read recorded and approved nothing',
+        };
       },
     },
 

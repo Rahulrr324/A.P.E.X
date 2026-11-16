@@ -129,6 +129,20 @@ export class ConversationStore {
       .slice(-limit);
   }
 
+  // The last `limit` turns of one session as the user saw them, oldest first, including origins
+  // that are kept for history but never replayed as model context (notices, questions). A display
+  // surface must show the answer the user received, so it cannot reuse the replay filter. A damaged
+  // log is refused here for the same reason as in `recent`: a partial transcript would misrepresent
+  // the exchange.
+  async transcript(sessionId, limit) {
+    if (!Number.isInteger(limit) || limit <= 0) return [];
+    const { records, corrupt } = await this.log.load();
+    if (corrupt.length > 0) {
+      throw new StoreError(`conversation store contains ${corrupt.length} corrupt line(s); refusing incomplete history`);
+    }
+    return records.filter((t) => t.sessionId === sessionId).slice(-limit);
+  }
+
   // A count of one session's turns. It follows the rule the replay readers already state above:
   // a damaged log is refused, not reported as a smaller history. Without that, a caller would get
   // a number that silently excludes whatever the damaged lines held.

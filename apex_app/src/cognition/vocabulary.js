@@ -183,6 +183,8 @@ export const Disclosure = Object.freeze({
   MODEL_OUTPUT_UNVERIFIED: 'model_output_unverified',
   MODEL_STRUCTURE_REJECTED: 'model_structure_rejected',
   RECOMMENDATION_NOT_EXECUTED: 'recommendation_not_executed',
+  // More than one reading of the same records is possible, and no rule selects between them.
+  COMPETING_READINGS_NOT_SETTLED: 'competing_readings_not_settled',
 });
 
 // Bounds for every stage. They are exported so tests and the audit can cite the same numbers the

@@ -80,6 +80,8 @@ import {
 } from '../executive/handoff.js';
 import { RequestMode, StatusQuestion } from '../executive/vocabulary.js';
 import { GatewayResponseClass } from '../model/gateway.js';
+import { describeProviderContract } from '../model/contract.js';
+import { describeNeuralBoundary } from '../neural/diagnostics.js';
 
 export const MAX_REQUEST_CHARS = 4000;
 const MAX_OUTPUT_CHARS = 4000;
@@ -584,6 +586,7 @@ export class CognitiveController {
     worldModel = null,
     deadlines = null,
     dataDir = null,
+    neural = null,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -637,6 +640,10 @@ export class CognitiveController {
     // The data directory the backup commands read and replace. The actions close over it at
     // composition time; this field only decides whether the commands are available at all.
     this.dataDir = dataDir;
+    // The neural boundary is declared, never exercised from a request: no transport is configured
+    // by the application, and even when one is injected for a test, an action sees only the plain
+    // declaration. It is held here so `neural.contract` can report it.
+    this.neural = neural;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -2722,6 +2729,14 @@ export class CognitiveController {
       // The deadline ledger, readable and optional. work.review discloses the recorded dates it
       // holds; a configuration without the ledger omits the section rather than showing an empty one.
       deadlines: this.deadlines,
+      // A plain declaration of the model boundary, not the gateway itself. An action can report
+      // what the provider declares and what APEX enforces, but it cannot reach the endpoint: no
+      // action gets a handle that would let it make a model call outside the request path.
+      modelContract: describeProviderContract(this.gateway),
+      // The same shape on the neural side: versions, limits, isolation, trust, and whether a
+      // transport is connected. Inspecting it contacts nothing; the simulated transport is
+      // reported as available to tests, never as an integrated runtime.
+      neuralContract: describeNeuralBoundary(this.neural),
     };
   }
 
@@ -3064,6 +3079,12 @@ export class CognitiveController {
     this.#requireGoals();
     const op = this.#planningOp('plan.candidates', `plan candidates ${truncate(String(goal ?? ''), 40)}`);
     const step = await this.runAction('plan.candidates', { goal, work, cannot_use: cannotUse }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async planOutline({ objective, goal = null, cannotUse = [] } = {}) {
+    const op = this.#planningOp('plan.outline', `plan outline ${truncate(String(objective ?? ''), 40)}`);
+    const step = await this.runAction('plan.outline', { objective, goal, cannot_use: cannotUse }, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 
@@ -6377,6 +6398,39 @@ export class CognitiveController {
     return { display, verified: v.outcome === Outcome.SUCCESS_VERIFIED, data: exec.result.data };
   }
 
+  // A direct, unaudited read of the declared model contract. Like capabilitiesReport, it runs the
+  // registered read itself so the answer cannot offer a contract the action would refuse, and it
+  // never contacts the endpoint.
+  async modelContracts() {
+    const def = this.registry.get('model.contracts');
+    const ctx = this.#actionContext(null, 'user');
+    const exec = await executeAction(def, ctx, {});
+    if (exec.status !== 'ok') {
+      return { display: `could not read the model contract: ${redactSecrets(exec.error.message)}`, verified: false, data: null };
+    }
+    const v = await this.verifier.check(def, ctx, exec.input, exec.result);
+    const display = v.outcome === Outcome.VERIFICATION_FAILED
+      ? `${exec.result.display}\nEvidence: the contract check failed: ${redactSecrets(v.detail)}`
+      : exec.result.display;
+    return { display, verified: v.outcome === Outcome.SUCCESS_VERIFIED, data: exec.result.data };
+  }
+
+  // The same direct read for the neural boundary. It runs the registered read so the answer
+  // cannot offer a declaration the action would refuse, and it contacts no runtime.
+  async neuralContract() {
+    const def = this.registry.get('neural.contract');
+    const ctx = this.#actionContext(null, 'user');
+    const exec = await executeAction(def, ctx, {});
+    if (exec.status !== 'ok') {
+      return { display: `could not read the neural boundary: ${redactSecrets(exec.error.message)}`, verified: false, data: null };
+    }
+    const v = await this.verifier.check(def, ctx, exec.input, exec.result);
+    const display = v.outcome === Outcome.VERIFICATION_FAILED
+      ? `${exec.result.display}\nEvidence: the boundary check failed: ${redactSecrets(v.detail)}`
+      : exec.result.display;
+    return { display, verified: v.outcome === Outcome.SUCCESS_VERIFIED, data: exec.result.data };
+  }
+
   // Inside handle(): a deterministic multi-part request. The plan is stored, then run.
   async #runPlannedRequest(op, sid, request, planned) {
     try {
@@ -6816,6 +6870,7 @@ export class CognitiveController {
         },
         worldConflicts: worldModelConflicts,
         window: evidenceWindow,
+        capabilities: this.registry.list(),
         continuationLoader: () => this.continuationReport({}),
       });
       if (cognition?.available !== true) {

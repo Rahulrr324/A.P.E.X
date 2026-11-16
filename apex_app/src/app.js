@@ -63,6 +63,10 @@ export function createApp({
   filesystemListDefaultLimit = FILESYSTEM_LIST_DEFAULT_LIMIT,
   filesystemListMaxLimit = FILESYSTEM_LIST_MAX_LIMIT,
   experienceCapture = CAPTURE_OFF,
+  // A neural boundary is never selected by the application: the default reports that no runtime
+  // is connected. Tests may inject one to exercise the contract, but the controller still sees
+  // only the declaration, and no request path invokes it.
+  neuralRuntime = null,
 } = {}) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new Error('dataDir is required');
   // Isolation is checked here as well as in loadConfig because this is the one place every
@@ -312,6 +316,7 @@ export function createApp({
     worldModel,
     deadlines,
     dataDir,
+    neural: neuralRuntime,
   });
   return {
     controller,

@@ -9,6 +9,7 @@ import {
   BOUNDS, COGNITION_SCHEMA, DecisionKind, Disclosure,
 } from './vocabulary.js';
 import { understandRequest } from './request.js';
+import { objectiveAudit } from './objective.js';
 import { retrieveEvidence } from './evidence.js';
 import { extractClaims } from './claims.js';
 import { deliberate } from './deliberation.js';
@@ -61,6 +62,7 @@ export async function analyzeRequest({
   worldConflicts = null,
   window = null,
   continuationLoader = null,
+  capabilities = null,
 } = {}) {
   const started = performance.now();
   const timings = {};
@@ -80,6 +82,7 @@ export async function analyzeRequest({
       tasks: seeds.executive?.tasks ?? [],
       hasContext: Array.isArray(turns) && turns.length > 0,
       requestId,
+      capabilities,
     });
     timings.request = millis(mark);
     lifecycle.complete(2, {
@@ -107,6 +110,28 @@ export async function analyzeRequest({
       },
       durationMs: timings.request,
     });
+    // The decomposition is part of the same understanding stage, so it is recorded beside it. Only
+    // counts and fixed labels leave this stage: the trace never stores a part's wording.
+    const objectiveCounts = objectiveAudit(understanding.objective);
+    if (objectiveCounts) {
+      trace.stage('objective', {
+        counts: {
+          parts: objectiveCounts.parts,
+          requests: objectiveCounts.requests,
+          questions: objectiveCounts.questions,
+          conditions: objectiveCounts.conditions,
+          constraints: objectiveCounts.constraints,
+          unknowns: objectiveCounts.unknowns,
+          dependencies: objectiveCounts.dependencies,
+          routed: objectiveCounts.capabilities.routed,
+          candidates: objectiveCounts.capabilities.candidates,
+          unmatched: objectiveCounts.capabilities.unmatched,
+          unavailable: objectiveCounts.capabilities.unavailable,
+          evaluated: objectiveCounts.capabilities.evaluated,
+          truncated: objectiveCounts.truncated,
+        },
+      });
+    }
 
     mark = performance.now();
     const retrieval = await retrieveEvidence({
@@ -216,6 +241,11 @@ export async function analyzeRequest({
         interpretations: deliberation.interpretations.length,
         assumptions: deliberation.assumptions.length,
         clarification: deliberation.clarification.needed,
+        hypotheses: deliberation.hypotheses?.counts?.hypotheses ?? 0,
+        explanations: deliberation.hypotheses?.counts?.explanations ?? 0,
+        facts: deliberation.hypotheses?.counts?.facts ?? 0,
+        unknowns: deliberation.hypotheses?.counts?.unknowns ?? 0,
+        selected: deliberation.hypotheses?.counts?.selected ?? 0,
       },
       durationMs: timings.deliberation,
     });
@@ -419,6 +449,19 @@ export function analysisAudit(analysis) {
     sources: analysis.retrieval.sources.map((source) => ({ source: source.source, status: source.status, count: source.count })),
     disclosures: analysis.deliberation.disclosures.slice(0, 16),
     clarification: analysis.deliberation.clarification.needed,
+    // Competing readings are counted, never quoted: the audit records that the records supported
+    // more than one reading and whether a stated rule selected one.
+    hypotheses: analysis.deliberation.hypotheses
+      ? {
+        hypotheses: analysis.deliberation.hypotheses.counts.hypotheses,
+        explanations: analysis.deliberation.hypotheses.counts.explanations,
+        contested: analysis.deliberation.hypotheses.counts.contested,
+        selected: analysis.deliberation.hypotheses.counts.selected,
+        facts: analysis.deliberation.hypotheses.counts.facts,
+        assumptions: analysis.deliberation.hypotheses.counts.assumptions,
+        unknowns: analysis.deliberation.hypotheses.counts.unknowns,
+      }
+      : null,
     brief: analysis.brief
       ? {
         lines: analysis.brief.lineCount,
