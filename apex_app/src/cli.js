@@ -18,6 +18,7 @@ import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
 import { State, collectDiagnostics, dataDirLabel, renderDiagnostics, safeText } from './diagnostics.js';
 import { MAX_WORLD_LIMIT } from './world/world-state.js';
 import { runRuntimeCommand } from './runtime/cli.js';
+import { runIntegrationCommand } from './integrations/cli.js';
 
 export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION})
 
@@ -132,6 +133,18 @@ Usage:
   node bin/apex.js runtime schedule <plan-id> --at <iso> [--reason <text>]
   node bin/apex.js runtime unschedule|cancel <plan-id> [--reason <text>]
   node bin/apex.js runtime notifications [--all]           active, suppressed and expired notices (acknowledge <id> clears one)
+  node bin/apex.js source list|status [provider]|health        external providers, scopes, health and counts
+                                                              (construction and disabled providers do nothing)
+  node bin/apex.js source enable|disable <provider>
+  node bin/apex.js source configure <provider> [--root <dir>]... [--extension <ext>]...
+                      [--interval <ms>] [--max-files N] [--max-depth N] [--entity <id>]
+                      [--path <dir>]... [--memory-percent N] [--disk-percent N]
+                      [--events-file <json>] [--endpoint <url>] [--allowlist <origin>]...
+  node bin/apex.js source poll [provider] [--force]             one bounded poll, or every due provider
+  node bin/apex.js source observations [--provider <id>] [--limit N]
+  node bin/apex.js source pause|resume                         stop or allow all external observation
+  node bin/apex.js source reset <provider> --reason <text>     invalidate one checkpoint (events are preserved)
+  node bin/apex.js source diagnose
   node bin/apex.js evidence integrity                      cross-store read consistency and per-store health (read-only; repairs nothing)
   node bin/apex.js prediction record --capability <name> --expect <kind> --subject <text> (--expires <iso> | --in-days N) [--supports <id[,id...]>] [--contradicts <id[,id...]>] [--feedback <id[,id...]>] [--pattern <kind[,kind...]>] [--replaces <id[,id...]>]
   node bin/apex.js prediction list [--limit N] [--capability <name>] [--status <name>]
@@ -448,7 +461,9 @@ function parseFlags(args, allowed, repeat = []) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--in-days needs a whole number of days', 'USAGE');
         flags['in-days'] = Number(v);
         i += 1;
-      } else if (['title', 'body', 'subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use', 'extension', 'content', 'expected-sha256', 'workspace', 'operations', 'confirm'].includes(name)) {
+      } else if (['title', 'body', 'subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use', 'extension', 'content', 'expected-sha256', 'workspace', 'operations', 'confirm',
+      'events-file', 'endpoint', 'allowlist', 'root', 'exclude', 'path', 'interval', 'timeout',
+      'max-observations', 'max-files', 'max-depth', 'memory-percent', 'disk-percent', 'provider'].includes(name)) {
         const v = args[i + 1];
         if (v === undefined || v.startsWith('--')) throw new ValidationError(`--${name} needs a value`, 'USAGE');
         flags[name] = v;
@@ -1809,6 +1824,10 @@ export async function main(argv, {
 
     if (command === 'runtime') {
       return runRuntimeCommand({ app, args, out, err, parseFlags, rejectUnexpected });
+    }
+
+    if (command === 'source') {
+      return runIntegrationCommand({ app, args, out, err, parseFlags, rejectUnexpected });
     }
 
     if (command === 'evidence') {

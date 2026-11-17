@@ -8,6 +8,7 @@ export const DEFAULT_RUNTIME_CONFIG = Object.freeze({
   tickIntervalMs: 5000,
   maxEventsPerTick: 5,
   maxActionsPerTick: 1,
+  maxProvidersPerTick: 2,
   maxBacklog: 500,
   maxProcessedIds: 2000,
   maxPublishedKeys: 2000,

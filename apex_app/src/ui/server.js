@@ -302,6 +302,17 @@ export function createUiServer({
       runtime = { unavailable: `runtime state is unavailable: ${err.message}` };
     }
 
+    // T-11: provider configuration, health and checkpoints. This is a read-only projection; it
+    // starts no poll and constructs no connection.
+    let sources = null;
+    try {
+      sources = app.integrations && typeof app.integrations.status === 'function'
+        ? await app.integrations.status()
+        : { unavailable: 'external sources are not configured' };
+    } catch (err) {
+      sources = { unavailable: `external source state is unavailable: ${err.message}` };
+    }
+
     return {
       at: now().toISOString(),
       session,
@@ -310,6 +321,7 @@ export function createUiServer({
       plans,
       situation,
       runtime,
+      sources,
       limits: {
         maxMessageChars: UI_LIMITS.maxMessageChars,
         maxTurns: UI_LIMITS.maxTurns,
@@ -488,6 +500,14 @@ export function createUiServer({
         sendJson(res, 200, await app.situation.state({ limit: 10 }));
       } catch (err) {
         sendJson(res, 503, { error: `the situational state is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/sources') {
+      try {
+        sendJson(res, 200, await app.integrations.status());
+      } catch (err) {
+        sendJson(res, 503, { error: `the external source state is unavailable: ${err.message}` });
       }
       return;
     }

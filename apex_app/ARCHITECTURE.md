@@ -1829,3 +1829,89 @@ log, interrupted work and the absence of an inference handle. The UI exposes the
 
 The runtime uses no model gateway, downloads nothing, launches no inference server and makes no
 network request. `neural` contracts remain untouched and unconnected.
+
+## T-11 external event and integration fabric (as implemented)
+
+`src/integrations/` adds providers around, not inside, the executive. It has no action registry, no
+authorization rule, no event store and no execution path. `IntegrationFabric` is constructed once in
+`app.js`, passed to `ExecutiveRuntime`, and exposes only configuration, polling and read models.
+
+| Module | Responsibility | Authority | Failure behaviour |
+| --- | --- | --- | --- |
+| `vocabulary.js` | Provider ids, version, permissions, closed limits, sensitive names, schema | None; vocabulary only | Out-of-range values are validation errors |
+| `model.js` | Configuration/observation validation, canonical hashing, secret-aware text, stable wire source ids | None | Malformed or oversized observations are refused per item |
+| `store.js` | Checksummed atomic `integrations.json`, writer lock, corruption quarantine | Own file only | A bad document is quarantined and reported, never trusted |
+| `registry.js` | Immutable builtin provider contracts and test/extension injection | Discovery only | Duplicate or invalid provider ids are refused |
+| `manager.js` | Enable/configure/pause/reset, bounded poll, timeout/abort, retry, health, ingest bridge | Calls `situation.ingest` only; never executes an action | One provider's failure is isolated; retries are bounded and the runtime sees the outage |
+| `providers/filesystem.js` | Metadata scan of explicit roots; create/modify/delete/rename detection | Read-only metadata | Root unreadable fails the poll; truncation suppresses deletion detection |
+| `providers/system-health.js` | Memory/process/`statfs` metrics; threshold transitions and periodic summary | Read-only system values | Per-volume failures are reported as unavailable, not inferred pressure |
+| `providers/calendar.js` | Deterministic configured schedule and time observations | Read-only configured data | Invalid timezone/offset/order refuses configuration |
+| `providers/external-service.js` | Allowlisted outbound JSON GET, byte cap, scalar metadata extraction | Read-only network GET | Timeout, HTTP error, oversized/malformed response fails the poll |
+| `cli.js` | `source` lifecycle/inspection/poll/reset commands | User-origin commands only | Usage errors exit 2; refused operations exit 1 |
+
+Every provider implements `apex.integration.provider/1`: id, name, declared permissions, defaults,
+`validate`, `scopeOf`, `poll` and `describe`. A poll receives only its configuration, checkpoint,
+clock, data directory and an `AbortSignal`; no controller, action registry or model. Construction
+creates no connection and the store is not written by reads. Disabled providers are skipped before
+their `poll` is called. Enabling is explicit, and every provider is disabled initially.
+
+Observation normalization runs before ingestion. It enforces a 64-character source key, a snake_case
+type, bounded safe summary, finite/UTC-safe times, confidence, empty-or-declared entity/goal/plan/task
+references, a 4 KiB payload and no null bytes. `wireSourceId` produces `provider:key` when legal and
+otherwise `int:<digest>`, so a replay maps to the same T-09 event. The fabric passes the result to
+`situation.ingest` with `source: "external_provider"`, provider provenance and the provider's
+checkpoint. It does not write `situational.jsonl`, `runtime.json`, the world model or the audit log
+itself. T-09 decides duplicate/replay/stale/conflict handling and significance; T-10 decides what is
+recorded, recommended or notified. Providers cannot supply action input, and observation text is
+static data.
+
+Health and checkpoints are per provider: last attempt/success/error, consecutive failures, counts,
+duration, next attempt, bounded recent rows and bounded errors, plus provider-owned checkpoint data.
+A successful poll clears the outage and emits one recovery event; the first failure in an outage
+emits one unavailable event. Retry delay is exponential with a hard attempt limit, and a forced poll
+can retry after exhaustion but remains bounded and cancellable. `disable` and `pause` abort an
+in-flight poll. `#persistProvider` merges only health/checkpoint after a slow poll, so a concurrent
+disable or configuration change is not overwritten. Scope changes and explicit resets clear only the
+provider checkpoint and append history with a reason; they never delete situational events.
+
+Filesystem scope is resolved absolute directories, never a filesystem root, with 1–5 roots, bounded
+depth/file count, extension filters, and sensitive segments/files refused before stat/read. The scan
+uses `readdir({ withFileTypes: true })`, skips symlinks and non-files, and never calls a read API.
+Rename detection matches an inode, then birthtime+size+root; it is heuristic. A scan that hits the
+file cap marks itself truncated and suppresses deletion observations, preventing a bounded scan from
+looking like mass deletion. A configured root that cannot be listed fails the provider; a failed
+subdirectory is a warning. Checkpoints retain a bounded map of relative paths and metadata.
+
+System health uses only `node:os`, `process` and `fs.statfs`; no privileged command, shell, process
+inspection or network. Memory and disk threshold transitions and a periodic snapshot become
+observations; the checkpoint's path scope is hashed so changing inspected paths invalidates the
+disk baseline. Calendar configuration requires explicit UTC offsets, checked IANA zones, valid
+start/end order and bounded events. Schedule metadata is separated from approaching/started/ended
+time observations, and a changed schedule uses a new stable identity.
+
+The external service is a real outbound adapter, not a mock in production code: a GET with
+`redirect: "manual"`, no credentials, no query/fragment, an exact origin allowlist, a response byte
+cap and a JSON list/`observations` envelope. Only bounded scalar properties are retained; a response
+cannot supply a URL, method, header or executable instruction. Tests point it at a local HTTP server;
+credentialed connectors remain a future contract. Any actual third-party use is still a user-
+configured endpoint, not an implicit connector.
+
+Wiring: `app.js` creates the fabric after T-09 and passes it to `ExecutiveRuntime`; each bounded tick
+calls `pollDue({ limit: maxProvidersPerTick })` before lifecycle publication and event processing.
+Runtime status includes an integration summary, and `provider_unavailable` is escalated to attention
+and notification through the normal event path. `cli.js` dispatches `source` commands, and the loopback
+UI's `/api/sources` plus read-only panel call the fabric status only; they add no control or write.
+
+Bounds: at most 8 registered providers, 5 filesystem roots, 8 health paths, 2,000 files, 8 depth,
+100 observations per poll, 50 service observations, 4 KiB event payload, 256 KiB response cap,
+2,000 checkpoint files, 500 fingerprints, 20 recent health rows and 10 stored errors. Intervals are
+1 s–24 h; timeouts 100 ms–30 s; retries at most 5 with a 1 h base cap. These are validation limits,
+not guarantees about an external system.
+
+No inference. No provider has a model handle, model endpoint, model process, embedding, classifier
+or background inference. `source diagnose` asserts this explicitly. Testing uses deterministic
+providers, temporary roots and a loopback HTTP server; the 30 T-11 scenarios include no construction
+polling, stable identity/dedupe/replay, stale/conflicting/out-of-order observations, timeout,
+failure/recovery/backoff, bounded batches, checkpoint and restart recovery, isolation, permissions,
+secret exclusion/redaction, malicious payload refusal, runtime pause/end-to-end flow, CLI/UI reads,
+no-inference checks, sustained polling bounds and existing-path regressions.

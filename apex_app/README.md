@@ -8797,3 +8797,85 @@ in the local stores. The lease distinguishes a live pid from a dead one, not a r
 platform. Notification cooldown and significance remain documented rule totals, not probabilities.
 Approval is still required for consequential actions, and an approved plan is the only thing the
 scheduler executes.
+
+## Batch T-11: external event and integration fabric
+
+T-11 lets the existing executive observe explicitly authorized local and remote metadata without
+adding a second event pipeline. Providers are deterministic adapters; their observations enter the
+T-09 `situation.ingest` contract and then follow the same assessment, world-model, decision and T-10
+tick path as any other event. There is no inference server, model call, remote model endpoint,
+autonomous action or parallel event store in this milestone.
+
+```
+CONFIGURE (explicit scope) -> ENABLE (permission grant) -> RUNTIME TICK OR MANUAL POLL
+  -> provider adapter (bounded, timed out, cancellable)
+  -> metadata validation -> situation.ingest (stable source id, dedupe, replay refusal)
+  -> T-09 significance/conflict/world state -> T-10 decision/notification -> recorded response
+```
+
+Providers. Four providers ship, with a versioned contract (`apex.integration.provider/1`):
+
+| Provider | Kind | Permission | What it reads |
+| --- | --- | --- | --- |
+| `filesystem` | real local adapter | `filesystem.metadata.read` | Names, sizes and modification times under 1–5 configured roots, filtered by extension and bounded by file/depth limits. Never opens a file. |
+| `system_health` | real local adapter | `system.metrics.read` | `os`/`process` memory and process values, plus `fs.statfs` capacity for configured paths. Threshold transitions and a periodic summary only. |
+| `calendar` | deterministic mock | `calendar.schedule.read` | A bounded local list of configured events and the clock. Detects schedule changes and approaching/started/ended times. No account or network. |
+| `external_service` | real outbound contract; local server in tests | `network.outbound` | One allowlisted HTTP(S) GET returning bounded JSON metadata. No credentials, query, redirect or arbitrary method. |
+
+Construction never contacts a provider. A provider is disabled by default, does nothing until
+enabled, and stops immediately when disabled or when observation is paused. Enabling records the
+permission grant; it does not widen an action's authorization. Each provider has its own interval,
+timeout, observation cap, retry/backoff state and checkpoint. Configuration changes that alter a
+scope invalidate that provider's checkpoint deliberately (with history); a reset requires a reason
+and preserves the situational log and past observations.
+
+Source identity and event flow. Every observation receives `source: "external_provider"`, a stable
+provider key (`wireSourceId`, hashed when longer than the situational limit) and provenance naming
+both the provider and reporter. A repeated poll produces a duplicate, not a second event; an update
+uses a new key while the old event stays as history. Facts and world events are written only through
+the existing T-09 payload fields (`fact`/`worldEvent`) and an explicitly configured existing
+`entityId`; providers cannot create entities, choose an action or write executable input. A stale
+observation is retained but skipped in the world model. Conflicting single-valued facts remain both
+visible and are reported by the existing conflict detector. Provider failure/recovery generates
+`provider_unavailable`/`provider_recovered` events; a failed provider is contained and retried with
+bounded backoff, and the runtime escalates the outage to attention.
+
+Privacy and security. Filesystem access is metadata-only and refuses content, symlinks, sensitive
+names (`.env`, keys, `.git`, `.ssh`, `node_modules`, system directories and similar) and whole-root
+failures that could masquerade as mass deletion. Service access requires an exact origin allowlist,
+no credentials or query in the URL, no redirects, a byte cap and JSON-only bounded scalar metadata.
+Observation summaries are redacted for secret-looking text. Event/log/checkpoint/diagnostic content
+is bounded and secret values are not stored. External payloads are data: text never becomes an
+action, and approval/authorization rules are unchanged.
+
+Commands:
+
+```
+apex source list | status [provider-id] | health | diagnose
+apex source configure <provider-id> [--root <dir>]... [--extension <ext>]...
+apex source enable|disable <provider-id>
+apex source poll <provider-id> [--force]       bounded manual poll
+apex source observations [--provider <id>] [--limit N]
+apex source pause | resume
+apex source reset <provider-id> --reason <text>
+```
+
+The local
+authenticated UI adds a read-only "External sources" panel and `GET /api/sources`; it exposes no poll,
+enable, disable or reset control. The runtime polls at most two due providers at the start of each
+bounded T-10 tick and never polls while the fabric or runtime is paused.
+
+Limitations: the filesystem adapter reports metadata and heuristics (inode/birthtime/size), not a
+filesystem journal, so rename detection can miss an unsupported platform pattern. The calendar is a
+configured deterministic mock, not Google/Outlook/CalDAV. The external service contract is a GET of
+JSON metadata, has no credential flow, and is not a general webhook receiver or connector library.
+There is no background thread, service installation, network listener, inference or model. Polling
+frequency, provider count, observation size and response size are hard-bounded. Provider health is
+last-known state, not a guarantee that the outside world is healthy. Enabling a provider grants only
+the declared read permission; it does not authorize an action, and every consequential action still
+needs the existing approval/authorization path.
+
+Future extension points are a new adapter behind the same versioned provider contract, a new
+permission and scope validator, and service-specific credentialed transports behind an explicit
+secret reference (not in configuration, events or checkpoints). A connector may add richer metadata
+but may not bypass `situation.ingest`, the world model, T-10 decisions, or action authorization.

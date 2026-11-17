@@ -19,7 +19,7 @@ import { DEFAULT_RUNTIME_CONFIG, FAILED_PLAN_STATUSES, OPEN_GOAL_STATUSES, RUNTI
 import { DEFAULT_EVENTS_READ, MAX_EVENTS_READ, SIGNIFICANCE_RANK } from '../situational/vocabulary.js';
 
 const ACTIVE_RUNTIMES = new Set();
-const ATTENTION_TYPES = new Set(['task_failed', 'task_step_failed', 'plan_failed', 'plan_invalidated', 'operation_failed', 'deadline_passed']);
+const ATTENTION_TYPES = new Set(['task_failed', 'task_step_failed', 'plan_failed', 'plan_invalidated', 'operation_failed', 'deadline_passed', 'provider_unavailable']);
 
 // T-09 caps an event source id at 64 characters. A composed identity keeps the readable key in the
 // checkpoint and a stable digest on the wire.
@@ -42,7 +42,7 @@ function makeDeadLetter(kind, ref, reason, detail, at) {
 export class ExecutiveRuntime {
   constructor({
     controller, situation, taskStore, plans, goals, learning = null, experience = null, predictions = null, operations,
-    dataDir, now = () => new Date(), idFactory = randomUUID, config = {},
+    integrations = null, dataDir, now = () => new Date(), idFactory = randomUUID, config = {},
   } = {}) {
     if (!controller || typeof controller.planActivate !== 'function') throw new TypeError('ExecutiveRuntime requires the controller');
     if (!situation || typeof situation.ingest !== 'function') throw new TypeError('ExecutiveRuntime requires the situational service');
@@ -55,6 +55,7 @@ export class ExecutiveRuntime {
     this.learning = learning;
     this.experience = experience;
     this.predictions = predictions;
+    this.integrations = integrations;
     this.operations = operations;
     this.dataDir = path.resolve(dataDir);
     this.now = now;
@@ -206,7 +207,7 @@ export class ExecutiveRuntime {
     const summary = {
       ran: true, at, trigger, published: 0, processed: 0, decisions: 0,
       notifications: 0, executed: [], retries: 0, deadLettered: 0, skipped: [],
-      learning: [],
+      learning: [], integrations: null,
     };
     const heartbeat = this.lease.heartbeat(this.leaseNonce);
     if (!heartbeat.ok) {
@@ -215,6 +216,16 @@ export class ExecutiveRuntime {
       return { ...summary, ran: false, reason: `the runtime lease is no longer held: ${heartbeat.reason}` };
     }
     try {
+      // External observation comes first so a freshly ingested event is assessed and queued in this
+      // same bounded cycle. A provider failure is contained by the fabric and cannot abort the tick.
+      if (this.integrations) {
+        try {
+          summary.integrations = await this.integrations.pollDue({ limit: this.config.maxProvidersPerTick ?? 2 });
+        } catch (err) {
+          summary.integrations = { error: err?.message ?? String(err) };
+          state.history.push({ type: 'integrations_failed', at, error: String(err?.message ?? err).slice(0, 300) });
+        }
+      }
       summary.published += await this.#publishLifecycle(state, at);
       summary.published += await this.#monitorDeadlines(state, at);
       const processed = await this.#processEvents(state, at);
@@ -823,6 +834,7 @@ export class ExecutiveRuntime {
       blockedTasks: blocked.map((task) => ({ id: task.id, planId: task.planId ?? null, goalId: task.goalId ?? null })),
       activePlans: plans.filter((plan) => ['approved', 'active'].includes(plan.status)).map((plan) => ({ id: plan.id, status: plan.status, outcome: plan.outcome })),
       lastSchedule: this.lastScheduleReport,
+      integrations: this.integrations ? await this.integrations.summary().catch((err) => ({ available: false, detail: err?.message ?? String(err) })) : null,
       situational,
       lastError: this.lastError,
       history: state.history.slice(-10),

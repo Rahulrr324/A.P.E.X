@@ -40,6 +40,7 @@ import { SituationStore } from './situational/store.js';
 import { SituationService } from './situational/service.js';
 import { situationActions } from './actions/situation-actions.js';
 import { ExecutiveRuntime } from './runtime/executive-runtime.js';
+import { IntegrationFabric } from './integrations/manager.js';
 import { PredictionStore } from './prediction/prediction-store.js';
 import { predictionActions } from './actions/prediction-actions.js';
 import { historyActions } from './actions/history-actions.js';
@@ -73,6 +74,7 @@ export function createApp({
   // is connected. Tests may inject one to exercise the contract, but the controller still sees
   // only the declaration, and no request path invokes it.
   neuralRuntime = null,
+  integrationProviders = null,
 } = {}) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new Error('dataDir is required');
   // Isolation is checked here as well as in loadConfig because this is the one place every
@@ -224,6 +226,18 @@ export function createApp({
     idFactory,
   });
 
+  // T-11 external sources: provider construction is inert. Configuration is loaded lazily, no
+  // connection is opened and no poll starts until an enabled provider is polled explicitly or by the
+  // runtime tick. Observations enter through the same situational contract as internal events.
+  const integrations = new IntegrationFabric({
+    dataDir,
+    situation,
+    worldModel,
+    now: clock,
+    idFactory,
+    providers: integrationProviders ?? undefined,
+  });
+
   // Filesystem assistance exists only when at least one root is configured. Every root is
   // resolved and validated here, once, and captured by the action closures: no request, model
   // proposal, or task step can add or widen one. A configured-but-invalid root is a startup
@@ -368,6 +382,7 @@ export function createApp({
     experience,
     predictions,
     operations,
+    integrations,
     dataDir,
     now: clock,
     idFactory,
@@ -399,6 +414,7 @@ export function createApp({
     learning,
     situation,
     runtime,
+    integrations,
   };
 }
 

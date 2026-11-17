@@ -50,6 +50,11 @@ export const UI_PAGE = `<!doctype html>
     <ul id="runtime" class="work"></ul>
   </section>
   <section class="panel">
+    <h2>External sources</h2>
+    <p class="meta">Permissioned, metadata-first providers. Enabling, configuring and polling are CLI acts; this view only reports persisted state.</p>
+    <ul id="sources" class="work"></ul>
+  </section>
+  <section class="panel">
     <h2>Situational awareness</h2>
     <p class="meta">Recorded observations, alerts and pending decisions. Decisions and execution are made with the CLI; this view only reads.</p>
     <ul id="situation" class="work"></ul>
@@ -105,6 +110,7 @@ const els = {
   plans: document.getElementById('plans'),
   situation: document.getElementById('situation'),
   runtime: document.getElementById('runtime'),
+  sources: document.getElementById('sources'),
   banner: document.getElementById('banner'),
 };
 
@@ -293,12 +299,37 @@ function renderRuntime(runtime) {
   if (runtime.deadLetters.length > 0) els.runtime.append(el('li', 'meta', runtime.deadLetters.length + ' dead letter(s) recorded.'));
 }
 
+function renderSources(sources) {
+  els.sources.replaceChildren();
+  if (!sources) {
+    els.sources.append(el('li', 'meta', 'External sources are not configured.'));
+    return;
+  }
+  if (sources.unavailable) {
+    els.sources.append(el('li', 'meta', sources.unavailable));
+    return;
+  }
+  els.sources.append(el('li', 'meta', (sources.enabled || 0) + ' of ' + sources.providers.length + ' provider(s) enabled' + (sources.paused ? ' \\u00b7 observation paused' : '') + ' \\u00b7 ' + sources.totals.accepted + ' accepted, ' + sources.totals.duplicates + ' duplicate, ' + sources.totals.rejected + ' refused'));
+  for (const provider of sources.providers) {
+    const item = el('li', 'item');
+    const head = el('div', 'row');
+    head.append(el('span', 'title', provider.name));
+    head.append(el('span', 'badge', provider.id + ' \\u00b7 ' + (provider.enabled ? 'enabled' : 'disabled')));
+    item.append(head);
+    item.append(el('div', 'meta', 'last success ' + (provider.health.lastSuccessAt || 'never') + ' \\u00b7 next ' + (provider.nextPollAt || 'not scheduled') + ' \\u00b7 checkpoint keys ' + provider.checkpoint.keys));
+    item.append(el('div', 'meta', provider.permissions.join(', ')));
+    if (provider.health.lastError) item.append(el('div', 'meta', 'error: ' + provider.health.lastError));
+    els.sources.append(item);
+  }
+}
+
 async function refresh() {
   const state = await api('/api/state');
   renderTurns(state.turns);
   renderTasks(state.tasks);
   renderPlans(state.plans);
   renderRuntime(state.runtime);
+  renderSources(state.sources);
   renderSituation(state.situation);
   els.session.textContent = state.session && state.session.id ? 'session ' + String(state.session.id).slice(0, 8) : 'no session yet';
   if (state.session && state.session.unavailable) showBanner(state.session.unavailable);
