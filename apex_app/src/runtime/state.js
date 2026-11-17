@@ -36,6 +36,7 @@ export function defaultRuntimeState({ now, idFactory = randomUUID } = {}) {
     updatedAt: at,
     startedAt: null,
     stoppedAt: null,
+    effectiveIntervalMs: null,
     boots: 0,
     paused: false,
     tickCount: 0,
@@ -54,6 +55,29 @@ export function defaultRuntimeState({ now, idFactory = randomUUID } = {}) {
 
 function trim(list, max) {
   return list.length > max ? list.slice(list.length - max) : list;
+}
+
+// Windows refuses to replace a file that another process has open for reading. The writer lock
+// serialises checkpoint writers but not readers, so a stop or status process reading runtime.json
+// can make a concurrent checkpoint replace fail with EPERM/EACCES/EBUSY even though nothing is
+// wrong with the write. Retrying briefly covers that window; any other error, or a retry budget
+// that runs out, is reported as the failure it is.
+const TRANSIENT_REPLACE = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const REPLACE_ATTEMPTS = 8;
+const REPLACE_RETRY_MS = 20;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function replaceCheckpoint(tmp, target) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      fs.renameSync(tmp, target);
+      return;
+    } catch (err) {
+      if (!TRANSIENT_REPLACE.has(err?.code) || attempt >= REPLACE_ATTEMPTS) throw err;
+      await sleep(Math.min(REPLACE_RETRY_MS * 2 ** (attempt - 1), 200));
+    }
+  }
 }
 
 function validStateShape(state) {
@@ -121,7 +145,7 @@ export class RuntimeStateStore {
     };
   }
 
-  #write(state) {
+  async #write(state) {
     const next = {
       ...state,
       updatedAt: this.now().toISOString(),
@@ -137,12 +161,17 @@ export class RuntimeStateStore {
     next.checksum = checksumOf(next);
     const tmp = `${this.filePath}.${process.pid}.${this.idFactory()}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(next)}\n`, { encoding: 'utf8' });
-    fs.renameSync(tmp, this.filePath);
+    try {
+      await replaceCheckpoint(tmp, this.filePath);
+    } catch (err) {
+      try { fs.unlinkSync(tmp); } catch { /* the staged copy is already gone */ }
+      throw err;
+    }
     return next;
   }
 
   async save(state) {
-    return this.lock.run(async () => this.#write(state));
+    return this.lock.run(() => this.#write(state));
   }
 
   async mutate(fn) {
@@ -152,11 +181,11 @@ export class RuntimeStateStore {
         // A corruption discovered inside a mutation is reported to the caller, which decides
         // whether to continue from a fresh checkpoint. It is never swallowed.
         const fresh = await fn(loaded.state, loaded);
-        const written = this.#write(fresh);
+        const written = await this.#write(fresh);
         return { state: written, corruption: loaded.corruption };
       }
       const next = await fn(loaded.state, loaded);
-      return { state: this.#write(next), corruption: null };
+      return { state: await this.#write(next), corruption: null };
     });
   }
 

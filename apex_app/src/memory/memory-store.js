@@ -26,6 +26,7 @@ const UPDATE_MODES = new Set(['user_confirmed', 'model_proposed', 'unresolved_co
 const OPERATION_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 const BACKEND_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const MEMORY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MEMORY_REF_RE = /^[0-9a-f]{4,35}$/i;
 const FUZZY_MIN_SIMILARITY = 0.6;
 const FUZZY_MIN_LENGTH = 4;
 // Health output is a summary, not a dump: exact counts, bounded examples.
@@ -456,6 +457,23 @@ export class MemoryStore {
       await this.log.append(record);
       return record;
     });
+  }
+
+  // The surfaces that report a stored claim display its first eight characters. Accepting that
+  // prefix when it identifies exactly one record keeps an explicit correction possible without
+  // copying the full identifier; an ambiguous or unknown prefix is refused.
+  async resolveId(reference) {
+    if (typeof reference !== 'string') throw new ValidationError('memory record reference must be text');
+    const text = reference.trim().toLowerCase();
+    if (MEMORY_ID_RE.test(text)) return text;
+    if (!MEMORY_REF_RE.test(text)) {
+      throw new ValidationError('memory record reference must be a full record ID or 4-35 hex characters of one');
+    }
+    const records = await this.#loadComplete();
+    const matches = [...new Set(records.map((record) => record.id).filter((id) => id.startsWith(text)))];
+    if (matches.length === 1) return matches[0];
+    if (matches.length === 0) throw new ValidationError(`no memory record matches ${text}`);
+    throw new ValidationError(`memory record reference ${text} is ambiguous; use more characters`);
   }
 
   async correct({ targetId, content, origin } = {}) {

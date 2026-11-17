@@ -419,7 +419,12 @@ export class DocumentService {
         try { buf = await fs.promises.readFile(file.absolute); } catch (err) { report.warnings.push(`${file.path}: ${err?.code ?? 'read_error'}`); continue; }
         report.observed += 1;
         const contentHash = hashBuffer(buf);
-        if (!force && prior && prior.contentHash === contentHash && prior.status === 'indexed') { report.duplicates += 1; continue; }
+        // Extraction is deterministic, so unchanged bytes fail the same way every time. Without
+        // this, a permanently failing file gained a failed version and a fresh
+        // document_extraction_failed event on every ingest, which the runtime turns into a new
+        // decision and notification each cycle. Counting the unchanged failure as a duplicate
+        // keeps history and attention proportional to what actually changed; --force still retries.
+        if (!force && prior && prior.contentHash === contentHash && (prior.status === 'indexed' || prior.status === 'failed')) { report.duplicates += 1; continue; }
         let extracted = null;
         let error = null;
         try { extracted = extractDocument(file.path, buf); } catch (err) { error = err?.message ?? String(err); }
@@ -643,7 +648,7 @@ export class DocumentService {
     const sec = section === null ? null : record.sections.find((item) => item.index === section);
     const excerpt = sec ? record.text.slice(sec.start, sec.end) : record.text.slice(0, LIMITS.maxExcerptChars);
     return {
-      document: { id: record.documentId, path: record.source.path, root: record.source.root, format: record.format, version: record.version, status: record.status, contentHash: record.contentHash, createdAt: record.createdAt, current: current !== null && !current.deleted && current.version === record.version },
+      document: { documentId: record.documentId, path: record.source.path, root: record.source.root, format: record.format, version: record.version, status: record.status, contentHash: record.contentHash, createdAt: record.createdAt, current: current !== null && !current.deleted && current.version === record.version },
       section: sec, excerpt: safeLabel(excerpt, LIMITS.maxExcerptChars), fullTextAvailable: record.status === 'indexed',
       extractor: record.extractor, limitations: record.limitations, warnings: record.warnings,
     };

@@ -99,6 +99,7 @@ export async function runDocumentCommand({ app, args, out, err, parseFlags, reje
       `  path: ${doc.path} (${doc.format}); root ${doc.root}`,
       `  content sha256: ${doc.contentHash}`,
       `  bytes: ${doc.bytes}; observed ${doc.observedAt}; ingested ${doc.ingestedAt}`,
+      ...(doc.status === 'failed' && doc.error ? [`  error: ${firstLine(doc.error, 300)}`] : []),
       `  extractor: ${doc.extractor?.id} v${doc.extractor?.version}`,
       `  sections: ${doc.sections.length}; warnings: ${doc.warnings.length}; limitations: ${doc.limitations.length}`,
       ...doc.limitations.slice(0, 5).map((line) => `  limitation: ${firstLine(line, 200)}`),

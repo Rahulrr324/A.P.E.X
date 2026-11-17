@@ -9,7 +9,7 @@ export async function runRuntimeCommand({ app, args, out, err, parseFlags, rejec
   const [sub, ...rest] = args;
   const statusLines = (s) => [
     `Runtime ${s.runtimeId} is ${s.lifecycle}${s.paused ? ' (scheduling paused)' : ''} | boot ${s.boots} | ticks ${s.ticks}`,
-    `  config v${s.configVersion} | interval ${s.config.tickIntervalMs} ms | bounds: ${s.config.maxEventsPerTick} event(s)/tick, ${s.config.maxActionsPerTick} action(s)/tick, backlog ${s.config.maxBacklog}`,
+    `  config v${s.configVersion} | interval ${s.effectiveIntervalMs ?? s.config.tickIntervalMs} ms${s.effectiveIntervalMs ? ' (live)' : ' (configured; no live cycle)'} | bounds: ${s.config.maxEventsPerTick} event(s)/tick, ${s.config.maxActionsPerTick} action(s)/tick, backlog ${s.config.maxBacklog}`,
     `  checkpoint: ${s.checkpoint.processed}/${s.checkpoint.processedCap} processed, ${s.checkpoint.published}/${s.checkpoint.publishedCap} published | backlog ${s.backlog ?? 'unavailable'}`,
     `  lease: ${s.lease.held ? `held by pid ${s.lease.pid}` : 'not held'} | last tick ${s.lastTickAt ?? 'never'}`,
     `  notifications: ${s.notifications.active} active (${s.notifications.suppressed} suppressed) | pending approvals: ${s.situational?.pendingApprovals ?? 'unavailable'}`,
@@ -46,6 +46,31 @@ export async function runRuntimeCommand({ app, args, out, err, parseFlags, rejec
     };
     process.once('SIGINT', () => { shutdown('SIGINT'); });
     process.once('SIGTERM', () => { shutdown('SIGTERM'); });
+    // A stop issued from a second process updates the checkpoint, but it cannot clear this
+    // process's interval. The foreground process watches the persisted lifecycle and the lease it
+    // owns, so it exits instead of staying alive and holding the lease against the next start.
+    let stopping = false;
+    const shutdownOnce = async (signal) => {
+      if (stopping) return;
+      stopping = true;
+      await shutdown(signal);
+    };
+    const watchdog = setInterval(async () => {
+      if (stopping) return;
+      let current;
+      try {
+        current = await runtime.supervision();
+      } catch {
+        return;
+      }
+      const stillMine = current.lease.held && current.lease.pid === process.pid;
+      if (current.lifecycle === 'stopped' || !stillMine) {
+        clearInterval(watchdog);
+        out('The runtime was stopped from another process; this foreground process is exiting.');
+        await shutdownOnce('external stop');
+      }
+    }, Math.max(500, Math.min(interval, 2000)));
+    watchdog.unref?.();
     return 0;
   }
   if (sub === 'tick') {

@@ -14,6 +14,7 @@ import { neuralBoundaryProblems, renderNeuralBoundary } from '../neural/diagnost
 const OPERATION_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 const BACKEND_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const MEMORY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MEMORY_REF_RE = /^(?:[0-9a-f]{4,35}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
 
 function expectObject(input, allowedKeys) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -433,29 +434,30 @@ export function builtinActions() {
     {
       name: 'memory.correct',
       description: 'Append a user-confirmed correction to one explicitly identified memory claim. User origin only.',
-      inputHint: '{"targetId":"full memory record ID", "content":"replacement claim", "resolve":true}',
+      inputHint: '{"targetId":"memory record ID or a unique 4+ hex prefix", "content":"replacement claim", "resolve":true}',
       plannable: false,
       permission: 'write',
       origins: [ORIGIN_USER],
       validate(input) {
         const o = expectObject(input, ['targetId', 'content', 'resolve']);
-        if (typeof o.targetId !== 'string' || !MEMORY_ID_RE.test(o.targetId)) {
-          throw new ValidationError('targetId must be a full memory record ID');
+        if (typeof o.targetId !== 'string' || !MEMORY_REF_RE.test(o.targetId.trim())) {
+          throw new ValidationError('targetId must be a memory record ID or at least 4 hex characters of one');
         }
         if (o.resolve !== true) throw new ValidationError('explicit --resolve confirmation is required');
-        return { targetId: o.targetId, content: validateContent(o.content), resolve: true };
+        return { targetId: o.targetId.trim().toLowerCase(), content: validateContent(o.content), resolve: true };
       },
       async execute(ctx, { targetId, content }) {
-        const rec = await ctx.memory.correct({ targetId, content, origin: ctx.origin });
+        const target = await ctx.memory.resolveId(targetId);
+        const rec = await ctx.memory.correct({ targetId: target, content, origin: ctx.origin });
         return {
-          summary: `stored user-confirmed correction ${shortId(rec.id)} for ${shortId(targetId)}`,
-          data: { id: rec.id, targetId, contentSha256: rec.contentSha256, sensitivity: rec.sensitivity },
-          display: `Stored correction ${rec.id}; it explicitly corrects ${targetId}. Earlier evidence remains stored.`,
+          summary: `stored user-confirmed correction ${shortId(rec.id)} for ${shortId(target)}`,
+          data: { id: rec.id, targetId: target, contentSha256: rec.contentSha256, sensitivity: rec.sensitivity },
+          display: `Stored correction ${rec.id}; it explicitly corrects ${target}. Earlier evidence remains stored.`,
         };
       },
       async verify(ctx, { targetId, content }, result) {
         const rec = await ctx.memory.get(result.data.id);
-        const target = await ctx.memory.get(targetId);
+        const target = await ctx.memory.get(result.data.targetId ?? targetId);
         if (!rec || !target) return { ok: false, detail: 'correction or original claim is missing from memory' };
         if (rec.contentSha256 !== sha256Hex(content)) return { ok: false, detail: 'stored correction hash differs from the requested replacement' };
         if (rec.source !== 'user' || rec.kind !== 'user_fact') return { ok: false, detail: 'correction is not stored as a user fact' };
@@ -465,7 +467,7 @@ export function builtinActions() {
         if (rec.provenance.origin !== 'user_memory_correction' || rec.provenance.updateMode !== 'user_confirmed') {
           return { ok: false, detail: 'correction provenance is not user-confirmed' };
         }
-        if (rec.provenance.replaces?.length !== 1 || rec.provenance.replaces[0] !== targetId) {
+        if (rec.provenance.replaces?.length !== 1 || rec.provenance.replaces[0] !== target.id) {
           return { ok: false, detail: 'replacement link does not match the selected claim' };
         }
         return { ok: true, detail: 'correction and exact historical replacement link confirmed in memory' };

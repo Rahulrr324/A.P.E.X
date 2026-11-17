@@ -564,12 +564,13 @@ test('performance - a caller cannot poison the snapshot by mutating the records 
 
   const first = await memory.list({ limit: 10, includePrivate: true });
   assert.equal(first.length, 1);
-  // Mutate everything a projection reads, at every depth the schema uses.
+  // Mutate everything a projection reads, at every depth the schema uses. The list hands out
+  // copies, so the top level is writable; the nested objects are shared with the store's
+  // retained records and are frozen, which is what makes that sharing safe.
   first[0].content = 'Overwritten by a caller';
   first[0].source = 'model';
   first[0].kind = 'model_conclusion';
-  first[0].provenance.origin = 'tampered';
-  first[0].provenance.updateMode = 'unresolved_conflict';
+  assert.throws(() => { first[0].provenance.origin = 'tampered'; }, TypeError, 'a retained nested field cannot be edited');
   first[0].replacedBy.push('ffffffff-1111-4111-8111-111111111111');
   first[0].status = 'superseded';
 
@@ -584,7 +585,7 @@ test('performance - a caller cannot poison the snapshot by mutating the records 
   assert.equal(world.counts.unverifiedModel, 0, 'a mutated copy cannot reclassify a stored user assertion');
 });
 
-test('performance - a write pays no snapshot work, in either of the reads around it', async (t) => {
+test('performance - a write keeps one snapshot that its own next read reuses instead of re-parsing', async (t) => {
   const dir = tempDir();
   t.after(() => cleanup(dir));
   const file = memoryPath(dir);
@@ -610,9 +611,9 @@ test('performance - a write pays no snapshot work, in either of the reads around
 
   await store.add({ content: 'The deploy target is staging', source: 'user', provenance: { origin: 'user_request' } });
   // The read a write performs is an incremental validated read, so it is accounted in
-  // appendStateStats and not here at all: the snapshot is untouched by the write, neither
-  // consulted (it describes bytes about to be superseded) nor rewritten (copying records the
-  // store is about to invalidate is work thrown away).
+  // appendStateStats and not here at all: the snapshot is neither consulted (it describes bytes
+  // about to be superseded) nor rewritten (copying records the store is about to invalidate is
+  // work thrown away).
   const wrote = store.log.parseCacheStats;
   assert.equal(wrote.misses, 1, 'the write read is not a snapshot read');
   assert.equal(wrote.hits, 0);
@@ -623,19 +624,20 @@ test('performance - a write pays no snapshot work, in either of the reads around
 
   const afterWrite = await buildWorldState(ctxFor(store, knowledge));
   const deferred = store.log.parseCacheStats;
-  assert.equal(deferred.misses, 2, 'the read after the append re-parses the new bytes');
-  assert.equal(deferred.hits, 0, 'and is not answered from the snapshot');
-  assert.equal(deferred.cachedRecords, 1, 'nor maintains a snapshot on a match that cannot exist');
-  assert.equal(afterWrite.counts.representedBeliefs, 2, 'the new record is read from disk, not deferred');
+  assert.equal(deferred.misses, 1, 'the read after the append is not re-parsed: the write path validated exactly these bytes');
+  assert.equal(deferred.hits, 1, 'it installs the validated records as the snapshot and is answered from them');
+  assert.equal(deferred.cachedRecords, 2, 'so the snapshot describes the file as the append left it');
+  assert.equal(afterWrite.counts.representedBeliefs, 2, 'the new record is read');
 
   const refreshed = await buildWorldState(ctxFor(store, knowledge));
   const refreshedStats = store.log.parseCacheStats;
-  assert.equal(refreshedStats.misses, 3);
-  assert.equal(refreshedStats.cachedRecords, 2, 'the first unchanged read refreshes the snapshot');
-  assert.deepEqual(refreshed, afterWrite, 'deferring snapshot work changes nothing a reader sees');
+  assert.equal(refreshedStats.misses, 1);
+  assert.equal(refreshedStats.hits, 2);
+  assert.equal(refreshedStats.cachedRecords, 2, 'an unchanged read is answered from that snapshot');
+  assert.deepEqual(refreshed, afterWrite, 'reusing the write-path records changes nothing a reader sees');
 
   const hit = await buildWorldState(ctxFor(store, knowledge));
-  assert.equal(store.log.parseCacheStats.hits, 1);
+  assert.equal(store.log.parseCacheStats.hits, 3);
   assert.deepEqual(hit, afterWrite);
 
   // The next write on the same instance reuses what it already validated, and still leaves the
@@ -713,32 +715,31 @@ test('performance - a write loop keeps one bounded snapshot and accounts for eve
   }
 
   // The 24 reads here are 12 write reads and 12 projection reads, and each is accounted for in
-  // exactly one place: the projection reads in parseCacheStats, the write reads in
-  // appendStateStats. A write read that also consulted the snapshot would show up as an extra
-  // miss, and a snapshot that retried after invalidating would show up as extra hits or misses;
-  // neither happens, which is what makes these counters a bound rather than a hope.
+  // exactly one place: the write reads in appendStateStats, the projection reads in
+  // parseCacheStats. A projection read that had to re-parse would show up as a miss; it does not,
+  // because the write read immediately before it validated exactly the bytes it finds.
   const stats = memory.log.parseCacheStats;
   const writes = memory.log.appendStateStats;
-  assert.equal(stats.misses, 12, 'one re-parse per projection: each follows a write, so a match cannot exist');
-  assert.equal(stats.hits, 0, 'no read here is adjacent to a stable file');
+  assert.equal(stats.misses, 0, 'no projection read re-parses: each follows a write that validated the same bytes');
+  assert.equal(stats.hits, 12, 'every projection read is answered from the state the write left');
   assert.equal(stats.misses + stats.hits, 12, 'every snapshot-eligible read is accounted for exactly once');
   assert.equal(writes.reuses + writes.rebuilds, 12, 'and every write read is accounted for once, in its own counter');
   assert.equal(writes.reuses, 12, 'this instance wrote the whole store, so every write read after the seed reused what it had validated');
   assert.equal(writes.rebuilds, 0, 'nothing arrived from outside, so nothing had to be derived again');
   assert.ok(stats.cachedBytes <= stats.maxBytes, 'the snapshot is bounded by the configured cap');
   assert.ok(writes.trackedBytes <= writes.maxBytes, 'and so is the incremental validated state');
-  assert.equal(stats.cachedRecords, 0, 'a write loop never maintains a snapshot at all, so the derived aid costs it nothing');
+  assert.equal(stats.cachedRecords, 13, 'the snapshot describes the seed plus the twelve appends');
 
-  // Two reads now that the writes have stopped: the first hashes a stable file and stores
-  // it, the second is served from that snapshot. Nothing was written during either read, so
-  // the projection they return is the same one the write loop last saw.
+  // Two reads now that the writes have stopped, both answered from the snapshot the last
+  // projection installed. Nothing was written during either read, so the projection they return
+  // is the same one the write loop last saw.
   const refreshed = await project();
   const populated = memory.log.parseCacheStats;
-  assert.equal(populated.misses, 13, 'the first read after the loop re-parses, it cannot be served by anything');
-  assert.equal(populated.cachedRecords, 13, 'and stores the seed plus the 12 appends');
+  assert.equal(populated.hits, 13, 'a read after the loop finds the file unchanged');
+  assert.equal(populated.cachedRecords, 13, 'and the snapshot still describes the seed plus the 12 appends');
   assert.equal(populated.cached, true);
   const warmed = await project();
-  assert.equal(memory.log.parseCacheStats.hits, 1, 'the second unchanged read is served from it');
+  assert.equal(memory.log.parseCacheStats.hits, 14, 'the next unchanged read is served from it');
   assert.deepEqual(warmed, refreshed);
   // The snapshot that just answered a read says nothing about the write state: the records the
   // loop tracked are still tracked, and the next write still verifies the file's bytes.

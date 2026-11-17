@@ -197,7 +197,19 @@ export function goalActions(store) {
         return { request, criteria, priority, deadline, dependsOn: dependencyList(o.dependsOn), ...decomposition };
       },
       async execute(_ctx, { request, criteria, priority, deadline, dependsOn, ...decomposition }) {
-        const { goal } = await store.createGoal({ request, criteria, priority, deadline, dependsOn, ...decomposition });
+        // The goal list prints an eight-character reference, so a dependency may be named the same
+        // way `goal show` accepts it. Resolution happens before any event is written; an unknown or
+        // ambiguous reference refuses the whole goal rather than inventing a link.
+        const resolved = [];
+        for (const ref of dependsOn) {
+          try {
+            resolved.push((await store.resolve(ref)).id);
+          } catch {
+            throw new ValidationError(`refused: unknown dependency goal ${singleLine(ref, 40)}`);
+          }
+        }
+        if (new Set(resolved).size !== resolved.length) throw new ValidationError('refused: a dependency goal is named twice');
+        const { goal } = await store.createGoal({ request, criteria, priority, deadline, dependsOn: resolved, ...decomposition });
         return {
           summary: `recorded goal ${shortId(goal.id)} with ${goal.criteria.length} success criterion(s)`,
           data: {

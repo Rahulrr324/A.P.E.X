@@ -24,7 +24,10 @@
 //      a subsequent write read. Batch W coordinates the public write paths through
 //      `src/memory/writer-lock.js`, which is what `tests/store-write-concurrency.test.js` proves;
 //      the tests here that need two instances to read before either writes drive the log primitives
-//      directly, and pin that derived state neither causes that interleaving nor hides its result.
+//      directly, and pin that derived state neither causes that interleaving nor hides its result;
+//   7. own-append reads. The read a projection performs immediately after one of this instance's
+//      appends is answered from the records that append validated instead of re-parsing the store -
+//      but only while the file's length and digest prove those records are still its bytes.
 //
 // Fixtures are temporary directories and controlled records. No real user data is read, damaged,
 // or modified, and no model inference is involved.
@@ -732,4 +735,96 @@ test('concurrency - two instances that read before either writes can duplicate a
     { reuses: 0, rebuilds: 2 },
     'an instance never writes blindly from a state it cannot verify',
   );
+});
+
+// ---- 7. the read after this instance's own append -------------------------------------------
+
+test('own append - the next read is answered from the validated bytes without re-parsing', async (t) => {
+  const dir = tempDir();
+  t.after(() => cleanup(dir));
+  const file = memoryPath(dir);
+  const store = new MemoryStore(file, { now: FIXED_NOW });
+  await store.add({ content: 'The build runs on Node 26', source: 'user', provenance: { origin: 'user_request' } });
+  await store.add({ content: 'My favourite colour is blue', source: 'user', provenance: { origin: 'user_request' } });
+
+  const before = store.log.parseCacheStats;
+  const view = await store.log.load();
+  const after = store.log.parseCacheStats;
+  assert.equal(after.misses, before.misses, 'a read after this instance\'s own append does not re-parse the store');
+  assert.equal(after.hits, before.hits + 1, 'it is answered from the records the append validated');
+  assert.equal(after.cachedRecords, 2, 'and installs them as the snapshot');
+  assert.deepEqual(view.records, (await replay(file, validateMemoryRecord)).records, 'exactly what a fresh replay holds');
+  assert.deepEqual(view.corrupt, [], 'a clean store reports no damage');
+
+  // The records are shared, so they must be uneditable, and the returned list must be its own.
+  assert.ok(Object.isFrozen(view.records[0]), 'a reused record cannot be edited by a caller');
+  view.records.push(memoryRecord('pushed onto a returned list'));
+  const again = await store.log.load();
+  assert.equal(again.records.length, 2, 'pushing onto the returned list cannot reach the snapshot');
+  assert.equal(store.log.parseCacheStats.cachedRecords, 2);
+});
+
+test('own append - a foreign append between the write and the read forces a parse', async (t) => {
+  const dir = tempDir();
+  t.after(() => cleanup(dir));
+  const file = memoryPath(dir);
+  const store = new MemoryStore(file, { now: FIXED_NOW });
+  await store.add({ content: 'The build runs on Node 26', source: 'user', provenance: { origin: 'user_request' } });
+
+  fs.appendFileSync(file, line(memoryRecord('Written by another process')), 'utf8');
+  const before = store.log.parseCacheStats;
+  const view = await store.log.load();
+  assert.equal(view.records.length, 2, 'the foreign record is read');
+  assert.ok(view.records.some((r) => r.content === 'Written by another process'));
+  assert.equal(store.log.parseCacheStats.misses, before.misses + 1, 'the length no longer matches the validated state, so the read re-parses');
+});
+
+test('own append - a same-length rewrite is parsed rather than served from the validated state', async (t) => {
+  const dir = tempDir();
+  t.after(() => cleanup(dir));
+  const file = memoryPath(dir);
+  const store = new MemoryStore(file, { now: FIXED_NOW });
+  await store.add({ content: 'The build runs on Node 26', source: 'user', provenance: { origin: 'user_request' } });
+
+  const beforeText = readText(file);
+  const rewritten = beforeText.replace(AT, '2026-02-03T00:00:00.000Z');
+  assert.notEqual(rewritten, beforeText);
+  assert.equal(rewritten.length, beforeText.length, 'the file size is unchanged');
+  fs.writeFileSync(file, rewritten, 'utf8');
+
+  const before = store.log.parseCacheStats;
+  const view = await store.log.load();
+  assert.equal(view.records[0].createdAt, '2026-02-03T00:00:00.000Z', 'the read sees the bytes that are on disk');
+  assert.equal(store.log.parseCacheStats.misses, before.misses + 1, 'the digest, not just the length, decides the reuse');
+});
+
+test('own append - damage written after the append is reported and installs no snapshot', async (t) => {
+  const dir = tempDir();
+  t.after(() => cleanup(dir));
+  const file = memoryPath(dir);
+  const store = new MemoryStore(file, { now: FIXED_NOW });
+  await store.add({ content: 'The build runs on Node 26', source: 'user', provenance: { origin: 'user_request' } });
+
+  fs.appendFileSync(file, '{"schema":1,"id":"half', 'utf8');
+  const view = await store.log.load();
+  assert.equal(view.corrupt.length, 1, 'the residue is damage, not a record');
+  assert.equal(view.records.length, 1);
+  assert.equal(store.log.parseCacheStats.cached, false, 'a damaged file is never represented by a snapshot');
+  assert.equal(store.log.parseCacheStats.cachedRecords, 0);
+});
+
+test('own append - a file past the cap does not install a snapshot from the write state', async (t) => {
+  const dir = tempDir();
+  t.after(() => cleanup(dir));
+  const file = memoryPath(dir);
+  const store = new MemoryStore(file, { now: FIXED_NOW, parseCacheBytes: 16 });
+  await store.add({ content: 'The build runs on Node 26', source: 'user', provenance: { origin: 'user_request' } });
+
+  const before = store.log.parseCacheStats;
+  const view = await store.log.load();
+  assert.equal(view.records.length, 1);
+  assert.equal(store.log.parseCacheStats.misses, before.misses, 'a store over the cap is read without any snapshot accounting');
+  assert.equal(store.log.parseCacheStats.hits, before.hits);
+  assert.equal(store.log.parseCacheStats.cached, false, 'and installs no snapshot');
+  assert.equal(statsFor(store).tracked, false, 'nor does the write path track a file this size');
 });

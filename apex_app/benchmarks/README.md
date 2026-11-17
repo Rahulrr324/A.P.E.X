@@ -2873,3 +2873,161 @@ this machine at that moment. The cloned prior log exercises parse, reduce and ap
 assessment quality; the T-09 tests cover that. The read figures are same-store warm reads, not a
 restart (a restart has no snapshot to reuse). Neither script is part of `npm test`, and no test
 depends on them.
+
+## T-16 real-process operational measurements
+
+`run-t16-operational.mjs` measures what an operator actually waits for. Every command in it is a
+real `bin/apex.js` child process against an isolated data directory and content root; the tick loop
+is a real foreground runtime process watched by separate processes; provider events are real files
+polled by the real provider; document ingest is the real CLI over real extracted text; and recovery
+is a real `SIGKILL` of the runtime followed by a real restart. Nothing is called in-process except
+the situational-read comparison in section 4b, which exists to separate one read's cost from a
+process's start cost.
+
+Isolation and safety, enforced by the script rather than described:
+
+- every data and content root is a `mkdtemp` directory under the OS temporary directory prefixed
+  `apex-bench-t16-`, and cleanup refuses any path outside that root or without that prefix;
+- every child environment is built by `pilotEnv()`, which drops every `APEX_*` variable (including
+  any inherited `APEX_DATA_DIR`), and `APEX_DATA_ISOLATED` must be unset or `1` - any other value
+  is refused before the first fixture is created;
+- no backend, endpoint, socket or provider credential is configured or contacted, and the script
+  says so in its own output;
+- it must not be run at the same time as the test suite or another benchmark, and it is not part of
+  `npm test`.
+
+```bash
+cd apex_app
+node benchmarks/run-t16-operational.mjs                                  # empty prior situational log
+node benchmarks/run-t16-operational.mjs --prior-situational-rows 4000    # 4,000 prior rows
+```
+
+What it reports: one-shot CLI startup (three real child samples, median), runtime readiness, ticks
+observed and the effective interval against the requested 100 ms, maximum checkpoint backlog,
+resident memory early and late, `runtime stop` latency and its exit code, the foreground process's
+exit after a stop, provider first-poll and re-poll outcomes, cold and unchanged document ingest,
+document search and answer retrieval, one reasoning session start and read, storage growth, and
+recovery after the runtime is killed.
+
+### Section 4b: the situational read each ingest performs
+
+Document ingest emits situational events, and each emitted event re-reads the situational log. The
+script therefore takes the log a real CLI ingest just produced and, in one process, times three
+things on those exact bytes: a read immediately after this instance's own append, a cold
+parse-and-validate, and `sha256` of the same buffer (the hashing floor every read pays). The ratio
+printed is the own-append read over the cold read. It is an in-process comparison on one file, not
+an end-to-end ingest figure, and a restart has no validated state, so its first read is the cold
+one - not the reused one.
+
+### Measured runs
+
+Two separate runs, one machine, one moment each. The conditions were not sampled together, so
+their absolute figures are not comparable across the two blocks; the only ratios published are the
+in-run ones.
+
+Empty prior situational log (`--docs 150 --provider-files 50`):
+
+| measurement | value |
+| --- | ---: |
+| startup, three samples / median | 979.049 / 959.124 / 927.750 ms; median 959.124 ms |
+| runtime readiness | 958.003 ms |
+| ticks observed | 62 over 6,913.347 ms |
+| effective tick interval (requested 100 ms) | 111.506 ms |
+| maximum checkpoint backlog | 0 |
+| resident memory early / late | 74.3 MiB / 77.6 MiB (+3.3 MiB) |
+| `runtime stop` / foreground exit after stop | 1,036.444 ms (exit 0) / 1,243.188 ms (exit 0) |
+| provider first poll | 2,305.424 ms, 50 accepted, 0 duplicate, 0 refused of 50 |
+| provider re-poll | 1,008.787 ms, 0 accepted, 0 duplicate, 0 refused |
+| cold document ingest | 9,887.899 ms, 150 indexed, 0 failed (65.919 ms/file) |
+| unchanged re-ingest | 1,044.815 ms, 0 indexed, 150 duplicate |
+| document search / answer | 948.047 ms / 965.526 ms (exit 0) |
+| reasoning session start / read | 1,143.432 ms / 926.552 ms |
+| recovery after `SIGKILL` | 1,057.387 ms to running; boot 3, 110 ticks, same runtime id |
+| storage growth | +877,501 bytes from ingests; +114,649 bytes after recovery |
+
+Situational read in that run: 404 rows, 543,791 bytes; own-append 2.053 ms, cold parse-and-validate
+11.826 ms (0.17x), `sha256` 0.452 ms.
+
+4,000 prior situational rows (`--prior-situational-rows 4000`, same document and provider counts):
+
+| measurement | value |
+| --- | ---: |
+| startup, three samples / median | 968.456 / 933.070 / 915.050 ms; median 933.070 ms |
+| runtime readiness | 950.798 ms |
+| ticks observed | 61 over 6,803.470 ms |
+| effective tick interval (requested 100 ms) | 111.532 ms |
+| maximum checkpoint backlog | 0 |
+| resident memory early / late | 73.9 MiB / 77.9 MiB (+4.0 MiB) |
+| `runtime stop` / foreground exit after stop | 993.236 ms (exit 0) / 1,320.527 ms (exit 0) |
+| provider first poll | 2,169.170 ms, 50 accepted, 0 duplicate, 0 refused of 50 |
+| provider re-poll | 980.644 ms, 0 accepted, 0 duplicate, 0 refused |
+| cold document ingest | 15,612.097 ms, 150 indexed, 0 failed (104.081 ms/file) |
+| unchanged re-ingest | 1,041.542 ms, 0 indexed, 150 duplicate |
+| document search / answer | 972.023 ms / 935.832 ms (exit 0) |
+| reasoning session start / read | 1,215.659 ms / 946.299 ms |
+| recovery after `SIGKILL` | 1,159.837 ms to running; boot 3, 103 ticks, same runtime id |
+| storage growth | +5,180,692 bytes from ingests; +97,653 bytes after recovery |
+
+Situational read in that run: 4,300 rows, 4,846,989 bytes; own-append 12.771 ms, cold
+parse-and-validate 64.211 ms (0.20x), `sha256` 3.724 ms.
+
+The per-file cold cost of 65.919 ms with an empty log and 104.081 ms with 4,000 prior rows is the
+measured shape of the ingest limitation: the same 150 files cost more when the situational log is
+larger, because each emitted event re-reads it. T-15 reduced that read's cost, and T-16 lets the
+writing instance reuse the state its own append produced; neither changes the per-event structure.
+The two figures come from separate runs and are not a ratio; the in-run own-append ratio
+(0.17x / 0.20x) is the only comparison these runs support.
+
+### T-16 re-measurement of the ingest emit share
+
+The T-15 attribution script was re-run once during T-16 on the then-current tree, with the default
+`--rows 0,1000,4000`, to check that the limitation the documentation describes still exists:
+
+```bash
+node benchmarks/run-t15-situational-ingest-benchmark.mjs --rows 0,1000,4000
+```
+
+| prior rows | emit share | share / event | emit / floor |
+| ---: | ---: | ---: | ---: |
+| 0 | 628.347 ms | 15.709 ms | 3.73x |
+| 1,000 | 631.215 ms | 15.780 ms | 4.00x |
+| 4,000 | 1,223.232 ms | 30.581 ms | 6.87x |
+
+The emit share was 1.95x higher with 4,000 prior rows than with none (in-run comparison). One read
+of the synthetic log cost 19.502 ms cold and 6.719 ms warm at 1,000 rows (0.34x), and 59.421 ms
+cold and 11.297 ms warm at 4,000 rows (0.19x). This run's absolutes differ from the earlier T-15
+table because they are a different run; only the in-run ratios carry meaning across the two runs.
+
+Limits of these operational measurements: they are a few samples on one machine at one moment, not
+a statistical benchmark; startup includes Node process launch, so it is larger than in-process
+application setup; the tick interval is derived from status samples taken by separate processes and
+therefore reflects achieved scheduling, not the loop's own timer; 150 extracted text files are a
+small corpus, so extraction cost per file is shown rather than a capacity; storage growth includes
+the fixture documents themselves; and no figure is model-backed or an answer-quality claim.
+
+## T-16 real-world pilot
+
+`pilot/run.js` is a separate, declared-in-code pilot runner. It is not part of `npm test`, and its
+scenarios are never scored by the synthetic evaluation suite; the two result sets stay separate.
+
+```bash
+cd apex_app
+node pilot/run.js                      # every real-world scenario, sequentially
+node pilot/run.js --area filesystem    # one area (filesystem, executive, security)
+node pilot/run.js --workflow E         # scenarios exercising one §6 workflow (A-J)
+node pilot/run.js --id fs-02           # exact id or id prefix, repeatable
+node pilot/run.js --repeat 2           # fresh fixtures per repeat, signature comparison
+node pilot/run.js --json               # machine-readable report
+node pilot/run.js --keep               # keep the isolated fixtures and print their paths
+node pilot/run.js --list               # declared scenarios and workflow coverage, then exit
+```
+
+Every scenario spawns the real application (`bin/apex.js` or `bin/apex-serve.js`) with an isolated
+data directory and workspace created under the OS temporary directory. A scenario that never
+started a real process cannot pass, a scenario that exits 0 without its asserted outcome cannot
+pass, and `--repeat` fails the run when two fresh-fixture executions produce different signatures.
+Each expectation is frozen and hashed at declaration, so a scenario cannot quietly relax what it
+asserts. Measurements are recorded beside each outcome and never scored as one; they must be
+finite numbers or an explicit `null`, and a scenario that records anything else fails as a harness
+error rather than publishing a value the run did not take. Runs are strictly sequential because
+the timings are part of the evidence.

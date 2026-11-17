@@ -2201,9 +2201,13 @@ lock and fsync cost still dominates at small logs, so no bound is claimed.
 
 - Health observes readable records at one moment. It is not a monitor, not a score, and cannot see
   a live process with stale records.
-- A document ingest re-reads the situational log once per emitted event. T-15 reduced that read's
-  cost (parse snapshot, single validation pass) but did not restructure the log, and the cost still
-  grows with the log; small logs are dominated by the fixed writer-locked, fsynced append.
+- A document ingest re-reads the situational log once per emitted event, but the process that just
+  appended no longer re-parses what it wrote. T-15 reduced an unchanged read's cost (parse snapshot,
+  single validation pass); T-16 lets the writing instance reuse the validated state its own append
+  produced when the file's length and SHA-256 match, so the file is still read and hashed but not
+  parsed. Any foreign writer, rewrite, truncation, corruption or file past the cap falls back to a
+  full parse. The per-event load still happens and still grows with the log; small logs are
+  dominated by the fixed writer-locked, fsynced append.
 - The index holds at most 500 live identities and one scan examines at most 500 files; a larger
   directory is reported as truncated.
 - The scale figures are one machine, one run, and synthetic data; they are not throughput claims.
@@ -2295,3 +2299,174 @@ and a single number would conceal which one is unmet.
   model, provider, real document corpus or real user data was used, and no answer-quality claim is
   made.
 - A 26/26 pass is a pass rate over authored scenarios, not evidence of general intelligence.
+
+## T-16: controlled real-world pilot and operational evolution
+
+T-16 added no architecture layer, no store and no new action. It added two artefacts outside
+`src/` - a real-process pilot harness in `pilot/` and a real-process operational benchmark - then
+operated the existing application under explicit start, status, pause, resume, stop, kill and
+restart; repaired the defects that operation exposed; and moved the capability ledger into
+real-world terms where the evidence supports it. No inference was configured, launched or
+contacted, and no external service, account or user document was used.
+
+### What was real
+
+| Real thing | How it was exercised |
+| --- | --- |
+| The application's entry points | Every pilot step is a spawned `bin/apex.js` or `bin/apex-serve.js` child process; no helper function stands in for a command |
+| The operating system's process lifecycle | Start, stop and pause from a second process; a foreground runtime under real scheduling; `SIGKILL` followed by a restart; the lease observed from outside the holder |
+| The filesystem | Create, modify, rename, delete, oversized and malformed files, interrupted ingestion, truncated scans, a corrupted journal, all inside one isolated directory |
+| The TCP stack | A loopback-only HTTP interface with a per-process token, cookie exchange, origin, header and content-type guards, and a non-loopback reachability probe |
+| Content permission | File metadata is observed without reading content; ingestion is refused until content permission is granted; document instructions are stored as untrusted text |
+
+What was not real, and is not claimed: the content is authored by the pilot, not the user; no
+provider outside the filesystem was configured; no model was contacted; and only `.txt` documents
+were ingested, so PDF, DOCX, XLSX and CSV extraction remains covered by fixtures only.
+
+### Pilot harness
+
+| Module | Responsibility |
+| --- | --- |
+| `pilot/harness.js` | Isolated fixture, real child processes, frozen hashed expectations, six dimensions, bounded evidence and measurements, signatures, summary and report |
+| `pilot/scenarios/*.js` | 17 scenarios in three areas covering all ten §6 workflows |
+| `pilot/index.js` | Scenario registry, area and workflow selection |
+| `pilot/run.js` | `--area`, `--workflow`, `--id`, `--repeat`, `--json`, `--keep`, `--list`; nonzero exit on failure |
+| `benchmarks/run-t16-operational.mjs` | The real-process operational measurements described below |
+
+The harness enforces in code the rules it used to state in prose. A scenario that started no real
+process cannot pass, however well its file assertions hold. A scenario that asserts no task-level
+outcome is `invalid_scenario`. An unasserted dimension is `null`, `null` is never a pass, and no
+composite score exists. Each expectation is frozen and hashed at declaration. `--repeat N` re-runs
+each scenario in fresh fixtures and compares a signature built from the outcome, dimension results
+and child exit codes - not from timings or evidence text - so a disagreement is
+`oracle_disagreement` rather than a pass. Measurements are recorded beside the outcome and never
+scored; a measurement must be a finite number or an explicit `null`, and anything else fails the
+scenario as a harness error instead of being printed.
+
+Every fixture is a temporary data directory and workspace, every child environment is built by
+`pilotEnv()` which drops every `APEX_*` variable, and the only socket opened is the interface's
+loopback listener. Runs are strictly sequential because the timings are evidence.
+
+### Scenarios and workflows
+
+| Area | Scenarios | What they operate |
+| --- | ---: | --- |
+| `filesystem` | 8 | Metadata before content permission; version history and compare after an edit; rename and deletion; malformed and oversized files; interrupted ingestion; truncated scan; a corrupted journal line; instructions inside a document |
+| `executive` | 8 | Project continuity across sessions; a changed requirement invalidating an approved plan; a user correction; conflicting information; a blocked dependency; a provider outage; a sustained runtime under real scheduling; recovery from a damaged runtime checkpoint |
+| `security` | 1 | The loopback interface: unauthenticated refusal, cookie flow, origin/header/content-type guards, token not persisted, non-loopback unreachable, deterministic answer |
+
+Workflow coverage is declared per scenario: A 2, B 1, C 1, D 1, E 1, F 1, G 1, H 1, I 1, J 2.
+
+### Defects repaired
+
+Each defect was reproduced through a supported interface before it was changed, and each is pinned
+by a deterministic test. None of them changed an authorization path, a store schema or a trust
+boundary.
+
+| Subsystem | Defect | Repair | Test |
+| --- | --- | --- | --- |
+| `runtime/executive-runtime.js` | A cycle that loaded `running` before an external `runtime stop` wrote its in-memory lifecycle back afterwards: the stop was undone, the foreground process never exited, and its lease refused the next start | The cycle merges its checkpoint under the writer lock, taking the lifecycle from the stored state while keeping its own completed work and history | `t16-runtime-stop-race.test.js` |
+| `runtime/state.js` | On Windows a checkpoint replace fails with `EPERM`/`EACCES`/`EBUSY` while another process reads `runtime.json`, although nothing is wrong with the write; the cycle reported a tick failure | A bounded retry with backoff covers only those three codes; any other error, or an exhausted budget, is reported and the staged file removed | `t16-runtime-checkpoint-replace.test.js` |
+| `runtime/cli.js`, `executive-runtime.js` | `runtime stop` from another process updated the checkpoint but the foreground process stayed alive holding the lease; `runtime status` printed the configured interval although the live cycle used another | A supervisor read exposes lifecycle and lease, and the foreground process exits when the runtime is stopped elsewhere or the lease leaves it; the interval a live process actually uses is persisted and reported as live | `runtime-supervision.test.js` |
+| `documents/cli.js` | `document show` printed a failed document's status but not why it failed | The stored error is shown for a failed document, and only for one | `t12-documents.test.js` 36 |
+| `documents/service.js` | Re-ingesting an unchanged file whose extraction fails added a failed version and a fresh `document_extraction_failed` event every time, which the runtime turns into a new decision and notification each cycle | An unchanged failure is counted as a duplicate; changed bytes are attempted, and `--force` still retries | `t12-documents.test.js` 35 |
+| `memory/memory-store.js`, `actions/builtin.js`, `cli.js` | Every surface shows an eight-character memory reference, but `memory correct` demanded the full UUID, so a correction copied from the listing was refused | A full ID or an unambiguous 4-35 hex prefix resolves to exactly one record; unknown and ambiguous prefixes are refused before anything is written | `memory.test.js` |
+| `actions/goal-actions.js` | A dependency named by the reference the goal list prints was not resolved, so a goal could be recorded with a dependency that named no goal | The reference is resolved before any event is written; unknown, ambiguous or repeated dependencies refuse the goal | `goal-system.test.js` |
+| `benchmarks/run-t16-operational.mjs`, `pilot/harness.js` | The operational benchmark accepted a recovered boot count without checking it advanced; recorded process output could contain the interface token; the pilot printed `[object Promise]` and then `0 bytes` for an untaken memory reading | The boot number must be exactly one higher; the token is redacted from recorded output; the read is awaited before the process stops, a blank operating-system reply is `null`, and the report prints `n/a` for it | `t16-pilot-reporting.test.js` |
+
+The harness itself was also corrected where it misreported rather than where APEX misbehaved: the
+security scenario now counts a refusal only for its stated cause, the interface child is recorded
+as a real process like every other child, and its recorded output is redacted. These were pilot
+defects, and are reported as such - they are not evidence about the application. One inherited
+security test pinned the previous refusal wording for `memory correct`; it now asserts the store's
+refusal of an unknown reference (exit 1, audited, no other store changed), which is the property
+that case exists to check.
+
+### Read-path change: reuse after this instance's own append
+
+Document ingest publishes one situational event per new, changed or failed document, and each
+publication loads the whole append-only situational log. T-15 made an unchanged read cheap through
+a parse snapshot, but the writing instance's own append changed the file, so the read that followed
+always missed the snapshot and re-parsed the store. `JsonlStore.load()` now reuses the validated
+state that this instance's own append produced when two conditions both hold: the file's length
+equals the length that state describes, and the SHA-256 of the bytes just read equals the key of
+the sequence those records were validated from. Otherwise it parses normally. The file is still
+read and every byte is still hashed; only the parse and reduce are skipped, and only for the
+process that wrote those exact bytes. A foreign writer, a same-length rewrite, a truncation, a
+corruption or a file past the 32 MiB cap all fall back to a full parse. Retained state exists only
+for a clean file, so a damaged store is never represented by retained records, and the load-time
+snapshot is installed from the same proof.
+
+The change is confined to `memory/jsonl-store.js`; no store format, append path, lock, validation
+rule or recovery behaviour changed. It is pinned by five own-append tests beside the existing
+proof, damage, bounds and concurrency tests in `incremental-write-state.test.js`, with the pinned
+counters in `request-scoped-reads.test.js` and `world-state-performance.test.js` updated to the
+measured behaviour.
+
+Measured effect, in-process on the file a real CLI ingest had just produced, within each run: the
+read after the instance's own append cost 2.053 ms against 11.826 ms for the same read cold
+(0.17x) at 404 rows, and 12.771 ms against 64.211 ms (0.20x) at 4,300 rows. The per-event load
+still happens and still grows with the log; the change removes the parse for the writer, not the
+read.
+
+### Measured operation
+
+Two separate runs of `benchmarks/run-t16-operational.mjs`, one machine, one moment each, 150
+documents and 50 provider files. They are reported separately and not compared.
+
+- Empty prior situational log: readiness 958.003 ms; 62 ticks giving an effective 111.506 ms
+  interval against a requested 100 ms; maximum checkpoint backlog 0; resident memory 74.3 to
+  77.6 MiB; `runtime stop` 1,036.444 ms with exit 0 and the foreground process exiting 1,243.188 ms
+  later with exit 0; provider first poll 2,305.424 ms accepting 50 of 50 with no duplicate or
+  refusal, re-poll 1,008.787 ms accepting none; cold ingest 9,887.899 ms for 150 files with no
+  failure (65.919 ms/file); unchanged re-ingest 1,044.815 ms reporting 150 duplicates; document
+  search 948.047 ms and answer 965.526 ms; recovery after `SIGKILL` 1,057.387 ms to running, boot 3,
+  110 ticks, same runtime id; storage +877,501 bytes from ingest and +114,649 bytes after recovery.
+- 4,000 prior situational rows: readiness 950.798 ms; 61 ticks at 111.532 ms; backlog 0; memory
+  73.9 to 77.9 MiB; stop 993.236 ms and foreground exit 1,320.527 ms, both exit 0; first poll
+  2,169.170 ms accepting 50 of 50, re-poll 980.644 ms; cold ingest 15,612.097 ms (104.081 ms/file);
+  unchanged re-ingest 1,041.542 ms with 150 duplicates; search 972.023 ms and answer 935.832 ms;
+  recovery 1,159.837 ms, boot 3, 103 ticks, same runtime id; storage +5,180,692 bytes from ingest
+  and +97,653 bytes after recovery.
+
+The pilot itself passed 17 of 17 scenarios, started 157 real child processes with 12 non-zero exits
+(each asserted by its scenario) and no timeout, and recorded 36 measurements separately from the
+outcomes. Correctness, completeness, reliability, safety and UX were asserted and held 17 of 17;
+continuity 16 of 16. Every scenario's signature matched under `--repeat 2`.
+
+### Capability status distribution
+
+Real-world validation for this ledger means the capability's asserted behaviour was exercised
+through its real entry points against a system the application neither created nor simulated - the
+operating system's process scheduler, its filesystem or its TCP stack - with pilot-authored
+content. It does not mean real user data, an external service or genuine inference, none of which
+was used.
+
+| Status | Count | Capabilities |
+| --- | ---: | --- |
+| Real-world validated (narrow) | 3 | Conversational web interface (T-06), cross-session persistence and continuity (T-07), continuous executive runtime (T-10) |
+| Locally validated | 10 | The remaining capabilities that were locally validated in T-15 |
+| Integrated, not locally validated | 1 | Model-facing architecture (T-04) |
+| Contract only | 1 | Neural runtime boundary (T-05) |
+| Prototype | 0 | - |
+
+The three upgrades are narrow and rest on what the pilot actually did: real sockets and cookies,
+real restarts and `SIGKILL` recovery with the same runtime identity, and a real cross-process stop
+that ends the foreground process and releases its lease. No other capability was upgraded. In
+particular, document understanding stays locally validated: the filesystem behaviour is real, but
+the documents are pilot-authored text files and the non-text extractors remain fixture-only.
+External providers stay locally validated with file-backed sources; no provider outside the
+filesystem was configured. Real-world validation against real user data, an external service or
+genuine inference remains 0 of 15.
+
+### Limits
+
+- The pilot is authored by the same team as the application; its scenarios are hands-on operation,
+  not an independent test.
+- The content is synthetic. A success on pilot-authored text or JSON does not generalise to a
+  user's documents, accounts or formats.
+- The operational figures are a few samples on one machine at one moment, with 150 documents; they
+  are not throughput or capacity claims, and only in-run ratios are findings.
+- The interface was stopped with `SIGTERM` on Windows because there is no portable way to deliver
+  `SIGINT` to another process; the Ctrl+C path is covered by in-process tests, not by the pilot.
+- No inference is performed or claimed, and no answer-quality or model-behaviour claim is made.

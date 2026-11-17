@@ -15,10 +15,12 @@
 // list rather than a copy of every record and every nested field. Stores that do not
 // enable it (tasks, conversation, operations) behave exactly as before and pay nothing.
 //
-// Snapshot work is skipped on the read that immediately follows one of this instance's own
-// appends: those bytes were just changed by this instance, so a snapshot match cannot exist and
-// hashing plus copying every record would be pure overhead. The snapshot is left exactly as it
-// was: stale snapshots miss, they never serve stale records.
+// A read that immediately follows one of this instance's own appends is answered from the records
+// that append validated, provided the file's length and digest still prove those are its bytes.
+// A foreign append, a same-length rewrite, a truncation, a replaced file or a dropped write state
+// falls back to a full parse, so reusing the write state can only skip work, never serve bytes the
+// instance did not validate. The snapshot is otherwise left exactly as it was: stale snapshots
+// miss, they never serve stale records.
 //
 // Incremental validated state for writes (`loadForAppend()`). An ordinary append used to re-read,
 // re-parse and re-validate the whole store, which made every write cost what the whole store
@@ -138,10 +140,10 @@ export class JsonlStore {
   // Read-only introspection of the derived snapshot. It reports a performance aid, not
   // stored state: a caller must not use it to decide whether a record exists. Hits and
   // misses are cumulative for this store instance and survive invalidation, so they answer
-  // "how many reads did the snapshot serve", never "is this data current". A miss includes
-  // the read that skips snapshot work because it immediately follows one of this instance's
-  // own appends. The read that precedes an append is a `loadForAppend()` and is counted in
-  // `appendStateStats`, not here.
+  // "how many reads did the snapshot serve", never "is this data current". A read immediately
+  // after one of this instance's appends is a hit when the write path's validated records still
+  // describe the file, and a miss when anything else changed it. The read that precedes an append
+  // is a `loadForAppend()` and is counted in `appendStateStats`, not here.
   get parseCacheStats() {
     return {
       enabled: this.parseCacheBytes > 0,
@@ -225,12 +227,25 @@ export class JsonlStore {
       return parseLines(text(), this.validateRecord);
     }
     const cacheable = this.parseCacheBytes > 0 && buffer.length <= this.parseCacheBytes;
+    const justWrote = this.#justWrote;
+    this.#justWrote = false;
     if (!cacheable) return parseLines(text(), this.validateRecord);
-    if (this.#justWrote) {
-      // This instance changed the bytes, so a snapshot match cannot exist and hashing plus
-      // copying every record would be pure write overhead. Parse and return; the next
-      // unchanged read hashes and populates.
-      this.#justWrote = false;
+    if (justWrote) {
+      // This instance changed the bytes, so a snapshot match cannot exist. Its own append may
+      // still have left the write path with the validated records of exactly these bytes: if
+      // the length and digest agree, the file is byte-for-byte the sequence those records were
+      // validated from, and the snapshot can be installed without re-parsing it. Anything else
+      // (a foreign writer, a partial write, a dropped state) falls back to a full parse.
+      const state = this.#appendState;
+      if (state && state.bytes === buffer.length) {
+        const key = digest(buffer);
+        if (key === state.key) {
+          this.#snapshot = { key, bytes: buffer.length, records: [...state.records], corrupt: [] };
+          this.#cacheHits += 1;
+          note(key);
+          return { records: [...state.records], corrupt: [] };
+        }
+      }
       this.#cacheMisses += 1;
       return parseLines(text(), this.validateRecord);
     }

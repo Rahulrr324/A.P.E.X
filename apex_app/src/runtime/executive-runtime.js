@@ -119,6 +119,9 @@ export class ExecutiveRuntime {
     }
     state = await this.stateStore.save(state);
     state.lifecycle = 'running';
+    // The interval this process actually uses is recorded so a status read from another process
+    // describes the running cycle, not the stored default it never used.
+    state.effectiveIntervalMs = intervalMs > 0 ? intervalMs : null;
     state = await this.stateStore.save(state);
 
     ACTIVE_RUNTIMES.add(this.dataDir);
@@ -168,6 +171,7 @@ export class ExecutiveRuntime {
     const stoppedAt = this.now().toISOString();
     state.lifecycle = 'stopped';
     state.stoppedAt = stoppedAt;
+    state.effectiveIntervalMs = null;
     state.history.push({ type: 'stopped', at: stoppedAt, reason });
     state = await this.stateStore.save(state);
     const released = this.leaseNonce ? this.lease.release(this.leaseNonce) : { released: true };
@@ -202,9 +206,26 @@ export class ExecutiveRuntime {
     return this.tickPromise;
   }
 
+  // A cycle that started while running owns its checkpoint, counters and history, but it does not
+  // own the lifecycle: an external `runtime stop` may have landed while the cycle was working.
+  // Writing this cycle's in-memory copy unchanged would set the checkpoint back to `running`, the
+  // foreground process would never observe the stop, and the lease it still holds would refuse the
+  // next start. Merging under the writer lock keeps both: the stop's lifecycle and this cycle's
+  // completed work.
+  #saveTick(state, historyStart) {
+    return this.stateStore.mutate((current) => ({
+      ...state,
+      lifecycle: current.lifecycle,
+      stoppedAt: current.stoppedAt,
+      effectiveIntervalMs: current.lifecycle === 'running' ? state.effectiveIntervalMs : current.effectiveIntervalMs,
+      history: [...current.history, ...state.history.slice(historyStart)],
+    }));
+  }
+
   async #tick({ trigger = 'timer' } = {}) {
     const loaded = await this.stateStore.load();
     const state = loaded.state;
+    const historyStart = state.history.length;
     const at = this.now().toISOString();
     if (state.lifecycle !== 'running') {
       return { ran: false, reason: `runtime is ${state.lifecycle}`, at };
@@ -217,7 +238,7 @@ export class ExecutiveRuntime {
     const heartbeat = this.lease.heartbeat(this.leaseNonce);
     if (!heartbeat.ok) {
       state.history.push({ type: 'lease_lost', at, reason: heartbeat.reason });
-      await this.stateStore.save(state);
+      await this.#saveTick(state, historyStart);
       return { ...summary, ran: false, reason: `the runtime lease is no longer held: ${heartbeat.reason}` };
     }
     try {
@@ -265,13 +286,13 @@ export class ExecutiveRuntime {
       state.counts.deadLettered += summary.deadLettered;
       state.counts.plansExecuted += summary.executed.length;
       state.history.push({ type: 'tick', at, trigger, processed: summary.processed, executed: summary.executed.length, published: summary.published });
-      await this.stateStore.save(state);
+      await this.#saveTick(state, historyStart);
     } catch (err) {
       // A tick failure is recorded and the runtime stays running. The next tick retries the work
       // that the checkpoint says was not finished.
       this.lastError = err?.message ?? String(err);
       state.history.push({ type: 'tick_failed', at, error: this.lastError });
-      await this.stateStore.save(state);
+      await this.#saveTick(state, historyStart);
       summary.error = this.lastError;
     }
     return summary;
@@ -818,6 +839,8 @@ export class ExecutiveRuntime {
       runtimeId: state.runtimeId,
       version: state.version,
       configVersion: state.config.version,
+      // The interval the running process actually uses; the configured default applies when idle.
+      effectiveIntervalMs: state.effectiveIntervalMs ?? null,
       paused: state.paused,
       boots: state.boots,
       ticks: state.tickCount,
@@ -856,6 +879,13 @@ export class ExecutiveRuntime {
       corruption: loaded.corruption,
       config: { ...this.config },
     };
+  }
+
+  // A cheap probe for a process that is not the holder: it answers only what a supervisor needs to
+  // notice that the runtime it started was stopped elsewhere, without loading the whole status page.
+  async supervision() {
+    const loaded = await this.stateStore.load();
+    return { lifecycle: loaded.state.lifecycle, effectiveIntervalMs: loaded.state.effectiveIntervalMs ?? null, lease: this.lease.inspect(), corruption: loaded.corruption };
   }
 
   async diagnose() {

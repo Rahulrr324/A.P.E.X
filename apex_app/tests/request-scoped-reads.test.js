@@ -152,14 +152,14 @@ describe('AP-12: memory retrieval reuse follows storage identity', () => {
     await store.add({ content: 'the lighthouse status is green', kind: 'user_fact', source: 'user' });
     await store.add({ content: 'the lighthouse status is amber', kind: 'user_fact', source: 'user', sensitivity: 'private' });
 
-    await store.search('lighthouse status'); // the read after this instance's writes certifies nothing
+    await store.search('lighthouse status'); // the read after this instance's writes certifies the file it validated
     const baseline = store.retrievalIndexStats;
     assert.equal((await store.search('lighthouse status', { includePrivate: false })).length, 1);
     assert.equal((await store.search('lighthouse status', { includePrivate: true })).length, 2);
     assert.equal((await store.search('lighthouse status', { includePrivate: false })).length, 1);
     const stats = store.retrievalIndexStats;
-    assert.equal(stats.builds, baseline.builds + 2, 'one corpus per visibility, not one per read');
-    assert.equal(stats.hits, baseline.hits + 1);
+    assert.equal(stats.builds, baseline.builds + 1, 'one corpus per visibility, not one per read');
+    assert.equal(stats.hits, baseline.hits + 2);
     assert.equal(stats.cached, true);
   });
 
@@ -334,13 +334,13 @@ describe('AP-12: knowledge lifecycle and retrieval reuse follows storage identit
     const file = tempFile('knowledge-search-memo.jsonl');
     const store = new KnowledgeStore(file, { now: NOW });
     await seedClaims(store);
-    await store.search('lighthouse'); // the read after this instance's writes certifies nothing
+    await store.search('lighthouse'); // the read after this instance's writes certifies the file it validated
     const baseline = store.retrievalIndexStats;
     const first = await store.search('lighthouse status');
     const second = await store.search('lighthouse status');
     assert.deepEqual(second, first);
-    assert.equal(store.retrievalIndexStats.builds, baseline.builds + 1);
-    assert.equal(store.retrievalIndexStats.hits, baseline.hits + 1);
+    assert.equal(store.retrievalIndexStats.builds, baseline.builds, 'the active pool is built once, not per read');
+    assert.equal(store.retrievalIndexStats.hits, baseline.hits + 2);
 
     // A new claim makes the next search see it, and the changed bytes rebuild the active pool.
     const beforeAdd = store.retrievalIndexStats;

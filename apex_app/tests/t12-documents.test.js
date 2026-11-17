@@ -202,6 +202,7 @@ describe('T-12 contextual knowledge and content understanding', () => {
     const evidence = await app.documents.evidence(doc.documentId, { section: 1 });
     assert.match(evidence.excerpt, /beta detail/);
     assert.equal(evidence.document.version, 1);
+    assert.equal(evidence.document.documentId, doc.documentId);
   });
 
   test('6: JSON field candidates are source-derived, uncertain and not user knowledge', async () => {
@@ -630,5 +631,48 @@ describe('T-12 contextual knowledge and content understanding', () => {
     await app.documents.ingest();
     const world = await buildWorldState({ memory: app.memory, knowledge: app.knowledge, now: () => new Date() });
     assert.equal(world.counts.userAsserted, 1);
+  });
+
+  test('35: an unchanged extraction failure is not re-versioned or re-announced on every ingest', async () => {
+    const app = appOn();
+    write(app.__root, 'binary.txt', Buffer.from([0, 1, 2, 3, 4, 5]));
+    await ready(app, { extensions: ['txt'] });
+    const first = await app.documents.ingest();
+    assert.equal(first.failed, 1);
+    const documentId = (await app.documents.list())[0].documentId;
+    const failures = async () => (await events(app)).filter((row) => row.event.type === 'document_extraction_failed');
+    assert.equal((await failures()).length, 1);
+    const second = await app.documents.ingest();
+    assert.equal(second.failed, 0);
+    assert.equal(second.duplicates, 1);
+    assert.equal(second.changed, 0);
+    assert.equal(second.documents.length, 0);
+    assert.equal((await app.documents.versions(documentId)).length, 1);
+    assert.equal((await failures()).length, 1, 'the unchanged failure is not announced again');
+    write(app.__root, 'binary.txt', Buffer.from([9, 8, 7]));
+    const third = await app.documents.ingest();
+    assert.equal(third.failed, 1, 'changed bytes are attempted again');
+    assert.equal((await app.documents.versions(documentId)).length, 2);
+    const forced = await app.documents.ingest({ force: true });
+    assert.equal(forced.failed, 1, '--force still retries unchanged bytes');
+    assert.equal((await app.documents.versions(documentId)).length, 3);
+  });
+
+  test('36: the real CLI show command prints why a document failed', async () => {
+    const app = appOn();
+    write(app.__root, 'binary.txt', Buffer.from([0, 1, 2, 3, 4, 5]));
+    const env = cleanEnv({ APEX_DATA_DIR: app.__dir });
+    assert.equal((await runCli(['document', 'configure', '--root', app.__root, '--extension', 'txt'], env)).code, 0);
+    assert.equal((await runCli(['document', 'enable'], env)).code, 0);
+    const ingested = await runCli(['document', 'ingest'], env);
+    assert.equal(ingested.code, 0, ingested.stderr);
+    assert.match(ingested.stdout, /1 failed/);
+    const documentId = (await app.documents.list())[0].documentId;
+    const shown = await runCli(['document', 'show', documentId], env);
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /failed/);
+    assert.match(shown.stdout, /error: .*not text/);
+    const again = await runCli(['document', 'ingest'], env);
+    assert.match(again.stdout, /1 duplicate/);
   });
 });

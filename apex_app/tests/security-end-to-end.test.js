@@ -399,7 +399,8 @@ describe('AF-23 3: malformed input, and the two different things a rejection can
     const good = await cli(dir, ['ask', 'remember that the release window is open']);
     assert.equal(good.code, 0, `${good.out}${good.err}`);
     const cases = [
-      { argv: ['memory', 'correct', '--resolve', 'ffffffff', 'the release window is closed'], capability: 'memory.correct', status: Outcome.INPUT_REJECTED, out: /targetId must be a full memory record ID/ },
+      // A well-formed reference that matches nothing is refused by the store, not by input syntax.
+      { argv: ['memory', 'correct', '--resolve', 'ffffffff', 'the release window is closed'], capability: 'memory.correct', status: Outcome.EXECUTION_FAILED, out: /no memory record matches ffffffff/ },
       { argv: ['experience', 'record', 'deadbeef', '--subject', 'a stored fact'], capability: 'experience.record', status: Outcome.EXECUTION_FAILED, out: /is not in the audit log/ },
       { argv: ['prediction', 'record', '--capability', 'memory.add', '--expect', 'maybe', '--subject', 'a claim', '--in-days', '30'], capability: 'prediction.record', status: Outcome.INPUT_REJECTED, out: /expectation must be one of: success, failure, blocked/ },
       { argv: ['prediction', 'record', '--capability', 'memory.add', '--expect', 'success', '--subject', 'a claim', '--in-days', '99999'], capability: 'prediction.record', status: Outcome.INPUT_REJECTED, out: /inDays must be an integer from 1 to 366/ },

@@ -8,6 +8,7 @@ import path from 'node:path';
 import { createApp } from '../src/app.js';
 import { CAPTURE_OFF } from '../src/experience/capture.js';
 import { Outcome } from '../src/outcomes.js';
+import { shortId } from '../src/util.js';
 import { makeTempDataDir, cleanup } from './helpers.js';
 
 async function appIn(dir) {
@@ -158,6 +159,40 @@ test('goal dependencies must exist and must be completed before the dependent go
     const { goal } = await app.controller.showGoal(dependentId);
     assert.equal(goal.status, 'active');
     assert.deepEqual(goal.dependsOn, [dependencyId]);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('a dependency may be named by the reference the goal list displays', async () => {
+  const dir = makeTempDataDir();
+  try {
+    const app = await appIn(dir);
+    const dependency = await app.controller.goalAdd({
+      request: 'the prerequisite is recorded',
+      criteria: ['the prerequisite operation verified'],
+    });
+    const dependencyId = goalIdOf(dependency);
+    const shown = shortId(dependencyId);
+
+    const dependent = await app.controller.goalAdd({
+      request: 'the follow-up is recorded',
+      criteria: ['the follow-up operation verified'],
+      dependsOn: [shown],
+    });
+    assert.equal(dependent.status, Outcome.GOAL_CREATED);
+    const { goal } = await app.controller.showGoal(goalIdOf(dependent));
+    assert.deepEqual(goal.dependsOn, [dependencyId]);
+
+    // Naming the same goal twice, once in full and once by prefix, is refused rather than
+    // recorded as two dependencies.
+    const twice = await app.controller.goalAdd({
+      request: 'the duplicate dependency',
+      criteria: ['anything'],
+      dependsOn: [dependencyId, shown],
+    });
+    assert.equal(twice.status, Outcome.EXECUTION_FAILED);
+    assert.match(twice.output, /a dependency goal is named twice/);
   } finally {
     cleanup(dir);
   }

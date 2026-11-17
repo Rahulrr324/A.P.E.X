@@ -1637,23 +1637,34 @@ questions that must change nothing).
   for; with
   `--model` the probe reads the endpoint's model list and still runs no inference. The view
   starts nothing, polls nothing, writes no record, and repairs nothing.
-- **Document ingest still re-reads the situational log once per emitted event, and that emit is
-  still the dominant cost.** Each new, changed, or failed document publishes one situational
-  event, and each publication reads and reduces the whole append-only situational log. T-15
-  reduced that share without changing what is stored or what is validated: repeated reads of
-  unchanged bytes are served from a parse snapshot, and the reducer no longer repeats the
-  per-record shape validation the store's parser already performed on that read. In one
-  in-process A/B run against the pre-T-15 tree, with identical synthetic documents and the same
-  emitting pipeline, the emit share was 0.97x the baseline at an empty log, 0.73x with 1,200
-  prior rows (75.7 vs 103.0 ms per emitted event) and 0.62x with 4,000 prior rows (153.2 vs
-  247.7 ms); a 20-document ingest into 4,000 prior rows took 7.23 s instead of 10.99 s. At small
-  logs a fixed per-event cost (two writer-locked, fsynced appends, about 60 ms on the measured
-  host) dominates, so the gain grows with the log rather than appearing at the first document.
-  The T-14 figure of roughly 35-40 ms per event at 500 events was measured before this change on
-  different fixtures; it and the T-15 figures are not comparable across runs. The reproducible
-  current-tree curve is in
-  [benchmarks/README.md](benchmarks/README.md#t-15-situational-ingest-benchmark), and the T-14
-  numbers remain in
+- **Document ingest still re-reads the situational log once per emitted event, but the process
+  that just appended no longer re-parses what it wrote.** Each new, changed, or failed document
+  publishes one situational event, and each publication loads the whole append-only situational
+  log. T-15 reduced that read's cost without changing what is stored or what is validated:
+  repeated reads of unchanged bytes are served from a parse snapshot, and the reducer no longer
+  repeats the per-record shape validation the store's parser already performed on that read. T-16
+  removed the parse for the one reader that had never benefited: a load immediately after this
+  instance's own append reuses the validated state that append produced when the file's length and
+  SHA-256 match the bytes those records were validated from. The file is still read and every byte
+  is still hashed; a foreign writer, a same-length rewrite, a truncation, a corruption or a file
+  past the cap all fall back to a full parse, and no state is retained for a damaged store. In the
+  T-16 operational runs that read cost 2.053 ms against 11.826 ms cold (0.17x) at 404 rows and
+  12.771 ms against 64.211 ms (0.20x) at 4,300 rows; both are in-process comparisons within their
+  own run. The per-event load still happens and still grows with the log: the same 150-file ingest
+  cost 65.919 ms/file with an empty log and 104.081 ms/file with 4,000 prior rows in two separate
+  runs, which is not a ratio. In one in-process A/B run against the pre-T-15 tree, with identical
+  synthetic documents and the same emitting pipeline, the emit share was 0.97x the baseline at an
+  empty log, 0.73x with 1,200 prior rows (75.7 vs 103.0 ms per emitted event) and 0.62x with 4,000
+  prior rows (153.2 vs 247.7 ms); a 20-document ingest into 4,000 prior rows took 7.23 s instead
+  of 10.99 s. At small logs a fixed per-event cost (two writer-locked, fsynced appends, about
+  60 ms on the measured host) dominates, so the gain grows with the log rather than appearing at
+  the first document. The T-14 figure of roughly 35-40 ms per event at 500 events was measured
+  before these changes on different fixtures; it and the T-15 figures are not comparable across
+  runs. The reproducible current-tree curve is in
+  [benchmarks/README.md](benchmarks/README.md#t-15-situational-ingest-benchmark), the T-16
+  real-process figures are in
+  [benchmarks/README.md](benchmarks/README.md#t-16-real-process-operational-measurements), and the
+  T-14 numbers remain in
   [Batch T-14](#t-14-whole-system-integration-reliability-and-operational-validation).
 - **The document index holds at most 500 live identities per store and one scan examines at
   most 500 files.** A full index still ingests: a new document beyond the cap is skipped and
@@ -9633,3 +9644,210 @@ dimensions; they come from the store, interruption and T-14 suites and from the 
 are separate and reported separately. The capability labels describe this machine on this date;
 none is a forecast. The numbers in this section are one machine and one run, and absolute times move
 with machine load, so only in-run ratios are findings.
+
+## T-16 controlled real-world pilot and operational evolution
+
+T-15 validated 0 of 15 capabilities against a real system. T-16 took the same application, without
+adding an architecture layer or a store, and operated it: real processes started, paused, stopped,
+killed and restarted; a real filesystem created, edited, renamed, truncated, corrupted and cleared;
+a real loopback interface authenticated or refused; real measurements taken from the operating
+system. It then repaired the defects that operation exposed and moved the capability ledger where
+the evidence supports it.
+
+No inference was performed or configured in any part of T-16: no model backend, endpoint, socket,
+download or local server, and no claim about model-backed intelligence. The content the pilot
+operated on is authored by the pilot; it is not the user's data.
+
+### Running the pilot
+
+```bash
+cd apex_app
+node pilot/run.js                      # all 17 scenarios, sequentially
+node pilot/run.js --area filesystem    # filesystem, executive or security
+node pilot/run.js --workflow E         # scenarios exercising one §6 workflow (A-J)
+node pilot/run.js --id fs-02           # exact id or id prefix, repeatable
+node pilot/run.js --repeat 2           # fresh fixtures per repeat, signatures compared
+node pilot/run.js --json               # machine-readable report
+node pilot/run.js --keep               # keep the isolated fixtures and print their paths
+node pilot/run.js --list               # declared scenarios and workflow coverage
+```
+
+Every step is a spawned `bin/apex.js` or `bin/apex-serve.js` child. Each scenario gets a temporary
+data directory and workspace; every child environment drops every `APEX_*` variable, and the only
+socket opened is the interface's loopback listener. Runs are sequential because their timings are
+evidence. The runner exits nonzero on a failed scenario, a repeated run that disagrees with itself,
+or input the harness refuses. It is not part of `npm test`; the real-process operation is separate
+from the synthetic evaluation suite, and the two result sets stay separate.
+
+### What was operated
+
+| Area | Scenarios | Operation |
+| --- | ---: | --- |
+| `filesystem` | 8 | Metadata observed without content permission; an edit keeps its earlier version and a later process sees it; rename and deletion; a malformed and an oversized file; an ingest killed mid-file; a truncated scan; a corrupted journal line; instructions inside a document |
+| `executive` | 8 | A goal and plan continued across sessions; a changed requirement invalidating an approved plan; a user correction; conflicting information; a blocked dependency; a provider outage; a sustained runtime; a damaged checkpoint quarantined |
+| `security` | 1 | The loopback interface over real HTTP: authentication, cookie flow, origin, header and content-type guards, token persistence, non-loopback reachability, deterministic answer |
+
+All ten §6 workflows are covered: A 2 scenarios, B 1, C 1, D 1, E 1, F 1, G 1, H 1, I 1, J 2.
+
+### Result of the pilot
+
+`node pilot/run.js` on this machine exited 0:
+
+| Measure | Result |
+| --- | --- |
+| Scenarios | 17 of 17 |
+| Correctness / completeness / reliability / safety / UX | 17/17 each, where asserted |
+| Continuity | 16/16 |
+| Areas | filesystem 8/8, executive 8/8, security 1/1 |
+| Workflows | every declared workflow passed in full |
+| Real processes | 157 started, 12 non-zero exits (each asserted by its scenario), 0 timed out |
+| Measurements | 36, recorded beside the outcomes and never scored as one |
+| Reproducibility | every scenario's signature matched under `--repeat 2` |
+
+A clean exit is never the pass: each scenario asserts an outcome through the application, and the
+harness refuses a scenario that asserts nothing. The security scenario ended the interface with
+`SIGTERM` because Windows has no portable way to deliver `SIGINT` to another process; the Ctrl+C
+path is covered by the in-process tests.
+
+### Security and permission results
+
+The real interface bound loopback only and was unreachable from the machine's non-loopback address.
+Without a token, `/healthz` answered 200 and the page and every API answered 401. The token was
+exchanged for an `HttpOnly`, `SameSite=Strict` cookie; a cross-origin POST was refused 403, a POST
+without the UI header 403, and a POST with the wrong content type 415. The token appeared in no
+persisted data file, and the interface reported no model configured and no provider enabled. File
+metadata was observed without reading content, ingestion was refused until the content permission
+was granted, and instructions inside a document were stored as untrusted text that authorized
+nothing.
+
+### Repairs
+
+Each defect was reproduced through a supported surface before it was changed and is pinned by a
+deterministic test. None changed an authorization path, a store schema or a trust boundary.
+
+| Defect | Behaviour before | Repair | Test |
+| --- | --- | --- | --- |
+| A stop during an in-flight runtime cycle | The cycle wrote its pre-stop `running` state back after the stop, so the runtime kept ticking, its process never exited and its lease refused the next start | The cycle merges its checkpoint under the writer lock, keeping the stored lifecycle and its own completed work | `t16-runtime-stop-race.test.js` |
+| A checkpoint replace on Windows | A concurrent reader made the rename fail `EPERM`/`EACCES`/`EBUSY`, which the cycle reported as a tick failure although the write was fine | A bounded retry covers only those three codes; other errors and an exhausted budget are reported, and the staged file is removed | `t16-runtime-checkpoint-replace.test.js` |
+| `runtime stop` from another process | It updated the checkpoint but the foreground process stayed alive holding the lease; `runtime status` also printed the configured interval rather than the live one | The foreground process watches the persisted lifecycle and its lease and exits when either leaves it; the interval a live process uses is persisted and shown as live | `runtime-supervision.test.js` |
+| `document show` on a failed document | It printed the status but not the reason, so a failed file looked mysterious | The stored error is shown for a failed document, and only for one | `t12-documents.test.js` 36 |
+| Re-ingesting an unchanged failing file | Every ingest added a failed version and a fresh failure event, which became a new decision and notification each runtime cycle | An unchanged failure is a duplicate; changed bytes are attempted and `--force` still retries | `t12-documents.test.js` 35 |
+| `memory correct` with a copied reference | Every surface prints eight characters of a memory id, but the command demanded the full UUID, so a correction copied from the listing was refused | A full ID or an unambiguous 4-35 hex prefix resolves to one record; unknown or ambiguous prefixes are refused before anything is written | `memory.test.js` |
+| A goal dependency named by a printed reference | The dependency was stored but resolved to no goal | The reference is resolved before any event is written; unknown, ambiguous or repeated dependencies refuse the goal | `goal-system.test.js` |
+| The pilot's own reporting | A memory measurement printed `[object Promise]`, then `0 bytes` after the process had stopped; the operational benchmark did not check that a recovered boot count advanced | The read is awaited before the stop, a blank operating-system reply is `null` and prints `n/a`, a non-numeric measurement fails the scenario, the recovered boot must be exactly one higher | `t16-pilot-reporting.test.js` |
+
+The harness was also corrected where it misreported rather than where APEX misbehaved: a refusal
+counts only for its stated cause, the interface child is recorded as a real process, and its
+recorded output has the token redacted. Those are pilot defects, not evidence about the
+application. One inherited security test pinned the previous refusal wording for `memory correct`;
+it now asserts the store's refusal of an unknown reference (exit 1, audited, no other store
+changed), which is the property that case exists to check.
+
+### The ingestion read, narrowed
+
+The measured T-14/T-15 bottleneck was that each emitted situational event re-reads the whole
+append-only log. T-16 applied one narrow change: a load immediately after this instance's own
+append reuses the validated state that append produced when the file's length and SHA-256 match the
+bytes those records were validated from. The file is still read and every byte is still hashed;
+only the parse and reduce are skipped, and only for the writer of those exact bytes. Any foreign
+writer, same-length rewrite, truncation, corruption or file past the 32 MiB cap falls back to a full
+parse, and no state is retained for a damaged store. Nothing about the log format, append path,
+locks, duplicate protection or fail-closed recovery changed.
+
+In the T-16 operational runs the read after the ingest's own append cost 2.053 ms against 11.826 ms
+cold (0.17x) at 404 rows and 12.771 ms against 64.211 ms (0.20x) at 4,300 rows, in-process within
+each run. The per-event load still happens and still grows with the log: the same 150-file ingest
+cost 65.919 ms/file with an empty log and 104.081 ms/file with 4,000 prior rows in two separate
+runs, which is not a ratio.
+
+### Measured operation
+
+`benchmarks/run-t16-operational.mjs` drives the installed application entirely through real child
+processes. Two separate runs, one machine, one moment each, reported separately and not compared:
+
+| Measurement | Empty prior log | 4,000 prior rows |
+| --- | ---: | ---: |
+| Runtime readiness | 958.003 ms | 950.798 ms |
+| Effective tick interval (requested 100 ms) | 111.506 ms | 111.532 ms |
+| Maximum checkpoint backlog | 0 | 0 |
+| Resident memory, early to late | 74.3 to 77.6 MiB | 73.9 to 77.9 MiB |
+| `runtime stop` / foreground exit | 1,036.444 / 1,243.188 ms, both exit 0 | 993.236 / 1,320.527 ms, both exit 0 |
+| Provider first poll / re-poll | 2,305.424 / 1,008.787 ms | 2,169.170 / 980.644 ms |
+| Cold document ingest (150 files) | 9,887.899 ms, 0 failed | 15,612.097 ms, 0 failed |
+| Unchanged re-ingest | 1,044.815 ms, 150 duplicates | 1,041.542 ms, 150 duplicates |
+| Document search / answer | 948.047 / 965.526 ms | 972.023 / 935.832 ms |
+| Recovery after `SIGKILL` | 1,057.387 ms, boot 3, same id | 1,159.837 ms, boot 3, same id |
+
+The comparison columns are two runs, not a benchmark of one condition against the other; only
+in-run ratios (such as the own-append read above) are findings. Full figures, what the runs cannot
+prove, and the T-15 attribution re-measurement are in
+[`benchmarks/README.md`](benchmarks/README.md#t-16-real-process-operational-measurements).
+
+### Capability reconciliation
+
+The labels are used exactly as named. **Not started**: no code and no contract. **Contract only**: a
+schema, declaration or validator exists, with no live producer or consumer. **Prototype**: a
+workable mechanism is exercised only by fixtures. **Implemented**: a real component passes its
+tests but is not reachable through the normal surfaces. **Integrated**: reachable through the
+controller, CLI or UI and wired to the real stores. **Locally validated**: exercised end to end on
+this machine under synthetic or deterministic conditions. **Real-world validated**: exercised
+against a real external system, real user data, or genuine model inference.
+
+For T-16, "real external system" means a system the application neither created nor simulated: the
+operating system's process scheduler, its filesystem, or its TCP stack. The pilot authored the
+content it operated on. No real user data, external account, service or inference was used.
+
+| Capability | Status | Evidence and boundary |
+| --- | --- | --- |
+| Request understanding and objective decomposition (T-01) | Integrated; locally validated | Unchanged from T-15; the pilot's executive workflows exercise the same controller with pilot-authored text |
+| Competing-hypothesis and contradiction reasoning (T-02) | Integrated; locally validated | Unchanged; no model was contacted |
+| Objective outlining (T-03) | Integrated; locally validated as a read-only outline | Unchanged; records, approves and starts nothing |
+| Model-facing architecture (T-04) | Integrated; not locally validated | Wired, but no provider was contacted in T-15 or T-16 |
+| Neural runtime boundary (T-05) | Contract only | No process or HTTP transport and no model |
+| Conversational web interface (T-06) | Integrated; real-world validated (narrow) | Real `bin/apex-serve.js` over loopback, real token, cookie and guard responses, token not persisted, non-loopback unreachable, deterministic answer; no external client or user |
+| Cross-session persistence and continuity (T-07) | Integrated; real-world validated (narrow) | Real restarts and `SIGKILL` with the same runtime identity across `fs-02`, `fs-05`, `ex-01`, `ex-07`; pilot-authored stores |
+| Outcome-driven adaptation (T-08) | Integrated; locally validated in a narrow scope | Unchanged: append-only experience, user feedback, candidate rules, approval; nothing trains or changes itself |
+| Situational awareness and proactive decisions (T-09) | Integrated; locally validated | Real file-backed providers were polled, but observation content is pilot-authored and the assessment is deterministic |
+| Continuous executive runtime (T-10) | Integrated; real-world validated (narrow) | Real scheduling, stop from another process with lease release, sustained ticking, `SIGKILL` recovery, quarantined checkpoint; not an always-on service |
+| External event provider fabric (T-11) | Integrated; locally validated with real local file sources | The provider read real files; no provider outside the filesystem was configured and the content is pilot-authored |
+| Document understanding and source-derived knowledge (T-12) | Integrated; locally validated on pilot-authored text files | Real filesystem behaviour; PDF, DOCX, XLSX and CSV extraction remains fixture-only, so no real corpus claim |
+| Reasoning and evidence workspace (T-13) | Integrated; locally validated | Unchanged; real CLI sessions on pilot-authored data |
+| Whole-system operational health (T-14) | Integrated; locally validated | Unchanged; read-only and not a monitor |
+| Personal workspace, notes, deadlines and backup (R-series) | Integrated; locally validated | Unchanged; synthetic and pilot-authored files |
+
+No other capability was upgraded. The three real-world upgrades rest on what the pilot actually
+did and are narrow: they do not imply external integration, real user data or model-backed
+behaviour.
+
+### Four completion measurements
+
+These remain four different measurements. No percentage and no composite score is computed.
+
+1. **Architecture completion** — unchanged by T-16: T-16 added no component to the running
+   application. The application still exposes 140 actions in 24 families with a workspace root
+   (125 in 23 without), one registry and one controller; the pilot harness and the operational
+   benchmark live outside `src/`. Absent: a neural transport and runtime, a general objective
+   planner, a voice interface, model training, and a hosted multi-user deployment.
+2. **Integrated functionality** — what a person can do through the real entry points. The synthetic
+   evaluation suite passes 26 of 26; the real-process pilot passes 17 of 17 across three areas and
+   all ten workflows; 43 CLI command words and the loopback UI reach the same controller. Model
+   answers, the neural runtime and non-filesystem providers remain unreachable.
+3. **Capability maturity** — 3 real-world validated (narrow), 10 locally validated, 1 integrated but
+   not locally validated, 1 contract only, 0 prototype, 0 implemented-only. Four named capabilities
+   are not started: a general objective planner, a neural inference runtime, a voice interface and
+   hosted multi-user operation.
+4. **Real-world validation coverage** — 3 of 15 capabilities were exercised against a real external
+   system (the operating system's scheduler, filesystem and TCP stack). 0 of 15 were exercised
+   against real user data, an external service or genuine model inference. In the pilot: 157 real
+   child processes, 0 model calls, 0 external services contacted, 17 pilot-authored fixtures.
+
+### What T-16 does not claim
+
+17 of 17 is a pass rate over scenarios written by the same team that wrote the application, on
+content the same team authored. It is not evidence of general intelligence, answer quality or
+robustness against a user's real corpus, formats, accounts or workflows. The pilot's filesystem,
+process and socket behaviour is real; the documents are not. No model was contacted, so no
+model-backed capability is claimed, and the neural runtime remains a contract. The operational
+figures are a few samples on one machine at one moment with 150 documents; they are not throughput
+or capacity claims, and only in-run ratios are findings. The capability labels describe this
+machine on this date; none is a forecast.

@@ -164,6 +164,16 @@ describe('memory store', () => {
     assert.ok(hits.every((hit) => hit.conflict.length === 0));
   });
 
+  test('a displayed short prefix resolves the correction target, and an unknown one is refused', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const older = await store.add({ content: 'The project codename is Lighthouse' });
+    assert.equal(await store.resolveId(older.id.slice(0, 8)), older.id);
+    assert.equal(await store.resolveId(older.id), older.id);
+    await assert.rejects(() => store.resolveId(older.id.slice(0, 3)), ValidationError);
+    await assert.rejects(() => store.resolveId('ffffffff'), /no memory record matches/);
+  });
+
   test('a correction only resolves the identified conflict and leaves independent conflicts unresolved', async () => {
     const dir = tempDir();
     const store = new MemoryStore(path.join(dir, 'memory.jsonl'));

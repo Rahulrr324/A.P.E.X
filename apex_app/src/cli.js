@@ -250,7 +250,7 @@ Request examples (no model needed; use them with ask, or type the same words in 
   remember privately that my pin is kept at the bank   (never sent to a model)
   recall codename
   list memory
-  memory correct --resolve <full-record-id> <replacement claim...>
+  memory correct --resolve <record-id> <replacement claim...>   (full ID or a unique 4+ hex prefix)
   calc (2+3)*4          (or: what is 2+3*4?)
   status
   list src/             list one directory inside the authorized root (no model needed)
@@ -1290,12 +1290,12 @@ export async function main(argv, {
         return res.health?.attention ? 1 : 0;
       }
       if (sub !== 'correct') {
-        err('usage: memory correct --resolve <full-record-id> <replacement claim...> | memory health');
+        err('usage: memory correct --resolve <record-id> <replacement claim...> | memory health');
         return 2;
       }
       const { flags, rest: values } = parseFlags(rest, ['resolve']);
       if (!flags.resolve || values.length < 2) {
-        throw new ValidationError('usage: memory correct --resolve <full-record-id> <replacement claim...>', 'USAGE');
+        throw new ValidationError('usage: memory correct --resolve <record-id> <replacement claim...>', 'USAGE');
       }
       return emit(await app.controller.correctMemory({ targetId: values[0], content: values.slice(1).join(' '), resolve: true }));
     }
