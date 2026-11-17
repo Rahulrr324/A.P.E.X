@@ -176,7 +176,11 @@ export class SituationService {
       );
     }
     if (existing.duplicate) {
-      const assessment = (await this.store.snapshot({ limit: 1 })).assessments.get(existing.event.id) ?? null;
+      // The stored assessment was computed when the event was first observed and describes it as
+      // new information. Returning it for a replay would recommend recording an event that is
+      // already recorded, so the replay is assessed as a replay. This reading is not stored: a
+      // duplicate adds no record, and the original assessment remains the recorded one.
+      const assessment = assessEvent({ event: existing.event, now: nowIso, duplicate: true });
       return { event: existing.event, assessment, duplicate: true };
     }
 
@@ -225,7 +229,7 @@ export class SituationService {
     event.worldRefs = await this.#applyWorld(spec, event, expired);
     const observed = await this.store.observe(event);
     if (observed.duplicate) {
-      const assessment = (await this.store.snapshot({ limit: 1 })).assessments.get(observed.record.id) ?? null;
+      const assessment = assessEvent({ event: observed.record, now: nowIso, duplicate: true });
       return { event: observed.record, assessment, duplicate: true };
     }
 

@@ -275,6 +275,28 @@ describe('memory store', () => {
     assert.equal(after, before);
   });
 
+  test('an explicit correction may replace a dated claim the clause parser cannot split', async () => {
+    const dir = tempDir();
+    const store = new MemoryStore(path.join(dir, 'memory.jsonl'));
+    const original = await store.add({ content: 'the vendor ships on Tuesdays' });
+    // "ships" is not a copula and the values are date words, so neither the clause parser nor the
+    // retrieval conflict rule recognizes this pair; the owner still named the claim to replace.
+    const corrected = await store.correct({
+      targetId: original.id,
+      content: 'the vendor ships on Thursdays',
+      origin: 'user',
+    });
+    assert.deepEqual(corrected.provenance.replaces, [original.id]);
+    const hits = await store.search('vendor ships', { limit: 10 });
+    assert.equal(hits.find((hit) => hit.record.id === original.id).status, 'superseded');
+    assert.equal(hits.find((hit) => hit.record.id === corrected.id).status, 'user_confirmed');
+    // Unrelated content is still refused by the bounded fallback.
+    await assert.rejects(
+      () => store.correct({ targetId: corrected.id, content: 'Buy oat milk on Tuesday', origin: 'user' }),
+      ValidationError,
+    );
+  });
+
   test('generic writes cannot forge confirmation or replacement provenance', async () => {
     const dir = tempDir();
     const store = new MemoryStore(path.join(dir, 'memory.jsonl'));

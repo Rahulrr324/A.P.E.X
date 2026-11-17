@@ -141,7 +141,13 @@ export function validateSituationRecord(record) {
 }
 
 // The whole current picture, derived only from append order.
-export function reduceSituation(records) {
+// `validated: true` is for a caller whose records were already put through
+// `validateSituationRecord` by the store's parser on this read - the situational store refuses
+// the read when any line failed that check. The structural rules (record ids, an assessment
+// naming a recorded event, a decision naming the latest assessment, one response per decision)
+// always run; only the per-record shape check is skipped, so this is a deduplication of work,
+// not a weaker read.
+export function reduceSituation(records, { validated = false } = {}) {
   const events = new Map();
   const assessments = new Map(); // eventId -> latest assessment record
   const assessmentCounts = new Map();
@@ -151,7 +157,7 @@ export function reduceSituation(records) {
   const problems = [];
 
   records.forEach((record, index) => {
-    const problem = validateSituationRecord(record);
+    const problem = validated ? null : validateSituationRecord(record);
     if (problem) {
       problems.push({ index, reason: problem });
       return;

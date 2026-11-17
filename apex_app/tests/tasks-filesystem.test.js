@@ -124,6 +124,36 @@ describe('task execution: filesystem steps', () => {
     assert.deepEqual(ops.map((r) => r.task.stepId).sort(), ['s1', 's2']);
   });
 
+  test('a planned find step with no extension executes instead of failing on its own default', async () => {
+    const root = tempRoot();
+    const app = appOn(tempDir(), root);
+
+    // Planning validates a step and stores the normalized input, with null for each optional field
+    // that was not supplied. Execution validates that stored input again. Before the fix, the
+    // second pass read extension: null as invalid text and rejected a step that had just been
+    // approved, so a read-only step failed with "extension must be text".
+    const planned = await app.controller.planAdd({
+      outcome: 'Find the notes file',
+      steps: [{
+        id: 's1',
+        description: 'Find files named notes',
+        action: 'filesystem.find',
+        input: { name: 'notes' },
+        dependsOn: [],
+        expectedResult: 'a bounded list of matching files',
+        verification: 'the action rescans the workspace',
+        risk: 'low',
+      }],
+      reason: 'regression: the normalized null optional fields must revalidate',
+    });
+    const planId = planned.operation.steps[0].result.data.planId;
+    await app.controller.planApprove({ target: planId });
+    const activated = await app.controller.planActivate(planId);
+
+    assert.equal(activated.task.steps[0].status, StepStatus.COMPLETED, activated.display);
+    assert.match(activated.task.steps[0].summary, /1 match\(es\)/);
+  });
+
   test('a multi-part filesystem request runs as a listing task through the controller', async () => {
     const root = tempRoot();
     const app = appOn(tempDir(), root);

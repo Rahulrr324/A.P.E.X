@@ -84,6 +84,14 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   append-only situational log is re-read and reduced per emit, so a large first ingest is slow. That
   cost is disclosed in the output and is not optimized by the benchmark.
 
+- `run-t15-situational-ingest-benchmark.mjs` builds every content root and data directory on a
+  `mkdtemp` directory prefixed `apex-bench-t15-` and uses the same refusing cleanup. It accepts
+  `APEX_DATA_ISOLATED` unset or `1` and refuses any other value, and constructs no backend, socket
+  or child process. It ingests 20 synthetic markdown documents with the situational emit on and off
+  at progressive prior-log sizes, and reads one unchanged synthetic log cold and warm on the same
+  store. Its synthetic prior log is cloned from one real event/assessment pair written by the
+  service, so it is structurally valid and the run pays only the measured reads and appends.
+
 - Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
   reporting, not a cleanup task.
 
@@ -2795,3 +2803,73 @@ machine measured, and the per-document cost rises as the log grows. The benchmar
 cost; it does not optimize it, and this file does not claim a bound that was not measured.
 
 This script is not part of `npm test` and no test depends on it.
+
+The T-15 section below measures the same emit share after the situational store was changed to serve
+repeated reads of unchanged bytes from a parse snapshot and to skip the reducer's duplicate
+validation pass. That section also records the before/after comparison; this T-14 script neither
+optimizes nor compares against a baseline.
+
+## T-15 situational-ingest benchmark
+
+`run-t15-situational-ingest-benchmark.mjs` measures two things on the current tree, with no
+inference and no target: what the situational event a document ingest emits costs at progressive
+prior-log sizes, and what one situational read costs cold and warm.
+
+```bash
+cd apex_app
+APEX_DATA_ISOLATED=1 node benchmarks/run-t15-situational-ingest-benchmark.mjs --rows 0,1000,4000
+```
+
+What it reports:
+
+- a 20-document ingest with the emit disabled (the extraction/index floor) and enabled, at each
+  prior-log size, with the emit share, the share per emitted event, and the in-run emit/floor ratio;
+- a cold read (a fresh store) and a warm read (the same store, unchanged bytes) of one synthetic
+  log at each non-zero size, with the warm/cold ratio and the parse-snapshot hit count;
+- equivalence checks: every condition must index all 20 documents with no failures, the emit
+  conditions must end with exactly `prior rows + 40` situational rows, the emit-disabled condition
+  must write no situational log, and both reads must return every record. The script exits 1 if a
+  check fails.
+
+The measured run used to write this section (one machine, one sample per condition, 40 emitted
+events per condition):
+
+| prior rows | floor | emit | emit share | share / event |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 268.6 ms | 691.9 ms | 423.3 ms | 10.6 ms |
+| 1,000 | 221.7 ms | 1,065.1 ms | 843.4 ms | 21.1 ms |
+| 4,000 | 207.6 ms | 6,740.7 ms | 6,533.1 ms | 163.3 ms |
+
+A 1,000-row log read cold in 39.0 ms and warm in 12.1 ms (0.31x); a 4,000-row log read cold in
+108.9 ms and warm in 33.3 ms (0.31x). The growth of the emit share with the log is the measured
+limitation: the fixed per-event cost (two writer-locked, fsynced appends) dominates at small logs,
+and the full-log read dominates as the log grows.
+
+### Before/after against the pre-T-15 tree
+
+The before/after comparison was run in-process on this machine by extracting `git archive
+--format=tar HEAD:apex_app` to a temporary directory and importing both trees as separate module
+graphs. Both variants ingested identical synthetic documents with the same wiring (the situational
+service over a fresh log, no knowledge store), in three alternating rounds; the figures below are
+medians. Every condition indexed the same documents and ended with the same number of situational
+records, and no run failed.
+
+| condition | baseline | current | current / baseline |
+| --- | ---: | ---: | ---: |
+| 150 docs, empty log, emit on | 26,304.5 ms | 26,265.4 ms | 1.00x |
+| 150 docs, empty log, emit share | 18,188.6 ms | 17,661.8 ms | 0.97x |
+| 40 docs after 1,200 prior rows, emit on | 10,401.8 ms | 8,155.1 ms | 0.78x |
+| 40 docs after 1,200 prior rows, emit share | 8,268.4 ms | 6,057.1 ms | 0.73x |
+| 20 docs after 4,000 prior rows, emit on | 10,987.4 ms | 7,234.2 ms | 0.66x |
+| 20 docs after 4,000 prior rows, emit share | 9,908.4 ms | 6,129.9 ms | 0.62x |
+
+The gain grows with the log because the change removes repeated parses and a duplicate validation
+pass per read; the fixed per-append cost is unchanged, and durability (a fsynced append inside the
+writer lock), append-only history, duplicate protection and fail-closed recovery were not weakened.
+At an empty log the change is neutral, which is why no small-log improvement is claimed.
+
+Limits: the A/B numbers are one run with a few rounds, not a statistical benchmark; they describe
+this machine at that moment. The cloned prior log exercises parse, reduce and append, not
+assessment quality; the T-09 tests cover that. The read figures are same-store warm reads, not a
+restart (a restart has no snapshot to reuse). Neither script is part of `npm test`, and no test
+depends on them.

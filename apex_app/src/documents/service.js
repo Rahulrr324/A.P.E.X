@@ -173,7 +173,7 @@ export class DocumentService {
       return resolved;
     });
     if (!Array.isArray(merged.extensions) || merged.extensions.length === 0 || merged.extensions.length > 40) throw new ValidationError('extensions must name between 1 and 40 extensions');
-    const extensions = [...new Set(merged.extensions.map((value) => String(value).replace(/^\\./, '').toLowerCase()))];
+    const extensions = [...new Set(merged.extensions.map((value) => String(value).replace(/^\./, '').toLowerCase()))];
     if (extensions.some((value) => !TEXT_EXTENSIONS.includes(`.${value}`) && !['pdf', 'docx', 'xlsx', 'markdown'].includes(value))) {
       throw new ValidationError('an extension is not a supported text or document format');
     }

@@ -9,7 +9,7 @@ import { StoreError, ValidationError } from '../errors.js';
 import { shortId, singleLine } from '../util.js';
 import {
   DECISION_REPLAY_WINDOW_MS, DEFAULT_DECISIONS_READ, DEFAULT_EVENTS_READ, MAX_DECISIONS_READ,
-  MAX_EVENTS_READ, SITUATION_SCHEMA,
+  MAX_EVENTS_READ, SITUATION_PARSE_CACHE_BYTES, SITUATION_SCHEMA,
 } from './vocabulary.js';
 import { latestDecisionFor, reduceSituation, validateSituationRecord } from './model.js';
 
@@ -22,12 +22,15 @@ function bounded(value, fallback, max) {
 }
 
 export class SituationStore {
-  constructor(filePath, { now = () => new Date(), idFactory = randomUUID, operations = null, lockWaitMs, lockRetryMs, lockRetryMaxMs } = {}) {
+  constructor(filePath, {
+    now = () => new Date(), idFactory = randomUUID, operations = null, parseCacheBytes = SITUATION_PARSE_CACHE_BYTES,
+    lockWaitMs, lockRetryMs, lockRetryMaxMs,
+  } = {}) {
     this.filePath = filePath;
     this.now = now;
     this.idFactory = idFactory;
     this.operations = operations;
-    this.log = new JsonlStore(filePath, { validateRecord: validateSituationRecord });
+    this.log = new JsonlStore(filePath, { validateRecord: validateSituationRecord, parseCacheBytes });
     this.lock = new WriterLock(filePath, { waitMs: lockWaitMs, retryMs: lockRetryMs, retryMaxMs: lockRetryMaxMs });
   }
 
@@ -36,7 +39,10 @@ export class SituationStore {
     if (corrupt.length > 0) {
       throw new StoreError(`situational log contains ${corrupt.length} corrupt line(s); refusing an incomplete picture`);
     }
-    const state = reduceSituation(records);
+    // `records` came through the store's parser, which applies the same validator to every line
+    // and diverts a failing line into `corrupt` (refused above). Reducing can therefore skip the
+    // second validation pass this read just paid for; the structural checks below still run.
+    const state = reduceSituation(records, { validated: true });
     if (state.problems.length > 0) {
       throw new StoreError(`situational log contains ${state.problems.length} record(s) that cannot be applied; refusing an incomplete picture`);
     }
@@ -51,7 +57,7 @@ export class SituationStore {
   // environment. An unreadable file still throws.
   async inspect() {
     const { records, corrupt } = await this.log.load();
-    const state = reduceSituation(records);
+    const state = reduceSituation(records, { validated: true });
     return {
       path: this.filePath,
       records: records.length,

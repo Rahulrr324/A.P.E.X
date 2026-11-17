@@ -49,7 +49,12 @@ preserved for provenance.
   everything is well. Batch T-14 then drove the assembled application through restart, dependency, document,
   external-observation, interruption, sustained-failure, and adversarial workflows, repaired the
   one integration defect they exposed, and measured documents and evidence at 100, 1,000 and 5,000
-  records with no model.
+  records with no model. Batch T-15 then evaluated the assembled application as a user would: 26
+  synthetic end-to-end scenarios across seven areas, four of them blind, with separate correctness,
+  completeness, safety, continuity and UX dimensions and no composite score. It repaired six defects
+  the evaluation and the CLI walkthrough exposed, reduced the situational read cost behind document
+  ingest, and reconciled every capability claim to one of seven explicit labels. No inference was
+  configured or run, and nothing was exercised against a real external system or real user data.
   It answers
   deterministic requests with no model and sends
   everything else to a local model backend **you** configure; without one it still answers from its
@@ -438,3 +443,21 @@ disclosed as slow because each emitted situational event re-reads the event log,
 ([details](apex_app/README.md#t-14-whole-system-integration-reliability-and-operational-validation);
 tests: `tests/t14-workflows.test.js`, `tests/t14-health.test.js`, `tests/t14-reliability.test.js`,
 `tests/t14-scale-bounds.test.js`). No model was configured, called, downloaded, or started.
+
+Batch T-15 added no subsystem. It added an evaluation harness outside the application source and
+drove the assembled system through 26 synthetic, end-to-end scenarios in seven user areas - four of
+them blind - asserting correctness, completeness, safety, continuity and UX as separate dimensions
+with no composite score. It repaired six defects those scenarios and the CLI walkthrough exposed,
+including a replay that recommended acting on an already-recorded event, a correction the memory
+store wrongly refused, a derived evidence id that moved with the query clock, a planned filesystem
+step that failed on its own normalized input, a dotted document-extension form that was not
+normalized, and a family of documented CLI options that were parsed as booleans and left their
+values as stray arguments. It then measured the situational read cost behind document ingest and
+cut the emit share to 0.62x the pre-T-15 tree at 4,000 prior records in an in-run A/B, without
+weakening durability or fail-closed recovery. It reconciled the capability record to seven explicit
+labels: 13 locally validated, 1 integrated but not locally validated, 1 contract only, 0 prototype,
+0 real-world validated, and 4 named capabilities not started. Every fixture was synthetic, no model
+was contacted, and no real external system or user data was used
+([details](apex_app/README.md#t-15-real-world-validation-capability-evaluation-and-evolution);
+tests: `tests/t15-evaluation.test.js`, `tests/t15-performance-and-inputs.test.js`,
+`tests/t15-operational-cli.test.js`).

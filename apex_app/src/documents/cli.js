@@ -73,7 +73,11 @@ export async function runDocumentCommand({ app, args, out, err, parseFlags, reje
     if (report.status === 'skipped') { err(`document ingestion skipped: ${report.reason}`); return 1; }
     out([
       `Document ingest: ${report.indexed} indexed, ${report.changed} changed, ${report.duplicates} duplicate, ${report.failed} failed, ${report.deleted} deleted of ${report.observed} observed in ${report.durationMs} ms${report.truncated ? ' (bounded; more files remain)' : ''}.`,
+      ...(report.limited > 0 ? [`  ${report.limited} current file(s) were not indexed because the index is at its document limit.`] : []),
       ...report.documents.slice(0, 20).map((row) => `  ${row.documentId} v${row.version} ${row.status} ${row.path} (${row.candidateIds} candidate fact(s))`),
+      ...(report.documents.length > 20 ? [`  ... and ${report.documents.length - 20} more document(s).`] : []),
+      ...report.warnings.slice(0, 10).map((line) => `  note: ${line}`),
+      ...(report.warnings.length > 10 ? [`  ... and ${report.warnings.length - 10} more note(s).`] : []),
     ].join('\n'));
     return 0;
   }

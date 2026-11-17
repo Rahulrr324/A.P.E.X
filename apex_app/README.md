@@ -1406,13 +1406,25 @@ documents with a warning, versions a changed one, and frees a slot on invalidati
 and evidence at 100, 1,000, and 5,000 synthetic records in one run, printing its own limitations
 ([Batch T-14](#t-14-whole-system-integration-reliability-and-operational-validation)).
 
+The T-15 suites cover the evaluation harness itself, the input and read-path repairs, and the CLI
+surface: `tests/t15-evaluation.test.js` pins the framework's rules (a clean return is not a pass,
+dimensions stay separate, signatures detect irreproducibility, no evaluation source can reach an
+inference system, and evidence identity does not move with the query clock);
+`tests/t15-performance-and-inputs.test.js` pins the situational parse snapshot, the reducer's
+structural rules, dotted document extensions and the CLI's limited-index report; and
+`tests/t15-operational-cli.test.js` drives the documented situational, learning, adaptation and goal
+options through the real entry point, including their domain refusals. The evaluation harness itself
+is `node eval/run.js` and is not part of `npm test` ([Batch T-15](#t-15-real-world-validation-capability-evaluation-and-evolution)).
+
 The suite map for a focused run: the T-14 acceptance set is
 `node --test tests/t14-workflows.test.js tests/t14-health.test.js tests/t14-reliability.test.js
-tests/t14-scale-bounds.test.js`; the integration set adds `tests/integration.test.js` and the T-09
-to T-13 suites (`t09-situational-awareness.test.js`, `t10-executive-runtime.test.js`,
-`t11-external-integrations.test.js`, `t12-documents.test.js`, `t13-reasoning.test.js`); the full set
-is `npm test`; and the long-duration scale evidence is the T-14 benchmark above, never part of
-`npm test` because it writes thousands of records and takes minutes.
+tests/t14-scale-bounds.test.js`; the T-15 set is `node --test tests/t15-evaluation.test.js
+tests/t15-performance-and-inputs.test.js tests/t15-operational-cli.test.js`; the integration set adds
+`tests/integration.test.js` and the T-09 to T-13 suites (`t09-situational-awareness.test.js`,
+`t10-executive-runtime.test.js`, `t11-external-integrations.test.js`, `t12-documents.test.js`,
+`t13-reasoning.test.js`); the full set is `npm test`; the long-duration scale evidence is the T-14
+benchmark above and the T-15 situational-ingest benchmark, neither part of `npm test` because they
+write thousands of records and take minutes.
 
 | Acceptance test | Where |
 |---|---|
@@ -1625,14 +1637,24 @@ questions that must change nothing).
   for; with
   `--model` the probe reads the endpoint's model list and still runs no inference. The view
   starts nothing, polls nothing, writes no record, and repairs nothing.
-- **A first document ingest re-reads the situational log once per emitted event.** Each new,
-  changed, or failed document publishes one situational event, and each publication re-reads
-  and reduces the whole append-only situational log several times. At 500 recorded events the
-  per-event cost is roughly 35-40 ms, so indexing 100 documents took 12.36 s and filling the
-  500-document index took about 112 s in the measured run; a later ingest of unchanged files
-  took 3.3 s. This is disclosed rather than optimized: restructuring the T-09 store during a
-  validation batch would have widened the change beyond the evidence. The measured numbers and
-  their fixtures are in [Batch T-14](#t-14-whole-system-integration-reliability-and-operational-validation).
+- **Document ingest still re-reads the situational log once per emitted event, and that emit is
+  still the dominant cost.** Each new, changed, or failed document publishes one situational
+  event, and each publication reads and reduces the whole append-only situational log. T-15
+  reduced that share without changing what is stored or what is validated: repeated reads of
+  unchanged bytes are served from a parse snapshot, and the reducer no longer repeats the
+  per-record shape validation the store's parser already performed on that read. In one
+  in-process A/B run against the pre-T-15 tree, with identical synthetic documents and the same
+  emitting pipeline, the emit share was 0.97x the baseline at an empty log, 0.73x with 1,200
+  prior rows (75.7 vs 103.0 ms per emitted event) and 0.62x with 4,000 prior rows (153.2 vs
+  247.7 ms); a 20-document ingest into 4,000 prior rows took 7.23 s instead of 10.99 s. At small
+  logs a fixed per-event cost (two writer-locked, fsynced appends, about 60 ms on the measured
+  host) dominates, so the gain grows with the log rather than appearing at the first document.
+  The T-14 figure of roughly 35-40 ms per event at 500 events was measured before this change on
+  different fixtures; it and the T-15 figures are not comparable across runs. The reproducible
+  current-tree curve is in
+  [benchmarks/README.md](benchmarks/README.md#t-15-situational-ingest-benchmark), and the T-14
+  numbers remain in
+  [Batch T-14](#t-14-whole-system-integration-reliability-and-operational-validation).
 - **The document index holds at most 500 live identities per store and one scan examines at
   most 500 files.** A full index still ingests: a new document beyond the cap is skipped and
   reported as `limited` with one warning instead of refusing the whole scan, a changed indexed
@@ -9408,3 +9430,206 @@ it was disclosed rather than restructured. Health observes readable records at o
 neither a monitor nor a score. The scale runs stop at the configured caps, so a store larger than
 500 live identities is reported as truncated rather than exercised. No model, remote or local, was
 used, downloaded, or started, and no claim is made about model behavior or answer quality.
+
+## T-15 real-world validation, capability evaluation and evolution
+
+T-15 added no subsystem to the application. It added a separate evaluation harness under `eval/`,
+drove the assembled application through 26 user-level scenarios, repaired six defects the scenarios
+or the operational walkthrough exposed, optimized one measured bottleneck, and reconciled the
+capability claims with what the code actually does. No inference was performed: every scenario used
+`NoBackend` or an in-process scripted fixture, every fact was synthetic, and no endpoint was
+contacted.
+
+### The evaluation harness
+
+The harness is deliberately outside `src/`. A scenario states what a person is trying to
+accomplish, supplies an isolated fixture, and asserts against public results only: outcome statuses,
+displayed text, and records the user can read back.
+
+| Rule | How it is enforced |
+| --- | --- |
+| A clean return is not a pass | A scenario that asserts no task-level outcome is `invalid_scenario`; at least one correctness or completeness assertion is required |
+| Dimensions stay separate | Correctness, completeness, reliability, safety, continuity, performance and UX are measured only where asserted; an unasserted dimension is `null`, `null` never counts as a pass, and no composite score is produced |
+| Expectations are frozen | Each scenario declares its expected and actual text before running, so a later code change cannot quietly redefine success |
+| Fixtures are isolated | One fresh temporary data directory and workspace root per scenario, a deterministic clock, and a `restart()` that preserves bytes and clock identity so continuity is measured rather than assumed |
+| Blind subset | `rq-01` to `rq-04` were written from the documented T-13 session contract, not from the code; the other 22 are non-blind |
+| Reproducibility | `--repeat N` re-runs each scenario in a fresh fixture and compares a signature; a disagreement is `oracle_disagreement`, not a pass |
+| No inference | A test asserts that no evaluation source contains an inference address or model token and that the default gateway is the no-backend stub |
+
+```bash
+cd apex_app
+node eval/run.js
+node eval/run.js --category reasoning-quality --repeat 2
+node eval/run.js --json
+node eval/run.js --list
+```
+
+The runner exits nonzero when a scenario fails or the harness refuses its input. It is not part of
+`npm test`, because it writes fixtures and runs 26 end-to-end situations.
+
+### What the suite covers
+
+| Category | Scenarios | What it asks |
+| --- | ---: | --- |
+| `personal-executive` | 4 | A remembered fact survives a restart and recall; a correction replaces without erasing; a private memory stays out of model turns; an ambiguous request is questioned |
+| `research-knowledge` | 4 | Search and digest; a retraction leaves current search and stays in history; conflicting claims are both preserved; a changed document is read at its current version after restart |
+| `planning-execution` | 4 | An approved plan runs without completing its goal; a goal completes only on its own evidence; a failure blocks the plan; a revision is current at version 2 while version 1 remains readable |
+| `situational-awareness` | 3 | A replayed observation is a duplicate; an expired one is preserved but not current; an observation tied to a goal is notified, not acted on |
+| `security-trust` | 4 | A model proposal to write is denied; document instructions cannot cause execution; a credential is refused and not stored; a destructive command is refused before any model or file operation |
+| `long-duration` | 3 | Completion survives a restart and a new process; a fresh process answers from the stores; corrections across sessions leave one current answer and a readable history |
+| `reasoning-quality` | 4 (blind) | Disagreement keeps alternatives instead of choosing; an unanswerable question names missing evidence; a superseded record is history; a question replays reproducibly and a correction changes the replay |
+
+Each result also records per-scenario metrics: evidence items, conflicts, unresolved hypotheses,
+hypothesis selection, provenance origins, supporting records, unsupported rate, missing-evidence
+codes, evidence-digest stability and model calls where recorded (zero in every case). These are
+reported per scenario and are not aggregated into a score.
+
+### Result of the acceptance run
+
+`node eval/run.js --repeat 2` on this machine exited 0:
+
+| Measure | Result |
+| --- | --- |
+| Scenarios | 26 of 26 passed |
+| Correctness | 26/26 asserted and held |
+| Completeness | 25/25 asserted and held |
+| Safety | 23/23 asserted and held |
+| Continuity | 11/11 asserted and held |
+| UX | 24/24 asserted and held |
+| Reliability | not asserted by the scenario suite (covered by store, interruption and T-14 suites, and by the T-15 benchmark's equivalence checks) |
+| Performance | not asserted by the scenario suite (measured by the benchmarks below) |
+| Blind / non-blind | 4 / 22 |
+| Reproducibility | 26/26 signatures matched across two runs in fresh fixtures |
+
+The categories each passed in full: `personal-executive` 4/4, `research-knowledge` 4/4,
+`planning-execution` 4/4, `situational-awareness` 3/3, `security-trust` 4/4, `long-duration` 3/3,
+`reasoning-quality` 4/4.
+
+### Repairs
+
+Each defect was reproduced through the supported interface before it was changed, and each is now
+pinned by a deterministic test.
+
+| Defect | Behaviour before | Repair | Test |
+| --- | --- | --- | --- |
+| A replayed situational observation | Returned the original assessment, which described the event as new information and recommended `record` for an already-recorded event | A duplicate is assessed as a replay; that reading is not appended, so one event keeps one recorded assessment | `t09-situational-awareness.test.js` Scenario 2b |
+| An explicit memory correction | `the vendor ships on Tuesdays` → `Thursdays` was refused because the clause parser cannot split it and the retrieval conflict rule declines date-valued pairs | A bounded lexical fallback accepts a replacement that shares most of the shorter claim's words; unrelated content is still refused | `memory.test.js` |
+| Temporal evidence identity | The derived summary's id encoded the wall-clock window, so the same question a minute later produced a different digest and the session could not replay over unchanged records | The id is a bounded digest of the summarized content, inside the evidence-reference grammar every later stage validates; the window remains in the claim text where it is informational | `t15-evaluation.test.js` |
+| A planned `filesystem.find` step | Planning stored normalized `null` for an absent extension; execution re-validated it as text and rejected a step that had just been approved | `null` means absent on re-validation | `tasks-filesystem.test.js` |
+| `document configure --extensions .md` | The leading-dot expression matched a literal backslash, so the documented dotted form was stored unchanged and could not match `.md` files | The dot is stripped as documented; dotted and bare forms both work | `t15-performance-and-inputs.test.js` |
+| Documented CLI options | The value flags for `situation`, `learning`, `adaptation` and `goal revise` were missing from the parser's value list: `--source user` became a boolean and `user` a stray positional, the command exited 2, and the bounded usage line cut off the reason | Those options carry their values, numeric options are validated as integers, and a usage error now leads with the offending argument | `t15-operational-cli.test.js` |
+
+The CLI defect was a whole-surface problem, not a single command: every documented option in that
+family either silently changed type or was refused as a stray argument. Fixing only `situation
+ingest` would have left the same failure in `situation decide`, `situation decisions`, `learning
+patterns`, `learning propose`, `learning rollback`, `adaptation effectiveness`, `adaptation guide`
+and `goal revise`.
+
+### Performance evolution against T-14
+
+T-14 disclosed that a document ingest re-reads and reduces the situational log once per emitted
+event. T-15 measured that share again, then changed the read path: repeated reads of unchanged bytes
+are served from a bounded in-process parse snapshot (32 MiB) that still reads and hashes the file,
+and the reducer skips the per-record shape validation that the store's parser already performed on
+that read. Structural rules, append-only history, duplicate protection and fail-closed recovery are
+unchanged; a corrupt line is still refused, and a log beyond the bound is parsed on every read.
+
+`benchmarks/run-t15-situational-ingest-benchmark.mjs` (outside `npm test`, `APEX_DATA_ISOLATED=1`,
+no backend) reported, for 40 emitted events:
+
+| Prior situational rows | Emit share per event |
+| ---: | ---: |
+| 0 | 10.6 ms |
+| 1,000 | 21.1 ms |
+| 4,000 | 163.3 ms |
+
+A warm read of an unchanged 1,000- or 4,000-row log cost 0.31x the cold read. An in-process A/B run
+against the pre-T-15 tree, three alternating rounds and medians, measured the emit-enabled ingest at
+1.00x baseline with an empty log, 0.78x at 1,200 prior rows and 0.66x at 4,000 prior rows; the emit
+share alone was 0.97x, 0.73x and 0.62x. Every condition indexed the same documents and ended with
+the same situational record count. The fixed per-event writer-lock and fsync cost still dominates
+small logs, so no bound is claimed. Full invocation, limits and the A/B table are in
+[`benchmarks/README.md`](benchmarks/README.md#t-15-situational-ingest-benchmark).
+
+### Capability reconciliation
+
+The labels below are cumulative and are used exactly as named. **Not started**: no code and no
+contract. **Contract only**: a schema, declaration or validator exists, with no live producer or
+consumer. **Prototype**: a workable mechanism is exercised only by fixtures, not by the running
+application. **Implemented**: a real component passes its tests but is not reachable through the
+application's normal surfaces. **Integrated**: reachable through the controller, CLI or UI and wired
+to the real stores. **Locally validated**: exercised end to end through those surfaces on this
+machine under synthetic or deterministic conditions. **Real-world validated**: exercised against a
+real external system, real user data, or genuine model inference.
+
+| Capability | Status | Evidence and boundary |
+| --- | --- | --- |
+| Request understanding and objective decomposition (T-01) | Integrated; locally validated | `cognition/objective.js`, request parts, goal assessment; exercised by `pe-04`, `px-01` to `px-04` |
+| Competing-hypothesis and contradiction reasoning (T-02) | Integrated; locally validated | `cognition/hypotheses.js`, semantic consistency; the four blind `rq` scenarios |
+| Objective outlining (T-03) | Integrated; locally validated as a read-only outline | `plans/objective.js`, `plan.outline`; records, approves and starts nothing |
+| Model-facing architecture (T-04) | Integrated; not locally validated | `model/contract.js`, gateway budget, structured output, streaming contract; wired, but no provider was contacted |
+| Neural runtime boundary (T-05) | Contract only | `neural/contract.js` and lifecycle; no process or HTTP transport and no model; the simulated transport is a test fixture |
+| Conversational web interface (T-06) | Integrated; locally validated | Loopback-only `ui/server.js`; real HTTP and child-process tests; chat, task and approval use the same controller |
+| Cross-session persistence and continuity (T-07) | Integrated; locally validated | Restart, new-process and correction scenarios across `ld-01` to `ld-03` and the T-14 durability suites |
+| Outcome-driven adaptation (T-08) | Integrated; locally validated in a narrow scope | Append-only experience, user feedback, candidate rules and user approval; no model is trained and no behaviour changes itself |
+| Situational awareness and proactive decisions (T-09) | Integrated; locally validated | Observation, assessment, decision, notification; `sa-01` to `sa-03`; an observation never creates a task by itself |
+| Continuous executive runtime (T-10) | Integrated; locally validated | Explicit start, bounded retries, dead-letter path, pause/resume/shutdown; not an always-on service |
+| External event provider fabric (T-11) | Integrated; locally validated with synthetic providers | Separate enable and allowlist; no real provider was configured or contacted |
+| Document understanding and source-derived knowledge (T-12) | Integrated; locally validated on synthetic documents | Separate content permission; extraction, versions and conflicts; no real document corpus was used |
+| Reasoning and evidence workspace (T-13) | Integrated; locally validated | `reasoning start/show/replay/invalidate`, evidence digests and citations; the blind scenarios are written against its documented contract |
+| Whole-system operational health (T-14) | Integrated; locally validated | Ten read-only areas in one view, CLI and authenticated UI; no monitor, no score |
+| Personal workspace, notes, deadlines and backup (R-series) | Integrated; locally validated | Guarded filesystem actions, append-only notes, deadline import, archive export and confirmed restore; synthetic files only |
+
+**T-03 reconciled.** Batch T-03 was requested as a "general objective planner." What exists is a
+read-only outline of a free-form objective against the live registry. It reports typed parts, the
+step each mapped part becomes, parts no capability can take, alternatives, risks and uncertainty,
+and it records nothing, approves nothing and starts nothing. A draft still needs `plan add` and the
+user's approval. The T-14 description is the accurate one; the "general planner" label overstates
+it, and a general planner is not started.
+
+**T-08 reconciled.** "Outcome-driven learning" in T-08 and in T-14 means one thing: append-only
+experience records, explicit user feedback, candidate adaptation rules and a five-state adaptation
+model that requires user approval before it can influence selection. Nothing trains weights,
+rewrites code, or changes the registry. Model training and self-modification are not started.
+
+**T-14 reconciled.** T-15 does not contradict T-14. The composed health view, the workflows A-G,
+the per-document index cap and the persistence guarantees still hold and still pass. T-15 adds a
+user-level scenario suite and six repairs; the T-14 suites remain in the full run.
+
+### Four completion measurements
+
+These are four different measurements reported separately. No percentage and no composite score is
+computed, because one number would hide which promise is unmet.
+
+1. **Architecture completion** — counted components, not the vision. The application exposes 140
+   actions in 24 families when a workspace root is configured (125 in 23 families without one):
+   75 reads, 65 writes, 56 plannable. One action registry authorizes; one controller serves the CLI
+   and the UI; 15 persisted data files form the backup contract; ten health areas each name their
+   source. Absent: a neural transport and runtime, a general objective planner, a voice interface,
+   model training, and a hosted multi-user deployment.
+2. **Integrated functionality** — what a person can actually do. 26 scenarios across seven user
+   areas pass end to end; 43 CLI command words (including aliases) reach the same controller; the
+   loopback UI adds chat, task run/resume/retry/cancel, plan approval and a read-only health panel.
+   Not reachable: model-backed answers (no provider), the neural runtime (no transport) and real
+   external providers (none configured).
+3. **Capability maturity** — the distribution of the 15 assessed capabilities under the labels
+   above: 13 locally validated, 1 integrated but not locally validated (model-facing
+   architecture), 1 contract only (neural runtime boundary), 0 prototype, 0 real-world validated.
+   Four further named capabilities are not started: a general objective planner, a neural inference
+   runtime, a voice interface and hosted multi-user operation.
+4. **Real-world validation coverage** — 0 of 15 capabilities were exercised against a real external
+   system, real user data or genuine model inference. In the acceptance run: 0 model calls,
+   0 external providers contacted, 0 real documents or deadline files, 26 synthetic fixtures and
+   4 blind scenarios. This is the measurement T-15 cannot move without contacting systems the
+   milestone forbids.
+
+### What T-15 does not claim
+
+A 26/26 result is a pass rate over authored scenarios, not a measure of general intelligence or
+answer quality. The scenarios were written by the same team that wrote the application; the blind
+subset is 4 of 26. No real model, external provider, user data or document corpus was used, and no
+model behaviour is claimed. Reliability and performance are deliberately absent from the scenario
+dimensions; they come from the store, interruption and T-14 suites and from the benchmarks, which
+are separate and reported separately. The capability labels describe this machine on this date;
+none is a forecast. The numbers in this section are one machine and one run, and absolute times move
+with machine load, so only in-run ratios are findings.

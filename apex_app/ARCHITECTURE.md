@@ -2184,13 +2184,114 @@ and the index holds at most 500 identities. First ingest at 100 / 500-indexed do
 emit attribution and its limitation are in
 [`README.md`](README.md#t-14-whole-system-integration-reliability-and-operational-validation).
 
+T-15 measured the same emit share again and then changed it. `run-t15-situational-ingest-benchmark.mjs`
+(outside `npm test`, `APEX_DATA_ISOLATED=1`, no backend, 24 checks) ingests 20 synthetic documents
+with the situational emit on and off at 0 / 1,000 / 4,000 prior rows. One current-tree run showed an
+emit share of 0.42 s / 0.84 s / 6.53 s for 40 emitted events (10.6 / 21.1 / 163.3 ms per event),
+and a warm read of an unchanged 1,000- or 4,000-row log cost 0.31x its cold read. The change that
+produced this is confined to the T-09 store: repeated reads of unchanged bytes are served from a
+parse snapshot, and the reducer skips the per-record shape validation the parser already performed
+on that read; structural rules, append-only history, duplicate protection and fail-closed recovery
+are unchanged. An in-process A/B run against the pre-T-15 tree on identical synthetic workloads
+measured the emit share at 0.97x baseline with an empty log, 0.73x at 1,200 prior rows and 0.62x at
+4,000 prior rows, with identical indexed and situational record counts. The fixed per-event writer
+lock and fsync cost still dominates at small logs, so no bound is claimed.
+
 ### Limits
 
 - Health observes readable records at one moment. It is not a monitor, not a score, and cannot see
   a live process with stale records.
-- A first document ingest re-reads the situational log once per emitted event; the measured cost is
-  disclosed and the store was not restructured during validation.
+- A document ingest re-reads the situational log once per emitted event. T-15 reduced that read's
+  cost (parse snapshot, single validation pass) but did not restructure the log, and the cost still
+  grows with the log; small logs are dominated by the fixed writer-locked, fsynced append.
 - The index holds at most 500 live identities and one scan examines at most 500 files; a larger
   directory is reported as truncated.
 - The scale figures are one machine, one run, and synthetic data; they are not throughput claims.
 - No inference is performed or claimed, and no answer-quality or model-behaviour claim is made.
+
+## T-15: real-world validation, capability evaluation and evolution
+
+T-15 added no runtime module and no store. It added an evaluation harness outside `src/`, repaired
+six defects it exposed, and reconciled the capability claims with the implementation. The harness
+drives the assembled application through the controller, stores, runtime, CLI children and UI; it
+does not import private helpers to manufacture a pass, and it never calls a model.
+
+### Evaluation harness
+
+| Module | Responsibility |
+| --- | --- |
+| `eval/framework.js` | Scenario validation, check and dimension rules, bounded traces and evidence, per-scenario metrics, signatures, summary and text/JSON reports |
+| `eval/context.js` | One isolated fixture per scenario: temporary data directory and workspace root, deterministic clock, real app, no-backend gateway, `restart()` that preserves bytes and clock identity |
+| `eval/oracles.js` | Shared read-back helpers: outcome status, bounded display, record counts, provenance origins, support quality |
+| `eval/scenarios/*.js` | 26 scenarios in seven categories; `rq-01` to `rq-04` are blind |
+| `eval/run.js` | CLI runner: `--category`, `--id`, `--repeat`, `--json`, `--list`; nonzero exit on failure |
+
+Three invariants are enforced in code rather than documented as intentions. A scenario that returns
+without asserting a task-level outcome is `invalid_scenario`, and a UX-only assertion cannot carry a
+pass. An unasserted dimension is `null` and is excluded from its rate; `null` is never a pass and no
+composite score exists. `--repeat N` re-runs each scenario in a fresh fixture and compares a
+signature; a disagreement is classified `oracle_disagreement`. A test also scans the evaluation
+sources for inference addresses and model markers and asserts that the default gateway is the
+no-backend stub.
+
+### Defects repaired
+
+Each was reproduced through a supported interface first. Each repair is narrow; no authorization
+path, store schema or trust boundary changed.
+
+| Subsystem | Defect | Repair |
+| --- | --- | --- |
+| `situational/service.js` | A duplicate replay returned the original assessment, which recommended recording an event already recorded | A replay is assessed as a replay and not stored; one event keeps one assessment |
+| `memory/memory-store.js` | An explicit correction the clause parser cannot split (dated values) was refused | A bounded lexical fallback accepts a replacement sharing most of the shorter claim's words; unrelated text is still refused |
+| `cognition/evidence.js` | A derived temporal summary's id encoded the wall-clock window, so an unchanged store produced changed evidence on a later query | The id is a bounded digest of the summarized content and stays inside the evidence-reference grammar; the window stays in the claim text |
+| `filesystem/workspace.js` | A planned `filesystem.find` with no extension was rejected at execution because planning stores normalized `null` | `null` means absent on re-validation |
+| `documents/service.js` | The leading-dot expression matched a literal backslash, so `--extensions .md` was not normalized | The documented dot is stripped; dotted and bare forms both work |
+| `cli.js` | Documented value options for the situational, learning, adaptation and goal families were parsed as booleans, leaving their values as stray positionals; the bounded usage line also cut off the reason | The options carry their values, numeric options are validated, and the reason leads the usage error |
+
+### Read-path change
+
+The situational store now accepts a bounded parse snapshot (32 MiB) for unchanged bytes; the file is
+still read and hashed before reuse. `SituationStore.load()` passes `validated:true` to
+`reduceSituation`, which skips only the per-record shape pass that the store parser just performed;
+the structural rules still run. A corrupt line is still refused, a log beyond the bound is parsed
+on every read, and no write path changed. The measured effect is in the T-14/T-15 benchmark section
+and in [`README.md`](README.md#t-15-real-world-validation-capability-evaluation-and-evolution).
+
+### Capability status distribution
+
+The 15 assessed capabilities fall into: 13 **locally validated**, 1 **integrated** but not locally
+validated (`model/contract.js` and the gateway are wired, but no provider was contacted), 1
+**contract only** (`neural/contract.js`; no transport or runtime), 0 **prototype**, and 0
+**real-world validated**. Four named capabilities are **not started**: a general objective planner,
+a neural inference runtime, a voice interface and hosted multi-user operation.
+
+Two prior descriptions are reconciled:
+
+- **T-03** is a read-only objective outline (`plans/objective.js`, `plan.outline`), not a general
+  planner. It records, approves and starts nothing; a draft still needs `plan add` and user
+  approval. T-14's description is the accurate one.
+- **T-08** is append-only experience, explicit feedback, candidate adaptation rules and
+  user-approved adaptation. It does not train weights, rewrite code or change the registry. T-14's
+  description is the accurate one.
+
+### Four separate completion measurements
+
+| Measurement | What it counts | Result |
+| --- | --- | --- |
+| Architecture completion | Components and wiring | 140 actions in 24 families with a workspace root (125/23 without); 75 reads, 65 writes, 56 plannable; 15 data files; 10 health areas; one registry and one controller; absent: neural transport, general planner, model training, voice, hosted multi-user |
+| Integrated functionality | Reachable behaviour | 26 scenarios in 7 categories pass; 43 CLI command words; UI chat, task run/resume/retry/cancel, plan approval and health; model answers, neural runtime and real providers are not reachable |
+| Capability maturity | Distribution under the seven labels | 13 locally validated, 1 integrated, 1 contract only, 0 prototype, 0 real-world validated; 4 not started |
+| Real-world validation coverage | Contact with real systems | 0 of 15 capabilities; 0 model calls, 0 external providers, 0 real corpora, 26 synthetic fixtures, 4 blind scenarios |
+
+No percentage or composite score is computed from these counts. They measure different promises,
+and a single number would conceal which one is unmet.
+
+### Limits
+
+- The scenario suite is authored by the same team as the application; only 4 of 26 are blind.
+- The suite asserts nothing about reliability or performance. Those come from the store,
+  interruption and T-14 suites and from the benchmarks, and are reported separately.
+- Every fixture is synthetic and every backend is `NoBackend` or a scripted in-process fixture. No
+  model, provider, real document corpus or real user data was used, and no answer-quality claim is
+  made.
+- A 26/26 pass is a pass rate over authored scenarios, not evidence of general intelligence.

@@ -54,6 +54,13 @@ export const MAX_ALERTS = 10;
 export const MAX_RECENT = 10;
 export const MAX_SUPPRESSED = 50;
 
+// The situational log is read three times per accepted event (dedupe, observation, assessment) and
+// grows with every event, so the same bytes are parsed again and again. The bounded derived parse
+// snapshot keeps one validated record sequence per unchanged byte sequence in process memory and
+// still reads and hashes the file before reuse. A log beyond this size is parsed on every read
+// rather than held in memory beside the user's other state. It is a performance aid, never evidence.
+export const SITUATION_PARSE_CACHE_BYTES = 32 * 1024 * 1024;
+
 // Notification hygiene. A condition repeated inside the cooldown is still recorded as a decision,
 // but its notification is marked suppressed so the same fact is not surfaced twice.
 export const NOTIFY_COOLDOWN_MS = 60 * 60 * 1000;

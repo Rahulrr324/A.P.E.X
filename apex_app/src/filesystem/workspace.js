@@ -224,13 +224,16 @@ export function findAction(roots, { maxScan = MAX_SCAN_ENTRIES, defaultLimit = D
     origins: [ORIGIN_USER],
     validate(input) {
       const o = expectObject(input, ['path', 'workspace', 'name', 'extension', 'maxDepth', 'limit']);
+      // A plan step's input is validated when it is planned and again when the task runs. The
+      // first pass stores every optional field, with null for one that was not supplied, so null
+      // must mean "absent" here or the action rejects its own normalized input at execution time.
       let name = null;
-      if (o.name !== undefined) {
+      if (o.name !== undefined && o.name !== null) {
         name = pathField(o.name, 'name');
         if (name.length > 200) throw new ValidationError('name exceeds 200 characters');
       }
       let extension = null;
-      if (o.extension !== undefined) {
+      if (o.extension !== undefined && o.extension !== null) {
         extension = pathField(o.extension, 'extension').replace(/^\./, '');
         if (!/^[A-Za-z0-9_+-]{1,16}$/.test(extension)) throw new ValidationError('extension must be 1-16 letters, digits, "_", "+", or "-"');
       }

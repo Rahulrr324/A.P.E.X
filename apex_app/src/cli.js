@@ -457,7 +457,8 @@ function parseFlags(args, allowed, repeat = []) {
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError('--days needs a whole number', 'USAGE');
         flags.days = Number(v);
         i += 1;
-      } else if (name === 'priority' || name === 'estimate' || name === 'depth' || name === 'max-depth' || name === 'max-bytes') {
+      } else if (name === 'priority' || name === 'estimate' || name === 'depth' || name === 'max-depth' || name === 'max-bytes'
+        || name === 'max-steps' || name === 'min-observations') {
         const v = args[i + 1];
         if (v === undefined || !/^\d+$/.test(v)) throw new ValidationError(`--${name} needs a whole number`, 'USAGE');
         flags[name] = Number(v);
@@ -481,6 +482,11 @@ function parseFlags(args, allowed, repeat = []) {
         flags['in-days'] = Number(v);
         i += 1;
       } else if (['title', 'body', 'subject', 'relationship', 'object', 'evidence', 'supersedes', 'choose', 'reason', 'assessment', 'guidance', 'replaces', 'since', 'until', 'capability', 'a-since', 'a-until', 'b-since', 'b-until', 'expect', 'expires', 'status', 'supports', 'contradicts', 'feedback', 'pattern', 'goal', 'outcome', 'deadline', 'plan', 'task', 'kind', 'operation', 'detail', 'by', 'category', 'name', 'description', 'observed-at', 'valid-from', 'valid-until', 'occurred-at', 'type', 'predicate', 'relation', 'direction', 'object-entity', 'object-value', 'value-type', 'unit', 'language', 'confidence-basis', 'evidence-relation', 'merge', 'left', 'right', 'decision', 'target-type', 'at', 'as-of', 'from', 'to', 'entity', 'world-event', 'work', 'cannot-use', 'extension', 'content', 'expected-sha256', 'workspace', 'operations', 'confirm',
+      // The situational commands take these values too. A name left off this list is not rejected
+      // as unknown: it becomes a boolean and its value becomes a stray positional, so the command
+      // still refuses but for the wrong reason. `source` stays repeatable where a note says so.
+      'source', 'source-id', 'payload', 'operation-id', 'reporter', 'response', 'action', 'input',
+      'adaptation', 'order', 'avoid', 'prefer', 'measurement', 'event', 'request',
       'events-file', 'endpoint', 'allowlist', 'root', 'exclude', 'path', 'interval', 'timeout',
       'max-observations', 'max-files', 'max-depth', 'max-bytes', 'memory-percent', 'disk-percent', 'provider',
       'version', 'section', 'document'].includes(name)) {
@@ -499,9 +505,13 @@ function parseFlags(args, allowed, repeat = []) {
 }
 
 // A command that takes no positional arguments must not ignore one: silently accepting
-// "status extra" says the request was understood when it was not.
+// "status extra" says the request was understood when it was not. The reason leads because the
+// terminal line is bounded, and a long usage string would otherwise cut the reason off.
 function rejectUnexpected(rest, usage) {
-  if (rest.length > 0) throw new ValidationError(`usage: ${usage}`, 'USAGE');
+  if (rest.length > 0) {
+    const extra = rest.length === 1 ? `"${rest[0]}"` : `"${rest[0]}" (and ${rest.length - 1} more)`;
+    throw new ValidationError(`unexpected argument ${extra}; usage: ${usage}`, 'USAGE');
+  }
 }
 
 // A comma-separated list of record ids on the command line. Blank entries are dropped, so

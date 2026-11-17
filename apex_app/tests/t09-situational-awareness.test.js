@@ -3,6 +3,8 @@
 // answer said it did.
 import { describe, test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createApp } from '../src/app.js';
 import { Outcome } from '../src/outcomes.js';
 import { createUiServer } from '../src/ui/server.js';
@@ -141,6 +143,35 @@ describe('T-09 situational awareness, event intelligence and the proactive execu
     assert.notEqual(conflicting.status, Outcome.SUCCESS_VERIFIED);
     assert.match(conflicting.output, /different content|replay/i);
     assert.equal(dataOf(await app.controller.situationEvents({ limit: 10 })).total, 1);
+  });
+
+  test('Scenario 2b: a duplicate replay is assessed as a replay and appends no second assessment', async () => {
+    const { app, dir } = appOn();
+    const spec = {
+      sourceEventId: 'dup-assessment-1',
+      type: 'gate_opened',
+      category: 'observation',
+      payload: { summary: 'the gate opened' },
+    };
+    const assessments = () => fs.readFileSync(path.join(dir, 'situational.jsonl'), 'utf8')
+      .split('\n').filter(Boolean).map((line) => JSON.parse(line)).filter((row) => row.kind === 'event_assessed');
+
+    const first = await ingest(app, spec);
+    const firstAssessmentId = dataOf(first).assessment.id;
+    assert.equal(assessments().length, 1);
+    assert.equal(assessments()[0].id, firstAssessmentId);
+
+    // The stored assessment describes the event as new information, so returning it for a replay
+    // would recommend recording an event that is already recorded. The replay is assessed again,
+    // but as a replay, and that reading is not appended: one event keeps one recorded assessment.
+    const second = await ingest(app, spec);
+    assert.equal(dataOf(second).duplicate, true);
+    assert.equal(assessments().length, 1, 'the replay appended a second assessment record');
+    assert.equal(assessments()[0].id, firstAssessmentId, 'the stored assessment was replaced');
+    // The replay reading was never recorded, so it carries no record id.
+    assert.equal(dataOf(second).assessment.id, undefined, 'the replay reading was given a record id');
+    assert.equal(dataOf(second).assessment.significance.level, 'none');
+    assert.equal(dataOf(second).assessment.recommended, 'ignore');
   });
 
   test('Scenario 3: a relevant event updates the World Model and the situational state names it', async () => {

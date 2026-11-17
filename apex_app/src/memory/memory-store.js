@@ -273,6 +273,25 @@ function isPotentialConflict(a, b) {
   return claimsConflict(left, right);
 }
 
+// An explicit correction names the claim it replaces, so the rule guarding it only has to
+// refuse unrelated content - it is not the retrieval rule, which also declines to call two
+// date-bearing claims contradictory. A correction such as "the vendor ships on Tuesdays" to
+// "the vendor ships on Thursdays" is neither a copula clause nor accepted by claimsConflict
+// (its values are date words), yet it is exactly the replacement the owner asked for. The
+// fallback accepts it only when the replacement shares most of the shorter claim's words, so
+// replacing one claim with unrelated text still fails.
+function isPlausibleCorrection(a, b) {
+  if (isPotentialConflict(a, b)) return true;
+  if (!a || !b || a.id === b.id) return false;
+  const left = new Set(normalizeConflictText(String(a.content).trim()).split(' ').filter(Boolean));
+  const right = new Set(normalizeConflictText(String(b.content).trim()).split(' ').filter(Boolean));
+  const shorter = Math.min(left.size, right.size);
+  if (shorter < 2) return false;
+  let shared = 0;
+  for (const token of right) if (left.has(token)) shared += 1;
+  return shared / shorter >= 0.5;
+}
+
 // Read-only, store-wide conflict scan for a bounded set of records. Retrieval compares
 // only the records it returns; a caller that needs to describe what the store holds uses
 // this instead, and must state that the clause patterns are heuristic. Records are grouped
@@ -473,7 +492,7 @@ export class MemoryStore {
           replaces: [target.id],
         },
       };
-      if (!isPotentialConflict(target, record)) {
+      if (!isPlausibleCorrection(target, record)) {
         throw new ValidationError('replacement content does not contradict the selected claim; nothing was changed');
       }
       if (records.some((existing) => existing.id === record.id)) throw new StoreError('identifier collision; nothing written');

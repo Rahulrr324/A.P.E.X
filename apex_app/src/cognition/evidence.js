@@ -11,6 +11,7 @@
 //    damaged). Both are reported, and only the first supports a claim that nothing exists.
 //  - a derived view (temporal pattern, prediction expectation) is never represented as an
 //    observation. Its evidence type and status say what it is.
+import { createHash } from 'node:crypto';
 import { singleLine, truncate } from '../util.js';
 import * as worldQuery from '../world/query.js';
 import { readReport, sourceRead } from '../evidence/read-contract.js';
@@ -562,10 +563,21 @@ function readTemporal(summary, list, counters, sources) {
     setSource(sources, EvidenceSource.TEMPORAL, SourceStatus.EMPTY, 0);
     return;
   }
+  // The identity of a derived summary is its content, not the wall-clock window it was read in.
+  // Encoding the window made the same summary of an unchanged store change id every second, so a
+  // replay over an unchanged store reported changed evidence. The window stays in the claim text,
+  // where it is informational, and the id follows the content of what was summarized. The content
+  // key holds separators the evidence-reference grammar does not allow, so the id carries a bounded
+  // digest of it instead.
+  const patternKey = patterns
+    .map((pattern) => `${pattern.kind}:${pattern.capability ?? 'all'}:${pattern.supporting}:${pattern.contradicting}`)
+    .join('|') || 'none';
+  const summaryKey = `${counts.events ?? 0}:${counts.success ?? 0}:${counts.failure ?? 0}:${counts.patterns ?? 0}:${patternKey}`;
+  const summaryDigest = createHash('sha256').update(summaryKey).digest('hex').slice(0, 16);
   const added = addEvidence(list, counters, {
-    evidenceId: `ev:${EvidenceSource.TEMPORAL}:${window.since ?? 'window'}:${window.until ?? 'window'}`,
+    evidenceId: `ev:${EvidenceSource.TEMPORAL}:summary:${summaryDigest}`,
     source: EvidenceSource.TEMPORAL,
-    recordId: `${window.since ?? 'window'}:${window.until ?? 'window'}`,
+    recordId: 'temporal-summary',
     type: 'temporal-summary',
     subject: null,
     claim: `${counts.events ?? 0} recorded outcome(s) in ${window.since ?? 'an unstated window'}..${window.until ?? 'now'}; ${counts.success ?? 0} success, ${counts.failure ?? 0} failure; ${counts.patterns ?? 0} pattern(s); a pattern describes recorded order, not cause`,
