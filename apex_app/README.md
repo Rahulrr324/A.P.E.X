@@ -8970,3 +8970,114 @@ inertness, separate permission, formats including real PDF/DOCX, malformed/overs
 limits, traversal/symlink/secrets, hashing/versions/dedupe/deletion/recovery, candidate trust and
 promotion, conflicts, exact/section retrieval, evidence/compare, prompt injection and budgets,
 T-09/T-10 coupling, CLI/UI authentication and existing knowledge regressions.
+
+## T-13 unified cognitive reasoning and evidence engine
+
+T-13 adds a shared deterministic reasoning workspace over capabilities that already existed. It is not
+a second memory, knowledge, document or world store. `ReasoningService` reads the authoritative stores
+through the existing retrieval and service contracts, normalizes bounded references into one evidence
+model, and writes only an append-only reasoning session (`reasoning.jsonl`).
+
+```
+question / objective
+  -> bounded retrieval (memory, confirmed and candidate knowledge, knowledge history,
+     documents and prior versions, world facts/relationships/conflicts, situational
+     observations, goals, plans, tasks, outcomes, predictions, T-02 readings)
+  -> evidence normalization (stable id, source record, provenance, trust, relation,
+     validity, time state, locator, supersession, untrusted-content flag)
+  -> assessment (support, contradiction, context, historical, candidate, missing)
+  -> hypotheses (T-02 readings where present; document-side alternatives; unresolved)
+  -> dependency / causal / temporal analysis
+  -> conclusion class and explicit rule
+  -> decision options from recorded criteria
+  -> append-only session with trace, assumptions, unknowns and digests
+```
+
+Evidence remains a reference. Memory and knowledge evidence uses the canonical
+`ev:memory:<id>` / `ev:knowledge:<id>` identity; documents use
+`ev:document:<documentId>:v<version>`; external observations use
+`ev:external_observation:<eventId>`. The session keeps a bounded claim excerpt for display and audit,
+not a copy of the source store. A cross-document field conflict is derived evidence: it cites both
+candidate records, says both are kept, and does not promote either candidate.
+
+Trust is closed and visible: `user_statement`, `user_confirmed`, `user_objective`,
+`authorized_document`, `external_observation`, `world_model`, `operational_record`, `outcome`,
+`expectation`, `derived`, `model_unverified`, `source_derived_candidate` and `unknown`. A
+`source_derived_candidate` can inform a reading but never supports a settled conclusion and is never
+promoted. An external observation or authorized document is cited as such; it is not silently
+relabelled as a user belief. The current request is contextual evidence about what was asked, not
+support for its own answer.
+
+Conclusions use six qualitative classes: `strongly_supported` (at least two independent current
+records from settling trust classes), `directly_supported`, `tentative` (only historical,
+external-only, unverified or candidate support), `conflicting`, `unsupported` and `unknown`. The
+classification is a stated rule over records, not a probability. Every session carries
+`authorizes:false`; a conclusion or recommendation cannot grant permission or execute work.
+
+Hypotheses reuse T-02's competing readings when they exist. Independent document conflicts add one
+reading per recorded side. A preferred reading is recorded only when the stated support rule selects
+exactly one; otherwise all alternatives remain unresolved. The session lists the evidence that would
+distinguish them (a user correction, a newer authorized document version, a current replacement, or a
+user confirmation of a candidate).
+
+Dependencies come only from explicit plan step `dependsOn` edges, with bounded cycle detection,
+missing-reference reporting and downstream propagation. Causal links come only from world
+relationships whose predicate is explicitly `causes`, `leads_to`, `blocks`, `prevents`, `requires`,
+`precondition_for` or `enables`. Correlation and temporal order never create a causal edge. Temporal
+reasoning classifies current, historical, expired, future and unknown records, shows document version
+changes, reports an observation that was recorded later than it occurred, and does not treat order as
+cause.
+
+Decision support lists choices with explicit satisfied/unmet criteria, recorded risks, reversibility
+and approval status. Conflicting evidence recommends clarification; an unsatisfied prerequisite
+recommends completing that prerequisite; historical-only evidence recommends refresh; absent evidence
+recommends gathering it. No utility score or probability is invented, and every option is
+`executable:false`. The existing controller, approval, authorization, audit and task execution paths
+remain authoritative.
+
+Sessions are append-only and capped at 200. Replay re-runs the same deterministic rules over the
+current authoritative stores and compares evidence digests and conclusions without overwriting the
+original. Comparison reports changed evidence or conclusion. Invalidation is a user-origin
+append-only event; the original trace and evidence remain readable. Recovery reads the log again
+after restart. A changed document version is retained as historical evidence beside the current
+version, and a replay after a user memory correction reports the changed evidence set.
+
+Commands:
+
+```
+apex reasoning start <question or objective>
+apex reasoning list [--limit N]
+apex reasoning show|evidence|hypotheses|contradictions|assumptions|unknowns|trace|decision <id>
+apex reasoning replay|compare <id>
+apex reasoning invalidate <id> --reason <text>
+apex reasoning status
+```
+
+The authenticated loopback UI adds a read-only "Reasoning workspace" panel and
+`GET /api/reasoning[?session=rsn:...]`. It shows the current question, conclusion, evidence
+references, hypotheses, contradictions, missing information, recommendation and trace. It has no
+start, invalidate or execute control; those remain explicit user-origin CLI/controller acts, and the
+append-only reasoning session is their durable trace. Reasoning commands are not registry actions, so
+no model origin and no plan can reach them. Document content is rendered with `textContent` as data
+and never as markup or instructions.
+
+Bounds: 2,000 request characters, 40 evidence references, 8 per source, 6 hypotheses, 120 dependency
+nodes, 12 traversal depth, 24 trace steps, 200 sessions and a 15-second reasoning budget warning.
+Retrieval, deduplication and ordering are deterministic. The engine has no model handle, endpoint,
+embedding, vector index or network client; no Ollama or other inference backend is started. It does
+not claim semantic understanding, general intelligence or calibrated probability. Model integration
+remains a future contract, deliberately inactive.
+
+`node benchmarks/run-reasoning-benchmark.mjs --sizes 100,1000,5000` exercises the projection and
+dependency algorithms over synthetic records with no sockets and no inference. On this machine the
+100 / 1,000 / 5,000-record runs measured evidence normalization at 5.3 / 9.4 / 29.0 ms, assessment at
+2.0 / 2.9 / 9.9 ms, and the full dependency graph at 6.4 / 19.9 / 109.8 ms. These are structural
+micro-benchmarks of these algorithms, not retrieval-quality or reasoning-quality measurements; the
+real bounded request path remains 40 evidence references and 120 dependency nodes.
+
+The 20 T-13 test blocks cover all 34 required scenarios (combined where one fixture exercises related
+guarantees), including cross-subsystem trust, candidate isolation, stale/superseded evidence,
+document conflicts, missing evidence, dependency cycles, explicit causal links, temporal states,
+conclusion classes, persistence/recovery, invalidation, correction replay, document versions,
+decision criteria, injection-as-data, authorization, bounds, CLI/UI/runtime integration, an absence
+of network access and a synthetic bounded benchmark.

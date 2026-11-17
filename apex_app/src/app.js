@@ -42,6 +42,7 @@ import { situationActions } from './actions/situation-actions.js';
 import { ExecutiveRuntime } from './runtime/executive-runtime.js';
 import { IntegrationFabric } from './integrations/manager.js';
 import { DocumentService } from './documents/service.js';
+import { ReasoningService } from './reasoning/service.js';
 import { PredictionStore } from './prediction/prediction-store.js';
 import { predictionActions } from './actions/prediction-actions.js';
 import { historyActions } from './actions/history-actions.js';
@@ -243,6 +244,24 @@ export function createApp({
     idFactory,
   });
 
+  // T-13 reasoning workspace. Construction opens no model and reads no source store; a session is
+  // created only by an explicit user command. The runtime reports its status but does not start one.
+  const reasoning = new ReasoningService({
+    dataDir,
+    memory,
+    knowledge,
+    experience,
+    predictions,
+    goals,
+    plans,
+    tasks: taskStore,
+    situation,
+    worldModel,
+    documents,
+    now: clock,
+    idFactory,
+  });
+
   const integrations = new IntegrationFabric({
     dataDir,
     situation,
@@ -382,6 +401,7 @@ export function createApp({
     learning,
     situation,
     documents,
+    reasoning,
     dataDir,
     neural: neuralRuntime,
   });
@@ -399,6 +419,7 @@ export function createApp({
     operations,
     integrations,
     documents,
+    reasoning,
     dataDir,
     now: clock,
     idFactory,
@@ -432,6 +453,7 @@ export function createApp({
     runtime,
     integrations,
     documents,
+    reasoning,
   };
 }
 

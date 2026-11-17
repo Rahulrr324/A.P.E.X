@@ -65,6 +65,11 @@ export const UI_PAGE = `<!doctype html>
     <ul id="documents" class="work"></ul>
   </section>
   <section class="panel">
+    <h2>Reasoning workspace</h2>
+    <p class="meta">Read-only. Bounded deterministic sessions over the existing stores; evidence is referenced, not copied, and a conclusion never authorizes an action.</p>
+    <ul id="reasoning" class="work"></ul>
+  </section>
+  <section class="panel">
     <h2>Situational awareness</h2>
     <p class="meta">Recorded observations, alerts and pending decisions. Decisions and execution are made with the CLI; this view only reads.</p>
     <ul id="situation" class="work"></ul>
@@ -123,6 +128,7 @@ const els = {
   runtime: document.getElementById('runtime'),
   sources: document.getElementById('sources'),
   documents: document.getElementById('documents'),
+  reasoning: document.getElementById('reasoning'),
   docSearch: document.getElementById('doc-search-form'),
   docSearchText: document.getElementById('doc-search'),
   banner: document.getElementById('banner'),
@@ -363,6 +369,41 @@ function renderDocuments(docs) {
   }
 }
 
+function renderReasoning(state) {
+  els.reasoning.replaceChildren();
+  if (!state) { els.reasoning.append(el('li', 'meta', 'The reasoning workspace is not configured.')); return; }
+  if (state.unavailable) { els.reasoning.append(el('li', 'meta', state.unavailable)); return; }
+  const session = state.session;
+  if (!session) {
+    els.reasoning.append(el('li', 'meta', 'No reasoning session has been recorded. Start one with: reasoning start <question>'));
+    return;
+  }
+  const head = el('li', 'item');
+  head.append(el('div', 'title', session.request));
+  head.append(el('div', 'meta', 'session ' + session.sessionId + ' · ' + (session.invalidated ? 'invalidated' : session.status) + ' · ' + session.conclusion.classification));
+  head.append(el('div', 'meta', session.conclusion.statement));
+  head.append(el('div', 'meta', 'evidence ' + session.summary.evidence + ' from ' + session.summary.sources + ' source(s); supporting ' + session.summary.supporting + ', contradicting ' + session.summary.contradicting + ', historical ' + session.summary.historical + ', candidates ' + session.summary.candidates));
+  head.append(el('div', 'meta', 'hypotheses ' + session.summary.hypotheses + '; blocked dependencies ' + session.summary.blocked + '; conflicts ' + session.summary.conflicts));
+  head.append(el('div', 'meta', 'recommendation: ' + (session.decision.recommended || 'none') + ' · executable: false · approval required: ' + (session.decision.requiresApproval === true)));
+  els.reasoning.append(head);
+  for (const item of (session.evidence.items || []).slice(0, 12)) {
+    const row = el('li', 'item');
+    row.append(el('div', 'title', item.source + ' · ' + item.relation + ' · ' + item.trust));
+    row.append(el('div', 'meta', item.claim));
+    if (item.locator) row.append(el('div', 'meta', item.locator));
+    els.reasoning.append(row);
+  }
+  for (const item of session.hypotheses.slice(0, 4)) {
+    const row = el('li', 'item');
+    row.append(el('div', 'title', item.status + ' · ' + item.supportLevel));
+    row.append(el('div', 'meta', item.statement));
+    els.reasoning.append(row);
+  }
+  if ((session.assessment.conflicts || []).length) els.reasoning.append(el('li', 'meta', 'Conflicting sources: ' + session.assessment.conflicts.map((item) => item.statement).join(' | ')));
+  if ((session.assessment.missing || []).length) els.reasoning.append(el('li', 'meta', 'Missing: ' + session.assessment.missing.join(', ')));
+  els.reasoning.append(el('li', 'meta', 'No action is executed from this view. Use the CLI for replay, comparison and explicit invalidation.'));
+}
+
 async function refresh() {
   const state = await api('/api/state');
   renderTurns(state.turns);
@@ -371,6 +412,7 @@ async function refresh() {
   renderRuntime(state.runtime);
   renderSources(state.sources);
   renderDocuments(state.documents);
+  renderReasoning(state.reasoning);
   renderSituation(state.situation);
   els.session.textContent = state.session && state.session.id ? 'session ' + String(state.session.id).slice(0, 8) : 'no session yet';
   if (state.session && state.session.unavailable) showBanner(state.session.unavailable);

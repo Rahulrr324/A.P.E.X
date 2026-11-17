@@ -1986,3 +1986,84 @@ levels, 200,000 extracted characters, 200 sections, 20 candidate facts per versi
 documents, 20 query results, 20,000 context characters (caller may lower it) and 1 s–24 h intervals.
 No document service has a model handle, endpoint, embedding, vector index, OCR engine or network
 client. The 34 T-12 tests use temporary roots and real extractors; no test starts inference.
+
+## T-13 unified cognitive reasoning and evidence engine (as implemented)
+
+`src/reasoning/` composes existing capabilities into one deterministic session. It owns a bounded
+evidence projection, the reasoning rules and the append-only session log. It does not own or copy
+memory, knowledge, documents, world state, situations, goals, plans, tasks, predictions or
+operations, and it adds no model path.
+
+| Module | Responsibility | Authority | Failure behaviour |
+| --- | --- | --- | --- |
+| `vocabulary.js` | Schema, trust/relation/time/conclusion/decision vocabulary, closed bounds | Vocabulary only | Out-of-range or unknown values are rejected by callers/stores |
+| `evidence.js` | Normalize cross-store evidence, trust and relation mapping, document/external/candidate entries, cross-document conflicts, dedupe/digest | Pure projection; source records remain authoritative | Unreadable evidence remains a limitation; claims are bounded and stripped of control characters |
+| `engine.js` | Evidence assessment, T-02 hypothesis normalization, temporal analysis, conclusion classification, decision construction, trace | Pure rules over supplied records | Every class states the rule; no probability, utility score or authorization |
+| `dependencies.js` | Plan-step dependency graph, missing prerequisites, cycle detection, downstream propagation, explicit causal links | Reads plans/tasks/world relationships only | Cycles and missing nodes are reported, not traversed indefinitely |
+| `store.js` | Append-only `reasoning.jsonl`, bounded sessions, invalidation events, recovery | Own file only; user-origin invalidation | Corrupt lines are counted; a full bounded history refuses a new session rather than growing without limit |
+| `service.js` | Bounded cross-subsystem retrieval, document/observation enrichment, session assembly, replay/compare | Reads the existing services; writes only its own session | Per-source failures become stated limitations; one unavailable source does not invent an empty world |
+| `present.js`, `cli.js`, controller methods | Bounded presentation, user commands and direct controller methods | User origin only; not registry actions, not plannable and never model-origin | Usage errors exit 2; a refused read or write does not claim success; `reasoning.jsonl` is the durable trace |
+
+Retrieval starts with the existing `analyzeRequest` pipeline so objective understanding, memory,
+knowledge, experience, predictions, goals/plans/tasks, world conflicts, T-02 hypotheses, assumptions
+and unknowns are reused rather than reimplemented. It then adds authorized document search (current
+and prior version), document candidate facts, cross-document field conflicts, and situational
+observations that match the request tokens. Knowledge history is supplemented with a bounded read so
+a superseded or retracted record can be shown as historical even though current search excludes it.
+Every item is deduplicated by stable evidence id and ordered deterministically.
+
+The evidence item carries `evidenceId`, source and source record id, bounded claim, provenance,
+observed/recorded/valid times, validity, `current`, trust, relation, locator, contradictions,
+retrieval reason and an untrusted-content flag. `user_instruction` is contextual. Documents and
+external observations are marked untrusted content. Cross-document conflicts are derived evidence
+citing the competing candidate records; they are not a new source fact. Source excerpts remain in
+their authority stores; the session keeps only the bounded display excerpt and reference.
+
+Assessment counts supporting, contradicting, contextual, historical, candidate and total items; it
+groups explicit contradictions and derived cross-document conflicts. It records independent settling
+support, unavailable sources, missing classes and unsupported claims. A T-02 reading is retained as a
+reading, with its qualitative support level and any evidence it cited. Candidate sides of a document
+conflict become separate unresolved hypotheses. Preference is only recorded when no conflict exists
+and exactly one reading has direct, uncontradicted support, or when T-02's own rule selected one.
+
+Dependency analysis maps each plan step to `step:<planId>:<stepId>`, reads `dependsOn` and
+`stepResults`, marks `completed`/`skipped` prerequisites as satisfied, reports missing node
+references, detects cycles with a bounded DFS, and propagates each blocked node to at most 12
+downstream nodes. Causal edges exist only for explicit causal predicates in active world
+relationships. Temporal analysis orders by observation time, not recorded time; it reports
+`recordedLater` separately, classifies validity windows, retains prior document versions and flags
+blocked/cancelled/failed plans rather than treating them as current.
+
+Conclusions are generated by closed rules: conflict first; then two or more independent current
+settling records (`strongly_supported`); then one (`directly_supported`); then only non-settling,
+candidate or historical support (`tentative`); then an explicit unsupported claim (`unsupported`);
+otherwise `unknown`. Missing information is listed. Decision options use recorded goal criteria,
+blocked prerequisites, evidence conflicts, historical state and exact plan reversibility. Irreversible
+work is surfaced (`irreversible`/`not_reversible`), but options are never executable and cannot
+bypass the controller, approvals or action authorization.
+
+The append-only session stores the request, evidence references and digest, assessment, hypotheses,
+dependencies, temporal view, conclusion, decision, trace, assumptions, unknowns and authorization
+note. Store validation enforces the schema, id, bounds, allowed relations, trace length and
+`authorizes:false`. `replay` and `compare` run with `persist:false`; they never append a duplicate
+session and they report a changed evidence digest or conclusion instead of presenting an old result
+as current. `invalidate` is a separate user-origin event and leaves the original session readable.
+`ExecutiveRuntime` includes reasoning status but does not start a session or execute a recommendation
+during its tick.
+
+Authorization and trust boundaries are unchanged. Reasoning actions are user-origin and
+non-plannable; there is no model-origin reasoning action. Document and observation text is data, not
+instructions. Candidate facts cannot silently become confirmed knowledge. A conclusion cannot grant
+permission, approve a plan, or run a task. Every reasoning command is wrapped by the existing
+controller operation audit, and the session store is separate from that audit log.
+
+Bounds are 40 evidence references, 8 per source, 6 hypotheses, 12 evidence ids per hypothesis, 120
+dependency nodes, 12 traversal depth, 24 trace steps, 200 sessions, 2,000 request characters and
+500-character evidence claims. Retrieval and ordering are deterministic. The cross-document conflict
+rule is limited to extracted `field:` candidates, and hypothesis evaluation is qualitative. There is no
+semantic entailment, calibrated probability, utility maximization, OCR, embedding index or model
+call. `benchmarks/run-reasoning-benchmark.mjs` measures normalization, deduplication, assessment,
+hypothesis construction and the dependency graph over synthetic sizes without a socket or an
+inference process; its figures describe these algorithms only. The 20 T-13 blocks exercise the 34
+required scenarios and the additional failure cases described in the README; they use temporary
+stores, real document extraction and no inference process.

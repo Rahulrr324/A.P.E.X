@@ -42,7 +42,7 @@ function makeDeadLetter(kind, ref, reason, detail, at) {
 export class ExecutiveRuntime {
   constructor({
     controller, situation, taskStore, plans, goals, learning = null, experience = null, predictions = null, operations,
-    integrations = null, documents = null, dataDir, now = () => new Date(), idFactory = randomUUID, config = {},
+    integrations = null, documents = null, reasoning = null, dataDir, now = () => new Date(), idFactory = randomUUID, config = {},
   } = {}) {
     if (!controller || typeof controller.planActivate !== 'function') throw new TypeError('ExecutiveRuntime requires the controller');
     if (!situation || typeof situation.ingest !== 'function') throw new TypeError('ExecutiveRuntime requires the situational service');
@@ -57,6 +57,10 @@ export class ExecutiveRuntime {
     this.predictions = predictions;
     this.integrations = integrations;
     this.documents = documents;
+    // T-13 is read-only from the runtime's perspective. The runtime reports whether the workspace is
+    // configured and how many sessions exist; it never starts a reasoning session on its own tick, and
+    // it never executes a recommendation.
+    this.reasoning = reasoning;
     this.operations = operations;
     this.dataDir = path.resolve(dataDir);
     this.now = now;
@@ -845,6 +849,7 @@ export class ExecutiveRuntime {
       lastSchedule: this.lastScheduleReport,
       integrations: this.integrations ? await this.integrations.summary().catch((err) => ({ available: false, detail: err?.message ?? String(err) })) : null,
       documents: this.documents ? await this.documents.status().catch((err) => ({ available: false, detail: err?.message ?? String(err) })) : null,
+      reasoning: this.reasoning ? await this.reasoning.status().catch((err) => ({ available: false, detail: err?.message ?? String(err) })) : null,
       situational,
       lastError: this.lastError,
       history: state.history.slice(-10),

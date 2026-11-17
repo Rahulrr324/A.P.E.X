@@ -322,6 +322,21 @@ export function createUiServer({
       documentsState = { unavailable: `document state is unavailable: ${err.message}` };
     }
 
+    // T-13: the newest bounded session is shown read-only. A conclusion is displayed with its
+    // evidence references and limits; it never becomes an action button.
+    let reasoningState = null;
+    try {
+      if (app.reasoning) {
+        const page = await app.reasoning.list({ limit: 5 });
+        const latest = page.sessions[0] ? await app.reasoning.session(page.sessions[0].sessionId) : null;
+        reasoningState = { ...page, session: latest?.found ? latest.session : null };
+      } else {
+        reasoningState = { unavailable: 'the reasoning workspace is not configured' };
+      }
+    } catch (err) {
+      reasoningState = { unavailable: `reasoning state is unavailable: ${err.message}` };
+    }
+
     return {
       at: now().toISOString(),
       session,
@@ -332,6 +347,7 @@ export function createUiServer({
       runtime,
       sources,
       documents: documentsState,
+      reasoning: reasoningState,
       limits: {
         maxMessageChars: UI_LIMITS.maxMessageChars,
         maxTurns: UI_LIMITS.maxTurns,
@@ -534,6 +550,30 @@ export function createUiServer({
         sendJson(res, 200, { ...status, documents, results, query: q });
       } catch (err) {
         sendJson(res, 503, { error: `the document index is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/reasoning') {
+      try {
+        if (!app.reasoning) {
+          sendJson(res, 503, { error: 'the reasoning workspace is not configured' });
+          return;
+        }
+        const id = url.searchParams.get('session');
+        const page = await app.reasoning.list({ limit: 20 });
+        if (!id) {
+          const latest = page.sessions[0] ? await app.reasoning.session(page.sessions[0].sessionId) : null;
+          sendJson(res, 200, { ...page, status: await app.reasoning.status(), session: latest?.found ? latest.session : null });
+          return;
+        }
+        const found = await app.reasoning.session(id);
+        if (!found.found) {
+          sendJson(res, 404, { error: found.detail });
+          return;
+        }
+        sendJson(res, 200, { ...page, status: await app.reasoning.status(), session: found.session });
+      } catch (err) {
+        sendJson(res, 503, { error: `the reasoning workspace is unavailable: ${err.message}` });
       }
       return;
     }

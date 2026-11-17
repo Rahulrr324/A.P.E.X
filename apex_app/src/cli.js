@@ -20,6 +20,7 @@ import { MAX_WORLD_LIMIT } from './world/world-state.js';
 import { runRuntimeCommand } from './runtime/cli.js';
 import { runIntegrationCommand } from './integrations/cli.js';
 import { runDocumentCommand } from './documents/cli.js';
+import { runReasoningCommand } from './reasoning/cli.js';
 
 export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION})
 
@@ -155,6 +156,11 @@ Usage:
   node bin/apex.js document versions|compare <id>             version history and deterministic diff
   node bin/apex.js document facts <id>|promote <claim-id>     document-derived candidates and user confirmation
   node bin/apex.js document invalidate|reprocess <id> --reason <text>
+  node bin/apex.js reasoning start <question or objective>      unified deterministic reasoning session
+  node bin/apex.js reasoning list|show|evidence|hypotheses <id>  bounded session, evidence and competing readings
+  node bin/apex.js reasoning contradictions|assumptions|unknowns|trace|decision <id>
+  node bin/apex.js reasoning replay|compare <id>                 re-run against current stores without overwriting
+  node bin/apex.js reasoning invalidate <id> --reason <text>     append an invalidation; history is preserved
   node bin/apex.js evidence integrity                      cross-store read consistency and per-store health (read-only; repairs nothing)
   node bin/apex.js prediction record --capability <name> --expect <kind> --subject <text> (--expires <iso> | --in-days N) [--supports <id[,id...]>] [--contradicts <id[,id...]>] [--feedback <id[,id...]>] [--pattern <kind[,kind...]>] [--replaces <id[,id...]>]
   node bin/apex.js prediction list [--limit N] [--capability <name>] [--status <name>]
@@ -1843,6 +1849,10 @@ export async function main(argv, {
 
     if (command === 'document') {
       return runDocumentCommand({ app, args, out, err, parseFlags, rejectUnexpected });
+    }
+
+    if (command === 'reasoning') {
+      return runReasoningCommand({ app, args, out, err, parseFlags, rejectUnexpected, emit });
     }
 
     if (command === 'evidence') {

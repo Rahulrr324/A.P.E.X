@@ -33,6 +33,11 @@ import { recheckEvidence } from '../cognition/evidence.js';
 import { contributingStores, openEvidenceSnapshot, snapshotView } from '../evidence/snapshot.js';
 import { reassessClaims } from '../cognition/lineage.js';
 import { classifyDecision, clarificationFor, turnsResolveContext, unsupportedOperationFor } from './decision.js';
+import {
+  renderReasoningAssumptions, renderReasoningConflicts, renderReasoningDecision,
+  renderReasoningEvidence, renderReasoningHypotheses, renderReasoningList,
+  renderReasoningSession, renderReasoningTrace, renderReasoningUnknowns,
+} from '../reasoning/present.js';
 import { TURN_ORIGINS } from '../memory/conversation-store.js';
 import { containsSecret, maskSecretLeaves, redactSecrets, SECRET_OMITTED } from '../security/secrets.js';
 import { planFromText, redactGoal, splitGoal, checkSteps, parseModelPlan, planningPrompt } from '../tasks/planner.js';
@@ -588,6 +593,7 @@ export class CognitiveController {
     learning = null,
     situation = null,
     documents = null,
+    reasoning = null,
     dataDir = null,
     neural = null,
   }) {
@@ -650,6 +656,11 @@ export class CognitiveController {
     // T-12 content retrieval is bounded, deterministic and optional. It supplies excerpts and
     // citations only; document text is never an instruction or a permission.
     this.documents = documents;
+    // T-13 composes the authoritative stores into one bounded reasoning session. These commands are
+    // user-origin controller methods rather than registry actions: a session can expose private
+    // memory and authorized excerpts, and its conclusion is never a plan step or a permission. The
+    // append-only session log is the durable trace.
+    this.reasoning = reasoning;
     // The data directory the backup commands read and replace. The actions close over it at
     // composition time; this field only decides whether the commands are available at all.
     this.dataDir = dataDir;
@@ -2222,6 +2233,163 @@ export class CognitiveController {
     const op = this.#situationOp('situation.status', 'situation status');
     const step = await this.runAction('situation.status', {}, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-13 reasoning commands call the workspace service directly, as the T-12 document commands do.
+  // They are not registry actions: no model origin can reach them and no plan may contain them. The
+  // service's append-only reasoning.jsonl session is the durable trace; these reads execute nothing.
+  #reasoningRead(result, display, summary) {
+    return {
+      operation: null,
+      status: Outcome.SUCCESS_DETERMINISTIC,
+      decision: classifyDecision({ status: Outcome.SUCCESS_DETERMINISTIC }),
+      output: null,
+      display,
+      recorded: true,
+      recordError: null,
+      summary,
+      result: { data: result },
+    };
+  }
+
+  #reasoningWrite(result, display, summary) {
+    return {
+      ...this.#reasoningRead(result, display, summary),
+      status: Outcome.SUCCESS_VERIFIED,
+    };
+  }
+
+  #reasoningService() {
+    if (!this.reasoning) throw new ValidationError('the reasoning workspace is not available in this configuration');
+    return this.reasoning;
+  }
+
+  async #reasoningSession(session) {
+    const found = await this.#reasoningService().session(session);
+    if (!found.found) throw new ValidationError(found.detail ?? 'the reasoning session was not found');
+    return found.session;
+  }
+
+  async reasoningStart({ request } = {}) {
+    const session = await this.#reasoningService().reason({ request, origin: 'user' });
+    const fresh = await this.#reasoningService().session(session.sessionId);
+    if (!fresh.found) throw new StoreError('the reasoning session could not be read back after it was written');
+    return this.#reasoningWrite(
+      { sessionId: session.sessionId, session: fresh.session },
+      renderReasoningSession(fresh.session),
+      `reasoning session ${session.sessionId} recorded`,
+    );
+  }
+
+  async reasoningList({ limit } = {}) {
+    const page = await this.#reasoningService().list(limit === undefined || limit === null ? {} : { limit });
+    return this.#reasoningRead(page, renderReasoningList(page), `${page.total} reasoning session(s)`);
+  }
+
+  async reasoningShow({ session } = {}) {
+    const found = await this.#reasoningSession(session);
+    return this.#reasoningRead({ sessionId: found.sessionId, session: found }, renderReasoningSession(found), `reasoning session ${found.sessionId}`);
+  }
+
+  async reasoningEvidence({ session } = {}) {
+    const found = await this.#reasoningSession(session);
+    return this.#reasoningRead({
+      sessionId: found.sessionId,
+      summary: found.summary,
+      evidence: found.evidence,
+      assessment: found.assessment,
+    }, renderReasoningEvidence(found), `${found.evidence?.items?.length ?? 0} evidence record(s)`);
+  }
+
+  async reasoningHypotheses({ session } = {}) {
+    const found = await this.#reasoningSession(session);
+    return this.#reasoningRead({
+      sessionId: found.sessionId,
+      hypotheses: found.hypotheses ?? [],
+      selection: found.hypothesisSelection,
+      temporal: found.temporal,
+    }, renderReasoningHypotheses(found), `${found.hypotheses?.length ?? 0} hypothesis(es)`);
+  }
+
+  async reasoningContradictions({ session } = {}) {
+    const found = await this.#reasoningSession(session);
+    return this.#reasoningRead({
+      sessionId: found.sessionId,
+      conflicts: found.assessment?.conflicts ?? [],
+    }, renderReasoningConflicts(found), `${found.assessment?.conflicts?.length ?? 0} contradiction(s)`);
+  }
+
+  async reasoningAssumptions({ session } = {}) {
+    const found = await this.#reasoningSession(session);
+    return this.#reasoningRead({
+      sessionId: found.sessionId,
+      assumptions: found.assumptions ?? [],
+    }, renderReasoningAssumptions(found), `${found.assumptions?.length ?? 0} assumption(s)`);
+  }
+
+  async reasoningUnknowns({ session } = {}) {
+    const found = await this.#reasoningSession(session);
+    return this.#reasoningRead({
+      sessionId: found.sessionId,
+      unknowns: found.unknowns ?? [],
+      missing: found.assessment?.missing ?? [],
+    }, renderReasoningUnknowns(found), `${found.unknowns?.length ?? 0} unknown(s)`);
+  }
+
+  async reasoningTrace({ session } = {}) {
+    const found = await this.#reasoningSession(session);
+    return this.#reasoningRead({
+      sessionId: found.sessionId,
+      trace: found.trace ?? [],
+      retrievalTrace: found.retrievalTrace,
+    }, renderReasoningTrace(found), `${found.trace?.length ?? 0} reasoning trace step(s)`);
+  }
+
+  async reasoningDecision({ session } = {}) {
+    const found = await this.#reasoningSession(session);
+    return this.#reasoningRead({
+      sessionId: found.sessionId,
+      decision: found.decision,
+    }, renderReasoningDecision(found), `decision support: ${found.decision?.recommended ?? 'none'}`);
+  }
+
+  async reasoningReplay({ session } = {}) {
+    const result = await this.#reasoningService().replay(session);
+    const display = result.replayed
+      ? [
+        `Replay of ${shortId(session)}:`,
+        `  evidence unchanged: ${result.evidenceUnchanged}`,
+        `  before: ${result.beforeConclusion?.classification} | after: ${result.afterConclusion?.classification}`,
+        `  changed: ${result.changed}`,
+      ].join('\n')
+      : `Replay refused: ${result.reason}`;
+    return this.#reasoningRead(result, display, result.replayed ? 'deterministic replay completed' : result.reason);
+  }
+
+  async reasoningCompare({ session } = {}) {
+    const result = await this.#reasoningService().compare(session);
+    const display = result.replayed
+      ? [
+        `Comparison of ${shortId(session)}:`,
+        `  evidence: ${result.evidenceUnchanged ? 'unchanged' : 'changed'}`,
+        `  conclusion: ${result.beforeConclusion?.classification} -> ${result.afterConclusion?.classification}`,
+        `  differences: ${JSON.stringify(result.differences)}`,
+      ].join('\n')
+      : `Comparison refused: ${result.reason}`;
+    return this.#reasoningRead(result, display, result.replayed ? 'comparison completed' : result.reason);
+  }
+
+  async reasoningInvalidate({ session, reason } = {}) {
+    const record = await this.#reasoningService().invalidate(session, { reason });
+    const fresh = await this.#reasoningService().session(session);
+    if (!fresh.found || !fresh.session.invalidated) {
+      throw new StoreError('the invalidation event is not readable after it was appended');
+    }
+    return this.#reasoningWrite(
+      { sessionId: session, invalidation: record },
+      `Invalidated ${shortId(session)} with an append-only event. The original trace and evidence references remain readable.`,
+      `reasoning session ${session} invalidated`,
+    );
   }
 
   #experienceOp(capability) {
