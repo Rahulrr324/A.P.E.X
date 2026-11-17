@@ -587,6 +587,7 @@ export class CognitiveController {
     deadlines = null,
     learning = null,
     situation = null,
+    documents = null,
     dataDir = null,
     neural = null,
   }) {
@@ -646,6 +647,9 @@ export class CognitiveController {
     // T-09 reads and writes only through the situational service; the controller keeps no event or
     // decision state of its own, so a restart reconstructs the same picture from the log.
     this.situation = situation;
+    // T-12 content retrieval is bounded, deterministic and optional. It supplies excerpts and
+    // citations only; document text is never an instruction or a permission.
+    this.documents = documents;
     // The data directory the backup commands read and replace. The actions close over it at
     // composition time; this field only decides whether the commands are available at all.
     this.dataDir = dataDir;
@@ -6924,6 +6928,16 @@ export class CognitiveController {
     // model cannot request this projection itself (the `world.state` action is user-origin
     // only) because the projection is built with private records included; the privacy
     // boundary is enforced by the prompt view, which never reproduces private content.
+    let documentContext = null;
+    let documentUnavailable = false;
+    if (this.documents) {
+      try {
+        documentContext = await readThrough('documents', () => this.documents.contextFor(request));
+      } catch (err) {
+        op.errors.push({ stage: 'documents', code: err.code || 'STORE_ERROR', message: err.message });
+        documentUnavailable = true;
+      }
+    }
     let world = null;
     let worldUnavailable = false;
     if (this.memory && this.knowledge) {
@@ -7123,6 +7137,8 @@ export class CognitiveController {
       turns,
       knowledge,
       knowledgeUnavailable,
+      documents: documentContext,
+      documentsUnavailable: documentUnavailable,
       adaptations,
       adaptationsUnavailable,
       adaptationsOmitted,

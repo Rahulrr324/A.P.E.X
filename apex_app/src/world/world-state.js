@@ -308,7 +308,12 @@ export async function buildWorldState({
   const activeClaims = claimRecords.filter((claim) => claim.active === true);
 
   const memoryBeliefs = activeMemory.map(memoryBelief);
-  const knowledgeBeliefs = activeClaims.map(knowledgeBelief);
+  // Document-derived candidates are deliberately not user beliefs. They remain visible through the
+  // document/knowledge read surfaces and can participate in a conflict, but the epistemic projection
+  // never counts them as something the user asserted.
+  const knowledgeBeliefs = activeClaims
+    .filter((claim) => claim.provenance?.origin !== 'source_extracted')
+    .map(knowledgeBelief);
   const allBeliefs = [...memoryBeliefs, ...knowledgeBeliefs]
     .sort((a, b) => {
       if (a.epistemic !== b.epistemic) return a.epistemic === 'user_asserted' ? -1 : 1;

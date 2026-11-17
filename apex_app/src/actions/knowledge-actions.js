@@ -74,6 +74,7 @@ function expectObject(input, allowedKeys) {
 }
 
 function renderStatus(r) {
+  if (r.candidate && r.active === true) return 'candidate (document-derived; not user-confirmed)';
   if (r.lifecycleState === 'ambiguous') {
     return `ambiguous (${r.lifecycleNote ?? 'lifecycle evidence disagrees'}); not active`;
   }
@@ -92,7 +93,9 @@ function renderStatus(r) {
 
 function renderRecord(r) {
   const status = renderStatus(r);
-  const prov = r.provenance?.origin ?? 'unknown';
+  const prov = r.provenance?.origin === 'source_extracted'
+    ? `source_extracted (${r.document?.path ?? 'document'} v${r.document?.version ?? '?'})`
+    : (r.provenance?.origin ?? 'unknown');
   const evi = r.evidence ? `\n      evidence: ${r.evidence}` : '';
   return `  [${shortId(r.id)}] ${r.subject} --[${r.relationship}]--> ${r.object}${evi}\n      status: ${status} | provenance: ${prov} | recorded: ${String(r.createdAt).slice(0, 10)}`;
 }

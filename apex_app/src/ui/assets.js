@@ -55,6 +55,16 @@ export const UI_PAGE = `<!doctype html>
     <ul id="sources" class="work"></ul>
   </section>
   <section class="panel">
+    <h2>Authorized documents</h2>
+    <p class="meta">Content reading is a separate opt-in permission. This view reports versions and deterministic excerpts; it never uploads content.</p>
+    <form id="doc-search-form" class="row">
+      <label for="doc-search" class="visually-hidden">Search documents</label>
+      <input id="doc-search" type="search" maxlength="500" placeholder="Search exact terms">
+      <button id="doc-search-button" type="submit" class="small">Search</button>
+    </form>
+    <ul id="documents" class="work"></ul>
+  </section>
+  <section class="panel">
     <h2>Situational awareness</h2>
     <p class="meta">Recorded observations, alerts and pending decisions. Decisions and execution are made with the CLI; this view only reads.</p>
     <ul id="situation" class="work"></ul>
@@ -81,6 +91,7 @@ main { display: grid; gap: 1rem; padding: 1rem 1.25rem 2rem; grid-template-colum
 .turn.apex { border-left-color: var(--warn); }
 .turn .who { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .turn pre { white-space: pre-wrap; word-break: break-word; margin: .2rem 0 0; font: inherit; }
+input[type=search] { flex: 1; min-width: 8rem; background: #0d1319; color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: .4rem .55rem; font: inherit; }
 textarea { width: 100%; resize: vertical; background: #0d1319; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: .6rem; font: inherit; }
 button { background: var(--accent); color: #06221f; border: 0; border-radius: 7px; padding: .45rem .8rem; font: inherit; font-weight: 600; cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
@@ -111,6 +122,9 @@ const els = {
   situation: document.getElementById('situation'),
   runtime: document.getElementById('runtime'),
   sources: document.getElementById('sources'),
+  documents: document.getElementById('documents'),
+  docSearch: document.getElementById('doc-search-form'),
+  docSearchText: document.getElementById('doc-search'),
   banner: document.getElementById('banner'),
 };
 
@@ -323,6 +337,32 @@ function renderSources(sources) {
   }
 }
 
+function renderDocuments(docs) {
+  els.documents.replaceChildren();
+  if (!docs) { els.documents.append(el('li', 'meta', 'Documents are not configured.')); return; }
+  if (docs.unavailable) { els.documents.append(el('li', 'meta', docs.unavailable)); return; }
+  els.documents.append(el('li', 'meta', (docs.indexed || 0) + ' indexed, ' + (docs.failed || 0) + ' failed, ' + (docs.deleted || 0) + ' deleted; permission ' + docs.permission));
+  for (const doc of (docs.documents || []).slice(0, 8)) {
+    const item = el('li', 'item');
+    const head = el('div', 'row');
+    head.append(el('span', 'title', doc.path));
+    head.append(el('span', 'badge', 'v' + doc.version + ' · ' + doc.status));
+    item.append(head);
+    item.append(el('div', 'meta', doc.documentId + ' · ' + doc.format + ' · ' + doc.bytes + ' bytes'));
+    if (doc.warnings && doc.warnings.length) item.append(el('div', 'meta', 'warnings: ' + doc.warnings.join('; ')));
+    if (doc.limitations && doc.limitations.length) item.append(el('div', 'meta', 'limitation: ' + doc.limitations[0]));
+    els.documents.append(item);
+  }
+  if (docs.searchError) els.documents.append(el('li', 'meta', docs.searchError));
+  for (const result of docs.results || []) {
+    const item = el('li', 'item');
+    item.append(el('div', 'title', result.path + ' · v' + result.version + (result.section ? ' · ' + result.section.label : '')));
+    item.append(el('div', 'meta', result.reasons.join('; ')));
+    item.append(el('div', 'meta', result.excerpt.text));
+    els.documents.append(item);
+  }
+}
+
 async function refresh() {
   const state = await api('/api/state');
   renderTurns(state.turns);
@@ -330,6 +370,7 @@ async function refresh() {
   renderPlans(state.plans);
   renderRuntime(state.runtime);
   renderSources(state.sources);
+  renderDocuments(state.documents);
   renderSituation(state.situation);
   els.session.textContent = state.session && state.session.id ? 'session ' + String(state.session.id).slice(0, 8) : 'no session yet';
   if (state.session && state.session.unavailable) showBanner(state.session.unavailable);
@@ -383,6 +424,18 @@ function connectEvents() {
   source.addEventListener('chat', () => { if (!busy) refresh().catch(() => {}); });
   source.addEventListener('error', () => { els.activity.textContent = ''; });
 }
+
+els.docSearch.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const query = els.docSearchText.value.trim();
+  if (!query) return;
+  try {
+    const result = await api('/api/documents?q=' + encodeURIComponent(query));
+    renderDocuments(result);
+  } catch (error) {
+    showBanner(error.message);
+  }
+});
 
 refresh().then(connectEvents).catch((error) => showBanner(error.message));
 `;

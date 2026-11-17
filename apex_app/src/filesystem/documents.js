@@ -17,6 +17,11 @@ function sha256(buf) {
 }
 
 export const MAX_DOCUMENT_BYTES = 4 * 1024 * 1024;
+export const TEXT_EXTENSIONS = Object.freeze([
+  '.txt', '.md', '.markdown', '.json', '.jsonl', '.csv', '.tsv', '.js', '.mjs', '.cjs', '.ts', '.tsx',
+  '.jsx', '.css', '.html', '.htm', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.sql', '.sh',
+  '.ps1', '.py', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp',
+]);
 export const MAX_EXTRACTED_CHARS = 200_000;
 const MAX_ZIP_ENTRIES = 512;
 const MAX_ZIP_DIRECTORY_BYTES = 8 * 1024 * 1024;
@@ -65,6 +70,22 @@ export function decodeXmlText(text) {
     if (lower.startsWith('#')) return String.fromCodePoint(Number.parseInt(lower.slice(1), 10));
     return match;
   });
+}
+
+// Text decoding is deliberately explicit. A BOM selects UTF-16LE/BE or UTF-8; otherwise UTF-8
+// with fatal errors is required. No transcoding guess is made, because a mojibake ingest would be
+// worse than an honest encoding error.
+export function decodeTextBuffer(buf) {
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return new TextDecoder('utf-16le', { fatal: true }).decode(buf.subarray(2));
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    return new TextDecoder('utf-16be', { fatal: true }).decode(buf.subarray(2));
+  }
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf.subarray(3));
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(buf);
 }
 
 function normaliseWhitespace(text) {
@@ -512,9 +533,9 @@ export function extractDocument(name, buf, { format = null } = {}) {
   } else if (detected === 'csv') {
     let decoded;
     try {
-      decoded = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+      decoded = decodeTextBuffer(buf);
     } catch {
-      throw new ExecutionError('FILE_NOT_TEXT', 'the CSV is not valid UTF-8 text');
+      throw new ExecutionError('FILE_NOT_TEXT', 'the CSV is not valid UTF-8 text (a BOM-marked UTF-16 file is accepted)');
     }
     // UTF-16 text decodes as valid UTF-8 with NUL bytes between characters, so the
     // control-character check is what keeps a mis-encoded CSV from being parsed as noise.
@@ -528,9 +549,9 @@ export function extractDocument(name, buf, { format = null } = {}) {
   } else {
     let decoded;
     try {
-      decoded = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+      decoded = decodeTextBuffer(buf);
     } catch {
-      throw new ExecutionError('UNSUPPORTED_FORMAT', 'the file is not a PDF, DOCX, XLSX or CSV document, and it is not UTF-8 text');
+      throw new ExecutionError('UNSUPPORTED_FORMAT', 'the file is not a PDF, DOCX, XLSX or CSV document, and it is not UTF-8 text (a BOM-marked UTF-16 file is accepted)');
     }
     if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(decoded)) {
       throw new ExecutionError('UNSUPPORTED_FORMAT', 'the file is not a PDF, DOCX, XLSX or CSV document, and it is not text');

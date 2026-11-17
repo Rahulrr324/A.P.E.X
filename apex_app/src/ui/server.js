@@ -313,6 +313,15 @@ export function createUiServer({
       sources = { unavailable: `external source state is unavailable: ${err.message}` };
     }
 
+    let documentsState = null;
+    try {
+      documentsState = app.documents
+        ? { ...(await app.documents.status()), documents: await app.documents.list({ limit: 10, includeDeleted: true }) }
+        : { unavailable: 'document content understanding is not configured' };
+    } catch (err) {
+      documentsState = { unavailable: `document state is unavailable: ${err.message}` };
+    }
+
     return {
       at: now().toISOString(),
       session,
@@ -322,6 +331,7 @@ export function createUiServer({
       situation,
       runtime,
       sources,
+      documents: documentsState,
       limits: {
         maxMessageChars: UI_LIMITS.maxMessageChars,
         maxTurns: UI_LIMITS.maxTurns,
@@ -508,6 +518,22 @@ export function createUiServer({
         sendJson(res, 200, await app.integrations.status());
       } catch (err) {
         sendJson(res, 503, { error: `the external source state is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/documents') {
+      try {
+        if (!app.documents) {
+          sendJson(res, 503, { error: 'document content understanding is not configured' });
+          return;
+        }
+        const q = url.searchParams.get('q');
+        const status = await app.documents.status();
+        const documents = await app.documents.list({ limit: 20, includeDeleted: true });
+        const results = q ? await app.documents.search(q, { limit: 10 }) : [];
+        sendJson(res, 200, { ...status, documents, results, query: q });
+      } catch (err) {
+        sendJson(res, 503, { error: `the document index is unavailable: ${err.message}` });
       }
       return;
     }

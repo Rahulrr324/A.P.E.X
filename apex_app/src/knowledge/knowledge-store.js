@@ -54,6 +54,11 @@ const RESOLUTION_KIND = 'resolution';
 
 const VALID_STATUSES = new Set(['supported', 'uncertain', 'conflicting', 'superseded']);
 const VALID_PROVENANCE_ORIGINS = new Set(['user_supplied', 'user_approved']);
+// A document-derived candidate is a narrow, non-user origin. It can never be written by the
+// knowledge.add action or a model; only DocumentService can append one, and it stays uncertain
+// and labelled as a candidate until the user records a confirmation. This is not a widening of
+// WRITE_REQUIRES_USER_ORIGIN: ordinary claim writes still reject every non-user caller.
+const SOURCE_EXTRACTED_ORIGIN = 'source_extracted';
 // model_proposed is the only model-origin provenance a knowledge record may carry,
 // but it may only arrive via the retrieval path, never through a write.
 const MODEL_PROVENANCE_ORIGIN = 'model_proposed';
@@ -87,6 +92,20 @@ function validateTextField(value, name, { required = true, max = MAX_FIELD_CHARS
   return t || null;
 }
 
+function validDocumentProvenance(document) {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) return false;
+  if (typeof document.documentId !== 'string' || !/^doc:[0-9a-f]{32}$/.test(document.documentId)) return false;
+  if (typeof document.path !== 'string' || document.path.length === 0 || document.path.length > 500) return false;
+  if (!Number.isInteger(document.version) || document.version < 1) return false;
+  if (typeof document.contentHash !== 'string' || !/^[0-9a-f]{64}$/.test(document.contentHash)) return false;
+  if (document.section !== null && document.section !== undefined) {
+    if (!Number.isInteger(document.section) || document.section < 0) return false;
+  }
+  if (document.locator !== null && document.locator !== undefined
+    && (typeof document.locator !== 'string' || document.locator.length > 200)) return false;
+  return true;
+}
+
 export function sha256Hex(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
@@ -113,10 +132,16 @@ export function validateKnowledgeRecord(r) {
   if (typeof r.createdAt !== 'string' || Number.isNaN(Date.parse(r.createdAt))) return 'bad timestamp';
   if (!r.provenance || typeof r.provenance !== 'object') return 'missing provenance';
   const originOk = r.provenance.origin === MODEL_PROVENANCE_ORIGIN
+    || r.provenance.origin === SOURCE_EXTRACTED_ORIGIN
     || VALID_PROVENANCE_ORIGINS.has(r.provenance.origin);
   if (!originOk) return 'unknown provenance origin';
-  if (r.provenance.updateMode !== 'user_confirmed' && r.provenance.updateMode !== 'model_proposed') {
+  if (r.provenance.updateMode !== 'user_confirmed' && r.provenance.updateMode !== 'model_proposed'
+    && r.provenance.updateMode !== 'source_extracted') {
     return 'unknown provenance updateMode';
+  }
+  if (r.provenance.origin === SOURCE_EXTRACTED_ORIGIN) {
+    if (r.provenance.updateMode !== 'source_extracted') return 'source-extracted origin needs source_extracted updateMode';
+    if (!validDocumentProvenance(r.provenance.document)) return 'source-extracted claim needs document provenance';
   }
   // model_proposed provenance must never carry user_confirmed updateMode.
   if (r.provenance.origin === MODEL_PROVENANCE_ORIGIN && r.provenance.updateMode === 'user_confirmed') {
@@ -437,6 +462,99 @@ export class KnowledgeStore {
     // lock, and the conflict set, the supersession targets and the resulting status are read from
     // the state observed after coordination - never from a state captured before it.
     return this.writeLock.run(() => this.#addFromAuthority({ sub, rel, obj, evi, sanitized, refs }));
+  }
+
+  // Narrow source-candidate write. This is the only method that can append a non-user claim, and
+  // it accepts no caller-supplied origin or update mode. It is intentionally not exposed through an
+  // action: DocumentService calls it after an authorized content read. Identical active claims from
+  // the same document version are duplicates; a different object follows the existing conflict rules.
+  async addSourceCandidate({
+    subject, relationship, object, evidence = null, document, provenance = {},
+  } = {}) {
+    const sub = validateTextField(subject, 'subject');
+    const rel = validateTextField(relationship, 'relationship');
+    const obj = validateTextField(object, 'object');
+    const evi = evidence !== null && evidence !== undefined
+      ? validateTextField(evidence, 'evidence', { required: false, max: MAX_EVIDENCE_CHARS })
+      : null;
+    if (typeof document?.documentId !== 'string' || !/^doc:[0-9a-f]{32}$/.test(document.documentId)) {
+      throw new ValidationError('a document candidate needs a stable document id');
+    }
+    const sanitized = sanitizeProvenance({ ...provenance, document }, SOURCE_EXTRACTED_ORIGIN);
+    return this.writeLock.run(async () => {
+      const records = await this.#loadComplete({ beforeAppend: true });
+      const { claims, retractionsByTarget } = splitLifecycle(records);
+      const supersededByMap = buildSupersededByMap(claims);
+      const duplicate = claims.find((r) => isActive(r, supersededByMap, retractionsByTarget)
+        && normalizedTriple(r.subject, r.relationship, r.object) === normalizedTriple(sub, rel, obj)
+        && r.provenance?.document?.documentId === document.documentId
+        && r.provenance?.document?.version === document.version);
+      if (duplicate) return { record: annotate(duplicate, supersededByMap, new Map(), retractionsByTarget), duplicate: true, conflictingIds: [] };
+      const conflictIndex = buildConflictIndex(claims, supersededByMap, retractionsByTarget);
+      const key = conflictIndexKey(sub, rel);
+      const reqKey = normalizedTriple(sub, rel, obj);
+      const conflictingIds = (conflictIndex.get(key) ?? [])
+        .filter((r) => normalizedTriple(r.subject, r.relationship, r.object) !== reqKey)
+        .map((r) => r.id);
+      const record = {
+        schema: KNOWLEDGE_SCHEMA,
+        id: randomUUID(),
+        subject: sub,
+        relationship: rel,
+        object: obj,
+        evidence: evi,
+        tripleHash: tripleHash(sub, rel, obj),
+        status: 'uncertain',
+        createdAt: this.now().toISOString(),
+        provenance: sanitized,
+      };
+      await this.log.append(record);
+      return { record: annotate(record, supersededByMap, conflictIndex, retractionsByTarget), duplicate: false, conflictingIds };
+    });
+  }
+
+  // A user confirms a candidate by appending a normal user-origin claim with the same triple and
+  // retracting the candidate. The candidate and its document provenance remain in history.
+  async promoteSourceCandidate({ target, provenance = {}, origin } = {}) {
+    if (origin !== 'user') {
+      throw new ValidationError('promoting a candidate requires an authorized user-origin operation', 'WRITE_REQUIRES_USER_ORIGIN');
+    }
+    const ref = validateRetractionRef(target);
+    return this.writeLock.run(async () => {
+      const records = await this.#loadComplete({ beforeAppend: true });
+      const { claims, retractionsByTarget } = splitLifecycle(records);
+      const supersededByMap = buildSupersededByMap(claims);
+      const matches = claims.filter((r) => r.id === ref || r.id.startsWith(ref) || shortId(r.id) === ref);
+      if (matches.length !== 1) throw new ValidationError(matches.length === 0 ? 'candidate not found' : 'candidate reference is ambiguous');
+      const candidate = matches[0];
+      if (candidate.provenance?.origin !== SOURCE_EXTRACTED_ORIGIN) throw new ValidationError('target is not a document-derived candidate');
+      if (!isActive(candidate, supersededByMap, retractionsByTarget)) throw new ValidationError('candidate is no longer active');
+      const sanitized = sanitizeProvenance(provenance, 'user');
+      const record = {
+        schema: KNOWLEDGE_SCHEMA,
+        id: randomUUID(),
+        subject: candidate.subject,
+        relationship: candidate.relationship,
+        object: candidate.object,
+        evidence: candidate.evidence,
+        tripleHash: candidate.tripleHash,
+        status: 'supported',
+        createdAt: this.now().toISOString(),
+        provenance: sanitized,
+      };
+      const event = {
+        schema: KNOWLEDGE_SCHEMA,
+        kind: RETRACTION_KIND,
+        id: randomUUID(),
+        targetId: candidate.id,
+        reason: 'promoted to user-confirmed knowledge',
+        createdAt: this.now().toISOString(),
+        provenance: sanitized,
+      };
+      await this.log.append(record);
+      await this.log.append(event);
+      return { record, candidate, event };
+    });
   }
 
   async #addFromAuthority({ sub, rel, obj, evi, sanitized, refs }) {
@@ -1063,6 +1181,21 @@ function sanitizeProvenance(p, origin) {
     if (typeof p.operationId === 'string' && OPERATION_ID_RE.test(p.operationId)) {
       base.operationId = p.operationId;
     }
+    if (origin === SOURCE_EXTRACTED_ORIGIN) {
+      if (!validDocumentProvenance(p.document)) throw new ValidationError('document provenance is invalid');
+      return {
+        origin: SOURCE_EXTRACTED_ORIGIN,
+        updateMode: 'source_extracted',
+        document: {
+          documentId: p.document.documentId,
+          path: p.document.path,
+          version: p.document.version,
+          contentHash: p.document.contentHash,
+          section: p.document.section ?? null,
+          locator: p.document.locator ?? null,
+        },
+      };
+    }
     if (typeof p.context === 'string' && p.context.trim().length > 0) {
       const ctx = p.context.trim().slice(0, MAX_CONTEXT_CHARS);
       if (!CONTROL_CHARS.test(ctx) && !containsSecret(ctx)) base.context = ctx;
@@ -1303,6 +1436,8 @@ function annotate(record, supersededByMap, conflictIndex, retractionsByTarget = 
     retractedBy: events.length === 1 ? events[0].id : null,
     retraction: events.length === 1 ? summarizeRetraction(events[0]) : null,
     retractionAmbiguous,
+    candidate: record.provenance?.origin === SOURCE_EXTRACTED_ORIGIN,
+    document: record.provenance?.document ?? null,
   };
 }
 

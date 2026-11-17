@@ -1915,3 +1915,74 @@ polling, stable identity/dedupe/replay, stale/conflicting/out-of-order observati
 failure/recovery/backoff, bounded batches, checkpoint and restart recovery, isolation, permissions,
 secret exclusion/redaction, malicious payload refusal, runtime pause/end-to-end flow, CLI/UI reads,
 no-inference checks, sustained polling bounds and existing-path regressions.
+
+## T-12 contextual knowledge and content understanding (as implemented)
+
+`src/documents/` adds a second, separately permissioned data plane beside T-11 metadata observation.
+It owns the content configuration, document version log and deterministic retrieval; it does not add
+a second knowledge store, event pipeline, action registry or model path. `DocumentService` is
+constructed once in `app.js` with the existing knowledge, situational, world-model and goal stores,
+and is passed to the controller, loopback UI and `ExecutiveRuntime`.
+
+| Module | Responsibility | Authority | Failure behaviour |
+| --- | --- | --- | --- |
+| `vocabulary.js` | Schema, `filesystem.content.read`, default formats, closed limits, extractor identity | Vocabulary only | Out-of-range values are validation errors |
+| `store.js` | Checksummed atomic `documents.json`, append-only `documents.jsonl`, writer lock, current-document derivation | Own files only | Corrupt lines are counted; configuration checksum mismatch is refused |
+| `service.js` | Authorized scan/read, extraction, versioning, candidate creation, search/ask/evidence/compare/context, T-09 events | Calls `KnowledgeStore.addSourceCandidate` and `situation.ingest` only; no action or execution | Per-file read/extract failures are contained; one failed item does not hide completed versions |
+| `cli.js` | `document` lifecycle, ingest, read, retrieval and promotion commands | User-origin commands only | Usage errors exit 2; refused/skipped operations exit 1 |
+| `../filesystem/documents.js` | Existing bounded PDF/DOCX/XLSX/CSV/text parsers plus BOM-aware decoding | Pure local parsing | Malformed or oversized input is refused at the extractor boundary |
+
+`DocumentService` reads `documents.json` lazily. Construction, status, list and search read the
+index but never scan or read a source file. `configure` validates absolute, non-root directories,
+extension and exclusion bounds, and writes configuration without granting the content permission.
+`enable` is the explicit grant; `disable` preserves history; `pause` stops the runtime tick from
+reading while leaving manual configuration readable. `ingest` is the only content-read entry point.
+It scans roots with `readdir({ withFileTypes: true })`, skips symlinks, sensitive segments/files and
+excluded names before stat/read, and enforces file count, size, depth and extraction caps. A
+truncated scan suppresses deletion detection.
+
+Each accepted file gets a stable `doc:` identity from the authorized root label and relative path.
+A SHA-256 content hash selects duplicate versus new version; records retain source path, root label,
+format, bytes, observed/ingested times, extractor id/version, text hash, permission scope, sections,
+limitations and warnings. PDF/DOCX/XLSX extraction is delegated to the existing parser; text/CSV is
+decoded with BOM handling. The index log also records deletion and invalidation events, so current
+documents are derived rather than rewritten. A deleted or invalidated document can be indexed again
+with a new version while older versions remain readable.
+
+Extraction candidates are narrow deterministic observations: key/value lines, top-level JSON scalar
+fields and CSV rows. They are stored through `KnowledgeStore.addSourceCandidate`, never through
+`knowledge.add`. That method accepts no caller origin or update mode; it validates the document
+reference, enforces the same text/secret bounds, records `source_extracted` provenance with
+`{documentId,path,version,contentHash,section,locator}`, and returns candidates in `status:
+"uncertain"`. `promoteSourceCandidate` requires the existing user-origin authorization, appends a
+normal user claim and a retraction of the candidate. The candidate is not mutated, so its document
+evidence remains auditable. The prompt knowledge selector excludes source candidates; the world
+projection excludes them from user/model belief counts while conflict groups can still show a
+candidate disagreement.
+
+Retrieval is deterministic: tokenisation with the existing stop-word set, optional quoted exact
+phrase, term counts, current-version filtering, document prefix, version and section filters, and
+bounded excerpts with section range. `contextFor` returns at most the caller's character budget and
+labels each line with document id, version and section. The controller adds this as an untrusted
+source-data section with an explicit system instruction; it never treats document text as an
+instruction, goal, approval or authorization. `ask` returns four separate channels: explicit source
+excerpts, deterministic extraction, the documented retrieval rule, and unknown/missing terms. A
+version-comparison question uses the deterministic line diff. No citation is created without a
+matching excerpt.
+
+T-09 events use `source: "external_provider"`, stable `sourceEventId =
+doc:<documentId>:v<version>[:deleted]`, types `document_indexed`, `document_updated`,
+`document_extraction_failed` and `document_deleted`, reporter `documents`, provider
+`filesystem_content`, a bounded excerpt and document metadata. Existing T-09 validation,
+duplicate/replay handling, significance, world-model application and T-10 notification rules apply
+unchanged. Existing goals whose request/title/description share tokens with the document path or
+first 2,000 characters are linked in `goalRefs` and `payload.affectedGoals`; the service never
+changes a goal or starts an action. `ExecutiveRuntime` calls `documents.ingestDue()` during its
+bounded tick and includes the document summary in status; extraction failures are in the existing
+attention type set.
+
+Bounds: 5 roots, 40 extensions, 20 exclusions, 500 files per scan, 4 MiB per file, 8 directory
+levels, 200,000 extracted characters, 200 sections, 20 candidate facts per version, 500 retained
+documents, 20 query results, 20,000 context characters (caller may lower it) and 1 s–24 h intervals.
+No document service has a model handle, endpoint, embedding, vector index, OCR engine or network
+client. The 34 T-12 tests use temporary roots and real extractors; no test starts inference.

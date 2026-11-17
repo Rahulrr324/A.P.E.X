@@ -8879,3 +8879,94 @@ Future extension points are a new adapter behind the same versioned provider con
 permission and scope validator, and service-specific credentialed transports behind an explicit
 secret reference (not in configuration, events or checkpoints). A connector may add richer metadata
 but may not bypass `situation.ingest`, the world model, T-10 decisions, or action authorization.
+
+## Batch T-12: contextual knowledge and content understanding
+
+T-12 adds a separate content permission and a bounded document index around the existing
+knowledge, situational and runtime path. Metadata observation (T-11) still never opens a file.
+Content is disabled by default; configuring an authorized root is inert, and only an explicit
+`document enable` records `filesystem.content.read`. An explicit ingest or a T-10 runtime tick is
+the only point at which file bytes are read. There is no model, inference server, embedding,
+vector store or network call in this milestone.
+
+```
+CONFIGURE ROOT -> ENABLE CONTENT PERMISSION -> EXPLICIT INGEST / RUNTIME TICK
+  -> bounded local read -> deterministic extractor -> content hash and version
+  -> document index + candidate facts (source_extracted) + T-09 evidence event
+  -> keyword/exact/section retrieval -> bounded prompt excerpt or grounded document answer
+```
+
+Formats and limits. Text, Markdown, JSON/JSONL, CSV/TSV, source and config files are supported by
+default. PDF, DOCX and XLSX use the existing bounded local parsers and are enabled only when their
+extensions are configured. Unsupported or binary files are skipped or recorded as failed; malformed
+PDF/ZIP/DOCX and oversized files never become extracted text. UTF-8 and UTF-16 BOM text is decoded
+without mojibake. Defaults are 200 files, 4 MiB per file, 8 directory levels and 200,000 extracted
+characters; roots, extensions, exclusions and limits are bounded and validated. Filesystem roots,
+sensitive directories/files (`.git`, `.ssh`, keys, `.env`, `node_modules`, system folders and
+similar), symlinks and names matching the existing secret rules are refused. A capped scan never
+looks like a mass deletion.
+
+Identity and versions. `documentId` is a stable hash of the authorized root and relative path.
+Each content change appends a version with a SHA-256 content hash; unchanged content is a duplicate.
+Deletion, manual invalidation and reappearance preserve history. `document compare` provides a
+deterministic line diff, and evidence is selected by document, version and section. A restart reads
+the durable index; the interval checkpoint prevents a second read on every tick.
+
+Knowledge and trust. Extracted facts are candidates, not user beliefs. They are written only through
+`KnowledgeStore.addSourceCandidate`, carry `origin: "source_extracted"`, `updateMode:
+"source_extracted"`, status `uncertain` and document path/version/section provenance. Ordinary
+`knowledge.add` remains user-origin only and still refuses model writes. Candidate promotion is an
+explicit user action that appends a normal user-confirmed claim and retracts the candidate; the
+candidate and its source provenance remain in history. Candidates are excluded from the model prompt
+knowledge section and from the world projection's user-belief count. Contradictory values remain
+visible as conflicts rather than being silently resolved.
+
+Retrieval and Q&A. Search is deterministic exact-phrase and term matching over current extracted
+text, with document/version/section filters and bounded excerpts. Document context passed to a model
+is labelled untrusted source text and budgeted; it is not an instruction or an authorization.
+`document ask` separates explicit source excerpts, deterministic extraction (candidate facts and
+document metadata), rule-based inference (the retrieval rule and counts) and unknown/unsupported
+material. Missing terms are reported as not found in the matching excerpts, never as proof that the
+information does not exist.
+
+T-09/T-10. Meaningful index, update, failure and deletion events enter the existing
+`situation.ingest` contract as `source: "external_provider"` with reporter `documents` and provider
+`filesystem_content`. Events carry a bounded excerpt and document citation; a matching existing goal
+is linked as `affectedGoals`, but no goal, plan or action is changed automatically. The T-10 runtime
+status includes the document summary and a bounded tick calls `ingestDue` after integration polling.
+A document extraction failure is an attention item through the existing runtime attention path.
+
+Commands and UI:
+
+```
+apex document sources | status | diagnose
+apex document configure [--root <dir>]... [--extension <ext>]... [--exclude <name>]...
+                       [--max-files N] [--max-bytes N] [--entity <id>] [--interval <ms>]
+apex document enable | disable | pause | resume
+apex document ingest [--force]
+apex document list [--limit N] [--all] | show <id> | evidence <id> [--version N] [--section N]
+apex document search <query> [--limit N] [--document <id>] [--version N] [--section N]
+apex document ask <question>
+apex document versions <id> | compare <id> [--from N] [--to N]
+apex document facts <id> | promote <candidate-id> [--reason <text>]
+apex document invalidate <id> --reason <text> | reprocess <id>
+```
+
+The authenticated loopback UI adds a read-only "Authorized documents" panel and
+`GET /api/documents[?q=...]`; search excerpts are rendered with `textContent`, and the panel adds no
+enable, ingest, promotion or other write control. All content stays local.
+
+Limitations. Extraction is deterministic and format-bounded, not semantic: scanned/image PDFs have
+no OCR, XLSX reads the first worksheet only, DOCX reads paragraphs but not all styling, and sections
+are derived from Markdown headings/line ranges rather than a full document model. Search is keyword
+and exact-phrase matching, not embeddings or natural-language entailment; `ask` reports the
+retrieval rule and never fabricates an answer or citation. Candidate facts are simple key/value,
+JSON scalar and CSV row extraction, not general fact extraction. Content must be explicitly enabled;
+a runtime tick reads no file while the permission is disabled or paused. Filesystem events are
+discovered by bounded rescans, not a journal, so deletion detection depends on a complete scan.
+Secrets are refused by name/content heuristics, not guaranteed by inspection of every encoding.
+No live model or external content service is contacted. The 34 T-12 scenarios cover default
+inertness, separate permission, formats including real PDF/DOCX, malformed/oversize/encoding cases,
+limits, traversal/symlink/secrets, hashing/versions/dedupe/deletion/recovery, candidate trust and
+promotion, conflicts, exact/section retrieval, evidence/compare, prompt injection and budgets,
+T-09/T-10 coupling, CLI/UI authentication and existing knowledge regressions.

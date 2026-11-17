@@ -41,6 +41,7 @@ import { SituationService } from './situational/service.js';
 import { situationActions } from './actions/situation-actions.js';
 import { ExecutiveRuntime } from './runtime/executive-runtime.js';
 import { IntegrationFabric } from './integrations/manager.js';
+import { DocumentService } from './documents/service.js';
 import { PredictionStore } from './prediction/prediction-store.js';
 import { predictionActions } from './actions/prediction-actions.js';
 import { historyActions } from './actions/history-actions.js';
@@ -229,6 +230,19 @@ export function createApp({
   // T-11 external sources: provider construction is inert. Configuration is loaded lazily, no
   // connection is opened and no poll starts until an enabled provider is polled explicitly or by the
   // runtime tick. Observations enter through the same situational contract as internal events.
+  // T-12 content understanding. Construction reads no file: content roots and the separate
+  // content permission live in documents.json, and nothing is indexed until an explicit enable and
+  // ingest. Derived facts go through the existing knowledge store and situational service.
+  const documents = new DocumentService({
+    dataDir,
+    knowledge,
+    situation,
+    worldModel,
+    goals,
+    now: clock,
+    idFactory,
+  });
+
   const integrations = new IntegrationFabric({
     dataDir,
     situation,
@@ -367,6 +381,7 @@ export function createApp({
     deadlines,
     learning,
     situation,
+    documents,
     dataDir,
     neural: neuralRuntime,
   });
@@ -383,6 +398,7 @@ export function createApp({
     predictions,
     operations,
     integrations,
+    documents,
     dataDir,
     now: clock,
     idFactory,
@@ -415,6 +431,7 @@ export function createApp({
     situation,
     runtime,
     integrations,
+    documents,
   };
 }
 
