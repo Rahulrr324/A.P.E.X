@@ -317,13 +317,16 @@ describe('T-11 external event and integration fabric', () => {
       throw new Error('always unavailable');
     });
     const app = appOn({ integrationProviders: [provider] });
-    await app.integrations.configure('fake_broken', { retry: { maxAttempts: 3, baseDelayMs: 100 } });
+    // The delay must outlast the whole test: a 100 ms window can expire between two awaits when
+    // the full suite runs files in parallel, which turned this assertion into a timing race.
+    await app.integrations.configure('fake_broken', { retry: { maxAttempts: 3, baseDelayMs: 60_000 } });
     await app.integrations.enable('fake_broken');
     const first = await app.integrations.poll('fake_broken', { force: true });
     assert.equal(first.attempts, 1);
     assert.ok(first.retryAt);
     const immediate = await app.integrations.poll('fake_broken');
     assert.equal(immediate.status, 'skipped');
+    assert.match(immediate.reason, /not due/);
     await app.integrations.poll('fake_broken', { force: true });
     await app.integrations.poll('fake_broken', { force: true });
     const exhausted = await app.integrations.poll('fake_broken');

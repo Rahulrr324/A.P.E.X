@@ -16,6 +16,7 @@ import { TaskStatus } from './tasks/model.js';
 import { MAX_QUEUED_SUMMARIES } from './tasks/summary-queue.js';
 import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
 import { State, collectDiagnostics, dataDirLabel, renderDiagnostics, safeText } from './diagnostics.js';
+import { collectHealth, renderHealth } from './health.js';
 import { MAX_WORLD_LIMIT } from './world/world-state.js';
 import { runRuntimeCommand } from './runtime/cli.js';
 import { runIntegrationCommand } from './integrations/cli.js';
@@ -33,6 +34,7 @@ Usage:
   node bin/apex.js model contracts [--json]           declared provider capabilities, limits and trust boundary (no endpoint is contacted)
   node bin/apex.js neural contract [--json]           declared neural runtime boundary, limits and isolation (no runtime is contacted; no inference)
   node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
+  node bin/apex.js health [--json] [--model]          unified operational health across every subsystem (inspects records; starts nothing, calls no model)
   node bin/apex.js workspace roots                     configured workspace roots and their names (read-only)
   node bin/apex.js workspace list [path] [--limit N] [--workspace <name>]        one directory inside a root (read-only)
   node bin/apex.js workspace find [path] --name <text>|--extension <ext> [--max-depth N] [--limit N] [--workspace <name>]
@@ -261,6 +263,7 @@ Request examples (no model needed; use them with ask, or type the same words in 
   task plan "calc 1+1; calc 2+2"   plan a checked task; nothing runs yet
                                      task run <task-id> runs it, task show <task-id> shows the record
   diagnose              read-only preflight, including recovery guidance
+  health                unified operational health across stores, runtime, providers, documents and reasoning
   what conflicts do you have   stored contradictions, answered from the stores (no model)
 
 Knowledge examples (explicit relationships; user-origin write only):
@@ -1076,6 +1079,15 @@ export async function main(argv, {
       const res = await app.controller.neuralContract();
       out(flags.json ? JSON.stringify(res.data, null, 2) : res.display);
       return res.verified ? 0 : 1;
+    }
+
+    if (command === 'health') {
+      const { flags, rest } = parseFlags(args, ['model', 'json']);
+      rejectUnexpected(rest, 'health [--json] [--model]');
+      const health = await collectHealth(app, { checkModel: Boolean(flags.model) });
+      if (flags.json) out(JSON.stringify(health, null, 2));
+      else out(renderHealth(health));
+      return health.overall === 'healthy' ? 0 : 1;
     }
 
     if (command === 'diagnose') {

@@ -42,6 +42,14 @@ preserved for provenance.
   show - separating approval from application, application from success, and success from cause. It never
   estimates an unexecuted baseline, claims a cause, changes a rule, retires an adaptation, or runs anything.
   Execution success is never reported as real-world success, and none of this grants permission.
+  `apex health` composes one read-only view from the reads every subsystem already exposes, so a
+  damaged store, a blocked task, a damaged checkpoint, or an unreadable area is stated rather than
+  hidden; a fresh install is healthy because an uncreated store is a valid absence, a configured
+  but unprobed model is advisory, and a successful process start is never reported as proof that
+  everything is well. Batch T-14 then drove the assembled application through restart, dependency, document,
+  external-observation, interruption, sustained-failure, and adversarial workflows, repaired the
+  one integration defect they exposed, and measured documents and evidence at 100, 1,000 and 5,000
+  records with no model.
   It answers
   deterministic requests with no model and sends
   everything else to a local model backend **you** configure; without one it still answers from its
@@ -143,6 +151,7 @@ you to run it.
 cd apex_app
 node bin/apex.js help
 node bin/apex.js status
+node bin/apex.js health
 ```
 
 There is no dependency install and nothing is downloaded. Without a model endpoint the
@@ -415,3 +424,17 @@ target and both sides returning the same trust, retrieval-completeness and verif
 ranking, bounds, conflict partners, provenance, audit and authorization are unchanged
 ([details](apex_app/README.md#batch-ap-12-request-scoped-read-optimization-scalable-retrieval-and-end-to-end-latency-reduction-as-implemented);
 tests: `tests/request-scoped-reads.test.js`). No inference was run or configured for this work.
+
+Batch T-14 then validated the assembled system rather than another capability. It added no subsystem:
+`apex health` composes existing reads into ten areas with five states, a configured but unprobed model
+treated as advisory, and no record of its own; the authenticated loopback page serves the same view. Seven workflows - restart
+and correction, dependent goals, document permission and versions, external observations, interrupted
+execution, sustained provider failure, and forged input - ran through the real controller, stores,
+runtime, and spawned CLI children. The one integration defect they exposed was repaired: a full
+document index no longer refuses a whole ingest scan when a new file appears, but skips that file as
+`limited` while still versioning a changed indexed one and freeing a slot on invalidation. Documents
+and evidence were measured at 100, 1,000 and 5,000 synthetic records; first document ingest is
+disclosed as slow because each emitted situational event re-reads the event log, rather than hidden
+([details](apex_app/README.md#t-14-whole-system-integration-reliability-and-operational-validation);
+tests: `tests/t14-workflows.test.js`, `tests/t14-health.test.js`, `tests/t14-reliability.test.js`,
+`tests/t14-scale-bounds.test.js`). No model was configured, called, downloaded, or started.

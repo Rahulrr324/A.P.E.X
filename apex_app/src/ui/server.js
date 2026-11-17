@@ -6,6 +6,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { UI_CLIENT, UI_CSS, UI_PAGE } from './assets.js';
+import { collectHealth } from '../health.js';
 
 export const UI_LIMITS = Object.freeze({
   maxBodyBytes: 64 * 1024,
@@ -519,6 +520,17 @@ export function createUiServer({
 
     if (method === 'GET' && url.pathname === '/api/state') {
       sendJson(res, 200, await snapshot());
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/health') {
+      // The same composition the CLI prints. It starts no runtime, polls no provider, and calls no
+      // model; the optional model check stays off so the page cannot contact an endpoint by itself.
+      try {
+        const health = await collectHealth(app, { checkModel: false });
+        sendJson(res, 200, health);
+      } catch (err) {
+        sendJson(res, 503, { error: `the health view is unavailable: ${err.message}` });
+      }
       return;
     }
     if (method === 'GET' && url.pathname === '/api/situation') {

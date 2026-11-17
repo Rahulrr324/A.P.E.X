@@ -287,6 +287,7 @@ suites re-hash the directory afterwards to prove it.
 |---|---|
 | `status [--model]` | Application identity, memory and operation counts, model status. `--model` probes the endpoint but never runs inference. |
 | `diagnose [--model]` | Read-only preflight: effective configuration, store state, integrity findings, and recovery guidance. `--model` adds a connectivity probe only. |
+| `health [--json] [--model]` | Read-only unified operational health: one composed view of the application, model, runtime, situational awareness, providers, documents, reasoning, world model, learning, and storage, each area naming the read it came from. A fresh install is healthy because every store is absent; a damaged store is reported `failed` rather than skipped; a blocked task is `blocked`, not healthy. The model area is advisory unless `--model` probes it (a probe reads the model list and runs no inference). Writes no record, starts nothing, polls nothing. Exit 0 only when the overall state is `healthy`. `--json` prints the same view as data. See [Operational health](#operational-health). |
 | `chat` | Interactive conversation. Reads one message per line from the terminal (or stdin); `/new` starts a new session, `/exit` ends. Memory and history persist across runs. |
 | `ask <request>` | Runs the full Cognitive Controller workflow for a request and records it. |
 | `ask --save-answer <request>` | As `ask`, and also stores a model answer as a `model_conclusion`. Only with this explicit flag. |
@@ -454,6 +455,152 @@ JSON behind.
 Error lines are presentation, not evidence: each is bounded to one line and
 credential-like text in it is redacted. An operation's audit record keeps the
 original error message.
+
+## Operating APEX locally
+
+This is the operator's guide: what starts, what stops, who authorizes, how to inspect the
+reasoning and the health, how to recover, and what this build deliberately does not do. Every
+command named here appears in `node bin/apex.js help`; the per-command reference is the
+[Commands](#commands) table, and each batch section records what that batch added and measured.
+
+### Starting and stopping
+
+APEX has no service install and no daemon. An ordinary command runs, records its audit line,
+prints, and exits. Two processes are long-lived, both stay in the foreground, and both stop on
+Ctrl+C (SIGINT or SIGTERM):
+
+- `node bin/apex.js runtime start [--interval <ms>]` — the opt-in executive runtime. Each cycle
+  publishes situational events, processes due provider observations and schedules, runs plans
+  that are already approved and ready, and records what happened. The interval defaults to
+  5,000 ms and must be an integer from 100 to 3,600,000. `runtime stop` is the graceful stop:
+  queued work and checkpoints are preserved and nothing is resumed by the stop itself.
+  `runtime pause` stops scheduling while event processing continues, and `runtime resume`
+  allows scheduling again. `runtime status`, `runtime diagnose`, and `runtime notifications`
+  inspect the runtime (a notification can be acknowledged); `runtime schedule`,
+  `runtime unschedule`, and `runtime cancel` change the recorded schedule. Only `runtime start`
+  and `runtime tick` execute executive work.
+- `node bin/apex-serve.js` — the loopback-only browser page for the same controller. It binds
+  `127.0.0.1`, prints a URL with a per-process token, and is a single-user local surface rather
+  than a hosted service; see
+  [Local browser interface](#local-browser-interface-loopback-only).
+
+A process that started is not evidence that its stores are readable. Start with `health`, not
+with the absence of an error.
+
+### Runtime configuration
+
+There is no configuration file and no `--data-dir` flag: environment is the only mechanism, and a
+mistyped unknown option is rejected before anything runs.
+
+| Variable | Effect |
+|---|---|
+| `APEX_DATA_DIR` | Where the stores live (default `~/.apex/local-alpha`). Created lazily by the first write, never at startup. |
+| `APEX_DATA_ISOLATED` | Exactly `1` or `0`. `1` requires an explicit `APEX_DATA_DIR` inside the OS temporary directory and refuses the default home store; benchmarks and tests use it. Unset or `0` is normal user operation. |
+| `APEX_FILESYSTEM_ROOT` | The one authorized filesystem root. Without it, filesystem actions are unavailable rather than defaulting to anywhere. |
+| `APEX_FILESYSTEM_MAX_READ_BYTES` | Per-read byte cap, 4 KiB to 10 MB (default 1 MB). |
+| `APEX_WORKSPACES` | Optional named selectors inside the same root; a name never widens the boundary, and the variable is refused without `APEX_FILESYSTEM_ROOT`. |
+| `APEX_EXPERIENCE_CAPTURE` | `off` (default) or `verified-success`: whether a verified outcome is recorded automatically as an experience. |
+| `APEX_CONTEXT_TURNS` | Recent conversation turns replayed into a model request, 0-50 (default 6). |
+| `APEX_UI_PORT` | UI port from 0 to 65535 (default 8787; `0` picks a free one). |
+
+The model variables (`APEX_MODEL_PROVIDER`, `APEX_MODEL_URL`, `APEX_MODEL_NAME`, timeouts, token
+caps, retries, and `APEX_ALLOW_REMOTE_MODEL`) configure the optional endpoint described in
+[Optional: a model endpoint you configure](#optional-a-model-endpoint-you-configure). Setting
+none of them is a supported, fully deterministic state.
+
+### Who authorizes what
+
+The action registry in the Executive Control Plane is the only authority, and the CLI and the UI
+share it because both call the same user-origin controller methods.
+
+- A model may propose a plan or an action. It cannot approve, register, or execute anything, and a
+  proposal naming a user-origin command is denied.
+- A plan is approved by you, and the approval is bound to the exact content hash and version. Any
+  revision clears it and requires a new approval.
+- Every step is authorized again at execution time. A recorded decision never authorizes the next
+  step by itself.
+- Documents, external providers, and the runtime each have a separate permission that configuring
+  them does not grant (`document enable`, `source enable`, `runtime start`).
+- Reasoning, health, `world`, `work`, `review`, `recover`, and `evidence integrity` grant
+  nothing. A reasoning conclusion carries `authorizes: false`, and no command a read prints runs
+  without your approval.
+
+### Inspecting reasoning
+
+`reasoning start <question or objective>` runs one deterministic session over the stores and
+records it. `reasoning show|evidence|hypotheses|contradictions|assumptions|unknowns|trace|decision <id>`
+reads it back: the evidence cited and where it came from, the readings that compete, what
+contradicts what, what is assumed rather than supported, and what APEX cannot answer.
+`reasoning replay <id>` re-runs the question against the stores as they are now without
+overwriting the recorded session; `reasoning compare <id>` shows the difference; `reasoning
+invalidate <id> --reason <text>` appends an invalidation and preserves history. A session never
+calls a model and authorizes nothing.
+
+### Inspecting health
+
+`health [--json] [--model]` composes one view from the reads each subsystem already exposes. The
+overall state is the worst of ten areas — application and stores, model, executive runtime,
+situational awareness, providers, documents, reasoning, world model, learning, and storage — and
+every area names the read it came from.
+
+- `healthy` — a record was read and says the subsystem is in order. A fresh install is healthy
+  because the absence of a not-yet-created store is a valid state.
+- `unknown` — the subsystem was not checked or could not be read. A configured but unprobed model
+  is `unknown` and advisory, so it does not decide the overall state.
+- `degraded` — a known, explained limitation such as an interrupted task or an uncertain step.
+- `blocked` — work is waiting for your decision: an approval, a paused task, a conflict.
+- `failed` — a store is damaged or unreadable, a reference is broken, or an area threw. The
+  damaged file is reported and left in place, never rewritten.
+
+`health` exits 0 only when the overall state is `healthy` and 1 otherwise; `--json` prints the
+same view as data for scripts; `--model` adds a model-list probe that runs no inference. The UI's
+"Operational health" panel reads the same `/api/health` view, and the view writes no record of its
+own. A successful process start is never reported as proof that every subsystem is healthy.
+
+### Recovery
+
+Inspect before acting. `diagnose` states the effective configuration, store state, integrity
+findings, and concrete recovery guidance. `recover` lists interrupted, uncertain, resumable, and
+blocked work. `repair locks` inspects the write locks and removes only abandoned takeover tokens.
+A damaged checkpoint is moved aside as `runtime.corrupt-<...>` rather than deleted.
+`plan continuation` and `plan continue` take up only the steps the records prove never started;
+`backup export`, `backup inspect`, and `backup restore` move the data files as one versioned
+archive, and a restore validates the archive and writes a pre-restore archive first. None of
+these invents state or resumes work on its own.
+
+### Current inference restriction
+
+This build is validated with deterministic logic, synthetic workloads, stub backends, and
+`NoBackend` only. No command or test described here performs local or remote inference, downloads
+a model, starts an inference server, or recommends one. If you configure an endpoint yourself,
+model output is untrusted input: it is reported as unverified and can propose but not authorize.
+
+### A practical local demo (no model, nothing downloaded)
+
+```bash
+cd apex_app
+export APEX_DATA_DIR="$PWD/.demo-data"        # keep the demo out of your real store
+
+node bin/apex.js ask "remember that the project codename is Lighthouse"
+node bin/apex.js ask "what is the project codename?"          # deterministic, cites the record
+node bin/apex.js reasoning start "is the project on track?"   # record one reasoning session
+node bin/apex.js reasoning show <session-id>                  # evidence, readings, unknowns
+node bin/apex.js health                                       # composed, read-only
+node bin/apex.js diagnose                                     # configuration and guidance
+```
+
+Every answer above comes from the records and cites them. With no model configured, a
+model-shaped request is reported as `model_unavailable`; APEX does not fabricate an answer.
+Delete `.demo-data` when you are done.
+
+### Where the documentation lives
+
+[`ARCHITECTURE.md`](ARCHITECTURE.md) is the consolidated architecture, authority map, and risk
+register. The [Commands](#commands) table in this file is the per-command reference, and each
+`Batch ...` section records what that batch added and measured.
+[`../DEVELOPMENT_WORKFLOW.md`](../DEVELOPMENT_WORKFLOW.md) records the shared-checkout working
+agreement, and [`benchmarks/README.md`](benchmarks/README.md) records how to reproduce the
+measurements.
 
 ## Optional: a model endpoint you configure
 
@@ -1244,6 +1391,29 @@ plan add/approve/activate path and the continuation report, and the diagnostics 
 uses an in-process fixture backend and writes only into temporary directories
 ([Benchmarks](#benchmarks)).
 
+The T-14 suites validate the assembled application rather than one capability each.
+`tests/t14-workflows.test.js` drives the seven acceptance workflows A-G through the real controller,
+stores, runtime, and CLI children: restart and correction, a dependent goal the runtime runs only
+after its prerequisite, content permission and versioned documents, an external observation that
+becomes a notification but no task, an interrupted run that is never replayed, sustained provider
+failure with pause/resume/shutdown, and forged input refused. `tests/t14-health.test.js` pins the
+composed health view (a fresh install is healthy, a damaged store is `failed`, an unchecked model is
+advisory, a blocked task is `blocked`, CLI and UI agree, and no store is created by reading it).
+`tests/t14-reliability.test.js` covers restart durability with no replay and a torn final record read
+as damage. `tests/t14-scale-bounds.test.js` proves a full 500-document index still ingests, skips new
+documents with a warning, versions a changed one, and frees a slot on invalidation.
+`benchmarks/run-t14-scale-benchmark.mjs` is outside the suite, needs no model, and measures documents
+and evidence at 100, 1,000, and 5,000 synthetic records in one run, printing its own limitations
+([Batch T-14](#t-14-whole-system-integration-reliability-and-operational-validation)).
+
+The suite map for a focused run: the T-14 acceptance set is
+`node --test tests/t14-workflows.test.js tests/t14-health.test.js tests/t14-reliability.test.js
+tests/t14-scale-bounds.test.js`; the integration set adds `tests/integration.test.js` and the T-09
+to T-13 suites (`t09-situational-awareness.test.js`, `t10-executive-runtime.test.js`,
+`t11-external-integrations.test.js`, `t12-documents.test.js`, `t13-reasoning.test.js`); the full set
+is `npm test`; and the long-duration scale evidence is the T-14 benchmark above, never part of
+`npm test` because it writes thousands of records and takes minutes.
+
 | Acceptance test | Where |
 |---|---|
 | 1. Starts without a configured model | `cli.test.js` "starts and reports status with no model" |
@@ -1447,6 +1617,28 @@ questions that must change nothing).
   external anchor, so a clean parse does not prove the log is authentic or unedited.
   A store that is unavailable or partly corrupt yields an explicitly incomplete
   inspection. None of the three repairs anything or writes an audit record.
+- **Unified `health` observes readable records at one moment; it is neither a monitor nor a
+  score.** It composes the reads each subsystem already performs, so it cannot see a process
+  that is running with stale records, and `healthy` says only that every read it performed
+  returned a state it could classify as in order. A configured but unprobed model is
+  `unknown` and advisory, so a local install is not downgraded for a remote check nobody asked
+  for; with
+  `--model` the probe reads the endpoint's model list and still runs no inference. The view
+  starts nothing, polls nothing, writes no record, and repairs nothing.
+- **A first document ingest re-reads the situational log once per emitted event.** Each new,
+  changed, or failed document publishes one situational event, and each publication re-reads
+  and reduces the whole append-only situational log several times. At 500 recorded events the
+  per-event cost is roughly 35-40 ms, so indexing 100 documents took 12.36 s and filling the
+  500-document index took about 112 s in the measured run; a later ingest of unchanged files
+  took 3.3 s. This is disclosed rather than optimized: restructuring the T-09 store during a
+  validation batch would have widened the change beyond the evidence. The measured numbers and
+  their fixtures are in [Batch T-14](#t-14-whole-system-integration-reliability-and-operational-validation).
+- **The document index holds at most 500 live identities per store and one scan examines at
+  most 500 files.** A full index still ingests: a new document beyond the cap is skipped and
+  reported as `limited` with one warning instead of refusing the whole scan, a changed indexed
+  document still gains a new version, and an invalidation frees a slot. A directory larger than
+  the scan cap is reported as truncated rather than silently complete. Every version is capped
+  at 60 and every extracted file at 4 MB, as in Batch T-12.
 - **The world-state projection is bounded and re-reads everything it describes.** It
   represents at most 100 records per store (`MAX_WORLD_RECORD_LIMIT`), shows 20 beliefs
   (1-50 with `--limit`), and lists at most 8 members of a conflict group. A contradiction
@@ -9081,3 +9273,138 @@ document conflicts, missing evidence, dependency cycles, explicit causal links, 
 conclusion classes, persistence/recovery, invalidation, correction replay, document versions,
 decision criteria, injection-as-data, authorization, bounds, CLI/UI/runtime integration, an absence
 of network access and a synthetic bounded benchmark.
+
+## T-14 whole-system integration, reliability and operational validation
+
+T-14 did not add a subsystem. It drove the assembled application through realistic workflows,
+repaired the one integration defect those workflows exposed, and made the operational state
+inspectable in one place. No inference was performed: every application under test used
+`NoBackend` or a stub, every fixture was synthetic, and no endpoint was contacted.
+
+### The defect repaired
+
+A document index that already held the 500-identity cap refused the **entire** next ingest scan
+when any new file appeared, so one new document could stop an unchanged one from being re-read and
+a changed indexed document from gaining its version. The repair enforces the cap per document: a
+new document beyond the cap is skipped and reported as `limited` with one warning, while an indexed
+and changed document still gains a version, unchanged files are not re-read, and invalidating an
+identity frees a slot. `tests/t14-scale-bounds.test.js` pins all four behaviours against a real
+500-document store; `tests/t12-documents.test.js` still holds the original contracts.
+
+### Unified operational health
+
+`src/health.js` composes one read-only view from the reads the subsystems already expose:
+`collectDiagnostics`, `runtime.status()`, `situation.status()`, `integrations.status()`,
+`documents.status()`, `reasoning.status()`, `worldModel.status()`, `learning.status()`, and a
+derived storage area. Each of the ten areas names its source. The overall state is the worst of
+the areas, in the order `failed` > `blocked` > `degraded` > `unknown` > `healthy`. A fresh install
+is `healthy` because an uncreated store is a valid absence; a damaged store is `failed` and the
+file is preserved; a task waiting for approval is `blocked`; a configured but unprobed model is
+`unknown` and `advisory`, so it does not decide a local install's result. The CLI exposes
+`health [--json] [--model]` (exit 0 only when the overall state is `healthy`), and the authenticated loopback UI
+adds `GET /api/health` and a read-only "Operational health" panel built with `textContent`. The
+view starts nothing, polls nothing, calls no model, writes no record, and repairs nothing.
+
+`tests/t14-health.test.js` (9 cases) pins the claims: a fresh install is healthy and reading the
+view creates no store; an unchecked model is advisory; a damaged situational log is `failed` and
+its bytes are preserved; a damaged runtime checkpoint is quarantined, not deleted; a damaged
+reasoning record is `failed` and citing sessions are refused; an approval-waiting task is
+`blocked`; the CLI exits 0 only when healthy; `--json` agrees with the text view; and
+`/api/health` requires the UI token and returns the same composition.
+
+### Workflows A-G (as exercised)
+
+`tests/t14-workflows.test.js` (8 cases) drives seven workflows through the real controller, stores,
+runtime, and spawned CLI children:
+
+- **A** — a personal fact survives two restarts, a correction supersedes rather than deletes the
+  old record, and the later deterministic answer follows the correction and cites it.
+- **B** — a dependent goal cannot be activated before its prerequisite completes; the runtime
+  executes only the ready plan; reasoning reports `authorizes: false` and `executable: false`; the
+  prerequisite completes through recorded evidence; only then does the dependent plan run.
+- **C** — ingested documents stay unread until the separate content permission is granted;
+  disagreeing sources are reported as `CONFLICTING` with a `cross_document_conflict`; a changed
+  document keeps two versions and each version's excerpt still holds its own bytes.
+- **D** — an external observation becomes a situational event, an assessed
+  `recommend`/`request_approval` decision, and a notification, but creates no task; reasoning
+  cites the observation as `external_observation`; granting document permission changes none of
+  that.
+- **E** — a child process interrupted mid-execution leaves one uncertain step, which is reported
+  `outcome_uncertain`, is never replayed, and refuses `plan continue`; an interruption after a
+  finalized step lets the continuation take up only the step that never started, and a second
+  continuation is refused.
+- **F** — a failing provider is isolated by retry/backoff and a dead-letter path while a healthy
+  provider's observations still process; the queue and notifications stay bounded; pause, resume,
+  and shutdown preserve queued work; a failed step blocks its plan without re-execution.
+- **G** — document content that looks like instructions, a forged event origin, an unauthorized UI
+  request, and a damaged store are each refused, with the refusal recorded rather than the damage
+  repaired silently.
+
+`tests/t14-reliability.test.js` (2 cases) covers restart durability with no replay and a torn
+final record read as damage. `tests/t14-scale-bounds.test.js` (1 case) covers the repaired
+500-document boundary.
+
+### Boundaries audited
+
+The acceptance run exercised these boundaries and none of them widened: the action registry as the
+sole authorizer; the controller as the same path for CLI and UI; model output as a proposal only;
+the UI token, cookie, same-origin check, and loopback bind; external providers behind a separate
+enable and allowlist; documents behind a separate content permission; the runtime behind an
+explicit start; append-only stores and writer locks; audit redaction; private-memory exclusion from
+the model path; reasoning and health as read-only; and recovery as inspection, never automatic
+resume. A refused crossing is written to the operations log; no test observed an execution without
+an allow decision and an authorization record.
+
+### Persistence and crash consistency
+
+A restart reads the same records; it never replays an effect. A run interrupted during execution
+reports the step as uncertain and refuses to continue; a run interrupted after finalization
+continues only the unreached step. A torn final line is reported as damage, the reads that need
+the store fail closed, and the damaged file is not rewritten. Quarantining is done by the store
+that reads the checkpoint, so the bytes remain available for inspection.
+
+### Measured scale and cost
+
+`node benchmarks/run-t14-scale-benchmark.mjs` (outside `npm test`, `NoBackend`, isolated
+`apex-bench-t14-*` temporary directories) ran 51 checks, all passing, on one Windows 11 machine
+(Node v26.4.0, i5-12450H, 23.6 GiB). Only in-run ratios are reported; absolute times move with
+machine load, so they are context, not a threshold.
+
+| Documents | 100 | 1,000 (scan-capped at 500) | 5,000 (scan-capped at 500) |
+|---|---|---|---|
+| First ingest | 12.36 s | 111.99 s | 110.79 s |
+| Unchanged re-ingest | 636 ms | 3.33 s | 3.18 s |
+| Search | 11.27 ms | 20.66 ms | 17.58 ms |
+| Status | 6.89 ms | 13.27 ms | 15.93 ms |
+| 10-file burst | 2.59 s | 6.79 s | 6.12 s |
+| `documents.jsonl` / `situational.jsonl` | 89.1 / 287.1 KiB | 415.3 / 1,332.8 KiB | 415.3 / 1,332.8 KiB |
+
+The 1,000- and 5,000-document runs converge because one scan examines at most 500 files and the
+index holds at most 500 identities. First ingest is the expensive phase: each emitted situational
+event re-reads the whole event log, so the cost grows with the events already published. Ratios
+5,000-to-100 were 8.96x for first ingest (explained by the 100-to-500 cap change), 5.00x for
+unchanged re-ingest, and 1.56x for search. A repeated-failure run indexed 20 documents and recorded
+20 failures in 6.95 s; an unchanged repeat appended nothing; five edits appended 4,010 bytes.
+
+Evidence reads were measured against 100 / 1,000 / 5,000 synthetic evidence records:
+
+| Evidence | 100 | 1,000 | 5,000 |
+|---|---|---|---|
+| Retrieval | 28.57 ms | 45.05 ms | 78.77 ms |
+| Complete request | 163.45 ms | 165.82 ms | 239.96 ms |
+| Reasoning session | 112.42 ms | 111.63 ms | 141.76 ms |
+
+The 5,000-to-100 ratios were 2.76x for retrieval, 1.47x for a complete request, and 1.26x for a
+reasoning session. A complete request cited 8 evidence items, the session returned 8 cited items
+and 1 hypothesis, and the recorded outcomes were `success_deterministic` (request) and
+`success_verified` (session). These are projections over synthetic records, not
+answer-quality measurements.
+
+### What T-14 does not claim
+
+The numbers above are one machine, one run, and synthetic data; they are not throughput guarantees.
+First document ingest is slow for the reason stated in [Known limitations](#known-limitations), and
+it was disclosed rather than restructured. Health observes readable records at one moment and is
+neither a monitor nor a score. The scale runs stop at the configured caps, so a store larger than
+500 live identities is reported as truncated rather than exercised. No model, remote or local, was
+used, downloaded, or started, and no claim is made about model behavior or answer quality.

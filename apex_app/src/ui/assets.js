@@ -35,6 +35,12 @@ export const UI_PAGE = `<!doctype html>
     </form>
   </section>
   <section class="panel">
+    <h2>Operational health</h2>
+    <p class="meta">Inspection composed from every subsystem's own records. A running process is not proof of health; each degraded or failed state names where it was read. A damaged checkpoint is quarantined by its store, never deleted.</p>
+    <div id="health-overall" class="row"></div>
+    <ul id="health" class="work"></ul>
+  </section>
+  <section class="panel">
     <h2>Tasks</h2>
     <p class="meta">Approval here is the same user-origin decision the CLI records; nothing runs by itself.</p>
     <ul id="tasks" class="work"></ul>
@@ -124,6 +130,8 @@ const els = {
   newSession: document.getElementById('new-session'),
   tasks: document.getElementById('tasks'),
   plans: document.getElementById('plans'),
+  healthOverall: document.getElementById('health-overall'),
+  health: document.getElementById('health'),
   situation: document.getElementById('situation'),
   runtime: document.getElementById('runtime'),
   sources: document.getElementById('sources'),
@@ -404,6 +412,39 @@ function renderReasoning(state) {
   els.reasoning.append(el('li', 'meta', 'No action is executed from this view. Use the CLI for replay, comparison and explicit invalidation.'));
 }
 
+function renderHealth(health) {
+  els.health.replaceChildren();
+  els.healthOverall.replaceChildren();
+  if (!health || health.unavailable) {
+    els.health.append(el('li', 'meta', 'The health view is not available.'));
+    return;
+  }
+  els.healthOverall.append(el('span', 'badge', 'overall: ' + health.overall));
+  if ((health.attention || []).length) els.healthOverall.append(el('span', 'meta', health.attention.length + ' item(s) need attention'));
+  for (const area of health.areas || []) {
+    const item = el('li', 'item');
+    const head = el('div', 'row');
+    head.append(el('span', 'title', area.label));
+    const advisory = area.advisory && area.state === 'unknown' ? ' / not checked' : '';
+    head.append(el('span', 'badge', area.state + advisory));
+    item.append(head);
+    item.append(el('div', 'meta', area.summary));
+    if (area.state !== 'healthy' || advisory) item.append(el('div', 'meta', 'source: ' + area.source));
+    els.health.append(item);
+  }
+  for (const row of (health.attention || []).slice(0, 12)) {
+    els.health.append(el('li', 'meta', '[' + row.severity + '] ' + row.text + ' (' + row.source + ')'));
+  }
+}
+
+async function refreshHealth() {
+  try {
+    renderHealth(await api('/api/health'));
+  } catch (error) {
+    els.health.replaceChildren(el('li', 'meta', 'Health is unavailable: ' + error.message));
+  }
+}
+
 async function refresh() {
   const state = await api('/api/state');
   renderTurns(state.turns);
@@ -414,6 +455,7 @@ async function refresh() {
   renderDocuments(state.documents);
   renderReasoning(state.reasoning);
   renderSituation(state.situation);
+  await refreshHealth();
   els.session.textContent = state.session && state.session.id ? 'session ' + String(state.session.id).slice(0, 8) : 'no session yet';
   if (state.session && state.session.unavailable) showBanner(state.session.unavailable);
 }

@@ -375,15 +375,30 @@ export class DocumentService {
     const started = Date.now();
     try {
       const existing = currentDocuments((await this.store.load()).records);
-      if (existing.size >= LIMITS.maxDocuments) throw new ValidationError(`document index is at its ${LIMITS.maxDocuments}-document limit`);
+      // The cap bounds the index, not the scan. Refusing the whole read at the cap made every later
+      // scheduled ingest fail - including one that had nothing new to add - and left existing
+      // documents unable to gain versions or deletions. Deleted documents release their slot, and
+      // only a document that would newly occupy one is skipped.
+      let occupied = [...existing.values()].filter((doc) => !doc.deleted).length;
+      let limited = 0;
+      let limitStated = false;
       const scan = await this.#scan(config, signal);
       const seen = new Set();
-      const report = { status: 'ingested', observed: 0, indexed: 0, changed: 0, duplicates: 0, failed: 0, deleted: 0, truncated: scan.truncated, warnings: [], documents: [] };
+      const report = { status: 'ingested', observed: 0, indexed: 0, changed: 0, duplicates: 0, failed: 0, deleted: 0, limited: 0, truncated: scan.truncated, warnings: [], documents: [] };
       for (const file of scan.files) {
         const documentId = identityFor(file.root, file.path);
         if (seen.has(documentId)) continue;
         seen.add(documentId);
         const prior = existing.get(documentId);
+        if ((!prior || prior.deleted) && occupied >= LIMITS.maxDocuments) {
+          limited += 1;
+          report.limited = limited;
+          if (!limitStated) {
+            limitStated = true;
+            report.warnings.push(`the document index is at its ${LIMITS.maxDocuments}-document limit; new documents are not indexed until a current document is deleted`);
+          }
+          continue;
+        }
         if ((prior?.version ?? 0) >= LIMITS.maxVersions) {
           report.warnings.push(`${file.path}: version limit ${LIMITS.maxVersions} reached; the current indexed version is retained`);
           continue;
@@ -395,6 +410,7 @@ export class DocumentService {
             record.status = 'failed'; record.error = `file is ${file.size} bytes; the limit is ${config.maxBytes}`; record.contentHash = oversizeHash;
             await this.store.append([record]);
             report.failed += 1;
+            if (!prior || prior.deleted) occupied += 1;
             await this.#emit(record, 'document_extraction_failed', { limitations: [record.error] });
           }
           continue;
@@ -418,6 +434,7 @@ export class DocumentService {
           if (extracted.truncated) record.warnings.push(`extracted text truncated at ${LIMITS.maxTextChars} characters`);
         }
         await this.store.append([record]);
+        if (!prior || prior.deleted) occupied += 1;
         const candidateIds = record.status === 'indexed' ? await this.#candidates(record, extracted) : [];
         const type = record.status === 'failed' ? 'document_extraction_failed' : (prior ? 'document_updated' : 'document_indexed');
         const eventId = await this.#emit(record, type, { candidateIds });

@@ -73,6 +73,17 @@ A benchmark is code that writes. What keeps it away from a real store, per scrip
   identical copied bytes; the retrieval partial is printed separately from the complete actions and
   the two are never added together.
 
+- `run-t14-scale-benchmark.mjs` builds every content root and data directory on a `mkdtemp`
+  directory prefixed `apex-bench-t14-`, asserts each with `assertIsolatedDataDir`, and uses the same
+  refusing cleanup. It accepts `APEX_DATA_ISOLATED` unset or `1` and refuses any other value,
+  constructs `NoBackend` (never contacted) and touches no network. It reports complete document
+  ingestion at 100/1000/5000 files on disk (the scan cap and truncation are printed, not hidden),
+  an unchanged re-ingest, a ten-file edit burst, repeated extraction failures, and complete request
+  and T-13 reasoning session reads over a memory store seeded directly at 100/1000/5000 records.
+  It also reports the measured cost of the situational event each document ingest emits: the
+  append-only situational log is re-read and reduced per emit, so a large first ingest is slow. That
+  cost is disclosed in the output and is not optimized by the benchmark.
+
 - Nothing here reads `~/.apex`. A run that leaves a file behind outside the temp root is a defect worth
   reporting, not a cleanup task.
 
@@ -2750,5 +2761,37 @@ text into its operation record: 7.2 MB per inspection at 12,000 records, growing
 - Restore is one sample per size and consumes an archive into an empty directory, so it is not a
   median and it does not measure replacing existing bytes with a pre-restore copy.
 - No model is configured, contacted, or needed. These numbers say nothing about model latency.
+
+This script is not part of `npm test` and no test depends on it.
+
+## T-14 scale benchmark
+
+`run-t14-scale-benchmark.mjs` measures two complete paths under growth, with no inference and no
+target: document ingestion when the authorized root holds 100, 1000, or 5000 files, and complete
+request / T-13 reasoning reads when the memory store holds 100, 1000, or 5000 records.
+
+```bash
+cd apex_app
+APEX_DATA_ISOLATED=1 node benchmarks/run-t14-scale-benchmark.mjs --sizes 100,1000,5000 --repeats 3
+```
+
+What it reports, in the rows it prints:
+
+- the document scan cap in force, how many files were scanned, whether the scan truncated, and the
+  indexed/failed/deleted/limited counts - so a 1000- or 5000-file row is not presented as if every
+  file were indexed;
+- the first complete ingest, an unchanged re-ingest (which should append no version), `search`, and
+  `status`, with a ten-file edit burst after them;
+- a repeated-failure fixture: twenty files over `maxBytes` fail once, are not re-appended while
+  unchanged, and the log stays byte-identical across repeats until a real edit lands;
+- complete controller requests and reasoning sessions beside the retrieval stage alone, with the
+  evidence actually cited and the reasoning bounds in force;
+- in-run ratios only, labelled with the scan caps involved.
+
+The measured limitation this benchmark exists to disclose: each document ingest emits one situational
+event, and the situational service re-reads and reduces the whole append-only situational log several
+times per emit. A first ingest of 500 new documents therefore costs minutes, not seconds, on the
+machine measured, and the per-document cost rises as the log grows. The benchmark prints the measured
+cost; it does not optimize it, and this file does not claim a bound that was not measured.
 
 This script is not part of `npm test` and no test depends on it.

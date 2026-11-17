@@ -1321,6 +1321,43 @@ the same bounds and `authorizes:false`.
 - Failure: if building the record throws, it becomes `available:false`, names
   `diagnostics_unavailable`, and the operation's status and audit line are untouched.
 
+### Unified operational health (T-14)
+
+`health.js` is a composition, not a new source of truth. `collectHealth(app, {checkModel,
+modelTimeoutMs})` calls the reads each subsystem already exposes - `collectDiagnostics`,
+`runtime.status()`, `situation.status()`, `integrations.status()`, `documents.status()`,
+`reasoning.status()`, `worldModel.status()`, `learning.status()` - and derives a storage area
+from the diagnostic store states. It writes no record, starts no runtime, polls no provider, and
+holds no model handle.
+
+- Ten areas: `application`, `model`, `runtime`, `situational`, `providers`, `documents`,
+  `reasoning`, `world-model`, `learning`, `storage`. Every area carries `state`, `summary`, and
+  the `source` read it came from.
+- Five states with a fixed severity order: `healthy` (0) < `unknown` (1) < `degraded` (2) <
+  `blocked` (3) < `failed` (4). The overall state is the worst non-advisory area, raised by any
+  attention item. `unknown` ranks above `healthy` because an unreadable store or unperformed
+  check is not a passing result, and below `degraded` because a known, explained degradation is
+  more actionable.
+- Evidence to state: diagnosis `OK`/`MISSING`/`NOT_CONFIGURED` map to `healthy` (absence of an
+  uncreated store is valid), `CORRUPT`/`UNAVAILABLE` to `failed`, `UNCONFIRMED` to `degraded`,
+  and `NOT_CHECKED` to `unknown`.
+- Advisory model: without `--model` the model is not checked. Its area is reported but marked
+  `advisory:true` and excluded from the overall, so a local install is not downgraded for a
+  remote read nobody requested. `--model` adds a model-list probe and still runs no inference.
+- Attention items: confirmed integrity findings and damaged areas are `failed`; suspicions,
+  uncertain task steps, and non-live running tasks are `degraded` or `unknown`; approval waits,
+  paused tasks, and recorded conflicts are `blocked`.
+- Surfaces: CLI `health [--json] [--model]` prints the view and exits 0 only when the overall
+  state is `healthy`; the authenticated loopback UI serves `GET /api/health` and renders a
+  read-only panel with `textContent`. Both use the same composition.
+- Claims: the view is an observation of readable records at one moment. It is not a monitor and
+  not a score; it cannot see a live process whose records are stale, and a damaged checkpoint is
+  quarantined by the store that reads it, never deleted. The renderer is bounded at 220 lines and
+  40,000 characters, and no request, record, or secret text enters it beyond bounded summaries.
+- Tests: `t14-health.test.js` (9 cases), `t14-workflows.test.js` (8), `t14-reliability.test.js`
+  (2), `t14-scale-bounds.test.js` (1). See README "T-14 whole-system integration, reliability and
+  operational validation" for the measured scale table and its limits.
+
 ### Cognitive evaluation
 
 `cognition/evaluation.js` runs fixed synthetic scenarios in memory over the deterministic pipeline.
@@ -1496,6 +1533,8 @@ The only authority owner is the action registry. Everything else observes, propo
 | User-confirmed task outcome feedback (Batch PC) | `IMPLEMENTED_AND_TESTED` | `actions/task-feedback-actions.js` (`task.feedback`), user-origin only and `plannable:false`, plus the `task feedback` CLI. Refuses unless the task and every step are completed, every step has an audit record, and a recorded run ended `success_verified` with the task completed; records your assessment against that run with user provenance and derives or applies no rule | `task-feedback.test.js`, `practical-eval.test.js` (model-origin write denied) |
 | Practical capability evaluation (Batch PC) | `IMPLEMENTED_AND_TESTED` | `tests/practical-eval.test.js` only; no runtime component. Ten dimensions measured separately through the real controller, stores and CLI in temporary directories; no combined score and no model | `practical-eval.test.js` (13 tests, 10 suites) |
 | Local browser interface (Batch T-06) | `IMPLEMENTED_AND_TESTED` | `ui/server.js` (loopback-only HTTP server started by `bin/apex-serve.js`: process-random token in the printed URL exchanged for an `HttpOnly; SameSite=Strict` cookie, Bearer or cookie auth, `x-apex-ui: 1` header plus same-origin `Origin` plus JSON content type on every POST, CSP with `default-src 'none'` and no remote origin, 64 KiB body cap, 4000-character messages, one chat in flight, eight SSE subscribers, 1 MiB buffered-write cap, 120 s chat timeout), `ui/assets.js` (page, stylesheet and client script built with `textContent` only). Chat, task run/resume/retry/cancel and plan approval call the same controller methods the CLI calls, so the page adds no action, store, or authorization path; the conversation view reads `ConversationStore.transcript`, which includes turns the model path never replays. Loopback addresses only (`127.0.0.1`/`::1`); it is not a hosted or multi-user service | `ui-server.test.js` (15 real HTTP tests, including a real `bin/apex-serve.js` child process: auth refusal, cross-origin and wrong-content-type refusal, body and message bounds, SSE subscriber cap, task visibility, approval surface, session continuity) |
+| Unified operational health (T-14) | `IMPLEMENTED_AND_TESTED` | `health.js` (composition of existing subsystem reads; ten areas; five states with fixed severity; advisory unprobed model; bounded renderer), CLI `health [--json] [--model]`, authenticated UI `GET /api/health` and read-only panel; writes no store and authorizes nothing | `t14-health.test.js` (9 cases) |
+| Whole-system integration acceptance (T-14) | `IMPLEMENTED_AND_TESTED` | No runtime component. `tests/t14-workflows.test.js` (8 cases, workflows A-G through the real controller, stores, runtime and spawned CLI children), `tests/t14-reliability.test.js` (2 cases: restart durability with no replay, torn final record read as damage), `tests/t14-scale-bounds.test.js` (1 case: the repaired 500-document ingest boundary), `benchmarks/run-t14-scale-benchmark.mjs` (outside `npm test`, `NoBackend`, isolated temp dirs, 51 checks) | those suites and benchmark |
 | Temporal experience | `IMPLEMENTED_AND_TESTED` | `experience/temporal.js`, `experience-store.js` | `experience-temporal*.test.js` |
 | Model gateway protocol (stub) | `IMPLEMENTED_AND_TESTED` | `model/gateway.js` | `gateway.test.js`, `model-workflow.test.js`; no test runs a real model |
 | Real-model answer quality | `DESCRIPTIVE_ONLY` | — | One dated observation (2026-10-31); no automated evidence |
@@ -1689,6 +1728,8 @@ node --test tests/semantic-consistency.test.js tests/semantic-acceptance.test.js
 node --test tests/temporal-belief.test.js tests/history-reconstruction.test.js tests/executive-history.test.js tests/memory-knowledge-history.test.js
 node --test tests/capability-eval.test.js
 node --test tests/practical-eval.test.js tests/workspace.test.js tests/knowledge-digest.test.js tests/work-review.test.js tests/task-feedback.test.js
+node --test tests/t14-workflows.test.js tests/t14-health.test.js tests/t14-reliability.test.js tests/t14-scale-bounds.test.js
+APEX_DATA_ISOLATED=1 node benchmarks/run-t14-scale-benchmark.mjs
 node benchmarks/run-cognitive-runtime-benchmark.mjs
 node benchmarks/run-adaptation-decision-benchmark.mjs
 node benchmarks/run-prediction-adaptation-benchmark.mjs
@@ -2067,3 +2108,89 @@ hypothesis construction and the dependency graph over synthetic sizes without a 
 inference process; its figures describe these algorithms only. The 20 T-13 blocks exercise the 34
 required scenarios and the additional failure cases described in the README; they use temporary
 stores, real document extraction and no inference process.
+
+## T-14: whole-system integration, reliability and operational validation
+
+T-14 changed no architecture boundary. It validated the assembled application, repaired one
+integration defect, and added a composition of existing reads so operational state is inspectable
+in one place. Every fixture was synthetic, every backend was `NoBackend` or a stub, and no model,
+remote or local, was contacted.
+
+### Composition, not a new subsystem
+
+`health.js` is the only new module. It owns no store, action, lock, or authority. Its input is the
+set of reads each subsystem already exposes; its output is one bounded record with ten areas, each
+naming its `source`. The CLI `health` command and the UI `GET /api/health` call the same function,
+and the UI renders it with `textContent` in a read-only panel.
+
+| Concern | Where it lives | What T-14 established |
+| --- | --- | --- |
+| Composition | `health.js` (`collectHealth`) | Ten areas composed from `collectDiagnostics`, `runtime.status()`, `situation.status()`, `integrations.status()`, `documents.status()`, `reasoning.status()`, `worldModel.status()`, `learning.status()`, and derived storage |
+| Severity | `SEVERITY` in `health.js` | `failed` > `blocked` > `degraded` > `unknown` > `healthy`; overall is the worst non-advisory area plus attention items |
+| Advisory model | `advisory:true` without `--model` | A configured but unprobed model is `unknown` and cannot decide a local install's result |
+| CLI | `cli.js` `health` | Exit 0 only when overall is `healthy`; `--json` prints the record; `--model` adds a model-list probe and no inference |
+| UI | `ui/server.js`, `ui/assets.js` | Authenticated `GET /api/health`; read-only panel; same view as the CLI |
+| Damage | store reads and `collectDiagnostics` | A damaged store is `failed`; a damaged checkpoint is quarantined by the reading store, never deleted |
+| Writes | none | Reading health creates no file and appends no audit record |
+| Authority | none | `authorizes:false` is not even a field because the view decides nothing; no caller reads it to permit work |
+
+### The repaired integration defect
+
+The document service enforced `LIMITS.maxDocuments` at scan level: when the index held 500 live
+identities, the next scan refused every document as a whole. That coupled one new file to the fate
+of unchanged and changed indexed files. The repair enforces the bound per document: a new identity
+beyond the cap is skipped and reported as `limited` with one warning; a changed indexed identity
+still produces a version; an unchanged file is not re-read; and invalidation frees a slot. The
+result keeps the index bounded without turning a capacity limit into a scan-wide failure.
+`t14-scale-bounds.test.js` pins the four outcomes against a real 500-document store, and the T-12
+suites still pass unchanged.
+
+### Acceptance workflows A-G
+
+`t14-workflows.test.js` (8 cases) runs the assembled system, not isolated modules:
+
+| Workflow | What the records must show |
+| --- | --- |
+| A | A fact survives two restarts; a correction supersedes and preserves the old record; the later deterministic answer follows the correction and cites it |
+| B | A dependent goal cannot activate before its prerequisite completes; only the ready plan runs; reasoning reports `authorizes:false` and `executable:false`; completion follows recorded evidence |
+| C | Documents stay unread without the separate content permission; disagreeing sources are `CONFLICTING`; a changed document keeps two versions with their own bytes |
+| D | An external observation becomes an assessed `recommend`/`request_approval` decision and a notification, creates no task, and is cited by reasoning as `external_observation` |
+| E | An interrupted execution leaves an uncertain step, is never replayed, and refuses continuation; after finalization only the unreached step runs, and a second continuation is refused |
+| F | A failing provider is isolated while a healthy one still processes; queue and notifications stay bounded; pause/resume/shutdown preserve work; a failed step blocks its plan without re-execution |
+| G | Instruction-shaped document text, a forged origin, an unauthorized UI request, and a damaged store are each refused and recorded, not repaired silently |
+
+`t14-reliability.test.js` (2 cases) adds restart durability with no replay and a torn final record
+read as damage. `t14-scale-bounds.test.js` (1 case) adds the repaired capacity boundary.
+
+### Boundaries re-checked
+
+The workflows exercised the registry, controller, model trust boundary, UI authentication,
+provider permission, document content permission, runtime lifecycle, append-only stores, writer
+locks, audit redaction, private-memory exclusion, reasoning and health reads, and recovery. None
+widened. In particular: a model or document instruction never reached an action as permission; the
+UI's cookie, same-origin check, `x-apex-ui` header, and loopback bind held; an observation created
+no task; a continuation took up only a step the records prove never started; and a damaged file was
+preserved. A refused crossing is written to the operations log.
+
+### Measured scale
+
+`benchmarks/run-t14-scale-benchmark.mjs` (outside `npm test`, `APEX_DATA_ISOLATED=1`, `NoBackend`,
+51 checks) measured documents at 100 / 1,000 / 5,000 synthetic files and evidence at 100 / 1,000 /
+5,000 records. The 1,000- and 5,000-file runs converge because one scan examines at most 500 files
+and the index holds at most 500 identities. First ingest at 100 / 500-indexed documents was 12.36 s
+/ 111.99 s; unchanged re-ingest 636 ms / 3.33 s; search 11.27 / 20.66 ms. Evidence retrieval was
+28.57 / 45.05 / 78.77 ms, a complete request 163.45 / 165.82 / 239.96 ms, and a reasoning session
+112.42 / 111.63 / 141.76 ms. Only in-run ratios are findings. The complete table, the situational
+emit attribution and its limitation are in
+[`README.md`](README.md#t-14-whole-system-integration-reliability-and-operational-validation).
+
+### Limits
+
+- Health observes readable records at one moment. It is not a monitor, not a score, and cannot see
+  a live process with stale records.
+- A first document ingest re-reads the situational log once per emitted event; the measured cost is
+  disclosed and the store was not restructured during validation.
+- The index holds at most 500 live identities and one scan examines at most 500 files; a larger
+  directory is reported as truncated.
+- The scale figures are one machine, one run, and synthetic data; they are not throughput claims.
+- No inference is performed or claimed, and no answer-quality or model-behaviour claim is made.
