@@ -314,6 +314,7 @@ describe('task execution: verification and audit failures', () => {
       authorize: (name, origin) => real.authorize(name, origin),
       list: () => real.list(),
       names: () => real.names(),
+      controlPlane: real.controlPlane,
     };
 
     const run = await app.controller.runTask(task.id, 'run');

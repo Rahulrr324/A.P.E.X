@@ -144,11 +144,96 @@ function projectPlan(plan) {
     version: Number.isInteger(plan.version) ? plan.version : null,
     approved: plan.approval ? true : false,
     activated: plan.activation ? true : false,
+    milestones: (Array.isArray(plan.milestones) ? plan.milestones : []).slice(0, 4).map((milestone) => ({
+      id: milestone.id,
+      title: singleLine(milestone.title, 120),
+      steps: (Array.isArray(milestone.steps) ? milestone.steps : []).slice(0, 8).map((id) => String(id)),
+    })),
     steps: (Array.isArray(plan.steps) ? plan.steps : []).slice(0, 8).map((step) => ({
       id: step.id,
       action: singleLine(step.action, 60),
       status: step.status ?? null,
+      milestoneId: step.milestoneId ?? null,
     })),
+  };
+}
+
+// The T-17 planning read is derived from an objective the user types here and the live registry;
+// it is never stored. This projection is bounded and copies strings, like every other one, so the
+// page can only display what the controller reported, and it adds no authority: the flags below
+// stay false whatever the controller said, because a view cannot record, approve, or run a plan.
+function planningItems(items, limit = 10) {
+  return (Array.isArray(items) ? items : []).slice(0, limit).map((item) => ({
+    text: singleLine(item.text, 240),
+    basis: item.basis ?? null,
+    field: item.field ?? null,
+  }));
+}
+
+function projectPlanning(planning) {
+  if (!planning || typeof planning !== 'object') return null;
+  const intake = planning.intake && typeof planning.intake === 'object' ? planning.intake : {};
+  const ambiguity = planning.ambiguity && typeof planning.ambiguity === 'object' ? planning.ambiguity : null;
+  return {
+    schema: planning.schema ?? null,
+    digest: planning.digest ?? null,
+    counts: planning.counts ?? null,
+    objective: intake.objective
+      ? { text: singleLine(intake.objective.text, 400), basis: intake.objective.basis ?? null }
+      : null,
+    goal: planning.goal ?? null,
+    constraints: planningItems(intake.constraints),
+    deliverables: planningItems(intake.deliverables),
+    resources: planningItems(intake.resources),
+    preferences: planningItems(intake.preferences),
+    deadlines: planningItems(intake.deadlines),
+    priorities: planningItems(intake.priorities),
+    successCriteria: planningItems(intake.successCriteria, 8),
+    unknowns: planningItems(intake.unknowns),
+    assumptions: planningItems(intake.assumptions),
+    milestones: (Array.isArray(planning.milestones) ? planning.milestones : []).slice(0, 8).map((milestone) => ({
+      id: milestone.id,
+      title: singleLine(milestone.title, 120),
+      steps: (Array.isArray(milestone.steps) ? milestone.steps : []).slice(0, 12).map((id) => String(id)),
+      checkpoint: singleLine(milestone.checkpoint, 200),
+      basis: milestone.basis ?? null,
+    })),
+    tasks: (Array.isArray(planning.tasks) ? planning.tasks : []).slice(0, 24).map((task) => ({
+      id: task.id,
+      kind: task.kind ?? null,
+      class: task.class ?? null,
+      description: singleLine(task.description ?? task.text, 200),
+      action: task.action ? singleLine(task.action, 60) : null,
+      permission: task.permission ?? null,
+      dependsOn: (Array.isArray(task.dependsOn) ? task.dependsOn : []).slice(0, 8).map((id) => String(id)),
+      milestoneId: task.milestoneId ?? null,
+      because: singleLine(task.because, 240),
+      nearby: (Array.isArray(task.nearby) ? task.nearby : []).slice(0, 4).map((name) => String(name)),
+    })),
+    conflicts: planningItems(planning.conflicts, 8),
+    ambiguity: ambiguity
+      ? {
+        material: ambiguity.material === true,
+        because: singleLine(ambiguity.because, 240),
+        interpretations: (Array.isArray(ambiguity.interpretations) ? ambiguity.interpretations : []).slice(0, 4)
+          .map((alt) => ({ title: singleLine(alt.title, 120), note: singleLine(alt.note, 200) })),
+        questions: (Array.isArray(ambiguity.questions) ? ambiguity.questions : []).slice(0, 6)
+          .map((q) => ({ question: singleLine(q.question, 240), candidates: (Array.isArray(q.candidates) ? q.candidates : []).slice(0, 4).map((c) => String(c)) })),
+      }
+      : null,
+    feasibility: planning.feasibility ? singleLine(planning.feasibility.statement, 300) : null,
+    approval: planning.approval
+      ? { required: planning.approval.required === true, bound: planning.approval.bound === true, path: singleLine(planning.approval.path, 300) }
+      : null,
+    draft: planning.draft
+      ? { available: planning.draft.available === true, recordable: planning.draft.recordable === true }
+      : null,
+    uncertainty: (Array.isArray(planning.uncertainty) ? planning.uncertainty : []).slice(0, 8)
+      .map((line) => singleLine(line, 240)),
+    authorizes: false,
+    recorded: false,
+    approved: false,
+    executable: false,
   };
 }
 
@@ -249,6 +334,10 @@ export function createUiServer({
         // The transcript, not the replay window: the page must show the answer the user received,
         // including turns the model path never replays (a deterministic reading is stored as a notice).
         const rows = await app.conversation.transcript(inspected.state.sessionId, UI_LIMITS.maxTurns);
+        if (!Array.isArray(rows) || rows.some((row) => !row || typeof row !== 'object' || Array.isArray(row)
+          || typeof row.role !== 'string' || typeof row.text !== 'string')) {
+          throw new Error('conversation transcript contains an invalid turn');
+        }
         turns = rows.map((row) => ({
           role: row.role === 'user' ? 'user' : 'apex',
           origin: row.origin ?? null,
@@ -453,6 +542,39 @@ export function createUiServer({
     sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
   }
 
+  // T-17: reading an objective is the same user-origin `plan.outline` call the CLI makes, on the
+  // same operation and audit path. The page may only ask for the read; recording the draft stays a
+  // CLI act (`plan add`), and approving it stays the user's own decision.
+  async function handlePlanning(req, res) {
+    const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      sendJson(res, 400, { error: 'the body must be a JSON object' });
+      return;
+    }
+    const extra = Object.keys(body).filter((key) => key !== 'objective' && key !== 'goal');
+    if (extra.length > 0) {
+      sendJson(res, 400, { error: `unknown field: ${extra[0]}` });
+      return;
+    }
+    if (typeof body.objective !== 'string' || body.objective.trim().length === 0) {
+      sendJson(res, 400, { error: 'objective is required' });
+      return;
+    }
+    const goal = body.goal === undefined || body.goal === null ? null : body.goal;
+    if (goal !== null && (typeof goal !== 'string' || goal.length > 64)) {
+      sendJson(res, 400, { error: 'goal is not a goal id' });
+      return;
+    }
+    const result = await app.controller.planOutline({ objective: body.objective, goal });
+    const data = result.operation?.steps?.[0]?.result?.data ?? null;
+    const planning = projectPlanning(data?.planning);
+    sendJson(res, 200, {
+      status: result.status,
+      display: typeof result.display === 'string' ? result.display : '',
+      planning,
+    });
+  }
+
   async function route(req, res) {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? `${host}:${listeningPort ?? port}`}`);
     const method = req.method ?? 'GET';
@@ -605,6 +727,10 @@ export function createUiServer({
     }
     if (method === 'POST' && url.pathname === '/api/chat') {
       await handleChat(req, res);
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/planning') {
+      await handlePlanning(req, res);
       return;
     }
     if (method === 'POST' && url.pathname === '/api/session/new') {

@@ -1,5 +1,7 @@
 # APEX Local Alpha — consolidated architecture
 
+> **APEX v2 direction and complete requirements:** see [ARCHITECTURE_V2.md](ARCHITECTURE_V2.md) and [docs/APEX_V2_REQUIREMENTS.md](docs/APEX_V2_REQUIREMENTS.md). This file remains the implementation/evidence map for the code it names; target architecture is not implementation status.
+
 This document is the single consolidated description of the cognitive runtime and the executive
 system as they exist in `apex_app/` after Batch AO-10 and the bounded AP-01 through AP-05
 pathways. It

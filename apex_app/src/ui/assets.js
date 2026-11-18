@@ -51,6 +51,21 @@ export const UI_PAGE = `<!doctype html>
     <ul id="plans" class="work"></ul>
   </section>
   <section class="panel">
+    <h2>Objective planning</h2>
+    <p class="meta">Read the plan the live registry supports for an objective: typed parts, proposed milestones, and each task's feasibility class. This read records, approves, and runs nothing; recording the draft stays a CLI act.</p>
+    <form id="planning-form">
+      <label for="planning-objective" class="visually-hidden">Objective</label>
+      <textarea id="planning-objective" rows="2" maxlength="500" placeholder="e.g. remember the launch date; then list the notes"></textarea>
+      <div class="row">
+        <label for="planning-goal" class="visually-hidden">Goal id</label>
+        <input id="planning-goal" type="text" maxlength="64" placeholder="optional goal id">
+        <button id="planning-read" type="submit" class="small">Read plan</button>
+        <span id="planning-status" class="meta" role="status"></span>
+      </div>
+    </form>
+    <ul id="planning" class="work"></ul>
+  </section>
+  <section class="panel">
     <h2>Executive runtime</h2>
     <p class="meta">Opt-in local process. Starting, stopping and approving remain explicit acts; this view only reports what the runtime has persisted.</p>
     <ul id="runtime" class="work"></ul>
@@ -102,7 +117,7 @@ main { display: grid; gap: 1rem; padding: 1rem 1.25rem 2rem; grid-template-colum
 .turn.apex { border-left-color: var(--warn); }
 .turn .who { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .turn pre { white-space: pre-wrap; word-break: break-word; margin: .2rem 0 0; font: inherit; }
-input[type=search] { flex: 1; min-width: 8rem; background: #0d1319; color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: .4rem .55rem; font: inherit; }
+input[type=search], input[type=text] { flex: 1; min-width: 8rem; background: #0d1319; color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: .4rem .55rem; font: inherit; }
 textarea { width: 100%; resize: vertical; background: #0d1319; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: .6rem; font: inherit; }
 button { background: var(--accent); color: #06221f; border: 0; border-radius: 7px; padding: .45rem .8rem; font: inherit; font-weight: 600; cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
@@ -130,6 +145,12 @@ const els = {
   newSession: document.getElementById('new-session'),
   tasks: document.getElementById('tasks'),
   plans: document.getElementById('plans'),
+  planning: document.getElementById('planning'),
+  planningForm: document.getElementById('planning-form'),
+  planningObjective: document.getElementById('planning-objective'),
+  planningGoal: document.getElementById('planning-goal'),
+  planningRead: document.getElementById('planning-read'),
+  planningStatus: document.getElementById('planning-status'),
   healthOverall: document.getElementById('health-overall'),
   health: document.getElementById('health'),
   situation: document.getElementById('situation'),
@@ -178,6 +199,7 @@ function renderTurns(turns) {
     return;
   }
   for (const turn of turns) {
+    if (!turn || typeof turn !== 'object' || typeof turn.text !== 'string') continue;
     const cls = turn.role === 'user' ? 'turn user' : 'turn apex';
     const item = el('li', cls);
     const who = turn.role === 'user' ? 'You' : 'APEX';
@@ -253,6 +275,9 @@ function renderPlans(plans) {
     if (plan.status === 'draft') head.append(actionButton('Approve', '/api/plans/' + encodeURIComponent(plan.id) + '/approve'));
     item.append(head);
     item.append(el('div', 'meta', plan.id + ' \\u00b7 v' + plan.version));
+    for (const milestone of (plan.milestones || [])) {
+      item.append(el('div', 'meta', 'milestone ' + milestone.id + ' \\u00b7 ' + milestone.title + ' \\u00b7 steps ' + milestone.steps.join(', ')));
+    }
     const steps = el('ol');
     for (const step of plan.steps) steps.append(el('li', null, step.id + ' \\u00b7 ' + step.action + (step.status ? ' \\u00b7 ' + step.status : '')));
     item.append(steps);
@@ -260,8 +285,88 @@ function renderPlans(plans) {
   }
 }
 
-function renderSituation(state) {
-  els.situation.replaceChildren();
+const PLANNING_BASIS = {
+  user_stated: 'you stated',
+  system_inferred: 'this read inferred',
+  assumption: 'assumed',
+  verified_fact: 'a record states',
+  unknown: 'unknown',
+};
+
+function basisLabel(basis) {
+  return PLANNING_BASIS[basis] || 'unknown basis';
+}
+
+function appendPlanningItems(list, heading, items) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  list.append(el('li', 'meta', heading));
+  for (const item of items) list.append(el('li', 'meta', '\\u00b7 ' + item.text + ' (' + basisLabel(item.basis) + ')'));
+}
+
+function renderPlanning(planning) {
+  els.planning.replaceChildren();
+  if (!planning) {
+    els.planning.append(el('li', 'meta', 'No planning read yet. Type an objective above; the read records nothing.'));
+    return;
+  }
+  const counts = planning.counts || {};
+  const head = el('li', 'item');
+  head.append(el('div', 'title', planning.objective ? planning.objective.text : 'objective'));
+  head.append(el('div', 'meta', planning.schema + ' \\u00b7 digest ' + String(planning.digest || '').slice(0, 12) + ' \\u00b7 nothing recorded, approved, or running'));
+  head.append(el('div', 'meta', (counts.tasks || 0) + ' task(s) \\u00b7 ' + (counts.milestones || 0) + ' milestone(s) \\u00b7 ' + (counts.completed || 0) + ' completed \\u00b7 ' + (counts.ready || 0) + ' ready \\u00b7 ' + (counts.needs_approval || 0) + ' need approval \\u00b7 ' + (counts.blocked || 0) + ' blocked \\u00b7 ' + (counts.needs_input || 0) + ' need input \\u00b7 ' + (counts.unsupported || 0) + ' unsupported'));
+  els.planning.append(head);
+  appendPlanningItems(els.planning, 'Stated constraints:', planning.constraints);
+  appendPlanningItems(els.planning, 'Stated deliverables:', planning.deliverables);
+  appendPlanningItems(els.planning, 'Stated preferences:', planning.preferences);
+  appendPlanningItems(els.planning, 'Stated resources:', planning.resources);
+  appendPlanningItems(els.planning, 'Stated deadlines:', planning.deadlines);
+  appendPlanningItems(els.planning, 'Unknowns (named, not filled in):', planning.unknowns);
+  appendPlanningItems(els.planning, 'Assumptions and inferred statements:', planning.assumptions);
+  if (planning.conflicts && planning.conflicts.length) {
+    appendPlanningItems(els.planning, 'Conflicts read from the records:', planning.conflicts);
+  }
+  if (planning.ambiguity) {
+    const item = el('li', 'item');
+    item.append(el('div', 'title', planning.ambiguity.material ? 'Competing readings: the choice changes the plan' : 'Competing readings'));
+    item.append(el('div', 'meta', planning.ambiguity.because));
+    for (const alt of planning.ambiguity.interpretations) item.append(el('div', 'meta', alt.title + ' \\u2014 ' + alt.note));
+    for (const question of planning.ambiguity.questions) {
+      item.append(el('div', 'meta', 'only you can settle: ' + question.question + (question.candidates.length ? ' (near: ' + question.candidates.join(', ') + ')' : '')));
+    }
+    els.planning.append(item);
+  }
+  if (planning.milestones.length) els.planning.append(el('li', 'meta', 'Milestones (proposed from capability families):'));
+  for (const milestone of planning.milestones) {
+    const item = el('li', 'item');
+    item.append(el('div', 'title', milestone.id + ' \\u00b7 ' + milestone.title));
+    item.append(el('div', 'meta', 'steps ' + milestone.steps.join(', ') + ' \\u00b7 ' + basisLabel(milestone.basis)));
+    item.append(el('div', 'meta', 'checkpoint: ' + milestone.checkpoint));
+    els.planning.append(item);
+  }
+  if (planning.tasks.length) els.planning.append(el('li', 'meta', 'Tasks:'));
+  for (const task of planning.tasks) {
+    const item = el('li', 'item');
+    const row = el('div', 'row');
+    row.append(el('span', 'title', (task.id || '?') + ' \\u00b7 ' + task.description));
+    row.append(el('span', 'badge', task.class || 'unclassified'));
+    item.append(row);
+    if (task.action) {
+      item.append(el('div', 'meta', task.action + ' \\u00b7 ' + (task.permission || 'permission unknown') + (task.milestoneId ? ' \\u00b7 milestone ' + task.milestoneId : '') + (task.dependsOn.length ? ' \\u00b7 after ' + task.dependsOn.join(', ') : '')));
+    }
+    item.append(el('div', 'meta', 'why: ' + task.because));
+    if (task.nearby.length) item.append(el('div', 'meta', 'near: ' + task.nearby.join(', ') + ' - a word match, not an accepted input'));
+    els.planning.append(item);
+  }
+  if (planning.feasibility) els.planning.append(el('li', 'meta', 'Feasibility: ' + planning.feasibility));
+  if (planning.approval) els.planning.append(el('li', 'meta', 'Approval: ' + (planning.approval.required ? (planning.approval.bound ? 'required and bound' : 'required and not present') : 'not required') + ' \\u2014 ' + planning.approval.path));
+  if (planning.uncertainty.length) {
+    els.planning.append(el('li', 'meta', 'What this read does not know:'));
+    for (const line of planning.uncertainty) els.planning.append(el('li', 'meta', '\\u00b7 ' + line));
+  }
+  els.planning.append(el('li', 'meta', 'Every class above is the live registry\\u2019s answer at this moment; nothing here was recorded, approved, or run.'));
+}
+
+function renderSituation(state) {  els.situation.replaceChildren();
   if (!state) {
     els.situation.append(el('li', 'meta', 'Situational awareness is not configured.'));
     return;
@@ -521,5 +626,27 @@ els.docSearch.addEventListener('submit', async (event) => {
   }
 });
 
+els.planningForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const objective = els.planningObjective.value.trim();
+  if (!objective) return;
+  const goal = els.planningGoal.value.trim();
+  els.planningRead.disabled = true;
+  els.planningStatus.textContent = 'reading\\u2026';
+  try {
+    const body = goal ? { objective: objective, goal: goal } : { objective: objective };
+    const result = await api('/api/planning', { method: 'POST', body: body });
+    renderPlanning(result.planning);
+    els.planningStatus.textContent = result.planning ? 'read complete \\u00b7 nothing recorded' : '';
+    if (!result.planning && result.display) showBanner(result.display);
+  } catch (error) {
+    showBanner(error.message);
+    els.planningStatus.textContent = '';
+  } finally {
+    els.planningRead.disabled = false;
+  }
+});
+
+renderPlanning(null);
 refresh().then(connectEvents).catch((error) => showBanner(error.message));
 `;

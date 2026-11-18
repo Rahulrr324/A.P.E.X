@@ -19,6 +19,8 @@ function nextHint(plan) {
       return `To inspect the task: node bin/apex.js task show ${shortId(plan.activation?.taskId ?? '')}. Reconcile recorded outcomes: node bin/apex.js plan reconcile ${id}`;
     case 'blocked':
       return `Resolve the obstacle, then reconcile: node bin/apex.js plan reconcile ${id}`;
+    case 'paused':
+      return `Held by a recorded pause. To lift it: node bin/apex.js plan resume ${id}. Nothing runs while the hold stands.`;
     case 'completed':
       return 'All steps carry verified outcomes. Whether that settles the goal is a separate reading: plan.outcome answers it from the records, and plan.assess records the answer.';
     case 'failed':
@@ -45,17 +47,38 @@ function stepLine(s, result) {
   const criterion = s.criterionId ? ` | criterion ${s.criterionId}` : '';
   const estimate = Number.isInteger(s.estimate?.seconds) ? ` | ~${s.estimate.seconds}s` : '';
   const reversibility = s.reversibility ? ` | reversibility: ${s.reversibility}` : '';
+  const milestone = s.milestoneId ? ` | milestone ${s.milestoneId}` : '';
+  const priority = s.priority && s.priority !== 'normal' ? ` | priority: ${s.priority}` : '';
   const deps = s.dependsOn.length ? ` | after ${s.dependsOn.join(', ')}` : '';
   const input = Object.keys(s.input ?? {}).length ? `\n      input: ${truncate(JSON.stringify(s.input), 160)}` : '';
   const recovery = s.recovery ? `\n      if it fails: ${singleLine(storedText(s.recovery), 200)}` : '';
   return `  ${s.id}${state} ${singleLine(storedText(s.description), 200)}\n`
-    + `      action: ${s.action} | risk: ${s.risk}${reversibility}${criterion}${estimate}${deps}`
+    + `      action: ${s.action} | risk: ${s.risk}${reversibility}${criterion}${estimate}${milestone}${priority}${deps}`
     + `\n      expected: ${singleLine(storedText(s.expectedResult), 200)}`
     + `\n      verified by: ${singleLine(storedText(s.verification), 200)}${recovery}${input}`;
 }
 
 function singleLine(text, max) {
   return String(text).replace(/[\r\n\t]+/g, ' ').slice(0, max);
+}
+
+// A milestone is a checkpoint the user can read on its own: the steps grouped under it, the checkpoint
+// that settles it, and what verifying that checkpoint means. A plan that recorded no milestones prints
+// nothing here - an empty heading would suggest a grouping the record does not hold.
+function milestoneLines(plan) {
+  const milestones = plan.milestones ?? [];
+  if (milestones.length === 0) return [];
+  const steps = plan.steps ?? [];
+  const lines = [`Milestones (${milestones.length}):`];
+  for (const m of milestones) {
+    const owned = steps.filter((s) => s.milestoneId === m.id).map((s) => s.id);
+    lines.push(`  ${m.id}  ${singleLine(storedText(m.title), 120)}`
+      + `${m.dependsOn?.length ? ` | after ${m.dependsOn.join(', ')}` : ''}`
+      + `\n      checkpoint: ${singleLine(storedText(m.checkpoint), 200)}`
+      + `\n      verified by: ${singleLine(storedText(m.verification), 200)}`
+      + `\n      steps: ${owned.length ? owned.join(', ') : 'none'}`);
+  }
+  return lines;
 }
 
 export function renderPlan(plan) {
@@ -66,6 +89,7 @@ export function renderPlan(plan) {
     `Intended outcome: ${storedText(plan.outcome)}`,
     `Progress: ${p.completed} of ${p.total} step(s) completed`
       + `${p.failed ? `, ${p.failed} failed` : ''}${p.uncertain ? `, ${p.uncertain} uncertain` : ''}${p.skipped ? `, ${p.skipped} skipped` : ''}`,
+    ...milestoneLines(plan),
     `Steps (${plan.steps.length}):`,
     ...plan.steps.map((s) => stepLine(s, plan.stepResults?.[s.id])),
   ];

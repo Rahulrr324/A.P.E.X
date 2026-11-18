@@ -102,6 +102,26 @@ function intEnv(env, name, fallback, min, max) {
   return n;
 }
 
+function autonomyLevelsEnv(env) {
+  const raw = (env.APEX_AUTONOMY_LEVELS || '').trim();
+  if (!raw) return {};
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new ValidationError('APEX_AUTONOMY_LEVELS must be a JSON object mapping domains to integers 0-5', 'INVALID_CONFIG');
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ValidationError('APEX_AUTONOMY_LEVELS must be a JSON object mapping domains to integers 0-5', 'INVALID_CONFIG');
+  }
+  const entries = Object.entries(value);
+  if (entries.length > 32 || entries.some(([domain, level]) => !/^[a-z][a-z0-9_]{0,31}$/.test(domain)
+    || !Number.isInteger(level) || level < 0 || level > 5)) {
+    throw new ValidationError('APEX_AUTONOMY_LEVELS domains must be lowercase identifiers with integer levels 0-5 (maximum 32 domains)', 'INVALID_CONFIG');
+  }
+  return Object.fromEntries(entries);
+}
+
 export function loadConfig(env = process.env) {
   const isolated = isolationRequested(env);
   const rawDir = (env.APEX_DATA_DIR || '').trim();
@@ -216,6 +236,7 @@ export function loadConfig(env = process.env) {
       allowRemote: env.APEX_ALLOW_REMOTE_MODEL === '1',
     },
     contextTurns: intEnv(env, 'APEX_CONTEXT_TURNS', 6, 0, 50),
+    autonomyByDomain: autonomyLevelsEnv(env),
     experienceCapture,
     filesystem: {
       root: filesystemRoot,

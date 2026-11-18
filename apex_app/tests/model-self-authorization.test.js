@@ -157,6 +157,10 @@ const MODEL_WRITE_ATTEMPTS = [
   ['plan.approve', { target: 'no-such-plan' }],
   ['plan.cancel', { target: 'no-such-plan', reason: 'the model decided' }],
   ['plan.supersede', { target: 'no-such-plan', by: 'no-such-other-plan', reason: 'the model decided' }],
+  ['plan.pause', { target: 'no-such-plan', reason: 'the model decided' }],
+  ['plan.resume', { target: 'no-such-plan' }],
+  ['safety.lockdown', { reason: 'the model decided' }],
+  ['safety.release', { reason: 'the model decided' }],
   // The verdict on an attempt is APEX's reading of records, but writing it is the user's act: a reply
   // that assessed its own run would be reporting its own success.
   ['plan.assess', { target: 'no-such-plan' }],

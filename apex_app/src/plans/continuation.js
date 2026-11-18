@@ -461,6 +461,17 @@ function revalidationOf({ plan, task, approval, validity, constraints, steps, re
       : `the plan records itself ${plan.status}, and a closed plan is not work to take up again: reopening it is a decision the user makes, not a continuation`,
     record: { store: 'plans', ref: shortId(plan.id) },
   });
+  // A pause is a decision recorded against the plan, not a gap in the run. Taking steps up while it
+  // stands would be this command overturning the user's hold, so the reading refuses and names the
+  // command that lifts it. Lifting the hold is `plan resume`, which checks the same records again.
+  checks.push({
+    check: 'plan_held',
+    ok: plan.status !== PlanStatus.PAUSED,
+    detail: plan.status === PlanStatus.PAUSED
+      ? 'a pause is recorded against this plan, so no step is taken up until the user resumes it ("plan resume")'
+      : `no pause is recorded against this plan (it records itself ${plan.status})`,
+    record: { store: 'plans', ref: shortId(plan.id) },
+  });
   const stepProblems = dependencyProblems(plan.steps ?? []);
   checks.push({
     check: 'step_structure',
@@ -633,6 +644,7 @@ export function continuationOf({
     else if (c.check === 'registry') whatWouldSettleIt.push('the capability registered again, or the plan revised so its steps name one that is');
     else if (c.check === 'task_belongs_to_plan') whatWouldSettleIt.push('the task this plan actually activated');
     else if (c.check === 'plan_bytes') whatWouldSettleIt.push('a plan record that can be read and re-hashed');
+    else if (c.check === 'plan_held') whatWouldSettleIt.push('the user lifting the hold themselves: "plan resume ' + shortId(plan.id) + '" is that decision, and no continuation takes it for them');
   }
   if (contradictory.length > 0) {
     whatWouldSettleIt.push(`the disagreement in step(s) ${contradictory.join(', ')} read: the task log and the audit log do not agree, and this read does not pick which one to believe`);
@@ -640,9 +652,11 @@ export function continuationOf({
 
   const nextCommand = safe
     ? `plan continue ${shortId(plan.id)}`
-    : (requiresUser.length > 0 || approval.bound === false || failedChecks.length > 0)
-      ? `plan show ${shortId(plan.id)}`
-      : `task show ${shortId(task.id)}`;
+    : plan.status === PlanStatus.PAUSED
+      ? `plan resume ${shortId(plan.id)}`
+      : (requiresUser.length > 0 || approval.bound === false || failedChecks.length > 0)
+        ? `plan show ${shortId(plan.id)}`
+        : `task show ${shortId(task.id)}`;
 
   return {
     schema: CONTINUATION_SCHEMA,

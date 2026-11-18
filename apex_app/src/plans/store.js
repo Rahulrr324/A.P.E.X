@@ -56,13 +56,18 @@ function goalOccupancy(plans, goalId) {
 }
 
 export class PlanStore {
-  constructor(filePath, { now = () => new Date(), idFactory = randomUUID, registry = null, goals = null, operations = null } = {}) {
+  constructor(filePath, {
+    now = () => new Date(), idFactory = randomUUID, registry = null, goals = null, operations = null, tasks = null,
+  } = {}) {
     this.filePath = filePath;
     this.now = now;
     this.idFactory = idFactory;
     this.registry = registry;
     this.goals = goals;
     this.operations = operations;
+    // Read-only, and only so a pause can refuse to claim a hold on a task that is executing right
+    // now. The store never drives the task; the TaskRunner is the only execution engine.
+    this.tasks = tasks;
     this.log = new JsonlStore(filePath, { validateRecord: validateEventShape });
     this.lock = new WriterLock(filePath, { label: path.basename(filePath), now, idFactory });
   }
@@ -269,8 +274,11 @@ export class PlanStore {
 
   // ---- mutations ------------------------------------------------------------
 
-  async createPlan({ goalId = null, outcome, steps, preconditions = [], assertions = [], resources = null, reason = null }) {
+  async createPlan({
+    goalId = null, outcome, milestones = [], steps, preconditions = [], assertions = [], resources = null, reason = null,
+  }) {
     assertNoSecret(outcome, 'the intended outcome');
+    for (const m of milestones) assertNoSecret(m?.title, 'a milestone title');
     for (const p of preconditions) assertNoSecret(p, 'a precondition');
     for (const a of assertions) assertNoSecret(a?.text, 'an assertion');
     let goalRevision = null;
@@ -300,6 +308,7 @@ export class PlanStore {
       version: 1,
       reason: reason ?? 'created by the user',
       outcome,
+      ...(Array.isArray(milestones) && milestones.length > 0 ? { milestones } : {}),
       steps,
       preconditions,
       assertions,
@@ -320,8 +329,11 @@ export class PlanStore {
     return { ...result, linkError, candidates: goalOccupancy(result.plans, goalId) };
   }
 
-  async revise(ref, { outcome, steps, preconditions = [], assertions = [], resources = null, reason }) {
+  async revise(ref, {
+    outcome, milestones = [], steps, preconditions = [], assertions = [], resources = null, reason,
+  }) {
     assertNoSecret(outcome, 'the intended outcome');
+    for (const m of milestones) assertNoSecret(m?.title, 'a milestone title');
     if (typeof reason !== 'string' || reason.trim().length === 0) throw new ValidationError('a revision needs a reason');
     return this.#mutate(async (plans) => {
       const plan = this.#pick(plans, ref);
@@ -338,6 +350,7 @@ export class PlanStore {
         ...(goalRevision !== null ? { goalRevision } : {}),
         reason: reason.trim(),
         outcome,
+        ...(Array.isArray(milestones) && milestones.length > 0 ? { milestones } : {}),
         steps,
         preconditions,
         assertions,
@@ -463,6 +476,68 @@ export class PlanStore {
     const { plans } = await this.load();
     return goalOccupancy(plans, goalId);
   }
+
+  // The task a plan's activation created, read and never driven. Null when the plan was never
+  // activated, when this configuration has no task store, or when the reading store is damaged -
+  // a store that cannot answer leaves the caller to refuse rather than to assume.
+  async #boundTask(plan) {
+    if (!plan.activation?.taskId || !this.tasks || typeof this.tasks.get !== 'function') return null;
+    try {
+      return await this.tasks.get(plan.activation.taskId);
+    } catch {
+      return null;
+    }
+  }
+
+  // A pause is a recorded hold on the plan, and it has to be one the records can support. A plan
+  // whose task is executing right now cannot be held: APEX has no path that stops a step in flight,
+  // and a pause that claimed otherwise would be a lie in the log. The store reads the task and never
+  // drives it; the TaskRunner remains the only execution engine.
+  async pause(ref, { reason = null } = {}) {
+    const text = typeof reason === 'string' ? reason.trim() : '';
+    if (text.length === 0) throw new ValidationError('a pause needs a reason');
+    if (text.length > 500) throw new ValidationError('reason exceeds 500 characters');
+    assertNoSecret(text, 'the reason');
+    return this.#mutate(async (plans) => {
+      const plan = this.#pick(plans, ref);
+      const bound = await this.#boundTask(plan);
+      if (bound?.status === 'running') {
+        throw new ValidationError(
+          `task ${shortId(bound.id)} created from this plan is running: a step already in flight cannot be stopped, so the plan is not recorded as paused`,
+          'TASK_RUNNING',
+        );
+      }
+      return { ...this.#base('plan_status', plan.id), from: plan.status, to: PlanStatus.PAUSED, reason: text, by: null };
+    });
+  }
+
+  // Resuming returns the plan to the state its own records support: a plan that was activated goes
+  // back to active, and one that was only approved goes back to approved and still has to be started.
+  // An approval that no longer binds the current content is not carried through a pause: the resume
+  // is refused rather than reinstating an authorization the records no longer hold.
+  async resume(ref, { reason = null } = {}) {
+    const text = typeof reason === 'string' ? reason.trim() : '';
+    if (text.length > 500) throw new ValidationError('reason exceeds 500 characters');
+    assertNoSecret(text, 'the reason');
+    return this.#mutate(async (plans) => {
+      const plan = this.#pick(plans, ref);
+      if (plan.status !== PlanStatus.PAUSED) throw new ValidationError(`plan is ${plan.status}; only a paused plan can be resumed`);
+      const bound = await this.#boundTask(plan);
+      if (bound?.status === 'running') {
+        throw new ValidationError(`task ${shortId(bound.id)} is running, so this plan is not held and cannot be resumed`, 'TASK_RUNNING');
+      }
+      if (bound?.status === 'completed') {
+        throw new ValidationError(`task ${shortId(bound.id)} from this plan is already completed; record the plan's own completion instead of resuming it`);
+      }
+      const approval = plan.approval;
+      if (!approval || approval.version !== plan.version || approval.contentHash !== planContentHash(plan)) {
+        throw new ValidationError('the plan\'s approval no longer binds its current content, so resuming would reinstate an authorization the records do not hold');
+      }
+      const to = plan.activation ? PlanStatus.ACTIVE : PlanStatus.APPROVED;
+      return { ...this.#base('plan_status', plan.id), from: plan.status, to, reason: text, by: null };
+    });
+  }
+
 
   // Records an outcome assessment against the plan: what happened, as distinct from what the plan
   // set out to do. Every finding must cite an audit operation, and each cited operation must be in

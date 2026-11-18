@@ -53,7 +53,7 @@ describe('107: capability statements match the evidence', () => {
     assert.match(APP_README, /Neural integration \| \*\*Contract implemented, no runtime connected\.\*\*/);
     assert.match(APP_README, /No child process, HTTP endpoint, model, or `stark\/` import exists, and nothing is inferred\./);
     assert.match(APP_README, /World Model, entity memory and evidence graph \| Implemented as an append-only `world-model\.jsonl` of user-origin records/);
-    assert.match(APP_README, /General planner, persistent learning, voice \| \*\*Not implemented\.\*\*/);
+    assert.match(APP_README, /Open-ended general planner, persistent learning, voice \| \*\*Not implemented\.\*\*/);
     // The loopback page is an implemented surface and must be described as one, with its bound.
     assert.match(APP_README, /Local browser interface \| Implemented as a loopback-only, zero-dependency HTTP server/);
     assert.match(APP_README, /It binds `127\.0\.0\.1` only, requires a process-random token/);

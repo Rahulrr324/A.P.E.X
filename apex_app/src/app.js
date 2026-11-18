@@ -57,7 +57,9 @@ import { planActions } from './actions/plan-actions.js';
 import { proposalActions } from './actions/proposal-actions.js';
 import { workActions } from './actions/work-actions.js';
 import { taskFeedbackActions } from './actions/task-feedback-actions.js';
+import { safetyActions } from './actions/safety-actions.js';
 import { CAPTURE_OFF } from './experience/capture.js';
+import { ResourceFabric } from './resources/fabric.js';
 
 export function createApp({
   dataDir,
@@ -77,6 +79,7 @@ export function createApp({
   // only the declaration, and no request path invokes it.
   neuralRuntime = null,
   integrationProviders = null,
+  autonomyByDomain = {},
 } = {}) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new Error('dataDir is required');
   // Isolation is checked here as well as in loadConfig because this is the one place every
@@ -110,12 +113,19 @@ export function createApp({
   // store holds the reverse edge. Until the attach below, feedback-derived records behave exactly as
   // before and any prediction-derived record reads as inert.
   experience.attachPredictions(predictions);
-  const registry = new ActionRegistry();
+  const registry = new ActionRegistry({
+    autonomyByDomain,
+    now: clock,
+    idFactory,
+    killSwitchPath: path.join(dataDir, 'kill-switch.json'),
+  });
   // Goals and plans are append-only records of intent. The plan store validates against the
   // live registry and reads goals, so it is constructed after both; neither store can execute
   // anything, and both use their own writer lock for every mutation.
   const goals = new GoalStore(path.join(dataDir, 'goals.jsonl'), { now: clock, idFactory, operations });
-  const plans = new PlanStore(path.join(dataDir, 'plans.jsonl'), { now: clock, idFactory, registry, goals, operations });
+  const plans = new PlanStore(path.join(dataDir, 'plans.jsonl'), {
+    now: clock, idFactory, registry, goals, operations, tasks: taskStore,
+  });
   // Proposals are model suggestions. The store records them and the user's decision about them;
   // it cannot approve, activate, or execute anything, and it is not a source of authority.
   const proposals = new ProposalStore(path.join(dataDir, 'proposals.jsonl'), { now: clock, idFactory });
@@ -289,7 +299,7 @@ export function createApp({
     );
   }
 
-  for (const def of [...builtinActions(), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
+  for (const def of [...builtinActions(), ...safetyActions(registry.controlPlane), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
     }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
@@ -424,6 +434,7 @@ export function createApp({
     now: clock,
     idFactory,
   });
+  const resources = new ResourceFabric({ now: clock });
   return {
     controller,
     memory,
@@ -431,6 +442,8 @@ export function createApp({
     session,
     operations,
     registry,
+    ecp: registry.controlPlane,
+    resources,
     gateway,
     getStatus,
     dataDir,
@@ -470,6 +483,7 @@ export function createAppFromEnv(env = process.env) {
     filesystemListDefaultLimit: config.filesystem.listDefaultLimit,
     filesystemListMaxLimit: config.filesystem.listMaxLimit,
     experienceCapture: config.experienceCapture,
+    autonomyByDomain: config.autonomyByDomain,
   });
   return { config, ...app };
 }

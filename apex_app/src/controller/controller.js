@@ -3057,7 +3057,7 @@ export class CognitiveController {
 
   // The context an action receives. Everything here is readable data, never permission:
   // runAction asks the registry for authorization before this is built.
-  #actionContext(operationId, origin) {
+  #actionContext(operationId, origin, signal = null) {
     return {
       memory: this.memory,
       knowledge: this.knowledge,
@@ -3067,6 +3067,7 @@ export class CognitiveController {
       getStatus: this.getStatus,
       operationId,
       origin,
+      signal,
       root: this.rootForContext,
       // Goal, plan and task references are readable so an action's own verifier can check them.
       // They remain data: authorization is still the registry's, decided above.
@@ -3110,7 +3111,7 @@ export class CognitiveController {
 
     // Authorization: a request is not authorization.
     const authSpan = timing?.start('authorization') ?? null;
-    const auth = this.registry.authorize(name, origin);
+    const auth = this.registry.authorize(name, origin, { phase: 'execute', operationId, auditRef: operationId });
     timing?.end(authSpan, {
       outcome: StageOutcome.RAN,
       counts: auth.decision === 'allow' ? { allowed: 1 } : { denied: 1 },
@@ -3123,7 +3124,12 @@ export class CognitiveController {
     }
 
     const def = this.registry.get(name);
-    const ctx = this.#actionContext(operationId, origin);
+    const executionAbort = new AbortController();
+    const unregisterCancellation = this.registry.controlPlane.registerCancellable(
+      `${operationId}:${name}`,
+      () => executionAbort.abort(new Error('APEX kill switch activated')),
+    );
+    const ctx = this.#actionContext(operationId, origin, executionAbort.signal);
     // The filesystem actions receive the authorized root on ctx.root. It is set only by the
     // composition root and cannot be supplied by a model proposal, so the boundary cannot be
     // expanded from model output.
@@ -3132,7 +3138,12 @@ export class CognitiveController {
     // so the reason is filtered here: the step says what went wrong without quoting back a value
     // that looked like a credential. Ordinary message wording is unchanged by this filter.
     const execSpan = timing?.start('execution') ?? null;
-    const exec = await executeAction(def, ctx, rawInput);
+    let exec;
+    try {
+      exec = await executeAction(def, ctx, rawInput);
+    } finally {
+      unregisterCancellation();
+    }
     if (exec.status === 'rejected') {
       timing?.end(execSpan, { outcome: StageOutcome.FAILED, counts: { rejected: 1 } });
       step.execution = { status: 'rejected', error: exec.error };
@@ -3350,23 +3361,23 @@ export class CognitiveController {
     };
   }
 
-  async planAdd({ goal = null, goalId = null, outcome, steps, preconditions = [], assertions = [], estimatedSeconds = null, reason = null } = {}) {
+  async planAdd({ goal = null, goalId = null, outcome, milestones = [], steps, preconditions = [], assertions = [], estimatedSeconds = null, reason = null } = {}) {
     return this.#executiveMutation({
       capability: 'plan.add',
       request: this.#intentSummary('plan', outcome),
       action: 'plan.add',
-      input: { goal, goalId, outcome, steps, preconditions, assertions, estimatedSeconds, reason },
+      input: { goal, goalId, outcome, milestones, steps, preconditions, assertions, estimatedSeconds, reason },
       failMessage: 'The plan may have been stored, but its audit record could not be written.',
       status: Outcome.PLAN_STORED,
     });
   }
 
-  async planRevise({ target, outcome, steps, preconditions = [], assertions = [], estimatedSeconds = null, reason } = {}) {
+  async planRevise({ target, outcome, milestones = [], steps, preconditions = [], assertions = [], estimatedSeconds = null, reason } = {}) {
     return this.#executiveMutation({
       capability: 'plan.revise',
       request: `plan revise ${truncate(String(target ?? ''), 40)}`,
       action: 'plan.revise',
-      input: { target, outcome, steps, preconditions, assertions, estimatedSeconds, reason },
+      input: { target, outcome, milestones, steps, preconditions, assertions, estimatedSeconds, reason },
       failMessage: 'The plan may have been revised, but its audit record could not be written.',
       status: Outcome.PLAN_STORED,
     });
@@ -3405,6 +3416,54 @@ export class CognitiveController {
     });
   }
 
+  // A hold on the plan, recorded where the plan record lives. It drives nothing: the store refuses
+  // it while the plan's task is running, and the runner stays the only engine that moves a step.
+  async planPause({ target, reason } = {}) {
+    return this.#executiveMutation({
+      capability: 'plan.pause',
+      request: `plan pause ${truncate(String(target ?? ''), 40)}`,
+      action: 'plan.pause',
+      input: { target, reason },
+      failMessage: 'The plan may have been paused, but its audit record could not be written.',
+      status: Outcome.PLAN_STORED,
+    });
+  }
+
+  async planResume({ target, reason = null } = {}) {
+    return this.#executiveMutation({
+      capability: 'plan.resume',
+      request: `plan resume ${truncate(String(target ?? ''), 40)}`,
+      action: 'plan.resume',
+      input: { target, reason },
+      failMessage: 'The plan may have been resumed, but its audit record could not be written.',
+      status: Outcome.PLAN_STORED,
+    });
+  }
+
+  // The ECP kill switch is durable and its write is itself audited through the ordinary action
+  // pipeline. Clearing it never resumes a task or plan.
+  async safetyLockdown({ reason } = {}) {
+    return this.#executiveMutation({
+      capability: 'safety.lockdown',
+      request: 'safety lockdown',
+      action: 'safety.lockdown',
+      input: { reason },
+      failMessage: 'The emergency-stop state may have changed; inspect ECP safety status before retrying.',
+      status: Outcome.SUCCESS_VERIFIED,
+    });
+  }
+
+  async safetyRelease({ reason } = {}) {
+    return this.#executiveMutation({
+      capability: 'safety.release',
+      request: 'safety release',
+      action: 'safety.release',
+      input: { reason },
+      failMessage: 'The emergency-stop state may have changed; inspect ECP safety status before retrying.',
+      status: Outcome.SUCCESS_VERIFIED,
+    });
+  }
+
   async listPlans({ limit = null } = {}) {
     this.#requirePlans();
     const plans = await this.plans.list();
@@ -3436,9 +3495,22 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
-  async planOutline({ objective, goal = null, cannotUse = [] } = {}) {
+  async planOutline({
+    objective, goal = null, cannotUse = [],
+    constraints = [], deliverables = [], preferences = [], resources = [], deadlines = [], priority = null,
+  } = {}) {
     const op = this.#planningOp('plan.outline', `plan outline ${truncate(String(objective ?? ''), 40)}`);
-    const step = await this.runAction('plan.outline', { objective, goal, cannot_use: cannotUse }, 'user', op.id);
+    const step = await this.runAction('plan.outline', {
+      objective,
+      goal,
+      cannot_use: cannotUse,
+      constraint: constraints,
+      deliverable: deliverables,
+      preference: preferences,
+      resource: resources,
+      deadline: deadlines,
+      ...(priority ? { priority } : {}),
+    }, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 

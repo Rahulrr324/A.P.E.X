@@ -31,7 +31,7 @@ const short = (id) => String(id).slice(0, 8);
 const LEAD_BASIS = 'no other candidate that passed every gate is as good on all ranked dimensions and better on one';
 // The terminal's own unknown-verb line for `plan`. Quoted once so a refusal of a malformed command can
 // be told apart from a verb the CLI has never heard of.
-const PLAN_USAGE = 'usage: plan add|list|show|validate|history|compare|candidates|replan|outcome|assess|revise|approve|start|reconcile|continuation|continue|cancel|supersede';
+const PLAN_USAGE = 'usage: plan add|list|show|validate|history|compare|candidates|replan|outcome|assess|revise|approve|start|reconcile|continuation|continue|pause|resume|cancel|supersede';
 
 const dirs = [];
 afterEach(() => { while (dirs.length) cleanup(dirs.pop()); });

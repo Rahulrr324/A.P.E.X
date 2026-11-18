@@ -24,6 +24,17 @@ export const MAX_VERIFICATION_CHARS = 200;
 export const MAX_STEP_INPUT_CHARS = 4000;
 export const MAX_ESTIMATE_SECONDS = 86400;
 export const MAX_RECOVERY_CHARS = 200;
+// How much hierarchy a plan may record. A milestone groups steps that share a checkpoint; it is a
+// record, not an execution unit, and the TaskRunner is still sequenced by the steps' dependencies.
+// The bound is small because a long objective is reported as parts a plan cannot hold rather than
+// compressed into an unreadable outline.
+export const MAX_PLAN_MILESTONES = 4;
+export const MAX_MILESTONE_TITLE_CHARS = 120;
+export const MAX_MILESTONE_DESCRIPTION_CHARS = 200;
+export const MILESTONE_ID_RE = /^m[1-9]$/;
+// A step's priority is the user's stated ordering, or absent. It is never inferred from wording:
+// a plan that does not know which part matters more says nothing rather than ranking for the user.
+export const TASK_PRIORITIES = Object.freeze(['low', 'normal', 'high']);
 // How many candidate drafts one goal may hold at once, and how many of its plans may be live at
 // once. Drafts are alternatives the user has not approved, so several are useful and a bound keeps
 // the comparison readable. A live plan is one the user has authorized: approving a second plan for
@@ -94,6 +105,10 @@ export const PlanStatus = Object.freeze({
   APPROVED: 'approved',
   ACTIVE: 'active',
   BLOCKED: 'blocked',
+  // A hold the user placed on an authorized plan. It is a record, not a pause button for a step
+  // already executing: activation is refused while a plan is paused, and a plan whose task is
+  // running cannot be paused at all. Completed work stays completed when the hold is lifted.
+  PAUSED: 'paused',
   COMPLETED: 'completed',
   FAILED: 'failed',
   CANCELLED: 'cancelled',
@@ -105,9 +120,12 @@ export const PlanStatus = Object.freeze({
 // approved content hash.
 export const PLAN_TRANSITIONS = Object.freeze({
   draft: ['cancelled', 'superseded'],
-  approved: ['blocked', 'cancelled', 'superseded'],
-  active: ['completed', 'failed', 'blocked', 'cancelled', 'superseded'],
-  blocked: ['active', 'failed', 'cancelled', 'superseded'],
+  approved: ['paused', 'blocked', 'cancelled', 'superseded'],
+  active: ['paused', 'completed', 'failed', 'blocked', 'cancelled', 'superseded'],
+  // A paused plan resumes to the state its own record supports: `resume` chooses `active` only
+  // when an activation is on record, so lifting a hold never authorizes a plan that was not.
+  paused: ['approved', 'active', 'blocked', 'failed', 'cancelled', 'superseded'],
+  blocked: ['active', 'paused', 'failed', 'cancelled', 'superseded'],
   completed: [],
   failed: ['cancelled', 'superseded'],
   cancelled: [],
@@ -120,14 +138,15 @@ export const OUTCOME_STEP_STATUSES = Object.freeze([
 
 export function isOpenPlan(status) {
   return status === PlanStatus.DRAFT || status === PlanStatus.APPROVED
-    || status === PlanStatus.ACTIVE || status === PlanStatus.BLOCKED;
+    || status === PlanStatus.ACTIVE || status === PlanStatus.BLOCKED || status === PlanStatus.PAUSED;
 }
 
 // Approved, running, or blocked while running: a plan the user has authorized. A blocked plan still
 // holds the slot because the user can put it back into action, so a second authorized plan for the
 // same goal would mean two live intentions. Drafts are not live - they authorize nothing.
 export function isLivePlan(status) {
-  return status === PlanStatus.APPROVED || status === PlanStatus.ACTIVE || status === PlanStatus.BLOCKED;
+  return status === PlanStatus.APPROVED || status === PlanStatus.ACTIVE
+    || status === PlanStatus.BLOCKED || status === PlanStatus.PAUSED;
 }
 
 // The plans one goal holds, split the way the store's bounds are stated. Used by the reducer, the
@@ -193,10 +212,26 @@ function assertionContent(a) {
   return content;
 }
 
+// A milestone as the plan holds it. It names the steps it groups through their own `milestoneId`,
+// and the checkpoint is the milestone's own completion condition: what has to hold for the work in
+// this phase to be finished. A milestone depends on the milestones before it, never on a step, so a
+// revision that renumbers steps does not silently rewrite the phases.
+function milestoneRecord(m) {
+  return {
+    id: m.id,
+    title: m.title,
+    description: m.description,
+    dependsOn: [...(m.dependsOn ?? [])],
+    checkpoint: m.checkpoint,
+    verification: m.verification,
+  };
+}
+
 // A step as the plan holds it. The two fields added for candidate planning - how far the step can
 // be undone, and what to do if it fails - are present only when recorded, so a plan written before
 // them hashes exactly as it did. `stableStringify` sorts keys, so this one mapping serves both the
-// stored record and the bytes approval is bound to.
+// stored record and the bytes approval is bound to. The milestone assignment and the user's stated
+// priority are additive in the same way.
 function stepRecord(s) {
   return {
     id: s.id,
@@ -211,6 +246,8 @@ function stepRecord(s) {
     estimate: { seconds: s.estimate?.seconds ?? null },
     ...(s.reversibility !== undefined && s.reversibility !== null ? { reversibility: s.reversibility } : {}),
     ...(s.recovery !== undefined && s.recovery !== null ? { recovery: s.recovery } : {}),
+    ...(s.milestoneId !== undefined && s.milestoneId !== null ? { milestoneId: s.milestoneId } : {}),
+    ...(s.priority !== undefined && s.priority !== null ? { priority: s.priority } : {}),
   };
 }
 
@@ -224,6 +261,11 @@ export function planContent(plan) {
     goalId: plan.goalId ?? null,
     ...(plan.goalRevision != null ? { goalRevision: plan.goalRevision } : {}),
     outcome: plan.outcome,
+    // Present only for a plan that records milestones, so every plan written before this field
+    // existed keeps exactly the bytes, and therefore the approval hash, it had.
+    ...(Array.isArray(plan.milestones) && plan.milestones.length > 0
+      ? { milestones: plan.milestones.map(milestoneRecord) }
+      : {}),
     steps: plan.steps.map(stepRecord),
     preconditions: [...plan.preconditions],
     assertions: plan.assertions.map(assertionContent),
@@ -270,6 +312,13 @@ function stepProblems(s, i, problems) {
   }
   if (s.recovery !== undefined && s.recovery !== null && !plainText(s.recovery, MAX_RECOVERY_CHARS)) {
     problems.push(`${label} recovery must be plain text of at most ${MAX_RECOVERY_CHARS} characters`);
+  }
+  if (s.priority !== undefined && s.priority !== null && !TASK_PRIORITIES.includes(s.priority)) {
+    problems.push(`${label} priority must be one of: ${TASK_PRIORITIES.join(', ')}`);
+  }
+  if (s.milestoneId !== undefined && s.milestoneId !== null
+    && (typeof s.milestoneId !== 'string' || !MILESTONE_ID_RE.test(s.milestoneId))) {
+    problems.push(`${label} milestone must be an id such as m1`);
   }
   if (s.estimate !== undefined && s.estimate !== null) {
     if (typeof s.estimate !== 'object' || Array.isArray(s.estimate)) {
@@ -360,10 +409,88 @@ export function assessmentProblems(e) {
   return problems;
 }
 
+// A cycle among milestones, found by depth-first search over the recorded edges. The same shape the
+// task dependency checker uses, kept here because a milestone is a plan-level record and may not
+// reuse step ids.
+function milestoneCycle(milestones) {
+  const byId = new Map(milestones.map((m) => [m.id, m]));
+  const state = new Map();
+  const visit = (id) => {
+    const status = state.get(id);
+    if (status === 'done') return null;
+    if (status === 'open') return id;
+    state.set(id, 'open');
+    for (const dep of byId.get(id)?.dependsOn ?? []) {
+      if (!byId.has(dep)) continue;
+      const found = visit(dep);
+      if (found) return found;
+    }
+    state.set(id, 'done');
+    return null;
+  };
+  for (const m of milestones) {
+    const found = visit(m.id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function milestoneProblems(milestones, problems) {
+  if (!Array.isArray(milestones)) {
+    problems.push('milestones must be a list');
+    return;
+  }
+  if (milestones.length > MAX_PLAN_MILESTONES) problems.push(`a plan may record at most ${MAX_PLAN_MILESTONES} milestones`);
+  const ids = new Set();
+  milestones.forEach((m, i) => {
+    const label = `milestone ${i + 1}`;
+    if (!m || typeof m !== 'object' || Array.isArray(m)) {
+      problems.push(`${label} is not an object`);
+      return;
+    }
+    if (typeof m.id !== 'string' || !MILESTONE_ID_RE.test(m.id)) problems.push(`${label} has an invalid id`);
+    else if (ids.has(m.id)) problems.push(`${label} repeats the id ${m.id}`);
+    else ids.add(m.id);
+    if (!plainText(m.title, MAX_MILESTONE_TITLE_CHARS)) problems.push(`${label} needs a plain title of at most ${MAX_MILESTONE_TITLE_CHARS} characters`);
+    if (!plainText(m.description, MAX_MILESTONE_DESCRIPTION_CHARS)) problems.push(`${label} needs a plain description`);
+    if (!plainText(m.checkpoint, MAX_VERIFICATION_CHARS)) problems.push(`${label} needs a stated checkpoint`);
+    if (!plainText(m.verification, MAX_VERIFICATION_CHARS)) problems.push(`${label} needs a stated verification requirement`);
+    if (!Array.isArray(m.dependsOn)) problems.push(`${label} dependencies must be a list`);
+  });
+  for (const m of milestones) {
+    if (!m || typeof m !== 'object' || !Array.isArray(m.dependsOn)) continue;
+    for (const dep of m.dependsOn) {
+      if (dep === m.id) problems.push(`milestone ${m.id} cannot depend on itself`);
+      else if (!ids.has(dep)) problems.push(`milestone ${m.id} depends on ${String(dep)}, which is not a milestone of this plan`);
+    }
+  }
+  const cycle = milestoneCycle(milestones.filter((m) => m && typeof m === 'object' && typeof m.id === 'string'));
+  if (cycle) problems.push(`milestone dependencies form a cycle through ${cycle}`);
+}
+
 export function validatePlanContent(content) {
   const problems = [];
   if (!content || typeof content !== 'object' || Array.isArray(content)) return ['the plan content is not an object'];
   if (!plainText(content.outcome, MAX_PLAN_OUTCOME_CHARS)) problems.push(`the intended outcome must be 1 to ${MAX_PLAN_OUTCOME_CHARS} plain characters`);
+  if (content.milestones !== undefined && content.milestones !== null) {
+    milestoneProblems(content.milestones, problems);
+    const milestoneIds = new Set(Array.isArray(content.milestones)
+      ? content.milestones.filter((m) => m && typeof m.id === 'string').map((m) => m.id)
+      : []);
+    for (const s of Array.isArray(content.steps) ? content.steps : []) {
+      if (s?.milestoneId != null && !milestoneIds.has(s.milestoneId)) {
+        problems.push(`step ${s.id ?? '?'} names milestone ${s.milestoneId}, which this plan does not record`);
+      }
+    }
+    if (milestoneIds.size > 0) {
+      for (const id of milestoneIds) {
+        const used = (Array.isArray(content.steps) ? content.steps : []).some((s) => s?.milestoneId === id);
+        if (!used) problems.push(`milestone ${id} groups no step, so nothing would settle it`);
+      }
+    }
+  } else if (Array.isArray(content.steps) && content.steps.some((s) => s?.milestoneId != null)) {
+    problems.push('a step names a milestone, but the plan records none');
+  }
   if (!Array.isArray(content.steps) || content.steps.length === 0) problems.push('a plan needs at least one step');
   else {
     if (content.steps.length > MAX_PLAN_STEPS) problems.push(`a plan may have at most ${MAX_PLAN_STEPS} steps`);
@@ -400,6 +527,7 @@ export function validatePlanContent(content) {
 function contentOf(e) {
   return {
     outcome: e.outcome,
+    ...(e.milestones !== undefined && e.milestones !== null ? { milestones: e.milestones } : {}),
     steps: e.steps,
     preconditions: e.preconditions,
     assertions: e.assertions,
@@ -493,6 +621,7 @@ function newPlan(e) {
     version: 1,
     status: PlanStatus.DRAFT,
     outcome: e.outcome,
+    milestones: (e.milestones ?? []).map(milestoneRecord),
     steps: e.steps.map(stepRecord),
     preconditions: [...e.preconditions],
     assertions: e.assertions.map(assertionContent),
@@ -515,6 +644,7 @@ function newPlan(e) {
 function applyContent(plan, e) {
   plan.goalRevision = e.goalRevision ?? null;
   plan.outcome = e.outcome;
+  plan.milestones = (e.milestones ?? []).map(milestoneRecord);
   plan.steps = e.steps.map(stepRecord);
   plan.preconditions = [...e.preconditions];
   plan.assertions = e.assertions.map(assertionContent);
@@ -673,7 +803,7 @@ export function applyEvent(plans, e) {
   if (e.type === 'plan_status') {
     if (plan.status !== e.from) return `plan is ${plan.status}, event expected ${e.from}`;
     if (!PLAN_TRANSITIONS[e.from]?.includes(e.to)) return `illegal plan transition ${e.from} -> ${e.to}`;
-    if (['blocked', 'failed', 'cancelled', 'superseded'].includes(e.to) && e.reason.trim().length === 0) {
+    if (['paused', 'blocked', 'failed', 'cancelled', 'superseded'].includes(e.to) && e.reason.trim().length === 0) {
       return `a ${e.to} plan needs a recorded reason`;
     }
     if (e.to === PlanStatus.SUPERSEDED) {

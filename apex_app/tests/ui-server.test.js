@@ -303,6 +303,18 @@ describe('a conversation through the page', () => {
     assert.deepEqual(before, [], 'the fixture starts from an empty data directory');
   });
 
+  test('a null conversation turn is reported as unavailable instead of crashing the state view', async () => {
+    const dir = tempDir();
+    const app = offlineApp(dir);
+    await app.session.current();
+    app.conversation.transcript = async () => [null];
+    const { base } = await uiOn(dir, { app });
+
+    const state = await json(await request(base, '/api/state', { bearer: TOKEN }));
+    assert.deepEqual(state.turns, []);
+    assert.match(state.session.unavailable, /invalid turn/);
+  });
+
   test('a new session rotates the conversation without erasing the log', async () => {
     const dir = tempDir();
     const app = offlineApp(dir);
@@ -503,6 +515,69 @@ describe('the approval surface reuses the controller', () => {
     const unknown = await post(base, '/api/plans/no-such-plan/approve');
     assert.equal(unknown.status, 200);
     assert.doesNotMatch((await json(unknown)).status, /^success_/);
+  });
+});
+
+describe('objective planning through the page', () => {
+  test('the page compiles and carries the planning panel without markup sinks', () => {
+    assert.doesNotThrow(() => new Function(UI_CLIENT));
+    assert.match(UI_PAGE, /id="planning-form"/);
+    assert.match(UI_PAGE, /id="planning-objective"/);
+    assert.match(UI_CLIENT, /renderPlanning/);
+    assert.match(UI_CLIENT, /\/api\/planning/);
+  });
+
+  test('the planning read is the CLI call, is projected, and records nothing', async () => {
+    const dir = tempDir();
+    const app = offlineApp(dir);
+    const { base } = await uiOn(dir, { app });
+
+    const anonymous = await request(base, '/api/planning', {
+      method: 'POST',
+      headers: { 'x-apex-ui': '1' },
+      body: { objective: 'remember the launch fact' },
+    });
+    assert.equal(anonymous.status, 401);
+
+    const response = await post(base, '/api/planning', { objective: 'remember the launch fact; recall the build note' });
+    assert.equal(response.status, 200);
+    const payload = await json(response);
+    assert.equal(payload.status, Outcome.SUCCESS_VERIFIED, payload.display);
+    assert.equal(payload.planning.schema, 'apex.objective-planning.v1');
+    assert.equal(payload.planning.recorded, false);
+    assert.equal(payload.planning.approved, false);
+    assert.equal(payload.planning.executable, false);
+    assert.equal(payload.planning.objective.basis, 'user_stated');
+    assert.deepEqual(payload.planning.tasks.map((task) => task.action), ['memory.add', 'memory.search']);
+    assert.equal(payload.planning.tasks.every((task) => task.class === 'needs_approval'), true,
+      'an unapproved proposal has no ready step, whatever the registry allows');
+    assert.equal(payload.planning.counts.ready, 0);
+    assert.match(payload.planning.feasibility, /wait on approval/);
+    assert.equal(payload.planning.approval.required, true);
+    assert.equal(payload.planning.approval.bound, false);
+
+    const plans = await app.plans.list();
+    assert.equal(plans.length, 0, 'the planning read records no plan');
+
+    const missing = await post(base, '/api/planning', {});
+    assert.equal(missing.status, 400);
+    const extra = await post(base, '/api/planning', { objective: 'remember x', budget: 3 });
+    assert.equal(extra.status, 400);
+    const badGoal = await post(base, '/api/planning', { objective: 'remember x', goal: 7 });
+    assert.equal(badGoal.status, 400);
+  });
+
+  test('a rejected objective is reported and recorded without a plan', async () => {
+    const dir = tempDir();
+    const app = offlineApp(dir);
+    const { base } = await uiOn(dir, { app });
+
+    const response = await post(base, '/api/planning', { objective: 'x'.repeat(501) });
+    assert.equal(response.status, 200);
+    const payload = await json(response);
+    assert.equal(payload.planning, null);
+    assert.match(payload.display, /input rejected/);
+    assert.equal((await app.plans.list()).length, 0);
   });
 });
 

@@ -216,6 +216,10 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // interpretation into the log the pattern and adaptation reads draw from.
   'plan.outcome': 'read',
   'plan.assess': 'executive',
+  'plan.pause': 'executive',
+  'plan.resume': 'executive',
+  'safety.lockdown': 'executive',
+  'safety.release': 'executive',
   'recover': 'read',
   'task.plan': 'task',
   'task.run': 'task',

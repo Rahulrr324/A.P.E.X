@@ -15,6 +15,9 @@ import {
   ASSESSMENT_ASPECTS,
   MAX_CANDIDATES_PER_GOAL,
   MAX_ESTIMATE_SECONDS,
+  MAX_MILESTONE_DESCRIPTION_CHARS,
+  MAX_MILESTONE_TITLE_CHARS,
+  MAX_PLAN_MILESTONES,
   MAX_PLAN_OUTCOME_CHARS,
   MAX_PRECONDITIONS,
   MAX_PRECONDITION_CHARS,
@@ -23,8 +26,10 @@ import {
   MAX_EXPECTED_CHARS,
   MAX_VERIFICATION_CHARS,
   MAX_RECOVERY_CHARS,
+  MILESTONE_ID_RE,
   REVERSIBILITY_LEVELS,
   RISK_LEVELS,
+  TASK_PRIORITIES,
   PlanStatus,
   planContentHash,
   validatePlanContent,
@@ -32,6 +37,7 @@ import {
 import { renderPlan } from '../plans/format.js';
 import { candidatesForGoal, revisedCandidates, renderCandidates } from '../plans/candidates.js';
 import { MAX_OBJECTIVE_CHARS, outlineObjective, renderOutline } from '../plans/objective.js';
+import { planObjective, renderPlanning } from '../planning/index.js';
 import { evaluateCandidates, renderAdaptationDecision, renderEvaluation } from '../plans/evaluation.js';
 import {
   constraintDigest, constraintLedger, planConstraintFinding, readConstraintRecords, renderConstraints,
@@ -83,7 +89,7 @@ function expectObject(input, allowedKeys) {
 
 function parseStep(raw, i) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new ValidationError(`step ${i + 1} is not an object`);
-  const allowed = ['id', 'description', 'action', 'input', 'dependsOn', 'expectedResult', 'verification', 'criterion', 'criterionId', 'risk', 'estimate', 'estimateSeconds', 'reversibility', 'recovery'];
+  const allowed = ['id', 'description', 'action', 'input', 'dependsOn', 'expectedResult', 'verification', 'criterion', 'criterionId', 'risk', 'estimate', 'estimateSeconds', 'reversibility', 'recovery', 'milestone', 'milestoneId', 'priority'];
   for (const key of Object.keys(raw)) {
     if (!allowed.includes(key)) throw new ValidationError(`step ${i + 1}: unexpected field "${singleLine(key, 40)}"`);
   }
@@ -97,6 +103,13 @@ function parseStep(raw, i) {
   if (!RISK_LEVELS.includes(risk)) throw new ValidationError(`step ${i + 1}: risk must be low, medium, or high`);
   if (raw.reversibility !== undefined && raw.reversibility !== null && !REVERSIBILITY_LEVELS.includes(raw.reversibility)) {
     throw new ValidationError(`step ${i + 1}: reversibility must be one of: ${REVERSIBILITY_LEVELS.join(', ')}`);
+  }
+  const milestoneId = raw.milestoneId ?? raw.milestone ?? null;
+  if (milestoneId !== null && (typeof milestoneId !== 'string' || !MILESTONE_ID_RE.test(milestoneId.trim()))) {
+    throw new ValidationError(`step ${i + 1}: milestone must be an id such as m1`);
+  }
+  if (raw.priority !== undefined && raw.priority !== null && !TASK_PRIORITIES.includes(raw.priority)) {
+    throw new ValidationError(`step ${i + 1}: priority must be one of: ${TASK_PRIORITIES.join(', ')}`);
   }
   let seconds = null;
   if (raw.estimateSeconds !== undefined && raw.estimateSeconds !== null) {
@@ -126,13 +139,43 @@ function parseStep(raw, i) {
     ...(raw.recovery === undefined || raw.recovery === null
       ? {}
       : { recovery: textField(raw.recovery, `step ${i + 1} recovery`, MAX_RECOVERY_CHARS) }),
+    ...(milestoneId === null ? {} : { milestoneId: milestoneId.trim() }),
+    ...(raw.priority === undefined || raw.priority === null ? {} : { priority: raw.priority }),
   };
+}
+
+// A milestone groups steps that share a checkpoint. Its completion condition is required, because a
+// milestone that cannot say what settles it would be a heading rather than a phase of the work.
+function parseMilestones(raw) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new ValidationError('milestones must be a list');
+  if (raw.length > MAX_PLAN_MILESTONES) throw new ValidationError(`at most ${MAX_PLAN_MILESTONES} milestones are allowed`);
+  return raw.map((m, i) => {
+    if (!m || typeof m !== 'object' || Array.isArray(m)) throw new ValidationError(`milestone ${i + 1} is not an object`);
+    for (const key of Object.keys(m)) {
+      if (!['id', 'title', 'description', 'dependsOn', 'checkpoint', 'verification'].includes(key)) {
+        throw new ValidationError(`milestone ${i + 1}: unexpected field "${singleLine(key, 40)}"`);
+      }
+    }
+    const id = String(m.id ?? `m${i + 1}`).trim();
+    if (!MILESTONE_ID_RE.test(id)) throw new ValidationError(`milestone ${i + 1}: id must be m1 to m${MAX_PLAN_MILESTONES}`);
+    if (!Array.isArray(m.dependsOn ?? [])) throw new ValidationError(`milestone ${i + 1}: dependsOn must be a list`);
+    return {
+      id,
+      title: textField(m.title, `milestone ${i + 1} title`, MAX_MILESTONE_TITLE_CHARS),
+      description: textField(m.description, `milestone ${i + 1} description`, MAX_MILESTONE_DESCRIPTION_CHARS),
+      dependsOn: (m.dependsOn ?? []).map((d) => String(d).trim()),
+      checkpoint: textField(m.checkpoint, `milestone ${i + 1} checkpoint`, MAX_VERIFICATION_CHARS),
+      verification: textField(m.verification, `milestone ${i + 1} verification`, MAX_VERIFICATION_CHARS),
+    };
+  });
 }
 
 function parseContent(input) {
   const outcome = textField(input.outcome, 'intended outcome', MAX_PLAN_OUTCOME_CHARS);
   if (!Array.isArray(input.steps) || input.steps.length === 0) throw new ValidationError('at least one step is required');
   const steps = input.steps.map(parseStep);
+  const milestones = parseMilestones(input.milestones);
   const preconditions = input.preconditions ?? [];
   if (!Array.isArray(preconditions)) throw new ValidationError('preconditions must be a list');
   if (preconditions.length > MAX_PRECONDITIONS) throw new ValidationError(`at most ${MAX_PRECONDITIONS} preconditions are allowed`);
@@ -165,7 +208,7 @@ function parseContent(input) {
     }
     resources = { estimatedSeconds: input.estimatedSeconds };
   }
-  const content = { outcome, steps, preconditions: cleanPreconditions, assertions: cleanAssertions, resources };
+  const content = { outcome, ...(milestones.length > 0 ? { milestones } : {}), steps, preconditions: cleanPreconditions, assertions: cleanAssertions, resources };
   const problems = validatePlanContent(content);
   if (problems.length > 0) throw new ValidationError(`the plan is not valid: ${problems.join('; ')}`);
   return content;
@@ -372,6 +415,30 @@ function cannotUseOf(value) {
   return [...new Set(value.map((n) => textField(n, 'an action in cannot_use', 64)))];
 }
 
+// The intake statements a planning read may be given: constraints, deliverables, preferences,
+// resources, and deadlines the user states explicitly. Each is the user's own words, so it is
+// validated as plain text and never merged into an inferred item.
+const MAX_STATEMENT_CHARS = 300;
+function statementsOf(o, singular, plural) {
+  const raw = [];
+  for (const value of [o[singular], o[plural]]) {
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value)) raw.push(...value);
+    else raw.push(value);
+  }
+  if (raw.length > MAX_PRECONDITIONS) throw new ValidationError(`${plural} may name at most ${MAX_PRECONDITIONS} items`);
+  return [...new Set(raw.map((v, i) => textField(v, `${plural} item ${i + 1}`, MAX_STATEMENT_CHARS)))];
+}
+
+function priorityField(value) {
+  if (value === undefined || value === null) return null;
+  const priority = String(value).trim().toLowerCase();
+  if (!TASK_PRIORITIES.includes(priority)) {
+    throw new ValidationError(`priority must be one of ${TASK_PRIORITIES.join(', ')}`);
+  }
+  return priority;
+}
+
 // A name the registry does not hold is refused rather than ignored: an ignored typo would leave the
 // excluded capability in the plan, which is the one thing the constraint was asked to prevent.
 function assertKnownActions(registry, names) {
@@ -488,6 +555,19 @@ const planSnapshot = (plan) => ({
   contentHash: planContentHash(plan),
   updatedAt: plan.updatedAt,
 });
+
+// The task a plan's activation created, read through the request's own task store. A plan never
+// activated, a configuration without that store, or an unreadable one is null, which the displays
+// state as unknown rather than guessing.
+async function boundTaskOf(ctx, plan) {
+  const id = plan?.activation?.taskId;
+  if (!id || !ctx?.taskStore || typeof ctx.taskStore.get !== 'function') return null;
+  try {
+    return await ctx.taskStore.get(id);
+  } catch {
+    return null;
+  }
+}
 
 // ---- one evidence window per planning read (AP-07 §7) ------------------------
 //
@@ -644,21 +724,21 @@ export function planActions(store) {
   return [
     {
       name: 'plan.add',
-      description: 'Record an executive plan for a goal: ordered steps with dependencies, expected results, verification requirements, risk, preconditions, and classified assumptions. A plan is a proposal, not permission. Write: user origin only.',
-      inputHint: '{"goal":"optional goal id","outcome":"intended outcome","steps":[{"id":"s1","description":"...","action":"memory.add","input":{},"dependsOn":[],"expectedResult":"...","verification":"...","criterion":"optional c1","risk":"low|medium|high","estimateSeconds":10,"reversibility":"read_only|reversible|not_reversible|unknown","recovery":"optional: what to do if this step fails"}],"preconditions":[],"assertions":[{"kind":"user_fact|stored_knowledge|retrieved_evidence|world_fact|world_entity|inference|unknown","text":"...","ref":"record id","expected":"optional live value to compare"}],"estimatedSeconds":30,"reason":"optional"}',
+      description: 'Record an executive plan for a goal: ordered steps with dependencies, expected results, verification requirements, risk, preconditions, and classified assumptions, optionally grouped into milestones that each name the checkpoint that settles them. A plan is a proposal, not permission. Write: user origin only.',
+      inputHint: '{"goal":"optional goal id","outcome":"intended outcome","milestones":[{"id":"m1","title":"...","description":"...","dependsOn":[],"checkpoint":"what settles this phase","verification":"how that is checked"}],"steps":[{"id":"s1","description":"...","action":"memory.add","input":{},"dependsOn":[],"expectedResult":"...","verification":"...","criterion":"optional c1","risk":"low|medium|high","estimateSeconds":10,"reversibility":"read_only|reversible|not_reversible|unknown","recovery":"optional: what to do if this step fails","milestone":"optional m1","priority":"low|normal|high"}],"preconditions":[],"assertions":[{"kind":"user_fact|stored_knowledge|retrieved_evidence|world_fact|world_entity|inference|unknown","text":"...","ref":"record id","expected":"optional live value to compare"}],"estimatedSeconds":30,"reason":"optional"}',
       permission: 'write',
       origins: [ORIGIN_USER],
       plannable: false,
       validate(input) {
-        const o = expectObject(input, ['goal', 'goalId', 'outcome', 'steps', 'preconditions', 'assertions', 'estimatedSeconds', 'reason']);
+        const o = expectObject(input, ['goal', 'goalId', 'outcome', 'milestones', 'steps', 'preconditions', 'assertions', 'estimatedSeconds', 'reason']);
         return {
           goalId: o.goalId ?? o.goal ?? null,
           ...parseContent(o),
           reason: optionalTextField(o.reason, 'reason', 500),
         };
       },
-      async execute(_ctx, { goalId, outcome, steps, preconditions, assertions, resources, reason }) {
-        const { plan, linkError } = await store.createPlan({ goalId, outcome, steps, preconditions, assertions, resources, reason });
+      async execute(_ctx, { goalId, outcome, milestones, steps, preconditions, assertions, resources, reason }) {
+        const { plan, linkError } = await store.createPlan({ goalId, outcome, milestones, steps, preconditions, assertions, resources, reason });
         const validation = store.validatePlan(plan);
         return {
           summary: `recorded plan ${shortId(plan.id)} v${plan.version} for ${goalId ? `goal ${shortId(goalId)}` : 'no goal'}; ${plan.steps.length} step(s)`,
@@ -671,10 +751,14 @@ export function planActions(store) {
           ].filter(Boolean).join('\n'),
         };
       },
-      async verify(ctx, { goalId, outcome, steps }, result) {
+      async verify(ctx, { goalId, outcome, milestones = [], steps }, result) {
         const plan = await store.get(result.data.planId);
         if (!plan) return { ok: false, detail: 'the recorded plan cannot be read back' };
         if (plan.outcome !== outcome) return { ok: false, detail: 'stored outcome differs from the request' };
+        if (plan.milestones.length !== milestones.length
+          || plan.milestones.some((m, i) => m.id !== milestones[i].id || m.title !== milestones[i].title)) {
+          return { ok: false, detail: 'stored milestones differ from the request' };
+        }
         // The store stores the full id it resolved a short reference to, so the comparison
         // resolves the same reference rather than demanding the text be identical.
         let requestedGoalId = goalId ?? null;
@@ -704,17 +788,17 @@ export function planActions(store) {
     {
       name: 'plan.revise',
       description: 'Replace a draft or blocked plan with a new version. The revision needs a reason, clears any approval, and must be approved again before it can be activated. Write: user origin only.',
-      inputHint: '{"target":"plan id","outcome":"...","steps":[...],"preconditions":[],"assertions":[],"estimatedSeconds":30,"reason":"why the plan changed"}',
+      inputHint: '{"target":"plan id","outcome":"...","milestones":[...],"steps":[...],"preconditions":[],"assertions":[],"estimatedSeconds":30,"reason":"why the plan changed"}',
       permission: 'write',
       origins: [ORIGIN_USER],
       plannable: false,
       validate(input) {
-        const o = expectObject(input, ['target', 'outcome', 'steps', 'preconditions', 'assertions', 'estimatedSeconds', 'reason']);
+        const o = expectObject(input, ['target', 'outcome', 'milestones', 'steps', 'preconditions', 'assertions', 'estimatedSeconds', 'reason']);
         if (typeof o.target !== 'string') throw new ValidationError('target must be a plan id');
         return { target: o.target.trim(), ...parseContent(o), reason: textField(o.reason, 'reason', 500) };
       },
-      async execute(_ctx, { target, outcome, steps, preconditions, assertions, resources, reason }) {
-        const { plan } = await store.revise(target, { outcome, steps, preconditions, assertions, resources, reason });
+      async execute(_ctx, { target, outcome, milestones, steps, preconditions, assertions, resources, reason }) {
+        const { plan } = await store.revise(target, { outcome, milestones, steps, preconditions, assertions, resources, reason });
         const validation = store.validatePlan(plan);
         return {
           summary: `revised plan ${shortId(plan.id)} to v${plan.version}`,
@@ -726,11 +810,15 @@ export function planActions(store) {
           ].filter(Boolean).join('\n'),
         };
       },
-      async verify(_ctx, { outcome, version: _ignored, steps }, result) {
+      async verify(_ctx, { outcome, milestones = [], version: _ignored, steps }, result) {
         const plan = await store.get(result.data.planId);
         if (!plan) return { ok: false, detail: 'the revised plan cannot be read back' };
         if (plan.version !== result.data.version) return { ok: false, detail: 'stored version differs from the revision result' };
         if (plan.outcome !== outcome) return { ok: false, detail: 'stored outcome differs from the revision' };
+        if (plan.milestones.length !== milestones.length
+          || plan.milestones.some((m, i) => m.id !== milestones[i].id || m.title !== milestones[i].title)) {
+          return { ok: false, detail: 'stored milestones differ from the revision' };
+        }
         if (plan.status !== PlanStatus.DRAFT) return { ok: false, detail: `the revision is ${plan.status}, not draft` };
         if (plan.approval) return { ok: false, detail: 'the revision inherited an approval' };
         if (plan.steps.length !== steps.length || plan.steps.some((s, i) => s.id !== steps[i].id)) {
@@ -814,6 +902,84 @@ export function planActions(store) {
     },
 
     {
+      name: 'plan.pause',
+      description: 'Record a hold on an approved, active, or blocked plan, with a reason. It changes the plan record only: a step already in flight cannot be stopped, so a pause is refused while the plan\'s task is running, and the task keeps its own state. Write: user origin only.',
+      inputHint: '{"target":"plan id","reason":"why the plan is on hold"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target', 'reason']);
+        if (typeof o.target !== 'string' || o.target.trim().length === 0) throw new ValidationError('target must be a plan id');
+        return { target: o.target.trim(), reason: textField(o.reason, 'reason', 500) };
+      },
+      async execute(ctx, { target, reason }) {
+        const before = await store.resolve(target);
+        const { plan } = await store.pause(target, { reason });
+        const task = await boundTaskOf(ctx, plan);
+        return {
+          summary: `plan ${shortId(plan.id)} on hold (was ${before.status})`,
+          data: { planId: plan.id, previousStatus: before.status, status: plan.status, reason: plan.history.at(-1)?.reason ?? reason, taskId: plan.activation?.taskId ?? null, taskStatus: task?.status ?? null },
+          display: [
+            `Plan ${shortId(plan.id)} is on hold (was ${before.status}): ${reason}`,
+            task
+              ? `  task ${shortId(task.id)} is ${task.status}. The plan record is held; the task is not driven from here.`
+              : '  no task was created from this plan, so only the plan record is held.',
+            'A held plan cannot be started or continued. Resuming it is `plan resume`, and a revision still needs fresh approval.',
+          ].join('\n'),
+        };
+      },
+      async verify(ctx, { reason }, result) {
+        const plan = await store.get(result.data.planId);
+        if (!plan) return { ok: false, detail: 'the paused plan cannot be read back' };
+        if (plan.status !== PlanStatus.PAUSED) return { ok: false, detail: `plan is ${plan.status}, not paused` };
+        const task = await boundTaskOf(ctx, plan);
+        if (task?.status === 'running') return { ok: false, detail: 'the plan is recorded paused while its task is running, which is not a hold the records support' };
+        if (plan.history.at(-1)?.reason !== reason) return { ok: false, detail: 'the recorded pause reason differs from the request' };
+        return { ok: true, detail: `hold confirmed at ${plan.updatedAt}; no step was started or stopped by it` };
+      },
+    },
+
+    {
+      name: 'plan.resume',
+      description: 'Lift a recorded hold on a paused plan. It returns to active when it had been activated, or to approved when it had not, so a resumed plan that never ran still has to be started. An approval that no longer binds the plan content is not carried through the pause. Write: user origin only.',
+      inputHint: '{"target":"plan id","reason":"optional: why the hold is lifted"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        const o = expectObject(input, ['target', 'reason']);
+        if (typeof o.target !== 'string' || o.target.trim().length === 0) throw new ValidationError('target must be a plan id');
+        return { target: o.target.trim(), reason: optionalTextField(o.reason, 'reason', 500) };
+      },
+      async execute(_ctx, { target, reason }) {
+        const before = await store.resolve(target);
+        const { plan } = await store.resume(target, { reason });
+        return {
+          summary: `plan ${shortId(plan.id)} resumed to ${plan.status}`,
+          data: { planId: plan.id, previousStatus: before.status, status: plan.status, taskId: plan.activation?.taskId ?? null },
+          display: [
+            `Plan ${shortId(plan.id)} resumed: ${before.status} -> ${plan.status}.`,
+            plan.status === PlanStatus.APPROVED
+              ? '  it was never activated, so it still has to be started with `plan start`.'
+              : `  it was activated as task ${shortId(plan.activation.taskId)}; continuing it is \`plan continue\`.`,
+            'Resuming a record starts nothing and approves nothing.',
+          ].join('\n'),
+        };
+      },
+      async verify(_ctx, { target }, result) {
+        const plan = await store.get(result.data.planId);
+        if (!plan) return { ok: false, detail: 'the resumed plan cannot be read back' };
+        if (plan.status === PlanStatus.PAUSED) return { ok: false, detail: 'the plan is still paused' };
+        if (plan.status !== result.data.status) return { ok: false, detail: `plan is ${plan.status}, not the ${result.data.status} reported` };
+        if (!plan.approval || plan.approval.version !== plan.version || plan.approval.contentHash !== planContentHash(plan)) {
+          return { ok: false, detail: 'the resumed plan does not carry an approval bound to its current content' };
+        }
+        return { ok: true, detail: `resumed to ${plan.status}; the approval still binds the plan content; nothing was started` };
+      },
+    },
+
+    {
       name: 'plan.supersede',
       description: 'Record that one plan is replaced by another. The replacement must be a recorded plan. Nothing is executed. Write: user origin only.',
       inputHint: '{"target":"plan id being replaced","by":"replacement plan id","reason":"why"}',
@@ -848,39 +1014,55 @@ export function planActions(store) {
 
     {
       name: 'plan.outline',
-      description: 'Read a free-form objective against the live registry and answer what a plan for it would be: the parts in the order they were written, the step each mapped part becomes, the parts no registered capability can take, the alternatives that can be derived from the same mapping without inventing anything, and the risks, uncertainty, revalidation, and recovery the existing plan and task machinery state. Read-only: nothing is recorded, approved, or started, and no step, parameter, or intent is invented.',
-      inputHint: '{"objective":"free-form text, 1-500 characters","goal":"optional goal id this objective serves","cannot_use":["optional registered action names this outline must not offer"]}',
+      description: 'Read a free-form objective against the live registry and answer what a plan for it would be: the parts in the order they were written, the step each mapped part becomes, the parts no registered capability can take, the alternatives that can be derived from the same mapping without inventing anything, and the risks, uncertainty, revalidation, and recovery the existing plan and task machinery state. The answer also carries a planning read: the user\'s stated constraints, deliverables, preferences, resources, deadlines, and priority classified by provenance, a milestone hierarchy proposed from the capability families the steps name, a six-way feasibility class (completed, ready, needs_approval, blocked, needs_input, unsupported) for every task, per-task explanation, and a recordable draft that carries the milestones. Read-only: nothing is recorded, approved, or started, and no step, parameter, or intent is invented.',
+      inputHint: '{"objective":"free-form text, 1-500 characters","goal":"optional goal id this objective serves","cannot_use":["optional registered action names this outline must not offer"],"constraint":["optional constraints stated by the user"],"deliverable":["optional deliverables stated by the user"],"preference":["optional preferences stated by the user"],"resource":["optional resources stated by the user"],"deadline":["optional deadlines stated by the user"],"priority":"optional low|normal|high"}',
       permission: 'read',
       origins: [ORIGIN_USER, ORIGIN_MODEL],
       validate(input) {
-        const o = expectObject(input ?? {}, ['objective', 'goal', 'goalId', 'cannot_use']);
+        const o = expectObject(input ?? {}, [
+          'objective', 'goal', 'goalId', 'cannot_use',
+          'constraint', 'constraints', 'deliverable', 'deliverables', 'preference', 'preferences',
+          'resource', 'resources', 'deadline', 'deadlines', 'priority',
+        ]);
         const goalRef = o.goalId ?? o.goal;
         return {
           objective: textField(o.objective, 'objective', MAX_OBJECTIVE_CHARS),
           goalRef: optionalTextField(goalRef, 'goal', 64),
           cannotUse: cannotUseOf(o.cannot_use),
+          stated: {
+            constraints: statementsOf(o, 'constraint', 'constraints'),
+            deliverables: statementsOf(o, 'deliverable', 'deliverables'),
+            preferences: statementsOf(o, 'preference', 'preferences'),
+            resources: statementsOf(o, 'resource', 'resources'),
+            deadlines: statementsOf(o, 'deadline', 'deadlines'),
+            priority: priorityField(o.priority),
+          },
         };
       },
-      async execute(ctx, { objective, goalRef, cannotUse }) {
+      async execute(ctx, { objective, goalRef, cannotUse, stated }) {
         const registry = registryFor(ctx);
         assertKnownActions(registry, cannotUse);
         const goal = goalRef ? await goalForRead(ctx, goalRef) : null;
         const outline = outlineObjective({ objective, registry, goal, cannotUse });
+        // The planning read is composed over the same outline bytes rather than re-reading the
+        // registry, so the two halves of the answer can never disagree about what mapped.
+        const planning = planObjective({ objective, registry, goal, cannotUse, stated, outline });
         const draftNote = outline.draft
           ? 'a recordable draft is part of the answer'
           : (outline.draftWithheld ? 'the full draft is withheld because the request excluded a capability it names' : 'no recordable draft could be produced');
         return {
           summary: `${outline.counts.parts} part(s) read, ${outline.counts.steps} step(s) mapped, `
-            + `${outline.counts.missing} part(s) no capability can take; ${draftNote}`,
-          data: outline,
-          display: renderOutline(outline),
+            + `${outline.counts.missing} part(s) no capability can take; ${planning.counts.milestones} milestone(s) proposed, `
+            + `${planning.counts.unsupported + planning.counts.needs_input} task(s) cannot be taken as they stand; ${draftNote}`,
+          data: { ...outline, planning },
+          display: [renderOutline(outline), '', renderPlanning(planning)].join('\n'),
         };
       },
       // The outline is a pure function of the objective, the live registry, and the goal record. The
       // verifier re-runs it and compares the digest, then re-asks the registry about every action the
       // answer listed - an outline is not permission, and a capability that moved after it was printed
       // has to invalidate it rather than be silently reported as still available.
-      async verify(ctx, { objective, goalRef, cannotUse }, result) {
+      async verify(ctx, { objective, goalRef, cannotUse, stated }, result) {
         const registry = registryFor(ctx);
         const goal = goalRef ? await goalForRead(ctx, goalRef) : null;
         const again = outlineObjective({ objective, registry, goal, cannotUse });
@@ -888,6 +1070,13 @@ export function planActions(store) {
           return {
             ok: false,
             detail: 'an independent read of the same objective gives different bytes, so the registry, the goal record, or a recorded capability this outline named has moved since it was read',
+          };
+        }
+        const againPlanning = planObjective({ objective, registry, goal, cannotUse, stated, outline: again });
+        if (againPlanning.digest !== result.data.planning?.digest) {
+          return {
+            ok: false,
+            detail: 'an independent planning read of the same objective gives different bytes, so the intake, the milestone grouping, or a feasibility class moved since it was read',
           };
         }
         if ((again.goal?.id ?? null) !== (result.data.goal?.id ?? null)) {
@@ -909,7 +1098,8 @@ export function planActions(store) {
         }
         return {
           ok: true,
-          detail: `${again.counts.steps} step(s) reproduce byte for byte from the same objective and the live registry`
+          detail: `${again.counts.steps} step(s) reproduce byte for byte from the same objective and the live registry, `
+            + `and the planning read reproduces ${againPlanning.counts.tasks} task class(es) and ${againPlanning.counts.milestones} milestone(s)`
             + `${goal ? `, and the goal record ${shortId(goal.id)} v${goal.revision} still reads the same` : ''}`
             + '; every listed action is still registered and authorized for the user; this read recorded and approved nothing',
         };

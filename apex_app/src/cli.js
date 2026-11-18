@@ -488,6 +488,7 @@ function parseFlags(args, allowed, repeat = []) {
       'source', 'source-id', 'payload', 'operation-id', 'reporter', 'response', 'action', 'input',
       'adaptation', 'order', 'avoid', 'prefer', 'measurement', 'event', 'request',
       'events-file', 'endpoint', 'allowlist', 'root', 'exclude', 'path', 'interval', 'timeout',
+      'plan-priority',
       'max-observations', 'max-files', 'max-depth', 'max-bytes', 'memory-percent', 'disk-percent', 'provider',
       'version', 'section', 'document'].includes(name)) {
         const v = args[i + 1];
@@ -2701,18 +2702,24 @@ export async function main(argv, {
         return res.diff.unchanged ? 0 : 1;
       }
       if (sub === 'outline') {
-        // The read that answers a free-form objective before anything is recorded: typed parts, the
-        // step each matched part becomes, the parts no capability can take, derived alternatives, and
-        // the risks, uncertainty, revalidation and recovery the existing machinery states. Nothing is
-        // written; recording the draft is `plan add` and approving it is the user's own decision.
-        const { flags, rest: words } = parseFlags(rest, ['goal', 'cannot-use', 'json']);
+        const { flags, rest: words } = parseFlags(
+          rest,
+          ['goal', 'cannot-use', 'json', 'constraint', 'deliverable', 'preference', 'resource', 'deadline', 'plan-priority'],
+          ['constraint', 'deliverable', 'preference', 'resource', 'deadline'],
+        );
         if (words.length !== 1) {
-          throw new ValidationError('usage: plan outline "<objective>" [--goal <id>] [--cannot-use <action,action>] [--json]', 'USAGE');
+          throw new ValidationError('usage: plan outline "<objective>" [--goal <id>] [--cannot-use <action,action>] [--constraint <text>]... [--deliverable <text>]... [--preference <text>]... [--resource <text>]... [--deadline <text>]... [--plan-priority low|normal|high] [--json]', 'USAGE');
         }
         return emitRead(await app.controller.planOutline({
           objective: words[0],
           goal: flags.goal ?? null,
           cannotUse: idList(flags['cannot-use']),
+          constraints: flags.constraint ?? [],
+          deliverables: flags.deliverable ?? [],
+          preferences: flags.preference ?? [],
+          resources: flags.resource ?? [],
+          deadlines: flags.deadline ?? [],
+          priority: flags['plan-priority'] ?? null,
         }), flags);
       }
       if (sub === 'candidates') {
@@ -2790,6 +2797,18 @@ export async function main(argv, {
         if (ids.length !== 1) throw new ValidationError('usage: plan continue <id>', 'USAGE');
         return emit(await app.controller.planContinue(ids[0]));
       }
+      if (sub === 'pause') {
+        const { flags, rest: ids } = parseFlags(rest, ['reason']);
+        if (ids.length !== 1 || !flags.reason) {
+          throw new ValidationError('usage: plan pause <id> --reason <text>', 'USAGE');
+        }
+        return emit(await app.controller.planPause({ target: ids[0], reason: flags.reason }));
+      }
+      if (sub === 'resume') {
+        const { flags, rest: ids } = parseFlags(rest, ['reason']);
+        if (ids.length !== 1) throw new ValidationError('usage: plan resume <id> [--reason <text>]', 'USAGE');
+        return emit(await app.controller.planResume({ target: ids[0], reason: flags.reason ?? null }));
+      }
       if (sub === 'cancel') {
         const { flags, rest: ids } = parseFlags(rest, ['reason']);
         if (ids.length !== 1 || !flags.reason) {
@@ -2808,7 +2827,7 @@ export async function main(argv, {
           reason: flags.reason,
         }));
       }
-      err('usage: plan add|list|show|validate|history|compare|candidates|replan|outcome|assess|revise|approve|start|reconcile|continuation|continue|cancel|supersede');
+      err('usage: plan add|list|show|validate|history|compare|candidates|replan|outcome|assess|revise|approve|start|reconcile|continuation|continue|pause|resume|cancel|supersede');
       return 2;
     }
 
