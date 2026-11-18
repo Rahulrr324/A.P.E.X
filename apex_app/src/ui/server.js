@@ -370,6 +370,21 @@ export function createUiServer({
       session.unavailable = session.unavailable ?? `plan records are unavailable: ${err.message}`;
     }
 
+    let goals = [];
+    try {
+      const all = await app.goals?.list?.() ?? [];
+      goals = (Array.isArray(all) ? all : []).slice(0, UI_LIMITS.maxWorkItems).map((goal) => ({
+        id: String(goal.id),
+        title: singleLine(goal.title ?? goal.outcome ?? goal.request ?? '', 200),
+        status: goal.status ?? null,
+        priority: goal.priority ?? null,
+        createdAt: goal.createdAt ?? null,
+      }));
+    } catch (err) {
+      goals = [];
+      session.unavailable = session.unavailable ?? `goal records are unavailable: ${err.message}`;
+    }
+
     // T-09: the same service the CLI reads. A damaged or unavailable situational log is reported
     // as unavailable-with-detail, never as an empty environment.
     let situation = null;
@@ -433,6 +448,7 @@ export function createUiServer({
       turns,
       tasks,
       plans,
+      goals,
       situation,
       runtime,
       sources,
@@ -717,6 +733,46 @@ export function createUiServer({
       } catch (err) {
         sendJson(res, 503, { error: `the runtime state is unavailable: ${err.message}` });
       }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/goals') {
+      try {
+        if (!app.goals) { sendJson(res, 503, { error: 'goals are not configured' }); return; }
+        sendJson(res, 200, { goals: await app.goals.list() });
+      } catch (err) {
+        sendJson(res, 503, { error: `goals are unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/memory') {
+      try {
+        if (!app.memory) { sendJson(res, 503, { error: 'memory is not configured' }); return; }
+        sendJson(res, 200, { records: await app.memory.list({ limit: 20 }) });
+      } catch (err) {
+        sendJson(res, 503, { error: `memory is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/knowledge') {
+      try {
+        if (!app.knowledge) { sendJson(res, 503, { error: 'knowledge is not configured' }); return; }
+        sendJson(res, 200, { claims: await app.knowledge.list({ limit: 20 }) });
+      } catch (err) {
+        sendJson(res, 503, { error: `knowledge is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/world') {
+      try {
+        if (!app.worldModel) { sendJson(res, 503, { error: 'the world model is not configured' }); return; }
+        sendJson(res, 200, await app.worldModel.listEntities({ limit: 20 }));
+      } catch (err) {
+        sendJson(res, 503, { error: `the world model is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/council') {
+      sendJson(res, 503, { error: 'Council deliberation is not implemented; no model inference is activated.' });
       return;
     }
     if (method === 'GET' && url.pathname === '/api/events') {
