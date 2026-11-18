@@ -52,6 +52,7 @@ import { ProposalStore } from './proposals/store.js';
 import { DeadlineStore } from './deadlines/store.js';
 import { deadlineActions } from './actions/deadline-actions.js';
 import { backupActions } from './actions/backup-actions.js';
+import { councilActions, createCouncilService } from './actions/council-actions.js';
 import { goalActions } from './actions/goal-actions.js';
 import { planActions } from './actions/plan-actions.js';
 import { proposalActions } from './actions/proposal-actions.js';
@@ -74,18 +75,11 @@ export function createApp({
   filesystemListDefaultLimit = FILESYSTEM_LIST_DEFAULT_LIMIT,
   filesystemListMaxLimit = FILESYSTEM_LIST_MAX_LIMIT,
   experienceCapture = CAPTURE_OFF,
-  // A neural boundary is never selected by the application: the default reports that no runtime
-  // is connected. Tests may inject one to exercise the contract, but the controller still sees
-  // only the declaration, and no request path invokes it.
   neuralRuntime = null,
   integrationProviders = null,
   autonomyByDomain = {},
 } = {}) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new Error('dataDir is required');
-  // Isolation is checked here as well as in loadConfig because this is the one place every
-  // writer passes. A test or benchmark that builds an app programmatically with a real
-  // directory fails at construction instead of writing into it, so the guarantee does not
-  // depend on remembering to resolve configuration through the env layer first.
   if (isolationRequested(process.env)) assertIsolatedDataDir(dataDir);
   const clock = now ?? (() => new Date());
   const memory = new MemoryStore(path.join(dataDir, 'memory.jsonl'), { now: clock });
@@ -93,25 +87,11 @@ export function createApp({
   const operations = new OperationLog(path.join(dataDir, 'operations.jsonl'));
   const session = new SessionState(path.join(dataDir, 'session.json'), { now: clock });
   const taskStore = new TaskStore(path.join(dataDir, 'tasks.jsonl'), { now: clock, idFactory });
-  // The task summaries that conversation history refused. It holds only unsaved turns,
-  // never task state or audit evidence, so the two authoritative logs are unaffected by it.
   const summaryQueue = new SummaryQueue(path.join(dataDir, 'task-summary-queue.json'), { now: clock, idFactory });
   const knowledge = new KnowledgeStore(path.join(dataDir, 'knowledge.jsonl'), { now: clock });
-  // A note is the user's own composition with its own append-only revision log. It may cite a
-  // memory record, a knowledge claim, or a file, but nothing is derived from it: it is not a
-  // memory, not a claim, and not an instruction.
   const notes = new NoteStore(path.join(dataDir, 'notes.jsonl'), { now: clock });
-  // An experience is a verified reference to one audit record, so this store is given the audit
-  // log: a write whose operation cannot be found there is refused instead of recorded, and every
-  // later read can recompute the evidence hash against it.
   const experience = new ExperienceStore(path.join(dataDir, 'experiences.jsonl'), { now: clock, operations });
-  // A prediction cites recorded events, so this store is given the experience log: a write whose
-  // citations do not resolve there is refused, and every later read re-opens the horizon against it.
-  // It is a separate log on purpose - see the header of prediction-store.js.
   const predictions = new PredictionStore(path.join(dataDir, 'predictions.jsonl'), { now: clock, experiences: experience });
-  // A prediction-derived candidate is checked against its prediction on every read, so the experience
-  // store holds the reverse edge. Until the attach below, feedback-derived records behave exactly as
-  // before and any prediction-derived record reads as inert.
   experience.attachPredictions(predictions);
   const registry = new ActionRegistry({
     autonomyByDomain,
@@ -119,32 +99,16 @@ export function createApp({
     idFactory,
     killSwitchPath: path.join(dataDir, 'kill-switch.json'),
   });
-  // Goals and plans are append-only records of intent. The plan store validates against the
-  // live registry and reads goals, so it is constructed after both; neither store can execute
-  // anything, and both use their own writer lock for every mutation.
   const goals = new GoalStore(path.join(dataDir, 'goals.jsonl'), { now: clock, idFactory, operations });
   const plans = new PlanStore(path.join(dataDir, 'plans.jsonl'), {
     now: clock, idFactory, registry, goals, operations, tasks: taskStore,
   });
-  // Proposals are model suggestions. The store records them and the user's decision about them;
-  // it cannot approve, activate, or execute anything, and it is not a source of authority.
   const proposals = new ProposalStore(path.join(dataDir, 'proposals.jsonl'), { now: clock, idFactory });
-  // Recorded deadlines: dates the owner imported from a local file. The ledger stores the date,
-  // its source file, that file's digest, and the line. It is not a scheduler and holds no
-  // completion state; a date passing changes nothing here.
   const deadlines = new DeadlineStore(path.join(dataDir, 'deadlines.jsonl'), { now: clock });
-  // T-08 outcome learning composes reads over the stores above and appends its three record kinds to
-  // the experience log. It holds no state, opens no file, and takes no lock of its own; the ordinary
-  // action registry authorizes every write and the experience store's writer lock covers the append.
   const learning = new LearningService({
     experience, plans, goals, tasks: taskStore, predictions, registry, now: clock,
   });
 
-  // The World Model is a separate append-only record of entities, facts, relationships, and events.
-  // Every evidence reference is checked against the store that owns the cited record, so each
-  // adapter answers only what its own log can justify: whether the record exists, whether it is
-  // still current, and how it was produced. A damaged source store throws, which the world store
-  // turns into a refusal - an unreadable source is never "no such evidence".
   const worldModel = new WorldModelStore(path.join(dataDir, 'world-model.jsonl'), {
     now: clock,
     idFactory,
@@ -214,10 +178,6 @@ export function createApp({
     },
   });
 
-  // T-09 situational awareness: one append-only log of observations, assessments, decisions and
-  // responses. Facts and world events are written through the World Model above; context is read
-  // from the existing goal, plan, task and prediction stores; approved responses run through the
-  // registry in the controller. Nothing here is a second world model, planner, or runner.
   const situationStore = new SituationStore(path.join(dataDir, 'situational.jsonl'), {
     now: clock,
     idFactory,
@@ -238,12 +198,6 @@ export function createApp({
     idFactory,
   });
 
-  // T-11 external sources: provider construction is inert. Configuration is loaded lazily, no
-  // connection is opened and no poll starts until an enabled provider is polled explicitly or by the
-  // runtime tick. Observations enter through the same situational contract as internal events.
-  // T-12 content understanding. Construction reads no file: content roots and the separate
-  // content permission live in documents.json, and nothing is indexed until an explicit enable and
-  // ingest. Derived facts go through the existing knowledge store and situational service.
   const documents = new DocumentService({
     dataDir,
     knowledge,
@@ -254,8 +208,6 @@ export function createApp({
     idFactory,
   });
 
-  // T-13 reasoning workspace. Construction opens no model and reads no source store; a session is
-  // created only by an explicit user command. The runtime reports its status but does not start one.
   const reasoning = new ReasoningService({
     dataDir,
     memory,
@@ -281,10 +233,6 @@ export function createApp({
     providers: integrationProviders ?? undefined,
   });
 
-  // Filesystem assistance exists only when at least one root is configured. Every root is
-  // resolved and validated here, once, and captured by the action closures: no request, model
-  // proposal, or task step can add or widen one. A configured-but-invalid root is a startup
-  // error rather than a silently disabled capability.
   let rootForContext = null;
   let workspaces = null;
   const fsActions = [];
@@ -303,8 +251,6 @@ export function createApp({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
     }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
 
-  // Reporting must not create a session as a side effect. A missing session is
-  // reported as absent; a damaged state still raises (it must not look empty).
   const getStatus = async () => {
     const m = await memory.status();
     const o = await operations.status();
@@ -314,11 +260,7 @@ export function createApp({
     const g = await goals.status();
     const pl = await plans.status();
     const pr = await proposals.status();
-    // The world model reports damage instead of throwing from this read, so a damaged log is
-    // displayed as unavailable-with-detail and never counted as an empty world.
     const wm = await worldModel.status();
-    // A deadline count is what was imported from the owner's files; it is not a count of what is
-    // due, which depends on a horizon and belongs to a reader that states it.
     const dl = await deadlines.status();
     const current = await session.peek();
     if (current.status === 'corrupt') {
@@ -340,8 +282,6 @@ export function createApp({
       experienceCapturedAutomatically: x.capturedAutomatically,
       experienceCaptureMode: experienceCapture,
       corruptExperienceLines: x.corrupt,
-      // Stated as expectations, never as events: `predictions` counts what the user recorded, and the
-      // verdict count is how many of those an outcome has been recorded against.
       predictionRecords: p.records,
       predictionsLive: p.live,
       predictionsSuperseded: p.superseded,
@@ -349,8 +289,6 @@ export function createApp({
       predictionsPastHorizon: p.pastHorizon,
       predictionConfidenceValues: p.confidenceValues,
       corruptPredictionLines: p.corrupt,
-      // Goals and plans are records of intent, not work done. The counts say what is stored,
-      // never that anything ran: progress lives on each record.
       goalRecords: g.records,
       goalCount: g.goals,
       corruptGoalLines: g.corrupt,
@@ -362,8 +300,6 @@ export function createApp({
       corruptProposalLines: pr.corrupt,
       deadlineRecords: dl.records,
       corruptDeadlineLines: dl.corrupt,
-      // The world model is a record of claims, not verified world state. A count says what is
-      // stored; conflictGroups says how many disagreements are stored unresolved.
       worldModelAvailable: wm.available,
       worldModelComplete: wm.complete,
       worldModelRecords: wm.counts === null ? null : wm.records,
@@ -377,7 +313,6 @@ export function createApp({
       sessionId: current.state?.sessionId ?? null,
       model: gateway.describe(),
       filesystemRoot: rootForContext,
-      // Names are selectors, not authority: every listed root was already validated at startup.
       filesystemWorkspaces: workspaces === null ? [] : workspaces.list(),
     };
   };
@@ -415,8 +350,6 @@ export function createApp({
     dataDir,
     neural: neuralRuntime,
   });
-  // T-10 runtime: an opt-in process over the same controller. Constructing it starts nothing; no
-  // timer, lease, or write exists until `runtime.start()` is called explicitly.
   const runtime = new ExecutiveRuntime({
     controller,
     situation,
@@ -435,6 +368,7 @@ export function createApp({
     idFactory,
   });
   const resources = new ResourceFabric({ now: clock });
+  const council = createCouncilService({ dataDir, now: clock, idFactory, registry });
   return {
     controller,
     memory,
@@ -467,6 +401,7 @@ export function createApp({
     integrations,
     documents,
     reasoning,
+    council,
   };
 }
 
