@@ -105,3 +105,20 @@ Security policy: model/document/agent output is untrusted; owner identity is dis
 ## Known architectural non-goals for T-17
 
 Do not create a second controller, registry, planner, task store, scheduler, world model, memory, audit system or model path. Do not activate inference, download models, start an inference service, or contact a model endpoint. Do not modify the historical `stark/` track just to make its names appear integrated. Do not claim real owner MFA, multi-device mesh, GPU availability, external accounts, voice, AR or self-improvement sandboxing without implementation and evidence.
+
+## T-19 Core state table (authoritative sources)
+
+| # | State | Authoritative source | Enter conditions | Leave conditions | Precedence | Reachable |
+|---|-------|----------------------|------------------|------------------|------------|-----------|
+| 1 | Dormant | No runtime/process | Process not started | Process starts | lowest | no (process-level) |
+| 2 | Idle | Server snapshot: no running tasks, no pending approvals, no degradation, no lockdown | No running/paused tasks, no approvals, health ok, kill-switch clear, event stream healthy | Any running task, approval, degradation, or lockdown | below awaiting/executing/degraded/lockdown | yes |
+| 3 | Listening | (none) | reserved | reserved | — | reserved, not reachable (no voice pipeline) |
+| 4 | Thinking | Client request in flight | Chat request submitted | Response received or failed | below lockdown/degraded | transient (UI only, derived from request) |
+| 5 | Speaking | (none) | reserved | reserved | — | reserved, not reachable (no voice pipeline) |
+| 6 | Executing | Task store: any task status=running | A task step is running | Task completes/pauses/fails | below lockdown/degraded | yes |
+| 7 | Awaiting Approval | Task store: any step awaiting_approval or task approval flag | A step requires approval | Approval granted/rejected/cancelled | below lockdown/degraded | yes |
+| 8 | Uncertain | (none with genuine source) | reserved | reserved | — | reserved, not reachable |
+| 9 | Degraded | Health/event stream/kill-switch read failure | Event stream lost, heartbeat timeout, unreadable latch, health failure | Successful reconnect + reconciliation | below lockdown only | yes |
+| 10 | Lockdown | ECP kill-switch latch (dataDir/kill-switch.json) | safety.lockdown activated | Explicit safety.release with reason+confirmation+audit | highest | yes |
+
+Precedence: Lockdown > Degraded > Awaiting Approval > Executing > Thinking > Idle. Reserved states (Listening, Speaking, Uncertain) cannot be set through production code paths; tests assert this.
