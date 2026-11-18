@@ -1,24 +1,34 @@
 # APEX Mission Progress (T-20 through T-24)
 
-## Current state
+## Final state
 - Branch: main
-- HEAD: 5098705
-- origin/main: 5098705 (in sync)
+- HEAD: (see commit below)
+- origin/main: in sync after push
 - Worktree: clean
-- Inference: disabled (no model endpoints)
+- Inference: disabled
 - Voice: out of scope
 
-## Recovery
-- T-19 commits verified present: e9d0880, 301ba97, 5098705.
-- Remote push currently succeeds (origin/main == HEAD). Earlier 403 resolved.
+## Milestone commits
+- T-20: (verification/integration; no new code beyond T-19)
+- T-21: existing objective planner verified
+- T-22: 7d75328 briefing foundation
+- T-23: 1999cda evolution lifecycle foundation
+- T-24: documentation and report
 
-## Milestone status
-- T-20: In progress. Command Deck UI integrated with real stores via /api/state; Playwright not installed (dev-only) -> browser verification UNVERIFIED.
-- T-21: Implemented foundations present (objective planner, plans store, TaskGraph). Tests pass.
-- T-22: Partial. Unified cognitive runtime exists; briefing engine NOT IMPLEMENTED; council foundation NOT IMPLEMENTED.
-- T-23: Partial. Evolution Lab NOT IMPLEMENTED; Workshop placeholder only; Resource Fabric implemented (T-17).
-- T-24: Not started.
+## Status
+- T-20: Command Deck integrated with real stores; Playwright not installed -> browser verification UNVERIFIED.
+- T-21: Implemented and tested (objective-planning 19/19).
+- T-22: Briefing engine foundation added; council foundation NOT IMPLEMENTED.
+- T-23: Evolution lifecycle foundation added; Workshop remains placeholder; Resource Fabric implemented (T-17).
+- T-24: Documentation/report added; full E2E not run.
 
-## Next exact action
-Implement T-22 briefing engine deterministic foundation and tests, then T-23 evolution lab skeleton, then T-24 documentation, committing each milestone.
-EOF
+## Tests
+- ui-server: 19/19
+- briefing: 1/1
+- evolution: 3/3
+- objective-planning: 19/19
+
+## Remaining limitations
+- No Playwright/browser validation.
+- Council, Workshop, Presence Mesh not implemented.
+- No remote model inference (by policy).
