@@ -446,6 +446,12 @@ export class ExecutiveControlPlane {
     });
   }
 
+  autonomyStatus() {
+    const configured = {};
+    for (const [domain, level] of this.#levels) configured[domain] = level;
+    return Object.freeze({ configured, readonly: true, source: 'APEX_AUTONOMY_LEVELS', restartRequired: true });
+  }
+
   registerCancellable(id, cancel) {
     if (typeof id !== 'string' || id.length === 0 || typeof cancel !== 'function') throw new TypeError('a cancellable operation needs an id and callback');
     if (this.#killSwitch.active) {

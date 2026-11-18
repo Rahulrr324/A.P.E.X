@@ -27,9 +27,12 @@ export const UI_PAGE = `<!doctype html>
   <div class="topbar-meta">
     <span id="clock" class="meta mono"></span>
     <span id="session" class="meta"></span>
-    <span id="mode" class="badge">Classic</span>
-    <span id="autonomy" class="badge">L0 Observe</span>
-    <span id="connectivity" class="badge">Loopback</span>
+    <span id="mode" class="badge">Deck</span>
+    <span id="autonomy" class="badge">Autonomy: —</span>
+    <span id="connectivity" class="badge">Connecting</span>
+    <span id="gauge-cpu" class="badge" aria-label="CPU">CPU: —</span>
+    <span id="gauge-mem" class="badge" aria-label="Memory">Mem: —</span>
+    <span id="gauge-storage" class="badge" aria-label="Storage">Storage: —</span>
   </div>
   <div class="topbar-actions">
     <button id="new-session" type="button" class="quiet small">New session</button>
@@ -95,7 +98,6 @@ export const UI_PAGE = `<!doctype html>
         <textarea id="chat-text" rows="3" maxlength="4000" placeholder="Command APEX, or ask for a verified read"></textarea>
         <div class="row">
           <button id="send" type="submit">Send</button>
-          <button id="voice-ptt" type="button" class="quiet small">Push to talk</button>
           <span id="activity" class="meta" role="status"></span>
         </div>
       </form>
@@ -310,7 +312,9 @@ body[data-core-state="degraded"] .core { filter: drop-shadow(0 0 12px rgba(255,1
 body[data-core-state="lockdown"] .core { filter: drop-shadow(0 0 18px rgba(225,6,0,0.5)); }
 body[data-core-state="lockdown"] .core-ring, body[data-core-state="lockdown"] .core-center { stroke: var(--red); }
 body[data-motion="reduced"] .core-ring, body[data-motion="reduced"] .core-segments path { animation: none !important; }
-@keyframes spin { to { transform: rotate(360deg); transform-origin: 120px 120px; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+.core, .core-ring, .core-segments, .core-segments path { transform-origin: 120px 120px; transform-box: view-box; }
+.core-segments { transform-origin: 120px 120px; }
 button { background: var(--cyan); color: #04131a; border: 0; border-radius: 8px; padding: .45rem .8rem; font: inherit; font-weight: 600; cursor: pointer; }
 button:disabled { opacity: .45; cursor: default; }
 button.quiet { background: transparent; color: var(--text); border: 1px solid var(--line); font-weight: 500; }
@@ -357,6 +361,12 @@ const els = {
   send: document.getElementById('send'),
   activity: document.getElementById('activity'),
   session: document.getElementById('session'),
+  mode: document.getElementById('mode'),
+  autonomy: document.getElementById('autonomy'),
+  connectivity: document.getElementById('connectivity'),
+  gaugeCpu: document.getElementById('gauge-cpu'),
+  gaugeMem: document.getElementById('gauge-mem'),
+  gaugeStorage: document.getElementById('gauge-storage'),
   newSession: document.getElementById('new-session'),
   tasks: document.getElementById('tasks'),
   plans: document.getElementById('plans'),
@@ -396,7 +406,7 @@ const els = {
   conversationHistory: document.getElementById('conversation-history'),
 };
 
-const state = { core: 'idle', view: 'deck', last: null, reducedMotion: false };
+const state = { core: 'idle', view: 'deck', last: null, lastSeq: 0, reducedMotion: false };
 
 function showBanner(text) {
   if (!els.banner) return;
@@ -599,6 +609,25 @@ async function refresh() {
     if (els.session) els.session.textContent = s.session && s.session.id ? 'session ' + String(s.session.id).slice(0, 8) : 'no session yet';
     if (s.session && s.session.unavailable) showBanner(s.session.unavailable);
 
+    // Dynamic badges from real state.
+    if (els.mode) els.mode.textContent = state.view === 'deck' ? 'Deck' : 'Workspace: ' + state.view;
+    if (els.autonomy) {
+      const cfg = s.autonomy && s.autonomy.configured ? s.autonomy.configured : {};
+      const entries = Object.entries(cfg);
+      els.autonomy.textContent = entries.length ? 'Autonomy: ' + entries.map(([d,l]) => d + '=' + l).join(', ') : 'Autonomy: default (L2)';
+    }
+    // Resource gauges.
+    const r = s.resources || {};
+    if (els.gaugeCpu) els.gaugeCpu.textContent = 'CPU: ' + (r.cpu && r.cpu.logicalCount != null ? r.cpu.logicalCount + ' cores' : 'n/a');
+    if (els.gaugeMem) {
+      const mem = r.memory || {};
+      els.gaugeMem.textContent = 'Mem: ' + (mem.available ? Math.round((mem.freeBytes||0)/1048576) + '/' + Math.round((mem.totalBytes||0)/1048576) + ' MB' : 'n/a');
+    }
+    if (els.gaugeStorage) {
+      const st = Array.isArray(r.storage) && r.storage.length ? r.storage[0] : null;
+      els.gaugeStorage.textContent = 'Storage: ' + (st && st.reported ? Math.round((st.availableBytes||0)/1048576) + '/' + Math.round((st.totalBytes||0)/1048576) + ' MB' : 'n/a');
+    }
+
     const [memory, knowledge, world] = await Promise.all([
       api('/api/memory').catch(() => ({ records: [] })),
       api('/api/knowledge').catch(() => ({ claims: [] })),
@@ -608,11 +637,15 @@ async function refresh() {
     renderKnowledge(knowledge.claims);
     renderWorld(world);
 
-    const coreState = s.session && s.session.unavailable ? 'degraded'
+    const ks = s.killSwitch || {};
+    const coreState = ks.policyUnavailable ? 'degraded'
+      : ks.active === true ? 'lockdown'
+      : (s.session && s.session.unavailable) ? 'degraded'
       : (Array.isArray(s.tasks) && s.tasks.some((t) => t.approval)) ? 'awaiting'
       : (Array.isArray(s.tasks) && s.tasks.some((t) => t.status === 'running')) ? 'executing'
       : 'idle';
     setCore(coreState, coreState === 'idle' ? 'Standing by.' : 'State derived from verified records.');
+    if (els.connectivity) els.connectivity.textContent = 'Connected';
   } catch (error) {
     showBanner(error.message);
     setCore('degraded', 'State unavailable.');
@@ -628,6 +661,10 @@ function setView(view) {
   document.querySelectorAll('.view').forEach((section) => {
     section.classList.toggle('active', section.dataset.view === view);
   });
+  const deck = document.querySelector('.deck');
+  if (deck) deck.style.display = view === 'deck' ? '' : 'none';
+  const workspace = document.getElementById('workspace');
+  if (workspace) workspace.style.display = view === 'deck' ? 'none' : '';
 }
 
 async function boot() {
@@ -717,12 +754,6 @@ if (els.docSearch) {
   });
 }
 
-if (els.voicePtt) {
-  els.voicePtt.addEventListener('click', () => {
-    showBanner('Voice architecture is available only as a scaffold; no microphone or speech service is activated.');
-  });
-}
-
 if (els.bootSkip) {
   els.bootSkip.addEventListener('click', () => {
     if (els.boot) els.boot.classList.add('hidden');
@@ -737,9 +768,52 @@ const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: 
 state.reducedMotion = !!(reduce && reduce.matches);
 document.body.dataset.motion = state.reducedMotion ? 'reduced' : 'full';
 
+let eventSource = null;
+let watchdog = null;
+let degraded = false;
+function armWatchdog() {
+  if (watchdog) clearTimeout(watchdog);
+  watchdog = setTimeout(() => {
+    degraded = true;
+    if (els.connectivity) els.connectivity.textContent = 'Degraded';
+    setCore('degraded', 'Event stream lost.');
+  }, 1500);
+}
+function connectEvents() {
+  if (typeof EventSource !== 'function') return;
+  try { if (eventSource) eventSource.close(); } catch (e) {}
+  eventSource = new EventSource('/api/events');
+  eventSource.onopen = () => { degraded = false; if (els.connectivity) els.connectivity.textContent = 'Connected'; armWatchdog(); };
+  const reset = () => { degraded = false; if (els.connectivity) els.connectivity.textContent = 'Connected'; armWatchdog(); if (!degraded) refresh().catch(() => {}); };
+  eventSource.addEventListener('hello', reset);
+  eventSource.addEventListener('heartbeat', reset);
+  eventSource.addEventListener('state-changed', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      // detect seq gaps? store last seq
+      if (state.lastSeq && data.seq && data.seq !== state.lastSeq + 1) {
+        // gap or duplicate; reconcile
+      }
+      state.lastSeq = data.seq || state.lastSeq;
+    } catch {}
+    reset();
+  });
+  eventSource.addEventListener('progress', (e) => {
+    try { const data = JSON.parse(e.data); if (els.activity) els.activity.textContent = data.stage === 'model' ? 'waiting for the model…' : 'working: ' + data.stage; } catch { if (els.activity) els.activity.textContent = 'working…'; }
+    armWatchdog();
+  });
+  eventSource.addEventListener('chat', () => { if (!degraded) refresh().catch(() => {}); armWatchdog(); });
+  eventSource.onerror = () => {
+    if (els.connectivity) els.connectivity.textContent = 'Degraded';
+    setCore('degraded', 'Event stream error.');
+  };
+  armWatchdog();
+}
+
 boot().then(() => {
   setView('deck');
   refresh();
+  connectEvents();
   setInterval(refresh, 15000);
 });
 `;

@@ -3,6 +3,7 @@
 // through the existing user-origin controller method, and the UI adds no action, no
 // store, and no authorization rule of its own. One request is in flight at a time,
 // because session turns are ordered and the conversation log is the continuity record.
+import fs from 'node:fs';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { UI_CLIENT, UI_CSS, UI_PAGE } from './assets.js';
@@ -242,7 +243,7 @@ export function createUiServer({
   token,
   host = '127.0.0.1',
   port = 0,
-  heartbeatMs = 15000,
+  heartbeatMs = 500,
   chatTimeoutMs = UI_LIMITS.chatTimeoutMs,
   now = () => new Date(),
 } = {}) {
@@ -256,6 +257,32 @@ export function createUiServer({
   const subscribers = new Set();
   let chatInFlight = false;
   let listeningPort = null;
+  let eventSeq = 0;
+  const watchers = new Map();
+  const debounceTimers = new Map();
+
+  function makeEnvelope(type, category, payload = null, correlationId = null) {
+    eventSeq += 1;
+    return Object.freeze({
+      schema: 'apex.state-event/1',
+      seq: eventSeq,
+      at: now().toISOString(),
+      type,
+      category,
+      payload: payload && typeof payload === 'object' ? payload : null,
+      correlationId: correlationId ?? null,
+    });
+  }
+
+  function broadcastEvent(name, envelope) {
+    broadcast(name, envelope);
+  }
+
+  function emitStateChange(category, payload = null, correlationId = null) {
+    const envelope = makeEnvelope('state-changed', category, payload, correlationId);
+    broadcastEvent('state-changed', envelope);
+    return envelope;
+  }
 
   function presented(req, url) {
     const header = req.headers.authorization;
@@ -305,6 +332,8 @@ export function createUiServer({
       if (res.writableEnded || res.destroyed) return unsubscribe(sub);
       try {
         res.write(': ping\n\n');
+        const hb = makeEnvelope('heartbeat', 'connectivity', { ok: true });
+        broadcastTo(sub, 'heartbeat', hb);
       } catch {
         unsubscribe(sub);
       }
@@ -442,6 +471,29 @@ export function createUiServer({
       reasoningState = { unavailable: `reasoning state is unavailable: ${err.message}` };
     }
 
+    let autonomy = null;
+    try {
+      autonomy = app.ecp && typeof app.ecp.autonomyStatus === 'function' ? app.ecp.autonomyStatus() : { configured: {}, readonly: true };
+    } catch (err) {
+      autonomy = { unavailable: `autonomy state is unavailable: ${err.message}` };
+    }
+
+    let killSwitch = null;
+    try {
+      killSwitch = app.ecp && typeof app.ecp.killSwitchStatus === 'function' ? app.ecp.killSwitchStatus() : { active: false, policyUnavailable: true };
+    } catch (err) {
+      killSwitch = { active: null, policyUnavailable: true, unavailable: `kill-switch state is unavailable: ${err.message}` };
+    }
+
+    let resources = null;
+    try {
+      resources = app.resources && typeof app.resources.telemetry === 'function'
+        ? await app.resources.telemetry({ storagePaths: [app.dataDir] })
+        : { unavailable: 'resource fabric is not configured' };
+    } catch (err) {
+      resources = { unavailable: `resource state is unavailable: ${err.message}` };
+    }
+
     return {
       at: now().toISOString(),
       session,
@@ -454,6 +506,9 @@ export function createUiServer({
       sources,
       documents: documentsState,
       reasoning: reasoningState,
+      autonomy,
+      killSwitch,
+      resources,
       limits: {
         maxMessageChars: UI_LIMITS.maxMessageChars,
         maxTurns: UI_LIMITS.maxTurns,
@@ -515,6 +570,7 @@ export function createUiServer({
       };
       sendJson(res, 200, payload);
       broadcast('chat', { operationId: payload.operation?.id ?? null, status: payload.status });
+      emitStateChange('conversation', { operationId: payload.operation?.id ?? null, status: payload.status }, payload.operation?.id ?? null);
     } finally {
       if (timer) clearTimeout(timer);
       chatInFlight = false;
@@ -556,6 +612,7 @@ export function createUiServer({
         ? await app.controller.retryTask(taskId, stepId)
         : await app.controller.cancelTask(taskId);
     sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
+    emitStateChange('tasks', { taskId, kind }, null);
   }
 
   // T-17: reading an objective is the same user-origin `plan.outline` call the CLI makes, on the
@@ -658,6 +715,57 @@ export function createUiServer({
 
     if (method === 'GET' && url.pathname === '/api/state') {
       sendJson(res, 200, await snapshot());
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/autonomy') {
+      try {
+        sendJson(res, 200, app.ecp && typeof app.ecp.autonomyStatus === 'function' ? app.ecp.autonomyStatus() : { configured: {}, readonly: true });
+      } catch (err) {
+        sendJson(res, 503, { error: `autonomy state is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/resources') {
+      try {
+        const data = app.resources && typeof app.resources.telemetry === 'function'
+          ? await app.resources.telemetry({ storagePaths: [app.dataDir] })
+          : { unavailable: 'resource fabric is not configured' };
+        sendJson(res, 200, data);
+      } catch (err) {
+        sendJson(res, 503, { error: `resource state is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/killswitch') {
+      try {
+        const status = app.ecp && typeof app.ecp.killSwitchStatus === 'function' ? app.ecp.killSwitchStatus() : { active: false, policyUnavailable: true };
+        sendJson(res, 200, status);
+      } catch (err) {
+        sendJson(res, 503, { error: `kill-switch state is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/safety/lockdown') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      if (typeof body.reason !== 'string' || body.reason.trim().length === 0) { sendJson(res, 400, { error: 'reason is required' }); return; }
+      try {
+        const result = await app.controller.safetyLockdown({ reason: body.reason.trim() });
+        sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
+        emitStateChange('safety', { active: true }, null);
+      } catch (err) { sendJson(res, 500, { error: err.message }); }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/safety/release') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      if (typeof body.reason !== 'string' || body.reason.trim().length === 0) { sendJson(res, 400, { error: 'reason is required' }); return; }
+      if (body.confirm !== true) { sendJson(res, 400, { error: 'confirmation is required' }); return; }
+      try {
+        const result = await app.controller.safetyRelease({ reason: body.reason.trim() });
+        sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
+        emitStateChange('safety', { active: false }, null);
+      } catch (err) { sendJson(res, 500, { error: err.message }); }
       return;
     }
     if (method === 'GET' && url.pathname === '/api/health') {
@@ -796,6 +904,7 @@ export function createUiServer({
       }
       const rotated = await app.session.rotate();
       sendJson(res, 200, { status: 'success_verified', display: `Started session ${String(rotated.sessionId).slice(0, 8)}.`, session: { id: rotated.sessionId } });
+      emitStateChange('session', { sessionId: rotated.sessionId }, null);
       return;
     }
     const taskMatch = /^\/api\/tasks\/([^/]+)\/(approve|retry|cancel)$/.exec(url.pathname);
@@ -807,9 +916,42 @@ export function createUiServer({
     if (method === 'POST' && planMatch) {
       const result = await app.controller.planApprove({ target: decodeURIComponent(planMatch[1]) });
       sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
+      emitStateChange('plans', { planId: decodeURIComponent(planMatch[1]) }, null);
       return;
     }
     sendJson(res, 404, { error: 'not found' });
+  }
+
+  function scheduleWatchEmit(filename) {
+    if (debounceTimers.has(filename)) clearTimeout(debounceTimers.get(filename));
+    const t = setTimeout(() => {
+      debounceTimers.delete(filename);
+      try {
+        if (filename === 'kill-switch.json') {
+          const status = app.ecp && typeof app.ecp.killSwitchStatus === 'function' ? app.ecp.killSwitchStatus() : null;
+          emitStateChange('safety', { killSwitch: status }, null);
+        } else if (filename === 'runtime.json') {
+          let status = null;
+          try { status = app.runtime && typeof app.runtime.status === 'function' ? app.runtime.status() : null; } catch { status = null; }
+          Promise.resolve(status).then((s) => { emitStateChange('runtime', { runtime: s }, null); }).catch(() => {});
+        }
+      } catch { /* watcher errors must not crash */ }
+    }, 100);
+    debounceTimers.set(filename, t);
+  }
+
+  function startWatchers() {
+    const dataDir = app.dataDir;
+    if (typeof dataDir !== 'string' || dataDir.length === 0) return;
+    const targetFiles = new Set(['kill-switch.json', 'runtime.json']);
+    try {
+      const watcher = fs.watch(dataDir, { persistent: false }, (eventType, filename) => {
+        if (!filename || !targetFiles.has(String(filename))) return;
+        scheduleWatchEmit(String(filename));
+      });
+      watcher.on('error', () => { /* ignore watcher errors */ });
+      watchers.set('dir', watcher);
+    } catch { /* watching is best-effort */ }
   }
 
   const server = createServer((req, res) => {
@@ -839,12 +981,17 @@ export function createUiServer({
         server.listen({ host, port }, () => {
           server.off('error', onError);
           listeningPort = server.address().port;
+          startWatchers();
           const hostLabel = host === '::1' ? '[::1]' : host;
           resolve({ host, port: listeningPort, token: authToken, url: `http://${hostLabel}:${listeningPort}/?token=${authToken}` });
         });
       });
     },
     async stop() {
+      for (const w of watchers.values()) { try { w.close(); } catch { /* ignore */ } }
+      watchers.clear();
+      for (const t of debounceTimers.values()) clearTimeout(t);
+      debounceTimers.clear();
       for (const sub of [...subscribers]) {
         try { sub.res.end(); } catch { /* already gone */ }
         unsubscribe(sub);
