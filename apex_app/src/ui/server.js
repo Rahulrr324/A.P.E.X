@@ -8,6 +8,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { UI_CLIENT, UI_CSS, UI_PAGE } from './assets.js';
 import { collectHealth } from '../health.js';
+import { buildBriefing } from '../briefing/index.js';
 
 export const UI_LIMITS = Object.freeze({
   maxBodyBytes: 64 * 1024,
@@ -784,6 +785,19 @@ export function createUiServer({
         sendJson(res, 200, await app.situation.state({ limit: 10 }));
       } catch (err) {
         sendJson(res, 503, { error: `the situational state is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/briefing') {
+      try {
+        const goals = Array.isArray(app.goals?.list) ? await app.goals.list() : [];
+        const plans = Array.isArray(app.plans?.list) ? await app.plans.list() : [];
+        const tasks = Array.isArray(app.taskStore?.list) ? await app.taskStore.list() : [];
+        let situation = null;
+        try { situation = app.situation && typeof app.situation.state === 'function' ? await app.situation.state({ limit: 10 }) : null; } catch { situation = null; }
+        sendJson(res, 200, buildBriefing({ goals, plans, tasks, situation }));
+      } catch (err) {
+        sendJson(res, 503, { error: `the briefing is unavailable: ${err.message}` });
       }
       return;
     }
