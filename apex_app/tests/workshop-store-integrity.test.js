@@ -68,6 +68,24 @@ test('Workshop refuses to append after malformed JSON is found', async (t) => {
   await assert.rejects(() => store.append(artifact), /corrupt/i);
 });
 
+test('Workshop duplicate composition is idempotent and does not append a second record', async (t) => {
+  const { store, artifact } = await fixture(t);
+  const first = await store.append(artifact);
+  const second = await store.append(artifact);
+  assert.equal(first.appended, true);
+  assert.equal(second.appended, false);
+  assert.equal(second.duplicate, true);
+  assert.equal((await store.status()).artifacts, 1);
+});
+
+test('Workshop rejects a conflicting duplicate identity instead of overwriting history', async (t) => {
+  const { store, artifact } = await fixture(t);
+  await store.append(artifact);
+  const conflict = { ...artifact, identityDigest: '0'.repeat(64) };
+  await assert.rejects(() => store.append(conflict), /identity digest|different content/i);
+  assert.equal((await store.status()).artifacts, 1);
+});
+
 test('Workshop store rejects a record whose identity digest does not match its content', async (t) => {
   const { store, artifact } = await fixture(t);
   const forged = { ...artifact, title: 'Changed after identity' };
