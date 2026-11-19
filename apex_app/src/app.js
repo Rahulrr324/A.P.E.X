@@ -62,7 +62,7 @@ import { taskFeedbackActions } from './actions/task-feedback-actions.js';
 import { safetyActions } from './actions/safety-actions.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 import { ResourceFabric } from './resources/fabric.js';
-import { createWorkshopService } from './workshop/service.js';
+import { createWorkshopService } from './workshop/service.js';\nimport { DeviceTrustService } from './security/device-trust.js';
 
 export function createApp({
   dataDir,
@@ -255,7 +255,7 @@ export function createApp({
 
   // The Workshop is a design sheet store: composition is a user write, inspection and simulation
   // are reads. Nothing in it executes code, and a simulation is never an authorization.
-  const workshop = createWorkshopService({ dataDir, now: clock });
+  const workshop = createWorkshopService({ dataDir, now: clock });\n\n  // Device trust records enrollment and authenticates signed device messages. It does not\n  // grant capabilities; all action authorization remains with the existing ECP.\n  const deviceTrust = new DeviceTrustService(path.join(dataDir, 'devices.jsonl'), { now: clock, idFactory });
 
   for (const def of [...builtinActions(), ...safetyActions(registry.controlPlane), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
@@ -272,7 +272,7 @@ export function createApp({
     const pr = await proposals.status();
     const wm = await worldModel.status();
     const dl = await deadlines.status();
-    const current = await session.peek();
+    const deviceStatus = await deviceTrust.status();\n    const current = await session.peek();
     if (current.status === 'corrupt') {
       throw new StoreError(`${current.detail}; run "apex new" to start a new session`);
     }
@@ -321,7 +321,7 @@ export function createApp({
       corruptWorldModelLines: wm.counts === null ? null : wm.corrupt.length,
       worldModelDetail: wm.detail ?? null,
       sessionId: current.state?.sessionId ?? null,
-      model: gateway.describe(),
+      model: gateway.describe(),\n      deviceTrust: deviceStatus,
       filesystemRoot: rootForContext,
       filesystemWorkspaces: workspaces === null ? [] : workspaces.list(),
     };
