@@ -11,9 +11,9 @@
 - Package 1 code commit: `875e3bc46703179ab50bcd22aa71c96939574f03` (`T-30 P1: define Core state ownership and precedence`).
 - Package 2 code commit: `ba08127` (`T-30 P2: version owner events and reconcile streams`).
 - Package 3 code commit: `fa9f8f9` (`T-30 P3: integrate live Core state and safety controls`); full verification is recorded below.
-- Package 4 code commits: `d3b0936` (`T-30 P4: implement owner-backed workspaces with truthful states`) and `3c753c2` (`T-30 P4: finish workspace empty-state and document-count truthfulness`); verification is recorded below.
+- Package 4 code commits: `d3b0936` (`T-30 P4: implement owner-backed workspaces with truthful states`), `3c753c2` (`T-30 P4: finish workspace empty-state and document-count truthfulness`) and `1ce7bf4` (`T-30 P4: show Resource Fabric diagnostics in the system workspace`); the P4 full suite ran on `1ce7bf4` and this report is committed afterwards as `d8b1880` plus this correction. Verification is recorded below.
 - HEAD at the Package 0 code checkpoint: `45ae99a87645be444070741d6cdea1e31c45f352`; later checkpoints are recorded below.
-- Active branch: `arena/c4691a2f-a-p-e-x`; `origin/main` was fetched and remained at the starting commit. No branch switch, push, PR, tag, or history rewrite was performed.
+- Active branch: `arena/c4691a2f-a-p-e-x`; `origin/main` was fetched and remained at the starting commit. At the Package 0 checkpoint no branch switch, push, PR, tag or history rewrite had been performed; the later checkpoints pushed this branch and opened PR #5 (`T-30: complete Packages 0–4 for APEX`, base `main`).
 - `stark/` and the unrelated OnCall Memory project were not modified.
 - Package 0 tests ran against the working tree that was committed unchanged as `45ae99a`.
 
