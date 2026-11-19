@@ -7,8 +7,12 @@
 - T-25 Council and repository-repair work is present on GitHub; the prior push blocker is no longer current.
 - The latest baseline adds a Workshop service, append-only store, action definitions, controller integration and view markup.
 - Review found the Workshop UI was incomplete: it referenced API endpoints that did not exist, and the compose form had no submit handler.
-- Follow-up commits add the missing GET/list, POST/compose and POST/simulate API routes through the existing controller/ECP, plus the UI form handler.
-- These edits were made through GitHub's file API. No local Node process, browser or full test runner was available here; the changes are not claimed as executed or tested.
+- Follow-up commits add the missing GET/list, POST/compose and POST/simulate API routes through the existing controller/ECP, plus the UI form handler and finite non-negative budget validation.
+- Workshop persistence now refuses appends when the JSONL parser reports corrupt lines or the digest chain is broken. Reads fail closed on corrupt records or a broken chain. Status explicitly reports corruption as a damaged chain.
+- Stored identity digests are recomputed from the canonical composition during record validation, so content altered without a matching identity digest is rejected.
+- Added `tests/workshop-store-integrity.test.js` covering append/read, restart recovery, tampering, malformed JSON and identity-digest mismatch.
+- Commits: `fa4aaed` integrity enforcement; `f653714` integrity tests; `73fcc36` budget validation.
+- These edits were made through GitHub's file API. No local Node process, browser or full test runner was available here; the new tests and UI changes are not claimed as executed or tested.
 - Inference remains prohibited. No model runtime, local inference server, remote endpoint or model download is used. Voice remains out of scope.
 
 ## T-25 — Council and release foundation
@@ -43,12 +47,11 @@ Not started. Existing subsystems remain separately implemented; a complete unifi
 
 ## Required next verification
 
-1. Run `npm test` from `apex_app/` and record exact totals.
-2. Add dedicated Workshop tests for normalization, bounds, content identity, append-only behavior, digest-chain tampering, restart recovery, action origins, ECP refusal and controller/API boundaries.
+1. Run `npm test` from `apex_app/` and record exact totals; specifically run `node --test tests/workshop-store-integrity.test.js`.
+2. Add coverage for normalization limits, action origins, ECP refusal and controller/API boundaries.
 3. Run Playwright against isolated temporary data and exercise Workshop compose/list/simulate on desktop and mobile.
 4. Verify malformed JSON, oversized input, missing artifacts, corrupt stores and unavailable storage fail safely.
-5. Inspect the Workshop store's chain-integrity behavior on ordinary reads and before appends; status reporting alone is not sufficient evidence of integrity enforcement.
-6. Continue T-26/T-27 integration only after tests pass; then implement T-28 and T-29.
+5. Continue T-26/T-27 integration only after tests pass; then implement T-28 and T-29.
 
 ## Global constraints
 
