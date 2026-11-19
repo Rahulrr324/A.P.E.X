@@ -12,6 +12,7 @@ import { BoundedEventHistory, canQueueEventFrame, EVENT_HEARTBEAT_MS, HEARTBEAT_
 import { collectHealth } from '../health.js';
 import { buildBriefing } from '../briefing/index.js';
 import { APP_NAME } from '../identity.js';
+import { planRisk } from '../plans/model.js';
 
 export const UI_LIMITS = Object.freeze({
   maxBodyBytes: 64 * 1024,
@@ -132,45 +133,214 @@ function singleLine(value, max) {
   return String(value ?? '').replace(/[\r\n\t]+/g, ' ').slice(0, max);
 }
 
+function projectGoal(goal) {
+  const criteria = (Array.isArray(goal.criteria) ? goal.criteria : []).slice(0, 8).map((criterion) => ({
+    id: singleLine(criterion.id, 16),
+    description: singleLine(criterion.description, 240),
+    status: singleLine(criterion.status, 32),
+    basis: criterion.basis ?? 'user_stated',
+    requirement: criterion.requirement ?? 'required',
+    ref: criterion.ref ?? null,
+    requiredEvidence: criterion.requiredEvidence ? singleLine(criterion.requiredEvidence, 200) : null,
+    confirmation: criterion.confirmation && typeof criterion.confirmation === 'object'
+      ? {
+        decision: criterion.confirmation.decision ?? null,
+        reason: criterion.confirmation.reason ? singleLine(criterion.confirmation.reason, 240) : null,
+        operationId: criterion.confirmation.operationId ?? null,
+        at: criterion.confirmation.at ?? null,
+      }
+      : null,
+    evidence: (Array.isArray(criterion.evidence) ? criterion.evidence : []).slice(0, 8).map((entry) => ({
+      kind: entry.kind ?? null,
+      operationId: entry.operationId ?? null,
+      detail: entry.detail ? singleLine(entry.detail, 240) : null,
+      at: entry.at ?? null,
+    })),
+  }));
+  const decomposition = {};
+  for (const key of ['prerequisites', 'constraints', 'resources', 'timeConditions', 'blockers', 'unknowns']) {
+    decomposition[key] = (Array.isArray(goal[key]) ? goal[key] : []).slice(0, 8).map((item) => ({
+      text: singleLine(item.text, 220),
+      basis: item.basis ?? 'user_stated',
+      ref: item.ref ?? null,
+    }));
+  }
+  const gating = criteria.filter((criterion) => criterion.requirement !== 'suggested' && criterion.requirement !== 'declined');
+  const statusHistory = Array.isArray(goal.statusHistory) ? goal.statusHistory : [];
+  const revisionHistory = Array.isArray(goal.revisionHistory) ? goal.revisionHistory : [];
+  return {
+    id: String(goal.id),
+    origin: goal.origin ?? null,
+    request: singleLine(goal.request, 400),
+    status: singleLine(goal.status, 32),
+    priority: Number.isInteger(goal.priority) ? goal.priority : null,
+    deadline: goal.deadline ?? null,
+    revision: Number.isSafeInteger(goal.revision) ? goal.revision : null,
+    blockedReason: goal.blockedReason ? singleLine(goal.blockedReason, 240) : null,
+    contradiction: goal.contradiction ? {
+      criterionId: goal.contradiction.criterionId ?? null,
+      operationId: goal.contradiction.operationId ?? null,
+      detail: goal.contradiction.detail ? singleLine(goal.contradiction.detail, 240) : null,
+      at: goal.contradiction.at ?? null,
+    } : null,
+    completion: goal.completion ? {
+      at: goal.completion.at ?? null,
+      criteria: (Array.isArray(goal.completion.criteria) ? goal.completion.criteria : []).slice(0, 8).map((entry) => ({
+        criterionId: entry.criterionId ?? null,
+        operationId: entry.operationId ?? null,
+      })),
+      declined: (Array.isArray(goal.completion.declined) ? goal.completion.declined : []).slice(0, 8),
+    } : null,
+    supersededBy: goal.supersededBy ?? null,
+    dependsOn: (Array.isArray(goal.dependsOn) ? goal.dependsOn : []).slice(0, 8).map((id) => String(id)),
+    planIds: (Array.isArray(goal.planIds) ? goal.planIds : []).slice(0, 12).map((id) => String(id)),
+    taskIds: (Array.isArray(goal.taskIds) ? goal.taskIds : []).slice(0, 12).map((id) => String(id)),
+    entityIds: (Array.isArray(goal.entityIds) ? goal.entityIds : []).slice(0, 12).map((id) => String(id)),
+    worldEventIds: (Array.isArray(goal.worldEventIds) ? goal.worldEventIds : []).slice(0, 12).map((id) => String(id)),
+    criteria,
+    progress: {
+      required: gating.length,
+      satisfied: gating.filter((criterion) => criterion.status === 'satisfied').length,
+      contradicted: gating.filter((criterion) => criterion.status === 'contradicted').length,
+      pending: gating.filter((criterion) => criterion.status !== 'satisfied' && criterion.status !== 'contradicted').length,
+    },
+    decomposition,
+    statusHistory: statusHistory.slice(-12).map((entry) => ({
+      from: entry.from ?? null,
+      to: singleLine(entry.to, 32),
+      at: entry.at ?? null,
+      reason: entry.reason ? singleLine(entry.reason, 240) : null,
+    })),
+    statusHistoryTotal: statusHistory.length,
+    revisionHistory: revisionHistory.slice(-12).map((entry) => ({
+      revision: Number.isSafeInteger(entry.revision) ? entry.revision : null,
+      at: entry.at ?? null,
+      reason: entry.reason ? singleLine(entry.reason, 240) : null,
+    })),
+    revisionHistoryTotal: revisionHistory.length,
+    createdAt: goal.createdAt ?? null,
+    updatedAt: goal.updatedAt ?? null,
+  };
+}
+
 function projectTask(task) {
   return {
     id: String(task.id),
-    goal: singleLine(task.goal, 300),
+    goal: singleLine(task.goal, 400),
+    goalId: task.goalId ?? null,
+    planId: task.planId ?? null,
     origin: task.origin ?? null,
-    status: task.status,
+    planner: task.planner ?? null,
+    status: singleLine(task.status, 32),
+    lastReason: task.lastReason ? singleLine(task.lastReason, 240) : null,
+    approvedAt: task.approvedAt ?? null,
     createdAt: task.createdAt ?? null,
     updatedAt: task.updatedAt ?? null,
     steps: (Array.isArray(task.steps) ? task.steps : []).slice(0, 8).map((step) => ({
-      id: step.id,
-      action: singleLine(step.action, 60),
+      id: singleLine(step.id, 32),
+      description: singleLine(step.description, 300),
+      action: singleLine(step.action, 80),
       permission: step.permission ?? null,
-      status: step.status,
+      status: singleLine(step.status, 32),
+      dependsOn: (Array.isArray(step.dependsOn) ? step.dependsOn : []).slice(0, 8).map((id) => String(id)),
       outcome: step.outcome ?? null,
-      approval: step.approval ? true : false,
+      summary: step.summary ? singleLine(step.summary, 240) : null,
+      operationId: step.operationId ?? null,
+      approval: step.approval ? {
+        approvedBy: step.approval.approvedBy ?? null,
+        at: step.approval.at ?? null,
+      } : null,
     })),
   };
 }
 
 function projectPlan(plan) {
+  const stepResults = plan.stepResults && typeof plan.stepResults === 'object' ? plan.stepResults : {};
+  const milestones = (Array.isArray(plan.milestones) ? plan.milestones : []).slice(0, 4).map((milestone) => {
+    const stepIds = (Array.isArray(milestone.steps) ? milestone.steps : []).slice(0, 8).map((id) => String(id));
+    const recorded = stepIds.map((id) => stepResults[id]).filter(Boolean);
+    return {
+      id: singleLine(milestone.id, 16),
+      title: singleLine(milestone.title, 120),
+      description: milestone.description ? singleLine(milestone.description, 220) : null,
+      dependsOn: (Array.isArray(milestone.dependsOn) ? milestone.dependsOn : []).slice(0, 4).map((id) => String(id)),
+      checkpoint: milestone.checkpoint ? singleLine(milestone.checkpoint, 240) : null,
+      verification: milestone.verification ? singleLine(milestone.verification, 240) : null,
+      steps: stepIds,
+      recordedProgress: {
+        total: stepIds.length,
+        completed: recorded.filter((result) => result.status === 'completed').length,
+        failed: recorded.filter((result) => result.status === 'failed').length,
+        uncertain: recorded.filter((result) => result.status === 'uncertain').length,
+        recorded: recorded.length,
+      },
+    };
+  });
   return {
     id: String(plan.id),
+    origin: plan.origin ?? null,
     goalId: plan.goalId ?? null,
-    outcome: singleLine(plan.outcome, 300),
-    status: plan.status,
-    version: Number.isInteger(plan.version) ? plan.version : null,
-    approved: plan.approval ? true : false,
-    activated: plan.activation ? true : false,
-    milestones: (Array.isArray(plan.milestones) ? plan.milestones : []).slice(0, 4).map((milestone) => ({
-      id: milestone.id,
-      title: singleLine(milestone.title, 120),
-      steps: (Array.isArray(milestone.steps) ? milestone.steps : []).slice(0, 8).map((id) => String(id)),
+    goalRevision: Number.isSafeInteger(plan.goalRevision) ? plan.goalRevision : null,
+    outcome: singleLine(plan.outcome, 400),
+    status: singleLine(plan.status, 32),
+    version: Number.isSafeInteger(plan.version) ? plan.version : null,
+    risk: Array.isArray(plan.steps) && plan.steps.length ? planRisk(plan.steps) : 'unknown',
+    approved: plan.approval !== null && plan.approval !== undefined,
+    approval: plan.approval ? {
+      at: plan.approval.at ?? null,
+      version: Number.isSafeInteger(plan.approval.version) ? plan.approval.version : null,
+      contentHashPrefix: typeof plan.approval.contentHash === 'string' ? plan.approval.contentHash.slice(0, 16) : null,
+    } : null,
+    activated: Boolean(plan.activation),
+    activation: plan.activation ? {
+      at: plan.activation.at ?? null,
+      taskId: plan.activation.taskId ?? null,
+    } : null,
+    blockedReason: plan.blockedReason ? singleLine(plan.blockedReason, 300) : null,
+    failureReason: plan.failureReason ? singleLine(plan.failureReason, 300) : null,
+    cancelledReason: plan.cancelledReason ? singleLine(plan.cancelledReason, 300) : null,
+    preconditions: (Array.isArray(plan.preconditions) ? plan.preconditions : []).slice(0, 8).map((text) => singleLine(text, 240)),
+    assertions: (Array.isArray(plan.assertions) ? plan.assertions : []).slice(0, 8).map((assertion) => ({
+      kind: assertion.kind ?? null,
+      text: assertion.text ? singleLine(assertion.text, 240) : null,
+      ref: assertion.ref ?? null,
+      basis: assertion.basis ?? null,
     })),
-    steps: (Array.isArray(plan.steps) ? plan.steps : []).slice(0, 8).map((step) => ({
-      id: step.id,
-      action: singleLine(step.action, 60),
-      status: step.status ?? null,
-      milestoneId: step.milestoneId ?? null,
+    resources: plan.resources && typeof plan.resources === 'object' ? { ...plan.resources } : null,
+    milestones,
+    steps: (Array.isArray(plan.steps) ? plan.steps : []).slice(0, 8).map((step) => {
+      const result = stepResults[step.id] ?? null;
+      return {
+        id: singleLine(step.id, 32),
+        description: singleLine(step.description, 300),
+        action: singleLine(step.action, 80),
+        dependsOn: (Array.isArray(step.dependsOn) ? step.dependsOn : []).slice(0, 8).map((id) => String(id)),
+        expectedResult: step.expectedResult ? singleLine(step.expectedResult, 240) : null,
+        verification: step.verification ? singleLine(step.verification, 240) : null,
+        criterionId: step.criterionId ?? null,
+        risk: step.risk ?? 'unknown',
+        reversibility: step.reversibility ?? 'unknown',
+        recovery: step.recovery ? singleLine(step.recovery, 240) : null,
+        milestoneId: step.milestoneId ?? null,
+        priority: step.priority ?? null,
+        result: result ? {
+          status: result.status ?? null,
+          operationId: result.operationId ?? null,
+          taskId: result.taskId ?? null,
+          at: result.at ?? null,
+          detail: result.detail ? singleLine(result.detail, 240) : null,
+        } : null,
+      };
+    }),
+    history: (Array.isArray(plan.history) ? plan.history : []).slice(-16).map((entry) => ({
+      version: Number.isSafeInteger(entry.version) ? entry.version : null,
+      kind: singleLine(entry.kind, 40),
+      at: entry.at ?? null,
+      reason: entry.reason ? singleLine(entry.reason, 240) : null,
     })),
+    historyTotal: Array.isArray(plan.history) ? plan.history.length : 0,
+    createdAt: plan.createdAt ?? null,
+    updatedAt: plan.updatedAt ?? null,
   };
 }
 
@@ -262,6 +432,141 @@ function projectApprovals(tasks, plans) {
     draftPlanCount: draftPlans.length,
     draftPlans: draftPlans.slice(0, UI_LIMITS.maxWorkItems),
     truncatedDraftPlans: draftPlans.length > UI_LIMITS.maxWorkItems,
+  };
+}
+
+function approvalCapability(action, registry, planStep = null, taskStep = null) {
+  const definition = typeof registry?.get === 'function' ? registry.get(action) : null;
+  const permission = definition?.permission ?? taskStep?.permission ?? null;
+  return {
+    action: singleLine(action, 80),
+    permission,
+    risk: planStep?.risk ?? definition?.risk ?? 'unknown',
+    scope: definition?.resourceScope
+      ? { recorded: true, resource: singleLine(definition.resourceScope, 240) }
+      : { recorded: false, resource: null },
+    reversibility: planStep?.reversibility ?? (permission === 'read' ? 'read_only' : 'unknown'),
+  };
+}
+
+function combinedRisk(capabilities) {
+  const values = capabilities.map((capability) => capability.risk);
+  const rank = { low: 0, medium: 1, high: 2 };
+  if (values.length === 0 || values.some((value) => !Object.hasOwn(rank, value))) return 'unknown';
+  return values.reduce((worst, value) => rank[value] > rank[worst] ? value : worst, 'low');
+}
+
+function projectApprovalItems({ tasks = [], plans = [], situation = null, situationRows = [], registry = null } = {}) {
+  const planById = new Map((Array.isArray(plans) ? plans : []).map((plan) => [String(plan.id), plan]));
+  const items = [];
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    const steps = Array.isArray(task.steps) ? task.steps : [];
+    const linkedPlan = task.planId ? planById.get(String(task.planId)) : null;
+    if (task.status === 'proposed') {
+      const capabilities = steps.map((step) => {
+        const planStep = linkedPlan?.steps?.find((candidate) => candidate.id === step.id) ?? null;
+        return approvalCapability(step.action, registry, planStep, step);
+      });
+      items.push({
+        id: `task:${String(task.id)}`,
+        kind: 'task_plan',
+        taskId: String(task.id),
+        taskOrigin: task.origin ?? null,
+        planner: task.planner ?? null,
+        at: task.createdAt ?? null,
+        request: singleLine(task.goal, 400),
+        capabilities,
+        risk: combinedRisk(capabilities),
+        reversibility: capabilities.map(({ action, reversibility }) => ({ action, value: reversibility })),
+        expiresAt: null,
+        expiryStatus: 'not_recorded',
+      });
+    }
+    for (const step of steps) {
+      if (step.status !== 'awaiting_approval') continue;
+      const planStep = linkedPlan?.steps?.find((candidate) => candidate.id === step.id) ?? null;
+      const capability = approvalCapability(step.action, registry, planStep, step);
+      items.push({
+        id: `task-step:${String(task.id)}:${String(step.id)}`,
+        kind: 'task_step',
+        taskId: String(task.id),
+        stepId: String(step.id),
+        taskOrigin: task.origin ?? null,
+        planner: task.planner ?? null,
+        at: task.updatedAt ?? task.createdAt ?? null,
+        request: singleLine(step.description || step.action, 400),
+        capabilities: [capability],
+        risk: capability.risk,
+        reversibility: capability.reversibility,
+        expiresAt: null,
+        expiryStatus: 'not_recorded',
+      });
+    }
+  }
+  for (const plan of Array.isArray(plans) ? plans : []) {
+    if (plan.status !== 'draft' || plan.approval) continue;
+    const capabilities = (Array.isArray(plan.steps) ? plan.steps : []).map((step) => approvalCapability(step.action, registry, step));
+    items.push({
+      id: `plan:${String(plan.id)}`,
+      kind: 'plan',
+      planId: String(plan.id),
+      version: Number.isSafeInteger(plan.version) ? plan.version : null,
+      at: plan.updatedAt ?? plan.createdAt ?? null,
+      request: singleLine(plan.outcome, 400),
+      capabilities,
+      risk: combinedRisk(capabilities),
+      reversibility: capabilities.map(({ action, reversibility }) => ({ action, value: reversibility })),
+      expiresAt: null,
+      expiryStatus: 'not_recorded',
+    });
+  }
+  const eventRows = Array.isArray(situationRows) ? situationRows : [];
+  const situationState = situation && typeof situation === 'object' ? situation : null;
+  const pendingSituational = Array.isArray(situationState?.pendingApprovals) ? situationState.pendingApprovals : [];
+  for (const pending of pendingSituational) {
+    const row = eventRows.find((candidate) => candidate?.event?.id === pending.eventId) ?? null;
+    const event = row?.event ?? null;
+    items.push({
+      id: `situation:${String(pending.decisionId)}`,
+      kind: 'situation',
+      decisionId: String(pending.decisionId),
+      eventId: String(pending.eventId),
+      at: pending.at ?? event?.at ?? null,
+      request: singleLine(pending.reason || event?.payload?.summary || event?.type || 'situational approval request', 400),
+      requestedAction: pending.action ?? null,
+      recordedSignificance: row?.assessment?.significance?.level ?? null,
+      eventScope: event ? {
+        source: singleLine(event.source, 64),
+        category: singleLine(event.category, 40),
+        type: singleLine(event.type, 160),
+        refs: [
+          ...(event.goalRefs ?? []).map((id) => `goal:${singleLine(id, 64)}`),
+          ...(event.planRefs ?? []).map((id) => `plan:${singleLine(id, 64)}`),
+          ...(event.taskRefs ?? []).map((id) => `task:${singleLine(id, 64)}`),
+        ].slice(0, 12),
+        stale: event.validUntil !== null && event.validUntil !== undefined && Date.parse(event.validUntil) <= Date.parse(situationState.at ?? new Date().toISOString()),
+      } : null,
+      capabilities: [],
+      risk: 'unknown',
+      reversibility: 'not_applicable_no_action_named',
+      expiresAt: null,
+      expiryStatus: 'not_recorded',
+      provenance: event?.provenance ? {
+        origin: event.provenance.origin ?? null,
+        reporter: event.provenance.reporter ?? null,
+        operationId: event.provenance.operationId ?? null,
+        provider: event.provenance.provider ?? null,
+      } : null,
+    });
+  }
+  items.sort((left, right) => Date.parse(right.at ?? 0) - Date.parse(left.at ?? 0));
+  return {
+    items: items.slice(0, UI_LIMITS.maxWorkItems),
+    total: items.length,
+    truncated: items.length > UI_LIMITS.maxWorkItems,
+    situationalTotal: Number.isSafeInteger(situationState?.counts?.pendingApprovals) ? situationState.counts.pendingApprovals : pendingSituational.length,
+    situationalTruncated: Number.isSafeInteger(situationState?.counts?.pendingApprovals)
+      && situationState.counts.pendingApprovals > pendingSituational.length,
   };
 }
 
@@ -575,6 +880,281 @@ export function createUiServer({
     };
   }
 
+  function availabilityOf(sources) {
+    const values = Object.values(sources);
+    const available = values.filter((source) => source?.available === true).length;
+    return available === values.length ? 'available' : available === 0 ? 'unavailable' : 'partial';
+  }
+
+  async function missionControlSnapshot() {
+    const [goals, plans, tasks] = await Promise.all([
+      captureRows('GoalStore', app.goals, (rows) => ({
+        total: rows.length,
+        truncated: rows.length > UI_LIMITS.maxWorkItems,
+        items: rows.slice(0, UI_LIMITS.maxWorkItems).map(projectGoal),
+      })),
+      captureRows('PlanStore', app.plans, (rows) => ({
+        total: rows.length,
+        truncated: rows.length > UI_LIMITS.maxWorkItems,
+        items: rows.slice(0, UI_LIMITS.maxWorkItems).map(projectPlan),
+      })),
+      captureRows('TaskStore', app.taskStore, (rows) => ({
+        total: rows.length,
+        truncated: rows.length > UI_LIMITS.maxWorkItems,
+        items: rows.slice(0, UI_LIMITS.maxWorkItems).map(projectTask),
+      })),
+    ]);
+    const sources = {
+      goals: goals.rows ? { available: true, ...goals.state } : goals.state,
+      plans: plans.rows ? { available: true, ...plans.state } : plans.state,
+      tasks: tasks.rows ? { available: true, ...tasks.state } : tasks.state,
+    };
+    return { status: availabilityOf(sources), at: now().toISOString(), sources };
+  }
+
+  async function approvalCentreSnapshot() {
+    const [taskRead, planRead, situationRead] = await Promise.all([
+      captureRows('TaskStore', app.taskStore, (rows) => ({ available: true, total: rows.length })),
+      captureRows('PlanStore', app.plans, (rows) => ({ available: true, total: rows.length })),
+      captureOwner(async () => {
+        if (typeof app.situation?.state !== 'function' || typeof app.situation?.events !== 'function') {
+          throw new Error('situational approval state is unavailable');
+        }
+        const [state, eventPage] = await Promise.all([
+          app.situation.state({ limit: 20 }),
+          app.situation.events({ limit: UI_LIMITS.maxWorkItems }),
+        ]);
+        if (!state || !Array.isArray(state.pendingApprovals) || !eventPage || !Array.isArray(eventPage.rows)) {
+          throw new Error('situational approval state is malformed');
+        }
+        return { state, eventPage };
+      }, ({ state, eventPage }) => ({
+        state,
+        eventPage,
+        total: Number.isSafeInteger(state.counts?.pendingApprovals) ? state.counts.pendingApprovals : state.pendingApprovals.length,
+        truncated: eventPage.truncated === true,
+      })),
+    ]);
+    const sources = {
+      tasks: taskRead.state,
+      plans: planRead.state,
+      situation: situationRead.available
+        ? { available: true, total: situationRead.total, truncated: situationRead.truncated }
+        : { available: false, error: situationRead.error },
+    };
+    const projection = projectApprovalItems({
+      tasks: taskRead.rows ?? [],
+      plans: planRead.rows ?? [],
+      situation: situationRead.available ? situationRead.state : null,
+      situationRows: situationRead.available ? situationRead.eventPage.rows : [],
+      registry: app.registry,
+    });
+    const status = availabilityOf(sources);
+    const knownTotal = projection.total;
+    const items = projection.items.map((item) => {
+      const row = item.kind === 'situation'
+        ? (situationRead.eventPage?.rows ?? []).find((candidate) => candidate?.event?.id === item.eventId)
+        : null;
+      return {
+        ...item,
+        basis: item.kind === 'situation' ? 'recorded_observation' : 'owner_record',
+        ...(row?.event ? {
+          event: {
+            source: singleLine(row.event.source, 64),
+            sourceEventId: singleLine(row.event.sourceEventId, 128),
+            summary: singleLine(row.event.payload?.summary ?? row.event.type, 300),
+          },
+        } : {}),
+      };
+    });
+    const situationalOmitted = Math.max(0, projection.situationalTotal - (situationRead.available ? situationRead.state.pendingApprovals.length : 0));
+    return {
+      status,
+      available: status !== 'unavailable',
+      at: now().toISOString(),
+      sources,
+      items,
+      total: knownTotal + situationalOmitted,
+      truncated: projection.truncated || projection.situationalTruncated || situationalOmitted > 0,
+      note: 'Only owner-recorded requests are listed. Risk, scope, reversibility, and expiry are shown as unknown or not recorded when their owner has no such field.',
+    };
+  }
+
+  async function timelineSnapshot(limit = UI_LIMITS.maxWorkItems) {
+    const bound = Number.isInteger(limit) ? Math.max(1, Math.min(limit, UI_LIMITS.maxWorkItems)) : UI_LIMITS.maxWorkItems;
+    const [memoryRead, knowledgeRead, worldRead] = await Promise.all([
+      captureOwner(async () => {
+        if (typeof app.memory?.list !== 'function' || typeof app.memory?.status !== 'function') throw new Error('memory is not configured');
+        const [records, status] = await Promise.all([
+          app.memory.list({ limit: bound }),
+          app.memory.status(),
+        ]);
+        if (!Array.isArray(records) || !Number.isSafeInteger(status.records)) throw new Error('memory timeline read is malformed');
+        return { records, total: status.records, corrupt: status.corrupt };
+      }, ({ records, total, corrupt }) => ({
+        total,
+        corrupt: Number.isSafeInteger(corrupt) ? corrupt : null,
+        truncated: total > records.length,
+        items: records.map((record) => ({
+          id: String(record.id),
+          kind: Array.isArray(record.provenance?.replaces) && record.provenance.replaces.length > 0 ? 'correction' : 'memory',
+          at: record.createdAt,
+          summary: singleLine(record.content, 1000),
+          status: record.status ?? null,
+          provenance: {
+            source: record.source ?? null,
+            memoryKind: record.kind ?? null,
+            origin: record.provenance?.origin ?? null,
+            operationId: record.provenance?.operationId ?? null,
+            updateMode: record.provenance?.updateMode ?? null,
+            backend: record.provenance?.backend ?? null,
+            replaces: (record.provenance?.replaces ?? []).slice(0, 8),
+            replacedBy: (record.replacedBy ?? []).slice(0, 8),
+          },
+        })),
+      })),
+      captureOwner(async () => {
+        if (typeof app.knowledge?.timeline !== 'function') throw new Error('knowledge timeline is not configured');
+        return app.knowledge.timeline({ limit: bound });
+      }, (page) => {
+        if (!page || !Array.isArray(page.items) || !Number.isSafeInteger(page.total)) throw new Error('knowledge timeline read is malformed');
+        return { total: page.total, truncated: page.truncated === true, items: page.items };
+      }),
+      captureOwner(async () => {
+        if (typeof app.worldModel?.timeline !== 'function') throw new Error('world model timeline is not configured');
+        return app.worldModel.timeline({ limit: bound });
+      }, (page) => {
+        if (!page || !Array.isArray(page.items) || !Number.isSafeInteger(page.total)) throw new Error('world model timeline read is malformed');
+        return { total: page.total, truncated: page.truncated === true, items: page.items };
+      }),
+    ]);
+    const sources = { memory: memoryRead, knowledge: knowledgeRead, world: worldRead };
+    const collected = [];
+    for (const [source, result] of Object.entries(sources)) {
+      if (result.available !== true || !Array.isArray(result.items)) continue;
+      for (const item of result.items) collected.push({ ...item, source });
+    }
+    collected.sort((a, b) => Date.parse(b.at ?? 0) - Date.parse(a.at ?? 0) || String(a.id).localeCompare(String(b.id)));
+    const total = Object.values(sources).reduce((sum, source) => sum + (source.available === true && Number.isSafeInteger(source.total) ? source.total : 0), 0);
+    const truncated = collected.length > bound
+      || Object.values(sources).some((source) => source.available === true && source.truncated === true);
+    const availableSources = Object.values(sources).filter((source) => source.available === true).length;
+    const damaged = memoryRead.available === true && Number.isSafeInteger(memoryRead.corrupt) && memoryRead.corrupt > 0;
+    const status = availableSources === 0 ? 'unavailable'
+      : availableSources < Object.keys(sources).length || damaged ? 'partial' : 'available';
+    return {
+      status,
+      at: now().toISOString(),
+      sources,
+      items: collected.slice(0, bound),
+      total,
+      limit: bound,
+      truncated,
+    };
+  }
+
+  async function briefingSnapshot() {
+    const [goals, plans, tasks, situation] = await Promise.all([
+      captureRows('GoalStore', app.goals, (rows) => ({ total: rows.length })),
+      captureRows('PlanStore', app.plans, (rows) => ({ total: rows.length })),
+      captureRows('TaskStore', app.taskStore, (rows) => ({ total: rows.length })),
+      captureOwner(async () => {
+        if (typeof app.situation?.state !== 'function') throw new Error('SituationStore is not configured');
+        const value = await app.situation.state({ limit: 20 });
+        if (!value || !Array.isArray(value.alerts) || !Array.isArray(value.recent)) throw new Error('SituationStore returned an invalid briefing view');
+        return value;
+      }, (value) => ({
+        total: Number.isSafeInteger(value.counts?.events) ? value.counts.events : value.recent.length,
+        alerts: value.alerts,
+        observations: value.recent,
+      })),
+    ]);
+    const sources = {
+      goals: goals.rows ? { available: true, ...goals.state } : goals.state,
+      plans: plans.rows ? { available: true, ...plans.state } : plans.state,
+      tasks: tasks.rows ? { available: true, ...tasks.state } : tasks.state,
+      situation: situation.available === true
+        ? { available: true, total: situation.total }
+        : { available: false, error: situation.error },
+    };
+    const status = availabilityOf(sources);
+    const briefing = buildBriefing({
+      goals: (goals.rows ?? []).map((goal) => ({ ...goal, title: goal.request ?? goal.title ?? goal.id })),
+      plans: plans.rows ?? [],
+      tasks: tasks.rows ?? [],
+      situation: situation.available === true
+        ? { alerts: situation.alerts, observations: situation.observations }
+        : null,
+      now,
+    });
+    const counts = { ...briefing.counts };
+    if (!goals.rows) counts.goals = null;
+    if (!plans.rows) counts.plans = null;
+    if (!tasks.rows) {
+      counts.tasks = null;
+      counts.approvals = null;
+      counts.blocked = null;
+      counts.running = null;
+    }
+    if (!situation.available) counts.alerts = null;
+    const countText = (key) => sources[key].available === true ? String(sources[key].total) : 'unavailable';
+    const concise = [
+      'Goals: ' + countText('goals'),
+      'Plans: ' + countText('plans'),
+      'Tasks: ' + countText('tasks'),
+      'Situational events: ' + countText('situation'),
+    ].join(' | ');
+    return {
+      ...briefing,
+      status,
+      available: status !== 'unavailable',
+      sources,
+      counts,
+      concise,
+      inferred: tasks.rows ? briefing.inferred : [],
+      note: briefing.note + ' A partial status means at least one owner could not be read; unavailable counts are not zero.',
+    };
+  }
+
+  async function situationSnapshot(limit = 20) {
+    if (typeof app.situation?.state !== 'function' || typeof app.situation?.events !== 'function') {
+      throw new Error('situational awareness is not configured');
+    }
+    const [state, eventPage] = await Promise.all([
+      app.situation.state({ limit }),
+      app.situation.events({ limit: Math.min(limit, UI_LIMITS.maxWorkItems) }),
+    ]);
+    const byId = new Map(eventPage.rows.map((row) => [row.event.id, row]));
+    return {
+      ...state,
+      recent: (Array.isArray(state.recent) ? state.recent : []).map((entry) => {
+        const row = byId.get(entry.id);
+        const event = row?.event;
+        return {
+          ...entry,
+          summary: singleLine(event?.payload?.summary ?? event?.type ?? entry.type, 300),
+          sourceEventId: event?.sourceEventId ?? null,
+          validUntil: event?.validUntil ?? null,
+          basis: 'recorded_observation',
+          provenance: event?.provenance ? {
+            origin: event.provenance.origin ?? null,
+            reporter: event.provenance.reporter ?? null,
+            operationId: event.provenance.operationId ?? null,
+            provider: event.provenance.provider ?? null,
+          } : null,
+          refs: event ? {
+            entities: (event.entityRefs ?? []).slice(0, 12),
+            goals: (event.goalRefs ?? []).slice(0, 12),
+            plans: (event.planRefs ?? []).slice(0, 12),
+            tasks: (event.taskRefs ?? []).slice(0, 12),
+          } : null,
+        };
+      }),
+      recentTruncated: eventPage.truncated === true,
+      recentTotal: eventPage.total,
+    };
+  }
+
   function publishOwnerSnapshots(next) {
     const emitted = [];
     for (const owner of STATE_EVENT_OWNERS) {
@@ -834,13 +1414,7 @@ export function createUiServer({
     let goals = [];
     try {
       const all = await app.goals?.list?.() ?? [];
-      goals = (Array.isArray(all) ? all : []).slice(0, UI_LIMITS.maxWorkItems).map((goal) => ({
-        id: String(goal.id),
-        title: singleLine(goal.title ?? goal.outcome ?? goal.request ?? '', 200),
-        status: goal.status ?? null,
-        priority: goal.priority ?? null,
-        createdAt: goal.createdAt ?? null,
-      }));
+      goals = (Array.isArray(all) ? all : []).slice(0, UI_LIMITS.maxWorkItems).map(projectGoal);
     } catch (err) {
       goals = [];
       session.unavailable = session.unavailable ?? `goal records are unavailable: ${err.message}`;
@@ -1150,6 +1724,24 @@ export function createUiServer({
       sendJson(res, 200, await snapshot());
       return;
     }
+    if (method === 'GET' && url.pathname === '/api/mission-control') {
+      sendJson(res, 200, await missionControlSnapshot());
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/approvals') {
+      sendJson(res, 200, await approvalCentreSnapshot());
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/timeline') {
+      const rawLimit = url.searchParams.get('limit');
+      const limit = rawLimit === null ? UI_LIMITS.maxWorkItems : Number(rawLimit);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > UI_LIMITS.maxWorkItems) {
+        sendJson(res, 400, { error: `limit must be an integer between 1 and ${UI_LIMITS.maxWorkItems}` });
+        return;
+      }
+      sendJson(res, 200, await timelineSnapshot(limit));
+      return;
+    }
     if (method === 'GET' && url.pathname === '/api/autonomy') {
       try {
         sendJson(res, 200, app.ecp && typeof app.ecp.autonomyStatus === 'function' ? app.ecp.autonomyStatus() : { configured: {}, readonly: true });
@@ -1343,20 +1935,47 @@ export function createUiServer({
     }
     if (method === 'GET' && url.pathname === '/api/situation') {
       try {
-        sendJson(res, 200, await app.situation.state({ limit: 10 }));
+        sendJson(res, 200, await situationSnapshot(20));
       } catch (err) {
         sendJson(res, 503, { error: `the situational state is unavailable: ${err.message}` });
       }
       return;
     }
+    if (method === 'POST' && url.pathname === '/api/situation/decide') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        sendJson(res, 400, { error: 'the body must be a JSON object' });
+        return;
+      }
+      const allowed = new Set(['event', 'response', 'reason']);
+      const extra = Object.keys(body).find((key) => !allowed.has(key));
+      if (extra) { sendJson(res, 400, { error: `unknown field: ${extra}` }); return; }
+      const responses = new Set(['ignore', 'record', 'investigate', 'notify', 'recommend']);
+      if (typeof body.event !== 'string' || body.event.length === 0 || body.event.length > 64) {
+        sendJson(res, 400, { error: 'event is required' }); return;
+      }
+      if (!responses.has(body.response)) {
+        sendJson(res, 400, { error: 'response must be one of ignore, record, investigate, notify, or recommend' }); return;
+      }
+      if (typeof body.reason !== 'string' || body.reason.trim().length === 0 || body.reason.trim().length > 500) {
+        sendJson(res, 400, { error: 'a decision reason of 1 to 500 characters is required' }); return;
+      }
+      try {
+        const result = await app.controller.situationDecide({
+          event: body.event,
+          response: body.response,
+          reason: body.reason.trim(),
+        });
+        sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
     if (method === 'GET' && url.pathname === '/api/briefing') {
       try {
-        const goals = Array.isArray(app.goals?.list) ? await app.goals.list() : [];
-        const plans = Array.isArray(app.plans?.list) ? await app.plans.list() : [];
-        const tasks = Array.isArray(app.taskStore?.list) ? await app.taskStore.list() : [];
-        let situation = null;
-        try { situation = app.situation && typeof app.situation.state === 'function' ? await app.situation.state({ limit: 10 }) : null; } catch { situation = null; }
-        sendJson(res, 200, buildBriefing({ goals, plans, tasks, situation }));
+        sendJson(res, 200, await briefingSnapshot());
       } catch (err) {
         sendJson(res, 503, { error: `the briefing is unavailable: ${err.message}` });
       }
@@ -1486,6 +2105,27 @@ export function createUiServer({
     const planMatch = /^\/api\/plans\/([^/]+)\/approve$/.exec(url.pathname);
     if (method === 'POST' && planMatch) {
       const result = await app.controller.planApprove({ target: decodeURIComponent(planMatch[1]) });
+      sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
+      scheduleOwnerRefresh();
+      return;
+    }
+    const cancelPlanMatch = /^\/api\/plans\/([^/]+)\/cancel$/.exec(url.pathname);
+    if (method === 'POST' && cancelPlanMatch) {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        sendJson(res, 400, { error: 'the body must be a JSON object' });
+        return;
+      }
+      const extra = Object.keys(body).find((key) => key !== 'reason');
+      if (extra) { sendJson(res, 400, { error: `unknown field: ${extra}` }); return; }
+      if (typeof body.reason !== 'string' || body.reason.trim().length === 0 || body.reason.trim().length > 500) {
+        sendJson(res, 400, { error: 'a plan cancellation reason of 1 to 500 characters is required' });
+        return;
+      }
+      const result = await app.controller.planCancel({
+        target: decodeURIComponent(cancelPlanMatch[1]),
+        reason: body.reason.trim(),
+      });
       sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
       scheduleOwnerRefresh();
       return;

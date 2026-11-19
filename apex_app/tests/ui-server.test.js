@@ -854,3 +854,334 @@ describe('Workshop API integration', () => {
     assert.equal(notJson.status, 415);
   });
 });
+
+// Package 4: the workspaces the page shows are projections of the owner stores. These tests drive
+// the real HTTP routes and the real stores, and assert that a workspace reports what an owner
+// recorded - provenance, lifecycle history and availability - without inventing a value.
+describe('owner-backed workspaces', () => {
+  const dataOf = (result) => result?.operation?.steps?.[0]?.result?.data ?? null;
+
+  async function seededApp(dir) {
+    const app = offlineApp(dir);
+    await app.memory.add({ content: 'the workspace fixture note is stored', provenance: { operationId: 'op-workspace-1' } });
+    await app.knowledge.add({
+      subject: 'the workspace fixture gate', relationship: 'has_status', object: 'closed',
+      provenance: { operationId: 'op-workspace-2' }, origin: 'user',
+    });
+    await app.worldModel.createEntity({
+      origin: 'user', entityId: 'workspace-site', category: 'project', name: 'Workspace Fixture Site',
+      evidence: [{ relation: 'supports', sourceType: 'user', sourceId: 'user' }],
+    });
+    const goalAdded = await app.controller.goalAdd({
+      request: 'ship the workspace fixture',
+      criteria: [{ description: 'the fixture is recorded', basis: 'user_stated' }],
+      priority: 3,
+    });
+    const planCreated = await app.plans.createPlan({
+      outcome: 'know which workspace records are stored',
+      steps: [{
+        id: 's1',
+        description: 'list the stored memory records',
+        action: 'memory.list',
+        input: {},
+        dependsOn: [],
+        expectedResult: 'the stored records are listed',
+        verification: 'the listing matches the store',
+        risk: 'low',
+      }],
+    });
+    await app.taskStore.createTask({
+      taskId: 'workspace-task-1',
+      goal: 'store the workspace review note',
+      origin: 'model',
+      planner: 'deterministic',
+      refs: { goalId: dataOf(goalAdded).goalId, planId: planCreated.plan.id },
+      steps: [{
+        id: 'w1',
+        description: 'store the workspace note',
+        action: 'memory.add',
+        permission: 'write',
+        input: { content: 'the workspace note' },
+        dependsOn: [],
+      }],
+      reason: 'recorded for the workspace fixture',
+    });
+    return { app, goalId: dataOf(goalAdded).goalId, planId: planCreated.plan.id };
+  }
+
+  test('mission control projects goals, plans and tasks with their recorded provenance', async () => {
+    const dir = tempDir();
+    const { app, goalId, planId } = await seededApp(dir);
+    const { base } = await uiOn(dir, { app });
+
+    const response = await request(base, '/api/mission-control', { bearer: TOKEN });
+    assert.equal(response.status, 200);
+    const value = await json(response);
+    assert.equal(value.status, 'available');
+    assert.equal(value.sources.goals.available, true);
+    assert.equal(value.sources.plans.available, true);
+    assert.equal(value.sources.tasks.available, true);
+    assert.equal(typeof value.at, 'string');
+
+    const goal = value.sources.goals.items.find((item) => item.id === goalId);
+    assert.ok(goal, 'the goal the controller recorded is projected');
+    assert.equal(goal.origin, 'user', 'the goal keeps the origin its store recorded');
+    assert.ok(Array.isArray(goal.criteria), 'criteria are projected');
+    assert.equal(goal.criteria[0].basis, 'user_stated');
+    assert.ok(Array.isArray(goal.statusHistory), 'the status history is projected rather than summarised away');
+
+    const plan = value.sources.plans.items.find((item) => item.id === planId);
+    assert.ok(plan, 'the draft plan the store recorded is projected');
+    assert.equal(plan.status, 'draft');
+    assert.equal(plan.risk, 'low');
+    assert.ok(Array.isArray(plan.history), 'the plan lifecycle history is projected');
+
+    const task = value.sources.tasks.items.find((item) => item.id === 'workspace-task-1');
+    assert.ok(task, 'the proposed task is projected');
+    assert.equal(task.status, 'proposed');
+    assert.equal(task.origin, 'model');
+    assert.equal(task.planner, 'deterministic');
+    assert.equal(task.steps[0].permission, 'write');
+  });
+
+  test('the approval centre names what the owner recorded and marks the rest unknown', async () => {
+    const dir = tempDir();
+    const { app, planId } = await seededApp(dir);
+    const { base } = await uiOn(dir, { app });
+
+    const value = await json(await request(base, '/api/approvals', { bearer: TOKEN }));
+    assert.equal(value.status, 'available');
+    assert.equal(value.available, true);
+    assert.ok(value.total >= 2, 'the proposed task and the unapproved draft plan are both pending');
+
+    const taskRequest = value.items.find((item) => item.kind === 'task_plan' && item.taskId === 'workspace-task-1');
+    assert.ok(taskRequest, 'the proposed task is an approval request');
+    assert.equal(taskRequest.taskOrigin, 'model');
+    assert.equal(taskRequest.planner, 'deterministic');
+    assert.equal(taskRequest.expiryStatus, 'not_recorded', 'a missing expiry is not invented');
+    assert.equal(taskRequest.expiresAt, null);
+    assert.ok(Array.isArray(taskRequest.reversibility));
+    assert.ok(['unknown', 'low', 'medium', 'high'].includes(taskRequest.risk), taskRequest.risk);
+
+    const planRequest = value.items.find((item) => item.kind === 'plan' && item.planId === planId);
+    assert.ok(planRequest, 'the unapproved draft plan is an approval request');
+    assert.equal(planRequest.basis, 'owner_record');
+    assert.equal(planRequest.expiryStatus, 'not_recorded');
+  });
+
+  test('the combined timeline keeps memory, knowledge and world-model provenance in order', async () => {
+    const dir = tempDir();
+    const { app } = await seededApp(dir);
+    const { base } = await uiOn(dir, { app });
+
+    const response = await request(base, '/api/timeline?limit=50', { bearer: TOKEN });
+    assert.equal(response.status, 200);
+    const value = await json(response);
+    assert.equal(value.status, 'available');
+    for (const name of ['memory', 'knowledge', 'world']) {
+      assert.equal(value.sources[name].available, true, `${name} is readable`);
+      assert.ok(Array.isArray(value.sources[name].items), `${name} projects its own items`);
+      assert.ok(Number.isInteger(value.sources[name].total), `${name} reports its own total`);
+    }
+
+    const sources = new Set(value.items.map((item) => item.source));
+    assert.deepEqual([...sources].sort(), ['knowledge', 'memory', 'world']);
+
+    const memoryItem = value.items.find((item) => item.source === 'memory');
+    assert.match(memoryItem.summary, /workspace fixture note/);
+    assert.ok(memoryItem.provenance, 'a memory row carries its provenance record');
+
+    const knowledgeItem = value.items.find((item) => item.source === 'knowledge');
+    assert.equal(knowledgeItem.kind, 'claim');
+    assert.equal(knowledgeItem.status, 'supported', 'the lifecycle state the owner derived is projected as-is');
+    assert.match(knowledgeItem.summary, /workspace fixture gate/);
+    assert.equal(knowledgeItem.provenance.origin, 'user_supplied', 'the origin the knowledge owner normalised is kept');
+    assert.equal(typeof knowledgeItem.provenance.operationId, 'string');
+
+    const worldItem = value.items.find((item) => item.source === 'world');
+    assert.equal(worldItem.type, 'entity_created');
+    assert.match(worldItem.summary, /Workspace Fixture Site/);
+    assert.equal(worldItem.provenance.origin, 'user');
+
+    const times = value.items.map((item) => Date.parse(item.at));
+    assert.deepEqual(times, [...times].sort((left, right) => right - left), 'the timeline is newest first');
+
+    const bounded = await json(await request(base, '/api/timeline?limit=1', { bearer: TOKEN }));
+    assert.equal(bounded.items.length, 1, 'the limit bounds the returned rows');
+    assert.equal(bounded.truncated, true);
+
+    const invalidLimit = await request(base, '/api/timeline?limit=0', { bearer: TOKEN });
+    assert.equal(invalidLimit.status, 400);
+    assert.match((await json(invalidLimit)).error, /limit must be an integer/);
+  });
+
+  test('an owner that cannot be read is reported, never shown as an empty or healthy store', async () => {
+    const dir = tempDir();
+    const { app } = await seededApp(dir);
+    app.knowledge.timeline = async () => { throw new Error('the knowledge log is unreadable'); };
+    app.situation.state = async () => { throw new Error('the situational log is unreadable'); };
+    const { base } = await uiOn(dir, { app });
+
+    const timeline = await json(await request(base, '/api/timeline', { bearer: TOKEN }));
+    assert.equal(timeline.status, 'partial');
+    assert.equal(timeline.sources.knowledge.available, false);
+    assert.match(timeline.sources.knowledge.error, /knowledge log is unreadable/);
+    assert.equal(timeline.sources.memory.available, true);
+    assert.ok(timeline.items.some((item) => item.source === 'memory'), 'the readable owners are still shown');
+
+    const approvals = await json(await request(base, '/api/approvals', { bearer: TOKEN }));
+    assert.equal(approvals.status, 'partial');
+    assert.equal(approvals.sources.situation.available, false);
+    assert.match(approvals.sources.situation.error, /situational log is unreadable/);
+    assert.ok(approvals.items.some((item) => item.kind === 'task_plan' || item.kind === 'plan'),
+      'the readable owners still name their pending requests');
+
+    const briefing = await json(await request(base, '/api/briefing', { bearer: TOKEN }));
+    assert.equal(briefing.status, 'partial');
+    assert.equal(briefing.sources.situation.available, false);
+    assert.equal(briefing.counts.alerts, null, 'an unavailable source is null, not zero');
+    assert.match(briefing.concise, /Situational events: unavailable/);
+  });
+
+  test('the briefing states what the recorded owners hold', async () => {
+    const dir = tempDir();
+    const { app } = await seededApp(dir);
+    const { base } = await uiOn(dir, { app });
+
+    const briefing = await json(await request(base, '/api/briefing', { bearer: TOKEN }));
+    assert.equal(briefing.status, 'available');
+    assert.equal(briefing.counts.goals, 1);
+    assert.equal(briefing.counts.plans, 1);
+    assert.equal(briefing.counts.tasks, 1);
+    assert.match(briefing.concise, /Goals: 1 \| Plans: 1 \| Tasks: 1/);
+    assert.ok(Array.isArray(briefing.facts) && briefing.facts.length > 0, 'facts come from the owners');
+    assert.ok(briefing.note.includes('unavailable counts are not zero'));
+  });
+
+  test('a plan cancellation is a controller write with a recorded reason, and it is not hidden', async () => {
+    const dir = tempDir();
+    const { app, planId } = await seededApp(dir);
+    const { base } = await uiOn(dir, { app });
+
+    const noReason = await post(base, `/api/plans/${planId}/cancel`, {});
+    assert.equal(noReason.status, 400);
+    assert.match((await json(noReason)).error, /reason/);
+    const extraField = await post(base, `/api/plans/${planId}/cancel`, { reason: 'why', force: true });
+    assert.equal(extraField.status, 400);
+    assert.match((await json(extraField)).error, /unknown field: force/);
+    const longReason = await post(base, `/api/plans/${planId}/cancel`, { reason: 'x'.repeat(501) });
+    assert.equal(longReason.status, 400);
+    assert.equal((await app.plans.get(planId)).status, 'draft', 'a refused request changes nothing');
+
+    const cancelled = await post(base, `/api/plans/${planId}/cancel`, { reason: 'the outcome is no longer wanted' });
+    assert.equal(cancelled.status, 200);
+    const result = await json(cancelled);
+    assert.equal(result.status, Outcome.PLAN_STORED, result.display);
+
+    const stored = await app.plans.get(planId);
+    assert.equal(stored.status, 'cancelled');
+    assert.equal(stored.cancelledReason, 'the outcome is no longer wanted');
+
+    const mission = await json(await request(base, '/api/mission-control', { bearer: TOKEN }));
+    const plan = mission.sources.plans.items.find((item) => item.id === planId);
+    assert.equal(plan.status, 'cancelled');
+    assert.equal(plan.cancelledReason, 'the outcome is no longer wanted');
+    assert.ok(plan.history.some((entry) => entry.kind === 'status:cancelled'
+      && entry.reason === 'the outcome is no longer wanted'),
+    'the cancellation is a recorded lifecycle entry, not a rewritten plan');
+    assert.equal((await app.taskStore.list()).length, 1, 'cancelling a plan does not touch any task record');
+
+    const unknown = await post(base, '/api/plans/no-such-plan/cancel', { reason: 'nothing to cancel' });
+    assert.equal(unknown.status, 200, 'a missing plan is a controller refusal, not a transport error');
+    assert.notEqual((await json(unknown)).status, Outcome.PLAN_STORED);
+  });
+
+  test('a situational decision is recorded through the controller and never executed by the page', async () => {
+    const dir = tempDir();
+    const app = offlineApp(dir);
+    const { base } = await uiOn(dir, { app });
+    const ingested = await app.controller.situationIngest({
+      source: 'test_provider',
+      sourceEventId: 'workspace-situation-1',
+      type: 'dependency_failed',
+      category: 'external',
+      payload: { summary: 'the workspace dependency failed' },
+      confidence: 0.9,
+    });
+    const eventId = dataOf(ingested).id;
+    const requested = await app.controller.situationDecide({
+      event: eventId,
+      response: 'request_approval',
+      reason: 'the user should choose what to do',
+    });
+    assert.equal(requested.status, Outcome.SUCCESS_VERIFIED, requested.display);
+
+    const approvals = await json(await request(base, '/api/approvals', { bearer: TOKEN }));
+    const pending = approvals.items.find((item) => item.kind === 'situation');
+    assert.ok(pending, 'the pending situational request appears in the approval centre');
+    assert.equal(pending.eventId, eventId);
+    assert.equal(pending.basis, 'recorded_observation');
+    assert.equal(pending.risk, 'unknown', 'an observation carries no invented risk');
+    assert.equal(pending.reversibility, 'not_applicable_no_action_named');
+    assert.equal(pending.provenance.origin, 'user');
+    assert.match(pending.event.summary, /workspace dependency failed/);
+
+    const notAllowed = await post(base, '/api/situation/decide', {
+      event: eventId, response: 'execute', reason: 'run it from the page',
+    });
+    assert.equal(notAllowed.status, 400);
+    assert.match((await json(notAllowed)).error, /response must be one of/);
+    const noReason = await post(base, '/api/situation/decide', { event: eventId, response: 'notify' });
+    assert.equal(noReason.status, 400);
+    assert.match((await json(noReason)).error, /reason/);
+    const extra = await post(base, '/api/situation/decide', {
+      event: eventId, response: 'notify', reason: 'recorded', action: 'backup.restore',
+    });
+    assert.equal(extra.status, 400);
+    assert.match((await json(extra)).error, /unknown field: action/);
+
+    const decided = await post(base, '/api/situation/decide', {
+      event: eventId, response: 'notify', reason: 'the user was told about the dependency',
+    });
+    assert.equal(decided.status, 200);
+    assert.equal((await json(decided)).status, Outcome.SUCCESS_VERIFIED);
+
+    const after = await json(await request(base, '/api/situation', { bearer: TOKEN }));
+    assert.equal(after.pendingApprovals.length, 0, 'the recorded decision settles the request');
+    assert.equal(after.counts.responses, 0, 'recording a decision recorded no execution response');
+    const approved = await json(await request(base, '/api/approvals', { bearer: TOKEN }));
+    assert.equal(approved.items.some((item) => item.kind === 'situation'), false);
+  });
+
+  test('reading every workspace creates no store file', async () => {
+    const dir = tempDir();
+    const { base } = await uiOn(dir);
+    const before = fs.readdirSync(dir).sort();
+    for (const pathname of ['/api/mission-control', '/api/approvals', '/api/timeline', '/api/briefing', '/api/sources', '/api/runtime']) {
+      const response = await request(base, pathname, { bearer: TOKEN });
+      assert.equal(response.status, 200, pathname);
+      await response.text();
+    }
+    assert.deepEqual(fs.readdirSync(dir).sort(), before, 'a projection read must not create owner state');
+    assert.deepEqual(before, [], 'the fixture starts from an empty data directory');
+  });
+
+  test('the page carries a status target and a renderer for every workspace', () => {
+    for (const id of ['mission-status', 'approval-state', 'approval-items', 'sentinel-status',
+      'sentinel-full', 'timeline-status', 'memory-timeline', 'briefing-status', 'conversation-status',
+      'mission-goals-status', 'mission-plans-status', 'mission-tasks-status']) {
+      assert.match(UI_PAGE, new RegExp(`id="${id}"`), id);
+    }
+    for (const endpoint of ['/api/mission-control', '/api/approvals', '/api/timeline',
+      '/api/situation', '/api/briefing']) {
+      assert.ok(UI_CLIENT.includes(endpoint), endpoint);
+    }
+    assert.ok(UI_CLIENT.includes("'/cancel'"), 'the plan cancellation control targets the controller route');
+    assert.ok(UI_CLIENT.includes('/api/situation/decide'), 'the decision form targets the controller route');
+    assert.match(UI_CLIENT, /refresh\(\)/, 'the workspaces are wired through the refresh cycle');
+    for (const renderer of ['renderMissionControl', 'renderApprovalCentre', 'renderSentinel',
+      'renderTimeline', 'renderBriefing', 'renderConversation']) {
+      assert.ok(UI_CLIENT.includes(renderer), renderer);
+    }
+  });
+});

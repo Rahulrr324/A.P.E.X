@@ -428,6 +428,23 @@ tasks and plans the stores hold, and buttons that call the same user-origin cont
 log, so it includes replies the model path stores as notices (for example a deterministic reading)
 as well as replayed turns.
 
+**T-30 Package 4 addendum (2026-11-19).** The page now has named workspaces, and each one is a
+projection of an owner store, never a second source of truth:
+
+| Workspace | Route | Owner records shown |
+|---|---|---|
+| Mission Control | `GET /api/mission-control` | GoalStore, PlanStore and TaskStore records with criteria, provenance, blockers, checkpoints and bounded status/lifecycle history |
+| Approval Centre | `GET /api/approvals` | proposed tasks, steps awaiting approval, unapproved draft plans and situational approval requests, with recorded risk/scope/reversibility/expiry or an explicit "unknown"/"not recorded" |
+| Sentinel | `GET /api/situation` | recorded situational events, assessments, decisions and provenance |
+| Memory Timeline | `GET /api/timeline?limit=N` | chronological MemoryStore records, KnowledgeStore claims/lifecycle decisions and WorldModelStore changes with their provenance |
+| Briefing | `GET /api/briefing` | recorded facts and explicitly labelled heuristic inferences from the owner stores |
+
+Every workspace reports its own loading, empty, error and unavailable states. A store that cannot be
+read says so, and a partial read names the missing owners; an unavailable count is `null`, not zero.
+Writes stay on the existing controller paths: `POST /api/tasks/:id/approve`, `POST /api/plans/:id/approve`,
+`POST /api/plans/:id/cancel` (a reason is required) and `POST /api/situation/decide`. Approving a
+record changes intent only: no control starts a task, runs a plan or executes a situational response.
+
 The surface is bounded and local: a strict Content-Security-Policy, no remote origin in the page or
 client, text written with `textContent` only, a JSON content type and an `x-apex-ui` header required
 on POST, a same-origin check whenever an `Origin` header is present, a 64 KiB body cap, 4,000-character
@@ -8954,9 +8971,13 @@ apex situation execute <decision-id> --input <json>
 apex situation status
 ```
 
-The local UI shows the same state at `GET /api/situation` and in its "Situational awareness" panel:
-recent events, alerts, and pending approvals. Decisions and execution stay in the CLI so the page
-adds no write path.
+The local UI shows the same state at `GET /api/situation` and in its Sentinel workspace: recent
+events, alerts, and pending approvals. Historically this section said decisions and execution stay
+in the CLI. **T-30 Package 4 addendum (2026-11-19):** the page can now record a non-executing
+decision (`ignore`, `record`, `investigate`, `notify`, `recommend`) through
+`POST /api/situation/decide`, which calls the same user-origin controller method as the CLI; the
+page cannot choose `execute`, and an approved execution still happens only through the CLI's
+separate `situation execute` step.
 
 Limitations: every event in this batch is supplied through the published ingestion contract (from
 the user, a test provider, or a cited APEX operation). There is no polling daemon, no network
