@@ -47,7 +47,8 @@ function validateEvent(event, previousHash, sequence) {
     return false;
   }
   if (event.type === 'enrolled' && (!HEX_256.test(event.secretHash ?? '') || typeof event.label !== 'string')) return false;
-  if (event.type === 'revoked' && (typeof event.reason !== 'string' || typeof event.priorSecretHash !== 'string')) return false;\n  if (event.type === 'message_accepted' && (!Number.isSafeInteger(event.deviceSequence) || event.deviceSequence < 1)) return false;
+  if (event.type === 'revoked' && (typeof event.reason !== 'string' || typeof event.priorSecretHash !== 'string')) return false;
+  if (event.type === 'message_accepted' && (!Number.isSafeInteger(event.deviceSequence) || event.deviceSequence < 1)) return false;
   return true;
 }
 
@@ -83,11 +84,15 @@ export class DeviceTrustService {
       if (event.type === 'enrolled') {
         if (devices.has(event.deviceId)) throw new StoreError(`duplicate device enrollment at line ${i + 1}`);
         devices.set(event.deviceId, { deviceId: event.deviceId, label: event.label, secretHash: event.secretHash, enrolledAt: event.at, revokedAt: null, revocationReason: null, lastSequence: 0 });
-      } else {
+      } else if (event.type === 'revoked') {
         const prior = devices.get(event.deviceId);
         if (!prior || prior.revokedAt || prior.secretHash !== event.priorSecretHash) throw new StoreError(`invalid device revocation at line ${i + 1}`);
         prior.revokedAt = event.at;
         prior.revocationReason = event.reason;
+      } else {
+        const prior = devices.get(event.deviceId);
+        if (!prior || prior.revokedAt || event.deviceSequence <= prior.lastSequence) throw new StoreError(`invalid accepted message sequence at line ${i + 1}`);
+        prior.lastSequence = event.deviceSequence;
       }
       events.push(event);
       previousHash = event.hash;
@@ -125,6 +130,7 @@ export class DeviceTrustService {
       device.revokedAt = event.at;
       device.revocationReason = fields.reason;
     }
+    if (type === 'message_accepted') this.#devices.get(fields.deviceId).lastSequence = fields.deviceSequence;
     return event;
   }
 
