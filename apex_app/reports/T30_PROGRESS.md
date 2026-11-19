@@ -1,8 +1,8 @@
 # T-30 Progress Report
 
-**Report checkpoint:** Packages 0–3 complete to their bounded scope, 2026-11-19 (UTC)
+**Report checkpoint:** Packages 0–4 complete to their bounded scope, 2026-11-19 (UTC)
 
-**Scope:** T-30 Packages 0–3 only. Packages 4–6 were intentionally not started.
+**Scope:** T-30 Packages 0–4 only. Packages 5–6 were intentionally not started.
 
 ## Repository checkpoint
 
@@ -11,6 +11,7 @@
 - Package 1 code commit: `875e3bc46703179ab50bcd22aa71c96939574f03` (`T-30 P1: define Core state ownership and precedence`).
 - Package 2 code commit: `ba08127` (`T-30 P2: version owner events and reconcile streams`).
 - Package 3 code commit: `fa9f8f9` (`T-30 P3: integrate live Core state and safety controls`); full verification is recorded below.
+- Package 4 code commits: `d3b0936` (`T-30 P4: implement owner-backed workspaces with truthful states`) and `3c753c2` (`T-30 P4: finish workspace empty-state and document-count truthfulness`); verification is recorded below.
 - HEAD at the Package 0 code checkpoint: `45ae99a87645be444070741d6cdea1e31c45f352`; later checkpoints are recorded below.
 - Active branch: `arena/c4691a2f-a-p-e-x`; `origin/main` was fetched and remained at the starting commit. No branch switch, push, PR, tag, or history rewrite was performed.
 - `stark/` and the unrelated OnCall Memory project were not modified.
@@ -24,7 +25,8 @@
 | 1 — Ledgers, architecture, requirements, numbering, state precedence/ownership | **Complete and verified** | Added dated ledger/requirements/architecture annotations and the ten-state source/precedence contract. Focused UI/core-state tests passed (26/26), syntax passed, and the P1 checkpoint full suite passed (3,733 total, 3,731 passed, 0 failed, 2 skipped); commit `875e3bc46703179ab50bcd22aa71c96939574f03`. |
 | 2 — Authoritative state events and cross-process observation | **Complete and verified** | Bounded versioned owner snapshots, cross-process refresh, replay/reconciliation, heartbeat/watchdog handling and preservation of transient events. Package-focused tests pass (36/36); syntax passes across 223 source files. Full Core-state integration was not claimed at the P2 checkpoint; its later P3 completion is recorded below. |
 | 3 — T-18 UI defects and lockdown integration | **Complete and verified** | All seven authoritative owner snapshots feed the live Core projection with full precedence and fail-closed validation; truthful boot/Quick boot, request-thinking, state visuals, and ECP safety UI are covered. Safety routes require local UI auth/CSRF, enforce the action's 240-character reason limit and release confirmation, return audit evidence, and do not resume paused runtime work. Focused tests 44/44; full suite passes (3,751 total, 3,749 passed, 0 failed, 2 skipped); syntax and diff checks pass. Browser execution remains unverified. |
-| 4–6 | Not started; intentionally deferred | Outside this request; no work on Packages 4–6 began. |
+| 4 — Truthful owner-backed workspaces | **Complete and verified** | Mission Control, Approval Centre, Sentinel, Memory Timeline, Conversation and the recorded Briefing are projections of the owning stores, including goals, plans, tasks, approvals, situational events, memory, knowledge and world-model history. Each workspace reports loading, empty, error, partial and unavailable states; provenance and lifecycle history are preserved, and writes stay on the existing controller paths. Focused tests 83/83 and 101/101; syntax passes; the P4 checkpoint full suite passed (see below). Browser execution remains unverified. |
+| 5–6 | Not started; intentionally deferred | Outside this request; no work on Packages 5–6 began. |
 
 ## Package 0 work completed
 
@@ -120,6 +122,29 @@
 - `apex_app/docs/APEX_V2_REQUIREMENTS.md`
 - `apex_app/reports/T30_PROGRESS.md`
 
+## Package 4 completed — truthful owner-backed workspaces
+
+- Added owner-backed projections and routes: `GET /api/mission-control` (GoalStore, PlanStore, TaskStore), `GET /api/approvals` (TaskStore, PlanStore and situational approval requests), `GET /api/timeline?limit=N` (MemoryStore, KnowledgeStore, WorldModelStore), an expanded `GET /api/situation`, and an expanded `GET /api/briefing`. Each answers with a per-source `available` flag, an error string when a source could not be read, and a `status` of `available`, `partial` or `unavailable`.
+- Added bounded chronological projections `KnowledgeStore.timeline()` and `WorldModelStore.timeline()` (1–100 rows). The combined timeline merges memory records with knowledge claims/retractions/resolutions and world-model changes in recorded-time order and reports `partial` when any owner is unreadable or memory reports corrupt records.
+- Goal projections now carry origin, criteria with basis/requirement, blockers, unknowns, contradictions, completion records, entity/world references and bounded status/revision history. Plan projections carry origin, risk, approval binding, activation task, preconditions, checkpoints with recorded progress, linked outcomes and bounded lifecycle history. Task and approval projections carry the recorded origin/planner and the task's goal/plan references.
+- Situation decisions bind to a recorded assessment and never execute an action. The page exposes only `ignore`, `record`, `investigate`, `notify` and `recommend` through `POST /api/situation/decide`, which calls `controller.situationDecide`. Approved execution remains a separate CLI `situation execute` step.
+- Writes stay on the existing user-origin controller methods: task approve (`POST /api/tasks/:id/approve`), plan approve, plan cancel (`POST /api/plans/:id/cancel`, reason 1–500 characters, unknown fields refused) and the situational decision above. Approving a record changes intent only; no page control starts a task, runs a plan, resumes a paused runtime or executes a situational response.
+- The served client's `refresh()` cycle now reads these endpoints instead of the older list routes, and every workspace has its own status element with `data-state` styling for `available`/`empty`/`partial`/`error`/`unavailable`/`loading`. Unavailable owners are named, an unavailable count is `null` rather than zero, and the briefing says so in its own note.
+- System diagnostics now shows the health areas, runtime status, external sources and Resource Fabric readings. CPU and memory come from the fabric; GPU and network are shown as unavailable with the provider's own reason, so an absent provider is never displayed as a zero reading. The existing ECP safety controls and their audit evidence are unchanged.
+- No decorative controls and no fabricated records were added. Controls appear only where an owner recorded a pending request or a cancellable plan, and the cancellation form states that cancelling a plan does not stop a task created from it.
+- README records the workspace/route table and replaces the stale claim that the page has no situational write path with a dated addendum.
+
+### Package 4 files changed
+
+- `apex_app/src/ui/server.js`
+- `apex_app/src/ui/assets.js`
+- `apex_app/src/knowledge/knowledge-store.js`
+- `apex_app/src/world/store.js`
+- `apex_app/src/briefing/index.js`
+- `apex_app/tests/ui-server.test.js`
+- `apex_app/README.md`
+- `apex_app/reports/T30_PROGRESS.md`
+
 ### T-19–T-29 evidence crosswalk
 
 | Milestone | What the retained records say | T-30 treatment |
@@ -135,6 +160,10 @@
 
 | Command | Result |
 |---|---|
+| `node --test tests/briefing.test.js tests/memory-knowledge-history.test.js tests/world-model-core.test.js tests/t09-situational-awareness.test.js tests/ui-server.test.js` (P4 focused run) | **101 tests: 101 passed, 0 failed, 0 skipped**; covers the owner timelines, briefing owners, situational state and the new workspace routes. |
+| `node --test tests/ui-server.test.js tests/ui-core-projection.test.js tests/ui-owner-events.test.js tests/core-state-contract.test.js tests/briefing.test.js tests/t12-documents.test.js` (P4 final focused run) | **83 tests: 83 passed, 0 failed, 0 skipped**; includes the served-client checks and the document-index route change. |
+| `npm run test:syntax` (P4 final run) | **1 passed, 0 failed, 0 skipped**; every JavaScript source file and the served client parsed. |
+FULL_SUITE_P4_ROW
 | `npm run test:syntax` (P0 checkpoint) | **1 passed, 0 failed, 0 skipped**; checked 221 source files and separately parsed the served client. |
 | `npm run test:syntax` (P1 checkpoint) | **1 passed, 0 failed, 0 skipped**; checked 222 source files and separately parsed the served client. |
 | `node --test tests/cross-process-stress.test.js tests/storage-concurrency.test.js tests/t16-pilot-reporting.test.js` | **21 tests: 21 passed, 0 failed, 0 skipped**. |
@@ -169,4 +198,4 @@ The P3 final `npm test` passed across the combined P0–P3 application code and 
 
 ## Next action
 
-Packages 0–3 are complete and verified to their bounded scope; P3's code checkpoint is `fa9f8f9`. Keep Packages 4–6 intentionally deferred and do not start them as part of this task. Preserve the browser/MFA/v2-target limitations above in any future status report.
+Packages 0–4 are complete and verified to their bounded scope; the Package 4 code checkpoint is `3c753c2`. Keep Packages 5–6 intentionally deferred and do not start them as part of this task. Preserve the browser/MFA/v2-target limitations above in any future status report.

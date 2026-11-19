@@ -1157,19 +1157,32 @@ describe('owner-backed workspaces', () => {
     const dir = tempDir();
     const { base } = await uiOn(dir);
     const before = fs.readdirSync(dir).sort();
-    for (const pathname of ['/api/mission-control', '/api/approvals', '/api/timeline', '/api/briefing', '/api/sources', '/api/runtime']) {
+    for (const pathname of ['/api/mission-control', '/api/approvals', '/api/timeline', '/api/briefing', '/api/sources', '/api/runtime', '/api/resources']) {
       const response = await request(base, pathname, { bearer: TOKEN });
       assert.equal(response.status, 200, pathname);
       await response.text();
     }
     assert.deepEqual(fs.readdirSync(dir).sort(), before, 'a projection read must not create owner state');
     assert.deepEqual(before, [], 'the fixture starts from an empty data directory');
+
+    // The Resource Fabric is the owner of these readings. An absent provider is reported as absent,
+    // never as a zero reading or a healthy state.
+    const resources = await json(await request(base, '/api/resources', { bearer: TOKEN }));
+    assert.equal(resources.cpu.available, true);
+    assert.equal(Number.isInteger(resources.cpu.logicalCount), true);
+    assert.equal(resources.memory.available, true);
+    assert.equal(resources.gpu.reported, false);
+    assert.match(resources.gpu.reason, /NO_GPU_METADATA_PROVIDER/);
+    assert.equal(resources.network.available, null);
+    assert.equal(resources.network.reported, false);
+    assert.equal(typeof resources.reservations, 'number');
   });
 
   test('the page carries a status target and a renderer for every workspace', () => {
     for (const id of ['mission-status', 'approval-state', 'approval-items', 'sentinel-status',
       'sentinel-full', 'timeline-status', 'memory-timeline', 'briefing-status', 'conversation-status',
-      'mission-goals-status', 'mission-plans-status', 'mission-tasks-status']) {
+      'mission-goals-status', 'mission-plans-status', 'mission-tasks-status', 'resources-status',
+      'resources', 'health', 'runtime', 'sources', 'documents', 'reasoning', 'council', 'workshop']) {
       assert.match(UI_PAGE, new RegExp(`id="${id}"`), id);
     }
     for (const endpoint of ['/api/mission-control', '/api/approvals', '/api/timeline',
@@ -1180,7 +1193,9 @@ describe('owner-backed workspaces', () => {
     assert.ok(UI_CLIENT.includes('/api/situation/decide'), 'the decision form targets the controller route');
     assert.match(UI_CLIENT, /refresh\(\)/, 'the workspaces are wired through the refresh cycle');
     for (const renderer of ['renderMissionControl', 'renderApprovalCentre', 'renderSentinel',
-      'renderTimeline', 'renderBriefing', 'renderConversation']) {
+      'renderTimeline', 'renderBriefing', 'renderConversation', 'renderResources', 'renderHealth',
+      'renderRuntime', 'renderSources', 'renderDocuments', 'renderReasoning', 'renderCouncil',
+      'renderWorkshop']) {
       assert.ok(UI_CLIENT.includes(renderer), renderer);
     }
   });

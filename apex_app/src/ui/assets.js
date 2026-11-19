@@ -249,6 +249,9 @@ export const UI_PAGE = `<!doctype html>
     <ul id="runtime" class="work"></ul>
     <h3>External sources</h3>
     <ul id="sources" class="work"></ul>
+    <h3>Resource Fabric</h3>
+    <p id="resources-status" class="workspace-status" role="status" aria-live="polite">Loading resource telemetry…</p>
+    <ul id="resources" class="work"></ul>
   </section>
   <section class="view" data-view="integrations">
     <h2>Integrations</h2>
@@ -539,6 +542,8 @@ const els = {
   situation: document.getElementById('situation'),
   runtime: document.getElementById('runtime'),
   sources: document.getElementById('sources'),
+  resources: document.getElementById('resources'),
+  resourcesStatus: document.getElementById('resources-status'),
   documents: document.getElementById('documents'),
   reasoning: document.getElementById('reasoning'),
   council: document.getElementById('council'),
@@ -1480,6 +1485,50 @@ function renderRuntime(result) {
   renderList(els.runtime, [runtime], (row) => itemFrom(row.lifecycle || row.status || 'runtime status not recorded', meta), 'Runtime returned no status record.');
 }
 
+function renderResources(result) {
+  const owner = ownerStatusText(result, 'Resource Fabric');
+  const value = result?.ok === true ? result.value : null;
+  if (owner.text || !value || value.unavailable) {
+    const message = owner.text || ('Unavailable: ' + String(value?.unavailable || 'resource telemetry was not returned.'));
+    setWorkspaceStatus(els.resourcesStatus, message, owner.text ? owner.state : 'unavailable');
+    renderList(els.resources, [], () => null, message);
+    return;
+  }
+  const megabytes = (bytes) => (Number.isFinite(bytes) ? Math.round(bytes / 1048576) + ' MB' : 'not reported');
+  const rows = [];
+  const cpu = value.cpu || {};
+  rows.push({ title: 'CPU', meta: (cpu.available === true && Number.isInteger(cpu.logicalCount))
+    ? cpu.logicalCount + ' logical processors reported by the host'
+    : 'not reported by the Resource Fabric' });
+  const memory = value.memory || {};
+  rows.push({ title: 'Memory', meta: memory.available === true
+    ? megabytes(memory.freeBytes) + ' free of ' + megabytes(memory.totalBytes)
+    : 'not reported by the Resource Fabric' });
+  const gpu = value.gpu || {};
+  rows.push({ title: 'GPU', meta: gpu.reported === true
+    ? 'reported'
+    : 'unavailable: ' + String(gpu.reason || 'no GPU telemetry provider') });
+  const network = value.network || {};
+  rows.push({ title: 'Network', meta: network.reported === true
+    ? 'reported'
+    : 'unavailable: ' + String(network.reason || 'no network telemetry provider') });
+  const storage = Array.isArray(value.storage) ? value.storage : [];
+  for (const volume of storage) {
+    rows.push({ title: 'Storage ' + String(volume.path || 'path not reported'), meta: volume.reported === true
+      ? megabytes(volume.availableBytes) + ' available of ' + megabytes(volume.totalBytes)
+      : 'unavailable: ' + String(volume.reason || 'statfs did not report this path') });
+  }
+  const unreported = [cpu.available !== true ? 'CPU' : null, memory.available !== true ? 'memory' : null,
+    gpu.reported !== true ? 'GPU' : null, network.reported !== true ? 'network' : null,
+    storage.some((volume) => volume.reported !== true) ? 'storage' : null].filter(Boolean);
+  setWorkspaceStatus(els.resourcesStatus, rows.length + ' resource reading(s) returned'
+    + (value.at ? ' at ' + value.at : '')
+    + (unreported.length ? ' · not reported: ' + unreported.join(', ') : '')
+    + ' · reservations held: ' + (Number.isInteger(value.reservations) ? value.reservations : 'not reported') + '.',
+  unreported.length ? 'partial' : 'available');
+  renderList(els.resources, rows, (row) => itemFrom(row.title, row.meta), 'The Resource Fabric returned no readings.');
+}
+
 function renderSources(result) {
   const owner = ownerStatusText(result, 'Integrations');
   const sources = result?.ok === true ? result.value : null;
@@ -1725,7 +1774,7 @@ function renderPlanning(planning) {
 async function refresh() {
   const [stateResult, healthResult, missionResult, approvalResult, timelineResult,
     situationResult, briefingResult, runtimeResult, sourcesResult, documentsResult,
-    reasoningResult, councilResult, workshopResult] = await Promise.all([
+    reasoningResult, councilResult, workshopResult, resourcesResult] = await Promise.all([
     readApi('/api/state'),
     readApi('/api/health'),
     readApi('/api/mission-control'),
@@ -1739,6 +1788,7 @@ async function refresh() {
     readApi('/api/reasoning'),
     readApi('/api/council'),
     readApi('/api/workshop'),
+    readApi('/api/resources'),
   ]);
 
   // The authoritative snapshot carries the current session, transcript, badges, gauges and the
@@ -1805,6 +1855,7 @@ async function refresh() {
   renderSystemStatus(snapshot, healthResult);
   renderRuntime(runtimeResult);
   renderSources(sourcesResult);
+  renderResources(resourcesResult);
   renderDocuments(documentsResult);
   renderReasoning(reasoningResult);
   renderCouncil(councilResult);
