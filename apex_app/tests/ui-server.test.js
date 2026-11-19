@@ -630,6 +630,36 @@ describe('live updates', () => {
     assert.ok(typeof data.operationId === 'string');
     await stream.close();
   });
+
+  test('progress events remain available alongside owner-state reconciliation', async () => {
+    const dir = tempDir();
+    const app = offlineApp(dir);
+    const controller = Object.create(app.controller);
+    controller.handle = async (_text, { onProgress } = {}) => {
+      onProgress?.({ stage: 'model' });
+      return {
+        status: Outcome.SUCCESS_VERIFIED,
+        display: 'the injected test controller completed',
+        recorded: true,
+        operation: { id: 'progress-test-operation', capability: 'test.progress' },
+      };
+    };
+    const { base } = await uiOn(dir, { app: { ...app, controller } });
+    const stream = await openStream(base);
+    await waitFor(() => /event: reconcile/.test(stream.received.text), 'the initial owner reconciliation');
+
+    const answered = await post(base, '/api/chat', { text: 'exercise the transient progress callback' });
+    assert.equal(answered.status, 200);
+    const progress = await waitFor(() => {
+      const match = /event: progress\ndata: (\{[^\n]*\})/.exec(stream.received.text);
+      return match ? JSON.parse(match[1]) : null;
+    }, 'the transient progress event');
+    assert.equal(progress.stage, 'model');
+    const chat = await waitFor(() => /event: chat\ndata: /.test(stream.received.text), 'the completion chat event');
+    assert.ok(chat);
+    assert.ok(stream.received.text.indexOf('event: progress') < stream.received.text.indexOf('event: chat'));
+    await stream.close();
+  });
 });
 
 describe('the launcher', () => {

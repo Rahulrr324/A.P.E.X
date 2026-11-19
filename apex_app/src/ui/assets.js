@@ -2,6 +2,7 @@
 // server needs no filesystem reads and no build step. The client renders every piece of
 // text with textContent: model output and stored records are untrusted strings.
 import { CORE_REACHABLE_STATES, CORE_STATE_DEFINITIONS } from './core-state.js';
+import { createEventWatchdog, EVENT_WATCHDOG_MS, HEARTBEAT_SCHEMA, isRecord, STATE_EVENT_OWNERS, STATE_EVENT_SCHEMA, validateHeartbeatEnvelope, validateStateEventEnvelope } from './event-contract.js';
 
 export const UI_PAGE = `<!doctype html>
 <html lang="en">
@@ -386,6 +387,14 @@ textarea { width: 100%; resize: vertical; }
 `;
 
 export const UI_CLIENT = `'use strict';
+const STATE_EVENT_SCHEMA = ${JSON.stringify(STATE_EVENT_SCHEMA)};
+const HEARTBEAT_SCHEMA = ${JSON.stringify(HEARTBEAT_SCHEMA)};
+const STATE_EVENT_OWNERS = ${JSON.stringify(STATE_EVENT_OWNERS)};
+const EVENT_WATCHDOG_MS = ${EVENT_WATCHDOG_MS};
+const isRecord = ${isRecord.toString()};
+const validateStateEventEnvelope = ${validateStateEventEnvelope.toString()};
+const validateHeartbeatEnvelope = ${validateHeartbeatEnvelope.toString()};
+const createEventWatchdog = ${createEventWatchdog.toString()};
 const CORE_STATE_DEFINITIONS = ${JSON.stringify(CORE_STATE_DEFINITIONS)};
 const CORE_REACHABLE_STATES = ${JSON.stringify(CORE_REACHABLE_STATES)};
 const els = {
@@ -456,7 +465,8 @@ const els = {
   conversationHistory: document.getElementById('conversation-history'),
 };
 
-const state = { core: 'idle', view: 'deck', last: null, lastSeq: 0, reducedMotion: false };
+const state = { core: 'idle', view: 'deck', last: null, eventCursor: { streamId: null, seq: 0, versions: {} }, reducedMotion: false };
+let eventStreamDegraded = false;
 
 function showBanner(text) {
   if (!els.banner) return;
@@ -794,11 +804,13 @@ async function refresh() {
       : (Array.isArray(s.tasks) && s.tasks.some((t) => t.approval)) ? 'awaiting_approval'
       : (Array.isArray(s.tasks) && s.tasks.some((t) => t.status === 'running')) ? 'executing'
       : 'idle';
-    setCore(coreState, coreState === 'idle' ? 'Standing by.' : 'State derived from verified records.');
-    if (els.connectivity) els.connectivity.textContent = 'Connected';
+    setCore(eventStreamDegraded ? 'degraded' : coreState,
+      eventStreamDegraded ? 'Event stream is unavailable.' : (coreState === 'idle' ? 'Standing by.' : 'State derived from verified records.'));
+    return true;
   } catch (error) {
     showBanner(error.message);
     setCore('degraded', 'State unavailable.');
+    return false;
   }
 }
 
@@ -986,45 +998,151 @@ state.reducedMotion = !!(reduce && reduce.matches);
 document.body.dataset.motion = state.reducedMotion ? 'reduced' : 'full';
 
 let eventSource = null;
-let watchdog = null;
-let degraded = false;
-function armWatchdog() {
-  if (watchdog) clearTimeout(watchdog);
-  watchdog = setTimeout(() => {
-    degraded = true;
-    if (els.connectivity) els.connectivity.textContent = 'Degraded';
-    setCore('degraded', 'Event stream lost.');
-  }, 1500);
+let eventWatchdog = null;
+let forcedReconciliation = false;
+let snapshotSyncInFlight = false;
+let eventRefreshTimer = null;
+let eventHealthGeneration = 0;
+
+function markEventDegraded(reason) {
+  eventHealthGeneration += 1;
+  eventStreamDegraded = true;
+  if (els.connectivity) els.connectivity.textContent = 'Degraded';
+  setCore('degraded', reason || 'Event stream is unavailable.');
 }
-function connectEvents() {
-  if (typeof EventSource !== 'function') return;
-  try { if (eventSource) eventSource.close(); } catch (e) {}
-  eventSource = new EventSource('/api/events');
-  eventSource.onopen = () => { degraded = false; if (els.connectivity) els.connectivity.textContent = 'Connected'; armWatchdog(); };
-  const reset = () => { degraded = false; if (els.connectivity) els.connectivity.textContent = 'Connected'; armWatchdog(); if (!degraded) refresh().catch(() => {}); };
-  eventSource.addEventListener('hello', reset);
-  eventSource.addEventListener('heartbeat', reset);
-  eventSource.addEventListener('state-changed', (e) => {
+
+function armWatchdog() {
+  if (!eventWatchdog) {
+    eventWatchdog = createEventWatchdog({
+      timeoutMs: EVENT_WATCHDOG_MS,
+      onExpired: () => markEventDegraded('Event stream lost.'),
+    });
+  }
+  eventWatchdog.arm();
+}
+
+function scheduleEventRefresh() {
+  if (eventRefreshTimer || snapshotSyncInFlight) return;
+  eventRefreshTimer = setTimeout(() => {
+    eventRefreshTimer = null;
+    refresh();
+  }, 50);
+}
+
+async function synchronizeAfterReconcile() {
+  if (snapshotSyncInFlight) return;
+  snapshotSyncInFlight = true;
+  const generation = eventHealthGeneration;
+  eventStreamDegraded = false;
+  const available = await refresh();
+  if (!available) {
+    markEventDegraded('Authoritative state reconciliation failed.');
+  } else if (generation === eventHealthGeneration) {
+    eventStreamDegraded = false;
+    if (els.connectivity) els.connectivity.textContent = 'Connected';
+    armWatchdog();
+  }
+  snapshotSyncInFlight = false;
+}
+
+function forceReconciliation(reason) {
+  markEventDegraded('Event stream reconciliation required: ' + reason + '.');
+  if (forcedReconciliation || typeof EventSource !== 'function') return;
+  forcedReconciliation = true;
+  try { if (eventSource) eventSource.close(); } catch (error) {}
+  connectEvents(true);
+}
+
+function parseEventData(event) {
+  try {
+    const value = JSON.parse(event.data);
+    return isRecord(value) ? value : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function acceptStateEvent(event) {
+  const data = parseEventData(event);
+  if (!data) {
+    forceReconciliation('malformed state event');
+    return;
+  }
+  const validation = validateStateEventEnvelope(data, state.eventCursor);
+  if (!validation.ok) {
+    markEventDegraded('Invalid state event: ' + validation.reason + '.');
+    if (validation.reason !== 'unsupported-schema') forceReconciliation(validation.reason);
+    return;
+  }
+  if (event.lastEventId !== data.streamId + ':' + data.seq) {
+    forceReconciliation('event cursor does not match its versioned envelope');
+    return;
+  }
+  state.eventCursor = validation.cursor;
+  armWatchdog();
+  if (validation.kind === 'reconcile') {
+    forcedReconciliation = false;
+    synchronizeAfterReconcile();
+    return;
+  }
+  if (eventStreamDegraded) synchronizeAfterReconcile();
+  else scheduleEventRefresh();
+}
+
+function acceptHeartbeat(event) {
+  const data = parseEventData(event);
+  const validation = validateHeartbeatEnvelope(data, state.eventCursor);
+  if (!validation.ok) {
+    markEventDegraded('Invalid event heartbeat: ' + validation.reason + '.');
+    if (validation.reason !== 'unsupported-heartbeat-schema') forceReconciliation(validation.reason);
+    return;
+  }
+  armWatchdog();
+  if (state.eventCursor.streamId === data.streamId && eventStreamDegraded) synchronizeAfterReconcile();
+}
+
+function connectEvents(forceReconcile = false) {
+  if (typeof EventSource !== 'function') {
+    markEventDegraded('Event streams are unavailable in this browser.');
+    return;
+  }
+  try { if (eventSource) eventSource.close(); } catch (error) {}
+  try {
+    eventSource = new EventSource(forceReconcile ? '/api/events?reconcile=1' : '/api/events');
+  } catch (error) {
+    markEventDegraded('Event stream connection failed.');
+    return;
+  }
+  const source = eventSource;
+  source.onopen = () => {
+    if (source !== eventSource) return;
+    armWatchdog();
+    if (els.connectivity && !eventStreamDegraded) els.connectivity.textContent = 'Connected';
+  };
+  source.addEventListener('hello', () => { if (source === eventSource) armWatchdog(); });
+  source.addEventListener('reconcile', acceptStateEvent);
+  source.addEventListener('state-changed', acceptStateEvent);
+  source.addEventListener('heartbeat', acceptHeartbeat);
+  source.addEventListener('progress', (event) => {
     try {
-      const data = JSON.parse(e.data);
-      // detect seq gaps? store last seq
-      if (state.lastSeq && data.seq && data.seq !== state.lastSeq + 1) {
-        // gap or duplicate; reconcile
-      }
-      state.lastSeq = data.seq || state.lastSeq;
-    } catch {}
-    reset();
-  });
-  eventSource.addEventListener('progress', (e) => {
-    try { const data = JSON.parse(e.data); if (els.activity) els.activity.textContent = data.stage === 'model' ? 'waiting for the model…' : 'working: ' + data.stage; } catch { if (els.activity) els.activity.textContent = 'working…'; }
+      const data = JSON.parse(event.data);
+      if (els.activity) els.activity.textContent = data.stage === 'model' ? 'waiting for the model…' : 'working: ' + data.stage;
+    } catch (error) {
+      if (els.activity) els.activity.textContent = 'working…';
+    }
     armWatchdog();
   });
-  eventSource.addEventListener('chat', () => { if (!degraded) refresh().catch(() => {}); armWatchdog(); });
-  eventSource.onerror = () => {
-    if (els.connectivity) els.connectivity.textContent = 'Degraded';
-    setCore('degraded', 'Event stream error.');
+  source.addEventListener('chat', () => {
+    if (!eventStreamDegraded) scheduleEventRefresh();
+    armWatchdog();
+  });
+  source.addEventListener('council', () => { scheduleEventRefresh(); armWatchdog(); });
+  source.addEventListener('workshop', () => { scheduleEventRefresh(); armWatchdog(); });
+  source.onerror = () => {
+    if (source !== eventSource) return;
+    markEventDegraded('Event stream error.');
+    armWatchdog();
   };
-  armWatchdog();
 }
 
 boot().then(() => {

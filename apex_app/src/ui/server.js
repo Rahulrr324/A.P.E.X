@@ -4,9 +4,11 @@
 // store, and no authorization rule of its own. One request is in flight at a time,
 // because session turns are ordered and the conversation log is the continuity record.
 import fs from 'node:fs';
+import path from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { UI_CLIENT, UI_CSS, UI_PAGE } from './assets.js';
+import { BoundedEventHistory, canQueueEventFrame, EVENT_HEARTBEAT_MS, HEARTBEAT_SCHEMA, MAX_EVENT_FRAME_BYTES, OWNER_POLL_MS, STATE_EVENT_HISTORY_LIMIT, STATE_EVENT_OWNERS, STATE_EVENT_SCHEMA } from './event-contract.js';
 import { collectHealth } from '../health.js';
 import { buildBriefing } from '../briefing/index.js';
 import { APP_NAME } from '../identity.js';
@@ -18,11 +20,22 @@ export const UI_LIMITS = Object.freeze({
   maxWorkItems: 50,
   maxSubscribers: 8,
   maxBufferedBytes: 1024 * 1024,
+  maxEventFrameBytes: MAX_EVENT_FRAME_BYTES,
+  maxStateEventHistory: STATE_EVENT_HISTORY_LIMIT,
+  heartbeatMs: EVENT_HEARTBEAT_MS,
+  ownerPollMs: OWNER_POLL_MS,
   chatTimeoutMs: 120000,
 });
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1']);
 const TOKEN_RE = /^[A-Za-z0-9_-]{16,128}$/;
+const MONITORED_DATA_FILES = Object.freeze([
+  'conversation.jsonl', 'council.jsonl', 'deadlines.jsonl', 'devices.jsonl', 'documents.json',
+  'documents.jsonl', 'experiences.jsonl', 'goals.jsonl', 'integrations.json', 'kill-switch.json',
+  'knowledge.jsonl', 'memory.jsonl', 'notes.jsonl', 'operations.jsonl', 'plans.jsonl',
+  'predictions.jsonl', 'proposals.jsonl', 'reasoning.jsonl', 'runtime.json', 'session.json',
+  'situational.jsonl', 'task-summary-queue.json', 'tasks.jsonl', 'workshop.jsonl', 'world-model.jsonl',
+]);
 
 function digest(value) {
   return createHash('sha256').update(String(value)).digest();
@@ -161,6 +174,95 @@ function projectPlan(plan) {
   };
 }
 
+function projectOwnerTasks(tasks) {
+  const rows = Array.isArray(tasks) ? tasks : [];
+  const pending = [];
+  let awaitingApprovalSteps = 0;
+  let uncertainSteps = 0;
+  let runningTasks = 0;
+  for (const task of rows) {
+    if (task.status === 'running') runningTasks += 1;
+    for (const step of Array.isArray(task.steps) ? task.steps : []) {
+      if (step.status === 'awaiting_approval') {
+        awaitingApprovalSteps += 1;
+        if (pending.length < UI_LIMITS.maxWorkItems) pending.push({ taskId: String(task.id), stepId: String(step.id) });
+      }
+      if (step.status === 'uncertain') uncertainSteps += 1;
+    }
+  }
+  return {
+    available: true,
+    total: rows.length,
+    truncated: rows.length > UI_LIMITS.maxWorkItems,
+    counts: { runningTasks, awaitingApprovalSteps, uncertainSteps },
+    items: rows.slice(0, UI_LIMITS.maxWorkItems).map((task) => ({
+      id: String(task.id),
+      status: singleLine(task.status, 32),
+      steps: (Array.isArray(task.steps) ? task.steps : []).slice(0, 12).map((step) => ({
+        id: singleLine(step.id, 32),
+        status: singleLine(step.status, 32),
+        outcome: typeof step.outcome === 'string' ? singleLine(step.outcome, 160) : null,
+      })),
+    })),
+  };
+}
+
+function projectOwnerPlans(plans) {
+  const rows = Array.isArray(plans) ? plans : [];
+  const counts = { draft: 0, approved: 0, active: 0, blocked: 0, completed: 0, failed: 0, cancelled: 0, superseded: 0 };
+  let approved = 0;
+  let unapprovedDrafts = 0;
+  for (const plan of rows) {
+    if (Object.hasOwn(counts, plan.status)) counts[plan.status] += 1;
+    if (plan.approval) approved += 1;
+    if (plan.status === 'draft' && !plan.approval) unapprovedDrafts += 1;
+  }
+  return {
+    available: true,
+    total: rows.length,
+    truncated: rows.length > UI_LIMITS.maxWorkItems,
+    counts: { ...counts, recordedApprovals: approved, unapprovedDrafts },
+    items: rows.slice(0, UI_LIMITS.maxWorkItems).map((plan) => ({
+      id: String(plan.id),
+      status: singleLine(plan.status, 32),
+      version: Number.isSafeInteger(plan.version) ? plan.version : null,
+      approved: plan.approval !== null && plan.approval !== undefined,
+      approvalVersion: Number.isSafeInteger(plan.approval?.version) ? plan.approval.version : null,
+      activated: Boolean(plan.activation),
+    })),
+  };
+}
+
+function projectApprovals(tasks, plans) {
+  const taskSteps = [];
+  const draftPlans = [];
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    for (const step of Array.isArray(task.steps) ? task.steps : []) {
+      if (step.status === 'awaiting_approval') {
+        taskSteps.push({ taskId: String(task.id), stepId: String(step.id) });
+      }
+    }
+  }
+  for (const plan of Array.isArray(plans) ? plans : []) {
+    if (plan.status === 'draft') {
+      draftPlans.push({
+        planId: String(plan.id),
+        version: Number.isSafeInteger(plan.version) ? plan.version : null,
+        approved: plan.approval !== null && plan.approval !== undefined,
+      });
+    }
+  }
+  return {
+    available: true,
+    taskStepCount: taskSteps.length,
+    taskSteps: taskSteps.slice(0, UI_LIMITS.maxWorkItems),
+    truncatedTaskSteps: taskSteps.length > UI_LIMITS.maxWorkItems,
+    draftPlanCount: draftPlans.length,
+    draftPlans: draftPlans.slice(0, UI_LIMITS.maxWorkItems),
+    truncatedDraftPlans: draftPlans.length > UI_LIMITS.maxWorkItems,
+  };
+}
+
 // The T-17 planning read is derived from an objective the user types here and the live registry;
 // it is never stored. This projection is bounded and copies strings, like every other one, so the
 // page can only display what the controller reported, and it adds no authority: the flags below
@@ -245,7 +347,9 @@ export function createUiServer({
   token,
   host = '127.0.0.1',
   port = 0,
-  heartbeatMs = 500,
+  heartbeatMs = UI_LIMITS.heartbeatMs,
+  ownerPollMs = UI_LIMITS.ownerPollMs,
+  stateEventHistoryLimit = UI_LIMITS.maxStateEventHistory,
   chatTimeoutMs = UI_LIMITS.chatTimeoutMs,
   now = () => new Date(),
 } = {}) {
@@ -253,38 +357,25 @@ export function createUiServer({
     throw new Error('createUiServer requires an APEX application');
   }
   if (!LOOPBACK_HOSTS.has(host)) throw new Error('the UI binds to loopback only');
+  if (!Number.isSafeInteger(heartbeatMs) || heartbeatMs < 1) throw new Error('heartbeatMs must be a positive integer');
+  if (!Number.isSafeInteger(ownerPollMs) || ownerPollMs < 1) throw new Error('ownerPollMs must be a positive integer');
   const authToken = token ?? randomBytes(24).toString('hex');
   if (!TOKEN_RE.test(authToken)) throw new Error('the UI token must be 16-128 letters, digits, dash or underscore');
 
   const subscribers = new Set();
+  const stateEventHistory = new BoundedEventHistory(stateEventHistoryLimit);
+  const streamId = randomBytes(16).toString('hex');
+  const ownerStates = Object.create(null);
+  const ownerVersions = Object.create(null);
   let chatInFlight = false;
   let listeningPort = null;
   let eventSeq = 0;
-  const watchers = new Map();
-  const debounceTimers = new Map();
-
-  function makeEnvelope(type, category, payload = null, correlationId = null) {
-    eventSeq += 1;
-    return Object.freeze({
-      schema: 'apex.state-event/1',
-      seq: eventSeq,
-      at: now().toISOString(),
-      type,
-      category,
-      payload: payload && typeof payload === 'object' ? payload : null,
-      correlationId: correlationId ?? null,
-    });
-  }
-
-  function broadcastEvent(name, envelope) {
-    broadcast(name, envelope);
-  }
-
-  function emitStateChange(category, payload = null, correlationId = null) {
-    const envelope = makeEnvelope('state-changed', category, payload, correlationId);
-    broadcastEvent('state-changed', envelope);
-    return envelope;
-  }
+  let fileWatcher = null;
+  let ownerPollTimer = null;
+  let ownerRefreshTimer = null;
+  let ownerFileSignature = null;
+  let ownerRefreshRunning = false;
+  let ownerRefreshAgain = false;
 
   function presented(req, url) {
     const header = req.headers.authorization;
@@ -299,20 +390,50 @@ export function createUiServer({
     return tokensMatch(presented(req, url), authToken);
   }
 
+  function makeFrame(event, data, id = null) {
+    const idLine = id === null ? '' : `id: ${id}\n`;
+    return `${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  }
+
+  function writeFrame(sub, event, data, id = null) {
+    if (sub.res.writableEnded || sub.res.destroyed) {
+      unsubscribe(sub);
+      return false;
+    }
+    const frame = makeFrame(event, data, id);
+    const bytes = Buffer.byteLength(frame);
+    if (bytes > UI_LIMITS.maxEventFrameBytes
+      || !canQueueEventFrame(sub.res.writableLength, bytes, UI_LIMITS.maxBufferedBytes)) return false;
+    try {
+      sub.res.write(frame);
+      return true;
+    } catch {
+      unsubscribe(sub);
+      return false;
+    }
+  }
+
+  function writeComment(sub, text) {
+    if (sub.res.writableEnded || sub.res.destroyed) {
+      unsubscribe(sub);
+      return false;
+    }
+    const frame = `: ${text}\n\n`;
+    const bytes = Buffer.byteLength(frame);
+    if (!canQueueEventFrame(sub.res.writableLength, bytes, UI_LIMITS.maxBufferedBytes)) return false;
+    try {
+      sub.res.write(frame);
+      return true;
+    } catch {
+      unsubscribe(sub);
+      return false;
+    }
+  }
+
   function broadcast(event, data) {
-    const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const sub of subscribers) {
-      if (sub.res.writableEnded || sub.res.destroyed) {
-        unsubscribe(sub);
-        continue;
-      }
-      // A slow reader loses progress frames rather than growing an unbounded queue.
-      if (sub.res.writableLength > UI_LIMITS.maxBufferedBytes) continue;
-      try {
-        sub.res.write(frame);
-      } catch {
-        unsubscribe(sub);
-      }
+      if (sub.needsReconcile) continue;
+      writeFrame(sub, event, data);
     }
   }
 
@@ -321,7 +442,299 @@ export function createUiServer({
     subscribers.delete(sub);
   }
 
-  function subscribe(res) {
+  function cursorId(sequence = eventSeq) {
+    return `${streamId}:${sequence}`;
+  }
+
+  function parseCursor(value) {
+    if (typeof value !== 'string' || value.length > 64) return null;
+    const match = /^([a-f0-9]{32}):(0|[1-9][0-9]{0,15})$/.exec(value);
+    if (!match) return null;
+    const sequence = Number(match[2]);
+    return Number.isSafeInteger(sequence) ? { streamId: match[1], seq: sequence } : null;
+  }
+
+  async function captureOwner(read, project) {
+    try {
+      const value = await read();
+      return { available: true, ...project(value) };
+    } catch (error) {
+      return { available: false, error: singleLine(error?.message ?? error, 240) };
+    }
+  }
+
+  async function captureRows(label, store, project) {
+    try {
+      if (!store || typeof store.list !== 'function') throw new Error(`${label} is not configured`);
+      const rows = await store.list();
+      if (!Array.isArray(rows)) throw new Error(`${label} returned an invalid list`);
+      return { rows, state: project(rows), error: null };
+    } catch (error) {
+      const message = singleLine(error?.message ?? error, 240);
+      return { rows: null, state: { available: false, error: message }, error: message };
+    }
+  }
+
+  async function readOwnerStates() {
+    const [taskRead, planRead, lockdown, runtime, health, conversation] = await Promise.all([
+      captureRows('TaskStore', app.taskStore, projectOwnerTasks),
+      captureRows('PlanStore', app.plans, projectOwnerPlans),
+      captureOwner(() => {
+        if (typeof app.ecp?.killSwitchStatus !== 'function') throw new Error('ECP kill-switch status is unavailable');
+        return app.ecp.killSwitchStatus();
+      }, (status) => ({
+        active: status.active === true,
+        policyUnavailable: status.policyUnavailable === true,
+        activatedAt: status.activatedAt ?? null,
+        reason: status.reason === null || status.reason === undefined ? null : singleLine(status.reason, 300),
+        persistence: singleLine(status.persistence ?? 'unknown', 80),
+      })),
+      captureOwner(() => {
+        if (typeof app.runtime?.status !== 'function') throw new Error('runtime status is unavailable');
+        return app.runtime.status();
+      }, (status) => ({
+        lifecycle: singleLine(status.lifecycle ?? 'unknown', 32),
+        runtimeId: status.runtimeId ?? null,
+        paused: status.paused === true,
+        ticks: Number.isSafeInteger(status.ticks) ? status.ticks : null,
+        backlog: Number.isSafeInteger(status.backlog) ? status.backlog : null,
+        lastError: status.lastError ? singleLine(status.lastError, 240) : null,
+        corruption: status.corruption ? singleLine(status.corruption.reason ?? status.corruption, 240) : null,
+      })),
+      captureOwner(async () => collectHealth(app, { checkModel: false }), (status) => ({
+        overall: singleLine(status.overall ?? 'unknown', 24),
+        areas: (Array.isArray(status.areas) ? status.areas : []).slice(0, 32).map((area) => ({
+          key: singleLine(area.key, 48),
+          state: singleLine(area.state, 24),
+          summary: singleLine(area.summary, 240),
+        })),
+        attentionCount: Array.isArray(status.attention) ? status.attention.length : 0,
+        errorCount: Array.isArray(status.errors) ? status.errors.length : 0,
+      })),
+      captureOwner(async () => {
+        if (typeof app.session?.peek !== 'function' || typeof app.conversation?.status !== 'function') {
+          throw new Error('conversation state is unavailable');
+        }
+        const [session, transcript] = await Promise.all([app.session.peek(), app.conversation.status()]);
+        return { session, transcript };
+      }, ({ session, transcript }) => ({
+        sessionStatus: singleLine(session?.status ?? 'unavailable', 24),
+        sessionId: session?.state?.sessionId ?? null,
+        turnCount: Number.isSafeInteger(transcript?.turns) ? transcript.turns : null,
+        corruptCount: Number.isSafeInteger(transcript?.corrupt) ? transcript.corrupt : null,
+      })),
+    ]);
+
+    const approval = taskRead.rows && planRead.rows
+      ? projectApprovals(taskRead.rows, planRead.rows)
+      : {
+        available: false,
+        error: taskRead.error ?? planRead.error ?? 'task or plan approval state is unavailable',
+      };
+    return {
+      tasks: taskRead.state,
+      plans: planRead.state,
+      approval,
+      lockdown,
+      runtime,
+      health,
+      conversation,
+    };
+  }
+
+  function publishOwnerSnapshots(next) {
+    const emitted = [];
+    for (const owner of STATE_EVENT_OWNERS) {
+      const value = next[owner];
+      if (!Object.hasOwn(ownerStates, owner)) {
+        ownerStates[owner] = value;
+        ownerVersions[owner] = 1;
+        continue;
+      }
+      if (JSON.stringify(ownerStates[owner]) === JSON.stringify(value)) continue;
+      ownerStates[owner] = value;
+      ownerVersions[owner] += 1;
+      eventSeq += 1;
+      const envelope = Object.freeze({
+        schema: STATE_EVENT_SCHEMA,
+        streamId,
+        seq: eventSeq,
+        at: now().toISOString(),
+        type: 'state-changed',
+        category: owner,
+        version: ownerVersions[owner],
+        payload: value,
+        correlationId: null,
+      });
+      emitted.push(envelope);
+    }
+    for (const envelope of emitted) {
+      stateEventHistory.push(envelope);
+      for (const sub of subscribers) sendOwnerEvent(sub, envelope);
+    }
+  }
+
+  function reconciliationEnvelope(reason) {
+    return Object.freeze({
+      schema: STATE_EVENT_SCHEMA,
+      streamId,
+      seq: eventSeq,
+      at: now().toISOString(),
+      type: 'reconcile',
+      versions: Object.fromEntries(STATE_EVENT_OWNERS.map((owner) => [owner, ownerVersions[owner]])),
+      payload: {
+        reason: singleLine(reason, 80),
+        snapshotUrl: '/api/state',
+        owners: Object.fromEntries(STATE_EVENT_OWNERS.map((owner) => [owner, ownerStates[owner]])),
+      },
+    });
+  }
+
+  function sendReconciliation(sub, reason) {
+    const envelope = reconciliationEnvelope(reason);
+    const sent = writeFrame(sub, 'reconcile', envelope, cursorId(envelope.seq));
+    sub.needsReconcile = !sent;
+    return sent;
+  }
+
+  function sendOwnerEvent(sub, envelope) {
+    if (sub.needsReconcile) return false;
+    const sent = writeFrame(sub, 'state-changed', envelope, cursorId(envelope.seq));
+    if (!sent) sub.needsReconcile = true;
+    return sent;
+  }
+
+  function sendHeartbeat(sub) {
+    if (sub.res.writableEnded || sub.res.destroyed) {
+      unsubscribe(sub);
+      return;
+    }
+    if (sub.needsReconcile && !sendReconciliation(sub, 'subscriber-backpressure')) return;
+    if (!writeComment(sub, 'ping')) {
+      sub.needsReconcile = true;
+      return;
+    }
+    const heartbeat = { schema: HEARTBEAT_SCHEMA, streamId, headSeq: eventSeq, at: now().toISOString() };
+    if (!writeFrame(sub, 'heartbeat', heartbeat)) sub.needsReconcile = true;
+  }
+
+  function fileFingerprint(filename) {
+    try {
+      const stat = fs.statSync(path.join(app.dataDir, filename), { bigint: true });
+      return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(':');
+    } catch (error) {
+      return error?.code === 'ENOENT' ? 'missing' : `error:${error?.code ?? 'unknown'}`;
+    }
+  }
+
+  function currentOwnerFileSignature() {
+    return MONITORED_DATA_FILES.map((filename) => `${filename}=${fileFingerprint(filename)}`).join('\n');
+  }
+
+  async function refreshOwnerSources() {
+    if (ownerRefreshRunning) {
+      ownerRefreshAgain = true;
+      return;
+    }
+    ownerRefreshRunning = true;
+    let passes = 0;
+    try {
+      do {
+        ownerRefreshAgain = false;
+        const before = currentOwnerFileSignature();
+        const next = await readOwnerStates();
+        const after = currentOwnerFileSignature();
+        ownerFileSignature = after;
+        publishOwnerSnapshots(next);
+        passes += 1;
+        if (before !== after && passes < 2) ownerRefreshAgain = true;
+      } while (ownerRefreshAgain && passes < 2);
+    } finally {
+      ownerRefreshRunning = false;
+      if (ownerRefreshAgain) {
+        ownerRefreshAgain = false;
+        scheduleOwnerRefresh();
+      }
+    }
+  }
+
+  function scheduleOwnerRefresh() {
+    if (ownerRefreshRunning) {
+      ownerRefreshAgain = true;
+      return;
+    }
+    if (ownerRefreshTimer) clearTimeout(ownerRefreshTimer);
+    ownerRefreshTimer = setTimeout(() => {
+      ownerRefreshTimer = null;
+      refreshOwnerSources().catch(() => {});
+    }, 60);
+    if (typeof ownerRefreshTimer.unref === 'function') ownerRefreshTimer.unref();
+  }
+
+  function startOwnerMonitoring() {
+    ownerFileSignature = currentOwnerFileSignature();
+    try {
+      fileWatcher = fs.watch(app.dataDir, { persistent: false }, (_eventType, filename) => {
+        const name = filename === null || filename === undefined ? null : String(filename);
+        if (name && (name.endsWith('.lock') || name.endsWith('.tmp'))) return;
+        scheduleOwnerRefresh();
+      });
+      fileWatcher.on('error', () => {
+        try { fileWatcher?.close(); } catch { /* the metadata poll remains a fallback */ }
+        fileWatcher = null;
+      });
+    } catch {
+      fileWatcher = null;
+    }
+    ownerPollTimer = setInterval(() => {
+      const signature = currentOwnerFileSignature();
+      if (signature === ownerFileSignature) return;
+      ownerFileSignature = signature;
+      scheduleOwnerRefresh();
+    }, ownerPollMs);
+    if (typeof ownerPollTimer.unref === 'function') ownerPollTimer.unref();
+  }
+
+  function stopOwnerMonitoring() {
+    try { fileWatcher?.close(); } catch { /* already closed */ }
+    fileWatcher = null;
+    if (ownerPollTimer) clearInterval(ownerPollTimer);
+    ownerPollTimer = null;
+    if (ownerRefreshTimer) clearTimeout(ownerRefreshTimer);
+    ownerRefreshTimer = null;
+  }
+
+  function sendReplayOrReconcile(req, res, url, sub) {
+    const rawCursor = req.headers['last-event-id'];
+    if (url.searchParams.get('reconcile') === '1') {
+      sendReconciliation(sub, 'requested');
+      return;
+    }
+    if (rawCursor === undefined) {
+      sendReconciliation(sub, 'initial');
+      return;
+    }
+    const cursor = parseCursor(rawCursor);
+    if (!cursor) {
+      sendReconciliation(sub, 'invalid-cursor');
+      return;
+    }
+    if (cursor.streamId !== streamId) {
+      sendReconciliation(sub, 'stream-changed');
+      return;
+    }
+    const replay = stateEventHistory.replayAfter(cursor.seq);
+    if (replay === null) {
+      sendReconciliation(sub, 'history-unavailable');
+      return;
+    }
+    for (const envelope of replay) {
+      if (!sendOwnerEvent(sub, envelope)) break;
+    }
+    if (sub.needsReconcile) sendReconciliation(sub, 'replay-backpressure');
+  }
+
+  function subscribe(req, res, url) {
     if (subscribers.size >= UI_LIMITS.maxSubscribers) return false;
     res.writeHead(200, baseHeaders({
       'content-type': 'text/event-stream; charset=utf-8',
@@ -329,30 +742,14 @@ export function createUiServer({
       'x-accel-buffering': 'no',
     }));
     res.write('retry: 5000\n\n');
-    const sub = { res, timer: null };
-    sub.timer = setInterval(() => {
-      if (res.writableEnded || res.destroyed) return unsubscribe(sub);
-      try {
-        res.write(': ping\n\n');
-        const hb = makeEnvelope('heartbeat', 'connectivity', { ok: true });
-        broadcastTo(sub, 'heartbeat', hb);
-      } catch {
-        unsubscribe(sub);
-      }
-    }, heartbeatMs);
-    if (typeof sub.timer.unref === 'function') sub.timer.unref();
+    const sub = { res, timer: null, needsReconcile: false };
     subscribers.add(sub);
     res.on('close', () => unsubscribe(sub));
-    broadcastTo(sub, 'hello', { at: now().toISOString() });
+    writeFrame(sub, 'hello', { streamId, headSeq: eventSeq, at: now().toISOString() });
+    sendReplayOrReconcile(req, res, url, sub);
+    sub.timer = setInterval(() => sendHeartbeat(sub), heartbeatMs);
+    if (typeof sub.timer.unref === 'function') sub.timer.unref();
     return true;
-  }
-
-  function broadcastTo(sub, event, data) {
-    try {
-      sub.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    } catch {
-      unsubscribe(sub);
-    }
   }
 
   async function snapshot() {
@@ -573,7 +970,7 @@ export function createUiServer({
       };
       sendJson(res, 200, payload);
       broadcast('chat', { operationId: payload.operation?.id ?? null, status: payload.status });
-      emitStateChange('conversation', { operationId: payload.operation?.id ?? null, status: payload.status }, payload.operation?.id ?? null);
+      scheduleOwnerRefresh();
     } finally {
       if (timer) clearTimeout(timer);
       chatInFlight = false;
@@ -615,7 +1012,7 @@ export function createUiServer({
         ? await app.controller.retryTask(taskId, stepId)
         : await app.controller.cancelTask(taskId);
     sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
-    emitStateChange('tasks', { taskId, kind }, null);
+    scheduleOwnerRefresh();
   }
 
   // T-17: reading an objective is the same user-origin `plan.outline` call the CLI makes, on the
@@ -755,7 +1152,7 @@ export function createUiServer({
       try {
         const result = await app.controller.safetyLockdown({ reason: body.reason.trim() });
         sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
-        emitStateChange('safety', { active: true }, null);
+        scheduleOwnerRefresh();
       } catch (err) { sendJson(res, 503, { error: `lockdown unavailable: ${err.message}` }); }
       return;
     }
@@ -767,7 +1164,7 @@ export function createUiServer({
       try {
         const result = await app.controller.safetyRelease({ reason: body.reason.trim() });
         sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
-        emitStateChange('safety', { active: false }, null);
+        scheduleOwnerRefresh();
       } catch (err) { sendJson(res, 503, { error: `release unavailable: ${err.message}` }); }
       return;
     }
@@ -843,7 +1240,7 @@ export function createUiServer({
         }
         sendJson(res, 200, { ...data, status: result.status, display: result.display });
         broadcast('council', { sessionId: data.sessionId });
-        emitStateChange('council', { sessionId: data.sessionId }, null);
+        scheduleOwnerRefresh();
       } catch (err) {
         sendJson(res, 400, { error: err.message });
       }
@@ -877,7 +1274,8 @@ export function createUiServer({
           sendJson(res, 400, { status: result.status, error: result.output ?? 'the design was not stored', display: result.display }); return;
         }
         sendJson(res, 200, { ...data, status: result.status, display: result.display });
-        emitStateChange('workshop', { artifactId: data.artifactId }, null);
+        broadcast('workshop', { artifactId: data.artifactId });
+        scheduleOwnerRefresh();
       } catch (err) { sendJson(res, 400, { error: err.message }); }
       return;
     }
@@ -1012,7 +1410,7 @@ export function createUiServer({
       return;
     }
     if (method === 'GET' && url.pathname === '/api/events') {
-      if (!subscribe(res)) {
+      if (!subscribe(req, res, url)) {
         sendJson(res, 429, { error: 'too many event stream subscribers' });
       }
       return;
@@ -1032,7 +1430,7 @@ export function createUiServer({
       }
       const rotated = await app.session.rotate();
       sendJson(res, 200, { status: 'success_verified', display: `Started session ${String(rotated.sessionId).slice(0, 8)}.`, session: { id: rotated.sessionId } });
-      emitStateChange('session', { sessionId: rotated.sessionId }, null);
+      scheduleOwnerRefresh();
       return;
     }
     const taskMatch = /^\/api\/tasks\/([^/]+)\/(approve|retry|cancel)$/.exec(url.pathname);
@@ -1044,42 +1442,10 @@ export function createUiServer({
     if (method === 'POST' && planMatch) {
       const result = await app.controller.planApprove({ target: decodeURIComponent(planMatch[1]) });
       sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
-      emitStateChange('plans', { planId: decodeURIComponent(planMatch[1]) }, null);
+      scheduleOwnerRefresh();
       return;
     }
     sendJson(res, 404, { error: 'not found' });
-  }
-
-  function scheduleWatchEmit(filename) {
-    if (debounceTimers.has(filename)) clearTimeout(debounceTimers.get(filename));
-    const t = setTimeout(() => {
-      debounceTimers.delete(filename);
-      try {
-        if (filename === 'kill-switch.json') {
-          const status = app.ecp && typeof app.ecp.killSwitchStatus === 'function' ? app.ecp.killSwitchStatus() : null;
-          emitStateChange('safety', { killSwitch: status }, null);
-        } else if (filename === 'runtime.json') {
-          let status = null;
-          try { status = app.runtime && typeof app.runtime.status === 'function' ? app.runtime.status() : null; } catch { status = null; }
-          Promise.resolve(status).then((s) => { emitStateChange('runtime', { runtime: s }, null); }).catch(() => {});
-        }
-      } catch { /* watcher errors must not crash */ }
-    }, 100);
-    debounceTimers.set(filename, t);
-  }
-
-  function startWatchers() {
-    const dataDir = app.dataDir;
-    if (typeof dataDir !== 'string' || dataDir.length === 0) return;
-    const targetFiles = new Set(['kill-switch.json', 'runtime.json']);
-    try {
-      const watcher = fs.watch(dataDir, { persistent: false }, (eventType, filename) => {
-        if (!filename || !targetFiles.has(String(filename))) return;
-        scheduleWatchEmit(String(filename));
-      });
-      watcher.on('error', () => { /* ignore watcher errors */ });
-      watchers.set('dir', watcher);
-    } catch { /* watching is best-effort */ }
   }
 
   const server = createServer((req, res) => {
@@ -1102,24 +1468,23 @@ export function createUiServer({
   return {
     server,
     token: authToken,
-    start() {
+    async start() {
+      await refreshOwnerSources();
       return new Promise((resolve, reject) => {
         const onError = (err) => reject(err);
         server.once('error', onError);
         server.listen({ host, port }, () => {
           server.off('error', onError);
           listeningPort = server.address().port;
-          startWatchers();
+          startOwnerMonitoring();
+          scheduleOwnerRefresh();
           const hostLabel = host === '::1' ? '[::1]' : host;
           resolve({ host, port: listeningPort, token: authToken, url: `http://${hostLabel}:${listeningPort}/?token=${authToken}` });
         });
       });
     },
     async stop() {
-      for (const w of watchers.values()) { try { w.close(); } catch { /* ignore */ } }
-      watchers.clear();
-      for (const t of debounceTimers.values()) clearTimeout(t);
-      debounceTimers.clear();
+      stopOwnerMonitoring();
       for (const sub of [...subscribers]) {
         try { sub.res.end(); } catch { /* already gone */ }
         unsubscribe(sub);
@@ -1135,7 +1500,16 @@ export function createUiServer({
     },
     // Exposed for tests and diagnostics; read-only.
     stats() {
-      return { subscribers: subscribers.size, chatInFlight, port: listeningPort, limits: UI_LIMITS };
+      return {
+        subscribers: subscribers.size,
+        chatInFlight,
+        port: listeningPort,
+        streamId,
+        eventSeq,
+        retainedStateEvents: stateEventHistory.size,
+        ownerVersions: { ...ownerVersions },
+        limits: UI_LIMITS,
+      };
     },
   };
 }
