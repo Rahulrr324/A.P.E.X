@@ -902,6 +902,10 @@ if (els.workshopForm) {
     try {
       const source = JSON.parse(els.workshopSource.value || '{}');
       const budgetText = els.workshopBudget?.value?.trim() ?? '';
+      const budget = budgetText === '' ? null : Number(budgetText);
+      if (budget !== null && (!Number.isFinite(budget) || budget < 0)) {
+        throw new Error('budget must be a finite, non-negative number');
+      }
       const result = await api('/api/workshop/compose', {
         method: 'POST',
         body: {
@@ -909,7 +913,7 @@ if (els.workshopForm) {
           domain: els.workshopDomain.value,
           components: source.components,
           connections: source.connections ?? [],
-          budget: budgetText === '' ? null : Number(budgetText),
+          budget,
           note: typeof source.note === 'string' ? source.note : '',
         },
       });
