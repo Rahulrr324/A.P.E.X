@@ -1,73 +1,61 @@
 # APEX Mission Progress (T-25 through T-29)
 
-## Final state
+## Repository state verified from GitHub
 
-- Branch: `main` (single shared branch; no agent branches)
-- HEAD: `01c3eae` — T-25 Council, served UI, browser evidence
-- `origin/main`: `78d88ee` — **T-25 is committed locally but NOT pushed.** The push was
-  rejected: the credential helper is signed in as `rahulsamarth121`, which has no write
-  access to `Rahulrr324/A.P.E.X`. Re-authenticate as an account with write access and run
-  `git push origin main`; the local commit is a fast-forward from `78d88ee`.
-- Worktree: clean apart from generated `apex_app/test-results/` output, which is ignored.
-- Inference: none. No model runtime, no Ollama/LM Studio/llama.cpp, no remote endpoint,
-  no model download. Every behaviour below is deterministic code or a simulated provider.
-- Voice: out of scope for T-25 through T-29; still documented as future work.
+- Canonical branch: `main`.
+- Latest reviewed baseline: `7bb79848177c7cc0ed905d34bf4fea3cdf31470d` (commit message `a`).
+- T-25 Council and repository-repair work is present on GitHub; the prior push blocker is no longer current.
+- The latest baseline adds a Workshop service, append-only store, action definitions, controller integration and view markup.
+- Review found the Workshop UI was incomplete: it referenced API endpoints that did not exist, and the compose form had no submit handler.
+- Follow-up commits add the missing GET/list, POST/compose and POST/simulate API routes through the existing controller/ECP, plus the UI form handler.
+- These edits were made through GitHub's file API. No local Node process, browser or full test runner was available here; the changes are not claimed as executed or tested.
+- Inference remains prohibited. No model runtime, local inference server, remote endpoint or model download is used. Voice remains out of scope.
 
-## Milestone commits
+## T-25 — Council and release foundation
 
-- T-25: `01c3eae` — Council core, actions, controller path, UI, Playwright suite,
-  capability inventory, README counts.
-- T-26: not started.
-- T-27: not started.
-- T-28: not started.
-- T-29: not started.
+**Status: substantially implemented; reported local validation exists, independent rerun not performed here.**
 
-## Status
+The repository contains Council service/store/actions, controller/ECP path, API and UI, capability inventory updates and a Playwright suite. The T-25 report records 8 Council tests, targeted regression suites and 7 Playwright tests passing on the contributor's Windows environment. The full `npm test` suite was not run in that report.
 
-- **T-25 Council: implemented locally and verified.** Seven fixed perspectives over an
-  evidence set built only from reasoning evidence; synthesis carries recommendation level,
-  support, confidence, alternatives, risks, assumptions, unknowns, missing information,
-  required approvals, reversibility and expected verification. Every record has
-  `authorizesExecution: false`; the assertion is a test. Deliberation runs through
-  `runAction` / the ECP / `operations.jsonl`, so a Council record is a judgement, never a
-  permission. `council.deliberate`, `council.list`, `council.get`, `council.replay` and
-  `council.compare` are reads, unplannable, and covered by the capability inventory.
-- **T-25 UI:** `/api/council` and `/api/council/deliberate` routes, a Council view and a
-  `renderCouncil` that reads the stored synthesis shape. The undefined `APP_NAME` import
-  that made `/api/state` return 500 is fixed; the workspace now loads.
-- **T-25 repository repair:** `npm test` is now bare `node --test` (Node 26 rejects
-  `node --test tests/`); the old explicit list is `test:unit:legacy`. The old list had
-  silently omitted six suites. Playwright is `test:e2e` and remains development-only;
-  `apex_app` declares no runtime dependencies. Two stray `fix-council.mjs` / `fix2.mjs`
-  scratch files were removed.
-- **T-26 through T-29:** not started. Scope remains Workshop, device trust/presence mesh,
-  and unified cognitive integration. None of them may authorize execution; the ECP stays
-  the sole authorization authority and the kill switch stays outside the model path.
+## T-26/T-27 — Workshop foundation
 
-## Tests
+**Status: backend and basic compose/list/simulate UI path implemented; validation outstanding.**
 
-Measured on this machine (Node v26.4.0, Windows), isolated temporary data directories:
+The Workshop provides:
+- Validated, bounded design compositions.
+- Content-addressed artifact identity.
+- Append-only JSONL persistence and digest-chain reporting.
+- Deterministic inspection and arithmetic simulation.
+- User-only `workshop.compose` and read-only `workshop.list/get/inspect/simulate` actions.
+- Controller methods that route writes through ECP.
+- A Workshop view with composition and simulation controls.
+- Newly added server routes and submit handler to connect the view to the controller.
 
-- `node --test tests/council.test.js tests/capability-inventory.test.js
-  tests/finalization-contract.test.js tests/ui-server.test.js` — **52 pass, 0 fail**
-  (13 suites).
-- `node --test tests/plan-scenarios-am.test.js` — **31 pass, 0 fail** (3 suites).
-- `node --test tests/composition-guard.test.js tests/finalization-path-audit.test.js
-  tests/capability-truthfulness.test.js tests/audit-consistency.test.js
-  tests/acceptance-batch-f.test.js tests/data-dir-isolation.test.js` — **80 pass, 0 fail**
-  (17 suites).
-- `npm run test:e2e` (Playwright 1.65.1, Chromium) — **7 pass, 0 fail**. The committed
-  PNGs in `apex_app/reports/` are captures from this run, not fabricated images.
-- Not run in this milestone: the full `npm test` sweep (deliberately, to keep the
-  milestone loop targeted). The full suite is the next step before T-26 starts.
+The Workshop remains a deterministic design-sheet tool, not a code runner, CAD engine, circuit solver or capability publisher. It does not authorize execution.
 
-## Remaining limitations
+## T-28 — Device trust and Presence Mesh
 
-- T-26..T-29 are unimplemented: no Workshop, no presence mesh, no device trust store, no
-  unified cognitive integration.
-- Council deliberation is deterministic and hypothetical; it is not a trained or learned
-  judgement, and its evidence comes only from records the runtime already holds.
-- Browser evidence covers the served UI at 1280x720 and 390x844 on Chromium only; no other
-  engine, no real mobile device.
-- No remote model inference, by policy. Model-backed behaviour remains simulated.
-- The T-25 commit is local until push credentials are corrected.
+Not started. No production device enrollment, remote transport or device-authentication guarantee is claimed.
+
+## T-29 — Unified cognitive integration
+
+Not started. Existing subsystems remain separately implemented; a complete unified executive pipeline and sustained validation are not claimed.
+
+## Required next verification
+
+1. Run `npm test` from `apex_app/` and record exact totals.
+2. Add dedicated Workshop tests for normalization, bounds, content identity, append-only behavior, digest-chain tampering, restart recovery, action origins, ECP refusal and controller/API boundaries.
+3. Run Playwright against isolated temporary data and exercise Workshop compose/list/simulate on desktop and mobile.
+4. Verify malformed JSON, oversized input, missing artifacts, corrupt stores and unavailable storage fail safely.
+5. Inspect the Workshop store's chain-integrity behavior on ordinary reads and before appends; status reporting alone is not sufficient evidence of integrity enforcement.
+6. Continue T-26/T-27 integration only after tests pass; then implement T-28 and T-29.
+
+## Global constraints
+
+- One shared canonical `main` branch.
+- No destructive Git operations, force pushes, credential changes or unverified push claims.
+- All tests use isolated temporary APEX data directories and self-seeded fixtures.
+- `apex_app` must retain zero runtime dependencies; Playwright remains development-only.
+- ECP remains the sole authorization authority; the kill switch remains outside the model path.
+- Deterministic code and synthetic fixtures only. No inference, voice or fake AI capabilities.
+- Distinguish code review from executed tests and browser verification.
