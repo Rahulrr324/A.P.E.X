@@ -1,15 +1,16 @@
 # T-30 Progress Report
 
-**Report checkpoint:** Packages 0–2 complete, 2026-11-19 (UTC)
+**Report checkpoint:** Packages 0–3 complete to their bounded scope, 2026-11-19 (UTC)
 
-**Scope:** T-30 Packages 0–3 only before Packages 4–6; no later package is marked complete by this report.
+**Scope:** T-30 Packages 0–3 only. Packages 4–6 were intentionally not started.
 
 ## Repository checkpoint
 
 - Starting commit: `fb09e73f2d875fe8697d731c9b9845dd054a0465`.
 - Package 0 code commit: `45ae99a87645be444070741d6cdea1e31c45f352` (`T-30 P0: repair syntax, inventory, and storage integrity`).
 - Package 1 code commit: `875e3bc46703179ab50bcd22aa71c96939574f03` (`T-30 P1: define Core state ownership and precedence`).
-- Package 2 code commit: pending the verified Package 2 checkpoint commit.
+- Package 2 code commit: `ba08127` (`T-30 P2: version owner events and reconcile streams`).
+- Package 3 code commit: `fa9f8f9` (`T-30 P3: integrate live Core state and safety controls`); full verification is recorded below.
 - HEAD at the Package 0 code checkpoint: `45ae99a87645be444070741d6cdea1e31c45f352`; later checkpoints are recorded below.
 - Active branch: `arena/c4691a2f-a-p-e-x`; `origin/main` was fetched and remained at the starting commit. No branch switch, push, PR, tag, or history rewrite was performed.
 - `stark/` and the unrelated OnCall Memory project were not modified.
@@ -21,9 +22,9 @@
 |---|---|---|
 | 0 — Syntax, inventory, data-directory failures, storage, CI | **Complete and verified** | Full suite passed at the P0 checkpoint; see exact results below. |
 | 1 — Ledgers, architecture, requirements, numbering, state precedence/ownership | **Complete and verified** | Added dated ledger/requirements/architecture annotations and the ten-state source/precedence contract. Focused UI/core-state tests passed (26/26), syntax passed, and the P1 checkpoint full suite passed (3,733 total, 3,731 passed, 0 failed, 2 skipped); commit `875e3bc46703179ab50bcd22aa71c96939574f03`. |
-| 2 — Authoritative state events and cross-process observation | **Complete and verified** | Bounded versioned owner snapshots, cross-process refresh, replay/reconciliation, heartbeat/watchdog handling and preservation of transient events. Package-focused tests pass (36/36); syntax passes across 223 source files. Package 3 full Core-state integration is deliberately not claimed here. |
-| 3 — T-18 UI defects and lockdown integration | Not started | Next: integrate authoritative owners with full Core precedence and test the UI safety release/confirmation/audit/no-auto-resume path. |
-| 4–6 | Not started; intentionally deferred | Do not begin until Packages 0–3 are complete. |
+| 2 — Authoritative state events and cross-process observation | **Complete and verified** | Bounded versioned owner snapshots, cross-process refresh, replay/reconciliation, heartbeat/watchdog handling and preservation of transient events. Package-focused tests pass (36/36); syntax passes across 223 source files. Full Core-state integration was not claimed at the P2 checkpoint; its later P3 completion is recorded below. |
+| 3 — T-18 UI defects and lockdown integration | **Complete and verified** | All seven authoritative owner snapshots feed the live Core projection with full precedence and fail-closed validation; truthful boot/Quick boot, request-thinking, state visuals, and ECP safety UI are covered. Safety routes require local UI auth/CSRF, enforce the action's 240-character reason limit and release confirmation, return audit evidence, and do not resume paused runtime work. Focused tests 44/44; full suite passes (3,751 total, 3,749 passed, 0 failed, 2 skipped); syntax and diff checks pass. Browser execution remains unverified. |
+| 4–6 | Not started; intentionally deferred | Outside this request; no work on Packages 4–6 began. |
 
 ## Package 0 work completed
 
@@ -60,7 +61,7 @@
 ## Package 1 completed — dated reconciliation and Core-state contract
 
 - Preserved and annotated the earlier T-19 Core table instead of deleting it. Added a current ten-state source/owner/precedence table and a state-ownership register in `apex_app/ARCHITECTURE_V2.md`. The fixed order is **Lockdown > Degraded > Awaiting Approval > Uncertain > Executing > Thinking > Idle**. Dormant, Listening and Speaking have no live source and are reserved/not reachable; persisted task uncertainty is a real source, so it is reachable. The UI setter fails safely to Degraded for reserved or unknown values.
-- Added `src/ui/core-state.js` with state definitions, reachability, precedence, `resolveCoreState()` and explicit source/owner descriptions. The pure resolver is contract code for Package 3; the current UI does **not yet consume every source or apply the full precedence**. Package 3 remains responsible for that integration.
+- At the Package 1 checkpoint, added `src/ui/core-state.js` with state definitions, reachability, precedence, `resolveCoreState()` and explicit source/owner descriptions. The pure resolver was contract code at that checkpoint; the UI did **not yet consume every source or apply the full precedence**. Package 3's later live integration is recorded below.
 - Corrected the basic UI state key to `awaiting_approval`; the served client embeds the same state definitions and refuses reserved/unknown Core state assignments. This does not grant UI authority or alter ECP policy.
 - Annotated stale T-16/T-17 claims in `docs/APEX_V2_REQUIREMENTS.md` about no ECP, no L0–L5 configuration, no kill switch, no Resource Fabric owner, and no briefing/Council/Workshop foundation. Each addendum distinguishes the local foundation from the complete v2 target and preserves the original statement as historical.
 - Added dated reconciliation notes to `ARCHITECTURE.md`, `APEX_MISSION_PROGRESS.md`, `T19_PROGRESS.md` and `T24_IMPLEMENTATION_REPORT.md`. The earlier failed-fetch statement is retained as an observation from the older Windows checkout; `git fetch origin` succeeded in this Arena checkout.
@@ -84,7 +85,7 @@
 - Added `src/ui/event-contract.js` with `apex.state-event/1` and `apex.event-heartbeat/1`, strict stream/sequence/owner-version validation, a bounded replay history, the subscriber frame-queue guard and an injectable 1.5 s watchdog helper.
 - The UI server now emits bounded owner snapshots for tasks, plans, approvals, ECP lockdown, runtime, health and conversation. Owner versions increase only when that owner's projection changes; every state event has a process-specific stream ID and contiguous sequence. The client rejects gaps, duplicates, out-of-order versions, malformed envelopes and stream mismatches, then requests explicit reconciliation when needed.
 - A directory watcher plus a 250 ms metadata-poll fallback observes data changes made by other CLI processes. Reconnects replay retained events from `Last-Event-ID`; changed stream IDs or unavailable history produce a full owner reconciliation. History is capped at 128 state events, streams at eight subscribers, each event frame at 256 KiB and the response queue at 1 MiB.
-- Preserved the separate progress/chat/Council/Workshop events. Heartbeats are emitted every 500 ms with the server head sequence; the browser watchdog expires at 1.5 s and marks transport state Degraded. This is not the full Core-state precedence integration; Package 3 owns that work.
+- Preserved the separate progress/chat/Council/Workshop events. Heartbeats are emitted every 500 ms with the server head sequence; the browser watchdog expires at 1.5 s and marks transport state Degraded. At the Package 2 checkpoint this was not the full Core-state precedence integration; Package 3's later completion is recorded below.
 
 ### Files changed in Package 2
 
@@ -96,13 +97,36 @@
 - `apex_app/tests/ui-server.test.js`
 - `apex_app/reports/T30_PROGRESS.md`
 
+## Package 3 completed — live Core projection, T-18 UI, and ECP safety controls
+
+- Connected all seven Package 2 owner snapshots (`tasks`, `plans`, `approval`, `lockdown`, `runtime`, `health`, `conversation`) to `resolveCoreStateFromOwners()` and the served client. Both initial reconciliation snapshots and contiguous owner updates feed the same reducer; chat Thinking is derived only from a real outstanding `/api/chat` request.
+- The live order is **Lockdown > Degraded > Awaiting Approval > Uncertain > Executing > Thinking > Idle**. Missing/malformed task counts, approval arrays, ECP flags, runtime lifecycle/pause state, health projection/counters, conversation counts, stale reads, or event liveness fail closed to Degraded. A positively observed active latch still wins. Health attention that is solely the same recorded approval or uncertain outcome is represented by that more-specific Core state; unrelated health blockers remain Degraded. Paused tasks or runtime scheduling are not presented as healthy Idle. Dormant, Listening and Speaking remain reserved.
+- T-18 UI corrections: the page boots in Degraded until authoritative reconciliation; boot diagnostics read actual state, health, ECP latch and event reconciliation rather than displaying a fictitious loopback check; both Quick boot controls skip the overlay; Core status has reachable-state visuals, an uncertainty treatment, Idle breathing, steady Degraded, contracted red Lockdown, reduced-motion handling and a screen-reader status; chat requests present Thinking only while pending.
+- Added the System safety panel and kept mutations on the existing Controller/ECP action path. The local UI token, POST marker and same-origin guard protect the controls. Lockdown/release reasons obey the underlying action's 240-character limit; release additionally requires a non-empty reason and explicit checkbox/`confirm: true`. Responses surface audit operation IDs and `recorded`; malformed/failed audit attempts are not presented as confirmed. Latch state is marked stale during a mutation and refreshed before release is re-enabled. ECP remains the authority, and releasing the latch does **not** resume a paused runtime or task.
+- Owner/event/served-client, malformed-source, real startup Idle, real external CLI draft Awaiting Approval, and real uncertain-task projection are covered by the focused tests. Safety integration covers missing/wrong authentication, CSRF marker, reason length, release confirmation, audit fields/origin/reason and no-auto-resume.
+- Local UI-token authentication is not owner identity/MFA/step-up. Playwright/browser interaction and screenshots remain unverified because Chromium is unavailable; full v2 cinematic visuals are not claimed.
+
+### Package 3 files changed
+
+- `apex_app/src/ui/assets.js`
+- `apex_app/src/ui/core-state.js`
+- `apex_app/src/ui/event-contract.js`
+- `apex_app/src/ui/server.js`
+- `apex_app/tests/ui-core-projection.test.js` (new)
+- `apex_app/tests/ui-owner-events.test.js`
+- `apex_app/tests/ui-server.test.js`
+- `apex_app/ARCHITECTURE.md`
+- `apex_app/ARCHITECTURE_V2.md`
+- `apex_app/docs/APEX_V2_REQUIREMENTS.md`
+- `apex_app/reports/T30_PROGRESS.md`
+
 ### T-19–T-29 evidence crosswalk
 
 | Milestone | What the retained records say | T-30 treatment |
 |---|---|---|
 | T-19 | Separate checkpoint; it reports UI/Core/event work and refers to `e9d0880` and `301ba97`. | Kept as history; commit objects are absent from this shallow clone. Package 2 independently verified the current bounded event implementation and does not retroactively verify those historical commits. |
 | T-20–T-24 | `T24_IMPLEMENTATION_REPORT.md` summarizes Command Experience, planner/TaskGraph, briefing, evolution foundation and documentation. | Summary retained; its starting commit `5098705` is unavailable locally and historical tests are not retroactively rerun. |
-| T-25 | Council and served UI foundation; historical report records 8 Council tests and 7 Playwright tests. | Node tests remain in the P0/P1 passing full-suite evidence; Package 2 preserves the served events. Browser run here is blocked by missing Chromium; historical screenshots are not newly reviewed. |
+| T-25 | Council and served UI foundation; historical report records 8 Council tests and 7 Playwright tests. | Node tests are included in the P0/P1/P3 full-suite runs; Package 2 preserves served events. Browser run here is blocked by missing Chromium; historical screenshots are not newly reviewed. |
 | T-26/T-27 | Workshop design-composition/store/actions/UI foundation. | Current Node suite passes; P0 repaired the nested UI template syntax. The product remains a deterministic design/simulation tool, not 3D CAD or code execution. |
 | T-28 | Local device-trust registry foundation. | Its tests are included in the passing full suite; transport, Presence Mesh, owner MFA and UI/ECP device operations remain unimplemented or unverified. |
 | T-29 | Ledger says “not started”; current repository also contains separate cognitive/executive modules. | Still not accepted as a unified integration milestone; module presence and a green suite are not proof of the complete pipeline. |
@@ -117,14 +141,17 @@
 | `node --test tests/core-state-contract.test.js tests/ui-server.test.js` (P1 checkpoint) | **26 tests: 26 passed, 0 failed, 0 skipped**; covers all ten state rows, precedence, reserved-state rejection and UI-server integration. |
 | `node --test tests/core-state-contract.test.js tests/ui-event-contract.test.js tests/ui-owner-events.test.js tests/ui-server.test.js` (P2 checkpoint) | **36 tests: 36 passed, 0 failed, 0 skipped**; adds event-envelope/version/gap checks, bounded replay/queue guards, cross-process CLI plan/runtime changes, stale-stream reconciliation, fail-closed health/lockdown owner events, subscriber limit and preserved progress/chat events. |
 | `npm run test:syntax` (P2 checkpoint) | **1 passed, 0 failed, 0 skipped**; checked all 223 JavaScript source files and parsed the served client independently. |
+| `node --test tests/core-state-contract.test.js tests/ui-core-projection.test.js tests/ui-event-contract.test.js tests/ui-owner-events.test.js tests/ui-server.test.js` (P3 final focused run) | **44 tests: 44 passed, 0 failed, 0 skipped**; includes real startup Idle, external CLI draft Awaiting Approval, real uncertain-task projection, malformed sources, precedence, UI safety gating, ECP auth/audit and no-auto-resume. |
+| `npm run test:syntax` (P3 final run) | **1 passed, 0 failed, 0 skipped**; all 223 JavaScript source files and the served client parsed. |
+| `npm test` (P3 final full suite) | **3,751 tests: 3,749 passed, 0 failed, 0 cancelled, 2 skipped; 576 suites**. Runtime 1,302,751 ms (about 21m43s). Log: `/tmp/apex-t30-p3-final.log`. |
 | `npm test` (P0 checkpoint) | **3,729 tests: 3,727 passed, 0 failed, 0 cancelled, 2 skipped; 570 suites**. Runtime 1,245,229 ms (about 20m45s). Log: `/tmp/apex-p0-full-verified.log`. |
 | `npm test` (P1 checkpoint) | **3,733 tests: 3,731 passed, 0 failed, 0 cancelled, 2 skipped; 571 suites**. Runtime 1,231,611 ms (about 20m32s). Log: `/tmp/apex-p1-full.log`. |
-| Full `npm test` after Package 2 | Not run at this checkpoint; Package 2 is verified by the focused acceptance command above. A post-Package-3 full run remains the broad regression gate. |
-| `git diff --check` | Passed. |
+| Full `npm test` immediately after Package 2 | Not run at the P2 checkpoint; the later P3 final full suite covers the combined P0–P3 working tree. |
+| `git diff --check` (P3 final review) | Passed. |
 | `npm run test:e2e` | Could not launch because the installed `node_modules/.bin/playwright` shim is not executable in this workspace (`Permission denied`). |
 | `node node_modules/@playwright/test/cli.js test` | **7 tests discovered: 1 passed, 6 could not launch Chromium** because Playwright's `chrome-headless-shell` binary is absent. No system Chromium/Chrome/Firefox was present. This is an environment/browser-availability blocker, not six observed product assertion failures. Browser verification and screenshots remain **unverified**. |
 
-The full Node suite passed at the P0 and P1 checkpoints; Package 2 has the focused 36-test event/UI/Core run and a passing syntax run, but the full suite has not yet been rerun after Package 2. Playwright was attempted through the package CLI; browser-based validation could not execute without a browser binary. No browser download was attempted. No `npm ci` was run locally; the existing development installation was used.
+The P3 final `npm test` passed across the combined P0–P3 application code and architecture/requirements changes. The progress report was then updated with that result; the exact full-suite total and log are shown above. This does not retroactively convert the P2 checkpoint's focused-only run into a P2-only full-suite claim. Playwright was attempted through the package CLI; browser-based validation could not execute without a browser binary. No browser download was attempted. No `npm ci` was run locally; the existing development installation was used.
 
 ## Risks and blockers
 
@@ -134,11 +161,12 @@ The full Node suite passed at the P0 and P1 checkpoints; Package 2 has the focus
 
 ## Current blockers and limits
 
-- Browser behavior and screenshots remain **unverified**: Playwright could not launch a browser because this environment has no installed Chromium/Chrome/Firefox binary. The current `UI_CLIENT` source parses and UI-server tests pass, but that is not browser verification.
-- The full Core precedence resolver remains tested as a pure contract only; Package 2 now delivers versioned owner observations, but the current UI still does not yet derive every Core state from those owners or enforce full precedence. That is Package 3 work.
-- T-19 historical commits are unavailable in the shallow local history. Package 2 verified current event behavior without replaying or backdating evidence for those historical commits.
-- The post-Package-2 full Node suite is not yet rerun; the 36-test focused event/UI/Core suite and the 223-file syntax check are the current Package 2 evidence.
+- Browser rendering, end-to-end clicks and screenshots remain **unverified**: the Playwright shim is non-executable and Chromium/Chrome/Firefox binaries are absent. The served client parses and Node UI/server tests pass, but neither establishes browser behavior.
+- The UI token is process-local authentication, not owner identity, MFA or step-up authentication. The ECP remains the authorization authority.
+- The full v2 visual/cinematic target, Listening/Speaking/audio, and Packages 4–6 are outside the completed T-30 scope. No completion claim is made for them.
+- T-19 historical commit objects remain unavailable in this shallow local history; current T-30 tests do not retroactively verify historical evidence.
+- P0's passing storage tests do not establish broader cross-platform filesystem guarantees beyond this Linux/Node 22 environment. No inference, model download, endpoint, voice/audio path, or remote inference process was used or added.
 
 ## Next action
 
-Package 2 is verified with the focused acceptance suite; record its code checkpoint, then start Package 3. Wire the versioned owner snapshots into `resolveCoreState()` with the required Lockdown > Degraded > Awaiting Approval > Uncertain > Executing > Thinking > Idle precedence; keep unavailable sources fail-closed and Listening/Speaking/Dormant reserved. Correct the T-18 UI defects and implement/test the token-authenticated ECP lockdown/release surface, requiring release reason and confirmation, checking audit evidence, and proving release does not auto-resume paused work. Do not begin Packages 4–6 until Package 3 is verified.
+Packages 0–3 are complete and verified to their bounded scope; P3's code checkpoint is `fa9f8f9`. Keep Packages 4–6 intentionally deferred and do not start them as part of this task. Preserve the browser/MFA/v2-target limitations above in any future status report.
