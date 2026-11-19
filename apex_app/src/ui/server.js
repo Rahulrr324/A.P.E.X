@@ -1455,9 +1455,16 @@ export function createUiServer({
 
     let documentsState = null;
     try {
-      documentsState = app.documents
-        ? { ...(await app.documents.status()), documents: await app.documents.list({ limit: 10, includeDeleted: true }) }
-        : { unavailable: 'document content understanding is not configured' };
+      if (app.documents) {
+        const status = await app.documents.status();
+        documentsState = {
+          ...status,
+          documentsTotal: status.documents,
+          documents: await app.documents.list({ limit: 10, includeDeleted: true }),
+        };
+      } else {
+        documentsState = { unavailable: 'document content understanding is not configured' };
+      }
     } catch (err) {
       documentsState = { unavailable: `document state is unavailable: ${err.message}` };
     }
@@ -1999,7 +2006,9 @@ export function createUiServer({
         const status = await app.documents.status();
         const documents = await app.documents.list({ limit: 20, includeDeleted: true });
         const results = q ? await app.documents.search(q, { limit: 10 }) : [];
-        sendJson(res, 200, { ...status, documents, results, query: q });
+        // `documents` is the row list here; the owner's total is kept under its own name so the page
+        // never has to infer a count from a bounded page.
+        sendJson(res, 200, { ...status, documentsTotal: status.documents, documents, results, query: q });
       } catch (err) {
         sendJson(res, 503, { error: `the document index is unavailable: ${err.message}` });
       }

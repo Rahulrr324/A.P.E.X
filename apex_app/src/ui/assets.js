@@ -824,11 +824,11 @@ function reportSource(target, source, label) {
   const shown = Array.isArray(source.items) ? source.items.length : null;
   const total = Number.isInteger(source.total) ? source.total : shown;
   if (total === 0) {
-    setWorkspaceStatus(target, 'No ' + label + ' are recorded in the owner store.', 'empty');
+    setWorkspaceStatus(target, 'No ' + label + ' records are present in the owner store.', 'empty');
     return;
   }
   const countText = shown === null ? String(total) : shown + ' of ' + total;
-  let text = 'Loaded ' + countText + ' recorded ' + label + (source.truncated ? ' (bounded view).' : '.');
+  let text = 'Loaded ' + countText + ' recorded ' + label + ' records' + (source.truncated ? ' (bounded view).' : '.');
   const corrupt = Number.isInteger(source.corrupt) ? source.corrupt : 0;
   if (corrupt > 0) text += ' ' + corrupt + ' corrupt record(s) were also reported.';
   setWorkspaceStatus(target, text, corrupt > 0 ? 'partial' : 'available');
@@ -1009,8 +1009,12 @@ function renderMissionControl(result) {
     setWorkspaceStatus(els.missionStatus, status.text, status.state);
   } else {
     const missing = Object.entries(sources).filter(([, source]) => source?.available !== true).map(([name]) => name);
+    const empty = ['goals', 'plans', 'tasks'].every((name) => sources[name]?.available === true
+      && Number.isInteger(sources[name].total) && sources[name].total === 0);
     if (value?.status === 'partial' || missing.length > 0) {
       setWorkspaceStatus(els.missionStatus, 'Partial owner read; unavailable: ' + (missing.join(', ') || 'one or more stores') + '.', 'partial');
+    } else if (empty) {
+      setWorkspaceStatus(els.missionStatus, 'No goal, plan or task records are present in the readable owner stores.', 'empty');
     } else {
       setWorkspaceStatus(els.missionStatus, 'Goal, plan and task state read from their owner stores.', 'available');
     }
