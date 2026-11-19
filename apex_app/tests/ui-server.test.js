@@ -671,3 +671,87 @@ describe('the launcher', () => {
     if (process.platform !== 'win32') assert.match(stdout, /stopped/, 'the launcher reports the stop after the signal');
   });
 });
+
+
+describe('Workshop API integration', () => {
+  test('compose, list and simulate use the authenticated controller/ECP path', async () => {
+    const dir = tempDir();
+    const app = offlineApp(dir);
+    const { base } = await uiOn(dir, { app });
+    const design = {
+      title: 'UI integration fixture',
+      domain: 'plan',
+      components: [
+        { id: 'source', kind: 'service', supply: 8, demand: 0, cost: 2 },
+        { id: 'sink', kind: 'database', supply: 0, demand: 4, cost: 1 },
+      ],
+      connections: [{ from: 'source', to: 'sink' }],
+      budget: { total: 5 },
+      note: 'isolated test fixture',
+    };
+
+    const unauthenticated = await request(base, '/api/workshop');
+    assert.equal(unauthenticated.status, 401);
+
+    const composed = await post(base, '/api/workshop/compose', design);
+    assert.equal(composed.status, 200);
+    const created = await json(composed);
+    assert.equal(created.status, 'success_verified');
+    assert.equal(created.authorizesExecution, false);
+    assert.equal(created.executedCode, false);
+    assert.match(created.artifactId, /^ws-/);
+
+    const listed = await request(base, '/api/workshop', { bearer: TOKEN });
+    assert.equal(listed.status, 200);
+    const page = await json(listed);
+    assert.equal(page.total, 1);
+    assert.equal(page.artifacts[0].artifactId, created.artifactId);
+    assert.equal(page.status.chain, 'intact');
+    assert.equal(page.authorizesExecution, false);
+
+    const simulated = await post(base, '/api/workshop/simulate', { artifactId: created.artifactId });
+    assert.equal(simulated.status, 200);
+    const report = await json(simulated);
+    assert.equal(report.status, 'success_verified');
+    assert.equal(report.authorizesExecution, false);
+    assert.equal(report.executedCode, false);
+    assert.equal(report.components.find((component) => component.id === 'sink').inbound, 8);
+
+    const after = await json(await request(base, '/api/workshop', { bearer: TOKEN }));
+    assert.equal(after.total, 1, 'simulation must not append or mutate workshop history');
+  });
+
+  test('Workshop API rejects unknown fields, malformed shapes and missing artifacts', async () => {
+    const dir = tempDir();
+    const { base } = await uiOn(dir);
+    const unknown = await post(base, '/api/workshop/compose', {
+      title: 'bad', components: [], privileged: true,
+    });
+    assert.equal(unknown.status, 400);
+    assert.match((await json(unknown)).error, /unknown field/);
+
+    const invalid = await post(base, '/api/workshop/compose', {
+      title: 'bad', components: [{ id: 'x', kind: 'service', supply: 'unbounded' }],
+    });
+    assert.equal(invalid.status, 400);
+
+    const missing = await post(base, '/api/workshop/simulate', { artifactId: 'ws-does-not-exist' });
+    assert.equal(missing.status, 400);
+  });
+
+  test('Workshop API keeps the anti-CSRF and JSON transport requirements', async () => {
+    const dir = tempDir();
+    const { base } = await uiOn(dir);
+    const noCsrf = await request(base, '/api/workshop/compose', {
+      method: 'POST', bearer: TOKEN, body: { title: 'blocked', components: [] },
+    });
+    assert.equal(noCsrf.status, 403);
+
+    const notJson = await request(base, '/api/workshop/compose', {
+      method: 'POST', bearer: TOKEN,
+      headers: { 'x-apex-ui': '1', 'content-type': 'text/plain' },
+      body: 'not json',
+    });
+    assert.equal(notJson.status, 415);
+  });
+});
