@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { WriterLock } from '../memory/writer-lock.js';
 import { StoreError } from '../errors.js';
-import { WORKSHOP_SCHEMA } from './index.js';
+import { identityDigest, WORKSHOP_SCHEMA } from './index.js';
 
 export const MAX_WORKSHOP_ARTIFACTS = 500;
 export const MAX_ARTIFACT_BYTES = 128 * 1024;
@@ -41,6 +41,11 @@ export class WorkshopStore {
     const candidate = boundRecord(artifact);
     return this.#lock.run(async () => {
       const { records, corrupt } = await this.#log.loadForAppend();
+      if (corrupt.length > 0) {
+        throw new StoreError(`workshop history contains ${corrupt.length} corrupt line(s); refusing to append to damaged history`);
+      }
+      const chain = verifyChain(records);
+      if (!chain.ok) throw new StoreError(`workshop history integrity check failed: ${chain.detail}`);
       const existing = records.find((record) => record.artifactId === candidate.artifactId);
       if (existing) {
         if (existing.identityDigest !== candidate.identityDigest) {
@@ -70,6 +75,7 @@ export class WorkshopStore {
 
   async list({ limit = 20 } = {}) {
     const { records, corrupt } = await this.#log.load();
+    this.#assertHealthy(records, corrupt);
     const count = Number.isInteger(limit) ? Math.max(1, Math.min(limit, MAX_LIST_LIMIT)) : 20;
     const out = [];
     for (let i = records.length - 1; i >= 0 && out.length < count; i -= 1) {
@@ -93,6 +99,7 @@ export class WorkshopStore {
       return { found: false, detail: 'artifact id is required' };
     }
     const { records, corrupt } = await this.#log.load();
+    this.#assertHealthy(records, corrupt);
     const exact = records.find((record) => record.artifactId === artifactId);
     if (exact) return { found: true, artifact: publicArtifact(exact), corrupt: corrupt.length };
     const prefix = records.filter((record) => record.artifactId.startsWith(artifactId));
@@ -101,10 +108,20 @@ export class WorkshopStore {
     return { found: false, detail: `no workshop artifact for ${artifactId}` };
   }
 
+  #assertHealthy(records, corrupt) {
+    if (corrupt.length > 0) {
+      throw new StoreError(`workshop history contains ${corrupt.length} corrupt line(s)`);
+    }
+    const chain = verifyChain(records);
+    if (!chain.ok) throw new StoreError(`workshop history integrity check failed: ${chain.detail}`);
+  }
+
   async status() {
     try {
       const { records, corrupt } = await this.#log.load();
-      const chain = verifyChain(records);
+      const chain = corrupt.length > 0
+        ? { ok: false, detail: `${corrupt.length} corrupt line(s) detected` }
+        : verifyChain(records);
       return {
         artifacts: records.length,
         corrupt: corrupt.length,
@@ -127,7 +144,20 @@ function validateRecord(record) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return 'workshop record must be an object';
   if (record.schema !== WORKSHOP_SCHEMA) return 'workshop record schema is not workshop';
   if (typeof record.artifactId !== 'string' || record.artifactId.length === 0) return 'workshop record needs an artifact id';
-  if (typeof record.identityDigest !== 'string' || record.identityDigest.length === 0) return 'workshop record needs an identity digest';
+  if (typeof record.identityDigest !== 'string' || !/^[a-f0-9]{64}$/.test(record.identityDigest)) return 'workshop record needs a SHA-256 identity digest';
+  try {
+    const composition = {
+      title: record.title,
+      domain: record.domain,
+      note: record.note,
+      components: record.components,
+      connections: record.connections,
+      budget: record.budget,
+    };
+    if (identityDigest(composition) !== record.identityDigest) return 'workshop record identity digest does not match its composition';
+  } catch {
+    return 'workshop record composition cannot be verified';
+  }
   if (record.authorizesExecution !== false) return 'a workshop artifact may never authorize execution';
   if (record.executedCode !== false) return 'a workshop artifact may never claim code ran';
   if (record.contentDigest !== null && typeof record.contentDigest !== 'string') return 'workshop content digest must be text';
