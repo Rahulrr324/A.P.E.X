@@ -39,7 +39,19 @@ The Workshop remains a deterministic design-sheet tool, not a code runner, CAD e
 
 ## T-28 — Device trust and Presence Mesh
 
-Not started. No production device enrollment, remote transport or device-authentication guarantee is claimed.
+**Status: local device-trust foundation implemented; ECP action integration and runtime validation remain outstanding.**
+
+Implemented on canonical `main`:
+- `security/device-trust.js` provides explicit user-origin enrollment and revocation, a one-time random device secret, and a persisted SHA-256 credential hash (the raw secret is not written to disk).
+- Signed HMAC-SHA256 envelopes bind device id, monotonic sequence, timestamp and payload. Authentication rejects unknown/revoked devices, invalid credentials/signatures, stale timestamps, replay and out-of-order messages.
+- Enrollment, revocation and accepted message sequence events are persisted in an append-only local JSONL log with a SHA-256 hash chain. Startup rebuilds device and replay state from the log and fails closed on malformed or tampered records.
+- The service is constructed by the application composition root and its bounded status is included in app status.
+- The service explicitly reports that transport and remote presence are not implemented and that device authentication grants no capability authorization. ECP remains the sole authorization authority.
+- Added `tests/device-trust.test.js` for user-only enrollment, secret-at-rest handling, restart recovery, signature tampering, replay protection, unknown/revoked devices, stale timestamps and hash-chain tampering.
+
+Commits: `754b891` device-trust module; `c98a108` initial tests; `d574140`, `9c4749e`, `f84f7d9`, `458afcd` security corrections; `a0c9256` restart replay test; `7cf597d` list result fix; `5fe4d32` app composition integration.
+
+**Important limitations:** These tests have been added but not executed in this session. The registry currently has no cross-process writer lock; it is not yet safe to treat as a multi-process or remote-device production service. Device operations are not yet exposed through user-authorized ECP actions/API/UI. No cryptographic claim beyond the implemented local HMAC/hash-chain mechanism is made. No transport, synchronization, presence mesh, owner MFA or hardware-backed key storage is implemented.
 
 ## T-29 — Unified cognitive integration
 
@@ -47,11 +59,11 @@ Not started. Existing subsystems remain separately implemented; a complete unifi
 
 ## Required next verification
 
-1. Run `npm test` from `apex_app/` and record exact totals; specifically run `node --test tests/workshop-store-integrity.test.js`.
+1. Run `npm test` from `apex_app/` and record exact totals; specifically run `node --test tests/workshop-store-integrity.test.js tests/workshop-actions.test.js tests/device-trust.test.js`.
 2. Execute `node --test tests/workshop-store-integrity.test.js tests/workshop-actions.test.js tests/ui-server.test.js` and fix any failures. The HTTP integration tests are committed but have not been run in this environment.
 3. Run the full `npm test` suite, then Playwright against isolated temporary data and exercise Workshop compose/list/simulate on desktop and mobile.
 4. Verify malformed JSON, oversized input, missing artifacts, corrupt stores and unavailable storage fail safely.
-5. Continue T-26/T-27 integration only after tests pass; then implement T-28 and T-29.
+5. Add a cross-process-safe append/locking strategy for the device registry, then expose enrollment, revocation and read-only status through existing ECP actions and the authenticated local UI. Keep raw enrollment secrets out of audit output and show them only once.\n6. Continue T-26/T-27 integration only after tests pass; then complete T-28 and T-29.
 
 ## Global constraints
 
