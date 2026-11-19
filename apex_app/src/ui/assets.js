@@ -894,6 +894,40 @@ if (els.docSearch) {
   });
 }
 
+if (els.workshopForm) {
+  els.workshopForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (els.workshopCompose) els.workshopCompose.disabled = true;
+    if (els.workshopStatus) els.workshopStatus.textContent = 'validating design…';
+    try {
+      const source = JSON.parse(els.workshopSource.value || '{}');
+      const budgetText = els.workshopBudget?.value?.trim() ?? '';
+      const result = await api('/api/workshop/compose', {
+        method: 'POST',
+        body: {
+          title: els.workshopTitle.value,
+          domain: els.workshopDomain.value,
+          components: source.components,
+          connections: source.connections ?? [],
+          budget: budgetText === '' ? null : Number(budgetText),
+          note: typeof source.note === 'string' ? source.note : '',
+        },
+      });
+      if (els.workshopStatus) els.workshopStatus.textContent = result.status === 'success_verified'
+        ? 'stored: ' + result.artifactId
+        : (result.display || result.error || result.status || 'composition did not verify');
+      await refresh();
+      if (result.artifactId) await simulateWorkshop(result.artifactId);
+    } catch (error) {
+      if (els.workshopStatus) els.workshopStatus.textContent = error instanceof SyntaxError
+        ? 'components and connections must be valid JSON'
+        : error.message;
+    } finally {
+      if (els.workshopCompose) els.workshopCompose.disabled = false;
+    }
+  });
+}
+
 if (els.councilForm) {
   els.councilForm.addEventListener('submit', async (event) => {
     event.preventDefault();
