@@ -41,13 +41,13 @@ function eventHash(event) {
 function validateEvent(event, previousHash, sequence) {
   if (!event || event.sequence !== sequence || event.previousHash !== previousHash
     || !HEX_256.test(event.hash ?? '') || event.hash !== eventHash(event)
-    || !['enrolled', 'revoked'].includes(event.type)
+    || !['enrolled', 'revoked', 'message_accepted'].includes(event.type)
     || typeof event.deviceId !== 'string' || !ID.test(event.deviceId)
     || typeof event.at !== 'string' || !Number.isFinite(Date.parse(event.at))) {
     return false;
   }
   if (event.type === 'enrolled' && (!HEX_256.test(event.secretHash ?? '') || typeof event.label !== 'string')) return false;
-  if (event.type === 'revoked' && (typeof event.reason !== 'string' || typeof event.priorSecretHash !== 'string')) return false;
+  if (event.type === 'revoked' && (typeof event.reason !== 'string' || typeof event.priorSecretHash !== 'string')) return false;\n  if (event.type === 'message_accepted' && (!Number.isSafeInteger(event.deviceSequence) || event.deviceSequence < 1)) return false;
   return true;
 }
 
@@ -137,7 +137,7 @@ export class DeviceTrustService {
     await this.#load();
     if (this.#devices.has(deviceId)) throw new ValidationError('deviceId has already been enrolled');
     const secret = randomBytes(32).toString('base64url');
-    await this.#append('enrolled', { deviceId, label: label.trim(), secretHash: sha256(secret) });
+    await this.#append('enrolled', { deviceId, label: label.trim(), secretHash: sha256(Buffer.from(secret, 'base64url')) });
     return Object.freeze({ deviceId, secret, secretShownOnce: true, status: 'trusted' });
   }
 
