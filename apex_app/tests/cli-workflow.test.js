@@ -189,17 +189,14 @@ describe('103: deterministic CLI workflow is discoverable and truthful', () => {
 
     const remembered = await runCli(['ask', 'remember that nothing can be stored'], env);
     assert.equal(remembered.code, 3, remembered.stdout + remembered.stderr);
-    // Batch W coordinates a store write before it reads the store, so the unusable directory is
-    // reported as the write lock's own refusal. The published contract is unchanged in substance:
-    // the failure names memory.jsonl, says nothing was written, and gives the environment check.
-    assert.match(remembered.stdout, /execution failed: cannot write memory\.jsonl: its directory could not be prepared \([A-Za-z]+\); nothing was written/, remembered.stdout);
-    assert.match(remembered.stdout, /Check APEX_DATA_DIR, its permissions, and free space/);
+    // [T-30, 2026-11-19] The earlier storage-execution expectation is superseded: the ECP's
+    // durable kill-switch latch is under dataDir too, so an unreadable latch denies before execution.
+    // The authorization failure is preserved as POLICY_UNAVAILABLE rather than mislabeled as a run.
+    assert.match(remembered.stdout, /Status:\s+action_denied/);
+    assert.match(remembered.stdout, /authorization deny \(POLICY_UNAVAILABLE\)/);
     assert.match(remembered.stdout, /Audit:\s+NOT RECORDED/);
-    assert.doesNotMatch(remembered.stdout, /Status:\s+success_verified/);
-    // A refusal before coordination is provably not a partial write, so the retry warning that
-    // belongs to failures after a side effect must not be attached to it.
-    assert.doesNotMatch(remembered.stdout, /cannot establish whether it changed stored data/, remembered.stdout);
-    assert.match(remembered.stdout, /refused before it began, so nothing was written/, remembered.stdout);
+    assert.doesNotMatch(remembered.stdout, /Status:\s+success_verified|execution failed:/);
+    assert.equal(fs.existsSync(path.join(blocker, 'memory.jsonl')), false, 'no memory write was attempted');
 
     assert.equal(fs.readFileSync(blocker, 'utf8'), 'x', 'the blocking file was not replaced');
   });

@@ -47,6 +47,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { StoreError } from '../errors.js';
+import { isWriterLockHeld, WriterLock } from './writer-lock.js';
 
 function snapshotCorrupt(corrupt) {
   return corrupt.map((entry) => ({ ...entry }));
@@ -124,6 +125,7 @@ function parseLines(text, validateRecord) {
 export class JsonlStore {
   #snapshot = null;
   #appendState = null;
+  #appendLock;
   #justWrote = false;
   #cacheHits = 0;
   #cacheMisses = 0;
@@ -135,6 +137,7 @@ export class JsonlStore {
     this.label = path.basename(filePath);
     this.validateRecord = validateRecord;
     this.parseCacheBytes = Number.isInteger(parseCacheBytes) && parseCacheBytes > 0 ? parseCacheBytes : 0;
+    this.#appendLock = new WriterLock(filePath, { label: `${this.label} append` });
   }
 
   // Read-only introspection of the derived snapshot. It reports a performance aid, not
@@ -178,7 +181,7 @@ export class JsonlStore {
 
   // The file's bytes, or null for the store that does not exist yet. A path that exists but
   // cannot be read is a StoreError, never an empty store.
-  async #readBytes() {
+  async #readBytesRaw() {
     try {
       return await fs.readFile(this.filePath);
     } catch (err) {
@@ -196,6 +199,40 @@ export class JsonlStore {
         return null;
       }
       throw new StoreError(`cannot read ${this.label}: ${err?.code || err?.message}`);
+    }
+  }
+
+  async #appendInProgress() {
+    try {
+      await fs.stat(this.#appendLock.lockPath);
+      return true;
+    } catch (err) {
+      return err?.code !== 'ENOENT';
+    }
+  }
+
+  // A reader can race the final write of an append and see an unterminated tail. If the writer's
+  // lock is present, wait briefly for its authoritative append to finish and re-read the bytes; if
+  // there is no lock and the same tail remains, preserve and report it as corruption as usual.
+  // This is read-only: the reader never creates or removes a lock, and a read inside the current
+  // store's WriterLock does not wait on itself.
+  async #readBytes() {
+    let buffer = await this.#readBytesRaw();
+    const complete = (value) => value === null || value.length === 0 || value[value.length - 1] === 0x0a;
+    if (complete(buffer) || isWriterLockHeld(this.filePath)) return buffer;
+    const deadline = Date.now() + 250;
+    while (true) {
+      if (!(await this.#appendInProgress())) {
+        const reread = await this.#readBytesRaw();
+        if (complete(reread)) return reread;
+        buffer = reread;
+        if (!(await this.#appendInProgress())) return buffer;
+      }
+      if (Date.now() >= deadline) return buffer;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const reread = await this.#readBytesRaw();
+      if (complete(reread)) return reread;
+      buffer = reread;
     }
   }
 
@@ -339,6 +376,11 @@ export class JsonlStore {
   }
 
   async append(record) {
+    if (isWriterLockHeld(this.filePath)) return this.#appendUnlocked(record);
+    return this.#appendLock.run(() => this.#appendUnlocked(record));
+  }
+
+  async #appendUnlocked(record) {
     const line = `${JSON.stringify(record)}\n`;
     let handle;
     let written = 0;

@@ -659,7 +659,7 @@ function renderWorkshop(page) {
   } else {
     const artifacts = Array.isArray(page.artifacts) ? page.artifacts : [];
     for (const artifact of artifacts.slice(0, 12)) {
-      const meta = `${artifact.domain} · ${artifact.components} component(s) · ${artifact.connections} connection(s) · budget ${artifact.budget === null || artifact.budget === undefined ? 'not declared' : artifact.budget}`;
+      const meta = \`\${artifact.domain} · \${artifact.components} component(s) · \${artifact.connections} connection(s) · budget \${artifact.budget === null || artifact.budget === undefined ? 'not declared' : artifact.budget}\`;
       const li = itemFrom(artifact.title || artifact.artifactId, meta);
       const button = el('button', 'small', 'Simulate');
       button.type = 'button';
@@ -680,13 +680,13 @@ function renderWorkshopReport(report) {
     els.workshopReport.append(el('p', 'meta', 'No simulation yet. Compose a sheet, then simulate a stored artifact.'));
     return;
   }
-  els.workshopReport.append(el('p', '', `Simulation of ${report.artifactId}: ${report.status}`));
+  els.workshopReport.append(el('p', '', \`Simulation of \${report.artifactId}: \${report.status}\`));
   els.workshopReport.append(el('p', 'meta', report.budget === null || report.budget === undefined
     ? 'budget: not declared'
-    : `budget: ${report.budget.spent} of ${report.budget.total}${report.budget.overBudget ? ' (over)' : ''}`));
+    : \`budget: \${report.budget.spent} of \${report.budget.total}\${report.budget.overBudget ? ' (over)' : ''}\`));
   const list = el('ul', 'work');
   for (const component of (Array.isArray(report.components) ? report.components : [])) {
-    list.append(itemFrom(component.id, `receives ${component.inbound}, demands ${component.demand}${component.satisfied ? '' : ' · short'} · cost ${component.cost}`));
+    list.append(itemFrom(component.id, \`receives \${component.inbound}, demands \${component.demand}\${component.satisfied ? '' : ' · short'} · cost \${component.cost}\`));
   }
   els.workshopReport.append(list);
   if (Array.isArray(report.warnings) && report.warnings.length > 0) {

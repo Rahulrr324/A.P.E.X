@@ -68,7 +68,7 @@ const readJsonl = (file) => (fs.existsSync(file)
 
 const STORE_FILES = ['memory.jsonl', 'conversation.jsonl', 'operations.jsonl', 'session.json',
   'tasks.jsonl', 'task-summary-queue.json', 'knowledge.jsonl', 'experiences.jsonl', 'predictions.jsonl',
-  'world-model.jsonl'];
+  'world-model.jsonl', 'workshop.jsonl'];
 function sizes(dir) {
   return Object.fromEntries(STORE_FILES.map((f) => {
     const p = path.join(dir, f);
@@ -181,6 +181,8 @@ const MODEL_WRITE_ATTEMPTS = [
   ['world.statement.retract', { targetType: 'fact', target: 'f-model', reason: 'the model withdrew it' }],
   ['world.statement.supersede', { targetType: 'fact', target: 'f-model', by: 'f-other', reason: 'the model replaced it' }],
   ['world.identity.decide', { left: 'e-model', right: 'e-other', decision: 'confirmed', reason: 'the model decided' }],
+  // T-30 (2026-11-19): Workshop composition is user-only even though it is not a belief-store write.
+  ['workshop.compose', {}],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.

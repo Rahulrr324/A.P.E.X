@@ -4006,10 +4006,15 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 134 registered actions declare both `validate()` and `verify()` - 149 with a
-  filesystem root - so the
-  independent verifier runs on every one - including the reads, which are verified against a fresh
-  re-read rather than trusted from the first result. Registration refuses an action that omits either.
+- **Verification.** All 139 registered actions declare both `validate()` and `verify()` - 154 with a
+  filesystem root - so the independent verifier runs on every one, including the reads, which are
+  verified against a fresh re-read rather than trusted from the first result. Registration refuses an
+  action that omits either.
+
+> **T-30 count correction (2026-11-19).** The earlier AF-19 count of 134 actions by default and 149
+> with a root (80 reads, 69 writes) is superseded by the verified registry: Workshop contributes four
+> reads and one user-only compose write, for 139/154 total, 84 reads, and 70 writes. The earlier
+> counts are retained here as historical context, not current inventory.
 
 "Cognitive state" below means persistent state the application records: the belief stores
 (`memory.jsonl`, `knowledge.jsonl`, `experiences.jsonl`, `predictions.jsonl`) and, since Batch AG,
@@ -4103,6 +4108,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `work.review` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `council.deliberate` | user | read | never in a plan | `council.jsonl` (append-only session; the synthesis is stored, not executed) | no (read) | no |
 | `council.list`, `council.get`, `council.replay`, `council.compare` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
+| `workshop.compose` | user | write | never in a plan | `workshop.jsonl` (append-only design sheet; it is stored, never executed) | no (workshop) | no (a design is not a belief) |
+| `workshop.list`, `workshop.get`, `workshop.inspect`, `workshop.simulate` | user + model | read | never in a plan | nothing (measured; simulation is arithmetic over the stored sheet) | no (read) | no |
 | `plan.assess` | user | write | never in a plan | `plans.jsonl` (one `plan_assessment` event; the plan record's own bytes, status, approval and timestamp are unchanged) | no (executive) | yes |
 | `plan.activate`, `plan.reconcile` | user | not a registered action | - | `plans.jsonl`, `tasks.jsonl`, `operations.jsonl` when a plan is activated | no (executive) | through the created task only |
 | `plan.continuation` | user | not a registered action | - | `operations.jsonl` (its own audit line); the plan, task, goal and belief stores are unchanged, measured byte for byte | no (read) | no |
@@ -4124,10 +4131,13 @@ the action ran to `success_verified` in an isolated data directory and no store 
 `filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.extract`,
 `filesystem.compare`, `filesystem.report`, the filesystem lifecycle and write actions, and
 `deadline.import` appear in the registry only when a workspace root is configured; there is no default
-root, and a model proposal cannot supply one, so the count is 134 registered actions by default and
-149 with a root. Batch T-25 added five council read actions (`council.deliberate`, `council.list`,
+root, and a model proposal cannot supply one, so the current count is 139 registered actions by default and
+154 with a root. Batch T-25 added five council read actions (`council.deliberate`, `council.list`,
 `council.get`, `council.replay`, `council.compare`) which are always present regardless of workspace
-configuration. `deadline.list` needs no root: it reads the ledger, not a workspace, and the three
+configuration. T-26/T-27 added five Workshop actions regardless of root configuration: `workshop.compose`
+(a user-only write of an immutable design sheet that is never executed) and four reads (`list`, `get`,
+`inspect`, `simulate`). The reads are repeatable and arithmetic-only; Workshop actions neither authorize
+execution nor change belief state. `deadline.list` needs no root: it reads the ledger, not a workspace, and the three
 `backup.*` actions need no root either: they read and replace the data directory itself. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
@@ -4180,8 +4190,10 @@ The neural-boundary work (Batch T-05) added one more: `neural.contract`, a user 
 declares the versioned proposal contract APEX would speak - schemas, limits, refused shapes, the
 lifecycle counters and the trust class - and reports that no runtime is connected. It contacts no
 runtime, executes nothing, and is unplannable, so neither prompt count changes.
-The default registry holds 134 actions and 149 with a root. No other action was added by those
-batches.
+[Superseded 2026-11-19 by T-30 Package 0: this earlier inventory recorded 134 actions by default and
+149 with a root, before the five Workshop actions were included.]
+The default registry currently holds 139 actions and 154 with a root; the prior counts are retained
+above as historical evidence. No other action was added by the batches described in this subsection.
 
 ### The inconsistencies this found, and what became of them
 
@@ -9619,9 +9631,11 @@ user-level scenario suite and six repairs; the T-14 suites remain in the full ru
 These are four different measurements reported separately. No percentage and no composite score is
 computed, because one number would hide which promise is unmet.
 
-1. **Architecture completion** — counted components, not the vision. The application exposes 149
-   actions in 26 families when a workspace root is configured (134 in 25 families without one):
-   80 reads, 69 writes, 56 plannable. One action registry authorizes; one controller serves the CLI
+1. **Architecture completion** — counted components, not the vision. [Superseded 2026-11-19: the
+   earlier T-16 count was 149 actions in 26 families with a workspace root (134 in 25 without one),
+   80 reads, and 69 writes.] The verified T-30 registry exposes 154 actions in 27 families with a
+   root (139 in 26 without one): 84 reads, 70 writes, and 56 plannable. One action registry authorizes;
+   one controller serves the CLI
    and the UI; 15 persisted data files form the backup contract; ten health areas each name their
    source. Absent: a neural transport and runtime, a general objective planner, a voice interface,
    model training, and a hosted multi-user deployment.

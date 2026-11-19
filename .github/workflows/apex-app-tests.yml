@@ -1,16 +1,12 @@
-name: APEX Local Alpha Tests
+name: APEX Local Alpha Checks
 
+# T-30 (2026-11-19): supersedes the earlier path-filtered trigger. Every push to main now
+# runs the source/client syntax guard and full APEX test suite, including repository-wide edits.
 on:
   push:
     branches: [main]
-    paths:
-      - "apex_app/**"
-      - ".github/workflows/apex-app-tests.yml"
   pull_request:
     branches: [main]
-    paths:
-      - "apex_app/**"
-      - ".github/workflows/apex-app-tests.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +20,7 @@ jobs:
   test:
     name: Node.js test suite
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -34,6 +30,12 @@ jobs:
           node-version: 22
       - name: Verify Node.js version
         run: node --version
-      - name: Run APEX tests
+      - name: Install development dependencies only
+        working-directory: apex_app
+        run: npm ci --ignore-scripts
+      - name: Check source files and extracted UI client
+        working-directory: apex_app
+        run: npm run test:syntax
+      - name: Run the full APEX test suite
         working-directory: apex_app
         run: npm test
