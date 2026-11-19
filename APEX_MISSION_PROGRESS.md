@@ -10,8 +10,8 @@
 - Follow-up commits add the missing GET/list, POST/compose and POST/simulate API routes through the existing controller/ECP, plus the UI form handler and finite non-negative budget validation.
 - Workshop persistence now refuses appends when the JSONL parser reports corrupt lines or the digest chain is broken. Reads fail closed on corrupt records or a broken chain. Status explicitly reports corruption as a damaged chain.
 - Stored identity digests are recomputed from the canonical composition during record validation, so content altered without a matching identity digest is rejected.
-- Added `tests/workshop-store-integrity.test.js` covering append/read, restart recovery, tampering, malformed JSON and identity-digest mismatch.
-- Commits: `fa4aaed` integrity enforcement; `f653714` integrity tests; `73fcc36` budget validation.
+- Added `tests/workshop-store-integrity.test.js` covering append/read, restart recovery, tampering, malformed JSON, identity-digest mismatch, idempotent duplicate composition and conflicting duplicate protection. Added `tests/workshop-actions.test.js` covering user-only composition authorization, model-origin read permissions, validation, independent verification and read-only simulation.
+- Commits: `fa4aaed` integrity enforcement; `f653714` integrity tests; `73fcc36` budget validation; `acc1327` action authorization/verification tests; `1e05586` idempotency and duplicate-protection tests.
 - These edits were made through GitHub's file API. No local Node process, browser or full test runner was available here; the new tests and UI changes are not claimed as executed or tested.
 - Inference remains prohibited. No model runtime, local inference server, remote endpoint or model download is used. Voice remains out of scope.
 
@@ -48,7 +48,7 @@ Not started. Existing subsystems remain separately implemented; a complete unifi
 ## Required next verification
 
 1. Run `npm test` from `apex_app/` and record exact totals; specifically run `node --test tests/workshop-store-integrity.test.js`.
-2. Add coverage for normalization limits, action origins, ECP refusal and controller/API boundaries.
+2. Add/execute end-to-end controller/API tests proving ECP refusal and UI route behavior; current action tests exercise the registry/action contract, not the full controller/server boundary.
 3. Run Playwright against isolated temporary data and exercise Workshop compose/list/simulate on desktop and mobile.
 4. Verify malformed JSON, oversized input, missing artifacts, corrupt stores and unavailable storage fail safely.
 5. Continue T-26/T-27 integration only after tests pass; then implement T-28 and T-29.
