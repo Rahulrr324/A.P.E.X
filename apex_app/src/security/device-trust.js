@@ -167,7 +167,7 @@ export class DeviceTrustService {
 
   async list() {
     await this.#load();
-    return [...this.#devices.keys()].map((id) => this.get(id));
+    return Promise.all([...this.#devices.keys()].map((id) => this.get(id)));
   }
 
   async authenticate(envelope) {
