@@ -849,6 +849,55 @@ export function createUiServer({
       }
       return;
     }
+    if (method === 'GET' && url.pathname === '/api/workshop') {
+      try {
+        if (!app.workshop) { sendJson(res, 503, { unavailable: true, error: 'Workshop is not configured' }); return; }
+        const [page, status] = await Promise.all([app.workshop.list({ limit: 20 }), app.workshop.status()]);
+        sendJson(res, 200, { ...page, status, authorizesExecution: false });
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `the Workshop is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/workshop/compose') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['title', 'domain', 'budget', 'note', 'components', 'connections'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      if (typeof body.title !== 'string' || body.title.trim().length === 0 || !Array.isArray(body.components)) {
+        sendJson(res, 400, { error: 'a title and components array are required' }); return;
+      }
+      try {
+        const result = await app.controller.workshopCompose({
+          title: body.title, domain: body.domain ?? 'generic', components: body.components,
+          connections: body.connections ?? [], budget: body.budget ?? null, note: body.note ?? '',
+        });
+        const data = result.operation?.steps?.[0]?.result?.data ?? null;
+        if (!data || typeof data.artifactId !== 'string') {
+          sendJson(res, 400, { status: result.status, error: result.output ?? 'the design was not stored', display: result.display }); return;
+        }
+        sendJson(res, 200, { ...data, status: result.status, display: result.display });
+        emitStateChange('workshop', { artifactId: data.artifactId }, null);
+      } catch (err) { sendJson(res, 400, { error: err.message }); }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/workshop/simulate') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)
+        || Object.keys(body).some((key) => key !== 'artifactId')
+        || typeof body.artifactId !== 'string' || body.artifactId.trim().length === 0) {
+        sendJson(res, 400, { error: 'artifactId is required' }); return;
+      }
+      try {
+        const result = await app.controller.workshopSimulate({ artifactId: body.artifactId });
+        const data = result.operation?.steps?.[0]?.result?.data ?? null;
+        if (!data || typeof data.artifactId !== 'string') {
+          sendJson(res, 400, { status: result.status, error: result.output ?? 'the simulation was unavailable', display: result.display }); return;
+        }
+        sendJson(res, 200, { ...data, status: result.status, display: result.display });
+      } catch (err) { sendJson(res, 400, { error: err.message }); }
+      return;
+    }
     if (method === 'GET' && url.pathname === '/api/situation') {
       try {
         sendJson(res, 200, await app.situation.state({ limit: 10 }));
