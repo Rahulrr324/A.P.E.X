@@ -1,6 +1,8 @@
 // Static browser assets for the local APEX UI. They are served from this module so the
 // server needs no filesystem reads and no build step. The client renders every piece of
 // text with textContent: model output and stored records are untrusted strings.
+import { CORE_REACHABLE_STATES, CORE_STATE_DEFINITIONS } from './core-state.js';
+
 export const UI_PAGE = `<!doctype html>
 <html lang="en">
 <head>
@@ -336,7 +338,7 @@ h3 { margin: .8rem 0 .4rem; font-size: .85rem; color: var(--gold); }
 .core-state { font-family: var(--font-display); letter-spacing: .18em; color: var(--cyan); }
 .core-caption { color: var(--muted); font-size: .82rem; text-align: center; max-width: 24rem; }
 body[data-core-state="thinking"] .core-ring.outer { animation-duration: 4s; stroke: var(--gold); }
-body[data-core-state="awaiting"] .core-ring.outer { stroke: var(--gold); stroke-dasharray: 2 8; }
+body[data-core-state="awaiting_approval"] .core-ring.outer { stroke: var(--gold); stroke-dasharray: 2 8; }
 body[data-core-state="executing"] .core-center { fill: rgba(43,255,136,0.22); stroke: var(--green); }
 body[data-core-state="degraded"] .core { filter: drop-shadow(0 0 12px rgba(255,176,0,0.35)); opacity: 0.82; }
 body[data-core-state="lockdown"] .core { filter: drop-shadow(0 0 18px rgba(225,6,0,0.5)); }
@@ -384,6 +386,8 @@ textarea { width: 100%; resize: vertical; }
 `;
 
 export const UI_CLIENT = `'use strict';
+const CORE_STATE_DEFINITIONS = ${JSON.stringify(CORE_STATE_DEFINITIONS)};
+const CORE_REACHABLE_STATES = ${JSON.stringify(CORE_REACHABLE_STATES)};
 const els = {
   turns: document.getElementById('turns'),
   form: document.getElementById('chat-form'),
@@ -485,9 +489,15 @@ async function api(path, options = {}) {
 }
 
 function setCore(next, caption) {
+  if (!CORE_REACHABLE_STATES.includes(next)
+    || !CORE_STATE_DEFINITIONS.some((definition) => definition.id === next && definition.reachability === 'reachable')) {
+    next = 'degraded';
+    caption = 'An unsupported or reserved state was refused; showing Degraded.';
+  }
+  const definition = CORE_STATE_DEFINITIONS.find((stateDefinition) => stateDefinition.id === next);
   state.core = next;
   document.body.dataset.coreState = next;
-  if (els.coreState) els.coreState.textContent = next.charAt(0).toUpperCase() + next.slice(1);
+  if (els.coreState) els.coreState.textContent = definition ? definition.label : 'Degraded';
   if (els.coreCaption && caption) els.coreCaption.textContent = caption;
 }
 
@@ -781,7 +791,7 @@ async function refresh() {
     const coreState = ks.policyUnavailable ? 'degraded'
       : ks.active === true ? 'lockdown'
       : (s.session && s.session.unavailable) ? 'degraded'
-      : (Array.isArray(s.tasks) && s.tasks.some((t) => t.approval)) ? 'awaiting'
+      : (Array.isArray(s.tasks) && s.tasks.some((t) => t.approval)) ? 'awaiting_approval'
       : (Array.isArray(s.tasks) && s.tasks.some((t) => t.status === 'running')) ? 'executing'
       : 'idle';
     setCore(coreState, coreState === 'idle' ? 'Standing by.' : 'State derived from verified records.');

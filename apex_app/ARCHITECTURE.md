@@ -1437,7 +1437,7 @@ long-running operation logs.
 
 ## 7. Authority and trust-boundary map
 
-The only authority owner is the action registry. Everything else observes, proposes, or records.
+> Historical pre-T-17 wording retained for provenance: “The only authority owner is the action registry.” Superseded by the T-17/T-30 implementation boundary: the ECP is the sole authorization authority; ActionRegistry remains the registered-capability declaration and lookup source. Everything else observes, proposes, or records.
 
 | Statement | Where it is enforced | Where it is tested |
 | --- | --- | --- |
@@ -2472,3 +2472,11 @@ genuine inference remains 0 of 15.
 - The interface was stopped with `SIGTERM` on Windows because there is no portable way to deliver
   `SIGINT` to another process; the Ctrl+C path is covered by in-process tests, not by the pilot.
 - No inference is performed or claimed, and no answer-quality or model-behaviour claim is made.
+
+## T-30 Package 1 — dated implementation reconciliation (2026-11-19)
+
+This appendix preserves the preceding T-01–T-16 evidence as a dated record. Later code and tests are not silently folded into earlier milestone results. The current Core state owner/source/precedence contract is in [`ARCHITECTURE_V2.md`](ARCHITECTURE_V2.md#t-30-current-core-state-source-and-precedence-contract-2026-11-19); the machine-checked vocabulary is `src/ui/core-state.js`, with `tests/core-state-contract.test.js` checking the served client and reserved states.
+
+The application now contains an Executive Control Plane facade over the existing ActionRegistry (`src/executive/control-plane.js`), startup-only per-domain `APEX_AUTONOMY_LEVELS` enforced by that ECP (`src/config.js`), a durable local kill-switch latch (`dataDir/kill-switch.json`), Resource Fabric foundations (`src/resources/`), Council and Workshop foundations, and a versioned local UI state-event implementation. This is not a claim that the full v2 target is integrated: local UI-token authentication is not owner authentication; autonomy is not live-editable; Council does not mean model inference is enabled; Workshop is a bounded deterministic design/simulation tool, not holographic 3D CAD or a code runner; and the event stream still requires the T-30 Packages 2–3 verification/completion before its coverage or visual presentation is called complete. ECP remains the sole authorization authority; UI/Core state is a read-only projection.
+
+**Historical environment note:** Section 7's statement that `git fetch origin` failed with “Repository not found” records an earlier Windows checkout. On the Arena checkout on 2026-11-19, `git fetch origin` succeeded and `origin/main` was `fb09e73f2d875fe8697d731c9b9845dd054a0465`. The older observation is retained as history, not treated as current status for this checkout.
