@@ -173,7 +173,7 @@ export class DeviceTrustService {
   async authenticate(envelope) {
     await this.#load();
     if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)
-      || Object.keys(envelope).some((key) => !['deviceId', 'sequence', 'timestamp', 'payload', 'signature'].includes(key))) {
+      || Object.keys(envelope).some((key) => !['deviceId', 'sequence', 'timestamp', 'payload', 'secret', 'signature'].includes(key))) {
       return { accepted: false, reason: 'INVALID_ENVELOPE' };
     }
     const device = this.#devices.get(envelope.deviceId);
