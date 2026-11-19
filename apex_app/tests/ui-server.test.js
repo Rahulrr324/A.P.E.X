@@ -662,6 +662,75 @@ describe('live updates', () => {
   });
 });
 
+describe('ECP safety controls', () => {
+  test('lockdown and release require the UI token, a reason, explicit confirmation, audit, and never resume work', async () => {
+    const dir = tempDir();
+    const app = offlineApp(dir);
+    const { base } = await uiOn(dir, { app });
+    const page = await request(base, '/', { bearer: TOKEN });
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    assert.match(html, /id="safety-lock-form"/);
+    assert.match(html, /id="safety-lock-reason" rows="2" maxlength="240" required/);
+    assert.match(html, /id="safety-release-reason" rows="2" maxlength="240" required/);
+    assert.match(html, /id="safety-release-confirm" type="checkbox" required/);
+    assert.match(UI_CLIENT, /api\('\/api\/safety\/release'/);
+
+    const unauthenticated = await fetch(`${base}/api/safety/lockdown`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reason: 'missing UI token' }),
+    });
+    assert.equal(unauthenticated.status, 401);
+    const missingCsrf = await request(base, '/api/safety/lockdown', { method: 'POST', bearer: TOKEN, body: { reason: 'missing UI marker' } });
+    assert.equal(missingCsrf.status, 403);
+
+    await app.runtime.pause({ reason: 'Package 3 no-auto-resume test' });
+    const pausedBefore = await app.runtime.status();
+    assert.equal(pausedBefore.paused, true);
+
+    const noReason = await post(base, '/api/safety/lockdown', {});
+    assert.equal(noReason.status, 400);
+    const longReason = await post(base, '/api/safety/lockdown', { reason: 'x'.repeat(241) });
+    assert.equal(longReason.status, 400);
+    assert.equal(fs.existsSync(path.join(dir, 'operations.jsonl')), false, 'rejected controls write no audit record');
+
+    const lockedResponse = await post(base, '/api/safety/lockdown', { reason: 'T-30 explicit lockdown test' });
+    assert.equal(lockedResponse.status, 200);
+    const locked = await json(lockedResponse);
+    assert.equal(locked.status, Outcome.SUCCESS_VERIFIED);
+    assert.equal(locked.recorded, true);
+    assert.equal(typeof locked.operationId, 'string');
+    assert.equal(app.ecp.killSwitchStatus().active, true);
+
+    const auditBeforeRejectedRelease = fs.readFileSync(path.join(dir, 'operations.jsonl'), 'utf8');
+    const unconfirmed = await post(base, '/api/safety/release', { reason: 'I reviewed the latch', confirm: false });
+    assert.equal(unconfirmed.status, 400);
+    const missingReleaseReason = await post(base, '/api/safety/release', { confirm: true });
+    assert.equal(missingReleaseReason.status, 400);
+    assert.equal(fs.readFileSync(path.join(dir, 'operations.jsonl'), 'utf8'), auditBeforeRejectedRelease,
+      'a release without both explicit fields never reaches the ECP action');
+
+    const releasedResponse = await post(base, '/api/safety/release', { reason: 'Reviewed; explicitly releasing the test latch', confirm: true });
+    assert.equal(releasedResponse.status, 200);
+    const released = await json(releasedResponse);
+    assert.equal(released.status, Outcome.SUCCESS_VERIFIED);
+    assert.equal(released.recorded, true);
+    assert.equal(typeof released.operationId, 'string');
+    assert.equal(app.ecp.killSwitchStatus().active, false);
+
+    const pausedAfter = await app.runtime.status();
+    assert.equal(pausedAfter.paused, true, 'clearing the latch does not resume paused runtime scheduling');
+    const operations = fs.readFileSync(path.join(dir, 'operations.jsonl'), 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    const lockdownOperation = operations.find((operation) => operation.id === locked.operationId);
+    const releaseOperation = operations.find((operation) => operation.id === released.operationId);
+    assert.equal(lockdownOperation.capability, 'safety.lockdown');
+    assert.equal(lockdownOperation.origin, 'user');
+    assert.match(JSON.stringify(lockdownOperation), /T-30 explicit lockdown test/);
+    assert.equal(releaseOperation.capability, 'safety.release');
+    assert.equal(releaseOperation.origin, 'user');
+    assert.match(JSON.stringify(releaseOperation), /Reviewed; explicitly releasing the test latch/);
+  });
+});
+
 describe('the launcher', () => {
   test('bin/apex-serve.js starts loopback, prints the tokenized URL, and stops on a signal', async () => {
     const dir = tempDir();

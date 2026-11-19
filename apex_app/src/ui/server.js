@@ -180,8 +180,10 @@ function projectOwnerTasks(tasks) {
   let awaitingApprovalSteps = 0;
   let uncertainSteps = 0;
   let runningTasks = 0;
+  let pausedTasks = 0;
   for (const task of rows) {
     if (task.status === 'running') runningTasks += 1;
+    if (task.status === 'paused') pausedTasks += 1;
     for (const step of Array.isArray(task.steps) ? task.steps : []) {
       if (step.status === 'awaiting_approval') {
         awaitingApprovalSteps += 1;
@@ -194,7 +196,7 @@ function projectOwnerTasks(tasks) {
     available: true,
     total: rows.length,
     truncated: rows.length > UI_LIMITS.maxWorkItems,
-    counts: { runningTasks, awaitingApprovalSteps, uncertainSteps },
+    counts: { runningTasks, pausedTasks, awaitingApprovalSteps, uncertainSteps },
     items: rows.slice(0, UI_LIMITS.maxWorkItems).map((task) => ({
       id: String(task.id),
       status: singleLine(task.status, 32),
@@ -481,36 +483,67 @@ export function createUiServer({
       captureRows('PlanStore', app.plans, projectOwnerPlans),
       captureOwner(() => {
         if (typeof app.ecp?.killSwitchStatus !== 'function') throw new Error('ECP kill-switch status is unavailable');
-        return app.ecp.killSwitchStatus();
+        const status = app.ecp.killSwitchStatus();
+        if (!status || typeof status !== 'object' || Array.isArray(status)
+          || typeof status.active !== 'boolean' || typeof status.policyUnavailable !== 'boolean') {
+          throw new Error('ECP kill-switch status is malformed');
+        }
+        return status;
       }, (status) => ({
-        active: status.active === true,
-        policyUnavailable: status.policyUnavailable === true,
+        active: status.active,
+        policyUnavailable: status.policyUnavailable,
         activatedAt: status.activatedAt ?? null,
         reason: status.reason === null || status.reason === undefined ? null : singleLine(status.reason, 300),
         persistence: singleLine(status.persistence ?? 'unknown', 80),
       })),
-      captureOwner(() => {
+      captureOwner(async () => {
         if (typeof app.runtime?.status !== 'function') throw new Error('runtime status is unavailable');
-        return app.runtime.status();
+        const status = await app.runtime.status();
+        if (!status || typeof status !== 'object' || Array.isArray(status)
+          || typeof status.lifecycle !== 'string' || typeof status.paused !== 'boolean') {
+          throw new Error('runtime status is malformed');
+        }
+        return status;
       }, (status) => ({
-        lifecycle: singleLine(status.lifecycle ?? 'unknown', 32),
+        lifecycle: singleLine(status.lifecycle, 32),
         runtimeId: status.runtimeId ?? null,
-        paused: status.paused === true,
+        paused: status.paused,
         ticks: Number.isSafeInteger(status.ticks) ? status.ticks : null,
         backlog: Number.isSafeInteger(status.backlog) ? status.backlog : null,
         lastError: status.lastError ? singleLine(status.lastError, 240) : null,
         corruption: status.corruption ? singleLine(status.corruption.reason ?? status.corruption, 240) : null,
       })),
-      captureOwner(async () => collectHealth(app, { checkModel: false }), (status) => ({
-        overall: singleLine(status.overall ?? 'unknown', 24),
-        areas: (Array.isArray(status.areas) ? status.areas : []).slice(0, 32).map((area) => ({
-          key: singleLine(area.key, 48),
-          state: singleLine(area.state, 24),
-          summary: singleLine(area.summary, 240),
-        })),
-        attentionCount: Array.isArray(status.attention) ? status.attention.length : 0,
-        errorCount: Array.isArray(status.errors) ? status.errors.length : 0,
-      })),
+      captureOwner(async () => collectHealth(app, { checkModel: false }), (status) => {
+        const healthStates = ['healthy', 'unknown', 'degraded', 'blocked', 'failed'];
+        if (!status || !healthStates.includes(status.overall)
+          || !Array.isArray(status.areas) || !Array.isArray(status.attention) || !Array.isArray(status.errors)
+          || status.areas.some((area) => !area || typeof area.key !== 'string'
+            || typeof area.state !== 'string' || !healthStates.includes(area.state)
+            || typeof area.summary !== 'string'
+            || (area.advisory !== undefined && typeof area.advisory !== 'boolean'))
+          || status.attention.some((item) => !item || typeof item.kind !== 'string' || typeof item.severity !== 'string')) {
+          throw new Error('health projection is malformed');
+        }
+        const coreAttentionCounts = { approval: 0, uncertain: 0, other: 0 };
+        for (const item of status.attention) {
+          if (item.kind === 'approval' && item.severity === 'blocked') coreAttentionCounts.approval += 1;
+          else if (item.kind === 'uncertain-step' && item.severity === 'degraded') coreAttentionCounts.uncertain += 1;
+          else coreAttentionCounts.other += 1;
+        }
+        return {
+          overall: status.overall,
+          areas: status.areas.slice(0, 32).map((area) => ({
+            key: singleLine(area.key, 48),
+            state: area.state,
+            summary: singleLine(area.summary, 240),
+            advisory: area.advisory === true,
+          })),
+          unhealthyAreaCount: status.areas.filter((area) => area.state !== 'healthy' && area.advisory !== true).length,
+          coreAttentionCounts,
+          attentionCount: status.attention.length,
+          errorCount: status.errors.length,
+        };
+      }),
       captureOwner(async () => {
         if (typeof app.session?.peek !== 'function' || typeof app.conversation?.status !== 'function') {
           throw new Error('conversation state is unavailable');
@@ -1149,9 +1182,15 @@ export function createUiServer({
       const body = await readJson(req, UI_LIMITS.maxBodyBytes);
       if (!body || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
       if (typeof body.reason !== 'string' || body.reason.trim().length === 0) { sendJson(res, 400, { error: 'reason is required' }); return; }
+      if (body.reason.trim().length > 240) { sendJson(res, 400, { error: 'reason must be at most 240 characters' }); return; }
       try {
         const result = await app.controller.safetyLockdown({ reason: body.reason.trim() });
-        sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
+        sendJson(res, 200, {
+          status: result.status,
+          display: typeof result.display === 'string' ? result.display : '',
+          operationId: typeof result.operation?.id === 'string' ? result.operation.id : null,
+          recorded: result.recorded === true,
+        });
         scheduleOwnerRefresh();
       } catch (err) { sendJson(res, 503, { error: `lockdown unavailable: ${err.message}` }); }
       return;
@@ -1160,10 +1199,16 @@ export function createUiServer({
       const body = await readJson(req, UI_LIMITS.maxBodyBytes);
       if (!body || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
       if (typeof body.reason !== 'string' || body.reason.trim().length === 0) { sendJson(res, 400, { error: 'reason is required' }); return; }
+      if (body.reason.trim().length > 240) { sendJson(res, 400, { error: 'reason must be at most 240 characters' }); return; }
       if (body.confirm !== true) { sendJson(res, 400, { error: 'confirmation is required' }); return; }
       try {
         const result = await app.controller.safetyRelease({ reason: body.reason.trim() });
-        sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
+        sendJson(res, 200, {
+          status: result.status,
+          display: typeof result.display === 'string' ? result.display : '',
+          operationId: typeof result.operation?.id === 'string' ? result.operation.id : null,
+          recorded: result.recorded === true,
+        });
         scheduleOwnerRefresh();
       } catch (err) { sendJson(res, 503, { error: `release unavailable: ${err.message}` }); }
       return;

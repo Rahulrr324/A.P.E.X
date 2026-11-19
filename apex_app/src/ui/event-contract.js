@@ -71,7 +71,7 @@ export function validateStateEventEnvelope(envelope, cursor = { streamId: null, 
   if (envelope.seq !== cursor.seq + 1) return fail('sequence-gap');
   if (typeof envelope.category !== 'string' || !STATE_EVENT_OWNERS.includes(envelope.category)) return fail('unknown-owner');
   if (!positiveVersion(envelope.version)) return fail('invalid-owner-version');
-  if (!isRecord(envelope.payload)) return fail('invalid-owner-payload');
+  if (!isRecord(envelope.payload) || typeof envelope.payload.available !== 'boolean') return fail('invalid-owner-payload');
 
   const priorVersion = cursor.versions?.[envelope.category];
   if (priorVersion === undefined) {

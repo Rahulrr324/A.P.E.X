@@ -1,12 +1,15 @@
 import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTempDataDir, cleanup, cleanEnv, runCli } from './helpers.js';
 import { createApp } from '../src/app.js';
 import { ModelGateway, NoBackend } from '../src/model/gateway.js';
 import { createUiServer, UI_LIMITS } from '../src/ui/server.js';
+import { Outcome } from '../src/outcomes.js';
 import { STATE_EVENT_OWNERS, STATE_EVENT_SCHEMA } from '../src/ui/event-contract.js';
+import { resolveCoreStateFromOwners } from '../src/ui/core-state.js';
 
 const TOKEN = 'ui-owner-test-token-0123456789';
 const dirs = [];
@@ -123,6 +126,10 @@ describe('cross-process owner events and reconciliation', () => {
     assert.equal(initial.id, `${initial.payload.streamId}:${initial.payload.seq}`);
     assert.equal(initial.payload.payload.owners.tasks.available, true);
     assert.equal(initial.payload.payload.owners.plans.available, true);
+    assert.equal(resolveCoreStateFromOwners(initial.payload.payload.owners, {
+      eventStreamAvailable: true,
+      stateReadAvailable: true,
+    }), 'idle', 'the real startup owner projections satisfy the full readiness contract');
 
     const result = await runCli([
       'plan', 'add', '--outcome', 'the external process stores a draft plan', '--step', step,
@@ -146,6 +153,12 @@ describe('cross-process owner events and reconciliation', () => {
     assert.ok(changes.plans.payload.seq < changes.approvals.payload.seq);
     assert.ok(changes.events.every((frame) => frame.id === `${frame.payload.streamId}:${frame.payload.seq}`));
     assert.ok(Buffer.byteLength(first.received.text) < UI_LIMITS.maxBufferedBytes);
+    const ownersAfterPlan = { ...initial.payload.payload.owners };
+    for (const frame of changes.events) ownersAfterPlan[frame.payload.category] = frame.payload.payload;
+    assert.equal(resolveCoreStateFromOwners(ownersAfterPlan, {
+      eventStreamAvailable: true,
+      stateReadAvailable: true,
+    }), 'awaiting_approval', 'a real external CLI draft becomes the higher-priority Core state');
 
     const pause = await runCli(['runtime', 'pause'], cleanEnv({ APEX_DATA_DIR: dir, HOME: dir, USERPROFILE: dir }));
     assert.equal(pause.code, 0, pause.stdout + pause.stderr);
@@ -192,6 +205,67 @@ describe('cross-process owner events and reconciliation', () => {
     assert.equal(lockdown.payload.payload.available, true);
     assert.equal(lockdown.payload.payload.active, true);
     assert.equal(lockdown.payload.payload.policyUnavailable, false);
+    await stream.close();
+  });
+
+  test('malformed ECP and runtime source objects are published unavailable, not normalized healthy', async () => {
+    const dir = tempDir();
+    const app = createApp({ dataDir: dir, gateway: new ModelGateway({ backend: new NoBackend() }) });
+    app.ecp.killSwitchStatus = () => ({ active: false });
+    app.runtime.status = async () => ({ lifecycle: 'stopped' });
+    const ui = createUiServer({ app, token: TOKEN, host: '127.0.0.1', port: 0 });
+    const started = await ui.start();
+    uis.push(ui);
+    const base = `http://127.0.0.1:${started.port}`;
+    const stream = await openStream(base);
+    const initial = await waitFor(() => frames(stream.received.text).find((frame) => frame.event === 'reconcile'), 'malformed-source reconciliation');
+    const owners = initial.payload.payload.owners;
+    assert.equal(owners.lockdown.available, false, 'a missing ECP policy flag is not coerced to false');
+    assert.equal(owners.runtime.available, false, 'a missing runtime pause flag is not coerced to false');
+    assert.equal(resolveCoreStateFromOwners(owners, { eventStreamAvailable: true, stateReadAvailable: true }), 'degraded');
+    await stream.close();
+  });
+
+  test('a real uncertain task stays Uncertain when health is degraded only for that outcome', async () => {
+    const dir = tempDir();
+    const unverifiedRead = {
+      name: 'test.ui_uncertain',
+      description: 'test-only read whose result cannot be verified',
+      inputHint: '{}',
+      permission: 'read',
+      origins: ['user'],
+      validate: (input) => input ?? {},
+      async execute() { return { summary: 'the test read ran', data: { read: true } }; },
+      async verify() { return null; },
+    };
+    const app = createApp({
+      dataDir: dir,
+      gateway: new ModelGateway({ backend: new NoBackend() }),
+      extraActions: [unverifiedRead],
+    });
+    const taskId = randomUUID();
+    await app.taskStore.createTask({
+      taskId,
+      goal: 'verify the live Core uncertainty projection',
+      origin: 'user',
+      planner: 'deterministic',
+      steps: [{
+        id: 's1', description: 'a test read with an unestablished result', action: 'test.ui_uncertain',
+        permission: 'read', input: {}, dependsOn: [],
+      }],
+    });
+    const run = await app.controller.runTask(taskId, 'run');
+    assert.equal(run.status, Outcome.VERIFICATION_UNAVAILABLE);
+    const ui = createUiServer({ app, token: TOKEN, host: '127.0.0.1', port: 0 });
+    const started = await ui.start();
+    uis.push(ui);
+    const stream = await openStream(`http://127.0.0.1:${started.port}`);
+    const initial = await waitFor(() => frames(stream.received.text).find((frame) => frame.event === 'reconcile'), 'uncertain-task reconciliation');
+    const owners = initial.payload.payload.owners;
+    assert.equal(owners.tasks.counts.uncertainSteps, 1);
+    assert.equal(owners.health.overall, 'degraded');
+    assert.equal(owners.health.coreAttentionCounts.uncertain, 1);
+    assert.equal(resolveCoreStateFromOwners(owners, { eventStreamAvailable: true, stateReadAvailable: true }), 'uncertain', JSON.stringify(owners.health));
     await stream.close();
   });
 });

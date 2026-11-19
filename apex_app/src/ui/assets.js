@@ -1,7 +1,7 @@
 // Static browser assets for the local APEX UI. They are served from this module so the
 // server needs no filesystem reads and no build step. The client renders every piece of
 // text with textContent: model output and stored records are untrusted strings.
-import { CORE_REACHABLE_STATES, CORE_STATE_DEFINITIONS } from './core-state.js';
+import { CORE_REACHABLE_STATES, CORE_STATE_DEFINITIONS, CORE_STATE_PRECEDENCE, resolveCoreState, resolveCoreStateFromOwners } from './core-state.js';
 import { createEventWatchdog, EVENT_WATCHDOG_MS, HEARTBEAT_SCHEMA, isRecord, STATE_EVENT_OWNERS, STATE_EVENT_SCHEMA, validateHeartbeatEnvelope, validateStateEventEnvelope } from './event-contract.js';
 
 export const UI_PAGE = `<!doctype html>
@@ -12,7 +12,7 @@ export const UI_PAGE = `<!doctype html>
 <title>APEX</title>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body data-core-state="idle" data-view="deck" data-motion="full">
+<body data-core-state="degraded" data-view="deck" data-motion="full">
 <a class="skip-link" href="#main-content">Skip to main content</a>
 <div id="boot" class="boot" role="status" aria-live="polite">
   <div class="boot-core" aria-hidden="true"></div>
@@ -89,8 +89,8 @@ export const UI_PAGE = `<!doctype html>
           <path d="M32 120 A88 88 0 0 1 120 32" />
         </g>
       </svg>
-      <div class="core-state" id="core-state">Idle</div>
-      <p class="core-caption" id="core-caption">No operation in progress.</p>
+      <div class="core-state" id="core-state" role="status" aria-live="polite">Degraded</div>
+      <p class="core-caption" id="core-caption">Waiting for an authoritative owner snapshot.</p>
     </div>
     <section class="panel conversation" id="conversation-panel">
       <h2>Conversation</h2>
@@ -185,6 +185,23 @@ export const UI_PAGE = `<!doctype html>
   </section>
   <section class="view" data-view="system">
     <h2>System and Resource Fabric</h2>
+    <section class="panel safety" aria-labelledby="safety-heading">
+      <h3 id="safety-heading">Execution safety</h3>
+      <p id="safety-status" class="meta" role="status" aria-live="polite">Reading the ECP safety latch…</p>
+      <form id="safety-lock-form" class="safety-form">
+        <label for="safety-lock-reason">Lockdown reason</label>
+        <textarea id="safety-lock-reason" rows="2" maxlength="240" required></textarea>
+        <button id="safety-lock" type="submit" class="small">Activate lockdown</button>
+        <span id="safety-lock-result" class="meta" role="status" aria-live="polite"></span>
+      </form>
+      <form id="safety-release-form" class="safety-form">
+        <label for="safety-release-reason">Release reason</label>
+        <textarea id="safety-release-reason" rows="2" maxlength="240" required></textarea>
+        <label class="safety-confirm"><input id="safety-release-confirm" type="checkbox" required> I have reviewed the latch and explicitly confirm release</label>
+        <button id="safety-release" type="submit" class="small" disabled>Release lockdown</button>
+        <span id="safety-release-result" class="meta" role="status" aria-live="polite"></span>
+      </form>
+    </section>
     <div id="health-overall" class="row"></div>
     <ul id="health" class="work"></ul>
     <h3>Runtime</h3>
@@ -338,14 +355,27 @@ h3 { margin: .8rem 0 .4rem; font-size: .85rem; color: var(--gold); }
 .core-segments path { fill: none; stroke: var(--cyan); stroke-width: 2; opacity: 0.55; stroke-linecap: round; }
 .core-state { font-family: var(--font-display); letter-spacing: .18em; color: var(--cyan); }
 .core-caption { color: var(--muted); font-size: .82rem; text-align: center; max-width: 24rem; }
+body[data-core-state="idle"] .core-halo { animation: breathe 3.2s ease-in-out infinite; }
 body[data-core-state="thinking"] .core-ring.outer { animation-duration: 4s; stroke: var(--gold); }
 body[data-core-state="awaiting_approval"] .core-ring.outer { stroke: var(--gold); stroke-dasharray: 2 8; }
+body[data-core-state="uncertain"] .core-ring, body[data-core-state="uncertain"] .core-center { stroke: var(--gold); }
+body[data-core-state="uncertain"] .core-center { fill: rgba(255,176,0,0.16); }
 body[data-core-state="executing"] .core-center { fill: rgba(43,255,136,0.22); stroke: var(--green); }
 body[data-core-state="degraded"] .core { filter: drop-shadow(0 0 12px rgba(255,176,0,0.35)); opacity: 0.82; }
-body[data-core-state="lockdown"] .core { filter: drop-shadow(0 0 18px rgba(225,6,0,0.5)); }
+body[data-core-state="degraded"] .core-ring.outer { animation: none; stroke: var(--gold); }
+body[data-core-state="lockdown"] .core { filter: drop-shadow(0 0 18px rgba(225,6,0,0.5)); transform: scale(.88); }
 body[data-core-state="lockdown"] .core-ring, body[data-core-state="lockdown"] .core-center { stroke: var(--red); }
-body[data-motion="reduced"] .core-ring, body[data-motion="reduced"] .core-segments path { animation: none !important; }
+body[data-motion="reduced"] .core-ring, body[data-motion="reduced"] .core-segments path, body[data-motion="reduced"] .core-halo { animation: none !important; }
+.safety { margin: .75rem 0 1rem; }
+.safety-form { display: grid; gap: .45rem; margin-top: .75rem; max-width: 40rem; }
+.safety-form label { color: var(--text); font-size: .84rem; }
+.safety-form button { justify-self: start; }
+.safety-confirm { display: flex; gap: .45rem; align-items: center; }
+#safety-status[data-safety="active"] { color: var(--red); }
+#safety-status[data-safety="clear"] { color: var(--green); }
+#safety-status[data-safety="unavailable"] { color: var(--gold); }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes breathe { 50% { opacity: .55; transform: scale(.96); } }
 .core, .core-ring, .core-segments, .core-segments path { transform-origin: 120px 120px; transform-box: view-box; }
 .core-segments { transform-origin: 120px 120px; }
 button { background: var(--cyan); color: #04131a; border: 0; border-radius: 8px; padding: .45rem .8rem; font: inherit; font-weight: 600; cursor: pointer; }
@@ -397,6 +427,9 @@ const validateHeartbeatEnvelope = ${validateHeartbeatEnvelope.toString()};
 const createEventWatchdog = ${createEventWatchdog.toString()};
 const CORE_STATE_DEFINITIONS = ${JSON.stringify(CORE_STATE_DEFINITIONS)};
 const CORE_REACHABLE_STATES = ${JSON.stringify(CORE_REACHABLE_STATES)};
+const CORE_STATE_PRECEDENCE = ${JSON.stringify(CORE_STATE_PRECEDENCE)};
+const resolveCoreState = ${resolveCoreState.toString()};
+const resolveCoreStateFromOwners = ${resolveCoreStateFromOwners.toString()};
 const els = {
   turns: document.getElementById('turns'),
   form: document.getElementById('chat-form'),
@@ -421,6 +454,16 @@ const els = {
   planningStatus: document.getElementById('planning-status'),
   healthOverall: document.getElementById('health-overall'),
   health: document.getElementById('health'),
+  safetyStatus: document.getElementById('safety-status'),
+  safetyLockForm: document.getElementById('safety-lock-form'),
+  safetyLockReason: document.getElementById('safety-lock-reason'),
+  safetyLockButton: document.getElementById('safety-lock'),
+  safetyLockResult: document.getElementById('safety-lock-result'),
+  safetyReleaseForm: document.getElementById('safety-release-form'),
+  safetyReleaseReason: document.getElementById('safety-release-reason'),
+  safetyReleaseConfirm: document.getElementById('safety-release-confirm'),
+  safetyReleaseButton: document.getElementById('safety-release'),
+  safetyReleaseResult: document.getElementById('safety-release-result'),
   situation: document.getElementById('situation'),
   runtime: document.getElementById('runtime'),
   sources: document.getElementById('sources'),
@@ -451,6 +494,7 @@ const els = {
   boot: document.getElementById('boot'),
   bootLines: document.getElementById('boot-lines'),
   bootSkip: document.getElementById('boot-skip'),
+  quickBoot: document.getElementById('quick-boot'),
   missions: document.getElementById('missions-list'),
   taskgraph: document.getElementById('taskgraph'),
   sentinel: document.getElementById('sentinel'),
@@ -465,7 +509,19 @@ const els = {
   conversationHistory: document.getElementById('conversation-history'),
 };
 
-const state = { core: 'idle', view: 'deck', last: null, eventCursor: { streamId: null, seq: 0, versions: {} }, reducedMotion: false };
+const state = {
+  core: 'degraded',
+  view: 'deck',
+  last: null,
+  eventCursor: { streamId: null, seq: 0, versions: {} },
+  ownerSnapshots: Object.create(null),
+  eventReconciled: false,
+  stateReadAvailable: false,
+  thinking: false,
+  safetyLatchFresh: false,
+  safetyMutationInFlight: false,
+  reducedMotion: false,
+};
 let eventStreamDegraded = false;
 
 function showBanner(text) {
@@ -509,6 +565,100 @@ function setCore(next, caption) {
   document.body.dataset.coreState = next;
   if (els.coreState) els.coreState.textContent = definition ? definition.label : 'Degraded';
   if (els.coreCaption && caption) els.coreCaption.textContent = caption;
+}
+
+function coreCaptionFor(core, reason = '') {
+  if (core === 'lockdown') return 'ECP reports an active kill switch. Release requires an explicit reason and confirmation.';
+  if (core === 'degraded') {
+    if (reason) return reason;
+    if (!state.eventReconciled || eventStreamDegraded) return 'The authoritative event stream is unavailable or not reconciled.';
+    if (!state.stateReadAvailable) return 'The authoritative UI state read is unavailable.';
+    const missing = ['tasks', 'plans', 'approval', 'lockdown', 'runtime', 'health', 'conversation']
+      .filter((name) => !state.ownerSnapshots[name] || state.ownerSnapshots[name].available !== true);
+    if (missing.length) return 'Required owner state is unavailable: ' + missing.join(', ') + '.';
+    const runtime = state.ownerSnapshots.runtime;
+    if (runtime?.corruption) return 'Runtime checkpoint is reported corrupt; work is not inferred healthy.';
+    if (runtime?.lastError) return 'Runtime reports an error: ' + runtime.lastError;
+    if (['starting', 'stopping', 'unknown'].includes(runtime?.lifecycle)) return 'Runtime lifecycle is ' + runtime.lifecycle + '.';
+    const conversation = state.ownerSnapshots.conversation;
+    if (conversation?.sessionStatus === 'corrupt' || conversation?.sessionStatus === 'unavailable') return 'Conversation state reports ' + conversation.sessionStatus + '.';
+    if (conversation?.corruptCount > 0) return 'Conversation history reports corrupt records.';
+    if (state.ownerSnapshots.tasks?.counts?.pausedTasks > 0) return 'A task is paused without a more specific reachable Core state.';
+    const health = state.ownerSnapshots.health;
+    return health && health.overall ? 'Health reports ' + health.overall + '; the UI is not assuming a healthy state.' : 'A required source is degraded or unavailable.';
+  }
+  if (core === 'awaiting_approval') return 'A task step or draft plan is waiting for an explicit owner approval.';
+  if (core === 'uncertain') return 'A task step has an uncertain outcome; no completion is being inferred.';
+  if (core === 'executing') return 'TaskStore reports one or more running tasks.';
+  if (core === 'thinking') return 'A chat request is in progress.';
+  if (state.ownerSnapshots.runtime?.paused === true) return 'No higher-priority task state is active; runtime scheduling is paused.';
+  return 'Required owner snapshots are available; no higher-priority condition is reported.';
+}
+
+function renderSafety() {
+  const snapshot = state.ownerSnapshots.lockdown;
+  if (!els.safetyStatus) return;
+  const known = snapshot && snapshot.available === true;
+  const active = known && snapshot.active === true;
+  const clear = known && snapshot.active === false && snapshot.policyUnavailable !== true;
+  const fresh = state.eventReconciled && state.stateReadAvailable && !eventStreamDegraded
+    && state.safetyLatchFresh === true && !state.safetyMutationInFlight;
+  if (state.safetyMutationInFlight) {
+    els.safetyStatus.dataset.safety = 'unavailable';
+    els.safetyStatus.textContent = 'An ECP safety control is in progress; waiting for a fresh latch read.';
+  } else if (!known || (!active && !clear)) {
+    els.safetyStatus.dataset.safety = 'unavailable';
+    els.safetyStatus.textContent = 'ECP kill-switch state is unavailable; it is not assumed clear.';
+  } else if (active) {
+    els.safetyStatus.dataset.safety = fresh ? 'active' : 'unavailable';
+    const staleReason = state.safetyLatchFresh === true ? 'event state is stale' : 'the latch has not been freshly read';
+    els.safetyStatus.textContent = (fresh ? 'LOCKDOWN ACTIVE — ' : 'Last reported LOCKDOWN ACTIVE; ' + staleReason + ' — ')
+      + (snapshot.reason || 'ECP reports the durable latch active.');
+  } else if (fresh) {
+    els.safetyStatus.dataset.safety = 'clear';
+    els.safetyStatus.textContent = 'ECP reports the durable lockdown latch clear.';
+  } else {
+    els.safetyStatus.dataset.safety = 'unavailable';
+    els.safetyStatus.textContent = state.safetyLatchFresh === true
+      ? 'Last reported clear; event state is stale.'
+      : 'Last reported clear; current ECP latch state is not confirmed.';
+  }
+  if (els.safetyLockButton) els.safetyLockButton.disabled = active || state.safetyMutationInFlight;
+  if (els.safetyReleaseButton) els.safetyReleaseButton.disabled = !active || !fresh || state.safetyMutationInFlight;
+}
+
+async function refreshSafetyLatch() {
+  try {
+    const snapshot = await api('/api/killswitch');
+    if (!snapshot || typeof snapshot.active !== 'boolean' || typeof snapshot.policyUnavailable !== 'boolean') {
+      throw new Error('ECP returned a malformed latch status');
+    }
+    state.ownerSnapshots.lockdown = {
+      available: true,
+      active: snapshot.active,
+      policyUnavailable: snapshot.policyUnavailable,
+      activatedAt: snapshot.activatedAt ?? null,
+      reason: typeof snapshot.reason === 'string' ? snapshot.reason : null,
+      persistence: typeof snapshot.persistence === 'string' ? snapshot.persistence : 'unknown',
+    };
+    state.safetyLatchFresh = true;
+  } catch (error) {
+    state.ownerSnapshots.lockdown = { available: false, error: String(error?.message || error).slice(0, 240) };
+    state.safetyLatchFresh = false;
+  }
+  applyCoreProjection(state.safetyLatchFresh ? '' : 'The current ECP latch state could not be freshly read.');
+  return state.safetyLatchFresh;
+}
+
+function applyCoreProjection(reason = '') {
+  const next = resolveCoreStateFromOwners(state.ownerSnapshots, {
+    eventStreamAvailable: state.eventReconciled && !eventStreamDegraded,
+    stateReadAvailable: state.stateReadAvailable,
+    thinking: state.thinking,
+  });
+  setCore(next, coreCaptionFor(next, reason));
+  renderSafety();
+  return next;
 }
 
 function renderTurns(turns) {
@@ -752,6 +902,7 @@ async function refresh() {
   try {
     const stateData = await api('/api/state');
     const s = stateData && typeof stateData === 'object' ? stateData : {};
+    state.stateReadAvailable = true;
     state.last = s;
     renderTurns(s.turns);
     renderTasks(s.tasks);
@@ -797,19 +948,12 @@ async function refresh() {
     renderKnowledge(knowledge.claims);
     renderWorld(world);
 
-    const ks = s.killSwitch || {};
-    const coreState = ks.policyUnavailable ? 'degraded'
-      : ks.active === true ? 'lockdown'
-      : (s.session && s.session.unavailable) ? 'degraded'
-      : (Array.isArray(s.tasks) && s.tasks.some((t) => t.approval)) ? 'awaiting_approval'
-      : (Array.isArray(s.tasks) && s.tasks.some((t) => t.status === 'running')) ? 'executing'
-      : 'idle';
-    setCore(eventStreamDegraded ? 'degraded' : coreState,
-      eventStreamDegraded ? 'Event stream is unavailable.' : (coreState === 'idle' ? 'Standing by.' : 'State derived from verified records.'));
+    applyCoreProjection();
     return true;
   } catch (error) {
+    state.stateReadAvailable = false;
     showBanner(error.message);
-    setCore('degraded', 'State unavailable.');
+    applyCoreProjection('Authoritative state read failed.');
     return false;
   }
 }
@@ -831,17 +975,44 @@ function setView(view) {
 
 async function boot() {
   if (!els.boot) return;
-  const lines = [
-    'APEX command deck initializing...',
-    'Verifying loopback boundary...',
-    'Loading controller state...',
-    'No inference activated.',
-  ];
-  if (els.bootLines) {
-    for (const line of lines) {
-      els.bootLines.append(el('div', null, line));
-      await new Promise((resolve) => setTimeout(resolve, 120));
+  const checks = await Promise.allSettled([
+    api('/api/state'),
+    api('/api/health'),
+    api('/api/killswitch'),
+  ]);
+  const lines = [];
+  const stateResult = checks[0];
+  if (stateResult.status === 'fulfilled') {
+    const snapshot = stateResult.value;
+    lines.push('State API: available (' + (Array.isArray(snapshot.tasks) ? snapshot.tasks.length : 0)
+      + ' task records, ' + (Array.isArray(snapshot.plans) ? snapshot.plans.length : 0) + ' plan records).');
+    lines.push('Runtime: ' + (snapshot.runtime?.status || snapshot.runtime?.lifecycle || 'status unavailable'));
+  } else {
+    lines.push('State API: unavailable (' + String(stateResult.reason?.message || stateResult.reason).slice(0, 180) + ').');
+  }
+  const healthResult = checks[1];
+  if (healthResult.status === 'fulfilled') {
+    const health = healthResult.value;
+    lines.push('Health overall: ' + String(health.overall || 'unknown') + '.');
+    for (const area of (Array.isArray(health.areas) ? health.areas : []).slice(0, 10)) {
+      lines.push('  ' + String(area.label || area.key || 'subsystem') + ': ' + String(area.state || 'unknown'));
     }
+  } else {
+    lines.push('Health: unavailable (' + String(healthResult.reason?.message || healthResult.reason).slice(0, 180) + ').');
+  }
+  const safetyResult = checks[2];
+  if (safetyResult.status === 'fulfilled') {
+    const safety = safetyResult.value;
+    lines.push('ECP kill switch: ' + (safety.active === true ? 'ACTIVE'
+      : safety.policyUnavailable === true ? 'unavailable; fail-closed'
+        : safety.active === false ? 'clear' : 'unknown') + '.');
+  } else {
+    lines.push('ECP kill switch: unavailable; not assumed clear.');
+  }
+  lines.push('Owner event stream: ' + (state.eventReconciled ? 'reconciled' : 'waiting for reconciliation') + '.');
+  if (els.bootLines) {
+    els.bootLines.replaceChildren();
+    for (const line of lines) els.bootLines.append(el('div', null, line));
   }
   els.boot.classList.add('hidden');
 }
@@ -856,7 +1027,8 @@ if (els.form) {
     if (!els.text) return;
     const text = els.text.value;
     if (text.trim().length === 0) return;
-    setCore('thinking', 'Request in progress.');
+    state.thinking = true;
+    applyCoreProjection();
     showBanner('');
     els.send.disabled = true;
     if (els.activity) els.activity.textContent = 'working…';
@@ -866,11 +1038,11 @@ if (els.form) {
       await refresh();
     } catch (error) {
       showBanner(error.message);
-      setCore('degraded', 'Request failed.');
     } finally {
+      state.thinking = false;
       els.send.disabled = false;
       if (els.activity) els.activity.textContent = '';
-      if (state.core !== 'degraded') setCore('idle', 'Standing by.');
+      applyCoreProjection();
     }
   });
 }
@@ -886,6 +1058,62 @@ if (els.newSession) {
       showBanner(error.message);
     } finally {
       els.newSession.disabled = false;
+    }
+  });
+}
+
+if (els.safetyLockForm) {
+  els.safetyLockForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const reason = els.safetyLockReason?.value?.trim() ?? '';
+    if (!reason) {
+      if (els.safetyLockResult) els.safetyLockResult.textContent = 'A reason is required.';
+      return;
+    }
+    state.safetyMutationInFlight = true;
+    state.safetyLatchFresh = false;
+    renderSafety();
+    if (els.safetyLockResult) els.safetyLockResult.textContent = 'Sending the user-origin ECP request…';
+    try {
+      const result = await api('/api/safety/lockdown', { method: 'POST', body: { reason } });
+      const audit = result.recorded === true && result.operationId ? ' Audit operation ' + result.operationId.slice(0, 8) + '.' : '';
+      if (els.safetyLockResult) els.safetyLockResult.textContent = (result.recorded === true
+        ? 'ECP lockdown request recorded; waiting for the authoritative latch event.'
+        : 'ECP did not confirm that the audit record was written.') + audit;
+      els.safetyLockForm.reset();
+    } catch (error) {
+      if (els.safetyLockResult) els.safetyLockResult.textContent = error.message;
+    } finally {
+      state.safetyMutationInFlight = false;
+      await refreshSafetyLatch();
+    }
+  });
+}
+
+if (els.safetyReleaseForm) {
+  els.safetyReleaseForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const reason = els.safetyReleaseReason?.value?.trim() ?? '';
+    if (!reason || !els.safetyReleaseConfirm?.checked) {
+      if (els.safetyReleaseResult) els.safetyReleaseResult.textContent = 'A reason and explicit confirmation are required.';
+      return;
+    }
+    state.safetyMutationInFlight = true;
+    state.safetyLatchFresh = false;
+    renderSafety();
+    if (els.safetyReleaseResult) els.safetyReleaseResult.textContent = 'Sending the explicit user-origin ECP release request…';
+    try {
+      const result = await api('/api/safety/release', { method: 'POST', body: { reason, confirm: true } });
+      const audit = result.recorded === true && result.operationId ? ' Audit operation ' + result.operationId.slice(0, 8) + '.' : '';
+      if (els.safetyReleaseResult) els.safetyReleaseResult.textContent = (result.recorded === true
+        ? 'ECP release request recorded; waiting for the authoritative latch event. No task or runtime is resumed by this control.'
+        : 'ECP did not confirm that the audit record was written.') + audit;
+      els.safetyReleaseForm.reset();
+    } catch (error) {
+      if (els.safetyReleaseResult) els.safetyReleaseResult.textContent = error.message;
+    } finally {
+      state.safetyMutationInFlight = false;
+      await refreshSafetyLatch();
     }
   });
 }
@@ -983,11 +1211,11 @@ if (els.councilForm) {
   });
 }
 
-if (els.bootSkip) {
-  els.bootSkip.addEventListener('click', () => {
-    if (els.boot) els.boot.classList.add('hidden');
-  });
+function skipBoot() {
+  if (els.boot) els.boot.classList.add('hidden');
 }
+if (els.bootSkip) els.bootSkip.addEventListener('click', skipBoot);
+if (els.quickBoot) els.quickBoot.addEventListener('click', skipBoot);
 
 setInterval(() => {
   if (els.clock) els.clock.textContent = new Date().toLocaleString();
@@ -1001,6 +1229,7 @@ let eventSource = null;
 let eventWatchdog = null;
 let forcedReconciliation = false;
 let snapshotSyncInFlight = false;
+let eventRefreshRequested = false;
 let eventRefreshTimer = null;
 let eventHealthGeneration = 0;
 
@@ -1008,7 +1237,7 @@ function markEventDegraded(reason) {
   eventHealthGeneration += 1;
   eventStreamDegraded = true;
   if (els.connectivity) els.connectivity.textContent = 'Degraded';
-  setCore('degraded', reason || 'Event stream is unavailable.');
+  applyCoreProjection(reason || 'Event stream is unavailable.');
 }
 
 function armWatchdog() {
@@ -1022,7 +1251,11 @@ function armWatchdog() {
 }
 
 function scheduleEventRefresh() {
-  if (eventRefreshTimer || snapshotSyncInFlight) return;
+  if (snapshotSyncInFlight) {
+    eventRefreshRequested = true;
+    return;
+  }
+  if (eventRefreshTimer) return;
   eventRefreshTimer = setTimeout(() => {
     eventRefreshTimer = null;
     refresh();
@@ -1030,7 +1263,10 @@ function scheduleEventRefresh() {
 }
 
 async function synchronizeAfterReconcile() {
-  if (snapshotSyncInFlight) return;
+  if (snapshotSyncInFlight) {
+    eventRefreshRequested = true;
+    return;
+  }
   snapshotSyncInFlight = true;
   const generation = eventHealthGeneration;
   eventStreamDegraded = false;
@@ -1040,9 +1276,14 @@ async function synchronizeAfterReconcile() {
   } else if (generation === eventHealthGeneration) {
     eventStreamDegraded = false;
     if (els.connectivity) els.connectivity.textContent = 'Connected';
+    applyCoreProjection();
     armWatchdog();
   }
   snapshotSyncInFlight = false;
+  if (eventRefreshRequested) {
+    eventRefreshRequested = false;
+    scheduleEventRefresh();
+  }
 }
 
 function forceReconciliation(reason) {
@@ -1081,10 +1322,17 @@ function acceptStateEvent(event) {
   state.eventCursor = validation.cursor;
   armWatchdog();
   if (validation.kind === 'reconcile') {
+    state.ownerSnapshots = data.payload.owners;
+    state.eventReconciled = true;
+    state.safetyLatchFresh = state.ownerSnapshots.lockdown?.available === true;
     forcedReconciliation = false;
+    applyCoreProjection();
     synchronizeAfterReconcile();
     return;
   }
+  state.ownerSnapshots[data.category] = data.payload;
+  if (data.category === 'lockdown') state.safetyLatchFresh = data.payload.available === true;
+  applyCoreProjection();
   if (eventStreamDegraded) synchronizeAfterReconcile();
   else scheduleEventRefresh();
 }
@@ -1117,7 +1365,7 @@ function connectEvents(forceReconcile = false) {
   source.onopen = () => {
     if (source !== eventSource) return;
     armWatchdog();
-    if (els.connectivity && !eventStreamDegraded) els.connectivity.textContent = 'Connected';
+    if (els.connectivity) els.connectivity.textContent = state.eventReconciled && !eventStreamDegraded ? 'Connected' : 'Reconciling';
   };
   source.addEventListener('hello', () => { if (source === eventSource) armWatchdog(); });
   source.addEventListener('reconcile', acceptStateEvent);
@@ -1145,10 +1393,9 @@ function connectEvents(forceReconcile = false) {
   };
 }
 
-boot().then(() => {
-  setView('deck');
-  refresh();
-  connectEvents();
-  setInterval(refresh, 15000);
-});
+setView('deck');
+connectEvents();
+refresh();
+boot();
+setInterval(refresh, 15000);
 `;
