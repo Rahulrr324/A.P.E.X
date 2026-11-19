@@ -161,9 +161,9 @@
 | Command | Result |
 |---|---|
 | `node --test tests/briefing.test.js tests/memory-knowledge-history.test.js tests/world-model-core.test.js tests/t09-situational-awareness.test.js tests/ui-server.test.js` (P4 focused run) | **101 tests: 101 passed, 0 failed, 0 skipped**; covers the owner timelines, briefing owners, situational state and the new workspace routes. |
-| `node --test tests/ui-server.test.js tests/ui-core-projection.test.js tests/ui-owner-events.test.js tests/core-state-contract.test.js tests/briefing.test.js tests/t12-documents.test.js` (P4 final focused run) | **83 tests: 83 passed, 0 failed, 0 skipped**; includes the served-client checks and the document-index route change. |
+| `node --test tests/ui-server.test.js tests/ui-core-projection.test.js tests/ui-owner-events.test.js tests/core-state-contract.test.js tests/briefing.test.js tests/t12-documents.test.js` (P4 focused runs) | **83 tests: 83 passed, 0 failed, 0 skipped**; includes the served-client checks, the document-index route change and the Resource Fabric diagnostics. |
 | `npm run test:syntax` (P4 final run) | **1 passed, 0 failed, 0 skipped**; every JavaScript source file and the served client parsed. |
-FULL_SUITE_P4_ROW
+| `npm test` (P4 final full suite) | **3,760 tests: 3,758 passed, 0 failed, 0 cancelled, 2 skipped; 577 suites**. Runtime 1,307,566 ms (about 21m48s). Log: `/tmp/apex-t30-p4-final.log`. Code checkpoint `1ce7bf4`; this report is committed separately afterwards. |
 | `npm run test:syntax` (P0 checkpoint) | **1 passed, 0 failed, 0 skipped**; checked 221 source files and separately parsed the served client. |
 | `npm run test:syntax` (P1 checkpoint) | **1 passed, 0 failed, 0 skipped**; checked 222 source files and separately parsed the served client. |
 | `node --test tests/cross-process-stress.test.js tests/storage-concurrency.test.js tests/t16-pilot-reporting.test.js` | **21 tests: 21 passed, 0 failed, 0 skipped**. |
@@ -180,6 +180,8 @@ FULL_SUITE_P4_ROW
 | `npm run test:e2e` | Could not launch because the installed `node_modules/.bin/playwright` shim is not executable in this workspace (`Permission denied`). |
 | `node node_modules/@playwright/test/cli.js test` | **7 tests discovered: 1 passed, 6 could not launch Chromium** because Playwright's `chrome-headless-shell` binary is absent. No system Chromium/Chrome/Firefox was present. This is an environment/browser-availability blocker, not six observed product assertion failures. Browser verification and screenshots remain **unverified**. |
 
+The P4 final `npm test` passed across the combined P0–P4 application code, served-client and documentation changes on code checkpoint `1ce7bf4`. Like the P3 run, it says nothing about browser behaviour; the Playwright blocker below still applies.
+
 The P3 final `npm test` passed across the combined P0–P3 application code and architecture/requirements changes. The progress report was then updated with that result; the exact full-suite total and log are shown above. This does not retroactively convert the P2 checkpoint's focused-only run into a P2-only full-suite claim. Playwright was attempted through the package CLI; browser-based validation could not execute without a browser binary. No browser download was attempted. No `npm ci` was run locally; the existing development installation was used.
 
 ## Risks and blockers
@@ -192,7 +194,7 @@ The P3 final `npm test` passed across the combined P0–P3 application code and 
 
 - Browser rendering, end-to-end clicks and screenshots remain **unverified**: the Playwright shim is non-executable and Chromium/Chrome/Firefox binaries are absent. The served client parses and Node UI/server tests pass, but neither establishes browser behavior.
 - The UI token is process-local authentication, not owner identity, MFA or step-up authentication. The ECP remains the authorization authority.
-- The full v2 visual/cinematic target, Listening/Speaking/audio, and Packages 4–6 are outside the completed T-30 scope. No completion claim is made for them.
+- The full v2 visual/cinematic target and Listening/Speaking/audio remain unimplemented, and Packages 5–6 are outside the completed T-30 scope. No completion claim is made for them.
 - T-19 historical commit objects remain unavailable in this shallow local history; current T-30 tests do not retroactively verify historical evidence.
 - P0's passing storage tests do not establish broader cross-platform filesystem guarantees beyond this Linux/Node 22 environment. No inference, model download, endpoint, voice/audio path, or remote inference process was used or added.
 
