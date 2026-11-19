@@ -596,6 +596,7 @@ export class CognitiveController {
     reasoning = null,
     dataDir = null,
     neural = null,
+    council = null,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -661,6 +662,7 @@ export class CognitiveController {
     // memory and authorized excerpts, and its conclusion is never a plan step or a permission. The
     // append-only session log is the durable trace.
     this.reasoning = reasoning;
+    this.council = council;
     // The data directory the backup commands read and replace. The actions close over it at
     // composition time; this field only decides whether the commands are available at all.
     this.dataDir = dataDir;
@@ -1467,6 +1469,23 @@ export class CognitiveController {
       request: `work review (limit ${limit}, horizon ${horizonDays} day(s))`,
     });
     const step = await this.runAction('work.review', { limit, horizonDays }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // Council deliberation is a judgement record, not an execution: the action appends one session
+  // and authorizes nothing. Routing it through runAction keeps the append inside the same ECP
+  // decision and audit line every other capability uses, so the session log has one owner.
+  async councilDeliberate({ objective, candidateId = null, useContext = true } = {}) {
+    const safe = typeof objective === 'string' ? objective.trim() : '';
+    const request = safe === ''
+      ? 'council deliberate'
+      : containsSecret(safe)
+        ? 'council deliberate [objective omitted: contained a password, key, or token]'
+        : `council deliberate [${safe.slice(0, 120)}]`;
+    const op = this.#newOp({ capability: 'council.deliberate', origin: 'user', request });
+    const input = { objective: safe, useContext: useContext !== false };
+    if (candidateId !== null && candidateId !== undefined) input.candidateId = candidateId;
+    const step = await this.runAction('council.deliberate', input, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 
@@ -3092,6 +3111,7 @@ export class CognitiveController {
       // transport is connected. Inspecting it contacts nothing; the simulated transport is
       // reported as available to tests, never as an integrated runtime.
       neuralContract: describeNeuralBoundary(this.neural),
+      council: this.council,
     };
   }
 

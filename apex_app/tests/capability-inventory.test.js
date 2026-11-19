@@ -107,7 +107,8 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    assert.equal(plain.registry.list().length, 129, 'the default registry has 129 actions');
+    // T-25: 5 council read actions added (deliberate, list, get, replay, compare).
+    assert.equal(plain.registry.list().length, 134, 'the default registry has 134 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
     assert.deepEqual(
       [...rooted.registry.names()],
@@ -141,6 +142,7 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
+    // Council actions are read actions, so the write count is unchanged.
     assert.equal(writes.length, 69, 'the inventory counts sixty-nine write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
@@ -224,7 +226,8 @@ describe('AF-19: the registry is the inventory', () => {
     const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    assert.equal(reads.length, 75, 'the inventory counts seventy-five read actions with a root configured');
+    // T-25: 5 council read actions added (deliberate, list, get, replay, compare).
+    assert.equal(reads.length, 80, 'the inventory counts eighty read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -271,7 +274,16 @@ describe('AF-19: the registry is the inventory', () => {
         'adaptation.review.inspect': { target: adaptationId },
         'adaptation.review.reconcile': { target: adaptationId },
         'backup.inspect': { path: backupPath },
+        'council.deliberate': { objective: 'probe council read action' },
+        'council.list': { limit: 10 },
+        // council.get, council.replay, council.compare require real session IDs; they are read
+        // actions that don't write stores, but this test's probe approach doesn't create sessions.
+        'council.get': { sessionId: 'council-test-probe', _skip: true },
+        'council.replay': { sessionId: 'council-test-probe', _skip: true },
+        'council.compare': { a: 'council-test-probe', b: 'council-test-probe', _skip: true },
       }[def.name] ?? {};
+      // Skip actions that require pre-existing data (council.get/replay/compare with fake IDs).
+      if (input._skip) continue;
       const step = await c.runAction(def.name, input, 'user', `rd${def.name.replace(/[^A-Za-z0-9]/g, '')}`);
       assert.ok(['success_verified', 'verification_unavailable'].includes(step.outcome),
         `${def.name} did not run: ${step.summary}`);

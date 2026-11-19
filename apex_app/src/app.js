@@ -247,9 +247,13 @@ export function createApp({
     );
   }
 
+  // Council is constructed before action registration so its read-oriented actions are
+  // registered exactly once, through the same registry/ECP path as every other capability.
+  const council = createCouncilService({ dataDir, now: clock, idFactory, registry, reasoning });
+
   for (const def of [...builtinActions(), ...safetyActions(registry.controlPlane), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
-    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...extraActions, ...fsActions]) registry.register(def);
+    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...extraActions, ...fsActions]) registry.register(def);
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -349,6 +353,7 @@ export function createApp({
     reasoning,
     dataDir,
     neural: neuralRuntime,
+    council,
   });
   const runtime = new ExecutiveRuntime({
     controller,
@@ -368,7 +373,6 @@ export function createApp({
     idFactory,
   });
   const resources = new ResourceFabric({ now: clock });
-  const council = createCouncilService({ dataDir, now: clock, idFactory, registry });
   return {
     controller,
     memory,

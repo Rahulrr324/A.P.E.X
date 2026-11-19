@@ -45,3 +45,14 @@ build/dev_bin/
 __pycache__/
 *.pyc
 .venv/
+
+# Node dependency trees and generated test output (T-25).
+# Dependencies are installed from package-lock.json and never committed.
+node_modules/
+apex_app/node_modules/
+test-results/
+apex_app/test-results/
+playwright-report/
+apex_app/playwright-report/
+blob-report/
+*.trace.zip

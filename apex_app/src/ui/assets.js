@@ -169,7 +169,16 @@ export const UI_PAGE = `<!doctype html>
   </section>
   <section class="view" data-view="council">
     <h2>Council</h2>
-    <p class="meta">Council deliberation is not implemented and no model inference is activated. Reasoning sessions remain available in the Reasoning view.</p>
+    <p class="meta">Seven deterministic perspectives over evidence owned by the existing stores. A synthesis explains disagreement and never authorizes execution. Evidence is gathered from the real stores when "gather" is on; no model is contacted.</p>
+    <form id="council-form" class="row">
+      <label for="council-objective" class="visually-hidden">Objective</label>
+      <textarea id="council-objective" rows="2" maxlength="2000" placeholder="Objective to deliberate"></textarea>
+      <label class="meta"><input id="council-gather" type="checkbox" checked> gather real evidence</label>
+      <button id="council-run" type="submit" class="small">Deliberate</button>
+      <span id="council-status" class="meta" role="status"></span>
+    </form>
+    <div id="council-synthesis" class="panel"></div>
+    <ul id="council" class="work"></ul>
   </section>
   <section class="view" data-view="system">
     <h2>System and Resource Fabric</h2>
@@ -383,6 +392,13 @@ const els = {
   sources: document.getElementById('sources'),
   documents: document.getElementById('documents'),
   reasoning: document.getElementById('reasoning'),
+  council: document.getElementById('council'),
+  councilForm: document.getElementById('council-form'),
+  councilObjective: document.getElementById('council-objective'),
+  councilGather: document.getElementById('council-gather'),
+  councilRun: document.getElementById('council-run'),
+  councilStatus: document.getElementById('council-status'),
+  councilSynthesis: document.getElementById('council-synthesis'),
   docSearch: document.getElementById('doc-search-form'),
   docSearchText: document.getElementById('doc-search'),
   banner: document.getElementById('banner'),
@@ -569,6 +585,42 @@ function renderReasoning(reasoning) {
   if (sessions.length === 0) els.reasoning.append(el('li', 'meta', 'No reasoning sessions recorded.'));
 }
 
+function renderCouncil(council) {
+  if (!els.council) return;
+  els.council.replaceChildren();
+  if (!council || council.unavailable) {
+    els.council.append(el('li', 'meta', 'Council is unavailable.'));
+    return;
+  }
+  const sessions = Array.isArray(council.sessions) ? council.sessions : [];
+  for (const session of sessions.slice(0, 12)) {
+    const title = (session.recommendation ? session.recommendation + ' · ' : '') + (session.objective || session.sessionId);
+    const meta = 'support ' + (session.support || 'unknown') + ' · ' + (session.at ? String(session.at).slice(0, 19) : '');
+    els.council.append(itemFrom(title, meta));
+  }
+  if (sessions.length === 0) els.council.append(el('li', 'meta', 'No council sessions recorded.'));
+  if (els.councilSynthesis) {
+    els.councilSynthesis.replaceChildren();
+    const latest = council.session;
+    // The stored session keeps the whole synthesis record; the recommendation itself is nested.
+    if (!latest || !latest.synthesis || !latest.synthesis.synthesis) {
+      els.councilSynthesis.append(el('p', 'meta', 'No stored synthesis yet.'));
+    } else {
+      const s = latest.synthesis.synthesis;
+      const verdict = el('p', '', 'Recommended: ' + s.recommendedOption.level + ' · support ' + s.support + ' · confidence ' + s.confidence);
+      const summary = el('p', 'meta', s.explanation || '');
+      const disagreement = el('p', 'meta', 'Disagreement: ' + (latest.disagreement?.kind || 'unknown') + ' — ' + (latest.synthesis.disagreementExplanation || latest.disagreement?.detail || ''));
+      const evidence = el('p', 'meta', 'Supporting ' + (s.supportingEvidence?.length || 0) + ' · Conflicting ' + (s.conflictingEvidence?.length || 0) + ' · Approvals: ' + (s.requiredApprovals || []).join(', '));
+      els.councilSynthesis.append(verdict, summary, disagreement, evidence);
+      const list = el('ul', 'work');
+      for (const p of (latest.positions || []).slice(0, 7)) {
+        list.append(itemFrom(p.perspectiveName || p.perspectiveId, (p.position && p.position.verdict) || p.status));
+      }
+      els.councilSynthesis.append(list);
+    }
+  }
+}
+
 function renderMemory(records) {
   renderList(els.memory, Array.isArray(records) ? records : [], (row) => itemFrom(row.content || row.id || 'memory', row.status || row.source || ''));
 }
@@ -606,6 +658,7 @@ async function refresh() {
     renderSources(s.sources);
     renderDocuments(s.documents);
     renderReasoning(s.reasoning);
+    renderCouncil(await api('/api/council').catch(() => null));
     if (els.session) els.session.textContent = s.session && s.session.id ? 'session ' + String(s.session.id).slice(0, 8) : 'no session yet';
     if (s.session && s.session.unavailable) showBanner(s.session.unavailable);
 
@@ -750,6 +803,35 @@ if (els.docSearch) {
       renderDocuments(data);
     } catch (error) {
       showBanner(error.message);
+    }
+  });
+}
+
+if (els.councilForm) {
+  els.councilForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const objective = els.councilObjective ? els.councilObjective.value.trim() : '';
+    if (objective.length === 0) {
+      if (els.councilStatus) els.councilStatus.textContent = 'an objective is required';
+      return;
+    }
+    if (els.councilRun) els.councilRun.disabled = true;
+    if (els.councilStatus) els.councilStatus.textContent = 'deliberating…';
+    try {
+      const result = await api('/api/council/deliberate', {
+        method: 'POST',
+        body: { objective, useContext: !!(els.councilGather && els.councilGather.checked) },
+      });
+      if (els.councilStatus) {
+        els.councilStatus.textContent = result.persisted === false
+          ? 'deliberated, but the session was not persisted: ' + (result.persistenceError || 'store unavailable')
+          : 'deliberated: ' + result.synthesis.recommendedOption.level;
+      }
+      await refresh();
+    } catch (error) {
+      if (els.councilStatus) els.councilStatus.textContent = error.message;
+    } finally {
+      if (els.councilRun) els.councilRun.disabled = false;
     }
   });
 }

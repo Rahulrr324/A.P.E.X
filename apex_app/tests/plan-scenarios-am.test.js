@@ -1171,11 +1171,16 @@ describe('AM scenarios 21-30: goal progress, continuation distinctions, and what
 
     const pkg = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8'));
     const registered = pkg.scripts.test;
+    // T-25: `npm test` may either name each suite or run the whole tests directory with the
+    // Node test runner's default discovery (`node --test`). The directory form registers every
+    // `*.test.js` file, which is a stronger guarantee than a hand-maintained list - the previous
+    // list had silently omitted six files. Both forms are accepted here; anything else is not.
+    const runsWholeDirectory = /^node\s+--test\s*$/.test(registered.trim());
     for (const file of ['tests/executive-readiness.test.js', 'tests/adversarial-batch-am.test.js',
       'tests/plan-constraints.test.js', 'tests/plan-guidance.test.js', 'tests/plan-continuation.test.js',
       'tests/plan-dimensions.test.js', 'tests/goal-evidence-consistency.test.js',
       'tests/learning-read-equivalence.test.js', 'tests/plan-scenarios-am.test.js']) {
-      assert.ok(registered.includes(file), `${file} is not registered in npm test`);
+      assert.ok(runsWholeDirectory || registered.includes(file), `${file} is not registered in npm test`);
     }
 
     // The audit chain, the task log and the plan record have to agree about the run just taken up.

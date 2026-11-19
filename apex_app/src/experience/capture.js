@@ -268,6 +268,11 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'backup.restore': 'backup',
   'knowledge.digest': 'read',
   'work.review': 'read',
+  'council.deliberate': 'read',
+  'council.list': 'read',
+  'council.get': 'read',
+  'council.replay': 'read',
+  'council.compare': 'read',
   none: 'no-action',
 });
 

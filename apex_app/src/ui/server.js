@@ -9,6 +9,7 @@ import { createServer } from 'node:http';
 import { UI_CLIENT, UI_CSS, UI_PAGE } from './assets.js';
 import { collectHealth } from '../health.js';
 import { buildBriefing } from '../briefing/index.js';
+import { APP_NAME } from '../identity.js';
 
 export const UI_LIMITS = Object.freeze({
   maxBodyBytes: 64 * 1024,
@@ -496,6 +497,7 @@ export function createUiServer({
     }
 
     return {
+      app: APP_NAME,
       at: now().toISOString(),
       session,
       turns,
@@ -754,7 +756,7 @@ export function createUiServer({
         const result = await app.controller.safetyLockdown({ reason: body.reason.trim() });
         sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
         emitStateChange('safety', { active: true }, null);
-      } catch (err) { sendJson(res, 500, { error: err.message }); }
+      } catch (err) { sendJson(res, 503, { error: `lockdown unavailable: ${err.message}` }); }
       return;
     }
     if (method === 'POST' && url.pathname === '/api/safety/release') {
@@ -766,7 +768,7 @@ export function createUiServer({
         const result = await app.controller.safetyRelease({ reason: body.reason.trim() });
         sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
         emitStateChange('safety', { active: false }, null);
-      } catch (err) { sendJson(res, 500, { error: err.message }); }
+      } catch (err) { sendJson(res, 503, { error: `release unavailable: ${err.message}` }); }
       return;
     }
     if (method === 'GET' && url.pathname === '/api/health') {
@@ -777,6 +779,73 @@ export function createUiServer({
         sendJson(res, 200, health);
       } catch (err) {
         sendJson(res, 503, { error: `the health view is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/council') {
+      try {
+        if (!app.council) {
+          sendJson(res, 503, { error: 'Council deliberation is not configured' });
+          return;
+        }
+        const id = url.searchParams.get('session');
+        const page = await app.council.list({ limit: 20 });
+        const status = await app.council.status();
+        if (id) {
+          const found = await app.council.session(id);
+          sendJson(res, found.found ? 200 : 404, found.found ? { ...page, status, session: found.session } : { ...page, status, error: found.detail });
+          return;
+        }
+        const latest = page.sessions[0] ? await app.council.session(page.sessions[0].sessionId) : null;
+        sendJson(res, 200, { ...page, status, session: latest?.found ? latest.session : null, authorizesExecution: false });
+      } catch (err) {
+        sendJson(res, 503, { error: `the council workspace is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/council/deliberate') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        sendJson(res, 400, { error: 'the body must be a JSON object' });
+        return;
+      }
+      const extra = Object.keys(body).filter((key) => !['objective', 'candidateId', 'useContext'].includes(key));
+      if (extra.length > 0) {
+        sendJson(res, 400, { error: `unknown field: ${extra[0]}` });
+        return;
+      }
+      if (typeof body.objective !== 'string' || body.objective.trim().length === 0) {
+        sendJson(res, 400, { error: 'objective is required' });
+        return;
+      }
+      if (body.candidateId !== undefined && body.candidateId !== null
+        && (typeof body.candidateId !== 'string' || body.candidateId.length > 128)) {
+        sendJson(res, 400, { error: 'candidateId is not a candidate id' });
+        return;
+      }
+      try {
+        // Deliberation is a judgement record, not an execution: it appends one session and
+        // authorizes nothing. It still goes through the controller so the append carries the same
+        // ECP decision and audit line as every other capability.
+        const result = await app.controller.councilDeliberate({
+          objective: body.objective,
+          candidateId: body.candidateId ?? null,
+          useContext: body.useContext !== false,
+        });
+        const data = result.operation?.steps?.[0]?.result?.data ?? null;
+        if (!data || typeof data.sessionId !== 'string') {
+          sendJson(res, 400, {
+            status: result.status,
+            error: result.output ?? 'the deliberation did not record a session',
+            display: result.display,
+          });
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status, display: result.display });
+        broadcast('council', { sessionId: data.sessionId });
+        emitStateChange('council', { sessionId: data.sessionId }, null);
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
       }
       return;
     }
@@ -891,10 +960,6 @@ export function createUiServer({
       } catch (err) {
         sendJson(res, 503, { error: `the world model is unavailable: ${err.message}` });
       }
-      return;
-    }
-    if (method === 'GET' && url.pathname === '/api/council') {
-      sendJson(res, 503, { error: 'Council deliberation is not implemented; no model inference is activated.' });
       return;
     }
     if (method === 'GET' && url.pathname === '/api/events') {
