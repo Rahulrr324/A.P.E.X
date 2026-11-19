@@ -195,7 +195,28 @@ export const UI_PAGE = `<!doctype html>
   </section>
   <section class="view" data-view="workshop">
     <h2>Workshop</h2>
-    <p class="meta">A real 3D workspace is not implemented in this milestone. This is a marked target, not a fake feature.</p>
+    <p class="meta">A deterministic design sheet: components with declared supply, demand and cost, connections between them, and an optional budget. A simulation is arithmetic over the declared numbers. Nothing here is executed, and a simulation never authorizes an action.</p>
+    <form id="workshop-form" class="row">
+      <label for="workshop-title" class="visually-hidden">Title</label>
+      <input id="workshop-title" maxlength="160" placeholder="Design title">
+      <label for="workshop-domain" class="visually-hidden">Domain</label>
+      <select id="workshop-domain">
+        <option value="generic">generic</option>
+        <option value="code">code</option>
+        <option value="circuit">circuit</option>
+        <option value="cad">cad</option>
+        <option value="data">data</option>
+        <option value="plan">plan</option>
+      </select>
+      <label for="workshop-budget" class="visually-hidden">Budget</label>
+      <input id="workshop-budget" type="number" min="0" step="any" placeholder="budget (optional)">
+      <label for="workshop-source" class="visually-hidden">Components and connections</label>
+      <textarea id="workshop-source" rows="5" placeholder='{"components":[{"id":"api","kind":"service","supply":10},{"id":"db","kind":"store","demand":8}],"connections":[{"from":"api","to":"db"}]}'></textarea>
+      <button id="workshop-compose" type="submit" class="small">Compose</button>
+      <span id="workshop-status" class="meta" role="status"></span>
+    </form>
+    <div id="workshop-report" class="panel"></div>
+    <ul id="workshop" class="work"></ul>
   </section>
 </section>
 <script src="/app.js"></script>
@@ -399,6 +420,15 @@ const els = {
   councilRun: document.getElementById('council-run'),
   councilStatus: document.getElementById('council-status'),
   councilSynthesis: document.getElementById('council-synthesis'),
+  workshop: document.getElementById('workshop'),
+  workshopForm: document.getElementById('workshop-form'),
+  workshopTitle: document.getElementById('workshop-title'),
+  workshopDomain: document.getElementById('workshop-domain'),
+  workshopBudget: document.getElementById('workshop-budget'),
+  workshopSource: document.getElementById('workshop-source'),
+  workshopCompose: document.getElementById('workshop-compose'),
+  workshopStatus: document.getElementById('workshop-status'),
+  workshopReport: document.getElementById('workshop-report'),
   docSearch: document.getElementById('doc-search-form'),
   docSearchText: document.getElementById('doc-search'),
   banner: document.getElementById('banner'),
@@ -621,6 +651,62 @@ function renderCouncil(council) {
   }
 }
 
+function renderWorkshop(page) {
+  if (!els.workshop) return;
+  els.workshop.replaceChildren();
+  if (!page || page.unavailable) {
+    els.workshop.append(el('li', 'meta', 'Workshop is unavailable.'));
+  } else {
+    const artifacts = Array.isArray(page.artifacts) ? page.artifacts : [];
+    for (const artifact of artifacts.slice(0, 12)) {
+      const meta = `${artifact.domain} · ${artifact.components} component(s) · ${artifact.connections} connection(s) · budget ${artifact.budget === null || artifact.budget === undefined ? 'not declared' : artifact.budget}`;
+      const li = itemFrom(artifact.title || artifact.artifactId, meta);
+      const button = el('button', 'small', 'Simulate');
+      button.type = 'button';
+      button.dataset.artifactId = artifact.artifactId;
+      button.addEventListener('click', () => { simulateWorkshop(artifact.artifactId); });
+      li.append(button);
+      els.workshop.append(li);
+    }
+    if (artifacts.length === 0) els.workshop.append(el('li', 'meta', 'No workshop artifacts are stored.'));
+  }
+  renderWorkshopReport(state.workshopReport ?? null);
+}
+
+function renderWorkshopReport(report) {
+  if (!els.workshopReport) return;
+  els.workshopReport.replaceChildren();
+  if (!report) {
+    els.workshopReport.append(el('p', 'meta', 'No simulation yet. Compose a sheet, then simulate a stored artifact.'));
+    return;
+  }
+  els.workshopReport.append(el('p', '', `Simulation of ${report.artifactId}: ${report.status}`));
+  els.workshopReport.append(el('p', 'meta', report.budget === null || report.budget === undefined
+    ? 'budget: not declared'
+    : `budget: ${report.budget.spent} of ${report.budget.total}${report.budget.overBudget ? ' (over)' : ''}`));
+  const list = el('ul', 'work');
+  for (const component of (Array.isArray(report.components) ? report.components : [])) {
+    list.append(itemFrom(component.id, `receives ${component.inbound}, demands ${component.demand}${component.satisfied ? '' : ' · short'} · cost ${component.cost}`));
+  }
+  els.workshopReport.append(list);
+  if (Array.isArray(report.warnings) && report.warnings.length > 0) {
+    els.workshopReport.append(el('p', 'meta', 'Warnings: ' + report.warnings.join('; ')));
+  }
+  els.workshopReport.append(el('p', 'meta', 'Arithmetic over the declared numbers. Nothing was executed and nothing was authorized.'));
+}
+
+async function simulateWorkshop(artifactId) {
+  if (els.workshopStatus) els.workshopStatus.textContent = 'simulating…';
+  try {
+    const report = await api('/api/workshop/simulate', { method: 'POST', body: { artifactId } });
+    state.workshopReport = report;
+    renderWorkshopReport(report);
+    if (els.workshopStatus) els.workshopStatus.textContent = 'simulated: ' + report.status;
+  } catch (error) {
+    if (els.workshopStatus) els.workshopStatus.textContent = error.message;
+  }
+}
+
 function renderMemory(records) {
   renderList(els.memory, Array.isArray(records) ? records : [], (row) => itemFrom(row.content || row.id || 'memory', row.status || row.source || ''));
 }
@@ -659,6 +745,7 @@ async function refresh() {
     renderDocuments(s.documents);
     renderReasoning(s.reasoning);
     renderCouncil(await api('/api/council').catch(() => null));
+    renderWorkshop(await api('/api/workshop').catch(() => null));
     if (els.session) els.session.textContent = s.session && s.session.id ? 'session ' + String(s.session.id).slice(0, 8) : 'no session yet';
     if (s.session && s.session.unavailable) showBanner(s.session.unavailable);
 

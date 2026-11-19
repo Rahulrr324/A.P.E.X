@@ -54,6 +54,10 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // an export or a restore would be a record of APEX's own files - and, after a restore, one written
   // into a log that was just replaced - so the archive and the pre-restore copy carry that account.
   backup: 'it reads or replaces the whole data directory, so an experience of one would describe APEX\'s own stores rather than an event, and a restore would write the experience into a log it just replaced',
+  // A workshop sheet is the user's own design: components, connections, declared numbers. It is
+  // held in its own append-only log, and an experience of a composition would copy that design
+  // into the log the pattern and adaptation reads draw from.
+  workshop: 'it reads or writes the workshop design log, whose records are the user\'s own composed sheet; an experience of one would copy that design into the log the pattern and adaptation reads draw from',
   'no-action': 'the request ran no action, so there is no postcondition that could have been verified',
   // The prediction ledger's own operations. This is a separate category from `self-bookkeeping`
   // because the reason is not about filling a log with its own traffic: an experience answers "what
@@ -273,6 +277,15 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'council.get': 'read',
   'council.replay': 'read',
   'council.compare': 'read',
+  // A design sheet is the user's own composition, held in its own append-only log. Capturing a
+  // composition would copy that sheet into the experience log the pattern and adaptation reads
+  // draw from, turning a design into behavioural evidence; a simulation is re-derivable from the
+  // stored sheet and says nothing about what happened.
+  'workshop.compose': 'workshop',
+  'workshop.list': 'read',
+  'workshop.get': 'read',
+  'workshop.inspect': 'read',
+  'workshop.simulate': 'read',
   none: 'no-action',
 });
 

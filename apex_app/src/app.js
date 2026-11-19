@@ -53,6 +53,7 @@ import { DeadlineStore } from './deadlines/store.js';
 import { deadlineActions } from './actions/deadline-actions.js';
 import { backupActions } from './actions/backup-actions.js';
 import { councilActions, createCouncilService } from './actions/council-actions.js';
+import { workshopActions } from './actions/workshop-actions.js';
 import { goalActions } from './actions/goal-actions.js';
 import { planActions } from './actions/plan-actions.js';
 import { proposalActions } from './actions/proposal-actions.js';
@@ -61,6 +62,7 @@ import { taskFeedbackActions } from './actions/task-feedback-actions.js';
 import { safetyActions } from './actions/safety-actions.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 import { ResourceFabric } from './resources/fabric.js';
+import { createWorkshopService } from './workshop/service.js';
 
 export function createApp({
   dataDir,
@@ -251,9 +253,13 @@ export function createApp({
   // registered exactly once, through the same registry/ECP path as every other capability.
   const council = createCouncilService({ dataDir, now: clock, idFactory, registry, reasoning });
 
+  // The Workshop is a design sheet store: composition is a user write, inspection and simulation
+  // are reads. Nothing in it executes code, and a simulation is never an authorization.
+  const workshop = createWorkshopService({ dataDir, now: clock });
+
   for (const def of [...builtinActions(), ...safetyActions(registry.controlPlane), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
-    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...extraActions, ...fsActions]) registry.register(def);
+    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...workshopActions(workshop), ...extraActions, ...fsActions]) registry.register(def);
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -354,6 +360,7 @@ export function createApp({
     dataDir,
     neural: neuralRuntime,
     council,
+    workshop,
   });
   const runtime = new ExecutiveRuntime({
     controller,
@@ -406,6 +413,7 @@ export function createApp({
     documents,
     reasoning,
     council,
+    workshop,
   };
 }
 

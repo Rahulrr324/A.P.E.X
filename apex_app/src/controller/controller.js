@@ -597,6 +597,7 @@ export class CognitiveController {
     dataDir = null,
     neural = null,
     council = null,
+    workshop = null,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -663,6 +664,9 @@ export class CognitiveController {
     // append-only session log is the durable trace.
     this.reasoning = reasoning;
     this.council = council;
+    // The workshop store holds design sheets the user composed. Reading and simulating one is a
+    // read; composing is a user write. Neither path executes the design.
+    this.workshop = workshop;
     // The data directory the backup commands read and replace. The actions close over it at
     // composition time; this field only decides whether the commands are available at all.
     this.dataDir = dataDir;
@@ -1486,6 +1490,31 @@ export class CognitiveController {
     const input = { objective: safe, useContext: useContext !== false };
     if (candidateId !== null && candidateId !== undefined) input.candidateId = candidateId;
     const step = await this.runAction('council.deliberate', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // ---- workshop ----------------------------------------------------------------
+  // Composing a design sheet is a user write; simulating one is a read that recomputes from the
+  // stored record. Neither path executes the design, and a simulation is never permission to run
+  // anything: the ECP still decides every action.
+
+  async workshopCompose({ title, domain = 'generic', components, connections, budget = null, note = '' } = {}) {
+    const safe = typeof title === 'string' ? title.trim() : '';
+    const request = safe === ''
+      ? 'workshop compose'
+      : containsSecret(safe)
+        ? 'workshop compose [title omitted: contained a password, key, or token]'
+        : `workshop compose [${truncate(safe, 120)}]`;
+    const op = this.#newOp({ capability: 'workshop.compose', origin: 'user', request });
+    const input = { title: safe, domain, components, connections, budget, note };
+    const step = await this.runAction('workshop.compose', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopSimulate({ artifactId } = {}) {
+    const shown = typeof artifactId === 'string' && artifactId.trim() !== '' ? truncate(artifactId.trim(), 64) : '[missing artifact]';
+    const op = this.#newOp({ capability: 'workshop.simulate', origin: 'user', request: `workshop simulate [${shown}]` });
+    const step = await this.runAction('workshop.simulate', { artifactId }, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 
@@ -3112,6 +3141,7 @@ export class CognitiveController {
       // reported as available to tests, never as an integrated runtime.
       neuralContract: describeNeuralBoundary(this.neural),
       council: this.council,
+      workshop: this.workshop,
     };
   }
 
