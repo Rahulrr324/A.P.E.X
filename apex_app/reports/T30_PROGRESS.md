@@ -686,6 +686,11 @@ checks: degradedAfterMs=8, connectivityWhileDegraded=Degraded,
 seeded: approvalCount=1, taskStatus=paused, cognitionRunStatus=awaiting_approval
 ```
 
+A second, independent run on `b320a91` repeated all of it with Edge 157.0.4341.46: zero errors at the
+same three viewports, `Degraded` in 23 ms, `Connected` on reconnect, three fresh PNGs (327,201 /
+266,352 / 105,716 bytes). Two green real-browser runs from two different Edge builds are the evidence;
+one would have been an anecdote.
+
 What this establishes: the deck loads in Edge 157 on a hosted runner with **zero console errors and
 zero page errors at all three viewports**, the Core reads `Awaiting Approval` from the seeded gated
 run rather than `Idle`, no viewport has horizontal overflow, the stream degrades to `Degraded` within
