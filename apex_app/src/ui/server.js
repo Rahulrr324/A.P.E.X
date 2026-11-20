@@ -14,6 +14,7 @@ import { buildBriefing } from '../briefing/index.js';
 import { APP_NAME } from '../identity.js';
 import { planRisk } from '../plans/model.js';
 import { COGNITION_STAGES } from '../cognition/pipeline.js';
+import { composeAllFramings, composeExecutiveComms } from '../cognition/persona-comms.js';
 import { AUTONOMY_LEVELS } from '../executive/control-plane.js';
 import { buildWorldState } from '../world/world-state.js';
 import { Outcome } from '../outcomes.js';
@@ -1139,6 +1140,31 @@ export function createUiServer({
         perception = { available: false, error: `the perception reading is unavailable: ${err.message}` };
       }
     }
+    // T-33 Step 2: the briefing speaks in the same five voices. Its own Core reading is taken from
+    // the owners it just read, so a brief written while an approval is pending never allows wit.
+    const briefingCore = !situation.available
+      ? 'degraded'
+      : (Number.isInteger(counts.approvals) && counts.approvals > 0 ? 'awaiting_approval' : 'idle');
+    const briefingFacts = [
+      { key: 'core', label: 'Core', value: briefingCore },
+      { key: 'goals', label: 'Goals', value: countText('goals') },
+      { key: 'plans', label: 'Plans', value: countText('plans') },
+      { key: 'tasks', label: 'Tasks', value: countText('tasks') },
+      { key: 'approvals', label: 'Approvals', value: Number.isInteger(counts.approvals) ? String(counts.approvals) : 'unavailable' },
+      { key: 'sentinel', label: 'Sentinel', value: countText('situation') },
+      { key: 'perception', label: 'Perception', value: perception.available === true
+        ? `${perception.observedCount} observed · ${perception.unavailableCount} unavailable`
+        : 'unavailable' },
+    ];
+    const executiveComms = composeAllFramings({
+      facts: briefingFacts,
+      signals: {
+        coreState: briefingCore,
+        approvals: Number.isInteger(counts.approvals) ? counts.approvals : 0,
+        alerts: situation.available === true && Array.isArray(situation.alerts) ? situation.alerts : [],
+        degraded: briefingCore === 'degraded',
+      },
+    });
     return {
       ...briefing,
       status,
@@ -1146,6 +1172,7 @@ export function createUiServer({
       sources,
       counts,
       concise,
+      executiveComms,
       inferred: tasks.rows ? briefing.inferred : [],
       perception,
       note: briefing.note + ' A partial status means at least one owner could not be read; unavailable counts are not zero.',
@@ -1401,6 +1428,94 @@ export function createUiServer({
     return true;
   }
 
+
+  // T-33 Step 2 (2026-11-19): executive comms. The formatter is deterministic and takes facts the
+  // server already holds, so a mode switch changes the wording and nothing else. The Core reading
+  // below is the server's own reading of the same owners the deck reads; the deck passes its own in
+  // when it asks for a framing, so the two never disagree about what the Core is doing.
+  function serverCoreReading({ killSwitch, tasks = [], situation = null, unavailable = [] } = {}) {
+    if (killSwitch && killSwitch.active === true) return 'lockdown';
+    if (unavailable.length > 0) return 'degraded';
+    const pending = tasks.filter((task) => Array.isArray(task?.steps)
+      && task.steps.some((step) => step && step.status === 'awaiting_approval')).length;
+    if (pending > 0) return 'awaiting_approval';
+    return 'idle';
+  }
+
+  function commsFactsFrom(snapshot) {
+    const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
+    const pending = tasks.filter((task) => Array.isArray(task?.steps)
+      && task.steps.some((step) => step && step.status === 'awaiting_approval')).length;
+    const facts = [
+      { key: 'core', label: 'Core', value: snapshot.coreReading },
+      { key: 'tasks', label: 'Tasks', value: `${tasks.length} record(s), ${pending} awaiting an owner decision` },
+      { key: 'session', label: 'Session', value: snapshot.session?.status ?? 'unavailable' },
+    ];
+    if (snapshot.plans !== undefined) facts.push({ key: 'plans', label: 'Plans', value: `${Array.isArray(snapshot.plans) ? snapshot.plans.length : 0} record(s)` });
+    if (snapshot.goals !== undefined) facts.push({ key: 'goals', label: 'Goals', value: `${Array.isArray(snapshot.goals) ? snapshot.goals.length : 0} record(s)` });
+    if (snapshot.perception) {
+      facts.push({
+        key: 'perception',
+        label: 'Perception',
+        value: snapshot.perception.available === true
+          ? `${snapshot.perception.observedCount} observed · ${snapshot.perception.unavailableCount} unavailable · last ${snapshot.perception.lastObservationAt ?? 'never'}`
+          : 'unavailable',
+      });
+    }
+    if (snapshot.resources && snapshot.resources.unavailable === undefined && snapshot.resources.cpu) {
+      const cpu = snapshot.resources.cpu;
+      const memory = snapshot.resources.memory;
+      facts.push({
+        key: 'resources',
+        label: 'Resources',
+        value: `CPU ${cpu.logicalCount ?? 'unavailable'} logical · memory ${Number.isFinite(memory?.usedPercent) ? Math.round(memory.usedPercent * 100) + '% used' : 'unavailable'}`,
+      });
+    }
+    if (snapshot.situation && Array.isArray(snapshot.situation.alerts)) {
+      facts.push({ key: 'sentinel', label: 'Sentinel', value: `${snapshot.situation.alerts.length} recorded alert(s)` });
+    }
+    return facts;
+  }
+
+  function commsSignalsFrom(snapshot) {
+    const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
+    const approvals = tasks.filter((task) => Array.isArray(task?.steps)
+      && task.steps.some((step) => step && step.status === 'awaiting_approval')).length;
+    const alerts = Array.isArray(snapshot.situation?.alerts) ? snapshot.situation.alerts : [];
+    return {
+      coreState: snapshot.coreReading,
+      approvals,
+      alerts,
+      lockdown: snapshot.killSwitch?.active === true,
+      degraded: snapshot.coreReading === 'degraded',
+      errors: snapshot.unavailable ?? [],
+    };
+  }
+
+
+  // T-33 Step 2: a T-29 run speaks too. The facts are the run's own recorded stage and status, so a
+  // run that is awaiting the owner's decision cannot be described in a voice that allows wit.
+  function runComms(run) {
+    const status = run?.status ?? 'unavailable';
+    const execution = run?.stages?.execution ?? null;
+    const facts = [
+      { key: 'run', label: 'Run', value: run?.runId ?? 'unavailable' },
+      { key: 'intent', label: 'Intent', value: run?.intent ?? 'unavailable' },
+      { key: 'stage', label: 'Stage', value: Array.isArray(run?.trace) && run.trace.length > 0
+        ? `${run.trace[run.trace.length - 1].stage ?? 'unknown'} (${run.trace.length} of 5 recorded)`
+        : 'no stage recorded' },
+      { key: 'status', label: 'Status', value: status },
+      { key: 'verification', label: 'Verification', value: execution?.verified === true ? 'verified' : 'not verified' },
+    ];
+    const signals = {
+      coreState: status === 'awaiting_approval' ? 'awaiting_approval' : (status === 'failed' || status === 'halted' ? 'degraded' : 'idle'),
+      approvals: status === 'awaiting_approval' ? 1 : 0,
+      errors: status === 'failed' ? [execution?.error ?? 'the run failed'] : [],
+    };
+    const set = composeAllFramings({ facts, signals });
+    return { facts, signals: set.signals, framings: set.framings };
+  }
+
   async function snapshot() {
     let session = { id: null, status: 'missing', unavailable: null };
     let turns = [];
@@ -1543,7 +1658,28 @@ export function createUiServer({
       resources = { unavailable: `resource state is unavailable: ${err.message}` };
     }
 
-    return {
+    // T-33 Step 2: what the formatter needs, read from the same owners the page reads.
+    let perceptionView = null;
+    if (app.perception && typeof app.perception.state === 'function') {
+      try {
+        const view = app.perception.state({ limit: 1 });
+        perceptionView = {
+          available: true,
+          observedCount: view.observedCount,
+          unavailableCount: view.unavailableCount,
+          lastObservationAt: view.lastObservationAt,
+          activeAdvisories: view.alerts?.active?.length ?? 0,
+          suppressions: view.alerts?.suppressions?.length ?? 0,
+        };
+      } catch (err) {
+        perceptionView = { available: false, error: singleLine(err.message, 200) };
+      }
+    }
+    const unavailable = [];
+    if (session.unavailable) unavailable.push(singleLine(session.unavailable, 160));
+    if (situation && typeof situation.unavailable === 'string') unavailable.push(singleLine(situation.unavailable, 160));
+
+    const body = {
       app: APP_NAME,
       at: now().toISOString(),
       session,
@@ -1559,6 +1695,7 @@ export function createUiServer({
       autonomy,
       killSwitch,
       resources,
+      perception: perceptionView,
       limits: {
         maxMessageChars: UI_LIMITS.maxMessageChars,
         maxTurns: UI_LIMITS.maxTurns,
@@ -1566,6 +1703,15 @@ export function createUiServer({
         oneRequestAtATime: true,
       },
     };
+    body.coreReading = serverCoreReading({
+      killSwitch, tasks, situation, unavailable,
+    });
+    body.unavailable = unavailable;
+    body.comms = composeAllFramings({
+      facts: commsFactsFrom(body),
+      signals: commsSignalsFrom(body),
+    });
+    return body;
   }
 
   async function handleChat(req, res) {
@@ -1780,6 +1926,40 @@ export function createUiServer({
 
     if (method === 'GET' && url.pathname === '/api/state') {
       sendJson(res, 200, await snapshot());
+      return;
+    }
+    // T-33 Step 2: the executive comms framings. The page passes the Core state it has already
+    // derived, so the wording follows what the deck is showing; an unknown state is refused rather
+    // than quietly replaced, because a voice that disagrees with the Core is worse than no voice.
+    if (method === 'GET' && url.pathname === '/api/comms') {
+      const requested = url.searchParams.get('core');
+      const KNOWN = ['idle', 'thinking', 'awaiting_approval', 'running', 'paused', 'degraded', 'lockdown'];
+      if (requested !== null && !KNOWN.includes(requested)) {
+        sendJson(res, 400, { error: `core must be one of ${KNOWN.join(', ')}` });
+        return;
+      }
+      try {
+        const body = await snapshot();
+        const coreReading = requested ?? body.coreReading;
+        const facts = commsFactsFrom({ ...body, coreReading });
+        const signals = {
+          ...commsSignalsFrom({ ...body, coreReading }),
+          coreState: coreReading,
+          // The state the deck passed is the state the voice must respect, so the latch and the
+          // degraded reading follow it rather than only the server's own snapshot.
+          lockdown: coreReading === 'lockdown',
+          degraded: coreReading === 'degraded',
+        };
+        sendJson(res, 200, {
+          ...composeAllFramings({ facts, signals }),
+          coreReading,
+          facts,
+          presentationOnly: true,
+          authorizesExecution: false,
+        });
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `executive comms are unavailable: ${err.message}` });
+      }
       return;
     }
     if (method === 'GET' && url.pathname === '/api/mission-control') {
@@ -2022,13 +2202,18 @@ export function createUiServer({
           if (!/^cog-[a-z0-9]{1,40}$/.test(runId)) { sendJson(res, 400, { error: 'not a cognition run id' }); return; }
           const run = await app.cognition.get(runId);
           if (!run) { sendJson(res, 404, { error: 'no such cognition run' }); return; }
-          sendJson(res, 200, { run, stages: COGNITION_STAGES, authorizesExecution: false });
+          sendJson(res, 200, { run, stages: COGNITION_STAGES, authorizesExecution: false, comms: runComms(run) });
           return;
         }
         const requested = Number(url.searchParams.get('limit') ?? '10');
         const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, 50) : 10;
         const page = await app.cognition.list({ limit });
-        sendJson(res, 200, { ...page, stages: COGNITION_STAGES, authorizesExecution: false });
+        sendJson(res, 200, {
+          ...page,
+          stages: COGNITION_STAGES,
+          authorizesExecution: false,
+          runs: (Array.isArray(page.runs) ? page.runs : []).map((run) => ({ ...run, comms: runComms(run) })),
+        });
       } catch (err) {
         sendJson(res, 503, { unavailable: true, error: `the cognitive trace is unavailable: ${err.message}` });
       }

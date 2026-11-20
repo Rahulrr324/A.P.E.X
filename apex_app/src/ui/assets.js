@@ -149,6 +149,14 @@ export const UI_PAGE = `<!doctype html>
       <div class="core-state" id="core-state" role="status" aria-live="polite">Degraded</div>
       <p class="core-caption" id="core-caption">Waiting for an authoritative owner snapshot.</p>
     </div>
+    <!-- T-33 Step 2 (2026-11-19): the executive comms layer. The same facts in the voice of the
+         mode the owner selected; the formatter withholds every flourish while anything is wrong. -->
+    <section class="panel exec-comms" id="exec-comms-panel" data-depth-plane="z3" aria-label="Executive comms">
+      <h2>Executive comms</h2>
+      <p id="exec-comms-headline" class="exec-comms-headline" role="status" aria-live="polite">Reading the deck…</p>
+      <ul id="exec-comms-lines" class="work"></ul>
+      <p id="exec-comms-tone" class="meta" role="status"></p>
+    </section>
     <section class="panel conversation" id="conversation-panel">
       <h2>Conversation</h2>
       <div id="banner" class="banner" data-depth-plane="z4" role="alert" hidden></div>
@@ -606,6 +614,12 @@ textarea { width: 100%; resize: vertical; }
 .workspace-status[data-state="error"], .workspace-status[data-state="unavailable"] { color: var(--gold); }
 .workspace-status[data-state="partial"] { color: var(--gold); }
 .item form.row { margin-top: .5rem; flex-wrap: wrap; align-items: flex-start; }
+/* T-33 Step 2: the executive comms panel. The tone line is deliberately plain: a voice that has
+   withheld its wit should look like a statement, not like an alert. */
+.exec-comms { margin-top: .75rem; }
+.exec-comms-headline { font-size: 1.05rem; letter-spacing: .01em; margin: .25rem 0 .5rem; }
+.exec-comms #exec-comms-lines .item .title { opacity: .82; }
+.exec-comms[data-wit-allowed="false"] .exec-comms-headline { color: var(--hud-text, #d7e3f4); }
 .item .plan-cancel { margin-top: .5rem; }
 .item .plan-cancel textarea, .item .approval-decision textarea { min-height: 2.4rem; }
 .view > .panel { margin: .75rem 0; }
@@ -871,6 +885,10 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   councilState: document.getElementById('council-state'),
   workshopState: document.getElementById('workshop-state'),
   // T-31 Step 2 surfaces.
+  execCommsHeadline: document.getElementById('exec-comms-headline'),
+  execCommsLines: document.getElementById('exec-comms-lines'),
+  execCommsTone: document.getElementById('exec-comms-tone'),
+  execCommsPanel: document.getElementById('exec-comms-panel'),
   perceptionStatus: document.getElementById('perception-status'),
   perceptionSummary: document.getElementById('perception-summary'),
   perceptionDetailStatus: document.getElementById('perception-detail-status'),
@@ -2903,7 +2921,71 @@ async function refresh() {
   renderStepUp(stepUpResult);
 
   applyCoreProjection(snapshot ? '' : 'The authoritative state read failed.');
+  // T-33 Step 2: the framings in the snapshot were computed with the server's Core reading. If the
+  // deck derived a different Core state, ask again with the deck's own so the voice matches the
+  // reticle rather than describing a calmer or busier system than the one on screen.
+  if (snapshot && snapshot.comms && snapshot.comms.signals?.coreState === state.core) {
+    state.comms = snapshot.comms;
+    renderExecComms();
+  } else if (snapshot) {
+    await refreshExecComms();
+  } else {
+    state.comms = null;
+    renderExecComms();
+  }
   return snapshot !== null;
+}
+
+
+// T-33 Step 2 (2026-11-19): the deck speaks in the selected voice.
+//
+// The framings come from the server's formatter, which is the one place the five voices are defined.
+// The Core state the formatter is given is the deck's own - the same one the reticle shows - so the
+// voice can never describe a calmer deck than the one on screen. 'data-wit-allowed' is the formatter's
+// answer, not a guess made here, which is what the browser run asserts against.
+function renderExecComms() {
+  if (!els.execCommsHeadline) return;
+  const set = state.comms;
+  if (!set || !set.framings) {
+    els.execCommsHeadline.textContent = 'Executive comms unavailable: the framings could not be read.';
+    els.execCommsHeadline.dataset.state = 'unavailable';
+    if (els.execCommsLines) renderList(els.execCommsLines, [], () => null, 'The formatter returned no framing.');
+    if (els.execCommsTone) els.execCommsTone.textContent = 'Nothing is claimed while the framings are unavailable.';
+    return;
+  }
+  const mode = MODES.includes(state.mode) ? state.mode : 'classic';
+  const framing = set.framings[mode] ?? set.framings.classic;
+  els.execCommsHeadline.textContent = framing.headline;
+  els.execCommsHeadline.dataset.state = 'available';
+  els.execCommsHeadline.dataset.mode = mode;
+  els.execCommsHeadline.dataset.persona = framing.persona;
+  els.execCommsHeadline.dataset.witAllowed = framing.witAllowed === true ? 'true' : 'false';
+  els.execCommsHeadline.dataset.core = set.signals?.coreState ?? 'unavailable';
+  renderList(els.execCommsLines, framing.lines ?? [], (entry) => itemFrom(entry.label, entry.value), 'This voice is a single line.');
+  if (els.execCommsTone) {
+    els.execCommsTone.dataset.witAllowed = framing.witAllowed === true ? 'true' : 'false';
+    els.execCommsTone.textContent = framing.witAllowed === true
+      ? framing.persona + ': wit allowed — nothing is wrong on this deck.'
+      : framing.persona + ': wit withheld — ' + (set.signals?.witWithheldBecause ?? []).join('; ')
+        + '. Presentation only; the facts above are unchanged.';
+  }
+  if (els.execCommsPanel) els.execCommsPanel.dataset.witAllowed = framing.witAllowed === true ? 'true' : 'false';
+}
+
+// The deck's own Core reading decides the voice, so a framings refresh asks the server with it. One
+// request, no loop: the answer is stored and rendered, and the request is skipped when the server
+// already agrees about the Core state.
+async function refreshExecComms() {
+  const core = state.core || 'degraded';
+  try {
+    const set = await api('/api/comms?core=' + encodeURIComponent(core));
+    state.comms = set;
+  } catch (error) {
+    state.comms = null;
+    if (els.execCommsTone) els.execCommsTone.textContent = 'Executive comms unavailable: ' + String(error?.message || error);
+  }
+  renderExecComms();
+  return state.comms;
 }
 
 function setView(view) {
@@ -2936,6 +3018,9 @@ function applyMode(mode) {
   state.mode = next;
   if (state.core !== 'lockdown') document.body.dataset.mode = next;
   if (els.modeSelect && els.modeSelect.value !== next) els.modeSelect.value = next;
+  // T-33 Step 2: the same facts, the voice the owner just chose. The framings are already held, so
+  // this is a selection and not a round trip.
+  renderExecComms();
   return next;
 }
 
