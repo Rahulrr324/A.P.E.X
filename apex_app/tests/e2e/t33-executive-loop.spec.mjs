@@ -95,6 +95,9 @@ test.describe('T-33 executive loop, in a real browser', () => {
   });
 
   test('the loop: dispatch, intent, perception, graph, workshop, approval, Idle', async () => {
+    // Seven checkpoints, three governed writes and two navigations between them: the default 90 s is
+    // for one page assertion, not for a session.
+    test.setTimeout(300_000);
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     const consoleErrors = [];
@@ -207,6 +210,7 @@ test.describe('T-33 executive loop, in a real browser', () => {
     // The approval is spent, so the Core settles. Wit is still withheld: the Sentinel holds a real
     // advisory about this machine, and the formatter treats a condition as a condition whether or
     // not its notice was delivered. Clearing the condition is what restores the voice.
+    await nav('deck');
     await expect(page.locator('#core-state')).toHaveText('Idle', { timeout: 45_000 });
     await expect(page.locator('#exec-comms-headline')).toHaveAttribute('data-core', 'idle', { timeout: 20_000 });
     await expect(page.locator('#exec-comms-headline')).toHaveAttribute('data-wit-allowed', 'false', { timeout: 20_000 });
@@ -219,8 +223,13 @@ test.describe('T-33 executive loop, in a real browser', () => {
     // workspace says so, the advisory list empties, and only then does the voice allow wit.
     const tidied = handle.tidyWorkspace();
     expect(tidied.clean, 'the fixture workspace is clean after its own commit').toBe(true);
+    // The sense control lives in the Sentinel workspace, so the walk goes there to use it. The
+    // exec-comms panel is on the deck; its attributes are read after the reading changes.
+    await nav('sentinel');
     await page.locator('#perception-sense').click();
     await expect(page.locator('#perception-alert-status')).toContainText('No advisory is implied', { timeout: 30_000 });
+    await expect(page.locator('#perception-alerts')).toContainText('No advisory is implied', { timeout: 20_000 });
+    await nav('deck');
     await expect(page.locator('#exec-comms-headline')).toHaveAttribute('data-wit-allowed', 'true', { timeout: 30_000 });
     await expect(page.locator('#exec-comms-tone')).toContainText('wit allowed', { timeout: 20_000 });
     step('idle-clear', { core: 'Idle', witAllowed: true, advisory: 'none implied by the last reading' });
