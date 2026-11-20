@@ -131,7 +131,7 @@ function flipLatchInAnotherProcess(dir, { release = false } = {}) {
 }
 
 describe('authoritative /api/state latency (T-30 Step 1)', () => {
-  test('cold is under 150 ms, warm is under 100 ms, and the stat cache is what makes warm cheap', async () => {
+  test('cold is under 150 ms, warm is under 100 ms, and a content-verified retained read is what makes warm cheap', async () => {
     const dir = tempDir();
     const { app, base } = await uiOn(dir);
 
@@ -147,7 +147,8 @@ describe('authoritative /api/state latency (T-30 Step 1)', () => {
     assert.ok(median <= LIMIT_WARM_MS, `warm median must be <= ${LIMIT_WARM_MS} ms, measured ${median.toFixed(1)} ms`);
     assert.ok(slowest <= LIMIT_WARM_MS, `every warm response must be <= ${LIMIT_WARM_MS} ms, slowest ${slowest.toFixed(1)} ms`);
 
-    // The speed comes from stat reuse, and the stats are observable rather than assumed.
+    // The speed comes from a retained read whose bytes were verified by digest, and the stats are
+    // observable rather than assumed.
     const stats = app.taskStore.log.readCacheStats;
     assert.equal(stats.enabled, true);
     assert.ok(stats.hits > 0, `repeated reads reuse the validated records (hits ${stats.hits}, misses ${stats.misses})`);
@@ -206,7 +207,7 @@ describe('authoritative /api/state latency (T-30 Step 1)', () => {
     // The CLI prints the short form; the projection carries the full id it resolved to.
     assert.ok(state.plans.some((plan) => plan.id.startsWith(planId)), 'the new plan is present on the very next read');
     const after = app.plans.log.readCacheStats;
-    assert.ok(after.misses > before.misses, 'the write changed the file identity, so the read was not served from the cache');
+    assert.ok(after.misses > before.misses, 'the write changed the bytes, so the read was not served from the retained records');
   });
 
   test('a lockdown latch flipped by another process is visible at once and is never cached as clear', async () => {
