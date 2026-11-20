@@ -180,6 +180,41 @@ jobs:
           print(f'::{level} title=browser-failures::{message[:30000]}')
           PY
 
+      # T-33 Step 4 (2026-11-19): the executive-loop walk publishes its own one-line annotation. The
+      # summary is written by the spec itself from what the page and the API answered, so the
+      # annotation states which of the seven checkpoints ran, or that no browser ran at all.
+      - name: Publish the T-33 executive-loop result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't33-executive-loop.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t33-executive-loop::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          steps = [step.get('id') for step in run.get('steps', [])]
+          shots = len(run.get('screenshots', []))
+          failures = run.get('failures', [])
+          facts = run.get('facts') or {}
+          core = (facts.get('state') or {}).get('body', {}).get('coreReading')
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"checkpoints {len(steps)}: {','.join(str(name) for name in steps) or 'none'}",
+              f"screenshots {shots}",
+              f"core at end {core or 'not read'}",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t33-executive-loop::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       - name: Keep the browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -189,6 +224,8 @@ jobs:
             apex_app/reports/screenshots
             apex_app/test-results/playwright
             apex_app/reports/screenshots/t32
+            apex_app/reports/screenshots/t33
+            apex_app/reports/t33-executive-loop.json
           if-no-files-found: warn
           retention-days: 14
 

@@ -57,6 +57,10 @@ apex_app/test-results/
 # the rest, and the CI job uploads it.
 apex_app/reports/screenshots/t32/
 apex_app/reports/screenshots/t32-hud-run.json
+# T-33 Step 4 (2026-11-19): the same treatment for the executive-loop walk. The PNGs and the JSON
+# summary are produced by the hosted browser job and uploaded as artifacts.
+apex_app/reports/screenshots/t33/
+apex_app/reports/t33-executive-loop.json
 playwright-report/
 apex_app/playwright-report/
 blob-report/

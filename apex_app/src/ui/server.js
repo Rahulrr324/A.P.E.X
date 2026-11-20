@@ -276,6 +276,11 @@ function taskGraphOf(task) {
     // controller route that already exists - the UI never invents a transition.
     controls: {
       approve: nodes.some((node) => node.state === 'awaiting_approval'),
+      // A resume only makes sense for a paused task that is not waiting on the owner: an approved
+      // step left pending is exactly that state, and it is the state the deck's resume control acts on.
+      resume: task.status === 'paused'
+        && !nodes.some((node) => node.state === 'awaiting_approval')
+        && nodes.some((node) => node.state === 'pending'),
       retry: nodes.some((node) => node.state === 'failed'),
       cancel: !['cancelled', 'completed'].includes(task.status),
     },
@@ -1541,11 +1546,19 @@ export function createUiServer({
     const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
     const approvals = tasks.filter((task) => Array.isArray(task?.steps)
       && task.steps.some((step) => step && step.status === 'awaiting_approval')).length;
-    const alerts = Array.isArray(snapshot.situation?.alerts) ? snapshot.situation.alerts : [];
+    const situationAlerts = Array.isArray(snapshot.situation?.alerts) ? snapshot.situation.alerts : [];
+    const advisories = Array.isArray(snapshot.perception?.advisories) ? snapshot.perception.advisories : [];
+    const alerts = [
+      ...situationAlerts,
+      ...advisories.map((entry) => ({ severity: entry.severity, summary: entry.summary, source: 'perception', alertClass: entry.alertClass })),
+    ];
     return {
       coreState: snapshot.coreReading,
       approvals,
       alerts,
+      // T-33 Step 4: an advisory is a condition, whether or not its notice was delivered. The
+      // formatter withholds wit on `alertActive`, so a suppressed advisory cannot quietly restore it.
+      alertActive: alerts.length > 0,
       lockdown: snapshot.killSwitch?.active === true,
       degraded: snapshot.coreReading === 'degraded',
       errors: snapshot.unavailable ?? [],
@@ -1730,6 +1743,15 @@ export function createUiServer({
           lastObservationAt: view.lastObservationAt,
           activeAdvisories: view.alerts?.active?.length ?? 0,
           suppressions: view.alerts?.suppressions?.length ?? 0,
+          // T-33 Step 4 (2026-11-19): the advisory *conditions* the last reading implied, so the
+          // exec-comms formatter can withhold wit while anything on this machine is out of order.
+          // A suppressed class is still a condition: suppression is about delivery, not about truth.
+          advisories: (view.alerts?.active ?? []).map((entry) => ({
+            alertClass: entry.alertClass,
+            severity: entry.severity,
+            critical: entry.critical === true,
+            summary: entry.summary,
+          })),
         };
       } catch (err) {
         perceptionView = { available: false, error: singleLine(err.message, 200) };
@@ -1862,11 +1884,18 @@ export function createUiServer({
       sendJson(res, 400, { error: 'cancel does not take a stepId' });
       return;
     }
+    // A resume runs the whole recorded task, so a step id would be a promise this route cannot keep.
+    if (kind === 'resume' && stepId !== null) {
+      sendJson(res, 400, { error: 'resume does not take a stepId' });
+      return;
+    }
     const result = kind === 'approve'
       ? await app.controller.approveTask(taskId, stepId === null ? {} : { stepId })
       : kind === 'retry'
         ? await app.controller.retryTask(taskId, stepId)
-        : await app.controller.cancelTask(taskId);
+        : kind === 'resume'
+          ? await app.controller.runTask(taskId, 'resume')
+          : await app.controller.cancelTask(taskId);
     sendJson(res, 200, { status: result.status, display: typeof result.display === 'string' ? result.display : '' });
     scheduleOwnerRefresh();
   }
@@ -2849,7 +2878,10 @@ export function createUiServer({
       scheduleOwnerRefresh();
       return;
     }
-    const taskMatch = /^\/api\/tasks\/([^/]+)\/(approve|retry|cancel)$/.exec(url.pathname);
+    // T-33 Step 3 (2026-11-19): resume joins approve, retry and cancel as a checkpoint control. It
+    // runs the recorded task through the same controller path a resume from the CLI uses, so the
+    // ECP still decides and the view still only asks.
+    const taskMatch = /^\/api\/tasks\/([^/]+)\/(approve|retry|resume|cancel)$/.exec(url.pathname);
     if (method === 'POST' && taskMatch) {
       await handleTaskAction(req, res, taskMatch[2], decodeURIComponent(taskMatch[1]));
       return;

@@ -223,6 +223,7 @@ export const UI_PAGE = `<!doctype html>
       <p id="dag-edges" class="meta"></p>
       <div class="row">
         <button id="dag-approve" type="button" class="small" hidden>Approve checkpoint</button>
+        <button id="dag-resume" type="button" class="small" hidden>Resume recorded task</button>
         <button id="dag-retry" type="button" class="small" hidden>Retry failed node</button>
         <button id="dag-cancel" type="button" class="small" hidden>Abort mission</button>
         <span id="dag-control-status" class="meta" role="status" aria-live="polite"></span>
@@ -911,6 +912,7 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   dagNodes: document.getElementById('dag-nodes'),
   dagEdges: document.getElementById('dag-edges'),
   dagApprove: document.getElementById('dag-approve'),
+  dagResume: document.getElementById('dag-resume'),
   dagRetry: document.getElementById('dag-retry'),
   dagCancel: document.getElementById('dag-cancel'),
   dagControlStatus: document.getElementById('dag-control-status'),
@@ -2385,14 +2387,14 @@ function renderTaskGraph(result) {
       result?.status >= 500 ? 'unavailable' : 'error');
     renderList(els.dagNodes, [], () => null, 'Unavailable: ' + reason);
     if (els.dagEdges) els.dagEdges.textContent = '';
-    for (const button of [els.dagApprove, els.dagRetry, els.dagCancel]) if (button) button.hidden = true;
+    for (const button of [els.dagApprove, els.dagResume, els.dagRetry, els.dagCancel]) if (button) button.hidden = true;
     return;
   }
   if (!graph.taskId || (graph.nodes || []).length === 0) {
     setWorkspaceStatus(els.dagStatus, graph.detail || 'No task record exists, so there is no graph to show.', 'empty');
     renderList(els.dagNodes, [], () => null, 'No node is recorded.');
     if (els.dagEdges) els.dagEdges.textContent = '';
-    for (const button of [els.dagApprove, els.dagRetry, els.dagCancel]) if (button) button.hidden = true;
+    for (const button of [els.dagApprove, els.dagResume, els.dagRetry, els.dagCancel]) if (button) button.hidden = true;
     return;
   }
   setWorkspaceStatus(els.dagStatus, graph.completed + ' of ' + graph.nodes.length + ' node(s) completed · '
@@ -2430,6 +2432,10 @@ function renderTaskGraph(result) {
     els.dagApprove.hidden = !graph.controls.approve;
     els.dagApprove.dataset.taskId = taskId;
     els.dagApprove.dataset.stepId = gatedNode ? gatedNode.id : '';
+  }
+  if (els.dagResume) {
+    els.dagResume.hidden = !graph.controls.resume;
+    els.dagResume.dataset.taskId = taskId;
   }
   if (els.dagRetry) {
     els.dagRetry.hidden = !graph.controls.retry;
@@ -3308,6 +3314,12 @@ if (els.dagApprove) {
     const taskId = els.dagApprove.dataset.taskId;
     const stepId = els.dagApprove.dataset.stepId;
     postTaskControl('/api/tasks/' + encodeURIComponent(taskId) + '/approve', stepId ? { stepId } : {}, els.dagApprove, 'Approving the checkpoint');
+  });
+}
+if (els.dagResume) {
+  els.dagResume.addEventListener('click', () => {
+    const taskId = els.dagResume.dataset.taskId;
+    postTaskControl('/api/tasks/' + encodeURIComponent(taskId) + '/resume', {}, els.dagResume, 'Resuming the recorded task');
   });
 }
 if (els.dagRetry) {

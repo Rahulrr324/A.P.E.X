@@ -213,9 +213,17 @@ describe('the TaskGraph inspector', () => {
     }).then(async (r) => ({ status: r.status, body: await r.json() }));
     assert.equal(approved.status, 200);
     assert.equal(approved.body.status, 'success_verified');
-    // The approval records intent; the step is now pending and the task paused, so the run is resumed
-    // through the same controller the deck uses for a task.
-    await app.controller.runTask(taskId, 'resume');
+    // The approval records intent; the step is now pending and the task paused. That is exactly the
+    // state the deck's resume control claims to act on, so the deck's own route does the work.
+    const gated = await fetch(`${base}/api/taskgraph?taskId=${encodeURIComponent(taskId)}`, { headers }).then((r) => r.json());
+    assert.equal(gated.controls.approve, false, 'the gate is spent');
+    assert.equal(gated.controls.resume, true, 'an approved step left pending is resumable');
+    assert.equal(gated.nodes[0].state, 'pending');
+    const resumed = await fetch(`${base}/api/tasks/${encodeURIComponent(taskId)}/resume`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}',
+    }).then(async (r) => ({ status: r.status, body: await r.json() }));
+    assert.equal(resumed.status, 200);
+    assert.equal(resumed.body.status, 'success_verified');
     const after = await fetch(`${base}/api/taskgraph?taskId=${encodeURIComponent(taskId)}`, { headers }).then((r) => r.json());
     assert.equal(after.nodes[0].state, 'completed');
     assert.equal(after.nodes[0].outcome, 'success_verified');

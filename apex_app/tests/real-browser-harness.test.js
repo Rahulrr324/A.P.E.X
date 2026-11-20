@@ -162,12 +162,14 @@ describe('T-31 browser suite wiring', () => {
     assert.ok(fs.existsSync(path.join(reportDir, 'README.md')), 'the directory explains what may appear in it');
   });
 
-  test('the Playwright configuration runs the T-31 and T-32 suites and keeps the legacy spec out of the default run', () => {
+  test('the Playwright configuration runs the T-31, T-32 and T-33 suites and keeps the legacy spec out of the default run', () => {
     const config = fs.readFileSync(path.join(appRoot, 'playwright.config.mjs'), 'utf8');
     // T-32 Step 2 (2026-11-19): the HUD-experience suite joins the default run. Both suites drive a
     // real binary; neither is a simulation, and the legacy T-25 spec stays out because its
     // assertions predate the T-31 markup.
-    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs'\]/);
+    // T-33 Step 4 (2026-11-19): the executive-loop walk joins them for the same reason, and it
+    // writes its own summary so the workflow can state which checkpoints ran.
+    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs'\]/);
     assert.match(config, /testIgnore: \['\*\*\/apex-browser\.spec\.mjs'\]/);
     const spec = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't31-real-browser.spec.mjs'), 'utf8');
     assert.match(spec, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/);
@@ -177,6 +179,18 @@ describe('T-31 browser suite wiring', () => {
       'the HUD suite launches the resolved browser');
     assert.match(hud, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
       'the HUD suite skips loudly when no browser exists');
+    const loop = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't33-executive-loop.spec.mjs'), 'utf8');
+    assert.match(loop, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/,
+      'the executive-loop walk launches the resolved browser');
+    assert.match(loop, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
+      'the walk skips loudly when no browser exists');
+    // The walk has to say which checkpoints it reached, or a partial session could look like a pass.
+    for (const checkpoint of ['dispatch', 'intent', 'suppression', 'graph', 'workshop']) {
+      assert.ok(loop.includes(`step('${checkpoint}'`), `the walk records the ${checkpoint} checkpoint`);
+    }
+    assert.match(loop, /toHaveAttribute\('data-wit-allowed', 'false'/,
+      'the walk asserts the wit rule in the browser, not only in the unit tests');
+    assert.match(loop, /T33_LOOP_SUMMARY/, 'the walk prints a summary line the workflow reads');
     assert.match(hud, /data-depth-plane/, 'the HUD suite asserts the depth planes');
     assert.match(hud, /4\.5/, 'the HUD suite asserts the contrast floor');
     for (const viewport of T31_VIEWPORTS) {

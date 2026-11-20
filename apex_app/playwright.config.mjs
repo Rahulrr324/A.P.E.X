@@ -14,7 +14,9 @@ export default defineConfig({
   // count and pre-T-31 markup, and the T-31 suite covers everything it covered and more.
   // T-32 Step 2 (2026-11-19): the HUD experience suite runs next to the T-31 one. Both drive the
   // shipped server and client with a real binary; neither is a simulation.
-  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs'],
+  // T-33 Step 4 (2026-11-19): the executive-loop walk joins them. It drives the whole five-character
+  // loop in one session and writes its own JSON summary for the workflow annotation.
+  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs'],
   testIgnore: ['**/apex-browser.spec.mjs'],
   // Generated traces/screenshots from a failing run must not be committed.
   outputDir: './test-results/playwright',
