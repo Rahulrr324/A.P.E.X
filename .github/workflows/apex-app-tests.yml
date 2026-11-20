@@ -38,4 +38,20 @@ jobs:
         run: npm run test:syntax
       - name: Run the full APEX test suite
         working-directory: apex_app
-        run: npm test
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/apex-test.log"
+      # T-30 S4 (2026-11-19): a red run's log lives behind a download this environment cannot
+      # reach, so the failing test names are echoed as one annotation, which the checks API can be
+      # read back without fetching the log.
+      - name: Report failing tests
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/apex-test.log"
+          summary="no test log was written"
+          if [ -f "$log" ]; then
+            summary="$(grep -E '^[[:space:]]*not ok [0-9]+' "$log" | head -30 | sed 's/^[[:space:]]*//' | paste -sd ' | ' -)"
+            [ -n "$summary" ] || summary="the suite failed without a 'not ok' line"
+          fi
+          summary="${summary//$'\n'/ }"
+          echo "::error title=apex-test-failures::${summary:0:60000}"
