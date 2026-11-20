@@ -152,12 +152,12 @@ jobs:
                   parts.append(f"{shot['state']} {shot['viewport']} {shot['bytes']}B")
           # The short failure line first, in its own annotation, so it survives any truncation of
           # the long summary below.
+          level = 'notice' if outcome == 'success' else 'error'
           short = re.search(r'^T32_FAILURES (\{.*\})$', text, re.M)
           if short:
               detail = short.group(1).replace('%', '%25').replace('\r', '')
               print(f'::{level} title=hud-failures::{detail[:4000]}')
           message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
-          level = 'notice' if outcome == 'success' else 'error'
           print(f'::{level} title=hud-experience::{message[:60000]}')
           PY
 
