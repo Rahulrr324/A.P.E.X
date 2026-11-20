@@ -19,8 +19,9 @@ export const UI_PAGE = `<!doctype html>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/style.css">
 </head>
-<body data-core-state="degraded" data-view="deck" data-motion="full" data-mode="classic" data-contrast="standard">
+<body data-core-state="degraded" data-view="deck" data-motion="full" data-mode="classic" data-contrast="standard" data-depth-plane="z0">
 <a class="skip-link" href="#main-content">Skip to main content</a>
+<div id="hud-grid" data-depth-plane="z1" aria-hidden="true"></div>
 <div id="boot" class="boot" role="status" aria-live="polite">
   <div class="boot-core" aria-hidden="true"></div>
   <div class="boot-lines" id="boot-lines"></div>
@@ -45,6 +46,11 @@ export const UI_PAGE = `<!doctype html>
     <span id="gauge-storage" class="badge" aria-label="Storage">Storage: —</span>
   </div>
   <div class="topbar-actions">
+    <!-- T-32 Step 1: the command dispatch is reachable from the top bar, so Tab reaches it before the
+         workspace tabs, and Ctrl+K or / opens it from anywhere. -->
+    <button id="command-trigger" type="button" class="hud-chip" aria-keyshortcuts="Control+K" aria-controls="chat-text">
+      Command <kbd>Ctrl K</kbd>
+    </button>
     <label class="visually-hidden" for="mode-select">Presentation mode</label>
     <select id="mode-select" class="small" aria-label="Presentation mode">
       <option value="classic">Classic</option>
@@ -59,6 +65,19 @@ export const UI_PAGE = `<!doctype html>
     <button id="quick-boot" type="button" class="quiet small">Quick boot</button>
   </div>
 </header>
+<!-- T-32 Step 1: the command dispatch lives in its own bar between the top bar and the workspace
+     tabs. One input, one place, and Tab reaches it before the tabs because that is where it is in
+     the document rather than because a tabindex was raised above its neighbours. -->
+<section class="command-bar" data-depth-plane="z1" aria-label="Command dispatch">
+  <form id="chat-form">
+    <label for="chat-text" class="visually-hidden">Message</label>
+    <textarea id="chat-text" rows="2" maxlength="4000" placeholder="Command APEX, or ask for a verified read"></textarea>
+    <div class="row">
+      <button id="send" type="submit">Send</button>
+      <span id="activity" class="meta" role="status"></span>
+    </div>
+  </form>
+</section>
 <nav class="nav" aria-label="Primary">
   <button type="button" data-view="deck" class="nav-item active" aria-current="page">Deck</button>
   <button type="button" data-view="conversations" class="nav-item">Conversations</button>
@@ -77,7 +96,7 @@ export const UI_PAGE = `<!doctype html>
   <button type="button" data-view="workshop" class="nav-item">Workshop</button>
 </nav>
 <main id="main-content" class="deck">
-  <aside class="rail left" aria-label="Missions">
+  <aside class="rail left" data-depth-plane="z3" aria-label="Missions">
     <section class="panel">
       <h2>Active missions</h2>
       <ul id="missions-list" class="work"></ul>
@@ -87,9 +106,9 @@ export const UI_PAGE = `<!doctype html>
       <ul id="taskgraph" class="work"></ul>
     </section>
   </aside>
-  <section class="stage" aria-label="APEX Core">
+  <section class="stage" data-depth-plane="z3" aria-label="APEX Core">
     <div class="core-wrap">
-      <svg class="core" viewBox="0 0 240 240" role="img" aria-label="APEX Core status">
+      <svg class="core" id="core-reticle" data-depth-plane="z2" viewBox="0 0 240 240" role="img" aria-label="APEX Core status" data-ack-state="idle" data-ack-count="0">
         <defs>
           <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.95"/>
@@ -97,16 +116,34 @@ export const UI_PAGE = `<!doctype html>
             <stop offset="100%" stop-color="#00e5ff" stop-opacity="0"/>
           </radialGradient>
         </defs>
-        <circle class="core-halo" cx="120" cy="120" r="96"/>
-        <circle class="core-ring outer" cx="120" cy="120" r="88"/>
-        <circle class="core-ring mid" cx="120" cy="120" r="70"/>
-        <circle class="core-ring inner" cx="120" cy="120" r="52"/>
-        <circle class="core-center" cx="120" cy="120" r="28"/>
+        <g class="reticle-azimuth" data-ring="azimuth">
+          <circle class="core-halo" cx="120" cy="120" r="96"/>
+          <circle class="core-ring outer" cx="120" cy="120" r="88"/>
+          <circle class="reticle-tick" cx="120" cy="120" r="96"/>
+        </g>
+        <g class="reticle-telemetry" data-ring="telemetry">
+          <circle class="core-ring mid" cx="120" cy="120" r="70"/>
+          <path class="reticle-arc" d="M120 42 A78 78 0 0 1 198 120"/>
+        </g>
+        <g data-ring="progress">
+          <circle class="reticle-progress" cx="120" cy="120" r="64" pathLength="100"/>
+        </g>
+        <g data-ring="brackets">
+          <path d="M18 42 L18 18 L42 18"/>
+          <path d="M198 18 L222 18 L222 42"/>
+          <path d="M222 198 L222 222 L198 222"/>
+          <path d="M42 222 L18 222 L18 198"/>
+        </g>
+        <g data-ring="nucleus">
+          <circle class="core-ring inner" cx="120" cy="120" r="52"/>
+          <circle class="core-center" cx="120" cy="120" r="28"/>
+          <circle class="reticle-ack" cx="120" cy="120" r="34"/>
+        </g>
         <g class="core-segments">
-          <path d="M120 32 A88 88 0 0 1 208 120" />
-          <path d="M208 120 A88 88 0 0 1 120 208" />
-          <path d="M120 208 A88 88 0 0 1 32 120" />
-          <path d="M32 120 A88 88 0 0 1 120 32" />
+          <path d="M120 32 A88 88 0 0 1 208 120"/>
+          <path d="M208 120 A88 88 0 0 1 120 208"/>
+          <path d="M120 208 A88 88 0 0 1 32 120"/>
+          <path d="M32 120 A88 88 0 0 1 120 32"/>
         </g>
       </svg>
       <div class="core-state" id="core-state" role="status" aria-live="polite">Degraded</div>
@@ -114,19 +151,12 @@ export const UI_PAGE = `<!doctype html>
     </div>
     <section class="panel conversation" id="conversation-panel">
       <h2>Conversation</h2>
-      <div id="banner" class="banner" role="alert" hidden></div>
+      <div id="banner" class="banner" data-depth-plane="z4" role="alert" hidden></div>
       <ol id="turns" class="turns"></ol>
-      <form id="chat-form">
-        <label for="chat-text" class="visually-hidden">Message</label>
-        <textarea id="chat-text" rows="3" maxlength="4000" placeholder="Command APEX, or ask for a verified read"></textarea>
-        <div class="row">
-          <button id="send" type="submit">Send</button>
-          <span id="activity" class="meta" role="status"></span>
-        </div>
-      </form>
+      <p class="meta">Dispatch is the command bar above the tabs (Ctrl+K or /).</p>
     </section>
   </section>
-  <aside class="rail right" aria-label="Sentinel and approvals">
+  <aside class="rail right" data-depth-plane="z3" aria-label="Sentinel and approvals">
     <section class="panel">
       <h2>Sentinel</h2>
       <ul id="sentinel" class="work"></ul>
@@ -143,13 +173,13 @@ export const UI_PAGE = `<!doctype html>
   </aside>
 </main>
 <section class="workspace" id="workspace">
-  <section class="view" data-view="conversations">
+  <section class="view" data-view="conversations" data-depth-plane="z3">
     <h2>Conversations</h2>
     <p class="meta">Session persistence and history. The current session is shown on the deck; older turns remain in the conversation log.</p>
     <p id="conversation-status" class="workspace-status" role="status" aria-live="polite">Loading conversation records…</p>
     <ul id="conversation-history" class="work"></ul>
   </section>
-  <section class="view" data-view="missions">
+  <section class="view" data-view="missions" data-depth-plane="z3">
     <h2>Mission Control</h2>
     <p class="meta">Goals, plans and tasks projected from their owning stores. Dependencies, blockers, checkpoints and verification are shown only when recorded; a plan or approval does not start work.</p>
     <p id="mission-status" class="workspace-status" role="status" aria-live="polite">Loading owner records…</p>
@@ -169,7 +199,7 @@ export const UI_PAGE = `<!doctype html>
       <ul id="mission-tasks" class="work"></ul>
     </section>
   </section>
-  <section class="view" data-view="tasks">
+  <section class="view" data-view="tasks" data-depth-plane="z3">
     <h2>Tasks and execution</h2>
     <p id="task-status" class="workspace-status" role="status" aria-live="polite">Loading tasks…</p>
     <ul id="tasks" class="work"></ul>
@@ -182,20 +212,20 @@ export const UI_PAGE = `<!doctype html>
     </form>
     <ul id="planning" class="work"></ul>
   </section>
-  <section class="view" data-view="approvals">
+  <section class="view" data-view="approvals" data-depth-plane="z3">
     <h2>Approval Centre</h2>
     <p class="meta">Pending requests come from TaskStore, PlanStore and Sentinel records. Approving records intent only; it does not start a task or run a response. Risk, scope, reversibility and expiry are not inferred when an owner did not record them.</p>
     <p id="approval-state" class="workspace-status" role="status" aria-live="polite">Loading pending owner requests…</p>
     <p id="approval-action-status" class="workspace-status" role="status" aria-live="polite"></p>
     <ul id="approval-items" class="work"></ul>
   </section>
-  <section class="view" data-view="sentinel">
+  <section class="view" data-view="sentinel" data-depth-plane="z3">
     <h2>Sentinel — recorded situational events</h2>
     <p class="meta">A bounded view of recorded observations, assessments, decisions and provenance. It does not imply that an external source is currently being watched.</p>
     <p id="sentinel-status" class="workspace-status" role="status" aria-live="polite">Loading situational records…</p>
     <ul id="sentinel-full" class="work"></ul>
   </section>
-  <section class="view" data-view="memory">
+  <section class="view" data-view="memory" data-depth-plane="z3">
     <h2>Memory Timeline</h2>
     <p class="meta">Chronological records from MemoryStore, KnowledgeStore and WorldModelStore. Corrections and lifecycle events are kept as provenance-linked history; the timeline does not make claims true.</p>
     <p id="timeline-status" class="workspace-status" role="status" aria-live="polite">Loading memory and world-model records…</p>
@@ -211,7 +241,7 @@ export const UI_PAGE = `<!doctype html>
     <p id="world-status" class="workspace-status" role="status" aria-live="polite">Loading world-model history…</p>
     <ul id="world" class="work"></ul>
   </section>
-  <section class="view" data-view="documents">
+  <section class="view" data-view="documents" data-depth-plane="z3">
     <h2>Authorized documents</h2>
     <p id="documents-status" class="workspace-status" role="status" aria-live="polite">Loading document index…</p>
     <form id="doc-search-form" class="row">
@@ -221,13 +251,13 @@ export const UI_PAGE = `<!doctype html>
     </form>
     <ul id="documents" class="work"></ul>
   </section>
-  <section class="view" data-view="reasoning">
+  <section class="view" data-view="reasoning" data-depth-plane="z3">
     <h2>Reasoning workspace</h2>
     <p class="meta">Deterministic, evidence-linked reasoning records. This view reads stored sessions; it does not run inference or authorize actions.</p>
     <p id="reasoning-status" class="workspace-status" role="status" aria-live="polite">Loading reasoning records…</p>
     <ul id="reasoning" class="work"></ul>
   </section>
-  <section class="view" data-view="council">
+  <section class="view" data-view="council" data-depth-plane="z3">
     <h2>Council</h2>
     <p class="meta">Seven deterministic perspectives over evidence owned by the existing stores. This is not multi-model deliberation: no model is contacted. A synthesis explains disagreement and never authorizes execution.</p>
     <p id="council-state" class="workspace-status" role="status" aria-live="polite">Loading recorded council sessions…</p>
@@ -241,7 +271,7 @@ export const UI_PAGE = `<!doctype html>
     <div id="council-synthesis" class="panel"></div>
     <ul id="council" class="work"></ul>
   </section>
-  <section class="view" data-view="cognition">
+  <section class="view" data-view="cognition" data-depth-plane="z3">
     <h2>Unified cognition — T-29 pipeline</h2>
     <p class="meta">One owner intent through five recorded stages: context packet, salience and Sentinel advisories, Council synthesis, task graph, and governed execution. Every value below is read from the run record. A recommendation is deliberation data, never a permission; a gated step executes only after the ECP authorizes it and you approve it yourself.</p>
     <p id="cognition-status" class="workspace-status" role="status" aria-live="polite">Loading recorded cognitive runs…</p>
@@ -265,7 +295,7 @@ export const UI_PAGE = `<!doctype html>
     <h3>Recorded runs</h3>
     <ul id="cognition-runs" class="work"></ul>
   </section>
-  <section class="view" data-view="presence">
+  <section class="view" data-view="presence" data-depth-plane="z3">
     <h2>Presence, device trust and autonomy policy</h2>
     <p class="meta">Device trust is an append-only enrollment log: a trusted device authenticates signed messages and grants no capability. Autonomy is read-only here. It is configured through the APEX_AUTONOMY_LEVELS environment at start-up, and the matrix below reports the level the ECP actually applies, not a value this page can change.</p>
     <p id="presence-status" class="workspace-status" role="status" aria-live="polite">Loading device trust and presence…</p>
@@ -285,11 +315,11 @@ export const UI_PAGE = `<!doctype html>
     <h3>Capabilities in the matrix</h3>
     <ul id="autonomy-capabilities" class="work"></ul>
   </section>
-  <section class="view" data-view="system">
+  <section class="view" data-view="system" data-depth-plane="z3">
     <h2>System diagnostics and Resource Fabric</h2>
     <p class="meta">Read-only diagnostics from the health, runtime, ECP and resource owners. Unknown or unavailable readings are not treated as healthy.</p>
     <p id="system-status" class="workspace-status" role="status" aria-live="polite">Loading system diagnostics…</p>
-    <section class="panel safety" aria-labelledby="safety-heading">
+    <section class="panel safety" data-depth-plane="z4" aria-labelledby="safety-heading">
       <h3 id="safety-heading">Execution safety</h3>
       <p id="safety-status" class="meta" role="status" aria-live="polite">Reading the ECP safety latch…</p>
       <form id="safety-lock-form" class="safety-form">
@@ -321,12 +351,12 @@ export const UI_PAGE = `<!doctype html>
     <p id="resources-status" class="workspace-status" role="status" aria-live="polite">Loading resource telemetry…</p>
     <ul id="resources" class="work"></ul>
   </section>
-  <section class="view" data-view="integrations">
+  <section class="view" data-view="integrations" data-depth-plane="z3">
     <h2>Integrations</h2>
     <p id="integrations-status" class="workspace-status" role="status" aria-live="polite">Loading integration state…</p>
     <ul id="integrations" class="work"></ul>
   </section>
-  <section class="view" data-view="workshop">
+  <section class="view" data-view="workshop" data-depth-plane="z3">
     <h2>Workshop — deterministic design sheets</h2>
     <p class="meta">This is not a 3D or interactive holographic workspace. It stores design sheets and performs arithmetic over declared values. Nothing here is executed, and a simulation never authorizes an action.</p>
     <p id="workshop-state" class="workspace-status" role="status" aria-live="polite">Loading stored designs…</p>
@@ -415,6 +445,7 @@ body {
     radial-gradient(circle at 50% 42%, rgba(0, 229, 255, 0.12), transparent 34%),
     radial-gradient(circle at 80% 10%, rgba(255, 176, 0, 0.08), transparent 28%),
     linear-gradient(180deg, var(--bg1), var(--bg0));
+  background-color: var(--bg-void);
   overflow-x: hidden;
 }
 body::before {
@@ -428,6 +459,13 @@ body::before {
     radial-gradient(circle at 50% 50%, transparent 0, rgba(0,0,0,0.35) 100%);
   mix-blend-mode: screen;
 }
+.command-bar {
+  display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start;
+  padding: .55rem 1.25rem; border-bottom: 1px solid var(--line);
+  background: rgba(5, 8, 15, 0.66); backdrop-filter: blur(14px);
+}
+.command-bar form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; flex: 1 1 24rem; min-width: 0; }
+.command-bar textarea { flex: 1 1 18rem; min-width: 0; height: 2.6rem; min-height: 2.6rem; resize: vertical; }
 .skip-link { position: absolute; left: -999px; top: 0; }
 .skip-link:focus { left: 1rem; top: 1rem; z-index: 100; background: var(--panel-strong); padding: .5rem; border-radius: 8px; }
 .topbar {
@@ -579,6 +617,151 @@ body[data-contrast="high"]::before { display: none; }
   .core-ring { animation: none !important; }
   .core-halo { animation: none !important; }
 }
+/* T-32 Step 1 (2026-11-19): Part 4 depth planes, motion tokens and the core reticle posture.
+   Everything below is additive: the T-30 tokens and rules above keep their meaning, and the new
+   custom properties are what the reticle layers and the panel transitions now read. */
+:root {
+  /* Part 4 motion tokens. Every animated state change names one of these four, so a reviewer can
+     change the cadence in one place instead of hunting durations. */
+  --motion-ack: 120ms;
+  --motion-panel: 260ms;
+  --motion-posture: 700ms;
+  --motion-reticle: 380ms;
+  /* Reticle posture. A Core state sets these; the layers below read them. */
+  --reticle-color: var(--arc-cyan);
+  --reticle-weight: 1.5;
+  --reticle-spin-azimuth: 18s;
+  --reticle-spin-telemetry: 12s;
+  --reticle-dash-azimuth: 8 6;
+  --reticle-dash-telemetry: 4 10;
+  --reticle-progress-offset: 260;
+  --surface-blur: 14px;
+}
+
+/* Z0-Z4: one declared depth plane per layer of the deck, monotonically increasing. z0 is the void
+   field the deck is drawn on, z1 the HUD grid, z2 the reticle, z3 the focal workspace cards, and z4
+   the gates that may interrupt the owner (banner, safety controls). */
+body[data-depth-plane="z0"] { position: relative; z-index: 0; }
+[data-depth-plane="z1"] { z-index: 10; }
+[data-depth-plane="z2"] { z-index: 20; }
+[data-depth-plane="z3"] { z-index: 30; }
+[data-depth-plane="z4"] { z-index: 40; }
+#hud-grid {
+  position: fixed; inset: 0; pointer-events: none; z-index: 10;
+  background-image:
+    linear-gradient(rgba(0, 229, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.07) 1px, transparent 1px);
+  background-size: 64px 64px, 64px 64px;
+  mask-image: radial-gradient(circle at 50% 40%, rgba(0, 0, 0, 0.9), transparent 72%);
+  opacity: 0.5;
+}
+body[data-mode="quiet"] #hud-grid { opacity: 0.12; }
+body[data-mode="overwatch"] #hud-grid { opacity: 0.75; }
+body[data-motion="reduced"] #hud-grid { opacity: 0.25; }
+
+/* The glass surface for the focal plane: the same tokens, at the Part 4 blur range, with the panel
+   radius the spec asks for and tabular numerals wherever a counter is drawn. */
+[data-depth-plane="z3"] .panel,
+[data-depth-plane="z3"].stage,
+[data-depth-plane="z3"].rail,
+[data-depth-plane="z3"] .view,
+[data-depth-plane="z3"].view {
+  background: var(--glass);
+  backdrop-filter: blur(var(--surface-blur));
+  border-radius: var(--radius);
+  transition: border-color var(--motion-panel) ease, box-shadow var(--motion-panel) ease;
+}
+[data-depth-plane="z4"] {
+  background: var(--glass-strong);
+  backdrop-filter: blur(20px);
+  border-radius: var(--radius);
+  transition: border-color var(--motion-panel) ease, box-shadow var(--motion-panel) ease;
+}
+#clock, #gauge-cpu, #gauge-mem, #gauge-storage, .badge, .core-caption, .workspace-status, .meta.mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The reticle's five layers. Each one is a real element with its own geometry and its own motion,
+   driven by the posture variables above rather than by a state-specific rule per layer. */
+#core-reticle { width: min(260px, 70vw); aspect-ratio: 1 / 1; height: auto; transition: filter var(--motion-posture) ease; }
+#core-reticle .reticle-azimuth { transform-origin: 120px 120px; animation: spin var(--reticle-spin-azimuth) linear infinite; }
+#core-reticle .reticle-telemetry { transform-origin: 120px 120px; animation: spin var(--reticle-spin-telemetry) linear infinite reverse; }
+#core-reticle .reticle-ack { opacity: 0; transition: opacity var(--motion-ack) ease; }
+#core-reticle[data-ack-state="active"] { filter: drop-shadow(0 0 26px var(--reticle-color)) brightness(1.28); }
+#core-reticle[data-ack-state="active"] .reticle-ack { opacity: 0.95; }
+#core-reticle [data-ring="azimuth"] .core-ring { stroke: var(--reticle-color); stroke-width: var(--reticle-weight); }
+#core-reticle [data-ring="azimuth"] .reticle-tick { stroke: var(--reticle-color); stroke-width: 1; stroke-dasharray: var(--reticle-dash-azimuth); fill: none; opacity: 0.8; }
+#core-reticle [data-ring="telemetry"] .reticle-arc { stroke: var(--reticle-color); fill: none; opacity: 0.85; stroke-width: calc(var(--reticle-weight) * 1.4); stroke-dasharray: var(--reticle-dash-telemetry); }
+#core-reticle [data-ring="progress"] .reticle-progress { stroke: var(--reticle-color); fill: none; stroke-width: calc(var(--reticle-weight) * 2); stroke-linecap: butt; stroke-dasharray: 14 8; stroke-dashoffset: var(--reticle-progress-offset); transition: stroke-dashoffset var(--motion-posture) ease, stroke var(--motion-posture) ease; }
+#core-reticle [data-ring="brackets"] path { stroke: var(--reticle-color); fill: none; stroke-width: var(--reticle-weight); opacity: 0.9; }
+#core-reticle [data-ring="nucleus"] .core-center { stroke: var(--reticle-color); }
+#core-reticle [data-ring="nucleus"] .core-ring.inner { stroke: var(--reticle-color); }
+
+/* Posture per reachable Core state. Distinct cadence, segmentation, weight and colour token, so a
+   reviewer can read the state from the reticle without reading the caption. */
+body[data-core-state="dormant"] { --state-color: var(--text-dim); --state-weight: 1; --state-spin-azimuth: 60s; --state-spin-telemetry: 48s; --state-dash-azimuth: 2 10; --state-dash-telemetry: 2 14; --state-progress: 380; }
+body[data-core-state="idle"] { --state-color: var(--arc-cyan); --state-weight: 1.5; --state-spin-azimuth: 18s; --state-spin-telemetry: 12s; --state-dash-azimuth: 8 6; --state-dash-telemetry: 4 10; --state-progress: 260; }
+body[data-core-state="thinking"] { --state-color: var(--armor-gold); --state-weight: 2; --state-spin-azimuth: 6s; --state-spin-telemetry: 4s; --state-dash-azimuth: 3 9; --state-dash-telemetry: 6 4; --state-progress: 180; }
+body[data-core-state="executing"] { --state-color: var(--ok-green); --state-weight: 2.2; --state-spin-azimuth: 3s; --state-spin-telemetry: 2s; --state-dash-azimuth: 18 6; --state-dash-telemetry: 10 4; --state-progress: 60; }
+body[data-core-state="awaiting_approval"] { --state-color: var(--armor-gold); --state-weight: 1.8; --state-spin-azimuth: 9s; --state-spin-telemetry: 6s; --state-dash-azimuth: 2 8; --state-dash-telemetry: 3 9; --state-progress: 120; }
+body[data-core-state="uncertain"] { --state-color: var(--armor-gold); --state-weight: 1.6; --state-spin-azimuth: 14s; --state-spin-telemetry: 10s; --state-dash-azimuth: 5 5; --state-dash-telemetry: 4 6; --state-progress: 200; }
+body[data-core-state="degraded"] { --state-color: var(--armor-gold); --state-weight: 1.2; --state-spin-azimuth: 30s; --state-spin-telemetry: 22s; --state-dash-azimuth: 6 12; --state-dash-telemetry: 2 12; --state-progress: 300; }
+body[data-core-state="lockdown"] { --state-color: var(--armor-red); --state-weight: 2.4; --state-spin-azimuth: 0s; --state-spin-telemetry: 0s; --state-dash-azimuth: 12 12; --state-dash-telemetry: 12 12; --state-progress: 320; }
+/* Posture resolution: the Core state supplies the base posture and the presentation mode scales it,
+   so a reviewer can tell Idle from Awaiting Approval from Degraded from Lockdown in every mode while
+   the mode still changes the geometry. Mode never overwrites the state it is layered on. */
+body {
+  --reticle-color: var(--state-color, var(--arc-cyan));
+  --reticle-weight: calc(var(--state-weight, 1.5) * var(--reticle-scale, 1));
+  --reticle-spin-azimuth: calc(var(--state-spin-azimuth, 18s) * var(--state-spin-scale, 1));
+  --reticle-spin-telemetry: calc(var(--state-spin-telemetry, 12s) * var(--state-spin-scale, 1));
+  --reticle-dash-azimuth: var(--dash-mode, var(--state-dash-azimuth, 8 6));
+  --reticle-dash-telemetry: var(--state-dash-telemetry, 4 10);
+  --reticle-progress-offset: var(--state-progress, 260);
+}
+/* A zero-cadence posture must not spin: animation-duration 0s on an infinite animation still
+   schedules work, so lockdown and quiet stop the layers outright. */
+body[data-core-state="lockdown"] #core-reticle .reticle-azimuth,
+body[data-core-state="lockdown"] #core-reticle .reticle-telemetry { animation: none !important; }
+
+/* Presentation modes scale the same posture rather than restyling the reticle from scratch. */
+body[data-mode="classic"] { --reticle-scale: 1; --surface-blur: 14px; }
+body[data-mode="tactical"] { --reticle-scale: 1.2; --state-spin-scale: 0.75; --surface-blur: 14px; }
+body[data-mode="overwatch"] { --reticle-scale: 1.45; --dash-mode: 2 4; --surface-blur: 20px; }
+body[data-mode="synthesis"] { --reticle-scale: 0.8; --state-spin-scale: 1.6; --surface-blur: 16px; }
+body[data-mode="quiet"] { --reticle-scale: 0.66; --surface-blur: 12px; }
+body[data-mode="lockdown"] { --reticle-scale: 1.6; --surface-blur: 20px; }
+
+/* Keyboard-first: one visible reticle outline on every interactive element, and a command trigger
+   in the top bar so the dispatch is the first thing Tab reaches after the top bar's own controls. */
+a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--arc-cyan);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(0, 229, 255, 0.18);
+}
+.hud-chip {
+  display: inline-flex; gap: .4rem; align-items: center;
+  border: 1px solid var(--line-strong); border-radius: 999px;
+  background: rgba(0, 229, 255, 0.08); color: var(--text);
+  padding: .25rem .6rem; font-size: .78rem; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.hud-chip kbd {
+  font-family: var(--font-mono); font-size: .72rem; border: 1px solid var(--line);
+  border-radius: 4px; padding: 0 .25rem; color: var(--muted);
+}
+
+/* Reduced motion, by preference or by the owner's own toggle: no continuous animation, no parallax,
+   and the acknowledgement still changes state instantly rather than animating. */
+@media (prefers-reduced-motion: reduce) {
+  #core-reticle .reticle-azimuth, #core-reticle .reticle-telemetry { animation: none !important; }
+  #hud-grid { opacity: 0.25; }
+  * { transition-duration: 0s !important; animation-duration: 0s !important; }
+}
+body[data-motion="reduced"] #core-reticle .reticle-azimuth,
+body[data-motion="reduced"] #core-reticle .reticle-telemetry { animation: none !important; }
+body[data-motion="reduced"] .core, body[data-motion="reduced"] .core-halo { animation: none !important; transform: none !important; }
+
 /* Responsive: 1600x900 and 1280x720 tighten the three-column deck; 390x844 is one column. */
 @media (max-width: 1600px) {
   .deck { grid-template-columns: minmax(16rem, 1fr) minmax(20rem, 1.3fr) minmax(16rem, 1fr); }
@@ -617,6 +800,9 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   turns: document.getElementById('turns'),
   form: document.getElementById('chat-form'),
   text: document.getElementById('chat-text'),
+  // T-32 Step 1: the command trigger and the reticle the acknowledgement pulse is written to.
+  commandTrigger: document.getElementById('command-trigger'),
+  coreReticle: document.getElementById('core-reticle'),
   send: document.getElementById('send'),
   activity: document.getElementById('activity'),
   session: document.getElementById('session'),
@@ -2554,12 +2740,64 @@ if (els.modeSelect) els.modeSelect.addEventListener('change', () => { applyMode(
 if (els.motionToggle) els.motionToggle.addEventListener('click', () => { applyMotion(!state.reducedMotion); });
 if (els.contrastToggle) els.contrastToggle.addEventListener('click', () => { applyContrast(state.contrast !== 'high'); });
 
+// T-32 Step 1: the keyboard-first command dispatch. Ctrl+K (or Cmd+K) and the slash key both focus
+// the dispatch input, and the reticle acknowledges within the Part 4 --motion-ack token (120 ms) by
+// flipping data-ack-state to "active" and counting the acknowledgement, so the pulse is inspectable
+// rather than merely visible. Escape dismisses the dispatch and returns focus to the deck.
+const COMMAND_ACK_MS = 120;
+
+function pulseReticleAck() {
+  const reticle = els.coreReticle;
+  if (!reticle) return null;
+  const at = Math.round((typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()));
+  reticle.dataset.ackCount = String(Number(reticle.dataset.ackCount || '0') + 1);
+  reticle.dataset.ackAt = String(at);
+  reticle.dataset.ackState = 'active';
+  if (state.ackTimer) clearTimeout(state.ackTimer);
+  state.ackTimer = setTimeout(() => {
+    if (reticle.dataset.ackState === 'active') reticle.dataset.ackState = 'settled';
+  }, COMMAND_ACK_MS);
+  return at;
+}
+
+function focusCommandDispatch() {
+  if (state.view !== 'deck') setView('deck');
+  pulseReticleAck();
+  if (els.text) {
+    els.text.focus({ preventScroll: true });
+    if (typeof els.text.setSelectionRange === 'function' && els.text.value.length > 0) {
+      els.text.setSelectionRange(els.text.value.length, els.text.value.length);
+    }
+  }
+  if (els.activity) els.activity.textContent = 'Command dispatch focused. Type a request; Escape dismisses.';
+}
+
+function dismissCommandDispatch() {
+  const reticle = els.coreReticle;
+  if (reticle && reticle.dataset.ackState === 'active') reticle.dataset.ackState = 'settled';
+  if (els.text && document.activeElement === els.text) els.text.blur();
+  if (els.activity) els.activity.textContent = '';
+}
+
+if (els.commandTrigger) els.commandTrigger.addEventListener('click', () => { focusCommandDispatch(); });
+
 document.addEventListener('keydown', (event) => {
-  if (!event || event.defaultPrevented || event.ctrlKey || event.metaKey) return;
+  if (!event || event.defaultPrevented) return;
   const target = event.target;
   const tag = target && target.tagName ? String(target.tagName).toUpperCase() : '';
   const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
     || (target && target.isContentEditable === true);
+  // The chord works even from inside a field, because it is how the owner leaves one.
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && (event.key === 'k' || event.key === 'K')) {
+    event.preventDefault();
+    focusCommandDispatch();
+    return;
+  }
+  if (event.key === 'Escape') {
+    dismissCommandDispatch();
+    return;
+  }
+  if (event.ctrlKey || event.metaKey) return;
   if (event.altKey && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
     event.preventDefault();
     moveView(event.key === 'ArrowRight' ? 1 : -1);
@@ -2568,7 +2806,7 @@ document.addEventListener('keydown', (event) => {
   if (typing) return;
   if (event.key === '/' && els.text) {
     event.preventDefault();
-    els.text.focus();
+    focusCommandDispatch();
   }
 });
 

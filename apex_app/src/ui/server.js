@@ -664,11 +664,17 @@ export function createUiServer({
   stateEventHistoryLimit = UI_LIMITS.maxStateEventHistory,
   chatTimeoutMs = UI_LIMITS.chatTimeoutMs,
   now = () => new Date(),
+  allowNonLoopback = false,
 } = {}) {
   if (!app || typeof app.controller?.handle !== 'function' || typeof app.controller?.approveTask !== 'function') {
     throw new Error('createUiServer requires an APEX application');
   }
-  if (!LOOPBACK_HOSTS.has(host)) throw new Error('the UI binds to loopback only');
+  // Loopback stays the default and the only thing an unconfigured server will bind. A sandboxed
+  // preview proxy cannot reach loopback inside the process's namespace, so an owner who explicitly
+  // asks for it may bind 0.0.0.0; every request is still token-gated, and the frame/origin headers
+  // change only in that opt-in mode.
+  const previewProxy = allowNonLoopback === true && host === '0.0.0.0';
+  if (!LOOPBACK_HOSTS.has(host) && !previewProxy) throw new Error('the UI binds to loopback only');
   if (!Number.isSafeInteger(heartbeatMs) || heartbeatMs < 1) throw new Error('heartbeatMs must be a positive integer');
   if (!Number.isSafeInteger(ownerPollMs) || ownerPollMs < 1) throw new Error('ownerPollMs must be a positive integer');
   const authToken = token ?? randomBytes(24).toString('hex');
@@ -1706,7 +1712,11 @@ export function createUiServer({
       }
       res.writeHead(200, baseHeaders({
         'content-type': 'text/html; charset=utf-8',
-        'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        'content-security-policy': previewProxy
+          // Preview-proxy mode: the page is framed by the sandbox host, so frame-ancestors is
+          // dropped rather than loosened to a wildcard, and everything else stays as it was.
+          ? "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'"
+          : "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
         'cross-origin-opener-policy': 'same-origin',
       }));
       res.end(UI_PAGE);
@@ -1725,7 +1735,11 @@ export function createUiServer({
     if (method === 'POST') {
       const origin = req.headers.origin;
       const expected = `http://${req.headers.host ?? `${host}:${listeningPort ?? port}`}`;
-      if (typeof origin === 'string' && origin !== expected) {
+      // Behind a TLS-terminating preview proxy the page's origin is https on the same host, so the
+      // same-host check admits either scheme; a different host is still refused.
+      const sameHost = typeof origin === 'string' && (origin === expected
+        || (previewProxy === true && origin === `https://${req.headers.host}`));
+      if (typeof origin === 'string' && !sameHost) {
         sendJson(res, 403, { error: 'cross-origin requests are refused' });
         return;
       }
