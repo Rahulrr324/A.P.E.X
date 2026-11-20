@@ -67,13 +67,14 @@ export class ActionRegistry {
   #actions = new Map();
   #controlPlane;
 
-  constructor({ autonomyByDomain = {}, now, idFactory, killSwitchPath = null } = {}) {
+  constructor({ autonomyByDomain = {}, now, idFactory, killSwitchPath = null, stepUpSecret = null } = {}) {
     this.#controlPlane = new ExecutiveControlPlane({
       capabilityLookup: (name) => this.get(name),
       autonomyByDomain,
       ...(now ? { now } : {}),
       ...(idFactory ? { idFactory } : {}),
       ...(killSwitchPath ? { killSwitchPath } : {}),
+      ...(stepUpSecret ? { stepUpSecret } : {}),
     });
   }
 

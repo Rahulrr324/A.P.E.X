@@ -7,22 +7,32 @@ export const BRIEFING_SCHEMA = 'apex.briefing.v1';
 export function buildBriefing({ goals = [], plans = [], tasks = [], situation = null, resources = null, health = null, now = () => new Date() } = {}) {
   const facts = [];
   const inferred = [];
-  const pendingApprovals = (Array.isArray(tasks) ? tasks : []).filter((t) => t && t.approval);
-  const blocked = (Array.isArray(tasks) ? tasks : []).filter((t) => t && (t.status === 'blocked' || t.status === 'paused'));
-  const running = (Array.isArray(tasks) ? tasks : []).filter((t) => t && t.status === 'running');
+  const taskRows = Array.isArray(tasks) ? tasks : [];
+  const planRows = Array.isArray(plans) ? plans : [];
+  const pendingTaskApprovals = taskRows.filter((task) => task && (
+    task.status === 'proposed'
+    || (Array.isArray(task.steps) && task.steps.some((step) => step?.status === 'awaiting_approval'))
+  ));
+  const pendingPlanApprovals = planRows.filter((plan) => plan?.status === 'draft' && !plan.approval);
+  const pendingApprovals = [...pendingTaskApprovals, ...pendingPlanApprovals];
+  const blocked = taskRows.filter((task) => task && (task.status === 'blocked' || task.status === 'paused'));
+  const running = taskRows.filter((task) => task && task.status === 'running');
 
   for (const g of (Array.isArray(goals) ? goals : [])) {
-    facts.push({ kind: 'goal', id: g.id ?? null, text: g.title || g.id || 'goal', status: g.status || 'recorded' });
+    facts.push({ kind: 'goal', id: g.id ?? null, text: g.request || g.title || g.id || 'goal', status: g.status || 'recorded' });
   }
-  for (const p of (Array.isArray(plans) ? plans : [])) {
+  for (const p of planRows) {
     facts.push({ kind: 'plan', id: p.id ?? null, text: p.outcome || p.id || 'plan', status: p.status || 'unknown' });
   }
-  for (const t of pendingApprovals) facts.push({ kind: 'approval', id: t.id ?? null, text: t.goal || t.id || 'approval', status: 'pending' });
+  for (const task of pendingTaskApprovals) facts.push({ kind: 'task_approval', id: task.id ?? null, text: task.goal || task.id || 'task approval', status: 'pending' });
+  for (const plan of pendingPlanApprovals) facts.push({ kind: 'plan_approval', id: plan.id ?? null, text: plan.outcome || plan.id || 'plan approval', status: 'pending' });
   for (const t of blocked) facts.push({ kind: 'blocked_task', id: t.id ?? null, text: t.goal || t.id || 'task', status: t.status });
   for (const t of running) facts.push({ kind: 'running_task', id: t.id ?? null, text: t.goal || t.id || 'task', status: 'running' });
 
   if (situation && Array.isArray(situation.alerts)) {
-    for (const a of situation.alerts) facts.push({ kind: 'sentinel_alert', id: a.id ?? null, text: a.summary || a.id || 'alert', status: 'reported' });
+    for (const alert of situation.alerts) {
+      facts.push({ kind: 'sentinel_alert', id: alert.eventId ?? alert.id ?? null, text: alert.summary || alert.eventId || alert.id || 'alert', status: 'recorded_alert' });
+    }
   }
   if (situation && Array.isArray(situation.observations)) {
     for (const o of situation.observations) facts.push({ kind: 'sentinel_observation', id: o.id ?? null, text: o.summary || o.id || 'observation', status: 'reported' });

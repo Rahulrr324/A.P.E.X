@@ -228,9 +228,15 @@ describe('controller: user requests', () => {
     await fs.writeFile(blocker, 'x');
     const broken = appWith({ dataDir: blocker });
     const res = await broken.controller.handle('remember that this cannot be stored');
-    assert.equal(res.status, Outcome.EXECUTION_FAILED);
+    // [T-30, 2026-11-19] The earlier execution_failed expectation is superseded: the ECP's
+    // durable kill-switch latch is under dataDir too, so an unreadable latch denies before execution.
+    assert.equal(res.status, Outcome.ACTION_DENIED);
+    assert.equal(res.operation.steps[0].authorization.decision, 'deny');
+    assert.equal(res.operation.steps[0].authorization.reason, 'POLICY_UNAVAILABLE');
+    assert.equal(res.operation.steps[0].execution.status, 'not_run');
     assert.equal(res.recorded, false, 'audit cannot be written either, and this must be reported');
     assert.match(res.recordError, /cannot write/);
+    await assert.rejects(() => fs.stat(path.join(blocker, 'memory.jsonl')), { code: 'ENOTDIR' }, 'no memory store was created');
     assert.equal((await app.memory.status()).records, 0);
   });
 

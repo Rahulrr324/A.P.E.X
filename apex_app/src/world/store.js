@@ -636,6 +636,59 @@ export class WorldModelStore {
     return changesBetween(records, from, to);
   }
 
+  // A bounded projection of the append-only world log for the executive timeline. Each row is a
+  // recorded change with its user origin and cited evidence references; this view does not infer
+  // whether the assertion is true or whether it remains current.
+  async timeline({ limit = 20 } = {}) {
+    const size = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 20;
+    const { records } = await this.#readComplete();
+    const objectText = (object) => {
+      if (!object || typeof object !== 'object') return 'an untyped value';
+      if (object.kind === 'entity') return `entity ${object.entityId}`;
+      const value = object.valueType === 'datetime' ? object.value : String(object.value ?? '');
+      return `${value}${object.unit ? ` ${object.unit}` : ''}`;
+    };
+    const describe = (record) => {
+      switch (record.type) {
+        case 'entity_created': return `Created ${record.category} "${record.name}"`;
+        case 'entity_alias_added': return `Added alias "${record.alias}" to entity ${record.entityId}`;
+        case 'entity_retired': return `Retired entity ${record.entityId}: ${record.reason}`;
+        case 'entity_merged': return `Merged entity ${record.fromId} into ${record.toId}: ${record.reason}`;
+        case 'entity_merge_undone': return `Undid entity merge ${record.mergeId}: ${record.reason}`;
+        case 'identity_decision': return `Recorded identity decision ${record.decision} for ${record.leftId} and ${record.rightId}`;
+        case 'fact_asserted': return `Recorded fact ${record.subjectId} ${record.predicate} ${objectText(record.object)}`;
+        case 'relationship_asserted': return `Recorded relationship ${record.subjectId} ${record.predicate} ${record.objectId}`;
+        case 'event_recorded': return `Recorded world event ${record.eventType}`;
+        case 'statement_retracted': return `Retracted ${record.targetType} ${record.targetId}${record.reason ? `: ${record.reason}` : ''}`;
+        case 'statement_superseded': return `Superseded ${record.targetType} ${record.targetId} with ${record.byId}${record.reason ? `: ${record.reason}` : ''}`;
+        default: return `Recorded world-model change ${record.type}`;
+      }
+    };
+    const items = records.map((record, index) => ({
+      id: record.eventId,
+      kind: 'world_change',
+      at: record.at,
+      type: record.type,
+      summary: singleLine(describe(record), 360),
+      provenance: {
+        origin: record.origin ?? null,
+        evidence: (Array.isArray(record.evidence) ? record.evidence : []).slice(0, 8).map((entry) => ({
+          relation: entry.relation ?? null,
+          sourceType: entry.sourceType ?? null,
+          sourceId: entry.sourceId ?? null,
+          classification: entry.classification ?? null,
+        })),
+      },
+      _index: index,
+    })).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b._index - a._index);
+    return {
+      items: items.slice(0, size).map(({ _index, ...item }) => item),
+      total: items.length,
+      truncated: items.length > size,
+      limit: size,
+    };
+  }
+
   // One file read yields the replayed state, its belief reconstruction, the current state, and the
   // changes recorded since the cutoff. A historical trace needs both views, and reading the log
   // twice would let an append between the reads split the answer across two states. A caller that

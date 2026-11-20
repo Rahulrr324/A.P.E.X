@@ -206,6 +206,7 @@ export async function collectDiagnostics(app, { checkModel = false, modelTimeout
       summary: corrupt
         ? `Session: corrupt (${safeText(session.detail)}; the current session cannot be loaded)`
         : `Session: unavailable (${safeText(session.detail)})`,
+      detail: session.detail,
       sessionId: null,
       count: null,
       corruptLines: 0,

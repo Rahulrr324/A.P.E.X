@@ -74,3 +74,13 @@ Not started. Existing subsystems remain separately implemented; a complete unifi
 - ECP remains the sole authorization authority; the kill switch remains outside the model path.
 - Deterministic code and synthetic fixtures only. No inference, voice or fake AI capabilities.
 - Distinguish code review from executed tests and browser verification.
+
+## T-30 dated checkout and evidence annotation (2026-11-19)
+
+The repository-state block above is a historical report for its earlier checkout. In this Arena session the starting commit and fetched `origin/main` were both `fb09e73f2d875fe8697d731c9b9845dd054a0465`, on active branch `arena/c4691a2f-a-p-e-x`; this environment successfully fetched `origin`. The T-19/T-24 commit references are not available as Git objects in this shallow clone and are not independently re-certified here. See `apex_app/docs/APEX_V2_REQUIREMENTS.md` and `apex_app/reports/T30_PROGRESS.md` for the dated T-19–T-29 crosswalk and Package 0 evidence.
+
+Package 0 is verified on the committed T-30 code checkpoint `45ae99a87645be444070741d6cdea1e31c45f352`: `npm test` reported 3,729 tests, 3,727 passed, 0 failed, 0 cancelled and 2 skipped; the source/UI syntax guard checked every source file; targeted concurrent-storage/cross-process/pilot tests passed 21/21. This supersedes the earlier “not executed here” statements for the tests included in that run, without changing the historical claim that they had not been executed when the earlier report was written. The current Package 0 test details, Playwright browser-availability blocker and changed-file list are in the T-30 progress report.
+
+T-29 remains **not accepted as a unified integration milestone**. Cognitive, executive and evidence modules exist in the current code, but the mission-level integrated pipeline and its own acceptance evidence are not established by their existence or by the full test suite. T-28 device-trust code is present and its tests were included in the full suite; transport, Presence Mesh, owner MFA and ECP-authorized device operations remain absent or unverified.
+
+Package 1 is complete on the current T-30 working tree: dated annotations reconcile the requirements/architecture with the local code; the ten-state source/owner/precedence contract, reserved-state guard and precedence tests pass. `node --test tests/core-state-contract.test.js tests/ui-server.test.js` passed 26/26; the full suite reported 3,733 tests: 3,731 passed, 0 failed, 0 cancelled and 2 skipped. See `apex_app/reports/T30_PROGRESS.md` for exact commands, counts, crosswalk and browser limitations. Packages 2–3 and 4–6 are not yet complete; do not infer their completion from this annotation.

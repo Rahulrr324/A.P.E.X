@@ -369,9 +369,16 @@ describe('074: Batch F integrated acceptance', () => {
 
     const appSources = [...walkFiles(path.join(APP_ROOT, 'src'), ['.js']), ...walkFiles(path.join(APP_ROOT, 'bin'), ['.js'])];
     assert.ok(appSources.length > 0);
+    // [T-30 Package 5, 2026-11-19] One reviewed exception, and only one: the thin desktop shell
+    // starts the owner's browser. That is a launcher, not a capability - it cannot run the research
+    // tree, load a native addon, or reach the ECP - and the exception is scoped to this file for
+    // process spawning only. Its launch arguments are pinned in tests/desktop-shell.test.js.
+    const processSpawnAllowlist = new Set([path.join(APP_ROOT, 'src', 'ui', 'desktop-shell.js')]);
     for (const file of appSources) {
       const text = fs.readFileSync(file, 'utf8');
-      assert.doesNotMatch(text, /node:child_process|require\(['"]child_process|from ['"]child_process/, `process spawning is linked in ${file}`);
+      if (!processSpawnAllowlist.has(file)) {
+        assert.doesNotMatch(text, /node:child_process|require\(['"]child_process|from ['"]child_process/, `process spawning is linked in ${file}`);
+      }
       assert.doesNotMatch(text, /\.node['"]|process\.dlopen|node:ffi/, `a native addon is loaded in ${file}`);
       assert.doesNotMatch(text, /from ['"][^'"]*stark|require\(['"][^'"]*stark/, `the application imports the research tree in ${file}`);
     }

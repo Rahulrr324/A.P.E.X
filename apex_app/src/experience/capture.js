@@ -83,6 +83,11 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // to itself.
   situation: 'it records or reads the situational event log, its assessments, decisions, and responses; an experience of one would put the awareness bookkeeping into the log the pattern and adaptation reads draw from',
   learning: 'it records or reads APEX\'s own outcome evaluations, adaptation measurements, and rollbacks; an experience of one would put APEX\'s judgement about its own behaviour into the log the pattern and adaptation reads draw from',
+  // T-31 Step 2: a lab proposal, its measured sandbox result, and the owner's promotion decision
+  // describe what APEX might become rather than what happened. Capturing one would put a candidate
+  // self-change into the log the pattern and adaptation reads draw from, so a proposal would start
+  // to count as an event and an idea would feed the loop that shapes behaviour.
+  evolution: 'it records a proposed change to APEX\'s own behaviour, the measured sandbox result for it, or the owner\'s promotion decision; a candidate self-change is not an event that happened, and it must not enter the experience log the pattern and adaptation reads draw from',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
@@ -224,6 +229,9 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'plan.resume': 'executive',
   'safety.lockdown': 'executive',
   'safety.release': 'executive',
+  // T-29 (2026-11-19): one cognitive run ends one operation whose real outcomes are the task
+  // records it created and ran, so it is classified with the executive commands that write those.
+  'cognition.run': 'executive',
   'recover': 'read',
   'task.plan': 'task',
   'task.run': 'task',
@@ -282,6 +290,10 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // draw from, turning a design into behavioural evidence; a simulation is re-derivable from the
   // stored sheet and says nothing about what happened.
   'workshop.compose': 'workshop',
+  'evolution.propose': 'evolution',
+  'evolution.verify': 'evolution',
+  'evolution.promote': 'evolution',
+  'evolution.decide': 'evolution',
   'workshop.list': 'read',
   'workshop.get': 'read',
   'workshop.inspect': 'read',

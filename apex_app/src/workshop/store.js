@@ -39,6 +39,8 @@ export class WorkshopStore {
       throw new StoreError('a workshop artifact may never authorize execution or claim code ran');
     }
     const candidate = boundRecord(artifact);
+    const candidateProblem = validateRecord(candidate);
+    if (candidateProblem) throw new StoreError(candidateProblem);
     return this.#lock.run(async () => {
       const { records, corrupt } = await this.#log.loadForAppend();
       if (corrupt.length > 0) {
@@ -180,6 +182,7 @@ function boundRecord(artifact) {
     budget: artifact.budget ?? null,
     note: String(artifact.note ?? '').slice(0, 2000),
     createdAt: artifact.createdAt ?? null,
+    contentDigest: null,
     authorizesExecution: false,
     executedCode: false,
   };

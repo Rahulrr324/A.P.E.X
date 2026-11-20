@@ -215,13 +215,25 @@ export function processMemoryBytes(pid) {
       const value = raw === '' ? NaN : Number(raw);
       return Number.isFinite(value) && value > 0 ? value * scale : null;
     };
+    const target = Number(pid);
+    if (!Number.isSafeInteger(target) || target <= 0) return resolve(null);
+    if (process.platform === 'linux') {
+      // Read the kernel's resident-set field directly. Spawning `ps` for each sample can
+      // time out under the same process contention the pilot is measuring, which would turn
+      // a real OS measurement into an environment-dependent false failure.
+      fs.promises.readFile(`/proc/${target}/status`, 'utf8').then((text) => {
+        const match = text.match(/^VmRSS:\s+(\d+)\s+kB$/m);
+        resolve(match ? parse(match[1], 1024) : null);
+      }).catch(() => resolve(null));
+      return;
+    }
     if (process.platform !== 'win32') {
-      execFile('ps', ['-o', 'rss=', '-p', String(pid)], { timeout: 10000, windowsHide: true }, (error, stdout) => {
+      execFile('ps', ['-o', 'rss=', '-p', String(target)], { timeout: 10000, windowsHide: true }, (error, stdout) => {
         resolve(error ? null : parse(stdout, 1024));
       });
       return;
     }
-    execFile('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${Number(pid)}).WorkingSet64`], { timeout: 15000, windowsHide: true }, (error, stdout) => {
+    execFile('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${target}).WorkingSet64`], { timeout: 15000, windowsHide: true }, (error, stdout) => {
       resolve(error ? null : parse(stdout));
     });
   });

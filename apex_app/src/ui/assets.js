@@ -1,6 +1,11 @@
 // Static browser assets for the local APEX UI. They are served from this module so the
 // server needs no filesystem reads and no build step. The client renders every piece of
 // text with textContent: model output and stored records are untrusted strings.
+// T-30 P0 (2026-11-19): the client is no longer assembled from Node function source.
+// One self-contained contract program (client-contract.js) is rendered verbatim below,
+// so nothing serialized into the browser can depend on Node module scope.
+import { CLIENT_CONTRACT_SOURCE } from './client-contract.js';
+
 export const UI_PAGE = `<!doctype html>
 <html lang="en">
 <head>
@@ -9,7 +14,7 @@ export const UI_PAGE = `<!doctype html>
 <title>APEX</title>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body data-core-state="idle" data-view="deck" data-motion="full">
+<body data-core-state="degraded" data-view="deck" data-motion="full" data-mode="classic" data-contrast="standard">
 <a class="skip-link" href="#main-content">Skip to main content</a>
 <div id="boot" class="boot" role="status" aria-live="polite">
   <div class="boot-core" aria-hidden="true"></div>
@@ -35,23 +40,36 @@ export const UI_PAGE = `<!doctype html>
     <span id="gauge-storage" class="badge" aria-label="Storage">Storage: —</span>
   </div>
   <div class="topbar-actions">
+    <label class="visually-hidden" for="mode-select">Presentation mode</label>
+    <select id="mode-select" class="small" aria-label="Presentation mode">
+      <option value="classic">Classic</option>
+      <option value="tactical">Tactical</option>
+      <option value="overwatch">Overwatch</option>
+      <option value="synthesis">Synthesis</option>
+      <option value="quiet">Quiet</option>
+    </select>
+    <button id="motion-toggle" type="button" class="quiet small" aria-pressed="false">Motion: full</button>
+    <button id="contrast-toggle" type="button" class="quiet small" aria-pressed="false">Contrast: standard</button>
     <button id="new-session" type="button" class="quiet small">New session</button>
     <button id="quick-boot" type="button" class="quiet small">Quick boot</button>
   </div>
 </header>
 <nav class="nav" aria-label="Primary">
-  <button data-view="deck" class="nav-item active">Deck</button>
-  <button data-view="conversations" class="nav-item">Conversations</button>
-  <button data-view="missions" class="nav-item">Missions</button>
-  <button data-view="tasks" class="nav-item">Tasks</button>
-  <button data-view="sentinel" class="nav-item">Sentinel</button>
-  <button data-view="memory" class="nav-item">Memory</button>
-  <button data-view="documents" class="nav-item">Documents</button>
-  <button data-view="reasoning" class="nav-item">Reasoning</button>
-  <button data-view="council" class="nav-item">Council</button>
-  <button data-view="system" class="nav-item">System</button>
-  <button data-view="integrations" class="nav-item">Integrations</button>
-  <button data-view="workshop" class="nav-item">Workshop</button>
+  <button type="button" data-view="deck" class="nav-item active" aria-current="page">Deck</button>
+  <button type="button" data-view="conversations" class="nav-item">Conversations</button>
+  <button type="button" data-view="missions" class="nav-item">Missions</button>
+  <button type="button" data-view="tasks" class="nav-item">Tasks</button>
+  <button type="button" data-view="approvals" class="nav-item">Approvals</button>
+  <button type="button" data-view="sentinel" class="nav-item">Sentinel</button>
+  <button type="button" data-view="memory" class="nav-item">Memory</button>
+  <button type="button" data-view="documents" class="nav-item">Documents</button>
+  <button type="button" data-view="reasoning" class="nav-item">Reasoning</button>
+  <button type="button" data-view="council" class="nav-item">Council</button>
+  <button type="button" data-view="cognition" class="nav-item">Cognition</button>
+  <button type="button" data-view="presence" class="nav-item">Presence</button>
+  <button type="button" data-view="system" class="nav-item">System</button>
+  <button type="button" data-view="integrations" class="nav-item">Integrations</button>
+  <button type="button" data-view="workshop" class="nav-item">Workshop</button>
 </nav>
 <main id="main-content" class="deck">
   <aside class="rail left" aria-label="Missions">
@@ -86,8 +104,8 @@ export const UI_PAGE = `<!doctype html>
           <path d="M32 120 A88 88 0 0 1 120 32" />
         </g>
       </svg>
-      <div class="core-state" id="core-state">Idle</div>
-      <p class="core-caption" id="core-caption">No operation in progress.</p>
+      <div class="core-state" id="core-state" role="status" aria-live="polite">Degraded</div>
+      <p class="core-caption" id="core-caption">Waiting for an authoritative owner snapshot.</p>
     </div>
     <section class="panel conversation" id="conversation-panel">
       <h2>Conversation</h2>
@@ -114,6 +132,7 @@ export const UI_PAGE = `<!doctype html>
     </section>
     <section class="panel">
       <h2>Briefings</h2>
+      <p id="briefing-status" class="workspace-status" role="status" aria-live="polite">Loading recorded briefing…</p>
       <ul id="briefings" class="work"></ul>
     </section>
   </aside>
@@ -122,16 +141,32 @@ export const UI_PAGE = `<!doctype html>
   <section class="view" data-view="conversations">
     <h2>Conversations</h2>
     <p class="meta">Session persistence and history. The current session is shown on the deck; older turns remain in the conversation log.</p>
+    <p id="conversation-status" class="workspace-status" role="status" aria-live="polite">Loading conversation records…</p>
     <ul id="conversation-history" class="work"></ul>
   </section>
   <section class="view" data-view="missions">
-    <h2>Missions and objectives</h2>
-    <p class="meta">Goals, plans and tasks from the real stores. Planning reads are proposals until recorded and approved.</p>
-    <ul id="goals" class="work"></ul>
-    <ul id="plans" class="work"></ul>
+    <h2>Mission Control</h2>
+    <p class="meta">Goals, plans and tasks projected from their owning stores. Dependencies, blockers, checkpoints and verification are shown only when recorded; a plan or approval does not start work.</p>
+    <p id="mission-status" class="workspace-status" role="status" aria-live="polite">Loading owner records…</p>
+    <section class="panel">
+      <h3>Goals and criteria</h3>
+      <p id="mission-goals-status" class="workspace-status" role="status" aria-live="polite">Loading goals…</p>
+      <ul id="goals" class="work"></ul>
+    </section>
+    <section class="panel">
+      <h3>Plans and checkpoints</h3>
+      <p id="mission-plans-status" class="workspace-status" role="status" aria-live="polite">Loading plans…</p>
+      <ul id="plans" class="work"></ul>
+    </section>
+    <section class="panel">
+      <h3>TaskGraph and blocked work</h3>
+      <p id="mission-tasks-status" class="workspace-status" role="status" aria-live="polite">Loading tasks…</p>
+      <ul id="mission-tasks" class="work"></ul>
+    </section>
   </section>
   <section class="view" data-view="tasks">
     <h2>Tasks and execution</h2>
+    <p id="task-status" class="workspace-status" role="status" aria-live="polite">Loading tasks…</p>
     <ul id="tasks" class="work"></ul>
     <form id="planning-form" class="row">
       <label for="planning-objective" class="visually-hidden">Objective</label>
@@ -142,20 +177,38 @@ export const UI_PAGE = `<!doctype html>
     </form>
     <ul id="planning" class="work"></ul>
   </section>
+  <section class="view" data-view="approvals">
+    <h2>Approval Centre</h2>
+    <p class="meta">Pending requests come from TaskStore, PlanStore and Sentinel records. Approving records intent only; it does not start a task or run a response. Risk, scope, reversibility and expiry are not inferred when an owner did not record them.</p>
+    <p id="approval-state" class="workspace-status" role="status" aria-live="polite">Loading pending owner requests…</p>
+    <p id="approval-action-status" class="workspace-status" role="status" aria-live="polite"></p>
+    <ul id="approval-items" class="work"></ul>
+  </section>
   <section class="view" data-view="sentinel">
-    <h2>Sentinel events</h2>
+    <h2>Sentinel — recorded situational events</h2>
+    <p class="meta">A bounded view of recorded observations, assessments, decisions and provenance. It does not imply that an external source is currently being watched.</p>
+    <p id="sentinel-status" class="workspace-status" role="status" aria-live="polite">Loading situational records…</p>
     <ul id="sentinel-full" class="work"></ul>
   </section>
   <section class="view" data-view="memory">
-    <h2>Memory timeline</h2>
+    <h2>Memory Timeline</h2>
+    <p class="meta">Chronological records from MemoryStore, KnowledgeStore and WorldModelStore. Corrections and lifecycle events are kept as provenance-linked history; the timeline does not make claims true.</p>
+    <p id="timeline-status" class="workspace-status" role="status" aria-live="polite">Loading memory and world-model records…</p>
+    <h3>Combined timeline</h3>
+    <ul id="memory-timeline" class="work"></ul>
+    <h3>Memory and corrections</h3>
+    <p id="memory-records-status" class="workspace-status" role="status" aria-live="polite">Loading memory…</p>
     <ul id="memory" class="work"></ul>
-    <h3>Knowledge</h3>
+    <h3>Knowledge and lifecycle changes</h3>
+    <p id="knowledge-status" class="workspace-status" role="status" aria-live="polite">Loading knowledge…</p>
     <ul id="knowledge" class="work"></ul>
-    <h3>World model</h3>
+    <h3>World-model changes</h3>
+    <p id="world-status" class="workspace-status" role="status" aria-live="polite">Loading world-model history…</p>
     <ul id="world" class="work"></ul>
   </section>
   <section class="view" data-view="documents">
     <h2>Authorized documents</h2>
+    <p id="documents-status" class="workspace-status" role="status" aria-live="polite">Loading document index…</p>
     <form id="doc-search-form" class="row">
       <label for="doc-search" class="visually-hidden">Search documents</label>
       <input id="doc-search" type="search" maxlength="500" placeholder="Search exact terms">
@@ -165,11 +218,14 @@ export const UI_PAGE = `<!doctype html>
   </section>
   <section class="view" data-view="reasoning">
     <h2>Reasoning workspace</h2>
+    <p class="meta">Deterministic, evidence-linked reasoning records. This view reads stored sessions; it does not run inference or authorize actions.</p>
+    <p id="reasoning-status" class="workspace-status" role="status" aria-live="polite">Loading reasoning records…</p>
     <ul id="reasoning" class="work"></ul>
   </section>
   <section class="view" data-view="council">
     <h2>Council</h2>
-    <p class="meta">Seven deterministic perspectives over evidence owned by the existing stores. A synthesis explains disagreement and never authorizes execution. Evidence is gathered from the real stores when "gather" is on; no model is contacted.</p>
+    <p class="meta">Seven deterministic perspectives over evidence owned by the existing stores. This is not multi-model deliberation: no model is contacted. A synthesis explains disagreement and never authorizes execution.</p>
+    <p id="council-state" class="workspace-status" role="status" aria-live="polite">Loading recorded council sessions…</p>
     <form id="council-form" class="row">
       <label for="council-objective" class="visually-hidden">Objective</label>
       <textarea id="council-objective" rows="2" maxlength="2000" placeholder="Objective to deliberate"></textarea>
@@ -180,22 +236,95 @@ export const UI_PAGE = `<!doctype html>
     <div id="council-synthesis" class="panel"></div>
     <ul id="council" class="work"></ul>
   </section>
+  <section class="view" data-view="cognition">
+    <h2>Unified cognition — T-29 pipeline</h2>
+    <p class="meta">One owner intent through five recorded stages: context packet, salience and Sentinel advisories, Council synthesis, task graph, and governed execution. Every value below is read from the run record. A recommendation is deliberation data, never a permission; a gated step executes only after the ECP authorizes it and you approve it yourself.</p>
+    <p id="cognition-status" class="workspace-status" role="status" aria-live="polite">Loading recorded cognitive runs…</p>
+    <form id="cognition-form" class="row">
+      <label for="cognition-intent" class="visually-hidden">Intent</label>
+      <textarea id="cognition-intent" rows="2" maxlength="500" placeholder="What should APEX work through? e.g. what does memory hold about the launch checklist"></textarea>
+      <label for="cognition-action" class="visually-hidden">Capability</label>
+      <select id="cognition-action">
+        <option value="">classify from the intent</option>
+        <option value="memory.search">memory.search (read)</option>
+        <option value="memory.add">memory.add (write, gated)</option>
+      </select>
+      <button id="cognition-run" type="submit" class="small">Run pipeline</button>
+      <span id="cognition-run-status" class="meta" role="status" aria-live="polite"></span>
+    </form>
+    <div id="cognition-trace" class="panel" aria-live="polite"></div>
+    <h3>Epistemic world model</h3>
+    <p class="meta">Every stored belief is shown with the label its own record carries: <strong>observed</strong>, <strong>inferred</strong>, <strong>assumed</strong> or <strong>predicted</strong>. A label describes how the record came to exist. It is not a claim that the belief is true, and an assumption is never shown as an observation.</p>
+    <p id="world-labels" class="meta"></p>
+    <ul id="world-claims" class="work"></ul>
+    <h3>Recorded runs</h3>
+    <ul id="cognition-runs" class="work"></ul>
+  </section>
+  <section class="view" data-view="presence">
+    <h2>Presence, device trust and autonomy policy</h2>
+    <p class="meta">Device trust is an append-only enrollment log: a trusted device authenticates signed messages and grants no capability. Autonomy is read-only here. It is configured through the APEX_AUTONOMY_LEVELS environment at start-up, and the matrix below reports the level the ECP actually applies, not a value this page can change.</p>
+    <p id="presence-status" class="workspace-status" role="status" aria-live="polite">Loading device trust and presence…</p>
+    <h3>Devices</h3>
+    <ul id="presence-devices" class="work"></ul>
+    <h3>Mesh</h3>
+    <ul id="presence-mesh" class="work"></ul>
+    <h3>Autonomy policy</h3>
+    <p id="autonomy-status" class="workspace-status" role="status" aria-live="polite">Loading the autonomy matrix…</p>
+    <table class="matrix" aria-describedby="autonomy-note">
+      <caption id="autonomy-note" class="meta">L0 Observe · L1 Suggest · L2 Confirm · L3 Delegate (bounded) · L4 Mission · L5 Standing orders</caption>
+      <thead>
+        <tr><th scope="col">Domain</th><th scope="col">Level</th><th scope="col">Capabilities</th><th scope="col">Source</th></tr>
+      </thead>
+      <tbody id="autonomy-matrix"></tbody>
+    </table>
+    <h3>Capabilities in the matrix</h3>
+    <ul id="autonomy-capabilities" class="work"></ul>
+  </section>
   <section class="view" data-view="system">
-    <h2>System and Resource Fabric</h2>
+    <h2>System diagnostics and Resource Fabric</h2>
+    <p class="meta">Read-only diagnostics from the health, runtime, ECP and resource owners. Unknown or unavailable readings are not treated as healthy.</p>
+    <p id="system-status" class="workspace-status" role="status" aria-live="polite">Loading system diagnostics…</p>
+    <section class="panel safety" aria-labelledby="safety-heading">
+      <h3 id="safety-heading">Execution safety</h3>
+      <p id="safety-status" class="meta" role="status" aria-live="polite">Reading the ECP safety latch…</p>
+      <form id="safety-lock-form" class="safety-form">
+        <label for="safety-lock-reason">Lockdown reason</label>
+        <textarea id="safety-lock-reason" rows="2" maxlength="240" required></textarea>
+        <button id="safety-lock" type="submit" class="small">Activate lockdown</button>
+        <span id="safety-lock-result" class="meta" role="status" aria-live="polite"></span>
+      </form>
+      <form id="safety-release-form" class="safety-form">
+        <label for="safety-release-reason">Release reason</label>
+        <textarea id="safety-release-reason" rows="2" maxlength="240" required></textarea>
+        <label class="safety-confirm"><input id="safety-release-confirm" type="checkbox" required> I have reviewed the latch and explicitly confirm release</label>
+        <div id="safety-step-up-wrap" hidden>
+          <label for="safety-step-up">Step-up proof</label>
+          <input id="safety-step-up" type="password" autocomplete="off" maxlength="200" placeholder="the configured step-up secret">
+          <p id="safety-step-up-note" class="meta">A step-up secret is configured, so the release is refused without it.</p>
+        </div>
+        <button id="safety-release" type="submit" class="small" disabled>Release lockdown</button>
+        <span id="safety-release-result" class="meta" role="status" aria-live="polite"></span>
+      </form>
+    </section>
     <div id="health-overall" class="row"></div>
     <ul id="health" class="work"></ul>
     <h3>Runtime</h3>
     <ul id="runtime" class="work"></ul>
     <h3>External sources</h3>
     <ul id="sources" class="work"></ul>
+    <h3>Resource Fabric</h3>
+    <p id="resources-status" class="workspace-status" role="status" aria-live="polite">Loading resource telemetry…</p>
+    <ul id="resources" class="work"></ul>
   </section>
   <section class="view" data-view="integrations">
     <h2>Integrations</h2>
+    <p id="integrations-status" class="workspace-status" role="status" aria-live="polite">Loading integration state…</p>
     <ul id="integrations" class="work"></ul>
   </section>
   <section class="view" data-view="workshop">
-    <h2>Workshop</h2>
-    <p class="meta">A deterministic design sheet: components with declared supply, demand and cost, connections between them, and an optional budget. A simulation is arithmetic over the declared numbers. Nothing here is executed, and a simulation never authorizes an action.</p>
+    <h2>Workshop — deterministic design sheets</h2>
+    <p class="meta">This is not a 3D or interactive holographic workspace. It stores design sheets and performs arithmetic over declared values. Nothing here is executed, and a simulation never authorizes an action.</p>
+    <p id="workshop-state" class="workspace-status" role="status" aria-live="polite">Loading stored designs…</p>
     <form id="workshop-form" class="row">
       <label for="workshop-title" class="visually-hidden">Title</label>
       <input id="workshop-title" maxlength="160" placeholder="Design title">
@@ -217,6 +346,22 @@ export const UI_PAGE = `<!doctype html>
     </form>
     <div id="workshop-report" class="panel"></div>
     <ul id="workshop" class="work"></ul>
+    <h3>Evolution Lab — controlled self-change</h3>
+    <p class="meta">A proposal is a recorded idea about APEX's own behaviour. It authorizes nothing and changes nothing. Promotion is refused unless a sandbox run recorded a passing result, and only you can decide a promotion; the lab applies no change by itself.</p>
+    <p id="evolution-status" class="workspace-status" role="status" aria-live="polite">Loading the evolution ledger…</p>
+    <form id="evolution-form" class="row">
+      <label for="evolution-title" class="visually-hidden">Proposal title</label>
+      <input id="evolution-title" maxlength="160" placeholder="Proposal title">
+      <label for="evolution-hypothesis" class="visually-hidden">Hypothesis</label>
+      <input id="evolution-hypothesis" maxlength="2000" placeholder="Hypothesis (optional)">
+      <button id="evolution-propose" type="submit" class="small">Record proposal</button>
+      <span id="evolution-form-status" class="meta" role="status" aria-live="polite"></span>
+    </form>
+    <ul id="evolution-proposals" class="work"></ul>
+    <h3>Immutable safety boundaries</h3>
+    <p id="evolution-boundaries-status" class="meta" role="status" aria-live="polite"></p>
+    <ul id="evolution-boundaries" class="work"></ul>
+    <p id="evolution-policy" class="meta"></p>
   </section>
 </section>
 <script src="/app.js"></script>
@@ -224,20 +369,33 @@ export const UI_PAGE = `<!doctype html>
 </html>
 `;
 
-export const UI_CSS = `:root {
-  --bg0: #05080f;
-  --bg1: #0a1220;
-  --panel: rgba(12, 22, 38, 0.72);
-  --panel-strong: rgba(16, 28, 48, 0.9);
+export const UI_CSS = `/* T-30 Package 5 (2026-11-19): design tokens from the master document Part 4.
+   The legacy aliases below keep every pre-existing rule meaningful, so the tokens changed
+   the vocabulary without silently restyling rules that were never reviewed. */
+:root {
+  --bg-void: #05080f;
+  --bg-deep: #0a1220;
+  --glass: rgba(12, 28, 48, 0.55);
+  --glass-strong: rgba(16, 34, 58, 0.82);
+  --arc-cyan: #00e5ff;
+  --armor-gold: #ffb000;
+  --armor-red: #e10600;
+  --armor-red-text: #ff6b5a;
+  --ok-green: #2bff88;
+  --text: #dcebff;
+  --text-dim: #7fa3c7;
   --line: rgba(84, 132, 176, 0.28);
   --line-strong: rgba(0, 229, 255, 0.42);
-  --text: #dcebff;
-  --muted: #7fa3c7;
-  --cyan: #00e5ff;
-  --gold: #ffb000;
-  --red: #e10600;
-  --green: #2bff88;
-  --radius: 12px;
+  --radius: 2px;
+  --bg0: var(--bg-void);
+  --bg1: var(--bg-deep);
+  --panel: var(--glass);
+  --panel-strong: var(--glass-strong);
+  --cyan: var(--arc-cyan);
+  --gold: var(--armor-gold);
+  --red: var(--armor-red);
+  --green: var(--ok-green);
+  --muted: var(--text-dim);
   --font-display: "Orbitron", "Rajdhani", "Segoe UI", sans-serif;
   --font-body: "Exo 2", "Inter", "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "Share Tech Mono", "Consolas", monospace;
@@ -246,6 +404,7 @@ export const UI_CSS = `:root {
 html, body { margin: 0; min-height: 100%; }
 body {
   font: 15px/1.5 var(--font-body);
+  font-variant-numeric: tabular-nums;
   color: var(--text);
   background:
     radial-gradient(circle at 50% 42%, rgba(0, 229, 255, 0.12), transparent 34%),
@@ -335,14 +494,27 @@ h3 { margin: .8rem 0 .4rem; font-size: .85rem; color: var(--gold); }
 .core-segments path { fill: none; stroke: var(--cyan); stroke-width: 2; opacity: 0.55; stroke-linecap: round; }
 .core-state { font-family: var(--font-display); letter-spacing: .18em; color: var(--cyan); }
 .core-caption { color: var(--muted); font-size: .82rem; text-align: center; max-width: 24rem; }
+body[data-core-state="idle"] .core-halo { animation: breathe 3.2s ease-in-out infinite; }
 body[data-core-state="thinking"] .core-ring.outer { animation-duration: 4s; stroke: var(--gold); }
-body[data-core-state="awaiting"] .core-ring.outer { stroke: var(--gold); stroke-dasharray: 2 8; }
+body[data-core-state="awaiting_approval"] .core-ring.outer { stroke: var(--gold); stroke-dasharray: 2 8; }
+body[data-core-state="uncertain"] .core-ring, body[data-core-state="uncertain"] .core-center { stroke: var(--gold); }
+body[data-core-state="uncertain"] .core-center { fill: rgba(255,176,0,0.16); }
 body[data-core-state="executing"] .core-center { fill: rgba(43,255,136,0.22); stroke: var(--green); }
 body[data-core-state="degraded"] .core { filter: drop-shadow(0 0 12px rgba(255,176,0,0.35)); opacity: 0.82; }
-body[data-core-state="lockdown"] .core { filter: drop-shadow(0 0 18px rgba(225,6,0,0.5)); }
+body[data-core-state="degraded"] .core-ring.outer { animation: none; stroke: var(--gold); }
+body[data-core-state="lockdown"] .core { filter: drop-shadow(0 0 18px rgba(225,6,0,0.5)); transform: scale(.88); }
 body[data-core-state="lockdown"] .core-ring, body[data-core-state="lockdown"] .core-center { stroke: var(--red); }
-body[data-motion="reduced"] .core-ring, body[data-motion="reduced"] .core-segments path { animation: none !important; }
+body[data-motion="reduced"] .core-ring, body[data-motion="reduced"] .core-segments path, body[data-motion="reduced"] .core-halo { animation: none !important; }
+.safety { margin: .75rem 0 1rem; }
+.safety-form { display: grid; gap: .45rem; margin-top: .75rem; max-width: 40rem; }
+.safety-form label { color: var(--text); font-size: .84rem; }
+.safety-form button { justify-self: start; }
+.safety-confirm { display: flex; gap: .45rem; align-items: center; }
+#safety-status[data-safety="active"] { color: var(--armor-red-text); }
+#safety-status[data-safety="clear"] { color: var(--green); }
+#safety-status[data-safety="unavailable"] { color: var(--gold); }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes breathe { 50% { opacity: .55; transform: scale(.96); } }
 .core, .core-ring, .core-segments, .core-segments path { transform-origin: 120px 120px; transform-box: view-box; }
 .core-segments { transform-origin: 120px 120px; }
 button { background: var(--cyan); color: #04131a; border: 0; border-radius: 8px; padding: .45rem .8rem; font: inherit; font-weight: 600; cursor: pointer; }
@@ -358,9 +530,58 @@ textarea { width: 100%; resize: vertical; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .mono { font-family: var(--font-mono); }
 .workspace { padding: 0 1.25rem 2rem; }
+.workspace-status { margin: .25rem 0 .65rem; padding: .3rem 0; color: var(--muted); font-size: .82rem; }
+.workspace-status[data-state="error"], .workspace-status[data-state="unavailable"] { color: var(--gold); }
+.workspace-status[data-state="partial"] { color: var(--gold); }
+.item form.row { margin-top: .5rem; flex-wrap: wrap; align-items: flex-start; }
+.item .plan-cancel { margin-top: .5rem; }
+.item .plan-cancel textarea, .item .approval-decision textarea { min-height: 2.4rem; }
+.view > .panel { margin: .75rem 0; }
 .view { display: none; }
 .view.active { display: block; }
 .view h2 { margin-bottom: .8rem; }
+/* T-30 Package 5: focus, motion, modes, contrast and responsive layout. */
+:focus-visible { outline: 2px solid var(--arc-cyan); outline-offset: 2px; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--arc-cyan); outline-offset: 2px; }
+.badge, .meta.mono, #clock, #gauge-cpu, #gauge-mem, #gauge-storage { font-variant-numeric: tabular-nums; }
+.item, .banner, .badge, input, textarea, select, button { border-radius: var(--radius); }
+.badge { border-radius: 999px; }
+.panel, .rail, .stage, .view { min-width: 0; overflow-wrap: anywhere; }
+.panel pre, .item pre { max-width: 100%; overflow-x: auto; }
+/* Presentation modes: palette emphasis only. They never change authorization or state. */
+body[data-mode="tactical"] { --cyan: #2fd0ff; --gold: #ff7a00; --line-strong: rgba(47, 208, 255, 0.5); }
+body[data-mode="tactical"] .core-ring.mid { animation-duration: 7s; }
+body[data-mode="overwatch"] { --cyan: #ff4d3d; --gold: #ffb000; --line-strong: rgba(255, 77, 61, 0.55); }
+body[data-mode="overwatch"]::before { opacity: 0.24; }
+body[data-mode="overwatch"] .core-ring.outer { stroke-dasharray: 2 4; }
+body[data-mode="synthesis"] { --cyan: #ffd166; --gold: #fff3d6; --line-strong: rgba(255, 209, 102, 0.5); }
+body[data-mode="synthesis"] .core-ring.mid { animation-duration: 26s; }
+body[data-mode="quiet"] { --cyan: #c9d6e4; --gold: #9aafc4; --muted: #8a9bae; --line: rgba(150, 168, 190, 0.22); }
+body[data-mode="quiet"]::before { opacity: 0.05; }
+body[data-mode="quiet"] .core-ring, body[data-mode="quiet"] .core-halo { animation: none !important; }
+body[data-mode="lockdown"] { --cyan: var(--armor-red); --gold: var(--armor-red-text); --line: rgba(225, 6, 0, 0.45); }
+body[data-mode="lockdown"] .core-ring, body[data-mode="lockdown"] .core-halo, body[data-mode="lockdown"]::before { animation: none !important; }
+body[data-motion="reduced"] *, body[data-motion="reduced"] *::before { animation: none !important; transition: none !important; }
+/* Contrast: a real high-contrast palette, not a filter. */
+@media (prefers-contrast: more) {
+  :root { --line: rgba(190, 215, 240, 0.5); --muted: #b9cde3; --glass: rgba(8, 18, 30, 0.9); }
+}
+body[data-contrast="high"] { --line: rgba(205, 226, 246, 0.6); --line-strong: rgba(0, 229, 255, 0.9); --muted: #c3d6ea; --glass: rgba(6, 14, 24, 0.94); }
+body[data-contrast="high"] .panel, body[data-contrast="high"] .rail, body[data-contrast="high"] .stage { border-width: 2px; }
+body[data-contrast="high"]::before { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  body { animation: none; }
+  .core-ring { animation: none !important; }
+  .core-halo { animation: none !important; }
+}
+/* Responsive: 1600x900 and 1280x720 tighten the three-column deck; 390x844 is one column. */
+@media (max-width: 1600px) {
+  .deck { grid-template-columns: minmax(16rem, 1fr) minmax(20rem, 1.3fr) minmax(16rem, 1fr); }
+}
+@media (max-width: 1280px) {
+  .deck { grid-template-columns: minmax(15rem, 1fr) minmax(18rem, 1.2fr) minmax(15rem, 1fr); gap: .75rem; padding: .85rem 1rem 6rem; }
+  .topbar-meta { row-gap: .25rem; }
+}
 @media (max-width: 1100px) {
   .deck { grid-template-columns: 1fr; }
   .core-wrap { order: -1; }
@@ -368,10 +589,13 @@ textarea { width: 100%; resize: vertical; }
 @media (max-width: 720px) {
   .topbar { grid-template-columns: 1fr; }
   .nav { flex-wrap: wrap; }
+  .workspace { padding: 0 .75rem 2rem; }
 }
-@media (prefers-reduced-motion: reduce) {
-  body { animation: none; }
-  .core-ring { animation: none !important; }
+@media (max-width: 480px) {
+  .deck { padding: .75rem .6rem 4rem; }
+  .topbar { padding: .6rem .75rem; }
+  h1 { font-size: 1.1rem; }
+  .topbar-meta { width: 100%; }
 }
 .boot {
   position: fixed; inset: 0; z-index: 50; background: rgba(5,8,15,0.96);
@@ -384,7 +608,7 @@ textarea { width: 100%; resize: vertical; }
 `;
 
 export const UI_CLIENT = `'use strict';
-const els = {
+${CLIENT_CONTRACT_SOURCE}\nconst els = {
   turns: document.getElementById('turns'),
   form: document.getElementById('chat-form'),
   text: document.getElementById('chat-text'),
@@ -399,8 +623,49 @@ const els = {
   gaugeStorage: document.getElementById('gauge-storage'),
   newSession: document.getElementById('new-session'),
   tasks: document.getElementById('tasks'),
+  taskStatus: document.getElementById('task-status'),
   plans: document.getElementById('plans'),
   planning: document.getElementById('planning'),
+  missionTasks: document.getElementById('mission-tasks'),
+  missionStatus: document.getElementById('mission-status'),
+  missionGoalsStatus: document.getElementById('mission-goals-status'),
+  missionPlansStatus: document.getElementById('mission-plans-status'),
+  missionTasksStatus: document.getElementById('mission-tasks-status'),
+  approvalItems: document.getElementById('approval-items'),
+  approvalState: document.getElementById('approval-state'),
+  approvalActionStatus: document.getElementById('approval-action-status'),
+  timeline: document.getElementById('memory-timeline'),
+  timelineStatus: document.getElementById('timeline-status'),
+  memoryRecordsStatus: document.getElementById('memory-records-status'),
+  knowledgeStatus: document.getElementById('knowledge-status'),
+  worldStatus: document.getElementById('world-status'),
+  conversationStatus: document.getElementById('conversation-status'),
+  sentinelStatus: document.getElementById('sentinel-status'),
+  documentsStatus: document.getElementById('documents-status'),
+  reasoningStatus: document.getElementById('reasoning-status'),
+  councilState: document.getElementById('council-state'),
+  workshopState: document.getElementById('workshop-state'),
+  // T-31 Step 2 surfaces.
+  presenceStatus: document.getElementById('presence-status'),
+  presenceDevices: document.getElementById('presence-devices'),
+  presenceMesh: document.getElementById('presence-mesh'),
+  autonomyStatus: document.getElementById('autonomy-status'),
+  autonomyMatrix: document.getElementById('autonomy-matrix'),
+  autonomyCapabilities: document.getElementById('autonomy-capabilities'),
+  worldClaims: document.getElementById('world-claims'),
+  worldLabels: document.getElementById('world-labels'),
+  evolutionStatus: document.getElementById('evolution-status'),
+  evolutionProposals: document.getElementById('evolution-proposals'),
+  evolutionBoundaries: document.getElementById('evolution-boundaries'),
+  evolutionBoundariesStatus: document.getElementById('evolution-boundaries-status'),
+  evolutionPolicy: document.getElementById('evolution-policy'),
+  evolutionForm: document.getElementById('evolution-form'),
+  evolutionTitle: document.getElementById('evolution-title'),
+  evolutionHypothesis: document.getElementById('evolution-hypothesis'),
+  evolutionProposeButton: document.getElementById('evolution-propose'),
+  evolutionFormStatus: document.getElementById('evolution-form-status'),
+  systemStatus: document.getElementById('system-status'),
+  integrationsStatus: document.getElementById('integrations-status'),
   planningForm: document.getElementById('planning-form'),
   planningObjective: document.getElementById('planning-objective'),
   planningGoal: document.getElementById('planning-goal'),
@@ -408,9 +673,23 @@ const els = {
   planningStatus: document.getElementById('planning-status'),
   healthOverall: document.getElementById('health-overall'),
   health: document.getElementById('health'),
-  situation: document.getElementById('situation'),
+  safetyStatus: document.getElementById('safety-status'),
+  safetyLockForm: document.getElementById('safety-lock-form'),
+  safetyLockReason: document.getElementById('safety-lock-reason'),
+  safetyLockButton: document.getElementById('safety-lock'),
+  safetyLockResult: document.getElementById('safety-lock-result'),
+  safetyReleaseForm: document.getElementById('safety-release-form'),
+  safetyReleaseReason: document.getElementById('safety-release-reason'),
+  safetyReleaseConfirm: document.getElementById('safety-release-confirm'),
+  safetyReleaseButton: document.getElementById('safety-release'),
+  safetyReleaseResult: document.getElementById('safety-release-result'),
+  safetyStepUpWrap: document.getElementById('safety-step-up-wrap'),
+  safetyStepUp: document.getElementById('safety-step-up'),
+  safetyStepUpNote: document.getElementById('safety-step-up-note'),
   runtime: document.getElementById('runtime'),
   sources: document.getElementById('sources'),
+  resources: document.getElementById('resources'),
+  resourcesStatus: document.getElementById('resources-status'),
   documents: document.getElementById('documents'),
   reasoning: document.getElementById('reasoning'),
   council: document.getElementById('council'),
@@ -420,6 +699,14 @@ const els = {
   councilRun: document.getElementById('council-run'),
   councilStatus: document.getElementById('council-status'),
   councilSynthesis: document.getElementById('council-synthesis'),
+  cognitionForm: document.getElementById('cognition-form'),
+  cognitionIntent: document.getElementById('cognition-intent'),
+  cognitionAction: document.getElementById('cognition-action'),
+  cognitionRun: document.getElementById('cognition-run'),
+  cognitionRunStatus: document.getElementById('cognition-run-status'),
+  cognitionStatus: document.getElementById('cognition-status'),
+  cognitionTrace: document.getElementById('cognition-trace'),
+  cognitionRuns: document.getElementById('cognition-runs'),
   workshop: document.getElementById('workshop'),
   workshopForm: document.getElementById('workshop-form'),
   workshopTitle: document.getElementById('workshop-title'),
@@ -438,11 +725,13 @@ const els = {
   boot: document.getElementById('boot'),
   bootLines: document.getElementById('boot-lines'),
   bootSkip: document.getElementById('boot-skip'),
+  quickBoot: document.getElementById('quick-boot'),
   missions: document.getElementById('missions-list'),
   taskgraph: document.getElementById('taskgraph'),
   sentinel: document.getElementById('sentinel'),
   approvals: document.getElementById('approvals'),
   briefings: document.getElementById('briefings'),
+  briefingStatus: document.getElementById('briefing-status'),
   goals: document.getElementById('goals'),
   memory: document.getElementById('memory'),
   knowledge: document.getElementById('knowledge'),
@@ -450,9 +739,29 @@ const els = {
   integrations: document.getElementById('integrations'),
   sentinelFull: document.getElementById('sentinel-full'),
   conversationHistory: document.getElementById('conversation-history'),
+  modeSelect: document.getElementById('mode-select'),
+  motionToggle: document.getElementById('motion-toggle'),
+  contrastToggle: document.getElementById('contrast-toggle'),
 };
 
-const state = { core: 'idle', view: 'deck', last: null, lastSeq: 0, reducedMotion: false };
+const state = {
+  core: 'degraded',
+  view: 'deck',
+  last: null,
+  eventCursor: { streamId: null, seq: 0, versions: {} },
+  ownerSnapshots: Object.create(null),
+  eventReconciled: false,
+  stateReadAvailable: false,
+  thinking: false,
+  safetyLatchFresh: false,
+  safetyMutationInFlight: false,
+  reducedMotion: false,
+  mode: 'classic',
+  contrast: 'standard',
+  cognitionInFlight: false,
+  lastCognitionRun: null,
+};
+let eventStreamDegraded = false;
 
 function showBanner(text) {
   if (!els.banner) return;
@@ -484,19 +793,152 @@ async function api(path, options = {}) {
   return data === null ? {} : data;
 }
 
+async function readApi(path) {
+  try {
+    return { ok: true, value: await api(path) };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error), status: error?.status ?? null };
+  }
+}
+
+function setWorkspaceStatus(target, text, status = 'available') {
+  if (!target) return;
+  target.dataset.state = status;
+  target.textContent = text;
+}
+
+function ownerStatusText(result, label) {
+  if (!result) return { text: 'Loading ' + label + '…', state: 'loading' };
+  if (result.ok === false) {
+    const state = result.status >= 500 ? 'unavailable' : 'error';
+    return { text: (state === 'unavailable' ? 'Unavailable' : 'Read error') + ': ' + result.error, state };
+  }
+  const value = result.value;
+  if (!value || value.available === false || value.unavailable === true || value.status === 'unavailable') {
+    return { text: 'Unavailable: ' + String(value?.error || value?.unavailable || (label + ' owner is not configured')), state: 'unavailable' };
+  }
+  return { text: '', state: 'available' };
+}
+
 function setCore(next, caption) {
+  if (!CORE_REACHABLE_STATES.includes(next)
+    || !CORE_STATE_DEFINITIONS.some((definition) => definition.id === next && definition.reachability === 'reachable')) {
+    next = 'degraded';
+    caption = 'An unsupported or reserved state was refused; showing Degraded.';
+  }
+  const definition = CORE_STATE_DEFINITIONS.find((stateDefinition) => stateDefinition.id === next);
   state.core = next;
   document.body.dataset.coreState = next;
-  if (els.coreState) els.coreState.textContent = next.charAt(0).toUpperCase() + next.slice(1);
+  // Presentation only: an active ECP latch always presents as Lockdown, whatever mode the
+  // owner selected, and the selector is disabled so the UI cannot imply otherwise. No
+  // authorization decision is made here.
+  const lockdown = next === 'lockdown';
+  document.body.dataset.mode = lockdown ? 'lockdown' : state.mode;
+  if (els.modeSelect) els.modeSelect.disabled = lockdown;
+  if (els.coreState) els.coreState.textContent = definition ? definition.label : 'Degraded';
   if (els.coreCaption && caption) els.coreCaption.textContent = caption;
 }
 
-function renderTurns(turns) {
+function coreCaptionFor(core, reason = '') {
+  if (core === 'lockdown') return 'ECP reports an active kill switch. Release requires an explicit reason and confirmation.';
+  if (core === 'degraded') {
+    if (reason) return reason;
+    if (!state.eventReconciled || eventStreamDegraded) return 'The authoritative event stream is unavailable or not reconciled.';
+    if (!state.stateReadAvailable) return 'The authoritative UI state read is unavailable.';
+    const missing = ['tasks', 'plans', 'approval', 'lockdown', 'runtime', 'health', 'conversation']
+      .filter((name) => !state.ownerSnapshots[name] || state.ownerSnapshots[name].available !== true);
+    if (missing.length) return 'Required owner state is unavailable: ' + missing.join(', ') + '.';
+    const runtime = state.ownerSnapshots.runtime;
+    if (runtime?.corruption) return 'Runtime checkpoint is reported corrupt; work is not inferred healthy.';
+    if (runtime?.lastError) return 'Runtime reports an error: ' + runtime.lastError;
+    if (['starting', 'stopping', 'unknown'].includes(runtime?.lifecycle)) return 'Runtime lifecycle is ' + runtime.lifecycle + '.';
+    const conversation = state.ownerSnapshots.conversation;
+    if (conversation?.sessionStatus === 'corrupt' || conversation?.sessionStatus === 'unavailable') return 'Conversation state reports ' + conversation.sessionStatus + '.';
+    if (conversation?.corruptCount > 0) return 'Conversation history reports corrupt records.';
+    if (state.ownerSnapshots.tasks?.counts?.pausedTasks > 0) return 'A task is paused without a more specific reachable Core state.';
+    const health = state.ownerSnapshots.health;
+    return health && health.overall ? 'Health reports ' + health.overall + '; the UI is not assuming a healthy state.' : 'A required source is degraded or unavailable.';
+  }
+  if (core === 'awaiting_approval') return 'A task step or draft plan is waiting for an explicit owner approval.';
+  if (core === 'uncertain') return 'A task step has an uncertain outcome; no completion is being inferred.';
+  if (core === 'executing') return 'TaskStore reports one or more running tasks.';
+  if (core === 'thinking') return 'A chat request is in progress.';
+  if (state.ownerSnapshots.runtime?.paused === true) return 'No higher-priority task state is active; runtime scheduling is paused.';
+  return 'Required owner snapshots are available; no higher-priority condition is reported.';
+}
+
+function renderSafety() {
+  const snapshot = state.ownerSnapshots.lockdown;
+  if (!els.safetyStatus) return;
+  const known = snapshot && snapshot.available === true;
+  const active = known && snapshot.active === true;
+  const clear = known && snapshot.active === false && snapshot.policyUnavailable !== true;
+  const fresh = state.eventReconciled && state.stateReadAvailable && !eventStreamDegraded
+    && state.safetyLatchFresh === true && !state.safetyMutationInFlight;
+  if (state.safetyMutationInFlight) {
+    els.safetyStatus.dataset.safety = 'unavailable';
+    els.safetyStatus.textContent = 'An ECP safety control is in progress; waiting for a fresh latch read.';
+  } else if (!known || (!active && !clear)) {
+    els.safetyStatus.dataset.safety = 'unavailable';
+    els.safetyStatus.textContent = 'ECP kill-switch state is unavailable; it is not assumed clear.';
+  } else if (active) {
+    els.safetyStatus.dataset.safety = fresh ? 'active' : 'unavailable';
+    const staleReason = state.safetyLatchFresh === true ? 'event state is stale' : 'the latch has not been freshly read';
+    els.safetyStatus.textContent = (fresh ? 'LOCKDOWN ACTIVE — ' : 'Last reported LOCKDOWN ACTIVE; ' + staleReason + ' — ')
+      + (snapshot.reason || 'ECP reports the durable latch active.');
+  } else if (fresh) {
+    els.safetyStatus.dataset.safety = 'clear';
+    els.safetyStatus.textContent = 'ECP reports the durable lockdown latch clear.';
+  } else {
+    els.safetyStatus.dataset.safety = 'unavailable';
+    els.safetyStatus.textContent = state.safetyLatchFresh === true
+      ? 'Last reported clear; event state is stale.'
+      : 'Last reported clear; current ECP latch state is not confirmed.';
+  }
+  if (els.safetyLockButton) els.safetyLockButton.disabled = active || state.safetyMutationInFlight;
+  if (els.safetyReleaseButton) els.safetyReleaseButton.disabled = !active || !fresh || state.safetyMutationInFlight;
+}
+
+async function refreshSafetyLatch() {
+  try {
+    const snapshot = await api('/api/killswitch');
+    if (!snapshot || typeof snapshot.active !== 'boolean' || typeof snapshot.policyUnavailable !== 'boolean') {
+      throw new Error('ECP returned a malformed latch status');
+    }
+    state.ownerSnapshots.lockdown = {
+      available: true,
+      active: snapshot.active,
+      policyUnavailable: snapshot.policyUnavailable,
+      activatedAt: snapshot.activatedAt ?? null,
+      reason: typeof snapshot.reason === 'string' ? snapshot.reason : null,
+      persistence: typeof snapshot.persistence === 'string' ? snapshot.persistence : 'unknown',
+    };
+    state.safetyLatchFresh = true;
+  } catch (error) {
+    state.ownerSnapshots.lockdown = { available: false, error: String(error?.message || error).slice(0, 240) };
+    state.safetyLatchFresh = false;
+  }
+  applyCoreProjection(state.safetyLatchFresh ? '' : 'The current ECP latch state could not be freshly read.');
+  return state.safetyLatchFresh;
+}
+
+function applyCoreProjection(reason = '') {
+  const next = resolveCoreStateFromOwners(state.ownerSnapshots, {
+    eventStreamAvailable: state.eventReconciled && !eventStreamDegraded,
+    stateReadAvailable: state.stateReadAvailable,
+    thinking: state.thinking,
+  });
+  setCore(next, coreCaptionFor(next, reason));
+  renderSafety();
+  return next;
+}
+
+function renderTurns(turns, emptyMessage = 'No turns are recorded in this session.') {
   if (!els.turns) return;
   els.turns.replaceChildren();
   const list = Array.isArray(turns) ? turns : [];
   if (list.length === 0) {
-    els.turns.append(el('li', 'meta', 'No turns in this session yet.'));
+    els.turns.append(el('li', 'meta', emptyMessage));
     return;
   }
   for (const turn of list) {
@@ -512,12 +954,12 @@ function renderTurns(turns) {
   els.turns.scrollTop = els.turns.scrollHeight;
 }
 
-function renderList(target, items, mapper) {
+function renderList(target, items, mapper, emptyMessage = 'No records are recorded by this owner.') {
   if (!target) return;
   target.replaceChildren();
   const list = Array.isArray(items) ? items : [];
   if (list.length === 0) {
-    target.append(el('li', 'meta', 'No records available.'));
+    target.append(el('li', 'meta', emptyMessage));
     return;
   }
   for (const item of list) target.append(mapper(item));
@@ -530,146 +972,1076 @@ function itemFrom(title, meta) {
   return li;
 }
 
-function renderTasks(tasks) {
-  renderList(els.tasks, tasks, (task) => itemFrom(task.goal || task.id, (task.status || 'unknown') + (task.approval ? ' · approval' : '')));
-  renderList(els.taskgraph, tasks, (task) => itemFrom(task.goal || task.id, 'steps: ' + (Array.isArray(task.steps) ? task.steps.length : 0)));
-  if (els.approvals) {
-    const pending = (Array.isArray(tasks) ? tasks : []).filter((task) => task.approval);
-    renderList(els.approvals, pending, (task) => itemFrom(task.goal || task.id, 'approval required'));
+function renderOwnerItems(target, source, mapper, label, emptyMessage) {
+  if (!target) return false;
+  if (!source || source.available !== true || !Array.isArray(source.items)) {
+    const reason = source?.error || (label + ' owner did not provide a readable item list.');
+    renderList(target, [], mapper, 'Unavailable: ' + reason);
+    return false;
+  }
+  renderList(target, source.items, mapper, emptyMessage);
+  return true;
+}
+
+function reportSource(target, source, label) {
+  if (!target) return;
+  if (!source) {
+    setWorkspaceStatus(target, 'Unavailable: no ' + label + ' owner response was received.', 'unavailable');
+    return;
+  }
+  if (source.available !== true) {
+    setWorkspaceStatus(target, 'Unavailable: ' + String(source.error || (label + ' records could not be read.')), 'unavailable');
+    return;
+  }
+  const shown = Array.isArray(source.items) ? source.items.length : null;
+  const total = Number.isInteger(source.total) ? source.total : shown;
+  if (total === 0) {
+    setWorkspaceStatus(target, 'No ' + label + ' records are present in the owner store.', 'empty');
+    return;
+  }
+  const countText = shown === null ? String(total) : shown + ' of ' + total;
+  let text = 'Loaded ' + countText + ' recorded ' + label + ' records' + (source.truncated ? ' (bounded view).' : '.');
+  const corrupt = Number.isInteger(source.corrupt) ? source.corrupt : 0;
+  if (corrupt > 0) text += ' ' + corrupt + ' corrupt record(s) were also reported.';
+  setWorkspaceStatus(target, text, corrupt > 0 ? 'partial' : 'available');
+}
+
+function renderTaskRows(tasks, target = els.tasks, emptyMessage = 'No task records are present in TaskStore.') {
+  const rows = Array.isArray(tasks) ? tasks : [];
+  renderList(target, rows, (task) => {
+    const item = itemFrom(task.goal || task.id, (task.status || 'unknown') + ' · task ' + task.id);
+    if (task.origin || task.planner) item.append(el('div', 'meta', 'Recorded origin: ' + (task.origin || 'not recorded') + ' · planner: ' + (task.planner || 'not recorded')));
+    if (task.goalId) item.append(el('div', 'meta', 'Goal reference: ' + task.goalId));
+    if (task.planId) item.append(el('div', 'meta', 'Plan reference: ' + task.planId));
+    if (task.approvedAt) item.append(el('div', 'meta', 'Task plan approval recorded at: ' + task.approvedAt));
+    if (task.lastReason) item.append(el('div', 'meta', 'Recorded transition reason: ' + task.lastReason));
+    if (task.createdAt || task.updatedAt) item.append(el('div', 'meta', 'Created: ' + (task.createdAt || 'not recorded') + ' · last updated: ' + (task.updatedAt || 'not recorded')));
+    for (const step of (Array.isArray(task.steps) ? task.steps : [])) {
+      item.append(el('div', 'meta', 'Step ' + step.id + ': ' + (step.description || step.action || 'description not recorded') + ' · ' + (step.status || 'unknown')));
+      if (step.outcome) item.append(el('div', 'meta', '  recorded outcome: ' + step.outcome));
+      if (step.dependsOn?.length) item.append(el('div', 'meta', '  depends on: ' + step.dependsOn.join(', ')));
+      if (step.summary) item.append(el('div', 'meta', '  recorded result: ' + step.summary));
+      if (step.operationId) item.append(el('div', 'meta', '  audit operation: ' + step.operationId));
+      if (step.approval) item.append(el('div', 'meta', '  step approval by ' + (step.approval.approvedBy || 'not recorded') + ' at ' + (step.approval.at || 'time not recorded')));
+    }
+    return item;
+  }, emptyMessage);
+}
+
+function cancellationFormForPlan(plan) {
+  const cancellable = ['draft', 'approved', 'active', 'blocked', 'paused', 'failed'];
+  if (!cancellable.includes(plan.status)) return null;
+  const details = document.createElement('details');
+  details.className = 'plan-cancel';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Cancel this plan';
+  const note = el('p', 'meta', 'This records plan cancellation only. A task already created from the plan is not stopped by this control.');
+  const form = document.createElement('form');
+  form.className = 'row';
+  const inputId = 'plan-cancel-reason-' + String(plan.id).replace(/[^A-Za-z0-9_-]/g, '-');
+  const label = document.createElement('label');
+  label.htmlFor = inputId;
+  label.className = 'visually-hidden';
+  label.textContent = 'Reason for cancelling plan ' + plan.id;
+  const reason = document.createElement('textarea');
+  reason.id = inputId;
+  reason.rows = 2;
+  reason.maxLength = 500;
+  reason.required = true;
+  reason.setAttribute('aria-label', label.textContent);
+  const button = el('button', 'small', 'Record cancellation');
+  button.type = 'submit';
+  form.append(label, reason, button);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const value = reason.value.trim();
+    if (!value) {
+      setWorkspaceStatus(els.missionStatus, 'A cancellation reason is required.', 'error');
+      return;
+    }
+    await cancelPlan(plan.id, value, button);
+  });
+  details.append(summary, note, form);
+  return details;
+}
+
+function renderPlans(plans, emptyMessage = 'No plan records are present in PlanStore.') {
+  renderList(els.plans, plans, (plan) => {
+    const item = itemFrom(plan.outcome || plan.id, (plan.status || 'unknown') + ' · plan ' + plan.id
+      + (plan.version ? ' · v' + plan.version : '') + ' · risk ' + (plan.risk || 'unknown'));
+    if (plan.goalId) item.append(el('div', 'meta', 'Goal reference: ' + plan.goalId));
+    if (plan.goalRevision !== null && plan.goalRevision !== undefined) item.append(el('div', 'meta', 'Linked goal revision: ' + plan.goalRevision));
+    if (plan.origin) item.append(el('div', 'meta', 'Recorded origin: ' + plan.origin));
+    if (plan.approval) item.append(el('div', 'meta', 'Approval recorded at ' + (plan.approval.at || 'time not recorded')
+      + ' · bound version ' + (plan.approval.version ?? 'not recorded')
+      + ' · content hash prefix ' + (plan.approval.contentHashPrefix || 'not recorded')));
+    if (plan.activation) item.append(el('div', 'meta', 'Activation recorded at ' + (plan.activation.at || 'time not recorded')
+      + ' · task ' + (plan.activation.taskId || 'not recorded')));
+    if (plan.blockedReason) item.append(el('div', 'meta', 'Blocked: ' + plan.blockedReason));
+    if (plan.failureReason) item.append(el('div', 'meta', 'Failure recorded: ' + plan.failureReason));
+    if (plan.cancelledReason) item.append(el('div', 'meta', 'Cancellation reason: ' + plan.cancelledReason));
+    if (plan.supersededBy) item.append(el('div', 'meta', 'Superseded by plan ' + plan.supersededBy));
+    if (plan.createdAt || plan.updatedAt) item.append(el('div', 'meta', 'Created: ' + (plan.createdAt || 'not recorded') + ' · last updated: ' + (plan.updatedAt || 'not recorded')));
+    for (const precondition of (Array.isArray(plan.preconditions) ? plan.preconditions : [])) item.append(el('div', 'meta', 'Precondition: ' + precondition));
+    for (const milestone of (Array.isArray(plan.milestones) ? plan.milestones : [])) {
+      const progress = milestone.recordedProgress || {};
+      item.append(el('div', 'meta', 'Checkpoint ' + milestone.id + ': ' + milestone.title
+        + ' · recorded outcomes ' + (progress.completed || 0) + '/' + (progress.total || 0)
+        + ' · failed ' + (progress.failed || 0) + ' · uncertain ' + (progress.uncertain || 0)));
+      if (milestone.checkpoint) item.append(el('div', 'meta', '  checkpoint: ' + milestone.checkpoint));
+      if (milestone.verification) item.append(el('div', 'meta', '  checkpoint verification: ' + milestone.verification));
+      if (milestone.dependsOn?.length) item.append(el('div', 'meta', '  milestone dependencies: ' + milestone.dependsOn.join(', ')));
+    }
+    for (const step of (Array.isArray(plan.steps) ? plan.steps : [])) {
+      const outcome = step.result?.status || 'no outcome recorded';
+      item.append(el('div', 'meta', 'Step ' + step.id + ': ' + (step.description || step.action || 'description not recorded')
+        + ' · ' + outcome + ' · risk ' + (step.risk || 'unknown') + ' · reversibility ' + (step.reversibility || 'unknown')));
+      if (step.dependsOn?.length) item.append(el('div', 'meta', '  depends on: ' + step.dependsOn.join(', ')));
+      if (step.expectedResult) item.append(el('div', 'meta', '  expected: ' + step.expectedResult));
+      if (step.verification) item.append(el('div', 'meta', '  verification: ' + step.verification));
+      if (step.result?.operationId) item.append(el('div', 'meta', '  recorded operation: ' + step.result.operationId));
+      if (step.result?.taskId) item.append(el('div', 'meta', '  outcome linked to task: ' + step.result.taskId));
+      if (step.result?.at) item.append(el('div', 'meta', '  outcome recorded at: ' + step.result.at));
+      if (step.result?.detail) item.append(el('div', 'meta', '  outcome detail: ' + step.result.detail));
+    }
+    const history = Array.isArray(plan.history) ? plan.history : [];
+    for (const entry of history) {
+      item.append(el('div', 'meta', 'Lifecycle ' + (entry.kind || 'event') + ' · ' + (entry.at || 'time not recorded')
+        + ' · v' + (entry.version ?? 'unknown') + (entry.reason ? ' · ' + entry.reason : '')));
+    }
+    if (Number.isInteger(plan.historyTotal) && plan.historyTotal > history.length) {
+      item.append(el('div', 'meta', 'Showing the most recent ' + history.length + ' of ' + plan.historyTotal + ' lifecycle records.'));
+    }
+    const cancel = cancellationFormForPlan(plan);
+    if (cancel) item.append(cancel);
+    return item;
+  }, emptyMessage);
+}
+
+function renderGoals(goals, emptyMessage = 'No goal records are present in GoalStore.') {
+  renderList(els.goals, goals, (goal) => {
+    const progress = goal.progress || {};
+    const item = itemFrom(goal.request || goal.id, (goal.status || 'unknown') + ' · priority '
+      + (goal.priority ?? 'not recorded') + ' · required criteria ' + (progress.satisfied || 0) + '/' + (progress.required || 0) + ' satisfied');
+    if (goal.origin) item.append(el('div', 'meta', 'Recorded origin: ' + goal.origin));
+    if (goal.revision !== null && goal.revision !== undefined) item.append(el('div', 'meta', 'Revision: ' + goal.revision));
+    if (goal.deadline) item.append(el('div', 'meta', 'Recorded deadline: ' + goal.deadline));
+    if (goal.blockedReason) item.append(el('div', 'meta', 'Blocked: ' + goal.blockedReason));
+    if (goal.contradiction) item.append(el('div', 'meta', 'Recorded contradiction for ' + (goal.contradiction.criterionId || 'criterion not recorded')
+      + (goal.contradiction.detail ? ': ' + goal.contradiction.detail : '')
+      + (goal.contradiction.operationId ? ' · operation ' + goal.contradiction.operationId : '')));
+    if (goal.dependsOn?.length) item.append(el('div', 'meta', 'Depends on goals: ' + goal.dependsOn.join(', ')));
+    if (goal.planIds?.length) item.append(el('div', 'meta', 'Linked plans: ' + goal.planIds.join(', ')));
+    if (goal.taskIds?.length) item.append(el('div', 'meta', 'Linked tasks: ' + goal.taskIds.join(', ')));
+    for (const blocker of (goal.decomposition?.blockers || [])) {
+      item.append(el('div', 'meta', 'Blocker (' + (blocker.basis || 'basis not recorded') + '): ' + blocker.text));
+    }
+    for (const unknown of (goal.decomposition?.unknowns || [])) {
+      item.append(el('div', 'meta', 'Unknown (' + (unknown.basis || 'basis not recorded') + '): ' + unknown.text));
+    }
+    for (const criterion of (Array.isArray(goal.criteria) ? goal.criteria : [])) {
+      item.append(el('div', 'meta', criterion.id + ' ' + criterion.status + ': ' + criterion.description
+        + ' · ' + (criterion.basis || 'basis not recorded') + '/' + (criterion.requirement || 'requirement not recorded')));
+      if (criterion.confirmation) item.append(el('div', 'meta', '  user decision: ' + (criterion.confirmation.decision || 'not recorded')
+        + (criterion.confirmation.reason ? ' · ' + criterion.confirmation.reason : '')
+        + (criterion.confirmation.operationId ? ' · operation ' + criterion.confirmation.operationId : '')));
+      if (criterion.evidence?.length) item.append(el('div', 'meta', '  evidence records: ' + criterion.evidence.map((entry) => (entry.operationId || 'no operation id') + ' (' + (entry.kind || 'kind not recorded') + ')').join(', ')));
+    }
+    if (goal.completion) {
+      item.append(el('div', 'meta', 'Completion recorded at ' + (goal.completion.at || 'time not recorded')
+        + ' · cited operations ' + (goal.completion.criteria || []).map((entry) => entry.operationId || 'not recorded').join(', ')));
+    }
+    for (const entry of (Array.isArray(goal.statusHistory) ? goal.statusHistory : [])) {
+      item.append(el('div', 'meta', 'Lifecycle ' + (entry.from || 'new') + ' → ' + (entry.to || 'unknown')
+        + ' · ' + (entry.at || 'time not recorded') + (entry.reason ? ' · ' + entry.reason : '')));
+    }
+    if (Number.isInteger(goal.statusHistoryTotal) && goal.statusHistoryTotal > (goal.statusHistory || []).length) {
+      item.append(el('div', 'meta', 'Showing the most recent ' + (goal.statusHistory || []).length + ' of ' + goal.statusHistoryTotal + ' status records.'));
+    }
+    for (const entry of (Array.isArray(goal.revisionHistory) ? goal.revisionHistory : [])) {
+      item.append(el('div', 'meta', 'Revision ' + (entry.revision ?? 'unknown') + ' recorded at ' + (entry.at || 'time not recorded')
+        + (entry.reason ? ' · ' + entry.reason : '')));
+    }
+    return item;
+  }, emptyMessage);
+}
+
+function renderMissions(goals = [], plans = [], emptyMessage = 'No mission records are present in GoalStore or PlanStore.') {
+  const missions = [];
+  for (const goal of (Array.isArray(goals) ? goals : [])) missions.push({ title: goal.request || goal.id, meta: 'goal · ' + (goal.status || 'unknown') });
+  for (const plan of (Array.isArray(plans) ? plans : [])) missions.push({ title: plan.outcome || plan.id, meta: 'plan · ' + (plan.status || 'unknown') });
+  renderList(els.missions, missions, (mission) => itemFrom(mission.title, mission.meta), emptyMessage);
+}
+
+function renderMissionControl(result) {
+  const status = ownerStatusText(result, 'Mission Control');
+  const value = result?.ok === true ? result.value : null;
+  const sources = value?.sources || {};
+  if (status.text) {
+    setWorkspaceStatus(els.missionStatus, status.text, status.state);
+  } else {
+    const missing = Object.entries(sources).filter(([, source]) => source?.available !== true).map(([name]) => name);
+    const empty = ['goals', 'plans', 'tasks'].every((name) => sources[name]?.available === true
+      && Number.isInteger(sources[name].total) && sources[name].total === 0);
+    if (value?.status === 'partial' || missing.length > 0) {
+      setWorkspaceStatus(els.missionStatus, 'Partial owner read; unavailable: ' + (missing.join(', ') || 'one or more stores') + '.', 'partial');
+    } else if (empty) {
+      setWorkspaceStatus(els.missionStatus, 'No goal, plan or task records are present in the readable owner stores.', 'empty');
+    } else {
+      setWorkspaceStatus(els.missionStatus, 'Goal, plan and task state read from their owner stores.', 'available');
+    }
+  }
+  const goalSource = sources.goals;
+  const planSource = sources.plans;
+  const taskSource = sources.tasks;
+  for (const [source, target, label] of [
+    [goalSource, els.missionGoalsStatus, 'goals'],
+    [planSource, els.missionPlansStatus, 'plans'],
+    [taskSource, els.missionTasksStatus, 'tasks'],
+  ]) reportSource(target, source, label);
+  if (goalSource?.available === true) renderGoals(goalSource.items, 'No goal records are present in GoalStore.');
+  else renderList(els.goals, [], () => null, 'Unavailable: ' + String(goalSource?.error || 'GoalStore records could not be read.'));
+  if (planSource?.available === true) renderPlans(planSource.items, 'No plan records are present in PlanStore.');
+  else renderList(els.plans, [], () => null, 'Unavailable: ' + String(planSource?.error || 'PlanStore records could not be read.'));
+  if (taskSource?.available === true) {
+    renderTaskRows(taskSource.items, els.missionTasks, 'No task records are present in TaskStore.');
+    renderTaskRows(taskSource.items, els.tasks, 'No task records are present in TaskStore.');
+    renderTaskRows(taskSource.items, els.taskgraph, 'No task records are present in TaskStore.');
+    const total = Number.isInteger(taskSource.total) ? taskSource.total : (taskSource.items || []).length;
+    setWorkspaceStatus(els.taskStatus, total === 0 ? 'No task records are present in TaskStore.' : total + ' task record(s) are projected from TaskStore.', total === 0 ? 'empty' : 'available');
+  } else {
+    renderList(els.missionTasks, [], () => null, 'Unavailable: ' + String(taskSource?.error || 'TaskStore records could not be read.'));
+    renderList(els.tasks, [], () => null, 'Unavailable: ' + String(taskSource?.error || 'TaskStore records could not be read.'));
+    renderList(els.taskgraph, [], () => null, 'Unavailable: ' + String(taskSource?.error || 'TaskStore records could not be read.'));
+    setWorkspaceStatus(els.taskStatus, 'Unavailable: ' + String(taskSource?.error || 'TaskStore records could not be read.'), 'unavailable');
+  }
+  const goals = goalSource?.available === true && Array.isArray(goalSource.items) ? goalSource.items : [];
+  const plans = planSource?.available === true && Array.isArray(planSource.items) ? planSource.items : [];
+  if (goalSource?.available !== true && planSource?.available !== true) {
+    renderList(els.missions, [], () => null, 'Unavailable: neither GoalStore nor PlanStore could be read.');
+  } else {
+    const noMissionMessage = goalSource?.available === true && planSource?.available === true
+      ? 'No mission records are present in GoalStore or PlanStore.'
+      : 'No mission records are present in the readable stores; another owner is unavailable.';
+    renderMissions(goals, plans, noMissionMessage);
   }
 }
 
-function renderPlans(plans) {
-  renderList(els.plans, plans, (plan) => itemFrom(plan.outcome || plan.id, (plan.status || 'unknown') + (plan.approved ? ' · approved' : '')));
+async function submitWorkspaceAction(path, body, button, label, target, expectedStatuses) {
+  if (button) button.disabled = true;
+  setWorkspaceStatus(target, label + ' is being sent through the controller…', 'loading');
+  let message = '';
+  let tone = 'error';
+  try {
+    const result = await api(path, { method: 'POST', body });
+    const expected = expectedStatuses.includes(result.status);
+    const refreshed = await refresh();
+    tone = expected ? (refreshed ? 'available' : 'partial') : 'error';
+    message = label + ' controller result: ' + String(result.status || 'status not returned')
+      + (result.display ? ' — ' + result.display : '');
+    if (!refreshed) message += ' The authoritative state refresh is unavailable.';
+  } catch (error) {
+    message = label + ' failed: ' + String(error?.message || error);
+  } finally {
+    if (button) button.disabled = false;
+  }
+  setWorkspaceStatus(target, message, tone);
 }
 
-function renderGoals(goals) {
-  renderList(els.goals, goals, (goal) => itemFrom(goal.title || goal.id, goal.status || 'recorded'));
+async function cancelPlan(planId, reason, button) {
+  if (button) button.disabled = true;
+  setWorkspaceStatus(els.missionStatus, 'Plan cancellation is being sent through the controller…', 'loading');
+  let message = '';
+  let tone = 'error';
+  try {
+    const result = await api('/api/plans/' + encodeURIComponent(planId) + '/cancel', {
+      method: 'POST',
+      body: { reason },
+    });
+    const expected = result.status === 'plan_stored';
+    const refreshed = await refresh();
+    tone = expected ? (refreshed ? 'available' : 'partial') : 'error';
+    message = 'Plan cancellation controller result: ' + String(result.status || 'status not returned')
+      + (result.display ? ' — ' + result.display : '');
+    if (!refreshed) message += ' The authoritative state refresh is unavailable.';
+  } catch (error) {
+    message = 'Plan cancellation failed: ' + String(error?.message || error);
+  } finally {
+    if (button) button.disabled = false;
+  }
+  setWorkspaceStatus(els.missionStatus, message, tone);
 }
 
-function renderMissions(state) {
-  const missions = [];
-  for (const goal of (state.goals || [])) missions.push(goal.title || goal.id);
-  for (const plan of (state.plans || [])) missions.push(plan.outcome || plan.id);
-  renderList(els.missions, missions.map((title) => ({ title })), (m) => itemFrom(m.title, 'mission'));
+function appendApprovalCapabilities(item, approval) {
+  const capabilities = Array.isArray(approval.capabilities) ? approval.capabilities : [];
+  if (capabilities.length === 0) {
+    item.append(el('div', 'meta', approval.kind === 'situation' ? 'No action is named by this record.' : 'No capabilities are recorded for this request.'));
+    return;
+  }
+  for (const capability of capabilities) {
+    const scope = capability.scope?.recorded === true
+      ? (capability.scope.resource || 'scope recorded without a label')
+      : 'not recorded';
+    item.append(el('div', 'meta', 'Capability ' + (capability.action || 'not recorded')
+      + ' · permission ' + (capability.permission || 'not recorded')
+      + ' · risk ' + (capability.risk || 'unknown')
+      + ' · scope ' + scope
+      + ' · reversibility ' + (capability.reversibility || 'unknown')));
+  }
 }
 
-function renderSentinel(situation) {
-  const items = [];
-  if (situation && Array.isArray(situation.observations)) items.push(...situation.observations.map((x) => x.summary || x.id || 'observation'));
-  if (situation && Array.isArray(situation.alerts)) items.push(...situation.alerts.map((x) => x.summary || x.id || 'alert'));
-  if (situation && Array.isArray(situation.pendingDecisions)) items.push(...situation.pendingDecisions.map((x) => x.summary || x.id || 'decision'));
-  const mapped = items.map((text) => ({ text }));
-  renderList(els.sentinel, mapped, (x) => itemFrom(x.text, 'sentinel'));
-  renderList(els.sentinelFull, mapped, (x) => itemFrom(x.text, 'sentinel'));
-  renderList(els.briefings, (situation && Array.isArray(situation.briefings) ? situation.briefings : []).map((x) => ({ text: x.summary || x.id || 'briefing' })), (x) => itemFrom(x.text, 'briefing'));
+function appendSituationalDecisionForm(item, approval) {
+  const notice = el('p', 'meta', 'These choices only record a user decision. This form cannot execute an action.');
+  const form = document.createElement('form');
+  form.className = 'row approval-decision';
+  const selectId = 'situation-response-' + String(approval.eventId).replace(/[^A-Za-z0-9_-]/g, '-');
+  const selectLabel = document.createElement('label');
+  selectLabel.htmlFor = selectId;
+  selectLabel.textContent = 'Record response';
+  const select = document.createElement('select');
+  select.id = selectId;
+  for (const [value, title] of [
+    ['record', 'Record'], ['investigate', 'Investigate'], ['notify', 'Notify'], ['recommend', 'Recommend'], ['ignore', 'Ignore'],
+  ]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = title;
+    select.append(option);
+  }
+  const reasonId = 'situation-reason-' + String(approval.eventId).replace(/[^A-Za-z0-9_-]/g, '-');
+  const reasonLabel = document.createElement('label');
+  reasonLabel.htmlFor = reasonId;
+  reasonLabel.className = 'visually-hidden';
+  reasonLabel.textContent = 'Reason for situational decision';
+  const reason = document.createElement('textarea');
+  reason.id = reasonId;
+  reason.rows = 2;
+  reason.maxLength = 500;
+  reason.required = true;
+  reason.setAttribute('aria-label', reasonLabel.textContent);
+  const button = el('button', 'small', 'Record decision');
+  button.type = 'submit';
+  form.append(selectLabel, select, reasonLabel, reason, button);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const text = reason.value.trim();
+    if (!text) {
+      setWorkspaceStatus(els.approvalActionStatus, 'A reason is required for a situational decision.', 'error');
+      return;
+    }
+    await submitWorkspaceAction('/api/situation/decide', {
+      event: approval.eventId,
+      response: select.value,
+      reason: text,
+    }, button, 'Situational decision', els.approvalActionStatus, ['success_verified']);
+  });
+  item.append(notice, form);
 }
 
-function renderHealth(health) {
+function approvalItemNode(approval) {
+  const item = itemFrom(approval.request || approval.id, approval.kind + ' · ' + (approval.at || 'time not recorded'));
+  item.append(el('div', 'meta', 'Owner record: ' + approval.id + ' · basis: ' + (approval.basis || 'not recorded')));
+  item.append(el('div', 'meta', 'Risk: ' + (approval.risk || 'unknown')
+    + ' · expiry: ' + (approval.expiryStatus === 'not_recorded' ? 'not recorded' : (approval.expiresAt || 'unknown'))
+    + ' · reversibility: ' + (Array.isArray(approval.reversibility)
+      ? approval.reversibility.map((entry) => entry.action + '=' + (entry.value || 'unknown')).join(', ')
+      : (approval.reversibility || 'unknown'))));
+  if (approval.taskId) item.append(el('div', 'meta', 'Task: ' + approval.taskId + (approval.stepId ? ' · step ' + approval.stepId : '')));
+  if (approval.planId) item.append(el('div', 'meta', 'Plan: ' + approval.planId + (approval.version ? ' · version ' + approval.version : '')));
+  if (approval.taskOrigin || approval.planner) item.append(el('div', 'meta', 'Task provenance: origin ' + (approval.taskOrigin || 'not recorded') + ' · planner ' + (approval.planner || 'not recorded')));
+  if (approval.eventScope) {
+    item.append(el('div', 'meta', 'Observation scope: ' + (approval.eventScope.source || 'source not recorded')
+      + ' · ' + (approval.eventScope.category || 'category not recorded') + '/' + (approval.eventScope.type || 'type not recorded')
+      + (approval.eventScope.stale ? ' · stale event' : '')));
+    if (approval.eventScope.refs?.length) item.append(el('div', 'meta', 'References: ' + approval.eventScope.refs.join(', ')));
+  }
+  if (approval.event?.summary) item.append(el('div', 'meta', 'Recorded event: ' + approval.event.summary));
+  if (approval.recordedSignificance) item.append(el('div', 'meta', 'Recorded significance: ' + approval.recordedSignificance));
+  if (approval.requestedAction) item.append(el('div', 'meta', 'Requested action in owner record: ' + approval.requestedAction));
+  if (approval.provenance) {
+    item.append(el('div', 'meta', 'Observation provenance: origin ' + (approval.provenance.origin || 'not recorded')
+      + ' · reporter ' + (approval.provenance.reporter || 'not recorded')
+      + ' · provider ' + (approval.provenance.provider || 'not recorded')
+      + ' · operation ' + (approval.provenance.operationId || 'not recorded')));
+  }
+  appendApprovalCapabilities(item, approval);
+  if (approval.kind === 'task_plan' && approval.taskId) {
+    const button = el('button', 'small', 'Approve recorded task plan');
+    button.type = 'button';
+    button.addEventListener('click', () => submitWorkspaceAction(
+      '/api/tasks/' + encodeURIComponent(approval.taskId) + '/approve', {}, button,
+      'Task-plan approval', els.approvalActionStatus, ['success_verified'],
+    ));
+    item.append(button);
+  } else if (approval.kind === 'task_step' && approval.taskId && approval.stepId) {
+    const button = el('button', 'small', 'Approve step ' + approval.stepId);
+    button.type = 'button';
+    button.addEventListener('click', () => submitWorkspaceAction(
+      '/api/tasks/' + encodeURIComponent(approval.taskId) + '/approve', { stepId: approval.stepId }, button,
+      'Task-step approval', els.approvalActionStatus, ['success_verified'],
+    ));
+    item.append(button);
+  } else if (approval.kind === 'plan' && approval.planId) {
+    const button = el('button', 'small', 'Approve recorded plan');
+    button.type = 'button';
+    button.addEventListener('click', () => submitWorkspaceAction(
+      '/api/plans/' + encodeURIComponent(approval.planId) + '/approve', {}, button,
+      'Plan approval', els.approvalActionStatus, ['plan_stored'],
+    ));
+    item.append(button);
+  } else if (approval.kind === 'situation' && approval.eventId) {
+    appendSituationalDecisionForm(item, approval);
+  }
+  return item;
+}
+
+function renderApprovalCentre(result) {
+  const owner = ownerStatusText(result, 'Approval Centre');
+  const value = result?.ok === true ? result.value : null;
+  if (owner.text) {
+    setWorkspaceStatus(els.approvalState, owner.text, owner.state);
+    renderList(els.approvalItems, [], approvalItemNode, 'Unavailable: pending approvals could not be read.');
+    return;
+  }
+  const sources = value?.sources || {};
+  const missing = Object.entries(sources).filter(([, source]) => source?.available !== true).map(([name]) => name);
+  const total = Number.isInteger(value.total) ? value.total : (Array.isArray(value.items) ? value.items.length : 0);
+  const shown = Array.isArray(value.items) ? value.items.length : 0;
+  if (value.status === 'partial' || missing.length > 0) {
+    setWorkspaceStatus(els.approvalState, 'Partial owner read; unavailable: ' + (missing.join(', ') || 'one or more stores')
+      + '. Showing ' + shown + ' of ' + total + ' known request(s).', 'partial');
+  } else if (total === 0) {
+    setWorkspaceStatus(els.approvalState, 'No pending approval requests are recorded in the readable owner stores.', 'empty');
+  } else {
+    setWorkspaceStatus(els.approvalState, 'Showing ' + shown + ' of ' + total + ' owner-recorded pending request(s)'
+      + (value.truncated ? ' (bounded view).' : '.'), 'available');
+  }
+  const emptyMessage = value.status === 'partial'
+    ? 'No pending requests were found in the readable stores; other owners are unavailable.'
+    : (value.truncated ? 'Requests exist, but this bounded page did not return an item.' : 'No pending approval requests are recorded.');
+  renderList(els.approvalItems, value.items, approvalItemNode, emptyMessage);
+}
+
+function renderSentinel(result) {
+  const owner = ownerStatusText(result, 'Sentinel');
+  const situation = result?.ok === true ? result.value : null;
+  if (owner.text) {
+    setWorkspaceStatus(els.sentinelStatus, owner.text, owner.state);
+    renderList(els.sentinelFull, [], () => null, 'Unavailable: situational records could not be read.');
+    renderList(els.sentinel, [], () => null, 'Unavailable: situational records could not be read.');
+    return;
+  }
+  const recent = Array.isArray(situation.recent) ? situation.recent : [];
+  const total = Number.isInteger(situation.recentTotal) ? situation.recentTotal : recent.length;
+  const alerts = Array.isArray(situation.alerts) ? situation.alerts.length : 0;
+  const pending = Array.isArray(situation.pendingApprovals) ? situation.pendingApprovals.length : 0;
+  const bounded = situation.recentTruncated === true || recent.length < total;
+  let statusText = total === 0 ? 'No situational observation records are present in SituationStore.'
+    : 'Showing ' + recent.length + ' of ' + total + ' recorded observation(s)';
+  statusText += ' · recorded alerts ' + alerts + ' · pending approvals ' + pending;
+  if (bounded) statusText += ' · bounded view';
+  statusText += '. These are records, not verified current-world truth.';
+  setWorkspaceStatus(els.sentinelStatus, statusText, total === 0 ? 'empty' : 'available');
+  const mapper = (row) => {
+    const at = row.at ? String(row.at) : 'time not recorded';
+    const confidence = Number.isFinite(row.confidence) ? 'confidence ' + row.confidence : 'confidence not recorded';
+    const significance = row.significance?.level ? 'significance ' + row.significance.level : 'not assessed';
+    const provenance = row.provenance ? [row.provenance.reporter, row.provenance.provider, row.provenance.operationId].filter(Boolean).join(' · ') : 'provenance not available';
+    const stale = row.stale ? ' · stale observation' : '';
+    const decision = row.decision ? ' · decision ' + (row.decision.response || 'not recorded') : ' · no decision recorded';
+    const item = itemFrom(row.summary || row.type || row.id, (row.source || 'source not recorded')
+      + ' · ' + (row.category || 'category not recorded') + '/' + (row.type || 'type not recorded')
+      + ' · ' + at + ' · ' + confidence + ' · ' + significance + stale + decision);
+    item.append(el('div', 'meta', 'Basis: recorded observation · provenance: ' + provenance));
+    if (row.recommended) item.append(el('div', 'meta', 'Recorded recommendation: ' + row.recommended));
+    if (row.sourceEventId) item.append(el('div', 'meta', 'Source event id: ' + row.sourceEventId));
+    if (row.refs) {
+      const refs = [
+        ...(row.refs.entities || []).map((id) => 'entity:' + id),
+        ...(row.refs.goals || []).map((id) => 'goal:' + id),
+        ...(row.refs.plans || []).map((id) => 'plan:' + id),
+        ...(row.refs.tasks || []).map((id) => 'task:' + id),
+      ];
+      if (refs.length) item.append(el('div', 'meta', 'References: ' + refs.join(', ')));
+    }
+    if (row.validUntil) item.append(el('div', 'meta', 'Observation valid until: ' + row.validUntil));
+    if (row.worldRefs && Object.keys(row.worldRefs).length) {
+      item.append(el('div', 'meta', 'World-model record references: ' + Object.entries(row.worldRefs).map(([key, id]) => key + ':' + id).join(', ')));
+    }
+    return item;
+  };
+  renderList(els.sentinelFull, recent, mapper, 'No situational observations have been recorded.');
+  renderList(els.sentinel, recent.slice(0, 5), mapper, 'No situational observations have been recorded.');
+}
+
+function renderTimeline(result) {
+  const owner = ownerStatusText(result, 'Memory Timeline');
+  const value = result?.ok === true ? result.value : null;
+  if (owner.text) {
+    setWorkspaceStatus(els.timelineStatus, owner.text, owner.state);
+    for (const [target, statusTarget, label] of [
+      [els.memory, els.memoryRecordsStatus, 'memory'],
+      [els.knowledge, els.knowledgeStatus, 'knowledge'],
+      [els.world, els.worldStatus, 'world-model'],
+    ]) {
+      setWorkspaceStatus(statusTarget, 'Unavailable: ' + label + ' timeline could not be read.', 'unavailable');
+      renderList(target, [], () => null, 'Unavailable: ' + label + ' timeline could not be read.');
+    }
+    renderList(els.timeline, [], () => null, 'Unavailable: timeline owners did not return a snapshot.');
+    return;
+  }
+  const sources = value.sources || {};
+  const missing = Object.entries(sources).filter(([, source]) => source?.available !== true).map(([name]) => name);
+  const items = Array.isArray(value.items) ? value.items : [];
+  if (value.status === 'partial' || missing.length > 0) {
+    setWorkspaceStatus(els.timelineStatus, 'Partial owner read; unavailable: ' + (missing.join(', ') || 'memory integrity is incomplete')
+      + '. Showing ' + items.length + ' of ' + (value.total ?? items.length) + ' readable timeline record(s).', 'partial');
+  } else if (items.length === 0) {
+    setWorkspaceStatus(els.timelineStatus, 'No memory, knowledge, or world-model timeline records are present.', 'empty');
+  } else {
+    setWorkspaceStatus(els.timelineStatus, 'Showing ' + items.length + ' of ' + (value.total ?? items.length)
+      + ' chronological owner record(s)' + (value.truncated ? ' (bounded view).' : '.')
+      + ' Records preserve provenance; they do not establish truth.', 'available');
+  }
+  const timelineMapper = (row) => {
+    const provenance = row.provenance || {};
+    const item = itemFrom(row.summary || row.id, (row.source || 'owner not recorded') + ' · ' + (row.kind || row.type || 'record')
+      + ' · ' + (row.at || 'time not recorded') + (row.status ? ' · ' + row.status : ''));
+    if (row.source === 'memory') {
+      item.append(el('div', 'meta', 'Memory provenance: source ' + (provenance.source || 'not recorded')
+        + ' · kind ' + (provenance.memoryKind || 'not recorded')
+        + ' · origin ' + (provenance.origin || 'not recorded')
+        + ' · update mode ' + (provenance.updateMode || 'not recorded')
+        + ' · backend ' + (provenance.backend || 'not recorded')
+        + ' · operation ' + (provenance.operationId || 'not recorded')));
+      if (provenance.replaces?.length) item.append(el('div', 'meta', 'Replaces records: ' + provenance.replaces.join(', ')));
+      if (provenance.replacedBy?.length) item.append(el('div', 'meta', 'Replaced by records: ' + provenance.replacedBy.join(', ')));
+    } else if (row.source === 'knowledge') {
+      item.append(el('div', 'meta', 'Knowledge provenance: origin ' + (provenance.origin || 'not recorded')
+        + ' · operation ' + (provenance.operationId || 'not recorded')
+        + ' · update mode ' + (provenance.updateMode || 'not recorded')));
+      if (provenance.document) item.append(el('div', 'meta', 'Document provenance: ' + (provenance.document.documentId || 'id not recorded')
+        + ' · version ' + (provenance.document.version ?? 'not recorded')
+        + ' · section ' + (provenance.document.section || 'not recorded')
+        + ' · locator ' + (provenance.document.locator || 'not recorded')));
+      if (row.targetIds?.length) item.append(el('div', 'meta', 'Lifecycle targets: ' + row.targetIds.join(', ')));
+      if (row.replaces?.length) item.append(el('div', 'meta', 'Supersedes records: ' + row.replaces.join(', ')));
+      if (row.replacedBy?.length) item.append(el('div', 'meta', 'Superseded by: ' + row.replacedBy.join(', ')));
+      if (row.conflictsWith?.length) item.append(el('div', 'meta', 'Recorded conflicts: ' + row.conflictsWith.join(', ')));
+    } else if (row.source === 'world') {
+      item.append(el('div', 'meta', 'World-model provenance: origin ' + (provenance.origin || 'not recorded')));
+      if (provenance.evidence?.length) item.append(el('div', 'meta', 'Cited evidence: ' + provenance.evidence.map((entry) => (
+        (entry.relation || 'relation not recorded') + ' · ' + (entry.sourceType || 'source type not recorded') + ':' + (entry.sourceId || 'source id not recorded')
+      )).join('; ')));
+    }
+    return item;
+  };
+  const timelineEmpty = value.status === 'partial'
+    ? 'No timeline rows were returned by the readable owners; one or more owners are unavailable.'
+    : 'No memory, knowledge, or world-model timeline records are present.';
+  renderList(els.timeline, items, timelineMapper, timelineEmpty);
+  for (const [key, target, statusTarget, label, emptyMessage] of [
+    ['memory', els.memory, els.memoryRecordsStatus, 'memory', 'No memory records are present in MemoryStore.'],
+    ['knowledge', els.knowledge, els.knowledgeStatus, 'knowledge', 'No knowledge claims or lifecycle records are present.'],
+    ['world', els.world, els.worldStatus, 'world-model', 'No world-model changes are recorded.'],
+  ]) {
+    const source = sources[key];
+    reportSource(statusTarget, source, label);
+    const mapper = (row) => itemFrom(row.summary || row.id, (row.kind || row.type || 'record')
+      + ' · ' + (row.at || 'time not recorded') + (row.status ? ' · ' + row.status : ''));
+    renderOwnerItems(target, source, mapper, label, emptyMessage);
+  }
+}
+
+function renderBriefing(result) {
+  const owner = ownerStatusText(result, 'Briefing');
+  const value = result?.ok === true ? result.value : null;
+  if (owner.text) {
+    setWorkspaceStatus(els.briefingStatus, owner.text, owner.state);
+    renderList(els.briefings, [], () => null, 'Unavailable: briefing owners could not be read.');
+    return;
+  }
+  const sources = value.sources || {};
+  const missing = Object.entries(sources).filter(([, source]) => source?.available !== true).map(([name]) => name);
+  const facts = Array.isArray(value.facts) ? value.facts : [];
+  const inferences = Array.isArray(value.inferred) ? value.inferred : [];
+  if (value.status === 'partial' || missing.length > 0) {
+    setWorkspaceStatus(els.briefingStatus, 'Partial owner read; unavailable: ' + (missing.join(', ') || 'one or more stores')
+      + '. Facts are limited to readable stores; inferred counts from missing owners are omitted.', 'partial');
+  } else if (facts.length === 0 && inferences.length === 0) {
+    setWorkspaceStatus(els.briefingStatus, 'No briefing facts are recorded by the current owners.', 'empty');
+  } else {
+    setWorkspaceStatus(els.briefingStatus, 'Generated at ' + (value.generatedAt || 'time not recorded')
+      + ' · ' + facts.length + ' owner facts · ' + inferences.length + ' explicitly labeled heuristic(s).', 'available');
+  }
+  const rows = [];
+  for (const fact of facts) rows.push({ title: fact.text || fact.id || fact.kind, meta: 'Recorded fact · ' + (fact.kind || 'kind not recorded')
+    + ' · ' + (fact.status || 'status not recorded') + (fact.id ? ' · record ' + fact.id : '') });
+  for (const inference of inferences) rows.push({ title: inference.text, meta: 'Heuristic inference, not a verified outcome · '
+    + (inference.kind || 'kind not recorded') + ' · basis: ' + (inference.basis || 'not recorded') });
+  renderList(els.briefings, rows, (row) => itemFrom(row.title, row.meta),
+    value.status === 'partial' ? 'No facts came from readable owners; unavailable owners are named above.' : 'No briefing facts are recorded.');
+}
+
+function renderHealth(result) {
   if (!els.health) return;
   els.health.replaceChildren();
   if (els.healthOverall) els.healthOverall.replaceChildren();
-  if (!health || health.unavailable) {
-    els.health.append(el('li', 'meta', 'The health view is not available.'));
+  const owner = ownerStatusText(result, 'Health');
+  const health = result?.ok === true ? result.value : null;
+  if (owner.text) {
+    renderList(els.health, [], () => null, owner.text);
     return;
   }
+  const areas = Array.isArray(health.areas) ? health.areas : [];
   if (els.healthOverall) els.healthOverall.append(el('span', 'badge', 'overall: ' + (health.overall || 'unknown')));
-  for (const area of (health.areas || [])) {
+  for (const area of areas) {
     const item = el('li', 'item');
     const head = el('div', 'row');
-    head.append(el('span', 'title', area.label));
-    head.append(el('span', 'badge', area.state + (area.advisory && area.state === 'unknown' ? ' / not checked' : '')));
+    head.append(el('span', 'title', area.label || area.key || 'subsystem'));
+    head.append(el('span', 'badge', (area.state || 'unknown') + (area.advisory && area.state === 'unknown' ? ' / not checked' : '')));
     item.append(head);
-    item.append(el('div', 'meta', area.summary));
+    item.append(el('div', 'meta', area.summary || 'No health detail recorded.'));
     els.health.append(item);
   }
+  if (areas.length === 0) renderList(els.health, [], () => null, 'The health owner returned no subsystem rows.');
 }
 
-function renderRuntime(runtime) {
-  renderList(els.runtime, Array.isArray(runtime) ? runtime : (runtime ? [runtime] : []), (row) => itemFrom(row.status || row.state || 'runtime', row.detail || ''));
+function renderSystemStatus(snapshot, healthResult) {
+  if (!snapshot) {
+    setWorkspaceStatus(els.systemStatus, 'Unavailable: the authoritative system snapshot could not be read.', 'unavailable');
+    return;
+  }
+  const health = healthResult?.ok === true ? healthResult.value : null;
+  const runtime = snapshot.runtime;
+  const latch = snapshot.killSwitch;
+  const resources = snapshot.resources;
+  const parts = [];
+  const missing = [];
+  if (health) parts.push('health reports ' + (health.overall || 'unknown'));
+  else missing.push('health');
+  if (runtime && !runtime.unavailable) parts.push('runtime lifecycle ' + (runtime.lifecycle || runtime.status || 'unknown'));
+  else missing.push('runtime');
+  if (latch && typeof latch.active === 'boolean' && latch.policyUnavailable !== true && !latch.unavailable) {
+    parts.push('ECP latch ' + (latch.active ? 'ACTIVE' : 'clear'));
+  } else {
+    parts.push('ECP latch unavailable or policy unavailable');
+    missing.push('ECP latch');
+  }
+  if (resources && !resources.unavailable) parts.push('resource telemetry returned');
+  else missing.push('resource telemetry');
+  setWorkspaceStatus(els.systemStatus, parts.join(' · ') + (missing.length ? ' · unavailable: ' + missing.join(', ') : ''), missing.length ? 'partial' : 'available');
 }
 
-function renderSources(sources) {
-  renderList(els.sources, Array.isArray(sources) ? sources : (sources ? [sources] : []), (row) => itemFrom(row.name || row.provider || 'source', row.status || row.health || ''));
-  renderList(els.integrations, Array.isArray(sources) ? sources : (sources ? [sources] : []), (row) => itemFrom(row.name || row.provider || 'integration', row.status || row.health || ''));
+function renderRuntime(result) {
+  const owner = ownerStatusText(result, 'Runtime');
+  const runtime = result?.ok === true ? result.value : null;
+  if (owner.text || !runtime || runtime.unavailable) {
+    const message = owner.text || ('Unavailable: ' + String(runtime?.unavailable || 'runtime status was not returned.'));
+    renderList(els.runtime, [], () => null, message);
+    return;
+  }
+  const meta = [
+    runtime.runtimeId ? 'runtime ' + runtime.runtimeId : null,
+    'paused ' + (runtime.paused === true ? 'yes' : runtime.paused === false ? 'no' : 'unknown'),
+    Number.isInteger(runtime.ticks) ? 'ticks ' + runtime.ticks : null,
+    Number.isInteger(runtime.backlog) ? 'backlog ' + runtime.backlog : null,
+    runtime.lastError ? 'last error ' + runtime.lastError : null,
+    runtime.corruption ? 'corruption ' + runtime.corruption : null,
+  ].filter(Boolean).join(' · ');
+  renderList(els.runtime, [runtime], (row) => itemFrom(row.lifecycle || row.status || 'runtime status not recorded', meta), 'Runtime returned no status record.');
 }
 
-function renderDocuments(documents) {
-  const docs = documents && Array.isArray(documents.documents) ? documents.documents : [];
-  const results = documents && Array.isArray(documents.results) ? documents.results : [];
+function renderResources(result) {
+  const owner = ownerStatusText(result, 'Resource Fabric');
+  const value = result?.ok === true ? result.value : null;
+  if (owner.text || !value || value.unavailable) {
+    const message = owner.text || ('Unavailable: ' + String(value?.unavailable || 'resource telemetry was not returned.'));
+    setWorkspaceStatus(els.resourcesStatus, message, owner.text ? owner.state : 'unavailable');
+    renderList(els.resources, [], () => null, message);
+    return;
+  }
+  const megabytes = (bytes) => (Number.isFinite(bytes) ? Math.round(bytes / 1048576) + ' MB' : 'not reported');
+  const rows = [];
+  const cpu = value.cpu || {};
+  rows.push({ title: 'CPU', meta: (cpu.available === true && Number.isInteger(cpu.logicalCount))
+    ? cpu.logicalCount + ' logical processors reported by the host'
+    : 'not reported by the Resource Fabric' });
+  const memory = value.memory || {};
+  rows.push({ title: 'Memory', meta: memory.available === true
+    ? megabytes(memory.freeBytes) + ' free of ' + megabytes(memory.totalBytes)
+    : 'not reported by the Resource Fabric' });
+  const gpu = value.gpu || {};
+  rows.push({ title: 'GPU', meta: gpu.reported === true
+    ? 'reported'
+    : 'unavailable: ' + String(gpu.reason || 'no GPU telemetry provider') });
+  const network = value.network || {};
+  rows.push({ title: 'Network', meta: network.reported === true
+    ? 'reported'
+    : 'unavailable: ' + String(network.reason || 'no network telemetry provider') });
+  const storage = Array.isArray(value.storage) ? value.storage : [];
+  for (const volume of storage) {
+    rows.push({ title: 'Storage ' + String(volume.path || 'path not reported'), meta: volume.reported === true
+      ? megabytes(volume.availableBytes) + ' available of ' + megabytes(volume.totalBytes)
+      : 'unavailable: ' + String(volume.reason || 'statfs did not report this path') });
+  }
+  const unreported = [cpu.available !== true ? 'CPU' : null, memory.available !== true ? 'memory' : null,
+    gpu.reported !== true ? 'GPU' : null, network.reported !== true ? 'network' : null,
+    storage.some((volume) => volume.reported !== true) ? 'storage' : null].filter(Boolean);
+  setWorkspaceStatus(els.resourcesStatus, rows.length + ' resource reading(s) returned'
+    + (value.at ? ' at ' + value.at : '')
+    + (unreported.length ? ' · not reported: ' + unreported.join(', ') : '')
+    + ' · reservations held: ' + (Number.isInteger(value.reservations) ? value.reservations : 'not reported') + '.',
+  unreported.length ? 'partial' : 'available');
+  renderList(els.resources, rows, (row) => itemFrom(row.title, row.meta), 'The Resource Fabric returned no readings.');
+}
+
+function renderSources(result) {
+  const owner = ownerStatusText(result, 'Integrations');
+  const sources = result?.ok === true ? result.value : null;
+  if (owner.text || !sources || sources.unavailable) {
+    const message = owner.text || ('Unavailable: ' + String(sources?.unavailable || 'integration status was not returned.'));
+    setWorkspaceStatus(els.integrationsStatus, message, owner.text ? owner.state : 'unavailable');
+    renderList(els.sources, [], () => null, message);
+    renderList(els.integrations, [], () => null, message);
+    return;
+  }
+  const providers = Array.isArray(sources.providers) ? sources.providers : [];
+  const enabled = Number.isInteger(sources.enabled) ? sources.enabled : providers.filter((provider) => provider.enabled === true).length;
+  const corruption = sources.corruption;
+  const damaged = corruption && (corruption === true || (typeof corruption === 'object' && Object.keys(corruption).length > 0));
+  const statusText = providers.length === 0 ? 'No integration providers are registered.'
+    : providers.length + ' provider record(s); ' + enabled + ' enabled' + (sources.paused ? ' · polling paused' : '') + '.';
+  setWorkspaceStatus(els.integrationsStatus, statusText + (damaged ? ' Provider state reports corruption.' : ''), damaged ? 'partial' : (providers.length ? 'available' : 'empty'));
+  const mapper = (row) => {
+    const health = row.health || {};
+    const details = [
+      row.kind || 'kind not recorded',
+      row.enabled === true ? 'enabled' : 'disabled',
+      Number.isInteger(health.observed) ? 'observed ' + health.observed : 'observed not recorded',
+      Number.isInteger(health.accepted) ? 'accepted ' + health.accepted : null,
+      Number.isInteger(health.rejected) && health.rejected > 0 ? 'rejected ' + health.rejected : null,
+      health.exhausted ? 'retry limit reached' : null,
+      health.lastSuccessAt ? 'last success ' + health.lastSuccessAt : 'no successful poll recorded',
+      health.lastError ? 'last error ' + health.lastError : null,
+      row.nextPollAt ? 'next poll ' + row.nextPollAt : null,
+      row.scope ? 'scope ' + JSON.stringify(row.scope) : null,
+    ].filter(Boolean).join(' · ');
+    return itemFrom(row.name || row.id || 'integration provider', details);
+  };
+  const empty = 'No integration providers are registered.';
+  renderList(els.sources, providers, mapper, empty);
+  renderList(els.integrations, providers, mapper, empty);
+}
+
+function renderDocuments(result) {
+  const owner = ownerStatusText(result, 'Document index');
+  const documents = result?.ok === true ? result.value : null;
+  if (owner.text || !documents || documents.unavailable) {
+    const message = owner.text || ('Unavailable: ' + String(documents?.unavailable || 'document records could not be read.'));
+    setWorkspaceStatus(els.documentsStatus, message, owner.text ? owner.state : 'unavailable');
+    renderList(els.documents, [], () => null, message);
+    return;
+  }
+  const docs = Array.isArray(documents.documents) ? documents.documents : [];
+  const results = Array.isArray(documents.results) ? documents.results : [];
   const items = results.length ? results : docs;
-  renderList(els.documents, items, (doc) => itemFrom(doc.title || doc.id || doc.path || 'document', doc.status || doc.summary || ''));
+  const corrupt = Number.isInteger(documents.corrupt) ? documents.corrupt : 0;
+  const total = Number.isInteger(documents.documentsTotal) ? documents.documentsTotal
+    : (Number.isInteger(documents.indexed) ? documents.indexed : 0)
+      + (Number.isInteger(documents.failed) ? documents.failed : 0)
+      + (Number.isInteger(documents.deleted) ? documents.deleted : 0);
+  const query = documents.query ? 'Search returned ' + results.length + ' result(s) for the submitted query.'
+    : 'Document owner reports ' + docs.length + ' row(s) in this bounded listing; indexed ' + (documents.indexed ?? 'unknown')
+      + ', failed ' + (documents.failed ?? 'unknown') + ', deleted ' + (documents.deleted ?? 'unknown') + '.';
+  setWorkspaceStatus(els.documentsStatus, query + (corrupt ? ' ' + corrupt + ' corrupt record(s) were reported.' : ''), corrupt ? 'partial' : (total === 0 ? 'empty' : 'available'));
+  renderList(els.documents, items, (doc) => {
+    const title = doc.title || doc.documentId || doc.id || doc.path || 'document';
+    const meta = [doc.status || doc.summary || 'status not recorded', doc.path || null,
+      doc.version ? 'version ' + doc.version : null, doc.bytes !== undefined ? doc.bytes + ' bytes' : null,
+      doc.score !== undefined ? 'score ' + doc.score : null].filter(Boolean).join(' · ');
+    return itemFrom(title, meta);
+  }, documents.query ? 'No matching document results were returned.' : 'No document records are present in the index.');
 }
 
-function renderReasoning(reasoning) {
-  if (!els.reasoning) return;
-  els.reasoning.replaceChildren();
-  if (!reasoning || reasoning.unavailable) {
-    els.reasoning.append(el('li', 'meta', 'Reasoning is unavailable.'));
+function renderReasoning(result) {
+  const owner = ownerStatusText(result, 'Reasoning');
+  const reasoning = result?.ok === true ? result.value : null;
+  if (owner.text || !reasoning || reasoning.unavailable) {
+    const message = owner.text || ('Unavailable: ' + String(reasoning?.unavailable || 'reasoning records could not be read.'));
+    setWorkspaceStatus(els.reasoningStatus, message, owner.text ? owner.state : 'unavailable');
+    renderList(els.reasoning, [], () => null, message);
     return;
   }
   const sessions = Array.isArray(reasoning.sessions) ? reasoning.sessions : [];
-  for (const session of sessions.slice(0, 8)) {
-    els.reasoning.append(itemFrom(session.sessionId || session.id || 'session', session.status || 'recorded'));
-  }
-  if (sessions.length === 0) els.reasoning.append(el('li', 'meta', 'No reasoning sessions recorded.'));
+  const status = reasoning.status || {};
+  const total = Number.isInteger(reasoning.total) ? reasoning.total : (Number.isInteger(status.sessions) ? status.sessions : sessions.length);
+  const corrupt = Number.isInteger(status.corrupt) ? status.corrupt : 0;
+  setWorkspaceStatus(els.reasoningStatus, total === 0 ? 'No reasoning sessions are recorded.'
+    : 'Showing ' + sessions.length + ' of ' + total + ' recorded reasoning session(s)'
+      + (Number.isInteger(status.invalidated) ? ' · invalidated ' + status.invalidated : '') + '.'
+      + (corrupt ? ' ' + corrupt + ' corrupt record(s) were reported.' : ''), corrupt ? 'partial' : (total === 0 ? 'empty' : 'available'));
+  renderList(els.reasoning, sessions, (session) => itemFrom(session.request || session.sessionId || session.id || 'session',
+    (session.sessionId ? 'session ' + session.sessionId + ' · ' : '')
+      + (session.status || 'status not recorded')
+      + (session.at ? ' · ' + session.at : ' · time not recorded')
+      + (session.invalidated ? ' · invalidated at ' + (session.invalidatedAt || 'time not recorded') : '')
+      + (session.summary ? ' · ' + session.summary : '')),
+  'No reasoning sessions are recorded.');
 }
 
-function renderCouncil(council) {
-  if (!els.council) return;
-  els.council.replaceChildren();
-  if (!council || council.unavailable) {
-    els.council.append(el('li', 'meta', 'Council is unavailable.'));
+function renderConversation(snapshot) {
+  if (!snapshot) {
+    setWorkspaceStatus(els.conversationStatus, 'Unavailable: conversation snapshot could not be read.', 'unavailable');
+    renderList(els.conversationHistory, [], () => null, 'Unavailable: conversation records could not be read.');
+    renderTurns([], 'Conversation state is unavailable.');
+    return;
+  }
+  const session = snapshot.session || {};
+  const conversationError = typeof session.unavailable === 'string' && session.unavailable.startsWith('conversation history is unavailable:')
+    ? session.unavailable : null;
+  const turns = Array.isArray(snapshot.turns) ? snapshot.turns : [];
+  if (conversationError || ['corrupt', 'unavailable'].includes(session.status)) {
+    const message = conversationError || 'Conversation session state is ' + session.status + '.';
+    setWorkspaceStatus(els.conversationStatus, 'Unavailable: ' + message, 'unavailable');
+    renderList(els.conversationHistory, [], () => null, 'Unavailable: conversation history could not be read.');
+    renderTurns([], 'Conversation history is unavailable.');
+    return;
+  }
+  const sessionText = session.status === 'ok' ? 'Current session has ' + turns.length + ' returned turn(s).'
+    : 'No active conversation session is recorded.';
+  setWorkspaceStatus(els.conversationStatus, sessionText + ' Earlier sessions are not included in this current-session view.', turns.length ? 'available' : 'empty');
+  const empty = session.status === 'ok' ? 'No turns are recorded in the current session.' : 'No active session or current-session turns are recorded.';
+  renderList(els.conversationHistory, turns, (turn) => itemFrom(turn.text || turn.id || 'turn',
+    (turn.role || 'role not recorded') + (turn.at ? ' · ' + turn.at : '') + (turn.verified ? ' · verified outcome' : '')),
+  empty);
+  renderTurns(turns, empty);
+}
+
+// ---- T-29 cognitive trace --------------------------------------------------
+// Five stage blocks, each built from the run record only. No field is synthesised here: a
+// missing value renders as "not recorded", and an approval button appears only when the run
+// itself says a step is waiting for the owner.
+function cognitionStage(title, lines) {
+  const section = el('section', 'cognition-stage');
+  section.append(el('h3', null, title));
+  for (const line of lines) {
+    if (line === null || line === undefined || line === '') continue;
+    section.append(el('p', 'meta', line));
+  }
+  return section;
+}
+
+function renderCognitionTrace(run) {
+  if (!els.cognitionTrace) return;
+  els.cognitionTrace.replaceChildren();
+  if (!run || typeof run !== 'object') {
+    els.cognitionTrace.append(el('p', 'meta', 'No cognitive run is recorded yet. Run the pipeline to record one.'));
+    return;
+  }
+  const stages = run.stages || {};
+  const packet = stages.context || {};
+  const epistemic = packet.epistemic || {};
+  const salience = stages.salience || {};
+  const council = stages.council || {};
+  const graph = stages.task_graph || {};
+  const execution = stages.execution || {};
+
+  els.cognitionTrace.append(el('p', 'meta', 'Run ' + String(run.runId || 'recorded') + ' · status ' + String(run.status || 'unknown')
+    + ' · ' + String(run.at || 'time not recorded') + ' · action ' + String(run.action?.name || 'not recorded')));
+
+  const memoryCount = packet.memory?.count ?? 0;
+  const knowledgeCount = packet.knowledge?.count ?? 0;
+  const worldCount = packet.world?.count ?? 0;
+  const contextLines = [
+    'Owner context: ' + (packet.owner?.activeGoals || []).length + ' active goal(s) with recorded criteria.',
+    'Memory ' + memoryCount + ' · knowledge ' + knowledgeCount + ' · world facts ' + worldCount + '.',
+    'Epistemic tags: ' + (epistemic.observed ?? 0) + ' observed · ' + (epistemic.inferred ?? 0) + ' inferred · '
+      + (epistemic.assumed ?? 0) + ' assumed · ' + (epistemic.predicted ?? 0) + ' predicted.',
+    packet.sentinel?.error ? 'Sentinel unavailable: ' + packet.sentinel.error : 'Sentinel advisories: ' + ((packet.sentinel?.advisories || []).length),
+  ];
+  for (const advisory of packet.sentinel?.advisories || []) {
+    contextLines.push('Advisory' + (advisory.severity ? ' (' + advisory.severity + ')' : '') + ': ' + (advisory.summary || advisory.detail || advisory.kind || 'not described'));
+  }
+  for (const problem of packet.problems || []) contextLines.push('Read problem: ' + problem);
+  els.cognitionTrace.append(cognitionStage('1 · Context, memory and world model', contextLines));
+
+  const reading = (value) => (value === null || value === undefined ? 'unavailable' : String(value));
+  els.cognitionTrace.append(cognitionStage('2 · Salience, resources and Sentinel', [
+    'urgency ' + reading(salience.urgency) + ' · confidence ' + reading(salience.confidence)
+      + ' · uncertainty ' + reading(salience.uncertainty) + ' · goal progress ' + reading(salience.goal_progress)
+      + ' · resource pressure ' + reading(salience.resource_pressure) + ' · risk sensitivity ' + reading(salience.risk_sensitivity)
+      + ' · novelty ' + reading(salience.novelty),
+    salience.basis?.resource_pressure ? 'Resource basis: ' + salience.basis.resource_pressure : null,
+    salience.basis?.confidence ? 'Confidence basis: ' + salience.basis.confidence : null,
+    salience.basis?.goal_progress ? 'Goal basis: ' + salience.basis.goal_progress : null,
+    'Read-only: these variables advise; the ECP decides.',
+  ]));
+
+  const councilLines = [];
+  if (council.status === 'ran') {
+    const view = (label, position) => (position
+      ? label + ': ' + position.verdict + ' — ' + position.summary
+      : label + ': not recorded');
+    councilLines.push(view('Thesis', council.perspectives?.thesis));
+    councilLines.push(view('Counter-risk', council.perspectives?.counter_risk));
+    councilLines.push(view('Evidence check', council.perspectives?.evidence_check));
+    if (council.recommendation) {
+      councilLines.push('Recommendation: ' + council.recommendation.summary + ' (support ' + council.recommendation.support
+        + ', confidence ' + council.recommendation.confidence + ')');
+    }
+    councilLines.push('Session ' + String(council.sessionId || 'not recorded') + ' · deliberation data, not a permission.');
+  } else {
+    councilLines.push('Council ' + String(council.status || 'not run') + (council.reason ? ': ' + council.reason : ''));
+  }
+  els.cognitionTrace.append(cognitionStage('3 · Council synthesis', councilLines));
+
+  const graphLines = [(graph.summary || 'not recorded')];
+  for (const node of graph.nodes || []) {
+    graphLines.push('Step ' + String(node.id) + ': ' + String(node.action) + ' · permission ' + String(node.permission)
+      + ' · risk ' + String(node.risk) + (node.description ? ' — ' + node.description : ''));
+  }
+  graphLines.push('Plan rule: ' + String(graph.rule || 'not recorded'));
+  els.cognitionTrace.append(cognitionStage('4 · Task graph', graphLines));
+
+  const executionLines = [
+    'Status: ' + String(run.status || 'unknown') + ' · ECP decision ' + String(execution.decision || 'not requested')
+      + (execution.reason ? ' (' + execution.reason + ')' : ''),
+    'Autonomy level: ' + reading(execution.autonomyLevel) + (execution.autonomySource ? ' · ' + execution.autonomySource : ''),
+    'Latch: ' + (execution.latch ? (execution.latch.active ? 'active' : (execution.latch.policyUnavailableLatch ? 'unreadable' : 'clear')) : 'not recorded'),
+    'Verification: ' + String(run.verification?.outcome || 'not_run') + (run.verification?.detail ? ' — ' + run.verification.detail : ''),
+  ];
+  if (run.approval?.required) {
+    executionLines.push('Approval: ' + String(run.approval.status) + (run.approval.waitingSteps?.length ? ' for step(s) ' + run.approval.waitingSteps.join(', ') : ''));
+    if (run.approval.recorded) executionLines.push('Recorded approval: ' + String(run.approval.recorded.approvedBy || 'owner') + ' at ' + String(run.approval.recorded.at || run.approval.recorded.approvedAt || 'not recorded'));
+  }
+  if (run.halted) executionLines.push('Halted: ' + String(run.halted.reason) + ' — ' + String(run.halted.detail || ''));
+  if (run.task?.id) executionLines.push('Task ' + String(run.task.id) + ' · ' + String(run.task.status));
+  els.cognitionTrace.append(cognitionStage('5 · Governed execution', executionLines));
+
+  if (run.status === 'awaiting_approval' && run.task?.id) {
+    const waiting = run.approval?.waitingSteps?.[0] || 's1';
+    const approve = el('button', 'small', 'Approve step ' + waiting + ' and execute');
+    approve.type = 'button';
+    approve.addEventListener('click', async () => {
+      approve.disabled = true;
+      els.cognitionRunStatus.textContent = 'Recording your approval for step ' + waiting + '…';
+      try {
+        const data = await api('/api/cognition/runs/' + encodeURIComponent(run.runId) + '/approve', { method: 'POST', body: { stepId: waiting } });
+        state.lastCognitionRun = data.run || null;
+        renderCognitionTrace(data.run || null);
+        els.cognitionRunStatus.textContent = 'Approval recorded; the run is ' + String(data.runStatus || 'reported') + '.';
+      } catch (err) {
+        els.cognitionRunStatus.textContent = 'The approval was refused: ' + String(err.message || err);
+        approve.disabled = false;
+      }
+      scheduleEventRefresh();
+    });
+    els.cognitionTrace.append(approve);
+  }
+}
+
+function renderCognition(result) {
+  if (!els.cognitionRuns) return;
+  if (!result) {
+    setWorkspaceStatus(els.cognitionStatus, 'Loading recorded cognitive runs…', 'loading');
+    return;
+  }
+  if (result.ok !== true) {
+    const state = result.status >= 500 ? 'unavailable' : 'error';
+    setWorkspaceStatus(els.cognitionStatus, (state === 'unavailable' ? 'Unavailable: ' : 'Read error: ') + result.error, state);
+    renderList(els.cognitionRuns, [], () => null, 'Unavailable: no cognitive run can be shown.');
+    return;
+  }
+  const runs = Array.isArray(result.value.runs) ? result.value.runs : [];
+  setWorkspaceStatus(els.cognitionStatus, runs.length === 0
+    ? 'No cognitive run has been recorded yet.'
+    : String(runs.length) + ' recorded run(s); the newest is shown above.', runs.length ? 'available' : 'empty');
+  renderCognitionTrace(runs[0] ?? state.lastCognitionRun);
+  renderList(els.cognitionRuns, runs, (run) => itemFrom(
+    String(run.runId || 'run') + ' · ' + String(run.status || 'unknown'),
+    String(run.intent || '') + ' · ' + String(run.action?.name || 'no action') + ' · verification '
+      + String(run.verification?.outcome || 'not_run'),
+  ), 'No cognitive run has been recorded yet.');
+}
+
+function renderCouncil(result) {
+  const owner = ownerStatusText(result, 'Council');
+  const council = result?.ok === true ? result.value : null;
+  if (owner.text) {
+    setWorkspaceStatus(els.councilState, owner.text, owner.state);
+    renderList(els.council, [], () => null, 'Unavailable: council sessions could not be read.');
+    if (els.councilSynthesis) {
+      els.councilSynthesis.replaceChildren();
+      els.councilSynthesis.append(el('p', 'meta', 'Unavailable: council synthesis could not be read.'));
+    }
     return;
   }
   const sessions = Array.isArray(council.sessions) ? council.sessions : [];
-  for (const session of sessions.slice(0, 12)) {
+  const total = Number.isInteger(council.total) ? council.total : sessions.length;
+  const status = council.status || {};
+  const corrupt = Number.isInteger(status.corrupt) ? status.corrupt : 0;
+  setWorkspaceStatus(els.councilState, total === 0 ? 'No council sessions are recorded.'
+    : 'Showing ' + sessions.length + ' of ' + total + ' recorded council session(s)'
+      + (corrupt ? ' · ' + corrupt + ' corrupt record(s)' : '') + '.', corrupt ? 'partial' : (total === 0 ? 'empty' : 'available'));
+  renderList(els.council, sessions, (session) => {
     const title = (session.recommendation ? session.recommendation + ' · ' : '') + (session.objective || session.sessionId);
-    const meta = 'support ' + (session.support || 'unknown') + ' · ' + (session.at ? String(session.at).slice(0, 19) : '');
-    els.council.append(itemFrom(title, meta));
+    const meta = 'support ' + (session.support || 'unknown') + ' · ' + (session.at ? String(session.at).slice(0, 19) : 'time not recorded');
+    return itemFrom(title, meta);
+  }, 'No council sessions are recorded.');
+  if (!els.councilSynthesis) return;
+  els.councilSynthesis.replaceChildren();
+  const latest = council.session;
+  if (!latest || !latest.synthesis || !latest.synthesis.synthesis) {
+    els.councilSynthesis.append(el('p', 'meta', 'No stored council synthesis is available.'));
+    return;
   }
-  if (sessions.length === 0) els.council.append(el('li', 'meta', 'No council sessions recorded.'));
-  if (els.councilSynthesis) {
-    els.councilSynthesis.replaceChildren();
-    const latest = council.session;
-    // The stored session keeps the whole synthesis record; the recommendation itself is nested.
-    if (!latest || !latest.synthesis || !latest.synthesis.synthesis) {
-      els.councilSynthesis.append(el('p', 'meta', 'No stored synthesis yet.'));
-    } else {
-      const s = latest.synthesis.synthesis;
-      const verdict = el('p', '', 'Recommended: ' + s.recommendedOption.level + ' · support ' + s.support + ' · confidence ' + s.confidence);
-      const summary = el('p', 'meta', s.explanation || '');
-      const disagreement = el('p', 'meta', 'Disagreement: ' + (latest.disagreement?.kind || 'unknown') + ' — ' + (latest.synthesis.disagreementExplanation || latest.disagreement?.detail || ''));
-      const evidence = el('p', 'meta', 'Supporting ' + (s.supportingEvidence?.length || 0) + ' · Conflicting ' + (s.conflictingEvidence?.length || 0) + ' · Approvals: ' + (s.requiredApprovals || []).join(', '));
-      els.councilSynthesis.append(verdict, summary, disagreement, evidence);
-      const list = el('ul', 'work');
-      for (const p of (latest.positions || []).slice(0, 7)) {
-        list.append(itemFrom(p.perspectiveName || p.perspectiveId, (p.position && p.position.verdict) || p.status));
-      }
-      els.councilSynthesis.append(list);
-    }
+  const synthesis = latest.synthesis.synthesis;
+  const verdict = el('p', '', 'Recommended: ' + (synthesis.recommendedOption?.level || 'not recorded')
+    + ' · support ' + (synthesis.support ?? 'not recorded') + ' · confidence ' + (synthesis.confidence ?? 'not recorded'));
+  const summary = el('p', 'meta', synthesis.explanation || 'No explanation was recorded.');
+  const disagreement = el('p', 'meta', 'Disagreement: ' + (latest.disagreement?.kind || 'unknown')
+    + ' — ' + (latest.synthesis.disagreementExplanation || latest.disagreement?.detail || 'not recorded'));
+  const evidence = el('p', 'meta', 'Supporting ' + (synthesis.supportingEvidence?.length || 0)
+    + ' · conflicting ' + (synthesis.conflictingEvidence?.length || 0)
+    + ' · approvals listed: ' + (synthesis.requiredApprovals || []).join(', '));
+  els.councilSynthesis.append(verdict, summary, disagreement, evidence);
+  const list = el('ul', 'work');
+  for (const position of (latest.positions || []).slice(0, 7)) {
+    list.append(itemFrom(position.perspectiveName || position.perspectiveId,
+      (position.position && position.position.verdict) || position.status || 'status not recorded'));
   }
+  els.councilSynthesis.append(list);
 }
 
-function renderWorkshop(page) {
-  if (!els.workshop) return;
-  els.workshop.replaceChildren();
-  if (!page || page.unavailable) {
-    els.workshop.append(el('li', 'meta', 'Workshop is unavailable.'));
-  } else {
-    const artifacts = Array.isArray(page.artifacts) ? page.artifacts : [];
-    for (const artifact of artifacts.slice(0, 12)) {
-      const meta = `${artifact.domain} · ${artifact.components} component(s) · ${artifact.connections} connection(s) · budget ${artifact.budget === null || artifact.budget === undefined ? 'not declared' : artifact.budget}`;
-      const li = itemFrom(artifact.title || artifact.artifactId, meta);
-      const button = el('button', 'small', 'Simulate');
-      button.type = 'button';
-      button.dataset.artifactId = artifact.artifactId;
-      button.addEventListener('click', () => { simulateWorkshop(artifact.artifactId); });
-      li.append(button);
-      els.workshop.append(li);
-    }
-    if (artifacts.length === 0) els.workshop.append(el('li', 'meta', 'No workshop artifacts are stored.'));
+function renderWorkshop(result) {
+  const owner = ownerStatusText(result, 'Workshop');
+  const page = result?.ok === true ? result.value : null;
+  if (owner.text) {
+    setWorkspaceStatus(els.workshopState, owner.text, owner.state);
+    renderList(els.workshop, [], () => null, 'Unavailable: stored design sheets could not be read.');
+    renderWorkshopReport(state.workshopReport ?? null);
+    return;
   }
+  const artifacts = Array.isArray(page.artifacts) ? page.artifacts : [];
+  const total = Number.isInteger(page.total) ? page.total : artifacts.length;
+  const health = page.status || {};
+  const damaged = (health.chain && health.chain !== 'intact') || (Number.isInteger(health.corrupt) && health.corrupt > 0);
+  setWorkspaceStatus(els.workshopState, total === 0 ? 'No design sheets are recorded in WorkshopStore.'
+    : 'Showing ' + artifacts.length + ' of ' + total + ' stored design sheet(s).'
+      + (health.chain ? ' Store chain: ' + health.chain + '.' : '')
+      + (page.authorizesExecution === false ? ' The store does not authorize execution.' : ''), damaged ? 'partial' : (total === 0 ? 'empty' : 'available'));
+  renderList(els.workshop, artifacts, (artifact) => {
+    const meta = (artifact.domain || 'domain not recorded') + ' · ' + artifact.components + ' component(s) · '
+      + artifact.connections + ' connection(s) · budget '
+      + (artifact.budget === null || artifact.budget === undefined ? 'not declared' : artifact.budget);
+    const li = itemFrom(artifact.title || artifact.artifactId, meta);
+    const button = el('button', 'small', 'Simulate');
+    button.type = 'button';
+    button.addEventListener('click', () => { simulateWorkshop(artifact.artifactId); });
+    li.append(button);
+    return li;
+  }, 'No design sheets are recorded in WorkshopStore.');
   renderWorkshopReport(state.workshopReport ?? null);
 }
 
@@ -677,16 +2049,17 @@ function renderWorkshopReport(report) {
   if (!els.workshopReport) return;
   els.workshopReport.replaceChildren();
   if (!report) {
-    els.workshopReport.append(el('p', 'meta', 'No simulation yet. Compose a sheet, then simulate a stored artifact.'));
+    els.workshopReport.append(el('p', 'meta', 'No simulation has been recorded in this page session.'));
     return;
   }
-  els.workshopReport.append(el('p', '', `Simulation of ${report.artifactId}: ${report.status}`));
+  els.workshopReport.append(el('p', '', 'Simulation of ' + report.artifactId + ': ' + report.status));
   els.workshopReport.append(el('p', 'meta', report.budget === null || report.budget === undefined
     ? 'budget: not declared'
-    : `budget: ${report.budget.spent} of ${report.budget.total}${report.budget.overBudget ? ' (over)' : ''}`));
+    : 'budget: ' + report.budget.spent + ' of ' + report.budget.total + (report.budget.overBudget ? ' (over)' : '')));
   const list = el('ul', 'work');
   for (const component of (Array.isArray(report.components) ? report.components : [])) {
-    list.append(itemFrom(component.id, `receives ${component.inbound}, demands ${component.demand}${component.satisfied ? '' : ' · short'} · cost ${component.cost}`));
+    list.append(itemFrom(component.id, 'receives ' + component.inbound + ', demands ' + component.demand
+      + (component.satisfied ? '' : ' · short') + ' · cost ' + component.cost));
   }
   els.workshopReport.append(list);
   if (Array.isArray(report.warnings) && report.warnings.length > 0) {
@@ -707,8 +2080,282 @@ async function simulateWorkshop(artifactId) {
   }
 }
 
-function renderMemory(records) {
-  renderList(els.memory, Array.isArray(records) ? records : [], (row) => itemFrom(row.content || row.id || 'memory', row.status || row.source || ''));
+// ---- T-31 Step 2 surfaces -------------------------------------------------------
+// Presence, the read-only autonomy matrix, the epistemic world model, and the Evolution Lab. Each
+// renderer reports what the owner returned: an owner that could not be read says unavailable, an
+// owner that returned nothing is honestly empty, and no value is ever defaulted to a clean reading.
+
+function renderPresence(presenceResult, matrixResult) {
+  const owner = ownerStatusText(presenceResult, 'Presence');
+  const value = presenceResult?.ok === true ? presenceResult.value : null;
+  if (owner.text) {
+    setWorkspaceStatus(els.presenceStatus, owner.text, owner.state);
+    renderList(els.presenceDevices, [], () => null, 'Unavailable: device trust could not be read.');
+    renderList(els.presenceMesh, [], () => null, 'Unavailable: mesh state could not be read.');
+  } else {
+    const trust = value.deviceTrust || { available: false, detail: 'device trust is not configured' };
+    const devices = Array.isArray(trust.devices) ? trust.devices : [];
+    if (trust.available !== true) {
+      setWorkspaceStatus(els.presenceStatus, 'Device trust is not configured in this deployment; no device is enrolled.', 'unavailable');
+      renderList(els.presenceDevices, [], () => null, 'Unavailable: device trust is not configured.');
+    } else if (devices.length === 0) {
+      const status = trust.status || {};
+      setWorkspaceStatus(els.presenceStatus, 'No device is enrolled. '
+        + (status.persistence ? 'The registry is ' + status.persistence + '.' : 'The registry state was not reported.'), 'empty');
+      renderList(els.presenceDevices, [], () => null, 'No device is enrolled, so no device is trusted.');
+    } else {
+      const trusted = devices.filter((device) => device.status === 'trusted').length;
+      setWorkspaceStatus(els.presenceStatus, devices.length + ' enrolled device(s): ' + trusted + ' trusted, '
+        + (devices.length - trusted) + ' revoked. A trusted device authenticates messages and grants no capability.', 'available');
+      renderList(els.presenceDevices, devices, (device) => {
+        const li = itemFrom(device.label || device.deviceId, (device.status || 'status not recorded')
+          + ' · enrolled ' + (device.enrolledAt || 'time not recorded')
+          + (device.lastAcceptedSequence !== null && device.lastAcceptedSequence !== undefined
+            ? ' · last accepted sequence ' + device.lastAcceptedSequence : ' · no sequence accepted yet'));
+        if (device.revokedAt) li.append(el('div', 'meta', 'Revoked ' + device.revokedAt
+          + (device.revocationReason ? ' — ' + device.revocationReason : '')));
+        return li;
+      }, 'No device is enrolled, so no device is trusted.');
+    }
+    const mesh = value.mesh || {};
+    const peers = Array.isArray(mesh.peers) ? mesh.peers : [];
+    const meshItems = [itemFrom('Transport', mesh.implemented === true
+      ? 'connected with ' + (mesh.connectedPeers ?? peers.length) + ' peer(s)'
+      : (mesh.detail || 'no device mesh transport is implemented'))];
+    if (peers.length === 0) meshItems.push(itemFrom('Peers', 'none — presence is the local owner session only'));
+    renderList(els.presenceMesh, [...meshItems, ...peers.map((peer) => itemFrom(peer.label || peer.deviceId || 'peer', 'connected'))],
+      (item) => null, 'No mesh peer is connected.');
+  }
+
+  const matrixOwner = ownerStatusText(matrixResult, 'Autonomy matrix');
+  const matrix = matrixResult?.ok === true ? matrixResult.value : null;
+  if (matrixOwner.text) {
+    setWorkspaceStatus(els.autonomyStatus, matrixOwner.text, matrixOwner.state);
+    if (els.autonomyMatrix) els.autonomyMatrix.replaceChildren();
+    renderList(els.autonomyCapabilities, [], () => null, 'Unavailable: the autonomy matrix could not be read.');
+    return;
+  }
+  const domains = Array.isArray(matrix.domains) ? matrix.domains : [];
+  const levels = Array.isArray(matrix.levels) ? matrix.levels : [];
+  const levelName = (level) => {
+    const found = levels.find((entry) => entry.level === level);
+    return found ? 'L' + found.level + ' ' + found.name : (level === null || level === undefined ? 'not reported' : 'L' + level);
+  };
+  setWorkspaceStatus(els.autonomyStatus, matrix.readonly === true
+    ? 'Read-only: ' + matrix.source + ' sets these levels at start-up and the UI cannot change them'
+      + (matrix.restartRequired === true ? ' (a change requires a restart).' : '.')
+    : 'The ECP did not report this matrix as read-only; treat the levels below as unconfirmed.', matrix.readonly === true ? 'available' : 'partial');
+  if (els.autonomyMatrix) {
+    els.autonomyMatrix.replaceChildren();
+    for (const domain of domains) {
+      const row = document.createElement('tr');
+      row.append(el('td', '', domain.domain));
+      row.append(el('td', '', domain.configuredLevel === null ? 'default (L2 write / L0 read)' : levelName(domain.configuredLevel)));
+      row.append(el('td', '', String(domain.capabilities)));
+      row.append(el('td', '', domain.configuredLevel === null ? 'registry default' : 'APEX_AUTONOMY_LEVELS'));
+      els.autonomyMatrix.append(row);
+    }
+  }
+  if (domains.length === 0) {
+    renderList(els.autonomyCapabilities, [], () => null, 'The registry reported no capabilities, so no level is shown.');
+  } else {
+    const rows = Array.isArray(matrix.capabilities) ? matrix.capabilities : [];
+    renderList(els.autonomyCapabilities, rows, (row) => itemFrom(row.name, (row.permission || 'permission not recorded')
+      + ' · ' + (row.levelName ? 'L' + row.level + ' ' + row.levelName : 'level not reported')
+      + ' · domain ' + row.domain + (row.configured ? ' (configured)' : ' (default)')
+      + (row.plannable ? '' : ' · not plannable')), 'The registry reported no capabilities.');
+  }
+}
+
+function renderWorldClaims(worldResult) {
+  if (!els.worldClaims) return;
+  const value = worldResult?.ok === true ? worldResult.value : null;
+  if (!value) {
+    if (els.worldLabels) els.worldLabels.textContent = 'Unavailable: the epistemic projection could not be read.';
+    renderList(els.worldClaims, [], () => null, 'Unavailable: the epistemic projection could not be read.');
+    return;
+  }
+  const labels = value.labels || {};
+  const beliefs = value.beliefs || {};
+  const counts = value.counts || {};
+  const rows = [];
+  const labelOf = (belief) => {
+    const epistemic = String(belief.epistemic || '');
+    if (epistemic === 'observed') return 'observed';
+    if (epistemic === 'predicted') return 'predicted';
+    if (epistemic === 'assumed') return 'assumed';
+    if (epistemic === 'inferred') return 'inferred';
+    if (epistemic === 'user_asserted') return labels.user_asserted || 'stated by you — not independently observed';
+    if (epistemic === 'unverified_model') return labels.unverified_model || 'inferred by a model — unverified';
+    // An unclassified record is never promoted to 'observed'.
+    return 'unclassified (never shown as observed)';
+  };
+  for (const belief of Array.isArray(beliefs.userAsserted) ? beliefs.userAsserted : []) {
+    rows.push({ belief, label: labelOf(belief) });
+  }
+  for (const belief of Array.isArray(beliefs.unverifiedModel) ? beliefs.unverifiedModel : []) {
+    rows.push({ belief, label: labelOf(belief) });
+  }
+  if (els.worldLabels) {
+    els.worldLabels.textContent = (value.complete === false ? 'Partial projection: one or more stores could not be read completely. ' : '')
+      + (beliefs.total ?? rows.length) + ' belief(s) recorded: '
+      + (counts.userAsserted ?? 0) + ' stated by you, ' + (counts.unverifiedModel ?? 0) + ' inferred by a model. '
+      + (value.attention === true ? 'This projection needs attention.' : '');
+  }
+  renderList(els.worldClaims, rows, ({ belief, label }) => {
+    const subject = belief.subject || belief.surface || belief.id || 'subject not recorded';
+    const li = itemFrom(belief.text || belief.claim || belief.summary || subject,
+      '[' + label + '] · ' + (belief.source || belief.store || 'store not recorded')
+      + (belief.recordedAt ? ' · ' + belief.recordedAt : ''));
+    if (belief.provenance && typeof belief.provenance === 'object') {
+      const parts = Object.entries(belief.provenance)
+        .filter(([, v]) => v !== null && v !== undefined && typeof v !== 'object')
+        .map(([k, v]) => k + ': ' + String(v));
+      if (parts.length) li.append(el('div', 'meta', 'Provenance: ' + parts.join(' · ')));
+    }
+    return li;
+  }, 'No belief is recorded, so there is nothing to label.');
+}
+
+const EVOLUTION_LABEL = {
+  not_requested: 'no promotion requested',
+  requested: 'promotion requested — awaiting your decision',
+  approved: 'promotion approved by you',
+  rejected: 'promotion rejected by you',
+};
+
+function renderEvolution(result) {
+  if (!els.evolutionProposals) return;
+  const value = result?.ok === true ? result.value : null;
+  if (!value) {
+    if (els.evolutionStatus) setWorkspaceStatus(els.evolutionStatus, 'Unavailable: the evolution ledger could not be read.', 'unavailable');
+    renderList(els.evolutionProposals, [], () => null, 'Unavailable: the evolution ledger could not be read.');
+    renderList(els.evolutionBoundaries, [], () => null, 'Unavailable: the safety boundaries could not be read.');
+    return;
+  }
+  const proposals = Array.isArray(value.proposals) ? value.proposals : [];
+  const status = value.status || {};
+  if (els.evolutionStatus) {
+    setWorkspaceStatus(els.evolutionStatus, proposals.length === 0
+      ? 'No evolution proposal is recorded. Nothing has been proposed, verified or promoted.'
+      : proposals.length + ' proposal(s): ' + (status.verified ?? 0) + ' with a passing sandbox result, '
+        + (status.failed ?? 0) + ' with a failed result, ' + (status.awaitingVerification ?? 0) + ' unverified, '
+        + (status.promotionRequested ?? 0) + ' awaiting your decision, ' + (status.promoted ?? 0) + ' promoted.'
+        + (status.corrupt && status.corrupt.length ? ' ' + status.corrupt.length + ' damaged ledger line(s) were skipped.' : ''),
+      proposals.length === 0 ? 'empty' : (Array.isArray(status.corrupt) && status.corrupt.length ? 'partial' : 'available'));
+  }
+  renderList(els.evolutionProposals, proposals, (proposal) => {
+    const sandbox = proposal.sandbox || {};
+    const sandboxText = sandbox.verified === true ? 'sandbox: verified · ' + (sandbox.detail || 'no detail recorded')
+      : sandbox.verified === false ? 'sandbox: failed · ' + (sandbox.detail || 'no detail recorded')
+        : 'sandbox: no verification recorded';
+    const li = itemFrom(proposal.title || proposal.proposalId, proposal.proposalId + ' · ' + sandboxText);
+    if (proposal.hypothesis) li.append(el('div', 'meta', 'Hypothesis: ' + proposal.hypothesis));
+    const promotion = proposal.promotion || {};
+    li.append(el('div', 'meta', 'Promotion: ' + (EVOLUTION_LABEL[promotion.state] || promotion.state || 'not recorded')
+      + (promotion.reason ? ' — ' + promotion.reason : '')
+      + (promotion.decisionReason ? ' · decision: ' + promotion.decisionReason : '')));
+    if (proposal.promotionBlocked) li.append(el('div', 'meta', 'Blocked: ' + proposal.promotionBlocked));
+    else if (promotion.state === 'not_requested' || promotion.state === 'rejected') {
+      const request = el('button', 'small', 'Request promotion');
+      request.type = 'button';
+      request.addEventListener('click', () => requestPromotion(proposal.proposalId, request));
+      li.append(request);
+    }
+    if (promotion.state === 'requested') {
+      const approve = el('button', 'small', 'Approve promotion');
+      approve.type = 'button';
+      approve.addEventListener('click', () => decidePromotion(proposal.proposalId, 'approved', approve));
+      const reject = el('button', 'small', 'Reject promotion');
+      reject.type = 'button';
+      reject.addEventListener('click', () => decidePromotion(proposal.proposalId, 'rejected', reject));
+      li.append(approve, reject);
+    }
+    return li;
+  }, 'No evolution proposal is recorded.');
+  const boundaries = value.boundaries || {};
+  const entries = Array.isArray(boundaries.entries) ? boundaries.entries : [];
+  if (els.evolutionBoundariesStatus) {
+    els.evolutionBoundariesStatus.textContent = entries.length === 0
+      ? 'The safety boundaries were not reported by this build.'
+      : (boundaries.allLocked === true
+        ? 'All ' + entries.length + ' boundaries were confirmed by a read of the running system.'
+        : 'One or more boundaries could not be confirmed; each row says what was read.');
+  }
+  renderList(els.evolutionBoundaries, entries, (entry) => itemFrom(
+    (entry.locked === true ? 'locked · ' : 'unconfirmed · ') + entry.title,
+    entry.evidence,
+  ), 'The safety boundaries were not reported by this build.');
+  if (els.evolutionPolicy) {
+    const policy = value.policy || {};
+    els.evolutionPolicy.textContent = 'States: ' + (policy.states || []).join(' → ')
+      + '. ' + (Array.isArray(policy.rules) ? policy.rules.join(' ') : '')
+      + (policy.appliesChanges === false ? ' The lab applies no change to APEX.' : '');
+  }
+}
+
+async function submitEvolutionProposal(event) {
+  event.preventDefault();
+  const title = els.evolutionTitle?.value?.trim() ?? '';
+  if (title === '') { if (els.evolutionFormStatus) els.evolutionFormStatus.textContent = 'a title is required'; return; }
+  const body = { title };
+  const hypothesis = els.evolutionHypothesis?.value?.trim() ?? '';
+  if (hypothesis !== '') body.hypothesis = hypothesis;
+  if (els.evolutionProposeButton) els.evolutionProposeButton.disabled = true;
+  if (els.evolutionFormStatus) els.evolutionFormStatus.textContent = 'recording the proposal…';
+  try {
+    const result = await api('/api/evolution/propose', { method: 'POST', body });
+    if (els.evolutionFormStatus) els.evolutionFormStatus.textContent = 'recorded ' + result.proposalId + '; it authorizes nothing.';
+    if (els.evolutionTitle) els.evolutionTitle.value = '';
+    if (els.evolutionHypothesis) els.evolutionHypothesis.value = '';
+    scheduleEventRefresh();
+  } catch (err) {
+    if (els.evolutionFormStatus) els.evolutionFormStatus.textContent = 'the proposal was refused: ' + String(err.message || err);
+  } finally {
+    if (els.evolutionProposeButton) els.evolutionProposeButton.disabled = false;
+    armWatchdog();
+  }
+}
+
+async function requestPromotion(proposalId, button) {
+  const reason = window.prompt('Why should this proposal be promoted? A reason is required.');
+  if (reason === null) return;
+  button.disabled = true;
+  if (els.evolutionStatus) els.evolutionStatus.textContent = 'requesting promotion of ' + proposalId + '…';
+  try {
+    await api('/api/evolution/promote', { method: 'POST', body: { proposalId, reason } });
+    scheduleEventRefresh();
+  } catch (err) {
+    if (els.evolutionStatus) els.evolutionStatus.textContent = 'the promotion request was refused: ' + String(err.message || err);
+  } finally {
+    button.disabled = false;
+    armWatchdog();
+  }
+}
+
+async function decidePromotion(proposalId, decision, button) {
+  const verb = decision === 'approved' ? 'approving' : 'rejecting';
+  const reason = window.prompt('Record your reason for ' + verb + ' this promotion. Your decision is audited.');
+  // Approving is the act that changes what APEX may become, so it takes the step-up when one is
+  // configured. A rejection is never gated.
+  const stepUp = decision === 'approved' && state.stepUp?.configured === true
+    ? window.prompt('Step-up proof for approving this promotion (it is required and is never stored in the audit log).')
+    : null;
+  if (stepUp === null && decision === 'approved' && state.stepUp?.configured === true) return;
+  button.disabled = true;
+  if (els.evolutionStatus) els.evolutionStatus.textContent = 'recording your decision on ' + proposalId + '…';
+  try {
+    const body = { proposalId, decision };
+    if (reason !== null && reason.trim() !== '') body.reason = reason.trim();
+    if (typeof stepUp === 'string' && stepUp !== '') body.stepUp = stepUp;
+    await api('/api/evolution/decide', { method: 'POST', body });
+    scheduleEventRefresh();
+  } catch (err) {
+    if (els.evolutionStatus) els.evolutionStatus.textContent = 'the decision was refused: ' + String(err.message || err);
+  } finally {
+    button.disabled = false;
+    armWatchdog();
+  }
 }
 
 function renderPlanning(planning) {
@@ -716,87 +2363,137 @@ function renderPlanning(planning) {
   renderList(els.planning, tasks, (task) => itemFrom(task.description || task.id, task.because || ''));
 }
 
-function renderKnowledge(claims) {
-  renderList(els.knowledge, Array.isArray(claims) ? claims : [], (row) => itemFrom(row.claim || row.statement || row.id || 'knowledge', row.status || row.lifecycleState || ''));
-}
-
-function renderWorld(data) {
-  renderList(els.world, Array.isArray(data && data.entities) ? data.entities : [], (row) => itemFrom(row.name || row.id || 'entity', row.category || row.status || ''));
-}
-
-function renderConversationHistory(turns) {
-  renderList(els.conversationHistory, Array.isArray(turns) ? turns : [], (turn) => itemFrom(turn.text || turn.id || 'turn', turn.role || ''));
+// T-31 Step 3: the step-up state is read, never assumed. The field is shown only when the ECP says
+// a step-up secret is configured, and the note says which of the two applies.
+function renderStepUp(result) {
+  const status = result?.ok === true ? result.value : null;
+  state.stepUp = status;
+  const configured = status?.configured === true;
+  if (els.safetyStepUpWrap) els.safetyStepUpWrap.hidden = !configured;
+  if (els.safetyStepUp) els.safetyStepUp.required = configured;
+  if (els.safetyStepUpNote) {
+    els.safetyStepUpNote.textContent = status === null
+      ? 'Step-up status is unavailable, so this page cannot say whether a proof is required.'
+      : configured
+        ? 'A step-up secret is configured: the release is refused without it, and a refusal leaves the latch active.'
+        : 'No step-up secret is configured in this deployment; the reason and the confirmation are the gate.';
+  }
 }
 
 async function refresh() {
-  try {
-    const stateData = await api('/api/state');
-    const s = stateData && typeof stateData === 'object' ? stateData : {};
-    state.last = s;
-    renderTurns(s.turns);
-    renderTasks(s.tasks);
-    renderPlans(s.plans);
-    renderGoals(s.goals);
-    renderMissions(s);
-    renderSentinel(s.situation);
-    renderHealth(await api('/api/health').catch(() => null));
-    renderRuntime(s.runtime);
-    renderSources(s.sources);
-    renderDocuments(s.documents);
-    renderReasoning(s.reasoning);
-    renderCouncil(await api('/api/council').catch(() => null));
-    renderWorkshop(await api('/api/workshop').catch(() => null));
-    if (els.session) els.session.textContent = s.session && s.session.id ? 'session ' + String(s.session.id).slice(0, 8) : 'no session yet';
-    if (s.session && s.session.unavailable) showBanner(s.session.unavailable);
+  const [stateResult, healthResult, missionResult, approvalResult, timelineResult,
+    situationResult, briefingResult, runtimeResult, sourcesResult, documentsResult,
+    reasoningResult, councilResult, workshopResult, resourcesResult, cognitionResult,
+    presenceResult, autonomyMatrixResult, worldResult, evolutionResult, stepUpResult] = await Promise.all([
+    readApi('/api/state'),
+    readApi('/api/health'),
+    readApi('/api/mission-control'),
+    readApi('/api/approvals'),
+    readApi('/api/timeline'),
+    readApi('/api/situation'),
+    readApi('/api/briefing'),
+    readApi('/api/runtime'),
+    readApi('/api/sources'),
+    readApi('/api/documents'),
+    readApi('/api/reasoning'),
+    readApi('/api/council'),
+    readApi('/api/workshop'),
+    readApi('/api/resources'),
+    readApi('/api/cognition/runs?limit=10'),
+    readApi('/api/presence'),
+    readApi('/api/autonomy/matrix'),
+    readApi('/api/world/epistemic'),
+    readApi('/api/evolution'),
+    readApi('/api/step-up'),
+  ]);
 
-    // Dynamic badges from real state.
+  // The authoritative snapshot carries the current session, transcript, badges, gauges and the
+  // same raw values the core projection was built from. Every other workspace reads its own owner
+  // endpoint so one unavailable owner is reported as unavailable instead of blanking the page.
+  const snapshot = stateResult.ok === true && stateResult.value && typeof stateResult.value === 'object'
+    ? stateResult.value : null;
+  state.stateReadAvailable = snapshot !== null;
+  if (snapshot) {
+    state.last = snapshot;
+    renderConversation(snapshot);
+    if (els.session) {
+      els.session.textContent = snapshot.session && snapshot.session.id
+        ? 'session ' + String(snapshot.session.id).slice(0, 8)
+        : 'no session yet';
+    }
+    if (snapshot.session && snapshot.session.unavailable) showBanner(snapshot.session.unavailable);
     if (els.mode) els.mode.textContent = state.view === 'deck' ? 'Deck' : 'Workspace: ' + state.view;
     if (els.autonomy) {
-      const cfg = s.autonomy && s.autonomy.configured ? s.autonomy.configured : {};
-      const entries = Object.entries(cfg);
-      els.autonomy.textContent = entries.length ? 'Autonomy: ' + entries.map(([d,l]) => d + '=' + l).join(', ') : 'Autonomy: default (L2)';
+      const configured = snapshot.autonomy && snapshot.autonomy.configured ? snapshot.autonomy.configured : {};
+      const entries = Object.entries(configured);
+      els.autonomy.textContent = entries.length
+        ? 'Autonomy: ' + entries.map(([domain, level]) => domain + '=' + level).join(', ')
+        : 'Autonomy: not recorded by this snapshot';
     }
-    // Resource gauges.
-    const r = s.resources || {};
-    if (els.gaugeCpu) els.gaugeCpu.textContent = 'CPU: ' + (r.cpu && r.cpu.logicalCount != null ? r.cpu.logicalCount + ' cores' : 'n/a');
+    const resources = snapshot.resources || {};
+    if (els.gaugeCpu) {
+      const cpu = resources.cpu || {};
+      els.gaugeCpu.textContent = 'CPU: ' + (cpu.logicalCount != null ? cpu.logicalCount + ' cores' : 'not reported');
+    }
     if (els.gaugeMem) {
-      const mem = r.memory || {};
-      els.gaugeMem.textContent = 'Mem: ' + (mem.available ? Math.round((mem.freeBytes||0)/1048576) + '/' + Math.round((mem.totalBytes||0)/1048576) + ' MB' : 'n/a');
+      const memory = resources.memory || {};
+      els.gaugeMem.textContent = 'Mem: ' + (memory.available === true
+        ? Math.round((memory.freeBytes || 0) / 1048576) + '/' + Math.round((memory.totalBytes || 0) / 1048576) + ' MB'
+        : 'not reported');
     }
     if (els.gaugeStorage) {
-      const st = Array.isArray(r.storage) && r.storage.length ? r.storage[0] : null;
-      els.gaugeStorage.textContent = 'Storage: ' + (st && st.reported ? Math.round((st.availableBytes||0)/1048576) + '/' + Math.round((st.totalBytes||0)/1048576) + ' MB' : 'n/a');
+      const storage = Array.isArray(resources.storage) && resources.storage.length ? resources.storage[0] : null;
+      els.gaugeStorage.textContent = 'Storage: ' + (storage && storage.reported === true
+        ? Math.round((storage.availableBytes || 0) / 1048576) + '/' + Math.round((storage.totalBytes || 0) / 1048576) + ' MB'
+        : 'not reported');
     }
-
-    const [memory, knowledge, world] = await Promise.all([
-      api('/api/memory').catch(() => ({ records: [] })),
-      api('/api/knowledge').catch(() => ({ claims: [] })),
-      api('/api/world').catch(() => ({ entities: [] })),
-    ]);
-    renderMemory(memory.records);
-    renderKnowledge(knowledge.claims);
-    renderWorld(world);
-
-    const ks = s.killSwitch || {};
-    const coreState = ks.policyUnavailable ? 'degraded'
-      : ks.active === true ? 'lockdown'
-      : (s.session && s.session.unavailable) ? 'degraded'
-      : (Array.isArray(s.tasks) && s.tasks.some((t) => t.approval)) ? 'awaiting'
-      : (Array.isArray(s.tasks) && s.tasks.some((t) => t.status === 'running')) ? 'executing'
-      : 'idle';
-    setCore(coreState, coreState === 'idle' ? 'Standing by.' : 'State derived from verified records.');
-    if (els.connectivity) els.connectivity.textContent = 'Connected';
-  } catch (error) {
-    showBanner(error.message);
-    setCore('degraded', 'State unavailable.');
+  } else {
+    const reason = stateResult.error || 'the authoritative state read failed';
+    setWorkspaceStatus(els.conversationStatus, (stateResult.status >= 500 ? 'Unavailable: ' : 'Read error: ') + reason,
+      stateResult.status >= 500 ? 'unavailable' : 'error');
+    renderList(els.conversationHistory, [], () => null, 'Unavailable: the conversation snapshot could not be read.');
+    renderTurns([], 'Conversation state is unavailable.');
+    if (els.session) els.session.textContent = 'session state unavailable';
+    if (els.mode) els.mode.textContent = state.view === 'deck' ? 'Deck' : 'Workspace: ' + state.view;
+    if (els.autonomy) els.autonomy.textContent = 'Autonomy: unavailable';
+    if (els.gaugeCpu) els.gaugeCpu.textContent = 'CPU: unavailable';
+    if (els.gaugeMem) els.gaugeMem.textContent = 'Mem: unavailable';
+    if (els.gaugeStorage) els.gaugeStorage.textContent = 'Storage: unavailable';
+    showBanner('The authoritative state read failed: ' + reason + '. Values on this page are not current.');
   }
+
+  renderMissionControl(missionResult);
+  renderApprovalCentre(approvalResult);
+  renderTimeline(timelineResult);
+  renderSentinel(situationResult);
+  renderBriefing(briefingResult);
+  renderHealth(healthResult);
+  renderSystemStatus(snapshot, healthResult);
+  renderRuntime(runtimeResult);
+  renderSources(sourcesResult);
+  renderResources(resourcesResult);
+  renderDocuments(documentsResult);
+  renderReasoning(reasoningResult);
+  renderCouncil(councilResult);
+  renderWorkshop(workshopResult);
+  renderCognition(cognitionResult);
+  renderPresence(presenceResult, autonomyMatrixResult);
+  renderWorldClaims(worldResult);
+  renderEvolution(evolutionResult);
+  renderStepUp(stepUpResult);
+
+  applyCoreProjection(snapshot ? '' : 'The authoritative state read failed.');
+  return snapshot !== null;
 }
 
 function setView(view) {
   state.view = view;
   document.body.dataset.view = view;
   document.querySelectorAll('.nav-item').forEach((button) => {
-    button.classList.toggle('active', button.dataset.view === view);
+    const active = button.dataset.view === view;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   });
   document.querySelectorAll('.view').forEach((section) => {
     section.classList.toggle('active', section.dataset.view === view);
@@ -807,19 +2504,109 @@ function setView(view) {
   if (workspace) workspace.style.display = view === 'deck' ? 'none' : '';
 }
 
+// T-30 Package 5 (2026-11-19): presentation preferences. They change palette, motion and
+// contrast only. They never call an API, write a store or reach the ECP; a mode is not a
+// permission and the Lockdown presentation is derived from the latch, not selected here.
+const VIEW_ORDER = ['deck', 'conversations', 'missions', 'tasks', 'approvals', 'sentinel', 'memory',
+  'documents', 'reasoning', 'council', 'cognition', 'presence', 'system', 'integrations', 'workshop'];
+const MODES = ['classic', 'tactical', 'overwatch', 'synthesis', 'quiet'];
+
+function applyMode(mode) {
+  const next = MODES.includes(mode) ? mode : 'classic';
+  state.mode = next;
+  if (state.core !== 'lockdown') document.body.dataset.mode = next;
+  if (els.modeSelect && els.modeSelect.value !== next) els.modeSelect.value = next;
+  return next;
+}
+
+function applyMotion(reduced) {
+  state.reducedMotion = reduced === true;
+  document.body.dataset.motion = state.reducedMotion ? 'reduced' : 'full';
+  if (els.motionToggle) {
+    els.motionToggle.textContent = state.reducedMotion ? 'Motion: reduced' : 'Motion: full';
+    els.motionToggle.setAttribute('aria-pressed', state.reducedMotion ? 'true' : 'false');
+  }
+}
+
+function applyContrast(high) {
+  state.contrast = high === true ? 'high' : 'standard';
+  document.body.dataset.contrast = state.contrast;
+  if (els.contrastToggle) {
+    els.contrastToggle.textContent = state.contrast === 'high' ? 'Contrast: high' : 'Contrast: standard';
+    els.contrastToggle.setAttribute('aria-pressed', state.contrast === 'high' ? 'true' : 'false');
+  }
+}
+
+// Sequential keyboard traversal of the same views the nav buttons expose.
+function moveView(step) {
+  const index = VIEW_ORDER.indexOf(state.view);
+  const next = VIEW_ORDER[(index + step + VIEW_ORDER.length) % VIEW_ORDER.length];
+  setView(next);
+  return next;
+}
+
+if (els.modeSelect) els.modeSelect.addEventListener('change', () => { applyMode(els.modeSelect.value); });
+if (els.motionToggle) els.motionToggle.addEventListener('click', () => { applyMotion(!state.reducedMotion); });
+if (els.contrastToggle) els.contrastToggle.addEventListener('click', () => { applyContrast(state.contrast !== 'high'); });
+
+document.addEventListener('keydown', (event) => {
+  if (!event || event.defaultPrevented || event.ctrlKey || event.metaKey) return;
+  const target = event.target;
+  const tag = target && target.tagName ? String(target.tagName).toUpperCase() : '';
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+    || (target && target.isContentEditable === true);
+  if (event.altKey && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
+    event.preventDefault();
+    moveView(event.key === 'ArrowRight' ? 1 : -1);
+    return;
+  }
+  if (typing) return;
+  if (event.key === '/' && els.text) {
+    event.preventDefault();
+    els.text.focus();
+  }
+});
+
 async function boot() {
   if (!els.boot) return;
-  const lines = [
-    'APEX command deck initializing...',
-    'Verifying loopback boundary...',
-    'Loading controller state...',
-    'No inference activated.',
-  ];
-  if (els.bootLines) {
-    for (const line of lines) {
-      els.bootLines.append(el('div', null, line));
-      await new Promise((resolve) => setTimeout(resolve, 120));
+  const checks = await Promise.allSettled([
+    api('/api/state'),
+    api('/api/health'),
+    api('/api/killswitch'),
+  ]);
+  const lines = [];
+  const stateResult = checks[0];
+  if (stateResult.status === 'fulfilled') {
+    const snapshot = stateResult.value;
+    lines.push('State API: available (' + (Array.isArray(snapshot.tasks) ? snapshot.tasks.length : 0)
+      + ' task records, ' + (Array.isArray(snapshot.plans) ? snapshot.plans.length : 0) + ' plan records).');
+    lines.push('Runtime: ' + (snapshot.runtime?.status || snapshot.runtime?.lifecycle || 'status unavailable'));
+  } else {
+    lines.push('State API: unavailable (' + String(stateResult.reason?.message || stateResult.reason).slice(0, 180) + ').');
+  }
+  const healthResult = checks[1];
+  if (healthResult.status === 'fulfilled') {
+    const health = healthResult.value;
+    lines.push('Health overall: ' + String(health.overall || 'unknown') + '.');
+    for (const area of (Array.isArray(health.areas) ? health.areas : []).slice(0, 10)) {
+      lines.push('  ' + String(area.label || area.key || 'subsystem') + ': ' + String(area.state || 'unknown'));
     }
+  } else {
+    lines.push('Health: unavailable (' + String(healthResult.reason?.message || healthResult.reason).slice(0, 180) + ').');
+  }
+  const safetyResult = checks[2];
+  if (safetyResult.status === 'fulfilled') {
+    const safety = safetyResult.value;
+    lines.push('ECP kill switch: ' + (safety.active === true ? 'ACTIVE'
+      : safety.policyUnavailable === true ? 'unavailable; fail-closed'
+        : safety.active === false ? 'clear' : 'unknown') + '.');
+  } else {
+    lines.push('ECP kill switch: unavailable; not assumed clear.');
+  }
+  lines.push('Owner event stream: ' + (state.eventReconciled ? 'reconciled' : 'waiting for reconciliation') + '.');
+  if (els.bootLines) {
+    els.bootLines.replaceChildren();
+    for (const line of lines) els.bootLines.append(el('div', null, line));
   }
   els.boot.classList.add('hidden');
 }
@@ -834,7 +2621,8 @@ if (els.form) {
     if (!els.text) return;
     const text = els.text.value;
     if (text.trim().length === 0) return;
-    setCore('thinking', 'Request in progress.');
+    state.thinking = true;
+    applyCoreProjection();
     showBanner('');
     els.send.disabled = true;
     if (els.activity) els.activity.textContent = 'working…';
@@ -844,11 +2632,11 @@ if (els.form) {
       await refresh();
     } catch (error) {
       showBanner(error.message);
-      setCore('degraded', 'Request failed.');
     } finally {
+      state.thinking = false;
       els.send.disabled = false;
       if (els.activity) els.activity.textContent = '';
-      if (state.core !== 'degraded') setCore('idle', 'Standing by.');
+      applyCoreProjection();
     }
   });
 }
@@ -864,6 +2652,66 @@ if (els.newSession) {
       showBanner(error.message);
     } finally {
       els.newSession.disabled = false;
+    }
+  });
+}
+
+if (els.safetyLockForm) {
+  els.safetyLockForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const reason = els.safetyLockReason?.value?.trim() ?? '';
+    if (!reason) {
+      if (els.safetyLockResult) els.safetyLockResult.textContent = 'A reason is required.';
+      return;
+    }
+    state.safetyMutationInFlight = true;
+    state.safetyLatchFresh = false;
+    renderSafety();
+    if (els.safetyLockResult) els.safetyLockResult.textContent = 'Sending the user-origin ECP request…';
+    try {
+      const result = await api('/api/safety/lockdown', { method: 'POST', body: { reason } });
+      const audit = result.recorded === true && result.operationId ? ' Audit operation ' + result.operationId.slice(0, 8) + '.' : '';
+      if (els.safetyLockResult) els.safetyLockResult.textContent = (result.recorded === true
+        ? 'ECP lockdown request recorded; waiting for the authoritative latch event.'
+        : 'ECP did not confirm that the audit record was written.') + audit;
+      els.safetyLockForm.reset();
+    } catch (error) {
+      if (els.safetyLockResult) els.safetyLockResult.textContent = error.message;
+    } finally {
+      state.safetyMutationInFlight = false;
+      await refreshSafetyLatch();
+    }
+  });
+}
+
+if (els.safetyReleaseForm) {
+  els.safetyReleaseForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const reason = els.safetyReleaseReason?.value?.trim() ?? '';
+    if (!reason || !els.safetyReleaseConfirm?.checked) {
+      if (els.safetyReleaseResult) els.safetyReleaseResult.textContent = 'A reason and explicit confirmation are required.';
+      return;
+    }
+    state.safetyMutationInFlight = true;
+    state.safetyLatchFresh = false;
+    renderSafety();
+    if (els.safetyReleaseResult) els.safetyReleaseResult.textContent = 'Sending the explicit user-origin ECP release request…';
+    try {
+      // The proof is read from the field only when step-up is configured; the server refuses the
+      // release either way if step-up is configured and the proof is missing or wrong.
+      const stepUp = state.stepUp?.configured === true ? (els.safetyStepUp?.value ?? '') : '';
+      const body = stepUp === '' ? { reason, confirm: true } : { reason, confirm: true, stepUp };
+      const result = await api('/api/safety/release', { method: 'POST', body });
+      const audit = result.recorded === true && result.operationId ? ' Audit operation ' + result.operationId.slice(0, 8) + '.' : '';
+      if (els.safetyReleaseResult) els.safetyReleaseResult.textContent = (result.recorded === true
+        ? 'ECP release request recorded; waiting for the authoritative latch event. No task or runtime is resumed by this control.'
+        : 'ECP did not confirm that the audit record was written.') + audit;
+      els.safetyReleaseForm.reset();
+    } catch (error) {
+      if (els.safetyReleaseResult) els.safetyReleaseResult.textContent = error.message;
+    } finally {
+      state.safetyMutationInFlight = false;
+      await refreshSafetyLatch();
     }
   });
 }
@@ -887,7 +2735,7 @@ if (els.docSearch) {
     event.preventDefault();
     try {
       const data = await api('/api/documents?q=' + encodeURIComponent(els.docSearchText.value || ''));
-      renderDocuments(data);
+      renderDocuments({ ok: true, value: data });
     } catch (error) {
       showBanner(error.message);
     }
@@ -895,6 +2743,7 @@ if (els.docSearch) {
 }
 
 if (els.workshopForm) {
+  if (els.evolutionForm) els.evolutionForm.addEventListener('submit', submitEvolutionProposal);
   els.workshopForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (els.workshopCompose) els.workshopCompose.disabled = true;
@@ -932,6 +2781,46 @@ if (els.workshopForm) {
   });
 }
 
+if (els.cognitionForm) {
+  els.cognitionForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (state.cognitionInFlight) return;
+    const intent = els.cognitionIntent ? els.cognitionIntent.value.trim() : '';
+    if (intent.length === 0) {
+      if (els.cognitionRunStatus) els.cognitionRunStatus.textContent = 'An intent is required.';
+      return;
+    }
+    state.cognitionInFlight = true;
+    state.thinking = true;
+    applyCoreProjection();
+    if (els.cognitionRun) els.cognitionRun.disabled = true;
+    if (els.cognitionRunStatus) els.cognitionRunStatus.textContent = 'Running the five stages…';
+    try {
+      const body = { intent };
+      const chosen = els.cognitionAction ? els.cognitionAction.value : '';
+      if (chosen) body.action = chosen;
+      const data = await api('/api/cognition/run', { method: 'POST', body });
+      state.lastCognitionRun = data.run || null;
+      renderCognitionTrace(data.run || null);
+      const status = data.runStatus || data.run?.status || data.status || 'recorded';
+      if (els.cognitionRunStatus) {
+        els.cognitionRunStatus.textContent = status === 'awaiting_approval'
+          ? 'Recorded: a step is waiting for your explicit approval before it can execute.'
+          : 'Recorded: run status ' + status + '.';
+      }
+      if (els.cognitionIntent) els.cognitionIntent.value = '';
+    } catch (error) {
+      if (els.cognitionRunStatus) els.cognitionRunStatus.textContent = 'The run was refused: ' + String(error.message || error);
+    } finally {
+      state.cognitionInFlight = false;
+      state.thinking = false;
+      applyCoreProjection();
+      if (els.cognitionRun) els.cognitionRun.disabled = false;
+      await refresh();
+    }
+  });
+}
+
 if (els.councilForm) {
   els.councilForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -961,11 +2850,11 @@ if (els.councilForm) {
   });
 }
 
-if (els.bootSkip) {
-  els.bootSkip.addEventListener('click', () => {
-    if (els.boot) els.boot.classList.add('hidden');
-  });
+function skipBoot() {
+  if (els.boot) els.boot.classList.add('hidden');
 }
+if (els.bootSkip) els.bootSkip.addEventListener('click', skipBoot);
+if (els.quickBoot) els.quickBoot.addEventListener('click', skipBoot);
 
 setInterval(() => {
   if (els.clock) els.clock.textContent = new Date().toLocaleString();
@@ -974,53 +2863,184 @@ setInterval(() => {
 const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
 state.reducedMotion = !!(reduce && reduce.matches);
 document.body.dataset.motion = state.reducedMotion ? 'reduced' : 'full';
+const contrastQuery = window.matchMedia && window.matchMedia('(prefers-contrast: more)');
+applyMotion(state.reducedMotion);
+applyContrast(!!(contrastQuery && contrastQuery.matches));
+applyMode(state.mode);
 
 let eventSource = null;
-let watchdog = null;
-let degraded = false;
-function armWatchdog() {
-  if (watchdog) clearTimeout(watchdog);
-  watchdog = setTimeout(() => {
-    degraded = true;
-    if (els.connectivity) els.connectivity.textContent = 'Degraded';
-    setCore('degraded', 'Event stream lost.');
-  }, 1500);
-}
-function connectEvents() {
-  if (typeof EventSource !== 'function') return;
-  try { if (eventSource) eventSource.close(); } catch (e) {}
-  eventSource = new EventSource('/api/events');
-  eventSource.onopen = () => { degraded = false; if (els.connectivity) els.connectivity.textContent = 'Connected'; armWatchdog(); };
-  const reset = () => { degraded = false; if (els.connectivity) els.connectivity.textContent = 'Connected'; armWatchdog(); if (!degraded) refresh().catch(() => {}); };
-  eventSource.addEventListener('hello', reset);
-  eventSource.addEventListener('heartbeat', reset);
-  eventSource.addEventListener('state-changed', (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      // detect seq gaps? store last seq
-      if (state.lastSeq && data.seq && data.seq !== state.lastSeq + 1) {
-        // gap or duplicate; reconcile
-      }
-      state.lastSeq = data.seq || state.lastSeq;
-    } catch {}
-    reset();
-  });
-  eventSource.addEventListener('progress', (e) => {
-    try { const data = JSON.parse(e.data); if (els.activity) els.activity.textContent = data.stage === 'model' ? 'waiting for the model…' : 'working: ' + data.stage; } catch { if (els.activity) els.activity.textContent = 'working…'; }
-    armWatchdog();
-  });
-  eventSource.addEventListener('chat', () => { if (!degraded) refresh().catch(() => {}); armWatchdog(); });
-  eventSource.onerror = () => {
-    if (els.connectivity) els.connectivity.textContent = 'Degraded';
-    setCore('degraded', 'Event stream error.');
-  };
-  armWatchdog();
+let eventWatchdog = null;
+let forcedReconciliation = false;
+let snapshotSyncInFlight = false;
+let eventRefreshRequested = false;
+let eventRefreshTimer = null;
+let eventHealthGeneration = 0;
+
+function markEventDegraded(reason) {
+  eventHealthGeneration += 1;
+  eventStreamDegraded = true;
+  if (els.connectivity) els.connectivity.textContent = 'Degraded';
+  applyCoreProjection(reason || 'Event stream is unavailable.');
 }
 
-boot().then(() => {
-  setView('deck');
-  refresh();
-  connectEvents();
-  setInterval(refresh, 15000);
-});
+function armWatchdog() {
+  if (!eventWatchdog) {
+    eventWatchdog = createEventWatchdog({
+      timeoutMs: EVENT_WATCHDOG_MS,
+      onExpired: () => markEventDegraded('Event stream lost.'),
+    });
+  }
+  eventWatchdog.arm();
+}
+
+function scheduleEventRefresh() {
+  if (snapshotSyncInFlight) {
+    eventRefreshRequested = true;
+    return;
+  }
+  if (eventRefreshTimer) return;
+  eventRefreshTimer = setTimeout(() => {
+    eventRefreshTimer = null;
+    refresh();
+  }, 50);
+}
+
+async function synchronizeAfterReconcile() {
+  if (snapshotSyncInFlight) {
+    eventRefreshRequested = true;
+    return;
+  }
+  snapshotSyncInFlight = true;
+  const generation = eventHealthGeneration;
+  eventStreamDegraded = false;
+  const available = await refresh();
+  if (!available) {
+    markEventDegraded('Authoritative state reconciliation failed.');
+  } else if (generation === eventHealthGeneration) {
+    eventStreamDegraded = false;
+    if (els.connectivity) els.connectivity.textContent = 'Connected';
+    applyCoreProjection();
+    armWatchdog();
+  }
+  snapshotSyncInFlight = false;
+  if (eventRefreshRequested) {
+    eventRefreshRequested = false;
+    scheduleEventRefresh();
+  }
+}
+
+function forceReconciliation(reason) {
+  markEventDegraded('Event stream reconciliation required: ' + reason + '.');
+  if (forcedReconciliation || typeof EventSource !== 'function') return;
+  forcedReconciliation = true;
+  try { if (eventSource) eventSource.close(); } catch (error) {}
+  connectEvents(true);
+}
+
+function parseEventData(event) {
+  try {
+    const value = JSON.parse(event.data);
+    return isRecord(value) ? value : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function acceptStateEvent(event) {
+  const data = parseEventData(event);
+  if (!data) {
+    forceReconciliation('malformed state event');
+    return;
+  }
+  const validation = validateStateEventEnvelope(data, state.eventCursor);
+  if (!validation.ok) {
+    markEventDegraded('Invalid state event: ' + validation.reason + '.');
+    if (validation.reason !== 'unsupported-schema') forceReconciliation(validation.reason);
+    return;
+  }
+  if (event.lastEventId !== data.streamId + ':' + data.seq) {
+    forceReconciliation('event cursor does not match its versioned envelope');
+    return;
+  }
+  state.eventCursor = validation.cursor;
+  armWatchdog();
+  if (validation.kind === 'reconcile') {
+    state.ownerSnapshots = data.payload.owners;
+    state.eventReconciled = true;
+    state.safetyLatchFresh = state.ownerSnapshots.lockdown?.available === true;
+    forcedReconciliation = false;
+    applyCoreProjection();
+    synchronizeAfterReconcile();
+    return;
+  }
+  state.ownerSnapshots[data.category] = data.payload;
+  if (data.category === 'lockdown') state.safetyLatchFresh = data.payload.available === true;
+  applyCoreProjection();
+  if (eventStreamDegraded) synchronizeAfterReconcile();
+  else scheduleEventRefresh();
+}
+
+function acceptHeartbeat(event) {
+  const data = parseEventData(event);
+  const validation = validateHeartbeatEnvelope(data, state.eventCursor);
+  if (!validation.ok) {
+    markEventDegraded('Invalid event heartbeat: ' + validation.reason + '.');
+    if (validation.reason !== 'unsupported-heartbeat-schema') forceReconciliation(validation.reason);
+    return;
+  }
+  armWatchdog();
+  if (state.eventCursor.streamId === data.streamId && eventStreamDegraded) synchronizeAfterReconcile();
+}
+
+function connectEvents(forceReconcile = false) {
+  if (typeof EventSource !== 'function') {
+    markEventDegraded('Event streams are unavailable in this browser.');
+    return;
+  }
+  try { if (eventSource) eventSource.close(); } catch (error) {}
+  try {
+    eventSource = new EventSource(forceReconcile ? '/api/events?reconcile=1' : '/api/events');
+  } catch (error) {
+    markEventDegraded('Event stream connection failed.');
+    return;
+  }
+  const source = eventSource;
+  source.onopen = () => {
+    if (source !== eventSource) return;
+    armWatchdog();
+    if (els.connectivity) els.connectivity.textContent = state.eventReconciled && !eventStreamDegraded ? 'Connected' : 'Reconciling';
+  };
+  source.addEventListener('hello', () => { if (source === eventSource) armWatchdog(); });
+  source.addEventListener('reconcile', acceptStateEvent);
+  source.addEventListener('state-changed', acceptStateEvent);
+  source.addEventListener('heartbeat', acceptHeartbeat);
+  source.addEventListener('progress', (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (els.activity) els.activity.textContent = data.stage === 'model' ? 'waiting for the model…' : 'working: ' + data.stage;
+    } catch (error) {
+      if (els.activity) els.activity.textContent = 'working…';
+    }
+    armWatchdog();
+  });
+  source.addEventListener('chat', () => {
+    if (!eventStreamDegraded) scheduleEventRefresh();
+    armWatchdog();
+  });
+  source.addEventListener('council', () => { scheduleEventRefresh(); armWatchdog(); });
+  source.addEventListener('cognition', () => { scheduleEventRefresh(); armWatchdog(); });
+  source.addEventListener('workshop', () => { scheduleEventRefresh(); armWatchdog(); });
+  source.addEventListener('evolution', () => { scheduleEventRefresh(); armWatchdog(); });
+  source.onerror = () => {
+    if (source !== eventSource) return;
+    markEventDegraded('Event stream error.');
+    armWatchdog();
+  };
+}
+
+setView('deck');
+connectEvents();
+refresh();
+boot();
+setInterval(refresh, 15000);
 `;

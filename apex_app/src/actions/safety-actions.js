@@ -51,17 +51,29 @@ export function safetyActions(controlPlane) {
     },
     {
       name: 'safety.release',
-      description: 'Clear the ECP software kill switch after an explicit user review. Requires a reason; this action does not automatically resume tasks or replay work. User origin only.',
-      inputHint: '{"reason":"what was reviewed before clearing the emergency stop"}',
+      description: 'Clear the ECP software kill switch after an explicit user review. Requires a reason and, when step-up is configured, the step-up proof; this action does not automatically resume tasks or replay work. User origin only.',
+      inputHint: '{"reason":"what was reviewed before clearing the emergency stop","stepUp":"the configured step-up secret, only when step-up is configured"}',
       permission: 'write',
       origins: ['user'],
       plannable: false,
       validate(input) {
         if (!input || typeof input !== 'object' || Array.isArray(input)
-          || Object.keys(input).some((key) => key !== 'reason')) throw new ValidationError('unexpected safety.release input');
-        return { reason: reasonField(input.reason, 'reason') };
+          || Object.keys(input).some((key) => key !== 'reason' && key !== 'stepUp')) throw new ValidationError('unexpected safety.release input');
+        const stepUp = input.stepUp === undefined || input.stepUp === null ? null : input.stepUp;
+        if (stepUp !== null && (typeof stepUp !== 'string' || stepUp.length === 0 || stepUp.length > 200)) {
+          throw new ValidationError('stepUp must be the configured step-up secret');
+        }
+        return { reason: reasonField(input.reason, 'reason'), stepUp };
       },
-      async execute(_ctx, { reason }) {
+      async execute(_ctx, { reason, stepUp }) {
+        // Step-up is checked before the latch is touched: a refused release must leave the latch
+        // exactly as it was, still active, with the refusal in the audit log.
+        const gate = controlPlane.verifyStepUp(stepUp, { capability: 'safety.release' });
+        if (!gate.ok) {
+          throw new ValidationError(gate.reason === 'STEP_UP_REQUIRED'
+            ? 'step-up is required to release the lockdown and no proof was given'
+            : 'the step-up proof did not match; the lockdown remains active');
+        }
         const state = controlPlane.clearKillSwitch({ origin: 'user', reason });
         return {
           summary: state.active ? 'ECP kill switch remains active' : 'ECP kill switch cleared by the user',
@@ -70,6 +82,7 @@ export function safetyActions(controlPlane) {
             state.active ? 'The ECP kill switch remains active.' : 'The ECP kill switch was cleared by an explicit user decision.',
             'No task was resumed and no action was replayed. Inspect the audit, task and plan state before starting work again.',
             `Review: ${reason}`,
+            gate.required ? 'Step-up was verified for this release.' : 'No step-up secret is configured; the reason and confirmation were the gate.',
           ].join('\n'),
         };
       },

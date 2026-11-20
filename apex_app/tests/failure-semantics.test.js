@@ -137,12 +137,14 @@ describe('104: the response never claims more than the pipeline established', ()
 
     const res = await runThroughCli(app, blocker, ['ask', 'remember that nothing can be stored']);
     assert.equal(res.code, 3, res.stdout + res.stderr);
-    // Batch W coordinates a write before it reads the store, so an unusable path can surface on
-    // either side of that order. Both wordings name the same file, say nothing was written, and
-    // report an environment failure; what must not happen is a success or a rejected request.
-    assert.match(res.stdout, /execution failed: cannot (read|write) memory\.jsonl/);
-    assert.match(res.stdout, /Check APEX_DATA_DIR, its permissions, and free space/);
-    assert.doesNotMatch(res.stdout, /Status:\s+success_verified/);
+    // [T-30, 2026-11-19] The earlier execution_failed expectation is superseded: the ECP's
+    // durable kill-switch latch is under dataDir too. An unreadable latch must deny before execute;
+    // it is not an execution failure and must never be recast as one to satisfy a storage message.
+    assert.match(res.stdout, /Status:\s+action_denied/);
+    assert.match(res.stdout, /authorization deny \(POLICY_UNAVAILABLE\)/);
+    assert.match(res.stdout, /Audit:\s+NOT RECORDED/);
+    assert.doesNotMatch(res.stdout, /Status:\s+success_verified|execution failed:/);
+    assert.equal(fs.existsSync(path.join(blocker, 'memory.jsonl')), false, 'no memory write was attempted');
     assert.equal(fs.readFileSync(blocker, 'utf8'), 'x');
   });
 });

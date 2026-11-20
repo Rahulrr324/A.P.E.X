@@ -101,7 +101,12 @@ export async function collectHealth(app, { checkModel = false, modelTimeoutMs = 
   for (const step of diag.taskState.awaitingApproval) {
     attentionItems.push(attention(Health.BLOCKED, 'approval', `task ${step.taskId} step ${step.stepId} is waiting for your explicit approval; nothing was run`, 'task log'));
   }
+  // T-29 (2026-11-19): a pause that is explained by a step waiting for the owner is the approval
+  // item above. Counting the same task a second time as an unexplained paused task made a gated
+  // run present as Degraded in the Core instead of Awaiting Approval.
+  const awaitingTaskIds = new Set(diag.taskState.awaitingApproval.map((step) => step.taskId));
   for (const task of diag.taskState.pausedTasks) {
+    if (awaitingTaskIds.has(task.id)) continue;
     attentionItems.push(attention(Health.BLOCKED, 'paused-task', `task ${task.id} is paused for a user decision`, 'task log'));
   }
   for (const task of diag.taskState.runningTasks.filter((entry) => entry.live !== true)) {
