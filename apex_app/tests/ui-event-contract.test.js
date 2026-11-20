@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { UI_CLIENT } from '../src/ui/assets.js';
+import { CLIENT_CONTRACT_SOURCE } from '../src/ui/client-contract.js';
 import { UI_LIMITS } from '../src/ui/server.js';
 import {
   BoundedEventHistory,
@@ -132,7 +133,11 @@ describe('bounded event transport and timing', () => {
     assert.equal(OWNER_POLL_MS, 250);
     assert.equal(UI_LIMITS.heartbeatMs, 500);
     assert.equal(UI_LIMITS.ownerPollMs, 250);
-    assert.match(UI_CLIENT, /const EVENT_WATCHDOG_MS = 1500;/);
+    // T-30 P0 (2026-11-19): supersedes the textual check for the old serialized Node
+    // function. The served client now receives its watchdog value from the rendered
+    // contract program; the intent (a 1.5 s watchdog in the browser) is unchanged.
+    assert.match(CLIENT_CONTRACT_SOURCE, /"watchdogMs":1500/);
+    assert.match(UI_CLIENT, /const EVENT_WATCHDOG_MS = APEX_CONTRACT\.constants\.watchdogMs;/);
 
     let now = 0;
     let nextId = 0;

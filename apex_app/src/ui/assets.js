@@ -1,8 +1,10 @@
 // Static browser assets for the local APEX UI. They are served from this module so the
 // server needs no filesystem reads and no build step. The client renders every piece of
 // text with textContent: model output and stored records are untrusted strings.
-import { CORE_REACHABLE_STATES, CORE_STATE_DEFINITIONS, CORE_STATE_PRECEDENCE, resolveCoreState, resolveCoreStateFromOwners } from './core-state.js';
-import { createEventWatchdog, EVENT_WATCHDOG_MS, HEARTBEAT_SCHEMA, isRecord, STATE_EVENT_OWNERS, STATE_EVENT_SCHEMA, validateHeartbeatEnvelope, validateStateEventEnvelope } from './event-contract.js';
+// T-30 P0 (2026-11-19): the client is no longer assembled from Node function source.
+// One self-contained contract program (client-contract.js) is rendered verbatim below,
+// so nothing serialized into the browser can depend on Node module scope.
+import { CLIENT_CONTRACT_SOURCE } from './client-contract.js';
 
 export const UI_PAGE = `<!doctype html>
 <html lang="en">
@@ -470,20 +472,7 @@ textarea { width: 100%; resize: vertical; }
 `;
 
 export const UI_CLIENT = `'use strict';
-const STATE_EVENT_SCHEMA = ${JSON.stringify(STATE_EVENT_SCHEMA)};
-const HEARTBEAT_SCHEMA = ${JSON.stringify(HEARTBEAT_SCHEMA)};
-const STATE_EVENT_OWNERS = ${JSON.stringify(STATE_EVENT_OWNERS)};
-const EVENT_WATCHDOG_MS = ${EVENT_WATCHDOG_MS};
-const isRecord = ${isRecord.toString()};
-const validateStateEventEnvelope = ${validateStateEventEnvelope.toString()};
-const validateHeartbeatEnvelope = ${validateHeartbeatEnvelope.toString()};
-const createEventWatchdog = ${createEventWatchdog.toString()};
-const CORE_STATE_DEFINITIONS = ${JSON.stringify(CORE_STATE_DEFINITIONS)};
-const CORE_REACHABLE_STATES = ${JSON.stringify(CORE_REACHABLE_STATES)};
-const CORE_STATE_PRECEDENCE = ${JSON.stringify(CORE_STATE_PRECEDENCE)};
-const resolveCoreState = ${resolveCoreState.toString()};
-const resolveCoreStateFromOwners = ${resolveCoreStateFromOwners.toString()};
-const els = {
+${CLIENT_CONTRACT_SOURCE}\nconst els = {
   turns: document.getElementById('turns'),
   form: document.getElementById('chat-form'),
   text: document.getElementById('chat-text'),

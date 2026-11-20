@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { UI_CLIENT, UI_CSS, UI_PAGE } from '../src/ui/assets.js';
+import { CLIENT_CONTRACT_SOURCE } from '../src/ui/client-contract.js';
 import { STATE_EVENT_OWNERS } from '../src/ui/event-contract.js';
 import { resolveCoreStateFromOwners } from '../src/ui/core-state.js';
 
@@ -209,7 +210,11 @@ describe('Package 3 live Core-state projection', () => {
     assert.equal(runServedProjection(owners, { eventReconciled: false }).core, 'degraded');
     assert.match(UI_CLIENT, /state\.ownerSnapshots = data\.payload\.owners/);
     assert.match(UI_CLIENT, /state\.ownerSnapshots\[data\.category\] = data\.payload/);
-    assert.match(UI_CLIENT, /const resolveCoreStateFromOwners = function resolveCoreStateFromOwners/);
+    // T-30 P0 (2026-11-19): supersedes the textual check for the serialized Node
+    // function. The client now builds the resolver from the shared contract factory;
+    // the intent (the browser runs the same reducer, not a look-alike) is unchanged.
+    assert.match(CLIENT_CONTRACT_SOURCE, /function resolveCoreStateFromOwners\(/);
+    assert.match(UI_CLIENT, /resolveCoreStateFromOwners \} = APEX_CONTRACT;/);
   });
 
   test('safety release stays disabled until the latch is fresh and no mutation is pending', () => {
