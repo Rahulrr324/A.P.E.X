@@ -54,4 +54,12 @@ jobs:
             [ -n "$summary" ] || summary="the suite failed without a 'not ok' line"
           fi
           summary="${summary//$'\n'/ }"
-          echo "::error title=apex-test-failures::${summary:0:60000}"
+          echo "::error title=apex-test-failures::${summary:0:30000}"
+          # The assertion text is what identifies the cause, so it is flattened into a second
+          # annotation next to the names above.
+          details=""
+          if [ -f "$log" ]; then
+            details="$(grep -E '^[[:space:]]*not ok [0-9]+|error:|Expected|actual:|expected:|stack:' "$log" | head -120 | sed 's/^[[:space:]]*//' | paste -sd ' ~ ' -)"
+          fi
+          details="${details//$'\n'/ }"
+          echo "::error title=apex-test-details::${details:0:30000}"
