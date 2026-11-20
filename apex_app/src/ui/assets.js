@@ -242,6 +242,9 @@ export const UI_PAGE = `<!doctype html>
         <span id="perception-budget" class="badge">Push budget: —</span>
         <span id="perception-sense-status" class="meta" role="status"></span>
       </div>
+      <p id="perception-alert-policy" class="meta">Push policy: at most three non-critical notices an hour; two dismissals of one alert class suppress it for six hours; a safety, lockdown or degraded notice bypasses the cap.</p>
+      <p id="perception-alert-status" class="workspace-status" role="status" aria-live="polite"></p>
+      <ul id="perception-alerts" class="work"></ul>
       <ul id="perception-observations" class="work"></ul>
       <ul id="perception-suppressions" class="work"></ul>
     </section>
@@ -874,6 +877,9 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   perceptionObservations: document.getElementById('perception-observations'),
   perceptionSuppressions: document.getElementById('perception-suppressions'),
   perceptionBudget: document.getElementById('perception-budget'),
+  perceptionAlerts: document.getElementById('perception-alerts'),
+  perceptionAlertStatus: document.getElementById('perception-alert-status'),
+  perceptionAlertPolicy: document.getElementById('perception-alert-policy'),
   perceptionSense: document.getElementById('perception-sense'),
   perceptionSenseStatus: document.getElementById('perception-sense-status'),
   briefingPerception: document.getElementById('briefing-perception'),
@@ -2458,6 +2464,80 @@ const EVOLUTION_LABEL = {
 // T-32 Step 3: the perception surfaces. The reading is shown with its own timestamp and its own
 // epistemic status, the push budget is the Sentinel's, and a suppression is listed with the rule id
 // the owner needs in order to revoke it. Nothing here is estimated.
+// T-33 Step 1 (2026-11-19): the Sentinel's advisories and the discipline that carries them.
+//
+// An advisory is a condition the reading implied. Whether it was *delivered* is the governor's
+// decision, and the record here is the governor's own answer - admitted, deduplicated, capped or
+// suppressed - so the owner can see the rule doing its work instead of wondering why a notice did
+// not arrive. Dismissing twice records a revocable rule with an expiry; revoking restores delivery.
+function renderPerceptionAlerts(value) {
+  if (!els.perceptionAlerts) return;
+  const alerts = value && value.alerts && typeof value.alerts === 'object' ? value.alerts : null;
+  const advisories = Array.isArray(alerts?.advisories) ? alerts.advisories : [];
+  const deliveries = Array.isArray(alerts?.deliveries) ? alerts.deliveries : [];
+  const suppressions = Array.isArray(alerts?.suppressions) ? alerts.suppressions : [];
+  const policy = alerts && alerts.policy ? alerts.policy : null;
+  if (els.perceptionAlertPolicy) {
+    els.perceptionAlertPolicy.textContent = policy
+      ? 'Push policy: at most ' + policy.limitPerHour + ' non-critical notices an hour; '
+        + policy.dismissalsToSuppress + ' dismissals of one alert class suppress it for '
+        + Math.round((policy.suppressionTtlMs || 0) / 3600000) + ' hours; a safety, lockdown or degraded '
+        + 'notice bypasses the cap.'
+      : 'Push policy: unavailable until the perception service answers.';
+  }
+  if (els.perceptionAlertStatus) {
+    const delivered = deliveries.filter((entry) => entry.admitted === true).length;
+    setWorkspaceStatus(els.perceptionAlertStatus, advisories.length === 0
+      ? 'No advisory is implied by the last reading.'
+      : advisories.length + ' advisory/advisories implied by the last reading · ' + delivered
+        + ' delivered · ' + suppressions.length + ' class(es) suppressed', advisories.length === 0 ? 'empty' : 'available');
+  }
+  const rows = advisories.map((entry) => {
+    const rule = suppressions.find((candidate) => candidate.alertClass === entry.alertClass) || null;
+    const delivery = deliveries.find((candidate) => candidate.alertClass === entry.alertClass) || null;
+    const state = rule ? 'suppressed' : (delivery && delivery.admitted === true ? 'delivered' : 'held');
+    return { entry, rule, delivery, state };
+  });
+  renderList(els.perceptionAlerts, rows, (row) => {
+    const item = itemFrom('Advisory · ' + row.entry.alertClass + (row.entry.critical === true ? ' · critical' : ''),
+      row.entry.severity + ' · ' + row.entry.watch + ' · ' + row.entry.summary);
+    item.dataset.alertClass = row.entry.alertClass;
+    item.dataset.delivery = row.state;
+    item.dataset.alertSignature = row.entry.signature;
+    item.append(el('div', 'meta', row.state === 'suppressed'
+      ? 'Delivery: suppressed by rule ' + row.rule.id + ' until ' + row.rule.suppressedUntil + ' (revocable above)'
+      : row.state === 'delivered'
+        ? 'Delivery: delivered at ' + (row.delivery.at || 'time not recorded') + ' · push ' + (row.delivery.pushId || 'not recorded')
+        : 'Delivery: not delivered — ' + String(row.delivery ? row.delivery.reason : 'the governor has not been asked yet')));
+    item.append(el('div', 'meta', 'Signature: ' + row.entry.signature + ' · basis: ' + row.entry.basis));
+    if (row.state !== 'suppressed') {
+      const button = el('button', 'small', 'Dismiss notice');
+      button.type = 'button';
+      button.dataset.action = 'dismiss-alert';
+      button.dataset.alertClass = row.entry.alertClass;
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        if (els.perceptionAlertStatus) setWorkspaceStatus(els.perceptionAlertStatus, 'Dismissing ' + row.entry.alertClass + '…', 'loading');
+        try {
+          const result = await api('/api/perception/dismiss', { method: 'POST', body: { alertClass: row.entry.alertClass } });
+          const dismissal = result.dismissals === undefined ? null : result.dismissals;
+          const message = 'Dismissed ' + row.entry.alertClass + ' ('
+            + (dismissal === null ? 'dismissal count not reported' : dismissal + ' of 2)')
+            + (result.suppressed === true && result.rule ? '; suppressed until ' + result.rule.suppressedUntil : '');
+          if (els.perceptionAlertStatus) setWorkspaceStatus(els.perceptionAlertStatus, message, 'available');
+        } catch (error) {
+          if (els.perceptionAlertStatus) setWorkspaceStatus(els.perceptionAlertStatus, 'Dismissal failed: ' + String(error?.message || error), 'error');
+        } finally {
+          button.disabled = false;
+          refresh();
+        }
+      });
+      item.append(button);
+    }
+    return item;
+  }, 'No advisory is implied by the last reading.');
+}
+
 function renderPerception(result) {
   const owner = ownerStatusText(result, 'Perception');
   const value = result?.ok === true ? result.value : null;
@@ -2470,6 +2550,7 @@ function renderPerception(result) {
       : 'Push budget: unavailable';
   }
   if (owner.text) {
+    renderPerceptionAlerts(null);
     setWorkspaceStatus(els.perceptionStatus, owner.text, owner.state);
     if (els.perceptionDetailStatus) setWorkspaceStatus(els.perceptionDetailStatus, owner.text, owner.state);
     renderList(els.perceptionSummary, [], () => null, owner.text);
@@ -2478,6 +2559,7 @@ function renderPerception(result) {
     if (els.briefingPerception) els.briefingPerception.textContent = 'Perception unavailable: ' + owner.text;
     return;
   }
+  renderPerceptionAlerts(value);
   const host = value.lastReading?.host ?? null;
   const workspace = value.lastReading?.workspace ?? null;
   const summary = [];
@@ -2516,24 +2598,31 @@ function renderPerception(result) {
     })), (row) => itemFrom(row.title, row.meta), 'No observation has been recorded in the perception ledger.');
   }
   if (els.perceptionSuppressions) {
-    const rows = suppressions.map((rule) => {
-      const item = {
-        title: 'Suppressed: ' + rule.alertClass + ' until ' + rule.suppressedUntil,
-        meta: 'Rule ' + rule.id + ' · recorded from ' + rule.dismissals + ' dismissals · revocable',
-      };
-      return item;
-    });
+    const rows = suppressions.map((rule) => ({
+      title: 'Suppressed: ' + rule.alertClass + ' until ' + rule.suppressedUntil,
+      meta: 'Rule ' + rule.id + ' · recorded from ' + rule.dismissals + ' dismissals · revocable · delivery resumes when revoked',
+      rule,
+    }));
     renderList(els.perceptionSuppressions, rows, (row) => {
       const node = itemFrom(row.title, row.meta);
-      const rule = suppressions.find((entry) => row.title.includes(entry.alertClass) && row.title.includes(entry.suppressedUntil));
+      const rule = row.rule;
       if (rule) {
+        // T-33 Step 1: the rule names its class and its expiry in the DOM, so the browser run can
+        // assert the exact rule the governor recorded instead of reading the owner's prose.
+        node.dataset.ruleId = rule.id;
+        node.dataset.alertClass = rule.alertClass;
+        node.dataset.suppressedUntil = rule.suppressedUntil;
+        node.dataset.dismissals = String(rule.dismissals);
         const button = el('button', 'small', 'Revoke suppression');
         button.type = 'button';
+        button.dataset.action = 'revoke-suppression';
+        button.dataset.ruleId = rule.id;
         button.addEventListener('click', async () => {
           button.disabled = true;
           try {
             await api('/api/perception/suppressions/revoke', { method: 'POST', body: { ruleId: rule.id } });
-            if (els.perceptionSenseStatus) els.perceptionSenseStatus.textContent = 'Suppression ' + rule.id + ' revoked.';
+            if (els.perceptionSenseStatus) els.perceptionSenseStatus.textContent = 'Suppression ' + rule.id + ' revoked; delivery for ' + rule.alertClass + ' resumes.';
+            if (els.perceptionAlertStatus) setWorkspaceStatus(els.perceptionAlertStatus, 'Suppression ' + rule.id + ' revoked; the next reading of ' + rule.alertClass + ' is delivered again.', 'available');
           } catch (error) {
             if (els.perceptionSenseStatus) els.perceptionSenseStatus.textContent = 'Revoke failed: ' + String(error?.message || error);
           } finally {

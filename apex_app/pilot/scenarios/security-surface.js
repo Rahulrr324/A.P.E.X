@@ -18,6 +18,61 @@ function nonLoopbackIPv4() {
   return null;
 }
 
+// [T-33 Step 1, 2026-11-19] The listening socket's own address, read from the kernel, as the primary
+// evidence that the interface is loopback only.
+//
+// The second-address probe below is corroborating evidence, not proof: on a container host with an
+// APIPA address (169.254.0.0/16) a connection to that address can be accepted by something that is
+// not the interface at all - a NAT rule, a sandbox proxy, or a link-local peer - and the probe then
+// reports "reachable" for a socket that is bound to 127.0.0.1. That happened once, in a full run, and
+// it is a false negative about the code rather than a finding about it. The kernel's own view of the
+// listening socket cannot be fooled that way, so it decides the check and the probe corroborates.
+const LOOPBACK_PROBE_NOTE = 'a link-local (169.254.0.0/16) second address can be answered by host '
+  + 'routing rather than by the interface, so it corroborates and does not decide';
+
+function isLinkLocal(address) {
+  return typeof address === 'string' && address.startsWith('169.254.');
+}
+
+// /proc/net/tcp: field 2 is the local address as little-endian hex, field 4 is the state (0A = LISTEN).
+export function listeningAddressesLinux(port) {
+  const sockets = [];
+  for (const file of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let text = '';
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const lines = text.split('\n').slice(1);
+    for (const line of lines) {
+      const fields = line.trim().split(/\s+/);
+      if (fields.length < 4) continue;
+      const local = fields[1].split(':');
+      if (local.length !== 2) continue;
+      if (Number.parseInt(local[1], 16) !== port) continue;
+      if (fields[3] !== '0A') continue;
+      sockets.push({ file, addressHex: local[0] });
+    }
+  }
+  return sockets;
+}
+
+// True when every listening socket on the port is bound to a loopback address; null when the platform
+// does not expose the table (the probe alone then answers, as it did before this change).
+export function listensOnLoopbackOnly(port) {
+  const sockets = listeningAddressesLinux(port);
+  if (sockets.length === 0) {
+    if (!fs.existsSync('/proc/net/tcp')) return null;
+    return false;
+  }
+  return sockets.every((socket) => {
+    // 127.0.0.1 is 0100007F; IPv6 loopback ::1 is 00000000000000000000000001000000.
+    const address = socket.addressHex.toUpperCase();
+    return address === '0100007F' || address === '00000000000000000000000001000000';
+  });
+}
+
 function reaches(host, port, timeoutMs = 1500) {
   return new Promise((resolve) => {
     const socket = net.createConnection({ host, port });
@@ -81,7 +136,9 @@ export default [
         'a valid chat POST returns a verified deterministic answer, and the session is readable afterwards',
         'the interface reports no model configured and no provider is enabled',
         'the token appears in no persisted data file',
-        'the listening port is not reachable from a non-loopback local address',
+        // [T-33 Step 1, 2026-11-19] The kernel's listening-socket table decides this; the
+        // second-address probe corroborates it and is not conclusive for link-local addresses.
+        'the listening socket is bound to a loopback address and the port is not reachable from a routable non-loopback local address',
       ],
     },
     async run(ctx) {
@@ -121,6 +178,9 @@ export default [
 
       const lan = nonLoopbackIPv4();
       const lanReached = lan ? await reaches(lan, port) : null;
+      // [T-33 Step 1, 2026-11-19] The kernel's view of the listening socket decides the loopback
+      // check; the second-address probe corroborates it. See LOOPBACK_PROBE_NOTE.
+      const loopbackBound = listensOnLoopbackOnly(port);
       const tokenHits = filesContaining(ctx.dataDir, ui.token);
       // Read the working set before stopping: the operating system cannot report a process that
       // has already exited, and a blank reading would otherwise look like an actual zero.
@@ -201,14 +261,17 @@ export default [
         && !page.body.includes(ui.token);
       const csp = page.headers['content-security-policy'] ?? '';
       const loopbackHeld = ui.url.startsWith('http://127.0.0.1:')
-        && (lan === null ? null : lanReached === false);
+        && loopbackBound !== false
+        && (lan === null ? true : (isLinkLocal(lan) ? true : lanReached === false));
 
       const limitations = [];
       if (lan === null) limitations.push('no non-internal IPv4 address was available, so the loopback binding could not be probed from a second address');
+      if (loopbackBound === null) limitations.push('the Linux listening-socket table was unavailable, so the loopback binding is corroborated only by the second-address probe');
+      if (lan !== null && isLinkLocal(lan)) limitations.push(LOOPBACK_PROBE_NOTE);
       if (info.code !== 0 && info.signal !== null) limitations.push(`the interface process was ended with ${info.signal} because Windows has no portable way to deliver SIGINT to another process; its Ctrl+C path is covered by the in-process tests`);
 
       return {
-        actual: `health=${health.status} page=${unauthPage.status} api=${unauthState.status} events=${unauthEvents.status}; login=${login.status} cookie=${cookie.length > 0}; pageWithCookie=${page.status}; guards=${crossOrigin.status}/${noHeader.status}/${wrongType.status}; chat=${chat.status} ${chat.json?.status ?? 'none'}; session=${stateAfter.json?.session?.status ?? 'none'}; providersEnabled=${sources.json?.enabled ?? 'unknown'}; tokenInData=${tokenHits.length}; lan=${lan ?? 'none'} reached=${lanReached === null ? 'untested' : lanReached}`,
+        actual: `health=${health.status} page=${unauthPage.status} api=${unauthState.status} events=${unauthEvents.status}; login=${login.status} cookie=${cookie.length > 0}; pageWithCookie=${page.status}; guards=${crossOrigin.status}/${noHeader.status}/${wrongType.status}; chat=${chat.status} ${chat.json?.status ?? 'none'}; session=${stateAfter.json?.session?.status ?? 'none'}; providersEnabled=${sources.json?.enabled ?? 'unknown'}; tokenInData=${tokenHits.length}; boundLoopbackOnly=${loopbackBound === null ? 'untested' : loopbackBound}; lan=${lan ?? 'none'} reached=${lanReached === null ? 'untested' : lanReached}`,
         checks: {
           correctness: check(
             boundaries && cookieFlow && answered,
@@ -232,14 +295,16 @@ export default [
             stateTruthful && providersInert && noModel && noSecretStored && loopbackHeld !== false
               && /frame-ancestors 'none'/.test(csp)
               && /default-src 'none'/.test(csp),
-            'the token is not persisted, no provider is enabled, no model is configured, and the socket is loopback only',
+            'the token is not persisted, no provider is enabled, no model is configured, and the listening socket is bound to loopback',
             {
               stateTruthful,
               providersInert,
               noModel,
               tokenHits,
+              loopbackBound,
               lan,
               lanReached,
+              linkLocalProbe: lan === null ? null : isLinkLocal(lan),
               csp: oneLine(csp, 200),
             },
           ),

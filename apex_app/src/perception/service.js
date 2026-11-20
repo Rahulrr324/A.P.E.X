@@ -14,6 +14,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHostWorkspaceSensor, HOST_SENSOR_SCHEMA, HOST_SENSOR_SOURCE } from './host-workspace-sensor.js';
 import { PushGovernor, PUSH_GOVERNOR_SCHEMA } from './push-governor.js';
+import { deriveAdvisories, deliverAdvisories } from './advisories.js';
 
 export const PERCEPTION_SCHEMA = 'apex.perception.view/1';
 export const OBSERVATION_SCHEMA = 'apex.perception.observation/1';
@@ -60,6 +61,10 @@ export function createPerceptionService({
 
   let observations = [];
   let lastReading = null;
+  // T-33 Step 1: what the last reading implied, and what the governor decided about each of those
+  // implications. Both are read-only projections of work already recorded.
+  let lastAdvisories = Object.freeze([]);
+  let lastDeliveries = Object.freeze([]);
 
   // The tail is read once at construction; appends keep the in-memory view current without
   // re-reading a file that only this process writes.
@@ -136,7 +141,20 @@ export function createPerceptionService({
       }),
     ]);
     lastReading = reading;
-    return Object.freeze({ reading, observations: Object.freeze(recorded), recorded: recorded.length, at });
+    // T-33 Step 1: a reading is also an occasion. The Sentinels' advisories are derived from what was
+    // just read and handed to the governor, which decides what may be delivered. Nothing is pushed
+    // here that the governor did not admit, and the same unchanged machine deduplicates.
+    lastAdvisories = deriveAdvisories(reading);
+    lastDeliveries = deliverAdvisories(pushGovernor, lastAdvisories, { at });
+    if (lastAdvisories.length > 0) persistGovernor();
+    return Object.freeze({
+      reading,
+      observations: Object.freeze(recorded),
+      recorded: recorded.length,
+      at,
+      advisories: lastAdvisories,
+      deliveries: lastDeliveries,
+    });
   }
 
   function recentObservations(limit = OBSERVATION_READ_LIMIT) {
@@ -156,6 +174,21 @@ export function createPerceptionService({
       observedCount: observations.filter((entry) => entry?.epistemicStatus === 'observed' && entry?.reading !== true).length,
       unavailableCount: observations.filter((entry) => entry?.epistemicStatus === 'unavailable').length,
       governor: pushGovernor.snapshot(),
+      // T-33 Step 1: the advisories the last reading implied, what the governor decided about each,
+      // and which of them are suppressed right now. A suppressed class is reported as suppressed
+      // rather than as absent, so the owner can see the rule doing its work and revoke it.
+      alerts: Object.freeze({
+        advisories: lastAdvisories,
+        deliveries: lastDeliveries,
+        active: lastDeliveries.filter((entry) => entry.admitted === true),
+        suppressions: pushGovernor.activeSuppressions(),
+        policy: Object.freeze({
+          limitPerHour: pushGovernor.limit,
+          dismissalsToSuppress: pushGovernor.dismissalsToSuppress,
+          suppressionTtlMs: pushGovernor.suppressionTtlMs,
+          criticalBypassesCap: true,
+        }),
+      }),
     });
   }
 
@@ -188,6 +221,7 @@ export function createPerceptionService({
     push,
     dismiss,
     revoke,
+    advisories: () => lastAdvisories,
     observations: () => recentObservations(),
   });
 }
