@@ -86,6 +86,14 @@ function writeSummary() {
   run.finishedAt = new Date().toISOString();
   fs.mkdirSync(reportDir, { recursive: true });
   fs.writeFileSync(summaryPath, `${JSON.stringify(run, null, 2)}\n`);
+  // One short line first: the long summary can be truncated by the annotation API, and a failure
+  // that is cut off is a failure that was not reported.
+  console.log(`T32_FAILURES ${JSON.stringify({
+    failures: run.failures,
+    screenshots: run.screenshots.length,
+    contrastChecked: (run.contrast ?? []).reduce((sum, entry) => sum + (entry.checked ?? 0), 0),
+    viewports: run.viewports,
+  })}`);
   console.log(`T32_HUD_SUMMARY ${JSON.stringify(run)}`);
 }
 
@@ -281,8 +289,11 @@ const ACTIVE_ELEMENT = () => {
   // The skip link is the first stop by design: it is how a keyboard owner jumps the chrome.
   const isSkipLink = el.classList.contains('skip-link');
   const cls = typeof el.className === 'string' ? el.className.trim().split(/\s+/)[0] ?? '' : '';
+  // Two controls can share a tag and a class; the nav's fifteen items do. The view they select is
+  // what tells them apart, so the key carries it and the trap assertion stops counting them as one.
+  const view = el.dataset && el.dataset.view ? `[${el.dataset.view}]` : '';
   return {
-    key: `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${cls ? `.${cls}` : ''}`,
+    key: `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${cls ? `.${cls}` : ''}${view}`,
     inTopbar,
     isSkipLink,
     isNavItem: el.classList.contains('nav-item'),
@@ -682,6 +693,7 @@ test.describe('T-32 HUD experience', () => {
       const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
       const page = await context.newPage();
       try {
+        console.log(`T32_PHASE screenshots:start ${viewport.width}x${viewport.height}`);
         await openDeck(page);
         await setState(page, 'awaiting_approval');
         for (const mode of MODES) {
@@ -716,6 +728,7 @@ test.describe('T-32 HUD experience', () => {
           ...size,
         });
         await releaseLockdown(page, 'T-32 Step 2: lockdown screenshot complete');
+        console.log(`T32_PHASE screenshots:done ${viewport.width}x${viewport.height} shots=${run.screenshots.length}`);
       } finally {
         await context.close();
       }
