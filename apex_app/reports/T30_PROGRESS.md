@@ -705,3 +705,172 @@ first attempt at this run (`0d098d6`) failed on exactly one console error — th
 `/favicon.ico` the page never declared — which is the correction recorded in `f712744`; that same
 commit added the four evolution actions to AF-20's model-origin sweep, where the curated attempt list
 had fallen out of step with the registry.
+
+## T-32 Step 1 (2026-11-19): the stark HUD reticle, depth planes and a keyboard-first command bar
+
+`f7d47a5` rewrote the deck's visual core in `src/ui/assets.js` (+318 lines, with the preview server in
+`bin/apex-serve.js` and one route change in `src/ui/server.js`). The reticle is now five named rings -
+`azimuth`, `brackets`, `nucleus`, `progress`, `telemetry` - so a test can name what it is looking at
+instead of counting `circle` elements. Depth is four tokens plus the void: `z0` 0, `z1` 10, `z2` 20,
+`z3` 30, `z4` 40, each carried on a `[data-depth-plane]` element that is `position: relative`, because
+`z-index` on a static box does nothing at all. Motion is four numbers, not adjectives: ack 120 ms,
+panel 260 ms, posture 700 ms, reticle 380 ms. The command bar takes `Ctrl+K` and gives focus back on
+`Escape`; the tab order puts the command input before the workspace tabs.
+
+Two corrections were forced during this step and are worth keeping. A backticked `/` inside a client
+comment closed the template literal that builds `UI_CLIENT` and turned the browser program into
+`NaN`, so any edit to that string is checked with `node -e "import('./src/ui/assets.js')..."` before
+it is believed. And `body` carries `data-view` as well as the navigation items, which later cost the
+T-31 sweep a real failure (Step 4).
+
+## T-32 Step 2 (2026-11-19): the HUD experience suite, run by the real-Edge CI job
+
+`e5e3f4a` added `tests/e2e/t32-hud-experience.spec.mjs` (711 lines) and wired it into the same
+hosted browser step that runs T-31, because a HUD that is only described in a report is a claim, not
+evidence. The suite drives the real deck in a real system browser and asserts:
+
+- void, glass, critical-panel and depth-plane values are *computed* values at three viewports, not
+  the stylesheet's own text;
+- the reticle posture differs between Idle, Awaiting Approval, Degraded and Lockdown - colour, ring
+  weight, dash pattern and animation each move;
+- the live contrast audit: every text run on the page, measured against its computed background;
+- keyboard: `Tab` is deterministic and untrapped, the command input precedes the tabs, `Ctrl+K` acks
+  within the frame budget, `Escape` returns focus;
+- `prefers-reduced-motion` is honoured, and the motion toggle both flips the system preference and
+  survives a reload;
+- eighteen screenshots - six presentation modes across three viewports - written as real PNGs whose
+  IHDR matches the viewport.
+
+The spec writes `reports/screenshots/t32/summary.json` and one `T32_HUD_SUMMARY` line, and the
+workflow turns that line into a check annotation, so the numbers are readable without the job log
+(which is not downloadable from this runner).
+
+## T-32 Step 3 (2026-11-19): real perception of the host and the workspace
+
+`ec07998` gave APEX senses it did not have. `src/perception/host-workspace-sensor.js` reads the real
+host: CPU count and load, memory, storage, uptime, the process's own resident bytes, the git HEAD and
+working-tree state of the checkout. `src/perception/push-governor.js` is the discipline that keeps a
+sensor from becoming noise - three non-critical pushes per rolling hour, dedupe on watch plus
+signature, a critical class (`safety`, `lockdown`, `degraded`) that bypasses the cap, two dismissals
+turning into a six-hour revocable suppression, and persistence across restarts.
+`src/perception/service.js` holds the observation ledger (`<dataDir>/perception/observations.jsonl`)
+and creates nothing until something is written to it.
+
+The capability surface is four governed actions: `perception.sense_host` (write, user-only,
+unplannable, verified), `perception.state` (read, user and model), `perception.dismiss_alert` and
+`perception.revoke_suppression` (write, user-only, verified). The HTTP surface mirrors them
+(`GET /api/perception`, three POSTs, token required, unknown fields refused), `/api/briefing` gains a
+`perception` block, and the cognition pipeline folds `packet.host` into `epistemic.observed` so the
+model reasons over what the machine actually reported rather than what it assumed.
+
+Two design rules came out of the tests. `unavailable` is not `clean`: a sensor that cannot read a
+value must say so, and the governor must not treat silence as health. And a `permission: 'read'`
+action that appends to a ledger is misclassified - the ledger write is what makes the capability a
+write.
+
+## T-32 Step 4 (2026-11-19): the HUD, measured - and the four defects the browser found
+
+The first hosted run on this branch (`44742231409`) was red, and the second (`44744397430`) was red
+for different reasons. Both were useful, because the annotation channel carried the browser's own
+words: the job log cannot be downloaded from this runner (`gh api .../jobs/<id>/logs` returns EOF),
+so the annotation is the only readback, and a failure that is not in it was not reported.
+
+What the real browser found, in the order it found it:
+
+1. **`[data-view="X"]` matches `<body>`.** The T-31 navigation sweep clicked `.first()` on that
+   selector and therefore clicked the page, not the nav item. It passed at 1600x900 and 1280x720
+   only because the deck already showed the view it was asked to switch to, and failed at 390x844
+   with `toHaveAttribute('data-view', 'deck')` receiving `conversations`. Both suites now name the
+   item: `nav .nav-item[data-view="X"]`.
+2. **A `calc()`-derived `stroke-width` is not a length.** Chromium reports the substituted
+   expression, so the posture test received `"calc(1.8px)"` and `"calc(3.84px)"` and every numeric
+   comparison failed. The test now parses the number out of whatever the browser says and asserts
+   the four postures differ - which is what the claim was always about.
+3. **The diagnostic was the defect.** The HUD summary printed the failing test's message, but the
+   message was long enough that the annotation was truncated: the run reported `artifact: 0 PNG(s)`
+   without the test that failed to write them. The spec now prints a short `T32_FAILURES` line ahead
+   of the long one, the workflow publishes it as its own annotation, each viewport prints a phase
+   line as it starts and finishes, and `test.afterEach` records every failure's title, status and
+   message into the summary.
+4. **Fifteen controls that share a class are fifteen controls.** The Tab sweep keyed each stop on
+   `tag#id.class`, so the fifteen nav items collapsed to one key: it counted 10 distinct stops where
+   the page has 14 and called that a trap. The key now carries `data-view`.
+
+The narrow-viewport defect from the first red run - a command bar and rows that could not shrink
+below their content at 390 px - was fixed in the same pass with `min-width: 0`, `max-width: 100%`
+and `overflow-wrap: anywhere` on titles, meta lines and the perception readouts.
+
+### The evidence, from the green hosted run
+
+`44751419073` on `971a043`: every step green, including step 7 (the full Node suite) and step 8
+(the real-browser verification), which is the step that matters here.
+
+```
+step=success | browser=157.0.4341.46 | executable=/usr/bin/microsoft-edge (system)
+1600x900: core=Awaiting Approval overflow=1600<=1600 errors=0
+1280x720: core=Awaiting Approval overflow=1280<=1280 errors=0
+ 390x844: core=Awaiting Approval overflow=390<=390 errors=0
+reports/screenshots/t31_desktop-wide_1600x900.png 1600x900 502885B
+reports/screenshots/t31_desktop_1280x720.png      1280x720 360815B
+reports/screenshots/t31_mobile_390x844.png         390x844 130549B
+checks: degradedAfterMs=23, connectivityWhileDegraded=Degraded,
+        recoveredCore=Awaiting Approval, recoveredConnectivity=Connected,
+        modes=[tactical, overwatch, synthesis, quiet, classic],
+        modeLockedByLockdown=true, releasedAfterLockdown=true
+```
+
+```
+T32_FAILURES {"failures":[],"screenshots":18,"contrastChecked":3940,
+              "viewports":["1600x900","1280x720","390x844"]}
+hud-step=success | browser=157.0.4341.46
+reticle[idle]            stroke=rgb(0, 229, 255)   weight=calc(1.5px)  dash=8px, 6px   animation=spin
+reticle[awaiting_approval] stroke=rgb(255, 176, 0) weight=calc(1.8px)  dash=2px, 8px   animation=spin
+reticle[degraded]        stroke=rgb(255, 176, 0)   weight=calc(1.2px)  dash=6px, 12px  animation=spin
+reticle[lockdown]        stroke=rgb(225, 6, 0)     weight=calc(3.84px) dash=12px, 12px animation=none
+planes[desktop-wide]: z0=[0], z1=[10], z2=[20], z3=[30], z4=[40]
+planes[desktop]:      z0=[0], z1=[10], z2=[20], z3=[30], z4=[40]
+planes[mobile]:       z0=[0], z1=[10], z2=[20], z3=[30], z4=[40]
+contrast: 3940 text runs checked, 0 violations
+ackMs=6.8 inputBeforeTabs=True
+tabStops=a.skip-link > button#command-trigger > select#mode-select > button#motion-toggle >
+         button#contrast-toggle > button#new-session > button#quick-boot > textarea#chat-text >
+         button#send > button.nav-item[deck] > [conversations] > [missions] > [tasks] > [approvals]
+escapeTo=#body
+artifact: 18 PNG(s) under apex_app/reports/screenshots/t32
+classic/tactical/overwatch/synthesis/quiet/lockdown at 1600x900: 511683/509994/508975/504590/449099/499393B
+classic/tactical/overwatch/synthesis/quiet/lockdown at 1280x720: 374318/373610/369492/363166/327460/359736B
+classic/tactical/overwatch/synthesis/quiet/lockdown at  390x844: 128527/128863/132979/131495/122016/130777B
+```
+
+What this establishes: in a real browser on a hosted runner, the deck has **zero console errors and
+no horizontal overflow at 1600x900, 1280x720 and 390x844**; the depth model is four distinct planes
+at all three viewports; the reticle's four postures are visually distinct in colour, weight, dash and
+animation, with Lockdown the only still one; **3,940 text runs were measured and not one fell below
+4.5:1**; the keyboard reaches fourteen stops in a fixed order with the command input before the
+workspace tabs, `Ctrl+K` acks in 6.8 ms, `Escape` returns focus to the body, and the reduced-motion
+preference plus its toggle both hold; and eighteen screenshots are real PNGs, each within a few
+kilobytes of its neighbours, which is what a changing design looks like and a stuck one does not.
+
+A first green attempt (`44749474825` on `c43b3cc`) had already passed both suites; its job was red
+only because the publish step referenced a variable it had not yet bound. That is recorded rather
+than hidden, because "the tests passed and the job went red" is exactly the case that teaches a
+person to stop reading the job.
+
+### Totals
+
+| Run | Tree | Result |
+|---|---|---|
+| Baseline, before T-32 | `d74adb3` | 3,862 tests, 3,860 pass, 0 fail, 2 skipped, 1,478,720 ms |
+| Final, local, `npm test` | `971a043` | **3,880 tests, 3,878 pass, 0 fail, 2 skipped, 1,403,192 ms, `EXIT=0`** |
+| Final, hosted, step 7 + step 8 | `971a043` | green: Node suite, then both browser suites |
+
+The eighteen new tests are the perception sensor (10) and the push discipline (8); the two skips are
+the same two as the baseline. A full run on `9ca3627` recorded one failure - `t16-pilot-reporting`,
+"the security scenario publishes a real resident-byte reading", which asserted a loopback-only socket
+and found this sandbox's `169.254.0.21` interface reachable. It passes 2/2 on its own and passed in
+the final run; it is recorded because a single failure that disappears is worth more as a note than
+as silence.
+
+What this still does not establish: that the HUD looks like the Tony-Stark target to a human eye.
+Eighteen screenshots and a contrast audit are measurements of specific properties, not a design
+review, and the target remains the reference - not this report.
