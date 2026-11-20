@@ -493,7 +493,7 @@ matrices are unit-tested, not executed.
 | Check | Result |
 |---|---|
 | `node --check` over every `apex_app/src/**/*.js` | **228 files, 0 failures** |
-| `npm test` (full suite) | **3,823 tests: 3,821 pass, 0 fail, 2 skipped — 1,441.6 s** |
+| `npm test` (full suite) | **3,823 tests: 3,821 pass, 0 fail, 2 skipped** — two consecutive runs, 1,441.6 s and 1,458.5 s |
 | `/api/state`, cold (single read) | 8–14 ms on the live harness's small store; 37–60 ms on the seeded 300/150/60/30 workspace |
 | `/api/state`, warm p50 | 8–13 ms small store; 12.6 ms seeded workspace |
 | First reconcile frame after page load | 266–384 ms |
@@ -514,11 +514,11 @@ store (8–14 ms) beside the seeded 300/150/60/30 benchmark workspace used in S1
 12.6 ms warm p50, seven runs). None of these is a paint, layout or first-contentful-paint
 measurement.
 
-The full-suite row is the run that closed this step series, taken **after** the S1 mechanism was
-replaced: 3,823 tests, 3,821 passing, 0 failing, 2 skipped, 1,441.6 s wall clock. Two earlier runs
-on the same tree are history rather than results — 3,805/3,823 with 16 failures before the T-29
-health, client-projection and inventory repairs, and 3,820/3,823 with one failure (the same-length
-rewrite above) before the S1 correction.
+The full-suite row is two consecutive runs that closed this step series, both taken **after** the
+S1 mechanism was replaced: 3,823 tests, 3,821 passing, 0 failing, 2 skipped, in 1,441.6 s and
+1,458.5 s of wall clock (the second on the committed tree). Two earlier runs are history rather
+than results — 3,805/3,823 with 16 failures before the T-29 health, client-projection and inventory
+repairs, and 3,820/3,823 with one failure (the same-length rewrite above) before the S1 correction.
 
 **Deliberately not claimed.** Intelligence, executive completeness, in-browser rendering, the three
 viewports, screenshots, Windows and macOS behaviour, and any voice path. Passing tests here are
