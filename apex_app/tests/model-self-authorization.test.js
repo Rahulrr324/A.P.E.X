@@ -185,6 +185,12 @@ const MODEL_WRITE_ATTEMPTS = [
   ['world.identity.decide', { left: 'e-model', right: 'e-other', decision: 'confirmed', reason: 'the model decided' }],
   // T-30 (2026-11-19): Workshop composition is user-only even though it is not a belief-store write.
   ['workshop.compose', {}],
+  // [T-31 Step 2, 2026-11-19] The Evolution Lab's four writes. A model may not propose a change to
+  // APEX's own behaviour, record a sandbox result, request a promotion, or decide one.
+  ['evolution.propose', { title: 'the model proposed this' }],
+  ['evolution.verify', { proposalId: 'evo-modelattempt', verified: true, detail: 'the model said it passed' }],
+  ['evolution.promote', { proposalId: 'evo-modelattempt', reason: 'the model asked for it' }],
+  ['evolution.decide', { proposalId: 'evo-modelattempt', decision: 'approved', reason: 'the model approved it' }],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.

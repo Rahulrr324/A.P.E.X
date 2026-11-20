@@ -77,11 +77,19 @@ jobs:
               parts.append(f"browser={data['browserVersion']}")
               parts.append(f"executable={data['resolved']['executable']} ({data['resolved']['source']})")
               for viewport in data['viewports']:
-                  errors = len(viewport.get('errors', {}).get('console', [])) + len(viewport.get('errors', {}).get('page', []))
-                  parts.append(
+                  console_errors = viewport.get('errors', {}).get('console', [])
+                  page_errors = viewport.get('errors', {}).get('page', [])
+                  errors = len(console_errors) + len(page_errors)
+                  line = (
                       f"{viewport['viewport']['width']}x{viewport['viewport']['height']}: core={viewport.get('core')} "
                       f"overflow={viewport['overflow']['scrollWidth']}<={viewport['overflow']['clientWidth']} errors={errors}"
                   )
+                  # The first error is quoted: a count alone cannot be acted on, and the browser log
+                  # is the only place the client's own message appears.
+                  if errors:
+                      first = (console_errors + page_errors)[0]
+                      line += ' firstError=' + str(first)
+                  parts.append(line)
               for shot in data['screenshots']:
                   parts.append(f"{shot['file']} {shot['width']}x{shot['height']} {shot['bytes']}B")
               parts.append('checks=' + json.dumps(data.get('checks', {}), sort_keys=True))

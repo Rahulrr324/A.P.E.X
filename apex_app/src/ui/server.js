@@ -1679,6 +1679,13 @@ export function createUiServer({
       sendAsset(res, 'text/css; charset=utf-8', UI_CSS);
       return;
     }
+    // A browser asks for this whether or not the page declares an icon. Answering 204 keeps the
+    // request out of the console-error count without pretending APEX ships a branded icon.
+    if (method === 'GET' && (url.pathname === '/favicon.ico' || url.pathname === '/favicon.svg')) {
+      res.writeHead(204, { 'cache-control': 'no-store' });
+      res.end();
+      return;
+    }
     if (method === 'GET' && url.pathname === '/app.js') {
       sendAsset(res, 'text/javascript; charset=utf-8', UI_CLIENT);
       return;

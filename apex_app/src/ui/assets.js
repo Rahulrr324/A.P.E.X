@@ -12,6 +12,11 @@ export const UI_PAGE = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>APEX</title>
+<!-- [T-31 Step 3, 2026-11-19] The first real-browser run recorded exactly one console error at the
+     first viewport. The page declared no icon, so the browser asked for /favicon.ico, and the
+     policy answer was a 404 that Chromium reports as a console error. An empty data: icon means the
+     browser asks for nothing; the server also answers the path for clients that ignore the link. -->
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body data-core-state="degraded" data-view="deck" data-motion="full" data-mode="classic" data-contrast="standard">
