@@ -1533,6 +1533,24 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // T-33 Step 3: the sandbox verification and the promotion. Both are user writes that run through
+  // runAction, so the ECP authorizes them, the verifier reads the ledger back, and a refusal is
+  // recorded rather than swallowed. Neither applies anything.
+  async workshopVerify({ artifactId, reason = null } = {}) {
+    const shown = typeof artifactId === 'string' ? truncate(artifactId, 40) : '[missing artifact]';
+    const op = this.#newOp({ capability: 'workshop.verify', origin: 'user', request: `workshop verify [${shown}]` });
+    const step = await this.runAction('workshop.verify', { artifactId, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopPromote({ artifactId, reason = null } = {}) {
+    const shown = typeof artifactId === 'string' ? truncate(artifactId, 40) : '[missing artifact]';
+    const stated = typeof reason === 'string' && reason.trim() !== '' ? truncate(reason.trim(), 60) : '[missing reason]';
+    const op = this.#newOp({ capability: 'workshop.promote', origin: 'user', request: `workshop promote [${shown}] ${stated}` });
+    const step = await this.runAction('workshop.promote', { artifactId, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   // ---- T-31 evolution lab -------------------------------------------------------
   // Four audited acts. Each one runs the registered capability through runAction, so the ECP
   // authorizes it, the verifier checks the ledger afterwards, and a refusal is recorded rather

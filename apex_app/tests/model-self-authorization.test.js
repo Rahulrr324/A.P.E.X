@@ -185,6 +185,10 @@ const MODEL_WRITE_ATTEMPTS = [
   ['world.identity.decide', { left: 'e-model', right: 'e-other', decision: 'confirmed', reason: 'the model decided' }],
   // T-30 (2026-11-19): Workshop composition is user-only even though it is not a belief-store write.
   ['workshop.compose', {}],
+  // T-33 Step 3 (2026-11-19): so are the sandbox verification and the promotion. A model may read the
+  // design and its verification; it may not record a check or accept a design on the owner's behalf.
+  ['workshop.verify', { artifactId: 'ws-model-attempt', reason: 'the model ran the check' }],
+  ['workshop.promote', { artifactId: 'ws-model-attempt', reason: 'the model accepted it' }],
   // [T-31 Step 2, 2026-11-19] The Evolution Lab's four writes. A model may not propose a change to
   // APEX's own behaviour, record a sandbox result, request a promotion, or decide one.
   ['evolution.propose', { title: 'the model proposed this' }],

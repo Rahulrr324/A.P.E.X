@@ -4156,6 +4156,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `cognition.run` | user | write | never in a plan | `cognition-runs.jsonl` and the governed `tasks.jsonl` record it creates through the controller | no (executive) | no (a run record is an account, not a belief) |
 | `council.list`, `council.get`, `council.replay`, `council.compare` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `workshop.compose` | user | write | never in a plan | `workshop.jsonl` (append-only design sheet; it is stored, never executed) | no (workshop) | no (a design is not a belief) |
+| `workshop.verify` | user | write | never in a plan | `workshop-verifications.jsonl` (append-only ledger: the check list, its result and the metrics it measured; a failed check is recorded as a failure) | no (workshop) | no (a check is not a belief) |
+| `workshop.promote` | user | write | never in a plan | `workshop-verifications.jsonl` (one promotion record citing the passing verification) plus one `memory.jsonl` entry naming the promotion; refuses without a passed verification for the same content | no (workshop) | no (accepting a design does not make it true) |
 | `workshop.list`, `workshop.get`, `workshop.inspect`, `workshop.simulate` | user + model | read | never in a plan | nothing (measured; simulation is arithmetic over the stored sheet) | no (read) | no |
 | `plan.assess` | user | write | never in a plan | `plans.jsonl` (one `plan_assessment` event; the plan record's own bytes, status, approval and timestamp are unchanged) | no (executive) | yes |
 | `evolution.propose`, `evolution.verify`, `evolution.promote`, `evolution.decide` | user | write | never in a plan | `evolution-proposals.jsonl` (append-only ledger: the proposal, the measured sandbox result, the promotion request and the owner's decision) | no (evolution) | no (a candidate self-change is not a belief) |
@@ -4187,7 +4189,10 @@ root, and a model proposal cannot supply one, so the current count is 139 regist
 configuration. T-26/T-27 added five Workshop actions regardless of root configuration: `workshop.compose`
 (a user-only write of an immutable design sheet that is never executed) and four reads (`list`, `get`,
 `inspect`, `simulate`). The reads are repeatable and arithmetic-only; Workshop actions neither authorize
-execution nor change belief state. `deadline.list` needs no root: it reads the ledger, not a workspace, and the three
+execution nor change belief state. T-33 Step 3 (2026-11-19) added two more Workshop writes,
+`workshop.verify` and `workshop.promote`, so the pinned totals are now 150 registered actions by
+default and 165 with a root; the verification is a fixed check list over the stored sheet and the
+promotion refuses unless the newest recorded verification for the same content passed. `deadline.list` needs no root: it reads the ledger, not a workspace, and the three
 `backup.*` actions need no root either: they read and replace the data directory itself. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added

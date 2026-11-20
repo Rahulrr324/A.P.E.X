@@ -301,6 +301,11 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // draw from, turning a design into behavioural evidence; a simulation is re-derivable from the
   // stored sheet and says nothing about what happened.
   'workshop.compose': 'workshop',
+  // T-33 Step 3: a verification is a check of the user's own sheet and a promotion is the user's own
+  // decision about it. Recording either as an experience would copy the design into the log the
+  // pattern and adaptation reads draw from, which is the same reason composition is excluded.
+  'workshop.verify': 'workshop',
+  'workshop.promote': 'workshop',
   'evolution.propose': 'evolution',
   'evolution.verify': 'evolution',
   'evolution.promote': 'evolution',

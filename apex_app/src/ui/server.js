@@ -229,6 +229,66 @@ function projectGoal(goal) {
   };
 }
 
+
+// T-33 Step 3: one task as a graph. A step is a node, `dependsOn` is an edge, and the state is the
+// one the task log recorded. `verified` is true only when the step's own record says the verifier
+// confirmed it; a step that merely ended is not verified.
+function taskGraphOf(task) {
+  const steps = Array.isArray(task.steps) ? task.steps : [];
+  const nodes = steps.map((step) => {
+    const verification = step.verification && typeof step.verification === 'object' ? step.verification : null;
+    // A completed step records its verification outcome as `success_verified`; a step that reached a
+    // verifier failure records a verification object. Either way the record decides, not this view.
+    const verified = verification
+      ? (verification.outcome === 'verified' || verification.ok === true)
+      : step.outcome === 'success_verified';
+    return {
+      id: String(step.id),
+      description: step.description ? singleLine(step.description, 240) : null,
+      action: step.action ? singleLine(step.action, 80) : null,
+      permission: step.permission ?? null,
+      state: step.status,
+      verified,
+      verificationOutcome: verification?.outcome ?? null,
+      outcome: step.outcome ?? null,
+      summary: step.summary ? singleLine(step.summary, 240) : null,
+      dependsOn: (Array.isArray(step.dependsOn) ? step.dependsOn : []).map(String),
+      approval: step.approval ? { approvedBy: step.approval.approvedBy ?? null, at: step.approval.at ?? null } : null,
+      control: CONTROL_FOR_STATE[step.status] ?? 'none',
+    };
+  });
+  const edges = [];
+  for (const node of nodes) {
+    for (const dependency of node.dependsOn) edges.push({ from: dependency, to: node.id });
+  }
+  const verified = nodes.length > 0 && nodes.every((node) => node.verified);
+  return {
+    taskId: String(task.id),
+    goal: task.goal ? singleLine(task.goal, 240) : null,
+    status: task.status,
+    nodes,
+    edges,
+    verified,
+    completed: nodes.filter((node) => node.state === 'completed').length,
+    gated: nodes.filter((node) => node.state === 'awaiting_approval').length,
+    failed: nodes.filter((node) => node.state === 'failed').length,
+    // A control is offered only where the task log says it can act, and each one posts to the
+    // controller route that already exists - the UI never invents a transition.
+    controls: {
+      approve: nodes.some((node) => node.state === 'awaiting_approval'),
+      retry: nodes.some((node) => node.state === 'failed'),
+      cancel: !['cancelled', 'completed'].includes(task.status),
+    },
+    authorizesExecution: false,
+  };
+}
+
+const CONTROL_FOR_STATE = Object.freeze({
+  awaiting_approval: 'approve',
+  failed: 'retry',
+  paused: 'retry',
+});
+
 function projectTask(task) {
   return {
     id: String(task.id),
@@ -1966,6 +2026,26 @@ export function createUiServer({
       sendJson(res, 200, await missionControlSnapshot());
       return;
     }
+    // T-33 Step 3: the TaskGraph as a graph. Nodes are the recorded steps with their own state and
+    // verification; edges are the declared dependencies. Nothing is derived that the task log does
+    // not hold, and `verified` is the ledger's answer, never the UI's.
+    if (method === 'GET' && url.pathname === '/api/taskgraph') {
+      try {
+        const requested = url.searchParams.get('taskId');
+        const tasks = await app.taskStore.list();
+        const chosen = requested
+          ? tasks.find((task) => task.id === requested)
+          : [...tasks].reverse().find((task) => !['cancelled', 'completed'].includes(task.status)) ?? tasks.at(-1) ?? null;
+        if (!chosen) {
+          sendJson(res, 200, { taskId: null, nodes: [], edges: [], status: 'none', detail: 'no task record exists' });
+          return;
+        }
+        sendJson(res, 200, taskGraphOf(chosen));
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `the task graph is unavailable: ${err.message}` });
+      }
+      return;
+    }
     if (method === 'GET' && url.pathname === '/api/approvals') {
       sendJson(res, 200, await approvalCentreSnapshot());
       return;
@@ -2386,8 +2466,12 @@ export function createUiServer({
     if (method === 'GET' && url.pathname === '/api/workshop') {
       try {
         if (!app.workshop) { sendJson(res, 503, { unavailable: true, error: 'Workshop is not configured' }); return; }
-        const [page, status] = await Promise.all([app.workshop.list({ limit: 20 }), app.workshop.status()]);
-        sendJson(res, 200, { ...page, status, authorizesExecution: false });
+        const [page, status, verificationSummary] = await Promise.all([
+          app.workshop.list({ limit: 20 }),
+          app.workshop.status(),
+          typeof app.workshop.verificationSummary === 'function' ? app.workshop.verificationSummary() : Promise.resolve(null),
+        ]);
+        sendJson(res, 200, { ...page, status, verificationSummary, authorizesExecution: false });
       } catch (err) {
         sendJson(res, 503, { unavailable: true, error: `the Workshop is unavailable: ${err.message}` });
       }
@@ -2431,6 +2515,44 @@ export function createUiServer({
         }
         sendJson(res, 200, { ...data, status: result.status, display: result.display });
       } catch (err) { sendJson(res, 400, { error: err.message }); }
+      return;
+    }
+    // T-33 Step 3: the sandbox verification and the promotion. The verification records a result; the
+    // promotion refuses unless the newest recorded verification for that exact content passed. Both
+    // run through the controller, so the ECP authorizes them and the ledger is read back afterwards.
+    if (method === 'POST' && (url.pathname === '/api/workshop/verify' || url.pathname === '/api/workshop/promote')) {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => key !== 'artifactId' && key !== 'reason');
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      if (typeof body.artifactId !== 'string' || body.artifactId.trim().length === 0) { sendJson(res, 400, { error: 'artifactId is required' }); return; }
+      if (body.reason !== undefined && (typeof body.reason !== 'string' || body.reason.length > 240)) {
+        sendJson(res, 400, { error: 'reason must be text of at most 240 characters' }); return;
+      }
+      const verifying = url.pathname === '/api/workshop/verify';
+      if (!verifying && (typeof body.reason !== 'string' || body.reason.trim().length === 0)) {
+        sendJson(res, 400, { error: 'a promotion requires your reason' }); return;
+      }
+      try {
+        const result = verifying
+          ? await app.controller.workshopVerify({ artifactId: body.artifactId, reason: body.reason ?? null })
+          : await app.controller.workshopPromote({ artifactId: body.artifactId, reason: body.reason });
+        const data = result.operation?.steps?.[0]?.result?.data ?? null;
+        if (!data || typeof data.artifactId !== 'string') {
+          sendJson(res, 400, { status: result.status, error: result.output ?? 'the workshop refused the request', display: result.display });
+          return;
+        }
+        sendJson(res, 200, {
+          ...data,
+          status: result.status,
+          display: result.display,
+          verification: app.workshop?.verificationState ? await app.workshop.verificationState(body.artifactId) : null,
+        });
+        broadcast('workshop', { artifactId: data.artifactId, verified: data.verified === true });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
       return;
     }
     // T-31 Step 2: the controlled Evolution Lab. The GET is a read of the ledger plus the live

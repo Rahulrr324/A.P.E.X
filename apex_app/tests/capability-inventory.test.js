@@ -116,9 +116,9 @@ describe('AF-19: the registry is the inventory', () => {
     // so the pinned totals moved by four; the write count moves with them because all four write.
     // T-32 Step 3 (2026-11-19) adds four perception capabilities (sense_host, state, dismiss_alert,
     // revoke_suppression), so the pinned totals move by four and the read/write split with them.
-    assert.equal(plain.registry.list().length, 148, 'the default registry has 148 actions');
+    assert.equal(plain.registry.list().length, 150, 'the default registry has 150 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 163, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 165, 'a configured workspace root adds fifteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -153,7 +153,7 @@ describe('AF-19: the registry is the inventory', () => {
     const writes = app.registry.list().filter((d) => d.permission === 'write');
     // T-30 (2026-11-19) supersedes the prior 69-write count: Workshop adds one user-only compose
     // write, and T-29 adds `cognition.run`, which is owner-only and unplannable.
-    assert.equal(writes.length, 78, 'the inventory counts seventy-eight write actions with a root configured');
+    assert.equal(writes.length, 80, 'the inventory counts eighty write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -414,6 +414,11 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         assert.equal(row.belief, 'no (a copy is not a belief)', `${name}: README belief-state`);
       } else if (name === 'workshop.compose') {
         assert.equal(row.belief, 'no (a design is not a belief)', `${name}: README belief-state`);
+      } else if (name === 'workshop.verify' || name === 'workshop.promote') {
+        // [T-33 Step 3, 2026-11-19] A sandbox verification records a check of the user's own sheet and
+        // a promotion records the user's decision to accept it. Neither is a belief about the world,
+        // and neither can change what APEX is permitted to do.
+        assert.equal(row.belief, name === 'workshop.verify' ? 'no (a check is not a belief)' : 'no (accepting a design does not make it true)', `${name}: README belief-state`);
       } else if (name.startsWith('evolution.')) {
         // [T-31 Step 2, 2026-11-19] The lab appends proposals, measured sandbox results and the
         // owner's promotion decisions to its own ledger. A candidate self-change is not a belief

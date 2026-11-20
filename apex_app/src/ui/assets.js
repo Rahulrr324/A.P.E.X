@@ -213,6 +213,21 @@ export const UI_PAGE = `<!doctype html>
       <p id="mission-tasks-status" class="workspace-status" role="status" aria-live="polite">Loading tasks…</p>
       <ul id="mission-tasks" class="work"></ul>
     </section>
+    <!-- T-33 Step 3 (2026-11-19): the recorded graph itself - nodes, dependency edges, per-node
+         state and verification - with the owner controls that already exist on the controller. -->
+    <section class="panel">
+      <h3>TaskGraph — dependency and checkpoint view</h3>
+      <p class="meta">Each node is a recorded step. Its state and its verification come from the task log; the controls post to the controller routes that already exist. A verified badge appears only when the step's own record says the verifier confirmed it.</p>
+      <p id="dag-status" class="workspace-status" role="status" aria-live="polite">Loading the recorded graph…</p>
+      <ul id="dag-nodes" class="work dag"></ul>
+      <p id="dag-edges" class="meta"></p>
+      <div class="row">
+        <button id="dag-approve" type="button" class="small" hidden>Approve checkpoint</button>
+        <button id="dag-retry" type="button" class="small" hidden>Retry failed node</button>
+        <button id="dag-cancel" type="button" class="small" hidden>Abort mission</button>
+        <span id="dag-control-status" class="meta" role="status" aria-live="polite"></span>
+      </div>
+    </section>
   </section>
   <section class="view" data-view="tasks" data-depth-plane="z3">
     <h2>Tasks and execution</h2>
@@ -411,6 +426,13 @@ export const UI_PAGE = `<!doctype html>
       <button id="workshop-compose" type="submit" class="small">Compose</button>
       <span id="workshop-status" class="meta" role="status"></span>
     </form>
+    <!-- T-33 Step 3 (2026-11-19): the sandbox loop. A verification is a fixed check list over the
+         stored sheet; a promotion is refused unless the newest recorded verification passed. -->
+    <p class="meta">The sandbox verification checks structure, resolved connections, isolation, feedback loops, supply against demand, and the declared budget. A verified badge appears only after the backend records <code>verified: true</code>, and a promotion refuses without one.</p>
+    <div class="row">
+      <button id="workshop-stage-telemetry" type="button" class="small">Stage from telemetry</button>
+      <span id="workshop-sandbox-status" class="meta" role="status" aria-live="polite"></span>
+    </div>
     <div id="workshop-report" class="panel"></div>
     <ul id="workshop" class="work"></ul>
     <h3>Evolution Lab — controlled self-change</h3>
@@ -885,6 +907,15 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   councilState: document.getElementById('council-state'),
   workshopState: document.getElementById('workshop-state'),
   // T-31 Step 2 surfaces.
+  dagStatus: document.getElementById('dag-status'),
+  dagNodes: document.getElementById('dag-nodes'),
+  dagEdges: document.getElementById('dag-edges'),
+  dagApprove: document.getElementById('dag-approve'),
+  dagRetry: document.getElementById('dag-retry'),
+  dagCancel: document.getElementById('dag-cancel'),
+  dagControlStatus: document.getElementById('dag-control-status'),
+  workshopStageTelemetry: document.getElementById('workshop-stage-telemetry'),
+  workshopSandboxStatus: document.getElementById('workshop-sandbox-status'),
   execCommsHeadline: document.getElementById('exec-comms-headline'),
   execCommsLines: document.getElementById('exec-comms-lines'),
   execCommsTone: document.getElementById('exec-comms-tone'),
@@ -2286,18 +2317,233 @@ function renderWorkshop(result) {
     : 'Showing ' + artifacts.length + ' of ' + total + ' stored design sheet(s).'
       + (health.chain ? ' Store chain: ' + health.chain + '.' : '')
       + (page.authorizesExecution === false ? ' The store does not authorize execution.' : ''), damaged ? 'partial' : (total === 0 ? 'empty' : 'available'));
+  const verificationEntries = Array.isArray(page.verificationSummary?.entries) ? page.verificationSummary.entries : [];
   renderList(els.workshop, artifacts, (artifact) => {
     const meta = (artifact.domain || 'domain not recorded') + ' · ' + artifact.components + ' component(s) · '
       + artifact.connections + ' connection(s) · budget '
       + (artifact.budget === null || artifact.budget === undefined ? 'not declared' : artifact.budget);
     const li = itemFrom(artifact.title || artifact.artifactId, meta);
-    const button = el('button', 'small', 'Simulate');
-    button.type = 'button';
-    button.addEventListener('click', () => { simulateWorkshop(artifact.artifactId); });
-    li.append(button);
+    li.dataset.artifactId = artifact.artifactId;
+    // T-33 Step 3: the badge is the ledger's answer. An artifact with no verification record shows
+    // 'unverified', which is a fact about the record and not a softer way of saying it passed.
+    const record = verificationEntries.find((entry) => entry.artifactId === artifact.artifactId) ?? null;
+    const verified = record?.verification?.verified === true;
+    li.dataset.verified = verified ? 'true' : 'false';
+    li.dataset.promoted = record?.promotion ? 'true' : 'false';
+    const badge = el('span', 'badge', verified ? 'verified' : 'unverified');
+    badge.dataset.verified = verified ? 'true' : 'false';
+    badge.dataset.verification = record?.verification ? record.verification.id : '';
+    li.append(badge);
+    if (record?.verification) {
+      li.append(el('div', 'meta', 'Sandbox verification ' + record.verification.id + ' at ' + record.verification.at
+        + (record.verification.failed?.length ? ' · failed: ' + record.verification.failed.join(', ') : ' · every check passed')));
+    }
+    if (record?.promotion) {
+      li.append(el('div', 'meta', 'Promoted ' + record.promotion.at + ' on verification ' + record.promotion.verificationId
+        + (record.promotion.reason ? ' — ' + record.promotion.reason : '')));
+    }
+    const simulate = el('button', 'small', 'Simulate');
+    simulate.type = 'button';
+    simulate.addEventListener('click', () => { simulateWorkshop(artifact.artifactId); });
+    li.append(simulate);
+    const verify = el('button', 'small', 'Verify in sandbox');
+    verify.type = 'button';
+    verify.dataset.action = 'workshop-verify';
+    verify.dataset.artifactId = artifact.artifactId;
+    verify.addEventListener('click', () => { verifyWorkshop(artifact.artifactId, verify); });
+    li.append(verify);
+    const promote = el('button', 'small', 'Promote');
+    promote.type = 'button';
+    promote.dataset.action = 'workshop-promote';
+    promote.dataset.artifactId = artifact.artifactId;
+    // A promotion is offered only where the ledger already says the artifact verified; the server
+    // refuses it otherwise, and the button says why rather than pretending.
+    promote.disabled = !verified;
+    if (!verified) promote.title = 'A promotion requires a passed sandbox verification for this exact content.';
+    promote.addEventListener('click', () => { promoteWorkshop(artifact.artifactId, promote); });
+    li.append(promote);
     return li;
   }, 'No design sheets are recorded in WorkshopStore.');
   renderWorkshopReport(state.workshopReport ?? null);
+}
+
+
+// T-33 Step 3 (2026-11-19): the TaskGraph view and its checkpoint controls.
+//
+// The graph is read from the task log through /api/taskgraph. A node's state and its verified flag
+// are the record's, not this function's: the badge says "verified" only when the step's own
+// verification outcome is verified. The three controls post to controller routes that already
+// existed (/api/tasks/:id/approve|retry|cancel), so this view offers an existing transition and
+// never invents one. Lockdown refuses them at the ECP, which is where that decision belongs.
+function renderTaskGraph(result) {
+  if (!els.dagNodes) return;
+  const graph = result?.ok === true ? result.value : null;
+  state.taskGraph = graph;
+  if (!graph) {
+    const reason = result?.error || 'the task graph could not be read';
+    setWorkspaceStatus(els.dagStatus, (result?.status >= 500 ? 'Unavailable: ' : 'Read error: ') + reason,
+      result?.status >= 500 ? 'unavailable' : 'error');
+    renderList(els.dagNodes, [], () => null, 'Unavailable: ' + reason);
+    if (els.dagEdges) els.dagEdges.textContent = '';
+    for (const button of [els.dagApprove, els.dagRetry, els.dagCancel]) if (button) button.hidden = true;
+    return;
+  }
+  if (!graph.taskId || (graph.nodes || []).length === 0) {
+    setWorkspaceStatus(els.dagStatus, graph.detail || 'No task record exists, so there is no graph to show.', 'empty');
+    renderList(els.dagNodes, [], () => null, 'No node is recorded.');
+    if (els.dagEdges) els.dagEdges.textContent = '';
+    for (const button of [els.dagApprove, els.dagRetry, els.dagCancel]) if (button) button.hidden = true;
+    return;
+  }
+  setWorkspaceStatus(els.dagStatus, graph.completed + ' of ' + graph.nodes.length + ' node(s) completed · '
+    + graph.gated + ' gated · ' + graph.failed + ' failed · task ' + graph.status
+    + (graph.verified ? ' · every node verified' : ' · not every node verified'),
+  graph.failed > 0 ? 'partial' : 'available');
+  renderList(els.dagNodes, graph.nodes, (node) => {
+    const item = itemFrom(node.id + ' — ' + (node.description || node.action || 'no description'),
+      node.state + ' · permission ' + (node.permission || 'not recorded') + ' · verified ' + (node.verified ? 'true' : 'false'));
+    item.dataset.nodeId = node.id;
+    item.dataset.state = node.state;
+    item.dataset.verified = node.verified ? 'true' : 'false';
+    item.dataset.control = node.control;
+    if (node.dependsOn.length > 0) item.append(el('div', 'meta', 'Depends on: ' + node.dependsOn.join(', ')));
+    if (node.outcome) item.append(el('div', 'meta', 'Recorded outcome: ' + node.outcome));
+    if (node.verificationOutcome) item.append(el('div', 'meta', 'Verification outcome: ' + node.verificationOutcome));
+    if (node.approval) item.append(el('div', 'meta', 'Approved by ' + (node.approval.approvedBy || 'not recorded') + ' at ' + (node.approval.at || 'time not recorded')));
+    // A verified node says so in the element, and only a verified node may carry the badge.
+    if (node.verified === true) {
+      const badge = el('span', 'badge dag-verified', 'verified');
+      badge.dataset.verified = 'true';
+      item.append(badge);
+    }
+    return item;
+  }, 'No node is recorded.');
+  if (els.dagEdges) {
+    els.dagEdges.textContent = graph.edges.length === 0
+      ? 'No dependency edge is recorded; this task is a single node.'
+      : 'Edges: ' + graph.edges.map((edge) => edge.from + ' → ' + edge.to).join(', ');
+  }
+  const taskId = graph.taskId;
+  const gatedNode = graph.nodes.find((node) => node.state === 'awaiting_approval') || null;
+  const failedNode = graph.nodes.find((node) => node.state === 'failed') || null;
+  if (els.dagApprove) {
+    els.dagApprove.hidden = !graph.controls.approve;
+    els.dagApprove.dataset.taskId = taskId;
+    els.dagApprove.dataset.stepId = gatedNode ? gatedNode.id : '';
+  }
+  if (els.dagRetry) {
+    els.dagRetry.hidden = !graph.controls.retry;
+    els.dagRetry.dataset.taskId = taskId;
+    els.dagRetry.dataset.stepId = failedNode ? failedNode.id : '';
+  }
+  if (els.dagCancel) {
+    els.dagCancel.hidden = !graph.controls.cancel;
+    els.dagCancel.dataset.taskId = taskId;
+  }
+}
+
+async function postTaskControl(path, body, button, label) {
+  if (button) button.disabled = true;
+  setWorkspaceStatus(els.dagControlStatus, label + ' is being sent through the controller…', 'loading');
+  try {
+    const result = await api(path, { method: 'POST', body });
+    const verified = result.status === 'success_verified';
+    setWorkspaceStatus(els.dagControlStatus, label + ': ' + String(result.status || 'status not returned')
+      + (result.display ? ' — ' + String(result.display).slice(0, 240) : ''),
+    verified ? 'available' : 'error');
+  } catch (error) {
+    setWorkspaceStatus(els.dagControlStatus, label + ' failed: ' + String(error?.message || error), 'error');
+  } finally {
+    if (button) button.disabled = false;
+    await refresh();
+  }
+}
+
+// T-33 Step 3: a design sheet staged from the last host reading. Every number is one the sensor
+// reported; when there is no reading the button says so instead of inventing a sheet.
+function stageFromTelemetry() {
+  const perception = state.perception;
+  const reading = perception && perception.lastReading ? perception.lastReading : null;
+  if (!reading) {
+    setWorkspaceStatus(els.workshopSandboxStatus, 'No host reading is recorded yet. Sense the host in Sentinel first; a sheet is not invented from nothing.', 'empty');
+    return null;
+  }
+  const host = reading.host || {};
+  const logical = Number.isFinite(host.cpu?.logicalCount) && host.cpu.logicalCount > 0 ? host.cpu.logicalCount : null;
+  const totalMb = Number.isFinite(host.memory?.totalBytes) ? Math.max(1, Math.round(host.memory.totalBytes / 1048576)) : null;
+  const storage = Array.isArray(host.storage) ? host.storage.find((volume) => volume.reported === true) : null;
+  const availableMb = storage && Number.isFinite(storage.availableBytes) ? Math.max(1, Math.round(storage.availableBytes / 1048576)) : null;
+  if (logical === null && totalMb === null && availableMb === null) {
+    setWorkspaceStatus(els.workshopSandboxStatus, 'The last reading carried no usable host figures, so no sheet can be staged from it.', 'unavailable');
+    return null;
+  }
+  const components = [];
+  if (logical !== null) components.push({ id: 'cpu', label: 'CPU', kind: 'resource', supply: logical, demand: 0, cost: 1 });
+  if (totalMb !== null) components.push({ id: 'memory', label: 'Memory', kind: 'resource', supply: totalMb, demand: 0, cost: 1 });
+  if (availableMb !== null) components.push({ id: 'storage', label: 'Storage', kind: 'resource', supply: availableMb, demand: 0, cost: 1 });
+  components.push({ id: 'workspace_check', label: 'Workspace check', kind: 'service', supply: 0, demand: 1, cost: 1 });
+  const connections = components.filter((component) => component.id !== 'workspace_check')
+    .map((component) => ({ from: component.id, to: 'workspace_check', label: 'supplies' }));
+  return {
+    title: 'Host reading ' + (reading.at || 'time not recorded'),
+    domain: 'plan',
+    components,
+    connections,
+    budget: { total: components.length * 2 },
+    note: 'Staged from the host reading at ' + (reading.at || 'time not recorded') + '; every number is a value the sensor reported.',
+  };
+}
+
+async function composeFromTelemetry(button) {
+  const sheet = stageFromTelemetry();
+  if (!sheet) return;
+  if (button) button.disabled = true;
+  setWorkspaceStatus(els.workshopSandboxStatus, 'Staging the telemetry design through the controller…', 'loading');
+  try {
+    const result = await api('/api/workshop/compose', { method: 'POST', body: sheet });
+    setWorkspaceStatus(els.workshopSandboxStatus, 'Staged ' + result.artifactId + '. It is stored, not verified; run the sandbox check next.', 'available');
+  } catch (error) {
+    setWorkspaceStatus(els.workshopSandboxStatus, 'Staging failed: ' + String(error?.message || error), 'error');
+  } finally {
+    if (button) button.disabled = false;
+    await refresh();
+  }
+}
+
+async function verifyWorkshop(artifactId, button) {
+  if (button) button.disabled = true;
+  setWorkspaceStatus(els.workshopSandboxStatus, 'Running the sandbox verification for ' + artifactId + '…', 'loading');
+  try {
+    const result = await api('/api/workshop/verify', { method: 'POST', body: { artifactId, reason: 'owner ran the sandbox check from the deck' } });
+    setWorkspaceStatus(els.workshopSandboxStatus, artifactId + ': '
+      + (result.verified === true ? 'verified — ' + result.passed + ' check(s) passed' : 'not verified — failed: ' + (result.failed || []).join(', ')),
+    result.verified === true ? 'available' : 'partial');
+  } catch (error) {
+    setWorkspaceStatus(els.workshopSandboxStatus, 'Verification failed: ' + String(error?.message || error), 'error');
+  } finally {
+    if (button) button.disabled = false;
+    await refresh();
+  }
+}
+
+async function promoteWorkshop(artifactId, button) {
+  const reason = window.prompt('Why is this design accepted? Your reason is recorded with the promotion.');
+  if (reason === null || reason.trim() === '') {
+    setWorkspaceStatus(els.workshopSandboxStatus, 'A promotion needs your reason; nothing was recorded.', 'error');
+    return;
+  }
+  if (button) button.disabled = true;
+  setWorkspaceStatus(els.workshopSandboxStatus, 'Promoting ' + artifactId + ' through the controller…', 'loading');
+  try {
+    const result = await api('/api/workshop/promote', { method: 'POST', body: { artifactId, reason: reason.trim() } });
+    setWorkspaceStatus(els.workshopSandboxStatus, artifactId + ' promoted on verification ' + result.verificationId
+      + (result.memoryId ? '; one memory-timeline entry was written.' : '; the memory-timeline entry could not be written.'), 'available');
+  } catch (error) {
+    setWorkspaceStatus(els.workshopSandboxStatus, 'Promotion refused: ' + String(error?.message || error), 'error');
+  } finally {
+    if (button) button.disabled = false;
+    await refresh();
+  }
 }
 
 function renderWorkshopReport(report) {
@@ -2820,7 +3066,8 @@ async function refresh() {
   const [stateResult, healthResult, missionResult, approvalResult, timelineResult,
     situationResult, briefingResult, runtimeResult, sourcesResult, documentsResult,
     reasoningResult, councilResult, workshopResult, resourcesResult, cognitionResult,
-    presenceResult, autonomyMatrixResult, worldResult, evolutionResult, stepUpResult, perceptionResult] = await Promise.all([
+    presenceResult, autonomyMatrixResult, worldResult, evolutionResult, stepUpResult, perceptionResult,
+    taskGraphResult] = await Promise.all([
     readApi('/api/state'),
     readApi('/api/health'),
     readApi('/api/mission-control'),
@@ -2842,6 +3089,7 @@ async function refresh() {
     readApi('/api/evolution'),
     readApi('/api/step-up'),
     readApi('/api/perception?limit=20'),
+    readApi('/api/taskgraph'),
   ]);
 
   // The authoritative snapshot carries the current session, transcript, badges, gauges and the
@@ -2918,6 +3166,9 @@ async function refresh() {
   renderWorldClaims(worldResult);
   renderEvolution(evolutionResult);
   renderPerception(perceptionResult);
+  // T-33 Step 3: the graph and the perception reading the Workshop stages a sheet from.
+  state.perception = perceptionResult.ok === true ? perceptionResult.value : null;
+  renderTaskGraph(taskGraphResult);
   renderStepUp(stepUpResult);
 
   applyCoreProjection(snapshot ? '' : 'The authoritative state read failed.');
@@ -3050,6 +3301,34 @@ function moveView(step) {
   return next;
 }
 
+// T-33 Step 3: the TaskGraph controls and the Workshop sandbox. Each one posts to a route that runs
+// the corresponding controller path, so the ECP decides and this code only asks.
+if (els.dagApprove) {
+  els.dagApprove.addEventListener('click', () => {
+    const taskId = els.dagApprove.dataset.taskId;
+    const stepId = els.dagApprove.dataset.stepId;
+    postTaskControl('/api/tasks/' + encodeURIComponent(taskId) + '/approve', stepId ? { stepId } : {}, els.dagApprove, 'Approving the checkpoint');
+  });
+}
+if (els.dagRetry) {
+  els.dagRetry.addEventListener('click', () => {
+    const taskId = els.dagRetry.dataset.taskId;
+    const stepId = els.dagRetry.dataset.stepId;
+    if (!stepId) return;
+    postTaskControl('/api/tasks/' + encodeURIComponent(taskId) + '/retry', { stepId }, els.dagRetry, 'Retrying the failed node');
+  });
+}
+if (els.dagCancel) {
+  els.dagCancel.addEventListener('click', () => {
+    const taskId = els.dagCancel.dataset.taskId;
+    const agreed = window.confirm('Abort this task? Every downstream node stops and the cancellation is recorded.');
+    if (!agreed) return;
+    postTaskControl('/api/tasks/' + encodeURIComponent(taskId) + '/cancel', {}, els.dagCancel, 'Aborting the mission');
+  });
+}
+if (els.workshopStageTelemetry) {
+  els.workshopStageTelemetry.addEventListener('click', () => { composeFromTelemetry(els.workshopStageTelemetry); });
+}
 if (els.modeSelect) els.modeSelect.addEventListener('change', () => { applyMode(els.modeSelect.value); });
 if (els.motionToggle) els.motionToggle.addEventListener('click', () => { applyMotion(!state.reducedMotion); });
 if (els.contrastToggle) els.contrastToggle.addEventListener('click', () => { applyContrast(state.contrast !== 'high'); });
