@@ -122,6 +122,39 @@ function parseLines(text, validateRecord) {
   return { records, corrupt };
 }
 
+// T-30 Step 1 (2026-11-19): a stat key decides whether a read can reuse the records this
+// instance validated a moment ago. It is the file identity and the two timestamps the kernel
+// updates on any write, at nanosecond resolution where the platform provides it:
+//   dev + ino  - a replaced file is a different file;
+//   size       - every append changes it;
+//   mtimeNs/ctimeNs - a rewrite in place changes them even when the size is identical.
+// A stat key never proves content by itself; it only proves that nothing wrote to this path
+// since the records were derived from it. Any error other than ENOENT marks the key
+// unusable, so the normal read path runs and its own error handling decides the outcome.
+async function statKeyOf(filePath) {
+  try {
+    const stat = await fs.stat(filePath, { bigint: true });
+    return {
+      missing: false,
+      readable: true,
+      dev: String(stat.dev),
+      ino: String(stat.ino),
+      size: String(stat.size),
+      mtimeNs: String(stat.mtimeNs),
+      ctimeNs: String(stat.ctimeNs),
+    };
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return { missing: true, readable: true };
+    return { missing: false, readable: false };
+  }
+}
+
+function sameStatKey(a, b) {
+  return Boolean(a && b && a.readable && b.readable && a.missing === b.missing
+    && a.dev === b.dev && a.ino === b.ino && a.size === b.size
+    && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs);
+}
+
 export class JsonlStore {
   #snapshot = null;
   #appendState = null;
@@ -131,12 +164,20 @@ export class JsonlStore {
   #cacheMisses = 0;
   #appendReuses = 0;
   #appendRebuilds = 0;
+  #readMeta = null;
+  #readCacheHits = 0;
+  #readCacheMisses = 0;
+  #readComplete = false;
 
-  constructor(filePath, { validateRecord = () => null, parseCacheBytes = 0 } = {}) {
+  constructor(filePath, { validateRecord = () => null, parseCacheBytes = 0, statCache = true, statCacheMaxRecords = 20000 } = {}) {
     this.filePath = filePath;
     this.label = path.basename(filePath);
     this.validateRecord = validateRecord;
     this.parseCacheBytes = Number.isInteger(parseCacheBytes) && parseCacheBytes > 0 ? parseCacheBytes : 0;
+    // The stat cache is a separate aid from the byte snapshot: it skips reading the file at
+    // all when the kernel says the file is the one this instance last read.
+    this.statCache = statCache !== false;
+    this.statCacheMaxRecords = Number.isInteger(statCacheMaxRecords) && statCacheMaxRecords > 0 ? statCacheMaxRecords : 20000;
     this.#appendLock = new WriterLock(filePath, { label: `${this.label} append` });
   }
 
@@ -248,11 +289,62 @@ export class JsonlStore {
   // exact bytes these records were parsed from, or null when this read did not establish one.
   // It is the same digest the snapshot compares, so a caller may reuse work derived from these
   // records only while that key still describes the file. It never changes what is returned.
-  async load({ maintainSnapshot = true, certification = null } = {}) {
+  // Read-only introspection of the stat cache. It reports a performance aid, never stored
+  // state: `hits` counts reads answered without opening the file, `misses` counts reads that
+  // ran the full path. It must not be used to decide whether a record exists.
+  get readCacheStats() {
+    return {
+      enabled: this.statCache,
+      cached: this.#readMeta !== null,
+      cachedRecords: this.#readMeta?.records.length ?? 0,
+      cachedSize: this.#readMeta?.key?.size ?? null,
+      hits: this.#readCacheHits,
+      misses: this.#readCacheMisses,
+    };
+  }
+
+  // A read is served from the stat cache only when all of these hold:
+  //   - the store opted in and this read is not the one that follows this instance's own append;
+  //   - the path exists and is statable;
+  //   - dev/ino/size/mtimeNs/ctimeNs are exactly the values of the read that produced the records;
+  //   - that read saw a complete final line, so a waiting writer's torn tail is never pinned.
+  // A cross-process append changes size, so the very next read misses and re-reads. A rewrite in
+  // place changes mtimeNs/ctimeNs even at identical size. A replaced file changes ino. Any error
+  // stat cannot describe falls through to the normal path, whose error handling is unchanged.
+  async load(options = {}) {
+    const { maintainSnapshot = true, certification = null } = options;
+    const key = this.statCache && !this.#justWrote ? await statKeyOf(this.filePath) : null;
+    if (key && !key.missing && key.readable && this.#readMeta
+      && sameStatKey(key, this.#readMeta.key) && this.#readMeta.complete) {
+      this.#readCacheHits += 1;
+      if (certification && typeof certification === 'object') certification.key = null;
+      return { records: [...this.#readMeta.records], corrupt: [...this.#readMeta.corrupt] };
+    }
+    this.#readCacheMisses += 1;
+    const result = await this.#loadFromDisk({ maintainSnapshot, certification });
+    const after = this.statCache ? await statKeyOf(this.filePath) : null;
+    const stable = after && !after.missing && after.readable && sameStatKey(key, after);
+    if (stable && result.records.length <= this.statCacheMaxRecords && this.#lastReadComplete()) {
+      this.#readMeta = { key: after, records: [...result.records], corrupt: [...result.corrupt], complete: true };
+    } else if (after && after.missing) {
+      this.#readMeta = null;
+    }
+    return result;
+  }
+
+  // A read is cacheable only when the file it described ended on a line boundary: an
+  // unterminated tail means a writer is mid-append, and pinning that state would defeat the
+  // wait-and-reread behaviour in `#readBytes`.
+  #lastReadComplete() {
+    return this.#readComplete;
+  }
+
+  async #loadFromDisk({ maintainSnapshot = true, certification = null } = {}) {
     const certify = certification && typeof certification === 'object' ? certification : null;
     if (certify) certify.key = null;
     const note = (key) => { if (certify) certify.key = key; };
     const buffer = await this.#readBytes();
+    this.#readComplete = buffer === null || buffer.length === 0 || buffer[buffer.length - 1] === 0x0a;
     if (buffer === null) {
       note(EMPTY_DIGEST);
       return { records: [], corrupt: [] };
