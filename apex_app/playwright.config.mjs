@@ -12,7 +12,9 @@ export default defineConfig({
   // screenshot or a Core that does not degrade. `tests/e2e/apex-browser.spec.mjs` (T-25) is kept
   // in the tree as history but is not part of the default run: it asserts the pre-T-29 navigation
   // count and pre-T-31 markup, and the T-31 suite covers everything it covered and more.
-  testMatch: ['**/t31-real-browser.spec.mjs'],
+  // T-32 Step 2 (2026-11-19): the HUD experience suite runs next to the T-31 one. Both drive the
+  // shipped server and client with a real binary; neither is a simulation.
+  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs'],
   testIgnore: ['**/apex-browser.spec.mjs'],
   // Generated traces/screenshots from a failing run must not be committed.
   outputDir: './test-results/playwright',

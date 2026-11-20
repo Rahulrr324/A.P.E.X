@@ -52,6 +52,11 @@ node_modules/
 apex_app/node_modules/
 test-results/
 apex_app/test-results/
+# T-32 Step 2 (2026-11-19): the HUD-experience PNGs and run summary are workflow artifacts, not
+# source. The T-31 evidence has the same treatment: the directory ships a README, the run writes
+# the rest, and the CI job uploads it.
+apex_app/reports/screenshots/t32/
+apex_app/reports/screenshots/t32-hud-run.json
 playwright-report/
 apex_app/playwright-report/
 blob-report/

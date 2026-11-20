@@ -97,14 +97,70 @@ jobs:
           level = 'notice' if outcome == 'success' else 'error'
           print(f'::{level} title=real-browser-verification::{message[:60000]}')
           PY
+      # T-32 Step 2 (2026-11-19): the HUD experience result. Reticle posture per Core state, the
+      # plane ordering, the contrast audit totals, the focus traversal and the acknowledgement
+      # latency, plus every PNG the artifact holds, as one annotation.
+      - name: Publish the HUD experience result
+        if: always()
+        shell: bash
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, re, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          log = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.log')
+          text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
+          match = re.search(r'^T32_HUD_SUMMARY (\{.*\})$', text, re.M)
+          parts = [f'hud-step={outcome}']
+          if not match:
+              parts.append('no HUD summary was printed (the browser suite did not reach the T-32 file)')
+          else:
+              data = json.loads(match.group(1))
+              parts.append(f"browser={data.get('browserVersion')}")
+              reticle = data.get('reticle') or {}
+              for state in ('idle', 'awaiting_approval', 'degraded', 'lockdown'):
+                  posture = reticle.get(state) or {}
+                  parts.append(
+                      f"reticle[{state}]: stroke={posture.get('stroke')} weight={posture.get('weight')} "
+                      f"dash={posture.get('dash')} animation={posture.get('animationName')}"
+                  )
+              planes = data.get('planes') or {}
+              for viewport, table in planes.items():
+                  parts.append(f"planes[{viewport}]: " + ', '.join(
+                      f"{plane}={sorted(set(entry.get('zIndexes') or []))}" for plane, entry in sorted(table.items())
+                  ))
+              audits = data.get('contrast') or []
+              violations = sum(entry.get('violations') or 0 for entry in audits)
+              checks = sum(entry.get('checked') or 0 for entry in audits)
+              parts.append(f'contrast: {checks} text runs checked, {violations} violations')
+              if violations:
+                  first = next((entry for entry in audits if entry.get('violations')), None)
+                  parts.append('firstContrastFailure=' + json.dumps(first, sort_keys=True))
+              keyboard = data.get('keyboard') or {}
+              if keyboard:
+                  parts.append('ackMs=' + str(keyboard.get('inPageAckMs')) + ' inputBeforeTabs=' + str(keyboard.get('inputBeforeTabs')))
+                  parts.append('tabStops=' + ' > '.join(keyboard.get('stops') or []))
+                  parts.append('escapeTo=' + str(keyboard.get('escapeTo')))
+              motion = data.get('motion') or {}
+              if motion:
+                  parts.append('motion=' + json.dumps(motion, sort_keys=True))
+              shots = data.get('screenshots') or []
+              parts.append(f'artifact: {len(shots)} PNG(s) under apex_app/reports/screenshots/t32')
+              for shot in shots:
+                  parts.append(f"{shot['state']} {shot['viewport']} {shot['bytes']}B")
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          level = 'notice' if outcome == 'success' else 'error'
+          print(f'::{level} title=hud-experience::{message[:60000]}')
+          PY
+
       - name: Keep the browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: t31-real-browser
+          name: t31-t32-real-browser
           path: |
             apex_app/reports/screenshots
             apex_app/test-results/playwright
+            apex_app/reports/screenshots/t32
           if-no-files-found: warn
           retention-days: 14
 

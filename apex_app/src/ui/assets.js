@@ -602,7 +602,9 @@ body[data-mode="synthesis"] .core-ring.mid { animation-duration: 26s; }
 body[data-mode="quiet"] { --cyan: #c9d6e4; --gold: #9aafc4; --muted: #8a9bae; --line: rgba(150, 168, 190, 0.22); }
 body[data-mode="quiet"]::before { opacity: 0.05; }
 body[data-mode="quiet"] .core-ring, body[data-mode="quiet"] .core-halo { animation: none !important; }
-body[data-mode="lockdown"] { --cyan: var(--armor-red); --gold: var(--armor-red-text); --line: rgba(225, 6, 0, 0.45); }
+/* Lockdown text uses the readable alarm red: #e10600 clears the bar as a border and a fill, but
+   not as 15px text on the glass planes, so the text token is the lighter one. */
+body[data-mode="lockdown"] { --cyan: var(--armor-red-text); --gold: var(--armor-red-text); --line: rgba(225, 6, 0, 0.45); --line-strong: rgba(255, 107, 90, 0.6); }
 body[data-mode="lockdown"] .core-ring, body[data-mode="lockdown"] .core-halo, body[data-mode="lockdown"]::before { animation: none !important; }
 body[data-motion="reduced"] *, body[data-motion="reduced"] *::before { animation: none !important; transition: none !important; }
 /* Contrast: a real high-contrast palette, not a filter. */
@@ -642,10 +644,13 @@ body[data-contrast="high"]::before { display: none; }
    field the deck is drawn on, z1 the HUD grid, z2 the reticle, z3 the focal workspace cards, and z4
    the gates that may interrupt the owner (banner, safety controls). */
 body[data-depth-plane="z0"] { position: relative; z-index: 0; }
-[data-depth-plane="z1"] { z-index: 10; }
-[data-depth-plane="z2"] { z-index: 20; }
-[data-depth-plane="z3"] { z-index: 30; }
-[data-depth-plane="z4"] { z-index: 40; }
+/* A plane that does not participate in stacking is a label, not a plane, so each one is positioned:
+   z-index alone does nothing on a static block box, and the ordering assertion would then be
+   reading an inert declaration. */
+[data-depth-plane="z1"] { position: relative; z-index: 10; }
+[data-depth-plane="z2"] { position: relative; z-index: 20; }
+[data-depth-plane="z3"] { position: relative; z-index: 30; }
+[data-depth-plane="z4"] { position: relative; z-index: 40; }
 #hud-grid {
   position: fixed; inset: 0; pointer-events: none; z-index: 10;
   background-image:
