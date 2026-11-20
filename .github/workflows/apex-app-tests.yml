@@ -152,6 +152,25 @@ jobs:
           print(f'::{level} title=hud-experience::{message[:60000]}')
           PY
 
+      # The Playwright failure text, not only my summary of it: a failed browser run has to be
+      # actionable from the checks API alone, because the job log sits behind a download.
+      - name: Publish the browser failure detail
+        if: always()
+        shell: bash
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import os, re, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          log = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.log')
+          text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
+          wanted = re.compile(r'(\u2718|\u00d7|Error:|error:|Expected|Received|Timeout|waiting for|locator|spec\.mjs:\d+)')
+          lines = [line.strip() for line in text.splitlines() if wanted.search(line)]
+          detail = ' ~ '.join(lines[:60]) if lines else 'no failure lines were logged'
+          message = detail.replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          level = 'notice' if outcome == 'success' else 'error'
+          print(f'::{level} title=browser-failures::{message[:30000]}')
+          PY
+
       - name: Keep the browser evidence
         if: always()
         uses: actions/upload-artifact@v4

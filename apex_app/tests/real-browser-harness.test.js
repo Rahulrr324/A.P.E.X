@@ -162,13 +162,23 @@ describe('T-31 browser suite wiring', () => {
     assert.ok(fs.existsSync(path.join(reportDir, 'README.md')), 'the directory explains what may appear in it');
   });
 
-  test('the Playwright configuration runs the T-31 suite and keeps the legacy spec out of the default run', () => {
+  test('the Playwright configuration runs the T-31 and T-32 suites and keeps the legacy spec out of the default run', () => {
     const config = fs.readFileSync(path.join(appRoot, 'playwright.config.mjs'), 'utf8');
-    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs'\]/);
+    // T-32 Step 2 (2026-11-19): the HUD-experience suite joins the default run. Both suites drive a
+    // real binary; neither is a simulation, and the legacy T-25 spec stays out because its
+    // assertions predate the T-31 markup.
+    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs'\]/);
     assert.match(config, /testIgnore: \['\*\*\/apex-browser\.spec\.mjs'\]/);
     const spec = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't31-real-browser.spec.mjs'), 'utf8');
     assert.match(spec, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/);
     assert.match(spec, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/);
+    const hud = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't32-hud-experience.spec.mjs'), 'utf8');
+    assert.match(hud, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/,
+      'the HUD suite launches the resolved browser');
+    assert.match(hud, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
+      'the HUD suite skips loudly when no browser exists');
+    assert.match(hud, /data-depth-plane/, 'the HUD suite asserts the depth planes');
+    assert.match(hud, /4\.5/, 'the HUD suite asserts the contrast floor');
     for (const viewport of T31_VIEWPORTS) {
       assert.match(spec, /T31_VIEWPORTS/, 'the spec iterates the shared viewport list');
       assert.ok(spec.includes('screenshotPath(reportDir, viewport)'), 'the spec writes one screenshot per viewport');

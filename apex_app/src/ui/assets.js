@@ -487,6 +487,11 @@ body::before {
 }
 .command-bar form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; flex: 1 1 24rem; min-width: 0; }
 .command-bar textarea { flex: 1 1 18rem; min-width: 0; height: 2.6rem; min-height: 2.6rem; resize: vertical; }
+/* Narrow viewports: a command bar and a perception reading hold long unbroken tokens (a path, a
+   subject name), and an item that cannot wrap is what pushes a 390px page sideways. */
+.command-bar, .command-bar form, .command-bar .row { min-width: 0; max-width: 100%; }
+.item .title, .item .meta, .workspace-status, #perception-budget, #perception-summary .title,
+#perception-observations .title, #briefing-perception { overflow-wrap: anywhere; }
 .skip-link { position: absolute; left: -999px; top: 0; }
 .skip-link:focus { left: 1rem; top: 1rem; z-index: 100; background: var(--panel-strong); padding: .5rem; border-radius: 8px; }
 .topbar {
