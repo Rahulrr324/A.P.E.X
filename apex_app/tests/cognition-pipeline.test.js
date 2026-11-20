@@ -12,6 +12,7 @@ import { makeTempDataDir, cleanup } from './helpers.js';
 import { createApp } from '../src/app.js';
 import { ModelGateway, NoBackend } from '../src/model/gateway.js';
 import { COGNITION_STAGES, PACKET_SCHEMA, RUN_SCHEMA, classifyIntent, epistemicStatus, createCognitivePipeline } from '../src/cognition/pipeline.js';
+import { collectHealth } from '../src/health.js';
 
 const dirs = [];
 const apps = [];
@@ -152,6 +153,16 @@ describe('T-29 stage 4: governed execution', () => {
     assert.equal(projected.verification.verified, true);
     assert.equal(projected.approval.recorded.approvedBy, 'user');
     assert.equal(typeof projected.approval.recorded.at, 'string', 'the approval records when the owner decided');
+  });
+
+  test('a gated run reads as one approval in health, not as an unexplained paused task', async () => {
+    const { app } = await seededApp();
+    const run = await app.cognition.run({ intent: 'remember the launch is zulu9c1', action: 'memory.add', input: { content: 'the launch is zulu9c1' } });
+    assert.equal(run.status, 'awaiting_approval');
+    const health = await collectHealth(app, { checkModel: false });
+    const kinds = health.attention.map((item) => item.kind);
+    assert.ok(kinds.includes('approval'), 'the waiting step is reported as an approval');
+    assert.ok(!kinds.includes('paused-task'), 'the same task is not counted a second time as an unexplained pause');
   });
 
   test('the run halts fail-closed under an active lockdown, creates no task, and leaves an audit record', async () => {

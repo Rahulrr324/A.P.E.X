@@ -308,7 +308,10 @@ export function buildClientContract(constants) {
       authoritativeStateAvailable: requiredOwnersAvailable,
       healthAvailable: Boolean(health),
       eventStreamAvailable: eventStreamAvailable === true,
-      degraded: healthDegraded || runtimeDegraded || conversationDegraded || pausedTasks,
+      // T-29 (2026-11-19): a paused task whose step is actually waiting for the owner is the
+      // Awaiting Approval state, not degradation. A task paused with nothing awaiting approval
+      // still degrades the Core, because nothing else in the snapshots explains it.
+      degraded: healthDegraded || runtimeDegraded || conversationDegraded || (pausedTasks && !pendingApproval),
       pendingApproval,
       uncertain,
       executing,

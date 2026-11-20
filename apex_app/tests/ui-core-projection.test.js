@@ -198,6 +198,14 @@ describe('Package 3 live Core-state projection', () => {
     const paused = readyOwners();
     paused.tasks.counts.pausedTasks = 1;
     assert.equal(resolve(paused), 'degraded', 'an unrepresented paused task is not reported as Idle');
+
+    // T-29 (2026-11-19): a paused task whose step waits for the owner is Awaiting Approval.
+    const pausedForApproval = readyOwners();
+    pausedForApproval.tasks.counts.pausedTasks = 1;
+    pausedForApproval.tasks.counts.awaitingApprovalSteps = 1;
+    pausedForApproval.approval.taskStepCount = 1;
+    pausedForApproval.approval.taskSteps = [{ taskId: 'task-1', stepId: 's1' }];
+    assert.equal(resolve(pausedForApproval), 'awaiting_approval', 'an approval that is actually waiting outranks the bare paused-task warning');
     assert.equal(resolve(owners, { eventStreamAvailable: false }), 'degraded');
     assert.equal(resolve(owners, { stateReadAvailable: false }), 'degraded');
   });

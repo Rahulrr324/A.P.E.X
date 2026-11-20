@@ -248,4 +248,111 @@ describe('shipped client over a real server and real event stream (T-30 P0/Step 
     assert.deepEqual(browser.events.pageErrors, []);
     assert.equal(browser.events.consoleErrors.filter((line) => /ReferenceError|SyntaxError|not defined/i.test(line)).length, 0);
   });
+
+  // T-29 (2026-11-19): the same shipped client, the same real server, now driven through the
+  // cognitive pipeline's HTTP surface. This is the runtime evidence for the deck's claim that a
+  // run is recorded, gated, approved by the owner, and rendered from the run record.
+  test('a cognitive run reaches the served client: cold and warm /api/state, the cognition event, the gated approval and the five-stage trace', async (t) => {
+    const dir = tempDir();
+    const { base } = await startUi(dir);
+    const headers = { authorization: `Bearer ${TOKEN}`, 'x-apex-ui': '1' };
+    const baseUrl = { value: base };
+    const stateTimings = [];
+    const liveFetch = async (url, options = {}) => {
+      const started = Date.now();
+      const response = await fetch(new URL(url, base), { ...options, headers: { ...headers, ...(options.headers ?? {}) } });
+      if (String(url).split('?')[0] === '/api/state') stateTimings.push(Date.now() - started);
+      return response;
+    };
+    // The cold read is taken on its own, before the page-load burst: STEP 1's acceptance bound is
+    // about one read, and a number taken while fourteen other owner routes are in flight would
+    // measure the burst rather than the read.
+    const coldStartedAt = Date.now();
+    const coldResponse = await fetch(`${base}/api/state`, { headers });
+    assert.equal(coldResponse.status, 200);
+    await coldResponse.json();
+    const cold = Date.now() - coldStartedAt;
+    const log = { frames: [], sources: [], reconnects: 0 };
+    const browser = createFakeBrowser({
+      realTimers: true,
+      fetchImpl: liveFetch,
+      EventSourceClass: createLiveEventSource({ baseUrl, headers, log }),
+    });
+    const context = vm.createContext(browser.sandbox, { name: 'apex-live-t29' });
+    vm.runInContext(UI_CLIENT, context, { filename: 'ui-client.js', displayErrors: true });
+    await waitForState(browser, 'idle', 6000, 'initial healthy stream', { connected: true });
+
+    const warm = [];
+    for (let index = 0; index < 5; index += 1) {
+      const startedAt = Date.now();
+      const response = await fetch(`${base}/api/state`, { headers });
+      assert.equal(response.status, 200);
+      await response.json();
+      warm.push(Date.now() - startedAt);
+    }
+    warm.sort((a, b) => a - b);
+    const warmP50 = warm[Math.floor(warm.length / 2)] ?? null;
+    assert.ok(cold <= 150, `the cold /api/state read must be within 150 ms, measured ${cold} ms`);
+    assert.ok(warmP50 <= 100, `the warm /api/state p50 must be within 100 ms, measured ${warmP50} ms`);
+
+    // A read-only run completes and the server announces it on the authoritative stream.
+    const readRun = await fetch(`${base}/api/cognition/run`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ intent: 'what does memory hold about the launch checklist' }),
+    });
+    assert.equal(readRun.status, 200);
+    const readBody = await readRun.json();
+    assert.equal(readBody.runStatus, 'completed');
+    const cognitionFrame = await (async () => {
+      const started = Date.now();
+      for (;;) {
+        const frame = log.frames.find((entry) => entry.type === 'cognition');
+        if (frame) return frame;
+        if (Date.now() - started > 5000) throw new Error('the cognition event never arrived');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    })();
+    const cognitionPayload = typeof cognitionFrame.data === 'string' ? JSON.parse(cognitionFrame.data) : cognitionFrame.data;
+    assert.equal(cognitionPayload.status, 'completed');
+    assert.equal(typeof cognitionPayload.runId, 'string');
+
+    // The client re-reads the trace from the owner route and renders all five stages.
+    const traceStarted = Date.now();
+    let stages = [];
+    for (;;) {
+      const trace = browser.getElement('cognition-trace');
+      stages = (trace.children ?? []).filter((child) => child.className === 'cognition-stage');
+      if (stages.length === 5) break;
+      if (Date.now() - traceStarted > 5000) throw new Error(`the trace rendered ${stages.length} of 5 stages`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const traceMs = Date.now() - traceStarted;
+    const traceText = JSON.stringify(stages.map((stage) => stage.children.map((child) => child.textContent)));
+    assert.match(traceText, /1 · Context/, 'the first stage is rendered');
+    assert.match(traceText, /5 · Governed execution/, 'the fifth stage is rendered');
+
+    // A write run pauses; the Core shows Awaiting Approval from the authoritative owner snapshot,
+    // not from a client animation. The owner's approval then executes it and the Core returns to Idle.
+    const writeRun = await fetch(`${base}/api/cognition/run`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ intent: 'remember the release window is zulu9c1', action: 'memory.add', input: { content: 'the release window is zulu9c1' } }),
+    });
+    assert.equal(writeRun.status, 200);
+    const writeBody = await writeRun.json();
+    assert.equal(writeBody.runStatus, 'awaiting_approval');
+    await waitForState(browser, 'awaiting_approval', 6000, 'the gated run is visible in the Core');
+
+    const approval = await fetch(`${base}/api/cognition/runs/${encodeURIComponent(writeBody.run.runId)}/approve`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ stepId: 's1' }),
+    });
+    const approved = await approval.json();
+    assert.equal(approval.status, 200);
+    assert.equal(approved.runStatus, 'completed');
+    await waitForState(browser, 'idle', 8000, 'the Core returns to Idle after the approved run completes');
+
+    t.diagnostic(`measured: cold /api/state ${cold} ms; warm /api/state p50 ${warmP50} ms over ${warm.length} reads; five-stage trace rendered ${traceMs} ms after the cognition event; gated run approved and completed; Core transitions observed idle -> awaiting_approval -> idle`);
+    assert.deepEqual(browser.events.pageErrors, []);
+    assert.equal(browser.events.consoleErrors.filter((line) => /ReferenceError|SyntaxError|not defined/i.test(line)).length, 0);
+  });
+
 });

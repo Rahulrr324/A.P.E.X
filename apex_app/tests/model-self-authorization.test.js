@@ -93,6 +93,8 @@ const MODEL_WRITE_ATTEMPTS = [
   ['knowledge.add', { subject: 'gate', relationship: 'opens', object: 'on time' }],
   ['knowledge.retract', { target: 'no-such-claim', reason: 'the model decided' }],
   ['knowledge.resolve', { target: 'no-such-conflict', choose: 'no-such-record' }],
+  // T-29 (2026-11-19): a reply may not start a cognitive run, which can create and run a task.
+  ['cognition.run', { intent: 'the model asked for this' }],
   // Batch T-08: outcome learning judges APEX's own behaviour, so a reply may not evaluate, propose,
   // measure, or roll back anything.
   ['learning.observe', { operationId: 'op1' }],
