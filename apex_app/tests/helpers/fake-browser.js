@@ -176,7 +176,7 @@ function defaultRoutes() {
   ]);
 }
 
-export function createFakeBrowser({ routes = defaultRoutes(), fetchStatus = 200 } = {}) {
+export function createFakeBrowser({ routes = defaultRoutes(), fetchStatus = 200, realTimers = false, fetchImpl = null, EventSourceClass = null } = {}) {
   const clock = createVirtualClock();
   const events = { consoleErrors: [], pageErrors: [], fetches: [], sources: [] };
   const elements = new Map();
@@ -247,7 +247,24 @@ export function createFakeBrowser({ routes = defaultRoutes(), fetchStatus = 200 
     }
   }
 
-  const fetchImpl = async (url, options = {}) => {
+  // Real timers are unref'd: the client legitimately keeps a 15 s refresh interval and a
+  // boot sequence, and neither should hold the test process open after the assertions run.
+  const unref = (handle) => {
+    if (handle && typeof handle.unref === 'function') handle.unref();
+    return handle;
+  };
+  const timers = realTimers
+    ? {
+      setTimeout: (callback, delay, ...rest) => unref(globalThis.setTimeout(callback, delay, ...rest)),
+      clearTimeout: globalThis.clearTimeout,
+      setInterval: (callback, delay, ...rest) => unref(globalThis.setInterval(callback, delay, ...rest)),
+      clearInterval: globalThis.clearInterval,
+      now: () => Date.now(),
+      advance() { throw new Error('real timers cannot be advanced'); },
+    }
+    : clock;
+
+  const httpFetch = fetchImpl || (async (url, options = {}) => {
     events.fetches.push({ url, method: options.method ?? 'GET' });
     const path = String(url).split('?')[0];
     if (fetchStatus !== 200) {
@@ -262,14 +279,14 @@ export function createFakeBrowser({ routes = defaultRoutes(), fetchStatus = 200 
       return { ok: false, status: 404, async json() { return { error: `no harness route for ${path}` }; } };
     }
     return { ok: true, status: 200, async json() { return JSON.parse(JSON.stringify(body)); } };
-  };
+  });
 
   const windowObject = {
     document,
-    setTimeout: clock.setTimeout,
-    clearTimeout: clock.clearTimeout,
-    setInterval: clock.setInterval,
-    clearInterval: clock.clearInterval,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    setInterval: timers.setInterval,
+    clearInterval: timers.clearInterval,
     matchMedia,
     location: { href: 'http://127.0.0.1:0/', origin: 'http://127.0.0.1:0', search: '', hash: '' },
     navigator: { userAgent: 'apex-harness' },
@@ -290,12 +307,12 @@ export function createFakeBrowser({ routes = defaultRoutes(), fetchStatus = 200 
       error(...args) { events.consoleErrors.push(args.map(String).join(' ')); },
       debug() {},
     },
-    EventSource: FakeEventSource,
-    fetch: fetchImpl,
-    setTimeout: clock.setTimeout,
-    clearTimeout: clock.clearTimeout,
-    setInterval: clock.setInterval,
-    clearInterval: clock.clearInterval,
+    EventSource: EventSourceClass || FakeEventSource,
+    fetch: httpFetch,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    setInterval: timers.setInterval,
+    clearInterval: timers.clearInterval,
     queueMicrotask,
     Promise,
     Date,
@@ -316,7 +333,8 @@ export function createFakeBrowser({ routes = defaultRoutes(), fetchStatus = 200 
   return {
     sandbox,
     document,
-    clock,
+    clock: timers,
+    virtualClock: clock,
     events,
     window: windowObject,
     getElement: (id) => document.getElementById(id),
