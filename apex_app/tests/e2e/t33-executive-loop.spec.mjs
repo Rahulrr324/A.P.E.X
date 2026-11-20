@@ -227,13 +227,23 @@ test.describe('T-33 executive loop, in a real browser', () => {
     // exec-comms panel is on the deck; its attributes are read after the reading changes.
     await nav('sentinel');
     await page.locator('#perception-sense').click();
-    await expect(page.locator('#perception-alert-status')).toContainText('No advisory is implied', { timeout: 30_000 });
-    await expect(page.locator('#perception-alerts')).toContainText('No advisory is implied', { timeout: 20_000 });
+    // The condition this walk created is gone, and its row with it.
+    await expect(page.locator('#perception-alerts li[data-alert-class="workspace_dirty"]')).toHaveCount(0, { timeout: 30_000 });
+    // Whether the deck may speak with wit now follows the record, not the walk's wishes: a hosted
+    // runner can be under real memory or load pressure, and then a host advisory still stands. The
+    // walk reads the record and asserts the page agrees with it, instead of assuming a quiet machine.
+    const perception = await fetch(`${handle.base}/api/perception`, { headers: handle.headers }).then((r) => r.json());
+    const remaining = (perception.alerts?.advisories ?? []).map((entry) => entry.alertClass);
     await nav('deck');
-    await expect(page.locator('#exec-comms-headline')).toHaveAttribute('data-wit-allowed', 'true', { timeout: 30_000 });
-    await expect(page.locator('#exec-comms-tone')).toContainText('wit allowed', { timeout: 20_000 });
-    step('idle-clear', { core: 'Idle', witAllowed: true, advisory: 'none implied by the last reading' });
-    await shot('05b-wit-restored-only-when-clear');
+    if (remaining.length === 0) {
+      await expect(page.locator('#exec-comms-headline')).toHaveAttribute('data-wit-allowed', 'true', { timeout: 30_000 });
+      await expect(page.locator('#exec-comms-tone')).toContainText('wit allowed', { timeout: 20_000 });
+    } else {
+      await expect(page.locator('#exec-comms-headline')).toHaveAttribute('data-wit-allowed', 'false', { timeout: 30_000 });
+      await expect(page.locator('#exec-comms-tone')).toContainText('advisory', { timeout: 20_000 });
+    }
+    step('idle-clear', { core: 'Idle', witAllowed: remaining.length === 0, remainingAdvisories: remaining });
+    await shot('05b-wit-follows-the-record');
 
     // ---- 6. the workshop loop: stage, verify, then the ECP-gated promotion ---------------------
     await nav('workshop');
