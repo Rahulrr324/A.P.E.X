@@ -874,3 +874,143 @@ as silence.
 What this still does not establish: that the HUD looks like the Tony-Stark target to a human eye.
 Eighteen screenshots and a contrast audit are measurements of specific properties, not a design
 review, and the target remains the reference - not this report.
+
+## T-33 (2026-11-19): the interactive 5-character executive loop, closed
+
+T-33 is the milestone that turns five separate surfaces into one loop a person can walk. It ran in
+four ordered steps on `arena/c4691a2f-a-p-e-x`, from `1d14d12`, and it closed the two T-32 carry-overs
+the owner asked for: exact paths and browser proof for T-32 Step 3, and the `t16` link-local flake.
+
+### Step 1 (`9ce1bcb`): advisories, a dismissal that records a rule, and a loopback check the kernel decides
+
+T-32 Step 3 gave the push governor a discipline but nothing derived a notice from a reading, so the
+deck could not dismiss what it never received. `src/perception/advisories.js` is that missing half:
+six fixed rules over values the sensor actually read (`workspace_dirty`, `workspace_unreadable`,
+`memory_pressure`, `load_pressure`, `storage_pressure`, and a critical `degraded`), each stated with a
+named threshold, each carrying the condition - not the moment - as its signature so an unchanged
+machine deduplicates instead of re-counting. A rule that could not be read never becomes an alarm.
+
+`src/ui/assets.js` gained the Sentinel advisory surface: each advisory with the governor's own answer
+(delivered, held, deduplicated, suppressed) and a Dismiss control; the second dismissal records a
+revocable rule with its expiry, and revoking it restores delivery. The rule names its class, its
+dismissal count and its `suppressedUntil` in the DOM, so a browser run can assert the rule rather
+than read prose.
+
+`apex_app/pilot/scenarios/security-surface.js` no longer trusts a probe against `169.254.0.21`: a
+container can answer a link-local address by routing rather than by the interface, which is what made
+`t16` flaky. The kernel's listening-socket table decides the check and the probe corroborates it, with
+the rule stated in the run's own limitations (`tests/pilot-loopback-check.test.js`).
+
+### Step 2 (`24a56f3`): five voices over one set of facts, and no wit the moment anything is wrong
+
+`src/cognition/persona-comms.js` is a deterministic formatter, not a generator: `Classic` (JARVIS),
+`Tactical` (FRIDAY: Action / Status / Next Gate), `Overwatch` (EDITH), `Synthesis` (Vision: observed
+apart from inferred apart from open risks) and `Quiet` (Her: one line). It calls no model and computes
+no fact; a missing fact reads `unavailable`. The hard invariant (Part 4, Principle #10 - dry wit,
+never noise) is a conjunction of signals: an active advisory, a pending owner approval, a degraded
+Core, an error, an uncertain state or a latched Lockdown each strip wit from every voice, including
+Classic, and `witWithheldBecause` names which one did it. It is enforced twice - the composer will not
+choose a witty phrasing when wit is withheld, and `assertNoWit` refuses to let a marker through if a
+future edit tries (`tests/persona-comms.test.js`, 16).
+
+The formatter is wired into the deck (`#exec-comms-panel`), the briefing (`executiveComms`), the T-29
+run summaries (`comms`, with the run's own `signals`) and `GET /api/comms?core=<state>` (400 on an
+unknown state). `/api/comms` derives `lockdown` and `degraded` from the Core the page passes, so a
+voice can never describe a calmer system than the reticle is showing.
+
+### Step 3 (`c2352b3`): the sandbox a design has to survive, and the graph a task really is
+
+`src/workshop/verification.js` runs six deterministic checks over a stored sheet - structure declared,
+connections resolve, no isolated components, no feedback loops, supply meets demand, budget within
+limit - and appends the result to `workshop-verifications.jsonl` beside `workshop.jsonl`. A failed
+check is recorded as a failure, not as an absent record. `workshop.verify` and `workshop.promote` are
+user-only, unplannable writes; the promotion refuses without a passing verification for the *same
+content digest*, records the owner's reason, and writes one memory-timeline entry.
+
+`GET /api/taskgraph` projects the recorded task into nodes, `dependsOn` edges, per-node state,
+verification and the control that state permits, with `authorizesExecution: false`. `POST
+/api/tasks/:id/{approve,retry,resume,cancel}` run the controller paths that already existed; the deck
+offers only the control the log says can act. The deck's Workshop view gained per-artifact Verify and
+Promote buttons and a "stage from telemetry" sheet built from the last real host reading; the badge
+says `verified` only when the ledger says `verified: true`, and Promote is disabled until then.
+
+Two defects were found by the tests and fixed rather than papered over: a completed step records its
+verification as `outcome: 'success_verified'` with no `verification` object (so the graph read
+`verified: false` for work that passed), and a paused task with an approved step was stranded with no
+resume control in the deck.
+
+### Step 4 (`c829ea7`, `f168955`, `0350b9d`): one real-browser session that walks the loop
+
+`tests/e2e/t33-executive-loop.spec.mjs` drives the whole loop in a real system browser against the
+shipped server and client: Ctrl+K reaches the dispatch and Escape dismisses it; a T-29 intent runs the
+five stages with the Council pass; a perception sense reads the host, the Sentinel delivers the
+`workspace_dirty` advisory, two dismissals record a rule with `suppressedUntil`, revoking it restores
+delivery on a changed machine; the TaskGraph shows the gated node with no verified badge, checkpoint
+approve moves it to pending, resume completes and verifies it; the Core returns to Idle; the Workshop
+stages a sheet from the reading, verifies it (badge `unverified` -> `verified`, naming the
+verification id), and promotes it after the owner types a reason; and the page ends with zero console
+errors and zero uncaught page errors.
+
+`tests/e2e/t33-fixtures.mjs` builds the same isolated fixture as T-31 plus a real temporary git
+repository, so the advisory the walk dismisses is implied by a reading of an actual repository - and
+clearing it means committing the change, not editing a stub. `tests/t33-loop-fixture.test.js` (5)
+proves the same sequence on a host with no browser, so a browser skip leaves the walk itself
+unverified rather than assumed.
+
+The wit rule gained the perception half it was missing: `commsSignalsFrom` now folds the reading's
+advisories into `alerts` and sets `alertActive`, so a suppressed advisory still withholds wit -
+suppression is about delivery, not about truth. The walk asserts that in both directions by reading
+the record: on a hosted runner under real load, a host advisory can stand after the workspace is
+clean, and then the deck must keep saying `witAllowed: false` and name the advisory.
+
+### The three red runs, and what each one taught
+
+| Run | Commit | What the annotation said |
+|---|---|---|
+| `44784104247` | `c829ea7` | The walk reached seven checkpoints, then clicked `#perception-sense` while the deck showed Missions: the control is in the Sentinel workspace, so Playwright waited on a hidden element until the 90 s test budget expired. The walk now navigates to where the control is, and asks for a session's budget (300 s) with the reason written down. |
+| `44786021016` | `f168955` | The walk reached the last checkpoint and failed on an assumption: after the fixture committed its own change, the reading still implied one advisory - a host condition (load or memory pressure) the walk neither caused nor controls. The step now reads the perception record and asserts the page agrees with it. |
+| `44790004845` | `0350b9d` | **green**, all suites |
+
+The `t33-executive-loop` annotation from the green run, verbatim:
+
+```
+[notice] t33-executive-loop :: browser 157.0.4341.46 | binary microsoft-edge | checkpoints 10:
+open,dispatch,intent,suppression,revoke,graph,idle,idle-clear,workshop,console | screenshots 9 |
+core at end idle
+```
+
+and the neighbouring browser suites in the same job, unchanged by this milestone:
+
+```
+[notice] real-browser-verification :: step=success | browser=157.0.4341.46 |
+  executable=/usr/bin/microsoft-edge (system) | 1600x900: core=Awaiting Approval overflow=1600<=1600
+  errors=0 | 1280x720: ... overflow=1280<=1280 errors=0 | 390x844: ... overflow=390<=390 errors=0
+[notice] hud-failures :: {"failures":[],"screenshots":18,"contrastChecked":4138,
+  "viewports":["1600x900","1280x720","390x844"]}
+[notice] browser-failures :: ✓ 1..13 (T-32 HUD 1-7, T-31 1-7, T-33 10) — every test passed
+```
+
+The run artifact (`t31-t32-real-browser`, containing `reports/screenshots/t33/*.png` and
+`reports/t33-executive-loop.json`) could not be downloaded from this environment - the same EOF that
+blocks job logs - so the annotation is the readback, and the nine screenshots are named in the spec
+source (`01-open-awaiting-approval`, `02-five-stage-trace`, `03-suppression-rule`,
+`04a-dag-gated`, `05a-idle-advisory-withholds-wit`, `05b-wit-follows-the-record`,
+`06a-workshop-unverified`, `06b-workshop-verified`, `07-workshop-promoted`) rather than claimed here.
+
+### Totals
+
+| Run | Tree | Result |
+|---|---|---|
+| Baseline, before T-33 | `1d14d12` | 3,880 tests, 3,878 pass, 0 fail, 2 skipped |
+| Final, local, `npm test` | `0350b9d` | **3,932 tests, 3,930 pass, 0 fail, 2 skipped, 1,429,008 ms, `EXIT=0`** |
+| Final, hosted, run `44790004845` | `0350b9d` | green: Node suite, then all three browser suites |
+
+`node --check` over every file in `apex_app/src` (238 files) reports 0 failures, and
+`npm run test:syntax` passes. The fifty-two new tests are: persona-comms (16), exec-comms surfaces
+(4), workshop sandbox (11), the T-33 loop fixture (5), perception advisories (13), the pilot loopback
+check (3). The two skips are the same two as the baseline.
+
+What T-33 does not establish: that the five voices are the right voices for a human owner, or that
+the TaskGraph is the right shape for a multi-step mission with real fan-out. Both are design
+judgements, not measurements, and the loop being walkable end to end is the claim this milestone can
+actually support.
