@@ -65,6 +65,7 @@ export const UI_PAGE = `<!doctype html>
   <button type="button" data-view="documents" class="nav-item">Documents</button>
   <button type="button" data-view="reasoning" class="nav-item">Reasoning</button>
   <button type="button" data-view="council" class="nav-item">Council</button>
+  <button type="button" data-view="cognition" class="nav-item">Cognition</button>
   <button type="button" data-view="system" class="nav-item">System</button>
   <button type="button" data-view="integrations" class="nav-item">Integrations</button>
   <button type="button" data-view="workshop" class="nav-item">Workshop</button>
@@ -233,6 +234,26 @@ export const UI_PAGE = `<!doctype html>
     </form>
     <div id="council-synthesis" class="panel"></div>
     <ul id="council" class="work"></ul>
+  </section>
+  <section class="view" data-view="cognition">
+    <h2>Unified cognition — T-29 pipeline</h2>
+    <p class="meta">One owner intent through five recorded stages: context packet, salience and Sentinel advisories, Council synthesis, task graph, and governed execution. Every value below is read from the run record. A recommendation is deliberation data, never a permission; a gated step executes only after the ECP authorizes it and you approve it yourself.</p>
+    <p id="cognition-status" class="workspace-status" role="status" aria-live="polite">Loading recorded cognitive runs…</p>
+    <form id="cognition-form" class="row">
+      <label for="cognition-intent" class="visually-hidden">Intent</label>
+      <textarea id="cognition-intent" rows="2" maxlength="500" placeholder="What should APEX work through? e.g. what does memory hold about the launch checklist"></textarea>
+      <label for="cognition-action" class="visually-hidden">Capability</label>
+      <select id="cognition-action">
+        <option value="">classify from the intent</option>
+        <option value="memory.search">memory.search (read)</option>
+        <option value="memory.add">memory.add (write, gated)</option>
+      </select>
+      <button id="cognition-run" type="submit" class="small">Run pipeline</button>
+      <span id="cognition-run-status" class="meta" role="status" aria-live="polite"></span>
+    </form>
+    <div id="cognition-trace" class="panel" aria-live="polite"></div>
+    <h3>Recorded runs</h3>
+    <ul id="cognition-runs" class="work"></ul>
   </section>
   <section class="view" data-view="system">
     <h2>System diagnostics and Resource Fabric</h2>
@@ -610,6 +631,14 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   councilRun: document.getElementById('council-run'),
   councilStatus: document.getElementById('council-status'),
   councilSynthesis: document.getElementById('council-synthesis'),
+  cognitionForm: document.getElementById('cognition-form'),
+  cognitionIntent: document.getElementById('cognition-intent'),
+  cognitionAction: document.getElementById('cognition-action'),
+  cognitionRun: document.getElementById('cognition-run'),
+  cognitionRunStatus: document.getElementById('cognition-run-status'),
+  cognitionStatus: document.getElementById('cognition-status'),
+  cognitionTrace: document.getElementById('cognition-trace'),
+  cognitionRuns: document.getElementById('cognition-runs'),
   workshop: document.getElementById('workshop'),
   workshopForm: document.getElementById('workshop-form'),
   workshopTitle: document.getElementById('workshop-title'),
@@ -661,6 +690,8 @@ const state = {
   reducedMotion: false,
   mode: 'classic',
   contrast: 'standard',
+  cognitionInFlight: false,
+  lastCognitionRun: null,
 };
 let eventStreamDegraded = false;
 
@@ -1719,6 +1750,153 @@ function renderConversation(snapshot) {
   renderTurns(turns, empty);
 }
 
+// ---- T-29 cognitive trace --------------------------------------------------
+// Five stage blocks, each built from the run record only. No field is synthesised here: a
+// missing value renders as "not recorded", and an approval button appears only when the run
+// itself says a step is waiting for the owner.
+function cognitionStage(title, lines) {
+  const section = el('section', 'cognition-stage');
+  section.append(el('h3', null, title));
+  for (const line of lines) {
+    if (line === null || line === undefined || line === '') continue;
+    section.append(el('p', 'meta', line));
+  }
+  return section;
+}
+
+function renderCognitionTrace(run) {
+  if (!els.cognitionTrace) return;
+  els.cognitionTrace.replaceChildren();
+  if (!run || typeof run !== 'object') {
+    els.cognitionTrace.append(el('p', 'meta', 'No cognitive run is recorded yet. Run the pipeline to record one.'));
+    return;
+  }
+  const stages = run.stages || {};
+  const packet = stages.context || {};
+  const epistemic = packet.epistemic || {};
+  const salience = stages.salience || {};
+  const council = stages.council || {};
+  const graph = stages.task_graph || {};
+  const execution = stages.execution || {};
+
+  els.cognitionTrace.append(el('p', 'meta', 'Run ' + String(run.runId || 'recorded') + ' · status ' + String(run.status || 'unknown')
+    + ' · ' + String(run.at || 'time not recorded') + ' · action ' + String(run.action?.name || 'not recorded')));
+
+  const memoryCount = packet.memory?.count ?? 0;
+  const knowledgeCount = packet.knowledge?.count ?? 0;
+  const worldCount = packet.world?.count ?? 0;
+  const contextLines = [
+    'Owner context: ' + (packet.owner?.activeGoals || []).length + ' active goal(s) with recorded criteria.',
+    'Memory ' + memoryCount + ' · knowledge ' + knowledgeCount + ' · world facts ' + worldCount + '.',
+    'Epistemic tags: ' + (epistemic.observed ?? 0) + ' observed · ' + (epistemic.inferred ?? 0) + ' inferred · '
+      + (epistemic.assumed ?? 0) + ' assumed · ' + (epistemic.predicted ?? 0) + ' predicted.',
+    packet.sentinel?.error ? 'Sentinel unavailable: ' + packet.sentinel.error : 'Sentinel advisories: ' + ((packet.sentinel?.advisories || []).length),
+  ];
+  for (const advisory of packet.sentinel?.advisories || []) {
+    contextLines.push('Advisory' + (advisory.severity ? ' (' + advisory.severity + ')' : '') + ': ' + (advisory.summary || advisory.detail || advisory.kind || 'not described'));
+  }
+  for (const problem of packet.problems || []) contextLines.push('Read problem: ' + problem);
+  els.cognitionTrace.append(cognitionStage('1 · Context, memory and world model', contextLines));
+
+  const reading = (value) => (value === null || value === undefined ? 'unavailable' : String(value));
+  els.cognitionTrace.append(cognitionStage('2 · Salience, resources and Sentinel', [
+    'urgency ' + reading(salience.urgency) + ' · confidence ' + reading(salience.confidence)
+      + ' · uncertainty ' + reading(salience.uncertainty) + ' · goal progress ' + reading(salience.goal_progress)
+      + ' · resource pressure ' + reading(salience.resource_pressure) + ' · risk sensitivity ' + reading(salience.risk_sensitivity)
+      + ' · novelty ' + reading(salience.novelty),
+    salience.basis?.resource_pressure ? 'Resource basis: ' + salience.basis.resource_pressure : null,
+    salience.basis?.confidence ? 'Confidence basis: ' + salience.basis.confidence : null,
+    salience.basis?.goal_progress ? 'Goal basis: ' + salience.basis.goal_progress : null,
+    'Read-only: these variables advise; the ECP decides.',
+  ]));
+
+  const councilLines = [];
+  if (council.status === 'ran') {
+    const view = (label, position) => (position
+      ? label + ': ' + position.verdict + ' — ' + position.summary
+      : label + ': not recorded');
+    councilLines.push(view('Thesis', council.perspectives?.thesis));
+    councilLines.push(view('Counter-risk', council.perspectives?.counter_risk));
+    councilLines.push(view('Evidence check', council.perspectives?.evidence_check));
+    if (council.recommendation) {
+      councilLines.push('Recommendation: ' + council.recommendation.summary + ' (support ' + council.recommendation.support
+        + ', confidence ' + council.recommendation.confidence + ')');
+    }
+    councilLines.push('Session ' + String(council.sessionId || 'not recorded') + ' · deliberation data, not a permission.');
+  } else {
+    councilLines.push('Council ' + String(council.status || 'not run') + (council.reason ? ': ' + council.reason : ''));
+  }
+  els.cognitionTrace.append(cognitionStage('3 · Council synthesis', councilLines));
+
+  const graphLines = [(graph.summary || 'not recorded')];
+  for (const node of graph.nodes || []) {
+    graphLines.push('Step ' + String(node.id) + ': ' + String(node.action) + ' · permission ' + String(node.permission)
+      + ' · risk ' + String(node.risk) + (node.description ? ' — ' + node.description : ''));
+  }
+  graphLines.push('Plan rule: ' + String(graph.rule || 'not recorded'));
+  els.cognitionTrace.append(cognitionStage('4 · Task graph', graphLines));
+
+  const executionLines = [
+    'Status: ' + String(run.status || 'unknown') + ' · ECP decision ' + String(execution.decision || 'not requested')
+      + (execution.reason ? ' (' + execution.reason + ')' : ''),
+    'Autonomy level: ' + reading(execution.autonomyLevel) + (execution.autonomySource ? ' · ' + execution.autonomySource : ''),
+    'Latch: ' + (execution.latch ? (execution.latch.active ? 'active' : (execution.latch.policyUnavailableLatch ? 'unreadable' : 'clear')) : 'not recorded'),
+    'Verification: ' + String(run.verification?.outcome || 'not_run') + (run.verification?.detail ? ' — ' + run.verification.detail : ''),
+  ];
+  if (run.approval?.required) {
+    executionLines.push('Approval: ' + String(run.approval.status) + (run.approval.waitingSteps?.length ? ' for step(s) ' + run.approval.waitingSteps.join(', ') : ''));
+    if (run.approval.recorded) executionLines.push('Recorded approval: ' + String(run.approval.recorded.approvedBy || 'owner') + ' at ' + String(run.approval.recorded.at || run.approval.recorded.approvedAt || 'not recorded'));
+  }
+  if (run.halted) executionLines.push('Halted: ' + String(run.halted.reason) + ' — ' + String(run.halted.detail || ''));
+  if (run.task?.id) executionLines.push('Task ' + String(run.task.id) + ' · ' + String(run.task.status));
+  els.cognitionTrace.append(cognitionStage('5 · Governed execution', executionLines));
+
+  if (run.status === 'awaiting_approval' && run.task?.id) {
+    const waiting = run.approval?.waitingSteps?.[0] || 's1';
+    const approve = el('button', 'small', 'Approve step ' + waiting + ' and execute');
+    approve.type = 'button';
+    approve.addEventListener('click', async () => {
+      approve.disabled = true;
+      els.cognitionRunStatus.textContent = 'Recording your approval for step ' + waiting + '…';
+      try {
+        const data = await api('/api/cognition/runs/' + encodeURIComponent(run.runId) + '/approve', { method: 'POST', body: { stepId: waiting } });
+        state.lastCognitionRun = data.run || null;
+        renderCognitionTrace(data.run || null);
+        els.cognitionRunStatus.textContent = 'Approval recorded; the run is ' + String(data.runStatus || 'reported') + '.';
+      } catch (err) {
+        els.cognitionRunStatus.textContent = 'The approval was refused: ' + String(err.message || err);
+        approve.disabled = false;
+      }
+      scheduleEventRefresh();
+    });
+    els.cognitionTrace.append(approve);
+  }
+}
+
+function renderCognition(result) {
+  if (!els.cognitionRuns) return;
+  if (!result) {
+    setWorkspaceStatus(els.cognitionStatus, 'Loading recorded cognitive runs…', 'loading');
+    return;
+  }
+  if (result.ok !== true) {
+    const state = result.status >= 500 ? 'unavailable' : 'error';
+    setWorkspaceStatus(els.cognitionStatus, (state === 'unavailable' ? 'Unavailable: ' : 'Read error: ') + result.error, state);
+    renderList(els.cognitionRuns, [], () => null, 'Unavailable: no cognitive run can be shown.');
+    return;
+  }
+  const runs = Array.isArray(result.value.runs) ? result.value.runs : [];
+  setWorkspaceStatus(els.cognitionStatus, runs.length === 0
+    ? 'No cognitive run has been recorded yet.'
+    : String(runs.length) + ' recorded run(s); the newest is shown above.', runs.length ? 'available' : 'empty');
+  renderCognitionTrace(runs[0] ?? state.lastCognitionRun);
+  renderList(els.cognitionRuns, runs, (run) => itemFrom(
+    String(run.runId || 'run') + ' · ' + String(run.status || 'unknown'),
+    String(run.intent || '') + ' · ' + String(run.action?.name || 'no action') + ' · verification '
+      + String(run.verification?.outcome || 'not_run'),
+  ), 'No cognitive run has been recorded yet.');
+}
+
 function renderCouncil(result) {
   const owner = ownerStatusText(result, 'Council');
   const council = result?.ok === true ? result.value : null;
@@ -1842,7 +2020,7 @@ function renderPlanning(planning) {
 async function refresh() {
   const [stateResult, healthResult, missionResult, approvalResult, timelineResult,
     situationResult, briefingResult, runtimeResult, sourcesResult, documentsResult,
-    reasoningResult, councilResult, workshopResult, resourcesResult] = await Promise.all([
+    reasoningResult, councilResult, workshopResult, resourcesResult, cognitionResult] = await Promise.all([
     readApi('/api/state'),
     readApi('/api/health'),
     readApi('/api/mission-control'),
@@ -1857,6 +2035,7 @@ async function refresh() {
     readApi('/api/council'),
     readApi('/api/workshop'),
     readApi('/api/resources'),
+    readApi('/api/cognition/runs?limit=10'),
   ]);
 
   // The authoritative snapshot carries the current session, transcript, badges, gauges and the
@@ -1928,6 +2107,7 @@ async function refresh() {
   renderReasoning(reasoningResult);
   renderCouncil(councilResult);
   renderWorkshop(workshopResult);
+  renderCognition(cognitionResult);
 
   applyCoreProjection(snapshot ? '' : 'The authoritative state read failed.');
   return snapshot !== null;
@@ -1955,7 +2135,7 @@ function setView(view) {
 // contrast only. They never call an API, write a store or reach the ECP; a mode is not a
 // permission and the Lockdown presentation is derived from the latch, not selected here.
 const VIEW_ORDER = ['deck', 'conversations', 'missions', 'tasks', 'approvals', 'sentinel', 'memory',
-  'documents', 'reasoning', 'council', 'system', 'integrations', 'workshop'];
+  'documents', 'reasoning', 'council', 'cognition', 'system', 'integrations', 'workshop'];
 const MODES = ['classic', 'tactical', 'overwatch', 'synthesis', 'quiet'];
 
 function applyMode(mode) {
@@ -2223,6 +2403,46 @@ if (els.workshopForm) {
   });
 }
 
+if (els.cognitionForm) {
+  els.cognitionForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (state.cognitionInFlight) return;
+    const intent = els.cognitionIntent ? els.cognitionIntent.value.trim() : '';
+    if (intent.length === 0) {
+      if (els.cognitionRunStatus) els.cognitionRunStatus.textContent = 'An intent is required.';
+      return;
+    }
+    state.cognitionInFlight = true;
+    state.thinking = true;
+    applyCoreProjection();
+    if (els.cognitionRun) els.cognitionRun.disabled = true;
+    if (els.cognitionRunStatus) els.cognitionRunStatus.textContent = 'Running the five stages…';
+    try {
+      const body = { intent };
+      const chosen = els.cognitionAction ? els.cognitionAction.value : '';
+      if (chosen) body.action = chosen;
+      const data = await api('/api/cognition/run', { method: 'POST', body });
+      state.lastCognitionRun = data.run || null;
+      renderCognitionTrace(data.run || null);
+      const status = data.runStatus || data.run?.status || data.status || 'recorded';
+      if (els.cognitionRunStatus) {
+        els.cognitionRunStatus.textContent = status === 'awaiting_approval'
+          ? 'Recorded: a step is waiting for your explicit approval before it can execute.'
+          : 'Recorded: run status ' + status + '.';
+      }
+      if (els.cognitionIntent) els.cognitionIntent.value = '';
+    } catch (error) {
+      if (els.cognitionRunStatus) els.cognitionRunStatus.textContent = 'The run was refused: ' + String(error.message || error);
+    } finally {
+      state.cognitionInFlight = false;
+      state.thinking = false;
+      applyCoreProjection();
+      if (els.cognitionRun) els.cognitionRun.disabled = false;
+      await refresh();
+    }
+  });
+}
+
 if (els.councilForm) {
   els.councilForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -2430,6 +2650,7 @@ function connectEvents(forceReconcile = false) {
     armWatchdog();
   });
   source.addEventListener('council', () => { scheduleEventRefresh(); armWatchdog(); });
+  source.addEventListener('cognition', () => { scheduleEventRefresh(); armWatchdog(); });
   source.addEventListener('workshop', () => { scheduleEventRefresh(); armWatchdog(); });
   source.onerror = () => {
     if (source !== eventSource) return;

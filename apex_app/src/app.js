@@ -60,6 +60,8 @@ import { proposalActions } from './actions/proposal-actions.js';
 import { workActions } from './actions/work-actions.js';
 import { taskFeedbackActions } from './actions/task-feedback-actions.js';
 import { safetyActions } from './actions/safety-actions.js';
+import { cognitionActions } from './actions/cognition-actions.js';
+import { createCognitivePipeline } from './cognition/pipeline.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 import { ResourceFabric } from './resources/fabric.js';
 import { createWorkshopService } from './workshop/service.js';
@@ -387,6 +389,27 @@ export function createApp({
     idFactory,
   });
   const resources = new ResourceFabric({ now: clock });
+
+  // T-29: the unified cognitive pipeline. It is constructed after the resource fabric so the
+  // salience stage can read real pressure, and its capability is registered through the same
+  // registry/ECP path as every other action: the pipeline orchestrates, the ECP authorizes.
+  const cognition = createCognitivePipeline({
+    dataDir,
+    registry,
+    controlPlane: registry.controlPlane,
+    controller,
+    taskStore,
+    memory,
+    knowledge,
+    worldModel,
+    goals,
+    situation,
+    resources,
+    council,
+    now: clock,
+    idFactory,
+  });
+  for (const def of cognitionActions(cognition)) registry.register(def);
   return {
     controller,
     memory,
@@ -421,6 +444,7 @@ export function createApp({
     reasoning,
     council,
     workshop,
+    cognition,
   };
 }
 

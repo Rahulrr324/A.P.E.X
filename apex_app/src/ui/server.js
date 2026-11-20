@@ -13,6 +13,7 @@ import { collectHealth } from '../health.js';
 import { buildBriefing } from '../briefing/index.js';
 import { APP_NAME } from '../identity.js';
 import { planRisk } from '../plans/model.js';
+import { COGNITION_STAGES } from '../cognition/pipeline.js';
 
 export const UI_LIMITS = Object.freeze({
   maxBodyBytes: 64 * 1024,
@@ -1810,6 +1811,119 @@ export function createUiServer({
         });
         scheduleOwnerRefresh();
       } catch (err) { sendJson(res, 503, { error: `release unavailable: ${err.message}` }); }
+      return;
+    }
+    // T-29: the cognitive pipeline. Reading a run is a read; starting one goes through the
+    // registered `cognition.run` capability, and only the owner's own approval can move a gated
+    // step out of awaiting_approval.
+    if (method === 'GET' && (url.pathname === '/api/cognition/runs' || url.pathname.startsWith('/api/cognition/runs/'))) {
+      if (!app.cognition) {
+        sendJson(res, 503, { unavailable: true, error: 'the cognitive pipeline is not configured' });
+        return;
+      }
+      const single = url.pathname.startsWith('/api/cognition/runs/');
+      try {
+        if (single) {
+          const runId = decodeURIComponent(url.pathname.slice('/api/cognition/runs/'.length));
+          if (!/^cog-[a-z0-9]{1,40}$/.test(runId)) { sendJson(res, 400, { error: 'not a cognition run id' }); return; }
+          const run = await app.cognition.get(runId);
+          if (!run) { sendJson(res, 404, { error: 'no such cognition run' }); return; }
+          sendJson(res, 200, { run, stages: COGNITION_STAGES, authorizesExecution: false });
+          return;
+        }
+        const requested = Number(url.searchParams.get('limit') ?? '10');
+        const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, 50) : 10;
+        const page = await app.cognition.list({ limit });
+        sendJson(res, 200, { ...page, stages: COGNITION_STAGES, authorizesExecution: false });
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `the cognitive trace is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/cognition/run') {
+      if (!app.cognition) {
+        sendJson(res, 503, { unavailable: true, error: 'the cognitive pipeline is not configured' });
+        return;
+      }
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).find((key) => !['intent', 'action', 'input', 'councilRequested'].includes(key));
+      if (extra) { sendJson(res, 400, { error: `unknown field: ${extra}` }); return; }
+      if (typeof body.intent !== 'string' || body.intent.trim().length === 0 || body.intent.length > 500) {
+        sendJson(res, 400, { error: 'an intent of 1-500 characters is required' });
+        return;
+      }
+      if (body.action !== undefined && body.action !== null && (typeof body.action !== 'string' || body.action.length === 0 || body.action.length > 80)) {
+        sendJson(res, 400, { error: 'action must be a registered capability name' });
+        return;
+      }
+      if (body.input !== undefined && body.input !== null && (typeof body.input !== 'object' || Array.isArray(body.input))) {
+        sendJson(res, 400, { error: 'input must be an object' });
+        return;
+      }
+      try {
+        const result = await app.controller.cognitionRun({
+          intent: body.intent.trim(),
+          action: body.action ?? null,
+          input: body.input ?? null,
+          councilRequested: body.councilRequested === true,
+        });
+        const data = result.operation?.steps?.[0]?.result?.data ?? null;
+        if (!data || typeof data.runId !== 'string') {
+          sendJson(res, 400, { status: result.status, error: result.output ?? 'the pipeline did not record a run', display: result.display });
+          return;
+        }
+        const run = await app.cognition.get(data.runId);
+        sendJson(res, 200, {
+          run,
+          runStatus: run?.status ?? data.status,
+          stages: COGNITION_STAGES,
+          status: result.status,
+          display: result.display,
+        });
+        broadcast('cognition', { runId: data.runId, status: run?.status ?? data.status });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+    const cognitionApprove = /^\/api\/cognition\/runs\/([^/]+)\/approve$/.exec(url.pathname);
+    if (method === 'POST' && cognitionApprove) {
+      if (!app.cognition) { sendJson(res, 503, { unavailable: true, error: 'the cognitive pipeline is not configured' }); return; }
+      const runId = decodeURIComponent(cognitionApprove[1]);
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).find((key) => key !== 'stepId');
+      if (extra) { sendJson(res, 400, { error: `unknown field: ${extra}` }); return; }
+      try {
+        const run = await app.cognition.get(runId);
+        if (!run) { sendJson(res, 404, { error: 'no such cognition run' }); return; }
+        if (run.status !== 'awaiting_approval') {
+          sendJson(res, 409, { error: `this run is ${run.status}; there is nothing awaiting approval` });
+          return;
+        }
+        const stepId = typeof body.stepId === 'string' ? body.stepId : (run.approval?.waitingSteps?.[0] ?? null);
+        if (!stepId) { sendJson(res, 409, { error: 'the run records no step awaiting approval' }); return; }
+        const approved = await app.controller.approveTask(run.taskId, { stepId });
+        if (approved.status !== 'success_verified') {
+          sendJson(res, 409, { status: approved.status, error: approved.output ?? 'the approval was not recorded', display: approved.display });
+          return;
+        }
+        const ran = await app.controller.runTask(run.taskId, 'resume');
+        const projected = await app.cognition.get(runId);
+        sendJson(res, 200, {
+          run: projected,
+          runStatus: projected?.status ?? 'unknown',
+          stages: COGNITION_STAGES,
+          status: ran.status,
+          display: `${approved.display ?? ''}\n${ran.display ?? ''}`.trim(),
+        });
+        broadcast('cognition', { runId, status: projected?.status ?? 'unknown' });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
       return;
     }
     if (method === 'GET' && url.pathname === '/api/health') {

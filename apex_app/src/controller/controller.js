@@ -1511,6 +1511,21 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // ---- T-29 cognition pipeline -------------------------------------------------
+  // One owner intent, one governed run. The capability is registered like any other, so the
+  // operation audit, ECP authorization and verifier all apply; the pipeline itself halts
+  // fail-closed and never executes a gated step without the owner's own approval.
+  async cognitionRun({ intent, action = null, input = null, councilRequested = false } = {}) {
+    const shown = typeof intent === 'string' && intent.trim() !== '' ? truncate(intent.trim(), 80) : '[missing intent]';
+    const op = this.#newOp({ capability: 'cognition.run', origin: 'user', request: `cognition run [${shown}]` });
+    const payload = { intent };
+    if (action !== null && action !== undefined) payload.action = action;
+    if (input !== null && input !== undefined) payload.input = input;
+    if (councilRequested === true) payload.councilRequested = true;
+    const step = await this.runAction('cognition.run', payload, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   async workshopSimulate({ artifactId } = {}) {
     const shown = typeof artifactId === 'string' && artifactId.trim() !== '' ? truncate(artifactId.trim(), 64) : '[missing artifact]';
     const op = this.#newOp({ capability: 'workshop.simulate', origin: 'user', request: `workshop simulate [${shown}]` });
