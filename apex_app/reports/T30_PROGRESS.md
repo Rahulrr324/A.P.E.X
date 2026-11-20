@@ -661,3 +661,42 @@ configuration error, the three verification outcomes, both refusals for release 
 active, the successful release, the audit omission, no-resume, the promotion gate (refuse without,
 refuse with a wrong proof, reject without, approve with), and the page wiring. **Not verified here:**
 the rendering of the hidden field and the note, which the browser suite asserts in CI.
+
+---
+
+## T-31 evidence (2026-11-19): a real browser executed the checks
+
+Run `44736180329` on `f712744` is the first green hosted run in which a **real browser** performed the
+verification, and the numbers below are copied from its `real-browser-verification` annotation, not
+from a local simulation:
+
+```
+step=success | browser=157.0.4341.60 | executable=/usr/bin/microsoft-edge (system)
+1600x900: core=Awaiting Approval  overflow 1600<=1600  errors=0
+1280x720: core=Awaiting Approval  overflow 1280<=1280  errors=0
+ 390x844: core=Awaiting Approval  overflow  390<=390   errors=0
+reports/screenshots/t31_desktop-wide_1600x900.png 1600x900 328417B
+reports/screenshots/t31_desktop_1280x720.png      1280x720 264463B
+reports/screenshots/t31_mobile_390x844.png         390x844 103791B
+checks: degradedAfterMs=8, connectivityWhileDegraded=Degraded,
+        recoveredCore=Awaiting Approval, recoveredConnectivity=Connected,
+        modes=[tactical, overwatch, synthesis, quiet, classic],
+        modeLockedByLockdown=true, releasedAfterLockdown=true,
+        stepUp={hidden:true, note:"No step-up secret is configured…"}
+seeded: approvalCount=1, taskStatus=paused, cognitionRunStatus=awaiting_approval
+```
+
+What this establishes: the deck loads in Edge 157 on a hosted runner with **zero console errors and
+zero page errors at all three viewports**, the Core reads `Awaiting Approval` from the seeded gated
+run rather than `Idle`, no viewport has horizontal overflow, the stream degrades to `Degraded` within
+8 ms of the server stopping and recovers to `Connected` on reconnect, all five presentation modes
+switch, Lockdown locks the mode selector and the explicit release restores it, and each screenshot is
+a real PNG whose IHDR matches the viewport it was taken at. The presence, autonomy-matrix, Evolution
+Lab and step-up surfaces were all reached through the navigation in the same run.
+
+What it still does not establish: motion, focus order, contrast, or that the design looks like the
+Tony-Stark target. Three screenshots and three assertions per viewport are not a design review. The
+first attempt at this run (`0d098d6`) failed on exactly one console error — the browser asking for a
+`/favicon.ico` the page never declared — which is the correction recorded in `f712744`; that same
+commit added the four evolution actions to AF-20's model-origin sweep, where the curated attempt list
+had fallen out of step with the registry.
