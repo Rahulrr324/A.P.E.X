@@ -224,6 +224,9 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'plan.resume': 'executive',
   'safety.lockdown': 'executive',
   'safety.release': 'executive',
+  // T-29 (2026-11-19): one cognitive run ends one operation whose real outcomes are the task
+  // records it created and ran, so it is classified with the executive commands that write those.
+  'cognition.run': 'executive',
   'recover': 'read',
   'task.plan': 'task',
   'task.run': 'task',

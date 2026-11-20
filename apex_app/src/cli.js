@@ -22,11 +22,15 @@ import { runRuntimeCommand } from './runtime/cli.js';
 import { runIntegrationCommand } from './integrations/cli.js';
 import { runDocumentCommand } from './documents/cli.js';
 import { runReasoningCommand } from './reasoning/cli.js';
+import { createDesktopShell, DESKTOP_SCHEMA } from './ui/desktop-shell.js';
+import { pathToFileURL } from 'node:url';
 
 export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION})
 
 Usage:
   node bin/apex.js chat                  interactive conversation (same session across restarts)
+  node bin/apex.js desktop [--dry-run] [--print-launch-spec] [--browser <path>] [--port <n>]
+                                         loopback UI in a thin Edge/Chrome/Chromium application frame (zero dependencies)
   node bin/apex.js ask [--save-answer] <request words...>
   node bin/apex.js new                   start a new conversation session
   node bin/apex.js status [--model]      subsystem counts (--model probes the endpoint; no inference)
@@ -488,7 +492,7 @@ function parseFlags(args, allowed, repeat = []) {
       'source', 'source-id', 'payload', 'operation-id', 'reporter', 'response', 'action', 'input',
       'adaptation', 'order', 'avoid', 'prefer', 'measurement', 'event', 'request',
       'events-file', 'endpoint', 'allowlist', 'root', 'exclude', 'path', 'interval', 'timeout',
-      'plan-priority',
+      'plan-priority', 'browser', 'port',
       'max-observations', 'max-files', 'max-depth', 'max-bytes', 'memory-percent', 'disk-percent', 'provider',
       'version', 'section', 'document'].includes(name)) {
         const v = args[i + 1];
@@ -918,6 +922,85 @@ async function repairLocks({ app, out, err }) {
   return failed > 0 ? 1 : 0;
 }
 
+// The thin desktop shell (T-30 Package 5). It is a launcher, not an authority: it starts the
+// same loopback server and stops it on exit. `--dry-run` and `--print-launch-spec` resolve the
+// executable and print the exact command without starting a browser, which is how the behaviour
+// is verified on a machine with no Chromium installed.
+async function runDesktopCommand(args, { app, env, out, err, platform = process.platform }) {
+  const { flags, rest } = parseFlags(args, ['dry-run', 'print-launch-spec', 'browser', 'port']);
+  rejectUnexpected(rest, 'desktop [--dry-run] [--print-launch-spec] [--browser <path>] [--port <n>]');
+  let port = null;
+  if (flags.port !== undefined) {
+    if (!/^\d+$/.test(String(flags.port)) || Number(flags.port) > 65535) {
+      throw new ValidationError('--port needs a whole number from 0 to 65535', 'USAGE');
+    }
+    port = Number(flags.port);
+  }
+  const candidates = flags.browser === undefined || flags.browser === true
+    ? null
+    : [{ id: 'flag', label: '--browser', command: String(flags.browser) }];
+    // Progress lines go to stderr so `--print-launch-spec` stays machine-readable on stdout.
+  const shell = createDesktopShell({ app, env, platform, port, candidates, log: (line) => err(line) });
+  const printSpec = flags['print-launch-spec'] === true;
+  const dryRun = flags['dry-run'] === true || printSpec;
+  try {
+    const planned = await shell.launch({ dryRun });
+    if (printSpec) {
+      out(JSON.stringify({
+        schema: DESKTOP_SCHEMA,
+        url: planned.url,
+        host: planned.host,
+        port: planned.port,
+        ready: planned.ready,
+        found: planned.found,
+        browser: planned.browser,
+        tried: planned.tried,
+        profileDir: planned.profileDir,
+        spec: planned.spec,
+        diagnostic: planned.diagnostic,
+      }, null, 2));
+      return 0;
+    }
+    if (dryRun) {
+      out(`APEX desktop shell ${DESKTOP_SCHEMA}`);
+      out(`Loopback interface: ${planned.url} (state read answered)`);
+      if (planned.found) {
+        out(`Browser: ${planned.executable}`);
+        out(`Command: ${[planned.executable, ...planned.spec.args].join(' ')}`);
+        out(`Profile: ${planned.profileDir ?? 'the browser default profile'}`);
+      } else {
+        err(planned.diagnostic);
+        err(`Tried: ${planned.tried.join(', ') || '(no candidates on this platform)'}`);
+      }
+      out('Dry run: nothing was started. The loopback server is stopping now.');
+      return 0;
+    }
+    if (!planned.spawned) {
+      // Honest fallback: no browser was found, so the shell says so and leaves the URL open
+      // for the owner to use. It does not pretend a window exists.
+      err(planned.diagnostic);
+      out('The loopback interface is running and will stop on Ctrl+C.');
+      out(`Open: ${planned.url}`);
+    }
+    out('Press Ctrl+C to stop the shell and the loopback server.');
+    await new Promise((resolve) => {
+      const done = () => resolve();
+      process.once('SIGINT', done);
+      process.once('SIGTERM', done);
+      if (planned.spawned) {
+        // The window closing is the ordinary way this ends. The child stays a child, so the
+        // server is stopped here rather than left listening after the window is gone.
+        setInterval(() => {
+          if (shell.status().childPid === null) { done(); }
+        }, 500).unref();
+      }
+    });
+    return 0;
+  } finally {
+    await shell.stop();
+  }
+}
+
 export async function main(argv, {
   env = process.env,
   stdout = process.stdout,
@@ -977,6 +1060,10 @@ export async function main(argv, {
   // directory in their own output and are left out to avoid saying it twice.
   if (app.config?.dataDirIsDefault === true && app.config?.isolated !== true && command !== 'status' && command !== 'diagnose') {
     err(`Data: this run uses the default data directory (${safeText(app.dataDir)}); APEX_DATA_DIR is not set. Set it to keep your store where you chose it.`);
+  }
+
+  if (command === 'desktop') {
+    return runDesktopCommand(args, { app, env, out, err, platform: process.platform });
   }
 
   try {
@@ -3112,4 +3199,17 @@ async function runChat({ app, stdin, stdout, stderr, out }) {
   }
   rl.close();
   return 0;
+}
+
+// `node src/cli.js ...` runs the same CLI as `node bin/apex.js ...`, so the desktop shell can be
+// started from either path (T-30 Package 5). Importing this module, as every test does, has no
+// effect: the guard only fires when this file is the process entry point.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2)).then(
+    (code) => { process.exitCode = code; },
+    (error) => {
+      process.stderr.write(`fatal: ${error?.message ?? error}\n`);
+      process.exitCode = 1;
+    },
+  );
 }

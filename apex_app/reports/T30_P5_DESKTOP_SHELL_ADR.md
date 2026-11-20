@@ -1,6 +1,12 @@
 # ADR: desktop shell for APEX (T-30 Package 5)
 
-- **Status:** proposed, not implemented. No shell code exists in this repository.
+- **Status:** **implemented** on 2026-11-19 (option A) after being proposed the same day; the
+  original text below is retained as the decision record. Implementation: `src/ui/desktop-shell.js`,
+  `node bin/apex.js desktop` / `node src/cli.js desktop` / `npm run desktop`, with
+  `--dry-run` and `--print-launch-spec`. Verified here on Linux only: command construction,
+  per-platform resolution (unit-tested for win32/darwin/linux), the dry run, the no-binary
+  fallback and lifecycle cleanup, all in `tests/desktop-shell.test.js`. **No window was ever
+  opened in this environment, and nothing was run on Windows or macOS.**
 - **Date:** 2026-11-19
 - **Decision owner:** the project owner. The master document (Part 7) leaves the platform
   decision open; this record gives the build agent's recommendation and the evidence behind it.

@@ -4057,6 +4057,11 @@ across the whole set, so they are stated once instead of per row:
 > reads and one user-only compose write, for 139/154 total, 84 reads, and 70 writes. The earlier
 > counts are retained here as historical context, not current inventory.
 
+> **T-29 / T-30 Package 5 count correction (2026-11-19).** `cognition.run` adds one owner-only write,
+> so the verified registry is **140 actions by default and 155 with a root: 85 reads and 71 writes**,
+> with 56 plannable (the pipeline capability is unplannable; the steps it plans are authorized
+> separately). The 139/154 figures above are retained as the state before T-29.
+
 "Cognitive state" below means persistent state the application records: the belief stores
 (`memory.jsonl`, `knowledge.jsonl`, `experiences.jsonl`, `predictions.jsonl`) and, since Batch AG,
 the executive stores `goals.jsonl` and `plans.jsonl`. The executive records are intentions, not
@@ -4148,6 +4153,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `plan.outcome` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `work.review` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `council.deliberate` | user | read | never in a plan | `council.jsonl` (append-only session; the synthesis is stored, not executed) | no (read) | no |
+| `cognition.run` | user | write | never in a plan | `cognition-runs.jsonl` and the governed `tasks.jsonl` record it creates through the controller | no (executive) | no (a run record is an account, not a belief) |
 | `council.list`, `council.get`, `council.replay`, `council.compare` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
 | `workshop.compose` | user | write | never in a plan | `workshop.jsonl` (append-only design sheet; it is stored, never executed) | no (workshop) | no (a design is not a belief) |
 | `workshop.list`, `workshop.get`, `workshop.inspect`, `workshop.simulate` | user + model | read | never in a plan | nothing (measured; simulation is arithmetic over the stored sheet) | no (read) | no |

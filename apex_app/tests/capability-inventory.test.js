@@ -109,11 +109,12 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    // T-25 added Council's five reads. The historical 134 default-action expectation is superseded
-    // on 2026-11-19: T-26/T-27 added four Workshop reads and one user-only compose action.
-    assert.equal(plain.registry.list().length, 139, 'the default registry has 139 actions');
+    // T-25 added Council's five reads; T-26/T-27 added four Workshop reads and one user-only
+    // compose action. T-29 (2026-11-19) adds one owner-only capability, `cognition.run`, and the
+    // historical 134/139 expectations are superseded with it.
+    assert.equal(plain.registry.list().length, 140, 'the default registry has 140 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 154, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 155, 'a configured workspace root adds fifteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -146,8 +147,9 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    // T-30 (2026-11-19) supersedes the prior 69-write count: Workshop adds one user-only compose write.
-    assert.equal(writes.length, 70, 'the inventory counts seventy write actions with a root configured');
+    // T-30 (2026-11-19) supersedes the prior 69-write count: Workshop adds one user-only compose
+    // write, and T-29 adds `cognition.run`, which is owner-only and unplannable.
+    assert.equal(writes.length, 71, 'the inventory counts seventy-one write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -408,6 +410,11 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         assert.equal(row.belief, 'no (a copy is not a belief)', `${name}: README belief-state`);
       } else if (name === 'workshop.compose') {
         assert.equal(row.belief, 'no (a design is not a belief)', `${name}: README belief-state`);
+      } else if (name === 'cognition.run') {
+        // [T-29, 2026-11-19] A cognitive run writes its own trace and the governed task it created;
+        // both record what happened, not what APEX believes. The store it writes is an account, and
+        // the model/knowledge/world writes it may cause are separate authorized steps.
+        assert.equal(row.belief, 'no (a run record is an account, not a belief)', `${name}: README belief-state`);
       } else if (def.permission === 'write' && !name.startsWith('filesystem.') && !name.startsWith('note.')) {
         assert.equal(row.belief, 'yes', `${name}: README belief-state`);
       } else if (def.permission === 'read') {
