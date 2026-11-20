@@ -1603,6 +1603,30 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // T-32 Step 3: perception. The sense is a read the ECP authorizes like any other capability; the
+  // dismiss and the revoke are owner writes that record the Sentinel's push discipline in the audit
+  // log as well as in the perception ledger.
+  async perceptionSense({ reason = null } = {}) {
+    const op = this.#newOp({ capability: 'perception.sense_host', origin: 'user', request: 'host and workspace reading' });
+    const payload = reason === null || reason === undefined ? {} : { reason };
+    const step = await this.runAction('perception.sense_host', payload, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async perceptionDismissAlert({ alertClass } = {}) {
+    const shown = typeof alertClass === 'string' && alertClass.trim() !== '' ? truncate(alertClass.trim(), 40) : '[missing class]';
+    const op = this.#newOp({ capability: 'perception.dismiss_alert', origin: 'user', request: `dismiss ${shown}` });
+    const step = await this.runAction('perception.dismiss_alert', { alertClass }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async perceptionRevokeSuppression({ ruleId } = {}) {
+    const shown = typeof ruleId === 'string' && ruleId.trim() !== '' ? truncate(ruleId.trim(), 40) : '[missing rule]';
+    const op = this.#newOp({ capability: 'perception.revoke_suppression', origin: 'user', request: `revoke ${shown}` });
+    const step = await this.runAction('perception.revoke_suppression', { ruleId }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   async workshopSimulate({ artifactId } = {}) {
     const shown = typeof artifactId === 'string' && artifactId.trim() !== '' ? truncate(artifactId.trim(), 64) : '[missing artifact]';
     const op = this.#newOp({ capability: 'workshop.simulate', origin: 'user', request: `workshop simulate [${shown}]` });

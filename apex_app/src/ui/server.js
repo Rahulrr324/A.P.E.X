@@ -1115,6 +1115,30 @@ export function createUiServer({
       'Tasks: ' + countText('tasks'),
       'Situational events: ' + countText('situation'),
     ].join(' | ');
+    // T-32 Step 3: the briefing carries the live perception reading too - what was observed on this
+    // machine, how many non-critical pushes the Sentinel has left this hour, and which alert classes
+    // the owner has suppressed. A missing perception service is reported as unavailable, not zero.
+    let perception = { available: false, error: 'the perception service is not configured' };
+    if (app.perception && typeof app.perception.state === 'function') {
+      try {
+        const view = app.perception.state({ limit: 5 });
+        perception = {
+          available: true,
+          lastObservationAt: view.lastObservationAt,
+          observedCount: view.observedCount,
+          unavailableCount: view.unavailableCount,
+          observations: view.observations.slice(0, 5).map((entry) => ({
+            subject: entry.subject, value: entry.value, unit: entry.unit, at: entry.at, epistemicStatus: entry.epistemicStatus,
+          })),
+          budget: view.governor.budget,
+          suppressions: view.governor.suppressions.map((rule) => ({ alertClass: rule.alertClass, suppressedUntil: rule.suppressedUntil, id: rule.id })),
+          host: view.lastReading?.host ?? null,
+          workspace: view.lastReading?.workspace ?? null,
+        };
+      } catch (err) {
+        perception = { available: false, error: `the perception reading is unavailable: ${err.message}` };
+      }
+    }
     return {
       ...briefing,
       status,
@@ -1123,6 +1147,7 @@ export function createUiServer({
       counts,
       concise,
       inferred: tasks.rows ? briefing.inferred : [],
+      perception,
       note: briefing.note + ' A partial status means at least one owner could not be read; unavailable counts are not zero.',
     };
   }
@@ -2291,6 +2316,62 @@ export function createUiServer({
         // field (a sandbox result), and the two must never be confused.
         sendJson(res, 200, { ...data, status: result.status, actVerified: true, display: result.display });
         broadcast('evolution', { proposalId: data.proposalId ?? null });
+        scheduleOwnerRefresh();
+      } catch (err) { sendJson(res, 400, { error: err.message }); }
+      return;
+    }
+    // T-32 Step 3: the perception surfaces. The state read is a read; the sense is the governed
+    // capability (so it is refused in lockdown by the same ECP path as everything else), and the
+    // dismiss/revoke are owner writes that record a revocable suppression rule.
+    if (method === 'GET' && url.pathname === '/api/perception') {
+      try {
+        if (!app.perception) { sendJson(res, 503, { unavailable: true, error: 'the perception service is not configured' }); return; }
+        const limit = Number(url.searchParams.get('limit') ?? 20);
+        sendJson(res, 200, app.perception.state({ limit: Number.isInteger(limit) ? limit : 20 }));
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `the perception state is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/perception/sense') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => key !== 'reason');
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = await app.controller.perceptionSense({ reason: typeof body.reason === 'string' && body.reason.trim() !== '' ? body.reason : null });
+        const step = result.operation?.steps?.[0] ?? null;
+        const data = step?.result?.data ?? null;
+        const verified = step?.verification?.outcome === 'success_verified';
+        if (!data || verified !== true) {
+          sendJson(res, 400, { status: result.status, error: step?.verification?.detail ?? step?.summary ?? 'the reading was not verified', display: result.display });
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status, senseVerified: true, display: result.display });
+        broadcast('perception', { at: data.reading?.at ?? null });
+        scheduleOwnerRefresh();
+      } catch (err) { sendJson(res, 400, { error: err.message }); }
+      return;
+    }
+    if (method === 'POST' && (url.pathname === '/api/perception/dismiss' || url.pathname === '/api/perception/suppressions/revoke')) {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const field = url.pathname === '/api/perception/dismiss' ? 'alertClass' : 'ruleId';
+      const extra = Object.keys(body).filter((key) => key !== field);
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = url.pathname === '/api/perception/dismiss'
+          ? await app.controller.perceptionDismissAlert({ alertClass: body.alertClass })
+          : await app.controller.perceptionRevokeSuppression({ ruleId: body.ruleId });
+        const step = result.operation?.steps?.[0] ?? null;
+        const data = step?.result?.data ?? null;
+        const verified = step?.verification?.outcome === 'success_verified';
+        if (!data || verified !== true) {
+          sendJson(res, 400, { status: result.status, error: step?.verification?.detail ?? step?.summary ?? 'the record was not verified', display: result.display });
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status, actVerified: true, display: result.display, perception: app.perception.state({ limit: 5 }) });
+        broadcast('perception', { at: new Date().toISOString() });
         scheduleOwnerRefresh();
       } catch (err) { sendJson(res, 400, { error: err.message }); }
       return;

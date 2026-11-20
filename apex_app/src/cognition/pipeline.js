@@ -168,6 +168,9 @@ export function createCognitivePipeline({
   goals,
   situation,
   resources,
+  // T-32 Step 3: optional. When the perception service is present, a run reads the latest host and
+  // workspace observations as facts about this machine instead of only the stores APEX keeps.
+  perception = null,
   council,
   now = () => new Date(),
   idFactory = randomUUID,
@@ -262,8 +265,15 @@ export function createCognitivePipeline({
     });
   }
 
+  async function hostReading() {
+    if (!perception || typeof perception.state !== 'function') {
+      return { value: null, error: 'the perception service is not configured' };
+    }
+    return attempt(() => perception.state({ limit: 8 }), null);
+  }
+
   async function buildContext(intent) {
-    const [memoryRead, knowledgeRead, worldRead, goalRead, sentinel] = await Promise.all([
+    const [memoryRead, knowledgeRead, worldRead, goalRead, sentinel, host] = await Promise.all([
       memory && typeof memory.search === 'function'
         ? attempt(() => memory.search(intent, { limit: 6 }), [])
         : Promise.resolve({ value: [], error: 'memory is not configured' }),
@@ -277,6 +287,7 @@ export function createCognitivePipeline({
         ? attempt(() => goals.list(), [])
         : Promise.resolve({ value: [], error: 'goals are not configured' }),
       situationReading(),
+      hostReading(),
     ]);
 
     const memoryItems = listOf(memoryRead.value).map(memoryItem).filter(Boolean).slice(0, 6);
@@ -294,6 +305,19 @@ export function createCognitivePipeline({
     if (worldRead.error) problems.push(`world model: ${worldRead.error}`);
     if (goalRead.error) problems.push(`goals: ${goalRead.error}`);
     if (sentinel.error) problems.push(`sentinel: ${sentinel.error}`);
+    if (host.error) problems.push(`perception: ${host.error}`);
+    const hostObservations = listOf(host.value?.observations).slice(0, 8).map((entry) => ({
+      id: text(entry?.id, 60) || null,
+      subject: text(entry?.subject, 80) || null,
+      value: entry?.value === null || entry?.value === undefined ? null : text(String(entry.value), 120),
+      unit: text(entry?.unit, 20) || null,
+      at: entry?.at ?? null,
+      source: text(entry?.source, 40) || 'host-workspace-sensor',
+      epistemic: entry?.epistemicStatus === 'unavailable' ? 'unavailable' : 'observed',
+    }));
+    // Live host facts are observations, so they are counted as such and never as inferences.
+    const observedHost = hostObservations.filter((entry) => entry.epistemic === 'observed').length;
+    epistemic.observed = (epistemic.observed ?? 0) + observedHost;
 
     return {
       packet: {
@@ -315,6 +339,20 @@ export function createCognitivePipeline({
             : null,
           advisories: advisoriesOf(sentinel.state),
           error: sentinel.error,
+        },
+        host: {
+          available: host.value !== null,
+          error: host.error,
+          lastObservationAt: host.value?.lastObservationAt ?? null,
+          observedCount: host.value?.observedCount ?? null,
+          unavailableCount: host.value?.unavailableCount ?? null,
+          observations: hostObservations,
+          pushBudget: host.value?.governor?.budget ?? null,
+          suppressions: listOf(host.value?.governor?.suppressions).map((rule) => ({
+            alertClass: text(rule?.alertClass, 40) || null,
+            suppressedUntil: rule?.suppressedUntil ?? null,
+          })),
+          reading: host.value?.lastReading ?? null,
         },
         problems,
       },

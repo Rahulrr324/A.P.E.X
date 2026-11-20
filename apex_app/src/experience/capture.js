@@ -87,6 +87,11 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // describe what APEX might become rather than what happened. Capturing one would put a candidate
   // self-change into the log the pattern and adaptation reads draw from, so a proposal would start
   // to count as an event and an idea would feed the loop that shapes behaviour.
+  // T-32 Step 3: perception records readings of the machine (CPU, memory, storage, process, and the
+  // workspace git state) and the Sentinel's push discipline over them. Capturing one would put host
+  // telemetry and notice bookkeeping into the log the pattern and adaptation reads draw from, so a
+  // CPU reading would start to count as evidence about behaviour.
+  perception: 'it records readings of the host and the workspace, or the Sentinel push discipline over them; an experience of one would put machine telemetry and notice bookkeeping into the log the pattern and adaptation reads draw from',
   evolution: 'it records a proposed change to APEX\'s own behaviour, the measured sandbox result for it, or the owner\'s promotion decision; a candidate self-change is not an event that happened, and it must not enter the experience log the pattern and adaptation reads draw from',
 });
 
@@ -94,6 +99,12 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
 // appears in neither list is refused by autoCaptureDecision, but the coverage test fails first: a
 // new action has to be classified here or added to the subset on purpose.
 export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
+  // T-32 Step 3: perception. A reading is re-derivable only while the machine is in the same state,
+  // which is exactly why it belongs in its own ledger rather than in the experience log.
+  'perception.sense_host': 'perception',
+  'perception.state': 'perception',
+  'perception.dismiss_alert': 'perception',
+  'perception.revoke_suppression': 'perception',
   'app.status': 'read',
   'app.capabilities': 'read',
   'calc.evaluate': 'read',

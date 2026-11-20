@@ -16,7 +16,11 @@ function traceText(run) {
   const stage = (name, label, detail) => `${label}: ${detail}`;
   const lines = [];
   const packet = run.stages.context;
-  lines.push(stage('context', '1 Context', `${packet.memory.count} memory · ${packet.knowledge.count} knowledge · ${packet.world.count} world facts (${packet.epistemic.observed} observed / ${packet.epistemic.inferred} inferred / ${packet.epistemic.assumed} assumed / ${packet.epistemic.predicted} predicted)`));
+  lines.push(stage('context', '1 Context', `${packet.memory.count} memory · ${packet.knowledge.count} knowledge · ${packet.world.count} world facts (${packet.epistemic.observed} observed / ${packet.epistemic.inferred} inferred / ${packet.epistemic.assumed} assumed / ${packet.epistemic.predicted} predicted)`
+    // T-32 Step 3: a run that read the machine says so, with the moment it was read.
+    + (packet.host && packet.host.available
+      ? ` · host: ${packet.host.observations.length} live observation(s), last at ${packet.host.lastObservationAt ?? 'not recorded'}`
+      : ' · host: no perception reading')));
   const salience = run.stages.salience;
   lines.push(stage('salience', '2 Salience', `urgency ${salience.urgency} · confidence ${salience.confidence} · uncertainty ${salience.uncertainty} · risk ${salience.risk_sensitivity} · novelty ${salience.novelty}`));
   const council = run.stages.council;

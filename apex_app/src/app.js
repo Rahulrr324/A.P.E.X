@@ -67,6 +67,8 @@ import { createCognitivePipeline } from './cognition/pipeline.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 import { ResourceFabric } from './resources/fabric.js';
 import { createWorkshopService } from './workshop/service.js';
+import { createPerceptionService } from './perception/service.js';
+import { perceptionActions } from './actions/perception-actions.js';
 import { DeviceTrustService } from './security/device-trust.js';
 
 export function createApp({
@@ -274,13 +276,24 @@ export function createApp({
   // executes nothing: every act below is a user-origin capability the ECP authorizes.
   const evolution = createEvolutionLab({ dataDir, now: clock, idFactory });
 
+  // T-32 Step 3: perception of the machine this process actually runs on. The sensor reads the host
+  // and the configured workspace (when there is one) and the service owns the observation ledger and
+  // the Sentinel's push discipline. It is constructed before action registration so
+  // perception.sense_host is registered through the same registry/ECP path as everything else.
+  const perception = createPerceptionService({
+    dataDir,
+    now: clock,
+    ...(idFactory ? { idFactory } : {}),
+    workspaceDir: rootForContext,
+  });
+
   // Device trust records enrollment and authenticates signed device messages. It does not
   // grant capabilities; all action authorization remains with the existing ECP.
   const deviceTrust = new DeviceTrustService(path.join(dataDir, 'devices.jsonl'), { now: clock, idFactory });
 
   for (const def of [...builtinActions(), ...safetyActions(registry.controlPlane), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
-    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...workshopActions(workshop), ...evolutionActions(evolution), ...extraActions, ...fsActions]) registry.register(def);
+    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...workshopActions(workshop), ...evolutionActions(evolution), ...perceptionActions(perception, { controlPlane: registry.controlPlane }), ...extraActions, ...fsActions]) registry.register(def);
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -420,6 +433,9 @@ export function createApp({
     goals,
     situation,
     resources,
+    // T-32 Step 3: live host and workspace facts, so a cognitive run reads the machine it is on
+    // rather than only the stores it keeps.
+    perception,
     council,
     now: clock,
     idFactory,
@@ -461,6 +477,7 @@ export function createApp({
     workshop,
     evolution,
     deviceTrust,
+    perception,
     cognition,
   };
 }

@@ -191,6 +191,12 @@ const MODEL_WRITE_ATTEMPTS = [
   ['evolution.verify', { proposalId: 'evo-modelattempt', verified: true, detail: 'the model said it passed' }],
   ['evolution.promote', { proposalId: 'evo-modelattempt', reason: 'the model asked for it' }],
   ['evolution.decide', { proposalId: 'evo-modelattempt', decision: 'approved', reason: 'the model approved it' }],
+  // T-32 Step 3: perception. A reading of the host, a dismissal of a notice class, and the revocation
+  // of a suppression rule are all owner acts; a model may read the ledger (`perception.state`) and
+  // may not take any of these three.
+  ['perception.sense_host', { reason: 'the model asked for a host reading' }],
+  ['perception.dismiss_alert', { alertClass: 'storage_pressure' }],
+  ['perception.revoke_suppression', { ruleId: 'rule-1' }],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.

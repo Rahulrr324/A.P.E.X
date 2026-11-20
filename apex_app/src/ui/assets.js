@@ -162,12 +162,19 @@ export const UI_PAGE = `<!doctype html>
       <ul id="sentinel" class="work"></ul>
     </section>
     <section class="panel">
+      <!-- T-32 Step 3: perception of the machine APEX is running on, on the deck itself. -->
+      <h2>Perception</h2>
+      <p id="perception-status" class="workspace-status" role="status" aria-live="polite">Loading host reading…</p>
+      <ul id="perception-summary" class="work"></ul>
+    </section>
+    <section class="panel">
       <h2>Approvals</h2>
       <ul id="approvals" class="work"></ul>
     </section>
     <section class="panel">
       <h2>Briefings</h2>
       <p id="briefing-status" class="workspace-status" role="status" aria-live="polite">Loading recorded briefing…</p>
+      <p id="briefing-perception" class="meta" role="status"></p>
       <ul id="briefings" class="work"></ul>
     </section>
   </aside>
@@ -224,6 +231,20 @@ export const UI_PAGE = `<!doctype html>
     <p class="meta">A bounded view of recorded observations, assessments, decisions and provenance. It does not imply that an external source is currently being watched.</p>
     <p id="sentinel-status" class="workspace-status" role="status" aria-live="polite">Loading situational records…</p>
     <ul id="sentinel-full" class="work"></ul>
+    <section class="panel">
+      <!-- T-32 Step 3: the perception ledger and the push discipline. The budget and the
+           suppressions are the Sentinel's own rules, shown where the owner can revoke them. -->
+      <h3>Perception — host and workspace</h3>
+      <p class="meta">Read-only readings of this machine and the configured workspace. A value that could not be read is shown as unavailable; it is never shown as zero.</p>
+      <p id="perception-detail-status" class="workspace-status" role="status" aria-live="polite">Loading perception ledger…</p>
+      <div class="row">
+        <button id="perception-sense" type="button" class="small">Sense host now</button>
+        <span id="perception-budget" class="badge">Push budget: —</span>
+        <span id="perception-sense-status" class="meta" role="status"></span>
+      </div>
+      <ul id="perception-observations" class="work"></ul>
+      <ul id="perception-suppressions" class="work"></ul>
+    </section>
   </section>
   <section class="view" data-view="memory" data-depth-plane="z3">
     <h2>Memory Timeline</h2>
@@ -842,6 +863,15 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   councilState: document.getElementById('council-state'),
   workshopState: document.getElementById('workshop-state'),
   // T-31 Step 2 surfaces.
+  perceptionStatus: document.getElementById('perception-status'),
+  perceptionSummary: document.getElementById('perception-summary'),
+  perceptionDetailStatus: document.getElementById('perception-detail-status'),
+  perceptionObservations: document.getElementById('perception-observations'),
+  perceptionSuppressions: document.getElementById('perception-suppressions'),
+  perceptionBudget: document.getElementById('perception-budget'),
+  perceptionSense: document.getElementById('perception-sense'),
+  perceptionSenseStatus: document.getElementById('perception-sense-status'),
+  briefingPerception: document.getElementById('briefing-perception'),
   presenceStatus: document.getElementById('presence-status'),
   presenceDevices: document.getElementById('presence-devices'),
   presenceMesh: document.getElementById('presence-mesh'),
@@ -2420,6 +2450,104 @@ const EVOLUTION_LABEL = {
   rejected: 'promotion rejected by you',
 };
 
+// T-32 Step 3: the perception surfaces. The reading is shown with its own timestamp and its own
+// epistemic status, the push budget is the Sentinel's, and a suppression is listed with the rule id
+// the owner needs in order to revoke it. Nothing here is estimated.
+function renderPerception(result) {
+  const owner = ownerStatusText(result, 'Perception');
+  const value = result?.ok === true ? result.value : null;
+  const budget = value?.governor?.budget ?? null;
+  const suppressions = Array.isArray(value?.governor?.suppressions) ? value.governor.suppressions : [];
+  const observations = Array.isArray(value?.observations) ? value.observations : [];
+  if (els.perceptionBudget) {
+    els.perceptionBudget.textContent = budget
+      ? 'Push budget: ' + budget.remaining + '/' + budget.limit + ' non-critical left this hour'
+      : 'Push budget: unavailable';
+  }
+  if (owner.text) {
+    setWorkspaceStatus(els.perceptionStatus, owner.text, owner.state);
+    if (els.perceptionDetailStatus) setWorkspaceStatus(els.perceptionDetailStatus, owner.text, owner.state);
+    renderList(els.perceptionSummary, [], () => null, owner.text);
+    if (els.perceptionObservations) renderList(els.perceptionObservations, [], () => null, owner.text);
+    if (els.perceptionSuppressions) renderList(els.perceptionSuppressions, [], () => null, owner.text);
+    if (els.briefingPerception) els.briefingPerception.textContent = 'Perception unavailable: ' + owner.text;
+    return;
+  }
+  const host = value.lastReading?.host ?? null;
+  const workspace = value.lastReading?.workspace ?? null;
+  const summary = [];
+  if (host) {
+    summary.push({ title: 'CPU: ' + (host.cpu?.logicalCount ?? 'unavailable') + ' logical · load 1m '
+      + (host.cpu?.loadAverage1m ?? 'unavailable'), meta: 'Observed · host.cpu · at ' + (value.lastObservationAt || 'time not recorded') });
+    summary.push({ title: 'Memory: ' + (host.memory?.usedPercent === null || host.memory?.usedPercent === undefined
+      ? 'unavailable' : Math.round(host.memory.usedPercent * 100) + '% used'), meta: 'Observed · host.memory' });
+    summary.push({ title: 'Process: up ' + (host.process?.uptimeSeconds ?? 'unavailable') + 's', meta: 'Observed · host.process' });
+  }
+  if (workspace) {
+    summary.push({
+      title: workspace.available
+        ? 'Workspace: ' + (workspace.branch || 'detached') + ' at ' + (workspace.head || 'unavailable')
+        : 'Workspace: unavailable (' + (workspace.reason || 'no reading') + ')',
+      meta: workspace.available
+        ? (workspace.dirtyFiles ?? 'unavailable') + ' changed · ' + (workspace.untrackedFiles ?? 'unavailable') + ' untracked'
+        : 'A missing reading is not a clean tree.',
+    });
+  }
+  if (summary.length === 0) {
+    setWorkspaceStatus(els.perceptionStatus, 'No host reading has been recorded yet; use "Sense host now" in Sentinel.', 'empty');
+  } else {
+    setWorkspaceStatus(els.perceptionStatus, 'Last reading ' + (value.lastObservationAt || 'time not recorded')
+      + ' · ' + (value.observedCount ?? 0) + ' observed · ' + (value.unavailableCount ?? 0) + ' unavailable', 'available');
+  }
+  renderList(els.perceptionSummary, summary, (row) => itemFrom(row.title, row.meta), 'No host reading recorded yet.');
+  if (els.perceptionDetailStatus) {
+    setWorkspaceStatus(els.perceptionDetailStatus, 'Ledger ' + (value.source || 'host-workspace-sensor') + ' · last observation '
+      + (value.lastObservationAt || 'none recorded') + ' · ' + observations.length + ' shown', 'available');
+  }
+  if (els.perceptionObservations) {
+    renderList(els.perceptionObservations, observations.slice(0, 20).map((entry) => ({
+      title: entry.subject + ' = ' + (entry.value === null ? 'unavailable' : String(entry.value)) + (entry.unit ? ' ' + entry.unit : ''),
+      meta: entry.epistemicStatus + ' · ' + entry.source + ' · ' + entry.at + (entry.detail && typeof entry.detail === 'string' ? ' · ' + entry.detail : ''),
+    })), (row) => itemFrom(row.title, row.meta), 'No observation has been recorded in the perception ledger.');
+  }
+  if (els.perceptionSuppressions) {
+    const rows = suppressions.map((rule) => {
+      const item = {
+        title: 'Suppressed: ' + rule.alertClass + ' until ' + rule.suppressedUntil,
+        meta: 'Rule ' + rule.id + ' · recorded from ' + rule.dismissals + ' dismissals · revocable',
+      };
+      return item;
+    });
+    renderList(els.perceptionSuppressions, rows, (row) => {
+      const node = itemFrom(row.title, row.meta);
+      const rule = suppressions.find((entry) => row.title.includes(entry.alertClass) && row.title.includes(entry.suppressedUntil));
+      if (rule) {
+        const button = el('button', 'small', 'Revoke suppression');
+        button.type = 'button';
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            await api('/api/perception/suppressions/revoke', { method: 'POST', body: { ruleId: rule.id } });
+            if (els.perceptionSenseStatus) els.perceptionSenseStatus.textContent = 'Suppression ' + rule.id + ' revoked.';
+          } catch (error) {
+            if (els.perceptionSenseStatus) els.perceptionSenseStatus.textContent = 'Revoke failed: ' + String(error?.message || error);
+          } finally {
+            button.disabled = false;
+            refresh();
+          }
+        });
+        node.append(button);
+      }
+      return node;
+    }, 'No alert class is suppressed. Two dismissals of one class record a rule with an expiry.');
+  }
+  if (els.briefingPerception) {
+    els.briefingPerception.textContent = 'Perception: ' + (value.lastObservationAt || 'no reading recorded')
+      + ' · ' + (value.observedCount ?? 0) + ' observed · push budget ' + (budget ? budget.remaining + '/' + budget.limit : 'unavailable')
+      + (suppressions.length ? ' · suppressed: ' + suppressions.map((rule) => rule.alertClass + ' until ' + rule.suppressedUntil).join(', ') : '');
+  }
+}
+
 function renderEvolution(result) {
   if (!els.evolutionProposals) return;
   const value = result?.ok === true ? result.value : null;
@@ -2580,7 +2708,7 @@ async function refresh() {
   const [stateResult, healthResult, missionResult, approvalResult, timelineResult,
     situationResult, briefingResult, runtimeResult, sourcesResult, documentsResult,
     reasoningResult, councilResult, workshopResult, resourcesResult, cognitionResult,
-    presenceResult, autonomyMatrixResult, worldResult, evolutionResult, stepUpResult] = await Promise.all([
+    presenceResult, autonomyMatrixResult, worldResult, evolutionResult, stepUpResult, perceptionResult] = await Promise.all([
     readApi('/api/state'),
     readApi('/api/health'),
     readApi('/api/mission-control'),
@@ -2601,6 +2729,7 @@ async function refresh() {
     readApi('/api/world/epistemic'),
     readApi('/api/evolution'),
     readApi('/api/step-up'),
+    readApi('/api/perception?limit=20'),
   ]);
 
   // The authoritative snapshot carries the current session, transcript, badges, gauges and the
@@ -2676,6 +2805,7 @@ async function refresh() {
   renderPresence(presenceResult, autonomyMatrixResult);
   renderWorldClaims(worldResult);
   renderEvolution(evolutionResult);
+  renderPerception(perceptionResult);
   renderStepUp(stepUpResult);
 
   applyCoreProjection(snapshot ? '' : 'The authoritative state read failed.');
@@ -2785,6 +2915,28 @@ function dismissCommandDispatch() {
 }
 
 if (els.commandTrigger) els.commandTrigger.addEventListener('click', () => { focusCommandDispatch(); });
+
+// T-32 Step 3: sensing is the governed capability, not a client-side read. The button posts to the
+// route the controller owns, so the ECP decides, the operation is audited, and a lockdown refusal
+// comes back as the reason it is.
+if (els.perceptionSense) {
+  els.perceptionSense.addEventListener('click', async () => {
+    els.perceptionSense.disabled = true;
+    if (els.perceptionSenseStatus) els.perceptionSenseStatus.textContent = 'Reading the host…';
+    try {
+      const result = await api('/api/perception/sense', { method: 'POST', body: {} });
+      if (els.perceptionSenseStatus) {
+        els.perceptionSenseStatus.textContent = 'Recorded: ' + (result.recorded ?? 0) + ' observation(s) at '
+          + (result.reading?.at ?? 'time not recorded') + '.';
+      }
+    } catch (error) {
+      if (els.perceptionSenseStatus) els.perceptionSenseStatus.textContent = 'Reading refused: ' + String(error?.message || error);
+    } finally {
+      els.perceptionSense.disabled = false;
+      refresh();
+    }
+  });
+}
 
 document.addEventListener('keydown', (event) => {
   if (!event || event.defaultPrevented) return;

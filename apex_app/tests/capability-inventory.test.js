@@ -114,9 +114,11 @@ describe('AF-19: the registry is the inventory', () => {
     // historical 134/139 expectations are superseded with it.
     // T-31 Step 2 (2026-11-19) added four evolution-lab capabilities (propose, verify, promote, decide),
     // so the pinned totals moved by four; the write count moves with them because all four write.
-    assert.equal(plain.registry.list().length, 144, 'the default registry has 144 actions');
+    // T-32 Step 3 (2026-11-19) adds four perception capabilities (sense_host, state, dismiss_alert,
+    // revoke_suppression), so the pinned totals move by four and the read/write split with them.
+    assert.equal(plain.registry.list().length, 148, 'the default registry has 148 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 159, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 163, 'a configured workspace root adds fifteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -151,7 +153,7 @@ describe('AF-19: the registry is the inventory', () => {
     const writes = app.registry.list().filter((d) => d.permission === 'write');
     // T-30 (2026-11-19) supersedes the prior 69-write count: Workshop adds one user-only compose
     // write, and T-29 adds `cognition.run`, which is owner-only and unplannable.
-    assert.equal(writes.length, 75, 'the inventory counts seventy-five write actions with a root configured');
+    assert.equal(writes.length, 78, 'the inventory counts seventy-eight write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -244,7 +246,7 @@ describe('AF-19: the registry is the inventory', () => {
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
     // T-30 (2026-11-19) supersedes the prior 80-read count: Workshop adds list/get/inspect/simulate.
-    assert.equal(reads.length, 84, 'the inventory counts eighty-four read actions with a root configured');
+    assert.equal(reads.length, 85, 'the inventory counts eighty-five read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -422,6 +424,12 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         // both record what happened, not what APEX believes. The store it writes is an account, and
         // the model/knowledge/world writes it may cause are separate authorized steps.
         assert.equal(row.belief, 'no (a run record is an account, not a belief)', `${name}: README belief-state`);
+      } else if (name.startsWith('perception.')) {
+        // [T-32 Step 3, 2026-11-19] Perception appends host and workspace readings to its own ledger
+        // and records the Sentinel's push discipline. A CPU reading is an observation about this
+        // machine, not a belief about the world, and the governor's rules are bookkeeping about
+        // notices; neither may be read as a stored belief.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a reading is not a belief)' : 'no', `${name}: README belief-state`);
       } else if (def.permission === 'write' && !name.startsWith('filesystem.') && !name.startsWith('note.')) {
         assert.equal(row.belief, 'yes', `${name}: README belief-state`);
       } else if (def.permission === 'read') {
