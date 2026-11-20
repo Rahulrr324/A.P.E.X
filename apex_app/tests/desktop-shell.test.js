@@ -50,12 +50,15 @@ function fakeSpawn() {
 }
 
 describe('desktop shell: browser resolution and command construction', () => {
-  test('each platform is searched Edge first, then Chrome or Chromium, then the explicit override', () => {
+  test('a configured browser is tried first, then the platform is searched Edge first and Chrome or Chromium next', () => {
     const win = browserCandidates({ platform: 'win32', env: { 'PROGRAMFILES(X86)': 'C:\\Program Files (x86)', APEX_DESKTOP_BROWSER_BIN: 'D:\\edge.exe' } });
-    assert.match(win[0].command, /Microsoft\\Edge\\Application\\msedge\.exe$/);
+    assert.equal(win[0].id, 'env', 'an explicit setting outranks discovery: it is the owner naming a browser');
+    assert.equal(win[0].command, 'D:\\edge.exe');
+    assert.match(win[1].command, /Microsoft\\Edge\\Application\\msedge\.exe$/);
     assert.ok(win.some((entry) => /chrome\.exe$/i.test(entry.command) && entry.id !== 'env'));
-    assert.equal(win.at(-1).id, 'env', 'the owner override is tried last, as the ADR orders it');
-    assert.equal(win.at(-1).command, 'D:\\edge.exe');
+    const discovered = browserCandidates({ platform: 'win32', env: { 'PROGRAMFILES(X86)': 'C:\\Program Files (x86)' } });
+    assert.match(discovered[0].command, /Microsoft\\Edge\\Application\\msedge\.exe$/, 'without a configured browser the ADR order is unchanged');
+    assert.equal(discovered.some((entry) => entry.id === 'env'), false);
 
     const mac = browserCandidates({ platform: 'darwin', env: {} });
     assert.equal(mac[0].command, '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge');
@@ -64,6 +67,18 @@ describe('desktop shell: browser resolution and command construction', () => {
     const linux = browserCandidates({ platform: 'linux', env: {} });
     assert.deepEqual(linux.slice(0, 2).map((entry) => entry.command), ['microsoft-edge', 'microsoft-edge-stable']);
     assert.ok(linux.some((entry) => entry.command === 'chromium'));
+  });
+
+  test('a configured browser wins even when a system one is installed', () => {
+    const candidates = browserCandidates({ platform: 'linux', env: { APEX_DESKTOP_BROWSER_BIN: '/opt/owner/edge' } });
+    const resolved = resolveBrowser({
+      platform: 'linux',
+      candidates,
+      executable: (command) => command === '/opt/owner/edge' || command === 'microsoft-edge',
+    });
+    assert.equal(resolved.executable, '/opt/owner/edge', 'the configured binary is chosen, not the installed Edge');
+    assert.equal(resolved.browser.id, 'env');
+    assert.equal(resolved.tried[0], '/opt/owner/edge', 'the printed "tried" list names the configured binary first');
   });
 
   test('resolution picks the first candidate that exists and reports everything it tried', () => {

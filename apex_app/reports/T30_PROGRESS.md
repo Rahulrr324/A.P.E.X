@@ -467,11 +467,12 @@ Option (A) of `reports/T30_P5_DESKTOP_SHELL_ADR.md`, implemented as `src/ui/desk
 - Starts the existing loopback UI server on `127.0.0.1` and a free or configured port
   (`--port`, `APEX_DESKTOP_PORT`, `APEX_UI_PORT`, else kernel-assigned), then **verifies
   `/api/state`** answers with the process token before it launches anything.
-- Resolves a Chromium-family executable in the ADR's order (`msedge`, then Chrome/Chromium per
-  platform, then `APEX_DESKTOP_BROWSER_BIN`; `--browser` names one binary for this run) and
-  launches it with `--app=<loopback url>`, `--user-data-dir=<dataDir>/desktop-profile` (mode 0700),
-  `--no-first-run` and `--no-default-browser-check`. Arguments are passed as a vector; nothing is
-  interpolated into a shell.
+- Resolves a Chromium-family executable: an explicit setting first (`APEX_DESKTOP_BROWSER_BIN`, or
+  `--browser` naming one binary for this run), then discovery in the order `msedge`, then
+  Chrome/Chromium per platform. It launches it with `--app=<loopback url>`,
+  `--user-data-dir=<dataDir>/desktop-profile` (mode 0700), `--no-first-run` and
+  `--no-default-browser-check`. Arguments are passed as a vector; nothing is interpolated into a
+  shell.
 - `--dry-run` and `--print-launch-spec` return the exact command without spawning; the spawner is
   injectable, so every behaviour is tested on a machine with no browser.
 - With no browser installed it prints an honest diagnostic, starts nothing, and leaves the working
@@ -479,11 +480,21 @@ Option (A) of `reports/T30_P5_DESKTOP_SHELL_ADR.md`, implemented as `src/ui/desk
 - Stops the server and terminates the child on exit, `SIGINT` and `SIGTERM`.
 - Entry points: `node src/cli.js desktop`, `node bin/apex.js desktop`, `npm run desktop`.
 
-**Tests.** `tests/desktop-shell.test.js` 13/13: per-platform candidate order, resolution with the
-tried list, PATH lookup, launch-spec construction, port parsing, a real loopback server with a
-verified ready state and an isolated profile, dry-run spawning nothing, real spawn argument
-vectors, the no-binary fallback with a still-serving URL, idempotent stop, and three CLI runs
-(`--dry-run`, `--print-launch-spec` JSON, no-browser fallback).
+**Correction, found by CI (2026-11-19).** The first version tried `APEX_DESKTOP_BROWSER_BIN` *last*,
+so on a machine with a browser installed the setting was silently ignored: the hosted runner has
+`/usr/bin/microsoft-edge`, and `--print-launch-spec` reported Edge where the configured binary had
+been named. The configured browser is now tried first and discovery answers only when nothing was
+configured; `--browser` still replaces the list entirely. `tests/desktop-shell.test.js` gained a
+regression that resolves a configured binary against an installed `microsoft-edge` and expects the
+configured one. This is also why the first CI runs of S1–S3 were red while the same tree was green
+here: this box has no browser at all, so the ordering defect was invisible.
+
+**Tests.** `tests/desktop-shell.test.js` 14/14: explicit-then-discovered candidate order (and the
+installed-browser regression above), resolution with the tried list, PATH lookup, launch-spec
+construction, port parsing, a real loopback server with a verified ready state and an isolated
+profile, dry-run spawning nothing, real spawn argument vectors, the no-binary fallback with a
+still-serving URL, idempotent stop, and three CLI runs (`--dry-run`, `--print-launch-spec` JSON,
+no-browser fallback).
 
 **Not verified.** No window was opened, and nothing was run on Windows or macOS. The platform
 matrices are unit-tested, not executed.

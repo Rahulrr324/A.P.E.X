@@ -76,15 +76,21 @@ function linuxCandidates() {
   ];
 }
 
-// Priority order is the order the owner's ADR names: the platform's Edge first, then Chrome or
-// Chromium, then the explicit APEX_DESKTOP_BROWSER_BIN override last. `--browser` on the CLI
-// takes precedence over all of them because it is the owner naming one binary for this run.
+// Priority order: the owner's explicit choice first, then the discovery order the ADR names (the
+// platform's Edge, then Chrome or Chromium). `--browser` replaces this list entirely, so it wins
+// over everything; `APEX_DESKTOP_BROWSER_BIN` is tried before discovery.
+//
+// The override used to be appended last, as the first draft of the ADR ordered it. A CI runner with
+// /usr/bin/microsoft-edge then ignored the configured binary and launched Edge instead, which is
+// what a configured browser silently losing to an installed one looks like in practice. An explicit
+// setting is the owner's instruction, not a fallback, so it now comes first and discovery answers
+// only when nothing was configured.
 export function browserCandidates({ platform = process.platform, env = process.env } = {}) {
   const list = platform === 'win32' ? winCandidates(env)
     : platform === 'darwin' ? macCandidates()
       : linuxCandidates();
   const override = typeof env.APEX_DESKTOP_BROWSER_BIN === 'string' ? env.APEX_DESKTOP_BROWSER_BIN.trim() : '';
-  if (override.length > 0) list.push({ id: 'env', label: 'APEX_DESKTOP_BROWSER_BIN', command: override });
+  if (override.length > 0) list.unshift({ id: 'env', label: 'APEX_DESKTOP_BROWSER_BIN', command: override });
   return list;
 }
 
