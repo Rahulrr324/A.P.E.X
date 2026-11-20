@@ -135,7 +135,10 @@ test.describe('T-31 real-browser verification', () => {
         const views = await page.evaluate(() => [...document.querySelectorAll('nav .nav-item')].map((node) => node.dataset.view));
         expect(views.length, 'the deck ships its workspaces').toBeGreaterThanOrEqual(15);
         for (const view of views) {
-          await page.locator(`[data-view="${view}"]`).first().click();
+          // T-32 Step 2 (2026-11-19): `body` carries data-view as well, so `.first()` on the bare
+          // attribute was selecting the body and clicking its centre - which passed only because the
+          // page already showed Deck. The navigation item is what this loop means to click.
+          await page.locator(`nav .nav-item[data-view="${view}"]`).first().click();
           await expect(page.locator('body')).toHaveAttribute('data-view', view);
           result.views.push(view);
         }

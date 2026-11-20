@@ -70,6 +70,7 @@ const run = {
   keyboard: null,
   motion: null,
   screenshots: [],
+  failures: [],
   startedAt: new Date().toISOString(),
   finishedAt: null,
 };
@@ -258,6 +259,10 @@ const RETICLE_POSTURE = () => {
     caption: (document.getElementById('core-state')?.textContent ?? '').trim(),
     stroke: azimuth?.stroke ?? null,
     weight: azimuth?.strokeWidth ?? null,
+    weightPx: (() => {
+      const match = /-?[0-9]*\.?[0-9]+/.exec(String(azimuth?.strokeWidth ?? ''));
+      return match === null ? null : Number.parseFloat(match[0]);
+    })(),
     dash: tick?.strokeDasharray ?? null,
     telemetryDash: arc?.strokeDasharray ?? null,
     progressOffset: step?.strokeDashoffset ?? null,
@@ -347,6 +352,15 @@ test.describe('T-32 HUD experience', () => {
     browser = await chromium.launch({ executablePath: resolution.executable, headless: true });
     run.browserVersion = browser.version();
     run.checks = { seeded: handle.seed };
+  });
+
+  // A failure's own words travel in the summary: the workflow annotation is the only channel this
+  // environment can read back, and a title alone does not say what the browser disagreed with.
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== testInfo.expectedStatus) {
+      const message = (testInfo.errors ?? []).map((error) => error.message ?? String(error)).join(' | ');
+      run.failures.push({ title: testInfo.title, status: testInfo.status, message: message.slice(0, 900) });
+    }
   });
 
   test.afterAll(async () => {
@@ -457,8 +471,10 @@ test.describe('T-32 HUD experience', () => {
     const signatures = Object.entries(captured).map(([state, posture]) => [state, signature(posture)]);
     expect(new Set(signatures.map(([, sig]) => sig)).size, `distinct postures: ${JSON.stringify(signatures)}`)
       .toBe(signatures.length);
-    const weights = Object.values(captured).map((posture) => Number.parseFloat(posture.weight));
-    expect(weights.every((weight) => Number.isFinite(weight) && weight > 0), JSON.stringify(captured)).toBe(true);
+    const weights = Object.values(captured).map((posture) => posture.weightPx);
+    expect(weights.every((weight) => Number.isFinite(weight) && weight > 0),
+      `stroke weights were not numbers: ${JSON.stringify(weights)} in ${JSON.stringify(captured)}`).toBe(true);
+    expect(new Set(weights).size, `the posture weights are distinct: ${weights.join(', ')}`).toBeGreaterThan(1);
     run.reticle = captured;
   });
 
@@ -472,7 +488,8 @@ test.describe('T-32 HUD experience', () => {
         // Every workspace in turn, so the audit covers the surfaces a reviewer has to read.
         const views = await page.evaluate(() => [...document.querySelectorAll('nav .nav-item')].map((node) => node.dataset.view));
         for (const view of [...views, 'deck']) {
-          await page.locator(`[data-view="${view}"]`).first().click();
+          // `body` carries data-view too, so the selector has to name the navigation item.
+          await page.locator(`nav .nav-item[data-view="${view}"]`).first().click();
           await expect(page.locator('body')).toHaveAttribute('data-view', view);
           const audit = await page.evaluate(CONTRAST_AUDIT);
           audits.push({ viewport: viewport.name, view, ...audit });
@@ -482,7 +499,7 @@ test.describe('T-32 HUD experience', () => {
         }
         // The alarm palette is audited too, once per viewport: lockdown changes the text tokens, so
         // a pass in Classic says nothing about it.
-        await page.locator('[data-view="deck"]').first().click();
+        await page.locator('nav .nav-item[data-view="deck"]').first().click();
         await lockDown(page, 'T-32 Step 2: contrast audit under lockdown');
         const alarmAudit = await page.evaluate(CONTRAST_AUDIT);
         audits.push({ viewport: viewport.name, view: 'deck+lockdown', ...alarmAudit });

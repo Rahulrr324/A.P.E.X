@@ -143,6 +143,9 @@ jobs:
               motion = data.get('motion') or {}
               if motion:
                   parts.append('motion=' + json.dumps(motion, sort_keys=True))
+              failures = data.get('failures') or []
+              for failure in failures:
+                  parts.append(f"FAILED {failure.get('title')} :: {failure.get('message')}")
               shots = data.get('screenshots') or []
               parts.append(f'artifact: {len(shots)} PNG(s) under apex_app/reports/screenshots/t32')
               for shot in shots:
