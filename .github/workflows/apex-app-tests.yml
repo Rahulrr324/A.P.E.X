@@ -1,16 +1,12 @@
-name: APEX Local Alpha Tests
+name: APEX Local Alpha Checks
 
+# T-30 (2026-11-19): supersedes the earlier path-filtered trigger. Every push to main now
+# runs the source/client syntax guard and full APEX test suite, including repository-wide edits.
 on:
   push:
     branches: [main]
-    paths:
-      - "apex_app/**"
-      - ".github/workflows/apex-app-tests.yml"
   pull_request:
     branches: [main]
-    paths:
-      - "apex_app/**"
-      - ".github/workflows/apex-app-tests.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +20,7 @@ jobs:
   test:
     name: Node.js test suite
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -34,6 +30,95 @@ jobs:
           node-version: 22
       - name: Verify Node.js version
         run: node --version
-      - name: Run APEX tests
+      - name: Install development dependencies only
         working-directory: apex_app
-        run: npm test
+        run: npm ci --ignore-scripts
+      - name: Check source files and extracted UI client
+        working-directory: apex_app
+        run: npm run test:syntax
+      - name: Run the full APEX test suite
+        working-directory: apex_app
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/apex-test.log"
+      # T-31 Step 1 (2026-11-19): the real-browser verification. This job is the reason the step
+      # exists - the runner ships /usr/bin/microsoft-edge, so the suite launches a real Chromium
+      # build rather than skipping. The resolver in src/ui/browser-binary.js picks the binary and
+      # the summary below records exactly which one ran.
+      - name: Real-browser verification (system Edge/Chromium, headless)
+        # It runs even when the Node suite failed: the browser evidence is worth having on a red
+        # run too, and a skip here must mean "no browser", not "an earlier step failed".
+        if: ${{ !cancelled() }}
+        id: browser
+        working-directory: apex_app
+        run: |
+          set -o pipefail
+          node node_modules/playwright/cli.js test --reporter=list 2>&1 | tee "$RUNNER_TEMP/t31-browser.log"
+      # The browser result, the viewports and each screenshot's real dimensions, as one annotation
+      # this environment can read without downloading the job log.
+      - name: Publish the real-browser result
+        if: always()
+        shell: bash
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, re, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          log = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.log')
+          text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
+          match = re.search(r'^T31_BROWSER_SUMMARY (\{.*\})$', text, re.M)
+          parts = [f'step={outcome}']
+          if not match:
+              skipped = re.search(r'(\d+) skipped', text)
+              parts.append('no browser summary was printed')
+              if skipped:
+                  parts.append(f'{skipped.group(1)} test(s) skipped (no Chromium-family binary on the runner)')
+          else:
+              data = json.loads(match.group(1))
+              parts.append(f"browser={data['browserVersion']}")
+              parts.append(f"executable={data['resolved']['executable']} ({data['resolved']['source']})")
+              for viewport in data['viewports']:
+                  errors = len(viewport.get('errors', {}).get('console', [])) + len(viewport.get('errors', {}).get('page', []))
+                  parts.append(
+                      f"{viewport['viewport']['width']}x{viewport['viewport']['height']}: core={viewport.get('core')} "
+                      f"overflow={viewport['overflow']['scrollWidth']}<={viewport['overflow']['clientWidth']} errors={errors}"
+                  )
+              for shot in data['screenshots']:
+                  parts.append(f"{shot['file']} {shot['width']}x{shot['height']} {shot['bytes']}B")
+              parts.append('checks=' + json.dumps(data.get('checks', {}), sort_keys=True))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          level = 'notice' if outcome == 'success' else 'error'
+          print(f'::{level} title=real-browser-verification::{message[:60000]}')
+          PY
+      - name: Keep the browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t31-real-browser
+          path: |
+            apex_app/reports/screenshots
+            apex_app/test-results/playwright
+          if-no-files-found: warn
+          retention-days: 14
+
+      # T-30 S4 (2026-11-19): a red run's log lives behind a download this environment cannot
+      # reach, so the failing test names are echoed as one annotation, which the checks API can be
+      # read back without fetching the log.
+      - name: Report failing tests
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/apex-test.log"
+          summary="no test log was written"
+          if [ -f "$log" ]; then
+            summary="$(grep -E '^[[:space:]]*not ok [0-9]+' "$log" | head -30 | sed 's/^[[:space:]]*//' | paste -sd ' | ' -)"
+            [ -n "$summary" ] || summary="the suite failed without a 'not ok' line"
+          fi
+          summary="${summary//$'\n'/ }"
+          echo "::error title=apex-test-failures::${summary:0:30000}"
+          # The assertion text is what identifies the cause, so it is flattened into a second
+          # annotation next to the names above.
+          details=""
+          if [ -f "$log" ]; then
+            details="$(grep -E '^[[:space:]]*not ok [0-9]+|error:|Expected|actual:|expected:|stack:' "$log" | head -120 | sed 's/^[[:space:]]*//' | paste -sd ' ~ ' -)"
+          fi
+          details="${details//$'\n'/ }"
+          echo "::error title=apex-test-details::${details:0:30000}"
