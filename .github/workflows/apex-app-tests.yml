@@ -41,6 +41,62 @@ jobs:
         run: |
           set -o pipefail
           npm test 2>&1 | tee "$RUNNER_TEMP/apex-test.log"
+      # T-31 Step 1 (2026-11-19): the real-browser verification. This job is the reason the step
+      # exists - the runner ships /usr/bin/microsoft-edge, so the suite launches a real Chromium
+      # build rather than skipping. The resolver in src/ui/browser-binary.js picks the binary and
+      # the summary below records exactly which one ran.
+      - name: Real-browser verification (system Edge/Chromium, headless)
+        id: browser
+        working-directory: apex_app
+        run: |
+          set -o pipefail
+          node node_modules/playwright/cli.js test --reporter=list 2>&1 | tee "$RUNNER_TEMP/t31-browser.log"
+      # The browser result, the viewports and each screenshot's real dimensions, as one annotation
+      # this environment can read without downloading the job log.
+      - name: Publish the real-browser result
+        if: always()
+        shell: bash
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, re, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          log = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.log')
+          text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
+          match = re.search(r'^T31_BROWSER_SUMMARY (\{.*\})$', text, re.M)
+          parts = [f'step={outcome}']
+          if not match:
+              skipped = re.search(r'(\d+) skipped', text)
+              parts.append('no browser summary was printed')
+              if skipped:
+                  parts.append(f'{skipped.group(1)} test(s) skipped (no Chromium-family binary on the runner)')
+          else:
+              data = json.loads(match.group(1))
+              parts.append(f"browser={data['browserVersion']}")
+              parts.append(f"executable={data['resolved']['executable']} ({data['resolved']['source']})")
+              for viewport in data['viewports']:
+                  errors = len(viewport.get('errors', {}).get('console', [])) + len(viewport.get('errors', {}).get('page', []))
+                  parts.append(
+                      f"{viewport['viewport']['width']}x{viewport['viewport']['height']}: core={viewport.get('core')} "
+                      f"overflow={viewport['overflow']['scrollWidth']}<={viewport['overflow']['clientWidth']} errors={errors}"
+                  )
+              for shot in data['screenshots']:
+                  parts.append(f"{shot['file']} {shot['width']}x{shot['height']} {shot['bytes']}B")
+              parts.append('checks=' + json.dumps(data.get('checks', {}), sort_keys=True))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          level = 'notice' if outcome == 'success' else 'error'
+          print(f'::{level} title=real-browser-verification::{message[:60000]}')
+          PY
+      - name: Keep the browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t31-real-browser
+          path: |
+            apex_app/reports/screenshots
+            apex_app/test-results/playwright
+          if-no-files-found: warn
+          retention-days: 14
+
       # T-30 S4 (2026-11-19): a red run's log lives behind a download this environment cannot
       # reach, so the failing test names are echoed as one annotation, which the checks API can be
       # read back without fetching the log.

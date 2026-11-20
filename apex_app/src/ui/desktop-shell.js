@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { createUiServer } from './server.js';
+import { browserCandidates, findExecutable, isExecutable, resolveBrowser } from './browser-binary.js';
 
 export const DESKTOP_SCHEMA = 'apex.desktop.shell/1';
 export const DEFAULT_HOST = '127.0.0.1';
@@ -36,111 +37,11 @@ export function desktopPort(env = process.env, requested = null) {
   return port;
 }
 
-function winCandidates(env) {
-  const roots = [
-    env['PROGRAMFILES(X86)'], env['ProgramFiles(x86)'], env['PROGRAMFILES'], env.ProgramFiles, env.LOCALAPPDATA, env.LocalAppData,
-  ].filter((root) => typeof root === 'string' && root.length > 0);
-  const relative = [
-    ['msedge', path.join('Microsoft', 'Edge', 'Application', 'msedge.exe')],
-    ['chrome', path.join('Google', 'Chrome', 'Application', 'chrome.exe')],
-    ['chromium', path.join('Chromium', 'Application', 'chrome.exe')],
-  ];
-  const list = [];
-  for (const [id, suffix] of relative) {
-    for (const root of roots) {
-      list.push({ id, label: path.win32.basename(suffix), command: path.win32.join(root, suffix) });
-    }
-    // A bare name is also tried, so an executable on PATH is found without knowing where it lives.
-    list.push({ id, label: path.win32.basename(suffix), command: path.win32.basename(suffix) });
-  }
-  return list;
-}
-
-function macCandidates() {
-  return [
-    { id: 'msedge', label: 'Microsoft Edge', command: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' },
-    { id: 'chrome', label: 'Google Chrome', command: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
-    { id: 'chrome-beta', label: 'Google Chrome Beta', command: '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta' },
-    { id: 'chromium', label: 'Chromium', command: '/Applications/Chromium.app/Contents/MacOS/Chromium' },
-  ];
-}
-
-function linuxCandidates() {
-  return [
-    { id: 'msedge', label: 'microsoft-edge', command: 'microsoft-edge' },
-    { id: 'msedge-stable', label: 'microsoft-edge-stable', command: 'microsoft-edge-stable' },
-    { id: 'chrome', label: 'google-chrome', command: 'google-chrome' },
-    { id: 'chrome-stable', label: 'google-chrome-stable', command: 'google-chrome-stable' },
-    { id: 'chromium', label: 'chromium', command: 'chromium' },
-    { id: 'chromium-browser', label: 'chromium-browser', command: 'chromium-browser' },
-  ];
-}
-
-// Priority order: the owner's explicit choice first, then the discovery order the ADR names (the
-// platform's Edge, then Chrome or Chromium). `--browser` replaces this list entirely, so it wins
-// over everything; `APEX_DESKTOP_BROWSER_BIN` is tried before discovery.
-//
-// The override used to be appended last, as the first draft of the ADR ordered it. A CI runner with
-// /usr/bin/microsoft-edge then ignored the configured binary and launched Edge instead, which is
-// what a configured browser silently losing to an installed one looks like in practice. An explicit
-// setting is the owner's instruction, not a fallback, so it now comes first and discovery answers
-// only when nothing was configured.
-export function browserCandidates({ platform = process.platform, env = process.env } = {}) {
-  const list = platform === 'win32' ? winCandidates(env)
-    : platform === 'darwin' ? macCandidates()
-      : linuxCandidates();
-  const override = typeof env.APEX_DESKTOP_BROWSER_BIN === 'string' ? env.APEX_DESKTOP_BROWSER_BIN.trim() : '';
-  if (override.length > 0) list.unshift({ id: 'env', label: 'APEX_DESKTOP_BROWSER_BIN', command: override });
-  return list;
-}
-
-// Deterministic resolution: a path is tested directly; a bare name is searched on PATH. It
-// returns the absolute file so the printed command names a real executable rather than a name
-// that happens to resolve in this shell's environment.
-export function findExecutable(command, { platform = process.platform, env = process.env, fsImpl = fs } = {}) {
-  if (typeof command !== 'string' || command.length === 0) return null;
-  const hasSeparator = command.includes('/') || (platform === 'win32' && command.includes('\\'));
-  const test = (candidate) => {
-    try {
-      fsImpl.accessSync(candidate, platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK);
-      return fsImpl.statSync(candidate).isFile() ? candidate : null;
-    } catch {
-      return null;
-    }
-  };
-  if (hasSeparator) return test(command);
-  const extensions = platform === 'win32'
-    ? (env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
-    : [''];
-  const directories = String(env.PATH ?? '').split(path.delimiter).filter((entry) => entry.length > 0);
-  for (const directory of directories) {
-    for (const extension of extensions) {
-      const candidate = path.join(directory, `${command}${platform === 'win32' && !command.toLowerCase().endsWith(extension.toLowerCase()) ? extension : ''}`);
-      const found = test(candidate);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-export function isExecutable(command, options = {}) {
-  return findExecutable(command, options) !== null;
-}
-
-export function resolveBrowser({ platform = process.platform, env = process.env, candidates = null, executable = findExecutable } = {}) {
-  const tried = candidates ?? browserCandidates({ platform, env });
-  for (const candidate of tried) {
-    const found = executable(candidate.command, { platform, env });
-    if (found) {
-      return {
-        browser: candidate,
-        executable: typeof found === 'string' ? found : candidate.command,
-        tried: tried.map((entry) => entry.command),
-      };
-    }
-  }
-  return { browser: null, executable: null, tried: tried.map((entry) => entry.command) };
-}
+// The browser candidates and the resolution rules moved to `browser-binary.js` in T-31 so the
+// real-browser verification suite and this shell choose a browser by exactly the same rules.
+// They are re-exported here because this module is the shell's public surface and callers (and
+// tests) already import them from it.
+export { browserCandidates, findExecutable, isExecutable, resolveBrowser };
 
 // The exact argument vector the shell would use. `--app=` gives the frameless application frame;
 // the profile directory keeps this window out of the owner's everyday browser profile; the two
