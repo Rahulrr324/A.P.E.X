@@ -3,6 +3,15 @@
 **Report checkpoint:** Packages 0–6 complete to their bounded scope, 2026-11-19 (UTC).
 Browser/visual evidence is unavailable in this environment and is marked UNVERIFIED throughout.
 
+> **Step-series checkpoint (2026-11-19, later the same day).** Four further steps were requested and
+> completed on this branch: **S1** `/api/state` latency, **S2** the T-29 unified cognitive pipeline,
+> **S3** the zero-dependency thin desktop shell, and **S4** full verification. They are recorded in
+> the "Step series S1–S4" section at the end of this report; the Package 0–6 sections above are kept
+> as written and are not restated. **S1 was corrected after its first commit:** the fast path it
+> shipped keyed on filesystem metadata that this machine's filesystem does not change on a
+> same-length rewrite, so it could serve stale records. The full suite caught it, the mechanism was
+> replaced with digest-verified retention, and the correction is written up in the S1 subsection.
+
 **Scope:** T-30 Packages 0–6.
 
 > **Superseded statement (2026-11-19, same day).** The previous checkpoint read "Packages 0–4
@@ -321,7 +330,214 @@ evidence**, and the responsive claims in Package 5 are supported only by static 
 - T-19 historical commit objects remain unavailable in this shallow local history; current T-30 tests do not retroactively verify historical evidence.
 - P0's passing storage tests do not establish broader cross-platform filesystem guarantees beyond this Linux/Node 22 environment. No inference, model download, endpoint, voice/audio path, or remote inference process was used or added.
 
+## Step series S1–S4 (2026-11-19, after the Packages 0–6 checkpoint)
+
+Four steps were requested in a fixed order, each verified and committed before the next. Every
+number below was measured in this environment; nothing visual was observed.
+
+### S1 — `/api/state` latency (commit `d1c9155`; mechanism corrected by the S4 repair)
+
+**Defect.** The Package 6 pilot measured 167–204 ms for `/api/state` against a Part 4 bound of
+≤150 ms. Profiling showed the cost was not one pathological read: the page-load burst issues
+fifteen owner routes, and each one that read a store re-read, hashed and re-parsed the whole file
+even when nothing had changed. Paired measurement on this machine before any change: a cold
+`/api/state` racing fourteen other owner routes took **155.2 ms**, and the full fan-out
+**174.3 ms**.
+
+**Change, final form.** `src/memory/jsonl-store.js` retains, per instance, the records it last
+derived together with the SHA-256 of the exact bytes they were derived from. `load()` reads the
+file, hashes it, and serves the retained records only when digest **and** byte length both match.
+Anything else — a different digest, a different length, an unterminated tail, a missing or
+unreadable file, more than `readCacheMaxRecords` records, or more bytes than the store's
+`parseCacheBytes` cap — falls through to the unchanged parse path. The bytes are therefore always
+read; what retention saves is the parse, the validation and the freeze, plus the per-route
+repetition inside one burst, because concurrent reads of one file share a single in-flight read.
+A read certifies its digest to a caller (the knowledge lifecycle index) only when this store kept
+the derivation, so an uncertified read still authorizes nothing.
+
+**Correction, same day: the first version keyed on file identity and was wrong.** `d1c9155` keyed
+the fast path on `fs.stat({ bigint: true })` — `dev/ino/size/mtimeNs/ctimeNs` — on the assumption
+that a rewrite in place moves `mtimeNs`/`ctimeNs`. On this machine's scratch filesystem
+(ext2/ext3) it does not: a 28-byte file rewritten with 28 different bytes reported **identical**
+`ino`, `size`, `mtimeNs = 1795158626995990272n` and `ctimeNs` afterwards. The first full-suite run
+found it — `tests/request-scoped-reads.test.js` returned `aaaa` where `bbbb` had been written — and
+it was then reproduced directly against the filesystem, so it was a cache-correctness bug, not a
+flaky test. The identity key was removed rather than patched: no store in APEX now reuses records
+on the strength of metadata this filesystem does not promise. Hashing a file that was just read
+costs a fraction of parsing and validating it, and the bound below is kept without the unsafe key.
+An earlier draft of this section claimed the identity path was safe *because* an in-place rewrite
+moves `mtimeNs`/`ctimeNs`; that claim was false here and is withdrawn.
+
+**Measured — paired A/B, same harness, same machine, back-to-back.** The pre-S1 file
+(`d1c9155^`) and the current file were swapped in turn; seven full runs each; seeded with 300
+memory records / 150 tasks / 60 plans / 30 goals, page = `/api/state` plus the fourteen other owner
+routes.
+
+| Measurement | Before (`d1c9155^`) | After (content-verified) |
+|---|---|---|
+| cold `/api/state`, single read | 40.3 ms (36.9–59.1) | 40.6 ms (37.3–59.9) |
+| cold page fan-out, 15 routes | **182.2 ms** (139.6–203.6) | **125.4 ms** (102.5–241.3) |
+| warm `/api/state` p50 | 12.7 ms | 12.6 ms |
+| warm page fan-out p50 | 70.2 ms (62.5–85.2) | 53.5 ms (50.8–66.3) |
+
+Contended run (200 tasks / 100 memory; `/api/state` racing fourteen routes; five rounds; state and
+page in ms):
+
+| Round | Before: state / page | After: state / page |
+|---|---|---|
+| 0 (cold) | **155.2 / 174.3** | **87.9 / 98.5** |
+| 1–4 (warm) | 37.5–87.7 / 46.3–101.2 | 31.5–50.4 / 39.9–56.9 |
+
+Read these numbers for what they are. `/api/state`'s own cost is dominated by the causal projection,
+not by store parsing, so its single-read cold and warm figures barely move; the gain is in the
+burst, where the repeated whole-file parses used to sit. This box has two vCPUs and single cold
+samples are noisy: the mid-suite sample reached 241 ms while a 24-minute test run was finishing,
+and the medians with min–max are reported instead of one sample. The acceptance bound is asserted
+on `/api/state` itself — ≤150 ms cold, ≤100 ms warm, single read and under a concurrent burst,
+plus a cross-process write visible on the very next read — and `tests/ui-state-latency.test.js`
+measures those directly.
+
+**Test.** `tests/ui-state-latency.test.js` (5 tests, 5/5): a cold read ≤150 ms, every warm read
+≤100 ms with retained reads actually served (`readCacheStats.hits > 0`), a page-load burst that
+does not push `/api/state` past 150 ms, an external `plan add` visible on the very next read with a
+proved retained-read miss, a lockdown latch flipped by another process visible at once, and a
+damaged `kill-switch.json` reported `policyUnavailable: true` and never `active: false`. The
+regression that caught the identity bug is
+`tests/request-scoped-reads.test.js` ("a same-length rewrite is parsed again, not answered from the
+snapshot"); `tests/knowledge-lifecycle-reuse.test.js`, `tests/retrieval-snapshot.test.js`,
+`tests/incremental-write-state.test.js`, `tests/store-write-concurrency.test.js` and
+`tests/storage-integrity.test.js` pin the rest of the store's reuse contract.
+
+### S2 — T-29 unified cognitive pipeline (commit `49651dd`)
+
+`src/cognition/pipeline.js` runs one owner intent through five recorded stages and stores the run
+in `cognition-runs.jsonl` (append-only, same store rules as every other ledger).
+
+1. **Context** — a `CognitiveContextPacket` of owner goals, memory records, knowledge claims and
+   world-model facts. Every claim carries an epistemic tag (`observed | inferred | assumed |
+   predicted`) decided by fixed rules over the record's own provenance and confidence, and every
+   cited item names its record id.
+2. **Salience** — read-only `urgency`, `confidence`, `uncertainty`, `goal_progress`,
+   `resource_pressure` (Resource Fabric), `risk_sensitivity`, `novelty`, each with a stated basis.
+   `goal_progress` is `null` rather than invented when no goal reports criteria. Sentinel
+   advisories are carried as advisories; they cannot authorize anything.
+3. **Council** — the deterministic Council's perspectives, mapped to `thesis`, `counter_risk` and
+   `evidence_check` and cited against the packet, with the recommendation and the explicit
+   `authorizesExecution: false`. Skipped, with the reason, when uncertainty and risk are low.
+4. **Task graph** — one step per concrete action, carrying the registry's permission and risk.
+5. **Execution** — through the controller, registry and ECP only.
+
+**The gate.** A write, an L2+ action, a high/critical-risk action, an irreversible effect or a
+security-relevant capability stops the run before anything executes: the task is recorded, taken to
+its authorization gate, and left `paused` with the step in `awaiting_approval`. Only
+`controller.approveTask(taskId, { stepId })` records the owner's approval; `runTask(id, 'resume')`
+then executes it. `verified: true` is derived from the task step's `success_verified` outcome on
+every read, never from the pipeline's own claim.
+
+**Fail-closed.** An active latch or an unreadable latch halts the run with
+`KILL_SWITCH_ACTIVE` / `POLICY_UNAVAILABLE` before a task exists; an ECP denial of the concrete
+action halts with the ECP's reason. The capability itself (`cognition.run`) is owner-only, write,
+unplannable, and denied to a model origin, so under lockdown the ECP refuses it and the requesting
+operation records the denial.
+
+**Surface.** `POST /api/cognition/run`, `GET /api/cognition/runs`, `GET /api/cognition/runs/:id`,
+`POST /api/cognition/runs/:id/approve`, a `cognition` SSE event, and a Command Deck workspace that
+renders the five stages from the run record with an approval control only when the run says a step
+is waiting.
+
+**Two representation defects found while wiring it, and fixed.**
+
+- `src/health.js` counted a paused task awaiting approval **twice** (once as `approval`, once as an
+  unexplained `paused-task`), which made the Core report Degraded for a gated run.
+- `src/ui/client-contract.js` treated *any* paused task as degradation, so `Awaiting Approval` was
+  unreachable for a paused task even when a step was waiting. A paused task with nothing waiting
+  still degrades the Core; a pending approval now outranks the bare paused-task warning.
+
+**Tests.** `tests/cognition-pipeline.test.js` 15/15 (packet, salience bounds and basis, Council
+perspectives, read end-to-end verified, write gated → approve → resume → verified, lockdown halt
+with an audit record, unreadable latch, unregistered capability, registry classification, storage
+and corruption handling, the health double-count). `tests/ui-cognition.test.js` 8/8 (all four
+routes, refusal and 404 cases, the SSE transition, and the shipped `UI_CLIENT` rendering five
+stages, offering the approval control, and re-reading on the event — in a vm, not a browser).
+
+### S3 — zero-dependency thin desktop shell (commit `ab630fa`)
+
+Option (A) of `reports/T30_P5_DESKTOP_SHELL_ADR.md`, implemented as `src/ui/desktop-shell.js`.
+
+- Starts the existing loopback UI server on `127.0.0.1` and a free or configured port
+  (`--port`, `APEX_DESKTOP_PORT`, `APEX_UI_PORT`, else kernel-assigned), then **verifies
+  `/api/state`** answers with the process token before it launches anything.
+- Resolves a Chromium-family executable in the ADR's order (`msedge`, then Chrome/Chromium per
+  platform, then `APEX_DESKTOP_BROWSER_BIN`; `--browser` names one binary for this run) and
+  launches it with `--app=<loopback url>`, `--user-data-dir=<dataDir>/desktop-profile` (mode 0700),
+  `--no-first-run` and `--no-default-browser-check`. Arguments are passed as a vector; nothing is
+  interpolated into a shell.
+- `--dry-run` and `--print-launch-spec` return the exact command without spawning; the spawner is
+  injectable, so every behaviour is tested on a machine with no browser.
+- With no browser installed it prints an honest diagnostic, starts nothing, and leaves the working
+  URL on screen. It never pretends a window exists.
+- Stops the server and terminates the child on exit, `SIGINT` and `SIGTERM`.
+- Entry points: `node src/cli.js desktop`, `node bin/apex.js desktop`, `npm run desktop`.
+
+**Tests.** `tests/desktop-shell.test.js` 13/13: per-platform candidate order, resolution with the
+tried list, PATH lookup, launch-spec construction, port parsing, a real loopback server with a
+verified ready state and an isolated profile, dry-run spawning nothing, real spawn argument
+vectors, the no-binary fallback with a still-serving URL, idempotent stop, and three CLI runs
+(`--dry-run`, `--print-launch-spec` JSON, no-browser fallback).
+
+**Not verified.** No window was opened, and nothing was run on Windows or macOS. The platform
+matrices are unit-tested, not executed.
+
+### S4 — full verification
+
+| Check | Result |
+|---|---|
+| `node --check` over every `apex_app/src/**/*.js` | **228 files, 0 failures** |
+| `npm test` (full suite) | **3,823 tests: 3,821 pass, 0 fail, 2 skipped — 1,441.6 s** |
+| `/api/state`, cold (single read) | 8–14 ms on the live harness's small store; 37–60 ms on the seeded 300/150/60/30 workspace |
+| `/api/state`, warm p50 | 8–13 ms small store; 12.6 ms seeded workspace |
+| First reconcile frame after page load | 266–384 ms |
+| Degraded detection after the server stops | 20 ms |
+| Reconnect → reconciled | 331–356 ms (includes the client's 300 ms backoff) |
+| Five-stage trace rendered after the `cognition` event | 103–159 ms |
+| Core transitions observed through the served client | `idle → awaiting_approval → idle` around one gated run |
+
+The live harness (`tests/ui-live-stream.test.js`) drives the shipped `UI_CLIENT` inside a vm against
+a real `createUiServer`: it records the state reads, the first reconcile frame, the heartbeat
+cadence, the T-29 SSE transition, the gated run's approval, the five-stage render and the degraded
+and reconnect behaviour. It is **not a browser**: no pixels, layout or motion were observed.
+
+The reconcile, degraded, reconnect and trace rows are the numbers `tests/ui-live-stream.test.js`
+prints in its own diagnostics (`--test-reporter=tap`, four consecutive runs on this two-vCPU box;
+the range is the spread across those runs). The `/api/state` rows are the live harness's small empty
+store (8–14 ms) beside the seeded 300/150/60/30 benchmark workspace used in S1 (37–60 ms cold,
+12.6 ms warm p50, seven runs). None of these is a paint, layout or first-contentful-paint
+measurement.
+
+The full-suite row is the run that closed this step series, taken **after** the S1 mechanism was
+replaced: 3,823 tests, 3,821 passing, 0 failing, 2 skipped, 1,441.6 s wall clock. Two earlier runs
+on the same tree are history rather than results — 3,805/3,823 with 16 failures before the T-29
+health, client-projection and inventory repairs, and 3,820/3,823 with one failure (the same-length
+rewrite above) before the S1 correction.
+
+**Deliberately not claimed.** Intelligence, executive completeness, in-browser rendering, the three
+viewports, screenshots, Windows and macOS behaviour, and any voice path. Passing tests here are
+evidence about this code on this machine, not proof of the system's competence.
+
+> **Superseded counts (2026-11-19).** The registry figure in the Package 6 row of the table above
+> (and the AF-19 inventory counts) predate T-29: with `cognition.run` registered the verified
+> registry is **140 actions by default and 155 with a filesystem root — 85 reads, 71 writes, 56
+> plannable**. The earlier 139/154 figures are history, not inventory.
+
+
 ## Next action
+
+The step series S1–S4 is complete: `/api/state` meets its bound on a seeded workspace, T-29 runs
+end-to-end behind an explicit owner approval, and the desktop shell launches or honestly reports
+that it cannot. What remains is still the evidence this environment cannot produce — a real
+Chromium run at the three viewports with zero console errors, plus screenshots — and the owner's
+decision on the desktop platform. Until then every visual, layout, overflow, motion and focus
+claim stays **UNVERIFIED**.
 
 Packages 0–6 are complete to their bounded scope. The P0 client defect is fixed and guarded, the
 experience system is applied, and the desktop-shell decision is recorded. What remains is not a
