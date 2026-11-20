@@ -512,6 +512,7 @@ matrices are unit-tested, not executed.
 | Reconnect → reconciled | 331–356 ms (includes the client's 300 ms backoff) |
 | Five-stage trace rendered after the `cognition` event | 103–159 ms |
 | Core transitions observed through the served client | `idle → awaiting_approval → idle` around one gated run |
+| Hosted CI (`.github/workflows/apex-app-tests.yml`, Node 22, ubuntu-latest) | **green** on commit `7a059a3`: same full suite, same syntax guard |
 
 The live harness (`tests/ui-live-stream.test.js`) drives the shipped `UI_CLIENT` inside a vm against
 a real `createUiServer`: it records the state reads, the first reconcile frame, the heartbeat
@@ -524,6 +525,10 @@ the range is the spread across those runs). The `/api/state` rows are the live h
 store (8–14 ms) beside the seeded 300/150/60/30 benchmark workspace used in S1 (37–60 ms cold,
 12.6 ms warm p50, seven runs). None of these is a paint, layout or first-contentful-paint
 measurement.
+
+The hosted CI job is the independent check on the same tree: `npm ci --ignore-scripts`, the syntax
+guard, then `npm test`, green on `7a059a3`. It is also what found the desktop-shell ordering defect
+recorded in S3 — the runner has a browser installed and this sandbox does not.
 
 The full-suite row is two consecutive runs that closed this step series, both taken **after** the
 S1 mechanism was replaced: 3,823 tests, 3,821 passing, 0 failing, 2 skipped, in 1,441.6 s and
