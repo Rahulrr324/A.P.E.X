@@ -14,7 +14,7 @@ export const UI_PAGE = `<!doctype html>
 <title>APEX</title>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body data-core-state="degraded" data-view="deck" data-motion="full">
+<body data-core-state="degraded" data-view="deck" data-motion="full" data-mode="classic" data-contrast="standard">
 <a class="skip-link" href="#main-content">Skip to main content</a>
 <div id="boot" class="boot" role="status" aria-live="polite">
   <div class="boot-core" aria-hidden="true"></div>
@@ -40,24 +40,34 @@ export const UI_PAGE = `<!doctype html>
     <span id="gauge-storage" class="badge" aria-label="Storage">Storage: —</span>
   </div>
   <div class="topbar-actions">
+    <label class="visually-hidden" for="mode-select">Presentation mode</label>
+    <select id="mode-select" class="small" aria-label="Presentation mode">
+      <option value="classic">Classic</option>
+      <option value="tactical">Tactical</option>
+      <option value="overwatch">Overwatch</option>
+      <option value="synthesis">Synthesis</option>
+      <option value="quiet">Quiet</option>
+    </select>
+    <button id="motion-toggle" type="button" class="quiet small" aria-pressed="false">Motion: full</button>
+    <button id="contrast-toggle" type="button" class="quiet small" aria-pressed="false">Contrast: standard</button>
     <button id="new-session" type="button" class="quiet small">New session</button>
     <button id="quick-boot" type="button" class="quiet small">Quick boot</button>
   </div>
 </header>
 <nav class="nav" aria-label="Primary">
-  <button data-view="deck" class="nav-item active">Deck</button>
-  <button data-view="conversations" class="nav-item">Conversations</button>
-  <button data-view="missions" class="nav-item">Missions</button>
-  <button data-view="tasks" class="nav-item">Tasks</button>
-  <button data-view="approvals" class="nav-item">Approvals</button>
-  <button data-view="sentinel" class="nav-item">Sentinel</button>
-  <button data-view="memory" class="nav-item">Memory</button>
-  <button data-view="documents" class="nav-item">Documents</button>
-  <button data-view="reasoning" class="nav-item">Reasoning</button>
-  <button data-view="council" class="nav-item">Council</button>
-  <button data-view="system" class="nav-item">System</button>
-  <button data-view="integrations" class="nav-item">Integrations</button>
-  <button data-view="workshop" class="nav-item">Workshop</button>
+  <button type="button" data-view="deck" class="nav-item active" aria-current="page">Deck</button>
+  <button type="button" data-view="conversations" class="nav-item">Conversations</button>
+  <button type="button" data-view="missions" class="nav-item">Missions</button>
+  <button type="button" data-view="tasks" class="nav-item">Tasks</button>
+  <button type="button" data-view="approvals" class="nav-item">Approvals</button>
+  <button type="button" data-view="sentinel" class="nav-item">Sentinel</button>
+  <button type="button" data-view="memory" class="nav-item">Memory</button>
+  <button type="button" data-view="documents" class="nav-item">Documents</button>
+  <button type="button" data-view="reasoning" class="nav-item">Reasoning</button>
+  <button type="button" data-view="council" class="nav-item">Council</button>
+  <button type="button" data-view="system" class="nav-item">System</button>
+  <button type="button" data-view="integrations" class="nav-item">Integrations</button>
+  <button type="button" data-view="workshop" class="nav-item">Workshop</button>
 </nav>
 <main id="main-content" class="deck">
   <aside class="rail left" aria-label="Missions">
@@ -292,20 +302,33 @@ export const UI_PAGE = `<!doctype html>
 </html>
 `;
 
-export const UI_CSS = `:root {
-  --bg0: #05080f;
-  --bg1: #0a1220;
-  --panel: rgba(12, 22, 38, 0.72);
-  --panel-strong: rgba(16, 28, 48, 0.9);
+export const UI_CSS = `/* T-30 Package 5 (2026-11-19): design tokens from the master document Part 4.
+   The legacy aliases below keep every pre-existing rule meaningful, so the tokens changed
+   the vocabulary without silently restyling rules that were never reviewed. */
+:root {
+  --bg-void: #05080f;
+  --bg-deep: #0a1220;
+  --glass: rgba(12, 28, 48, 0.55);
+  --glass-strong: rgba(16, 34, 58, 0.82);
+  --arc-cyan: #00e5ff;
+  --armor-gold: #ffb000;
+  --armor-red: #e10600;
+  --armor-red-text: #ff6b5a;
+  --ok-green: #2bff88;
+  --text: #dcebff;
+  --text-dim: #7fa3c7;
   --line: rgba(84, 132, 176, 0.28);
   --line-strong: rgba(0, 229, 255, 0.42);
-  --text: #dcebff;
-  --muted: #7fa3c7;
-  --cyan: #00e5ff;
-  --gold: #ffb000;
-  --red: #e10600;
-  --green: #2bff88;
-  --radius: 12px;
+  --radius: 2px;
+  --bg0: var(--bg-void);
+  --bg1: var(--bg-deep);
+  --panel: var(--glass);
+  --panel-strong: var(--glass-strong);
+  --cyan: var(--arc-cyan);
+  --gold: var(--armor-gold);
+  --red: var(--armor-red);
+  --green: var(--ok-green);
+  --muted: var(--text-dim);
   --font-display: "Orbitron", "Rajdhani", "Segoe UI", sans-serif;
   --font-body: "Exo 2", "Inter", "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "Share Tech Mono", "Consolas", monospace;
@@ -314,6 +337,7 @@ export const UI_CSS = `:root {
 html, body { margin: 0; min-height: 100%; }
 body {
   font: 15px/1.5 var(--font-body);
+  font-variant-numeric: tabular-nums;
   color: var(--text);
   background:
     radial-gradient(circle at 50% 42%, rgba(0, 229, 255, 0.12), transparent 34%),
@@ -419,7 +443,7 @@ body[data-motion="reduced"] .core-ring, body[data-motion="reduced"] .core-segmen
 .safety-form label { color: var(--text); font-size: .84rem; }
 .safety-form button { justify-self: start; }
 .safety-confirm { display: flex; gap: .45rem; align-items: center; }
-#safety-status[data-safety="active"] { color: var(--red); }
+#safety-status[data-safety="active"] { color: var(--armor-red-text); }
 #safety-status[data-safety="clear"] { color: var(--green); }
 #safety-status[data-safety="unavailable"] { color: var(--gold); }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -449,6 +473,48 @@ textarea { width: 100%; resize: vertical; }
 .view { display: none; }
 .view.active { display: block; }
 .view h2 { margin-bottom: .8rem; }
+/* T-30 Package 5: focus, motion, modes, contrast and responsive layout. */
+:focus-visible { outline: 2px solid var(--arc-cyan); outline-offset: 2px; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--arc-cyan); outline-offset: 2px; }
+.badge, .meta.mono, #clock, #gauge-cpu, #gauge-mem, #gauge-storage { font-variant-numeric: tabular-nums; }
+.item, .banner, .badge, input, textarea, select, button { border-radius: var(--radius); }
+.badge { border-radius: 999px; }
+.panel, .rail, .stage, .view { min-width: 0; overflow-wrap: anywhere; }
+.panel pre, .item pre { max-width: 100%; overflow-x: auto; }
+/* Presentation modes: palette emphasis only. They never change authorization or state. */
+body[data-mode="tactical"] { --cyan: #2fd0ff; --gold: #ff7a00; --line-strong: rgba(47, 208, 255, 0.5); }
+body[data-mode="tactical"] .core-ring.mid { animation-duration: 7s; }
+body[data-mode="overwatch"] { --cyan: #ff4d3d; --gold: #ffb000; --line-strong: rgba(255, 77, 61, 0.55); }
+body[data-mode="overwatch"]::before { opacity: 0.24; }
+body[data-mode="overwatch"] .core-ring.outer { stroke-dasharray: 2 4; }
+body[data-mode="synthesis"] { --cyan: #ffd166; --gold: #fff3d6; --line-strong: rgba(255, 209, 102, 0.5); }
+body[data-mode="synthesis"] .core-ring.mid { animation-duration: 26s; }
+body[data-mode="quiet"] { --cyan: #c9d6e4; --gold: #9aafc4; --muted: #8a9bae; --line: rgba(150, 168, 190, 0.22); }
+body[data-mode="quiet"]::before { opacity: 0.05; }
+body[data-mode="quiet"] .core-ring, body[data-mode="quiet"] .core-halo { animation: none !important; }
+body[data-mode="lockdown"] { --cyan: var(--armor-red); --gold: var(--armor-red-text); --line: rgba(225, 6, 0, 0.45); }
+body[data-mode="lockdown"] .core-ring, body[data-mode="lockdown"] .core-halo, body[data-mode="lockdown"]::before { animation: none !important; }
+body[data-motion="reduced"] *, body[data-motion="reduced"] *::before { animation: none !important; transition: none !important; }
+/* Contrast: a real high-contrast palette, not a filter. */
+@media (prefers-contrast: more) {
+  :root { --line: rgba(190, 215, 240, 0.5); --muted: #b9cde3; --glass: rgba(8, 18, 30, 0.9); }
+}
+body[data-contrast="high"] { --line: rgba(205, 226, 246, 0.6); --line-strong: rgba(0, 229, 255, 0.9); --muted: #c3d6ea; --glass: rgba(6, 14, 24, 0.94); }
+body[data-contrast="high"] .panel, body[data-contrast="high"] .rail, body[data-contrast="high"] .stage { border-width: 2px; }
+body[data-contrast="high"]::before { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  body { animation: none; }
+  .core-ring { animation: none !important; }
+  .core-halo { animation: none !important; }
+}
+/* Responsive: 1600x900 and 1280x720 tighten the three-column deck; 390x844 is one column. */
+@media (max-width: 1600px) {
+  .deck { grid-template-columns: minmax(16rem, 1fr) minmax(20rem, 1.3fr) minmax(16rem, 1fr); }
+}
+@media (max-width: 1280px) {
+  .deck { grid-template-columns: minmax(15rem, 1fr) minmax(18rem, 1.2fr) minmax(15rem, 1fr); gap: .75rem; padding: .85rem 1rem 6rem; }
+  .topbar-meta { row-gap: .25rem; }
+}
 @media (max-width: 1100px) {
   .deck { grid-template-columns: 1fr; }
   .core-wrap { order: -1; }
@@ -456,10 +522,13 @@ textarea { width: 100%; resize: vertical; }
 @media (max-width: 720px) {
   .topbar { grid-template-columns: 1fr; }
   .nav { flex-wrap: wrap; }
+  .workspace { padding: 0 .75rem 2rem; }
 }
-@media (prefers-reduced-motion: reduce) {
-  body { animation: none; }
-  .core-ring { animation: none !important; }
+@media (max-width: 480px) {
+  .deck { padding: .75rem .6rem 4rem; }
+  .topbar { padding: .6rem .75rem; }
+  h1 { font-size: 1.1rem; }
+  .topbar-meta { width: 100%; }
 }
 .boot {
   position: fixed; inset: 0; z-index: 50; background: rgba(5,8,15,0.96);
@@ -528,7 +597,6 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   safetyReleaseConfirm: document.getElementById('safety-release-confirm'),
   safetyReleaseButton: document.getElementById('safety-release'),
   safetyReleaseResult: document.getElementById('safety-release-result'),
-  situation: document.getElementById('situation'),
   runtime: document.getElementById('runtime'),
   sources: document.getElementById('sources'),
   resources: document.getElementById('resources'),
@@ -574,6 +642,9 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   integrations: document.getElementById('integrations'),
   sentinelFull: document.getElementById('sentinel-full'),
   conversationHistory: document.getElementById('conversation-history'),
+  modeSelect: document.getElementById('mode-select'),
+  motionToggle: document.getElementById('motion-toggle'),
+  contrastToggle: document.getElementById('contrast-toggle'),
 };
 
 const state = {
@@ -588,6 +659,8 @@ const state = {
   safetyLatchFresh: false,
   safetyMutationInFlight: false,
   reducedMotion: false,
+  mode: 'classic',
+  contrast: 'standard',
 };
 let eventStreamDegraded = false;
 
@@ -657,6 +730,12 @@ function setCore(next, caption) {
   const definition = CORE_STATE_DEFINITIONS.find((stateDefinition) => stateDefinition.id === next);
   state.core = next;
   document.body.dataset.coreState = next;
+  // Presentation only: an active ECP latch always presents as Lockdown, whatever mode the
+  // owner selected, and the selector is disabled so the UI cannot imply otherwise. No
+  // authorization decision is made here.
+  const lockdown = next === 'lockdown';
+  document.body.dataset.mode = lockdown ? 'lockdown' : state.mode;
+  if (els.modeSelect) els.modeSelect.disabled = lockdown;
   if (els.coreState) els.coreState.textContent = definition ? definition.label : 'Degraded';
   if (els.coreCaption && caption) els.coreCaption.textContent = caption;
 }
@@ -1858,7 +1937,10 @@ function setView(view) {
   state.view = view;
   document.body.dataset.view = view;
   document.querySelectorAll('.nav-item').forEach((button) => {
-    button.classList.toggle('active', button.dataset.view === view);
+    const active = button.dataset.view === view;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   });
   document.querySelectorAll('.view').forEach((section) => {
     section.classList.toggle('active', section.dataset.view === view);
@@ -1868,6 +1950,69 @@ function setView(view) {
   const workspace = document.getElementById('workspace');
   if (workspace) workspace.style.display = view === 'deck' ? 'none' : '';
 }
+
+// T-30 Package 5 (2026-11-19): presentation preferences. They change palette, motion and
+// contrast only. They never call an API, write a store or reach the ECP; a mode is not a
+// permission and the Lockdown presentation is derived from the latch, not selected here.
+const VIEW_ORDER = ['deck', 'conversations', 'missions', 'tasks', 'approvals', 'sentinel', 'memory',
+  'documents', 'reasoning', 'council', 'system', 'integrations', 'workshop'];
+const MODES = ['classic', 'tactical', 'overwatch', 'synthesis', 'quiet'];
+
+function applyMode(mode) {
+  const next = MODES.includes(mode) ? mode : 'classic';
+  state.mode = next;
+  if (state.core !== 'lockdown') document.body.dataset.mode = next;
+  if (els.modeSelect && els.modeSelect.value !== next) els.modeSelect.value = next;
+  return next;
+}
+
+function applyMotion(reduced) {
+  state.reducedMotion = reduced === true;
+  document.body.dataset.motion = state.reducedMotion ? 'reduced' : 'full';
+  if (els.motionToggle) {
+    els.motionToggle.textContent = state.reducedMotion ? 'Motion: reduced' : 'Motion: full';
+    els.motionToggle.setAttribute('aria-pressed', state.reducedMotion ? 'true' : 'false');
+  }
+}
+
+function applyContrast(high) {
+  state.contrast = high === true ? 'high' : 'standard';
+  document.body.dataset.contrast = state.contrast;
+  if (els.contrastToggle) {
+    els.contrastToggle.textContent = state.contrast === 'high' ? 'Contrast: high' : 'Contrast: standard';
+    els.contrastToggle.setAttribute('aria-pressed', state.contrast === 'high' ? 'true' : 'false');
+  }
+}
+
+// Sequential keyboard traversal of the same views the nav buttons expose.
+function moveView(step) {
+  const index = VIEW_ORDER.indexOf(state.view);
+  const next = VIEW_ORDER[(index + step + VIEW_ORDER.length) % VIEW_ORDER.length];
+  setView(next);
+  return next;
+}
+
+if (els.modeSelect) els.modeSelect.addEventListener('change', () => { applyMode(els.modeSelect.value); });
+if (els.motionToggle) els.motionToggle.addEventListener('click', () => { applyMotion(!state.reducedMotion); });
+if (els.contrastToggle) els.contrastToggle.addEventListener('click', () => { applyContrast(state.contrast !== 'high'); });
+
+document.addEventListener('keydown', (event) => {
+  if (!event || event.defaultPrevented || event.ctrlKey || event.metaKey) return;
+  const target = event.target;
+  const tag = target && target.tagName ? String(target.tagName).toUpperCase() : '';
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+    || (target && target.isContentEditable === true);
+  if (event.altKey && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
+    event.preventDefault();
+    moveView(event.key === 'ArrowRight' ? 1 : -1);
+    return;
+  }
+  if (typing) return;
+  if (event.key === '/' && els.text) {
+    event.preventDefault();
+    els.text.focus();
+  }
+});
 
 async function boot() {
   if (!els.boot) return;
@@ -2120,6 +2265,10 @@ setInterval(() => {
 const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
 state.reducedMotion = !!(reduce && reduce.matches);
 document.body.dataset.motion = state.reducedMotion ? 'reduced' : 'full';
+const contrastQuery = window.matchMedia && window.matchMedia('(prefers-contrast: more)');
+applyMotion(state.reducedMotion);
+applyContrast(!!(contrastQuery && contrastQuery.matches));
+applyMode(state.mode);
 
 let eventSource = null;
 let eventWatchdog = null;

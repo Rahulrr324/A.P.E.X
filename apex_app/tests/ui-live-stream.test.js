@@ -157,17 +157,26 @@ async function waitForState(browser, expected, timeoutMs, label, { connected = f
 }
 
 describe('shipped client over a real server and real event stream (T-30 P0/Step 2)', () => {
-  test('Idle on a healthy stream, Awaiting Approval after a real cross-process write, Degraded within 2 s when the server stops, and recovery on reconnect', async () => {
+  test('Idle on a healthy stream, Awaiting Approval after a real cross-process write, Degraded within 2 s when the server stops, and recovery on reconnect', async (t) => {
     const dir = tempDir();
     const { base, port } = await startUi(dir);
 
     const baseUrl = { value: base };
     const log = { frames: [], sources: [], reconnects: 0 };
     const headers = { authorization: `Bearer ${TOKEN}`, 'x-apex-ui': '1' };
-    const liveFetch = (url, options = {}) => fetch(new URL(url, baseUrl.value), {
-      ...options,
-      headers: { ...headers, ...(options.headers ?? {}) },
-    });
+    const timing = { stateReadMs: null, firstReconcileMs: null };
+    const liveFetch = async (url, options = {}) => {
+      const started = Date.now();
+      const response = await fetch(new URL(url, baseUrl.value), {
+        ...options,
+        headers: { ...headers, ...(options.headers ?? {}) },
+      });
+      if (String(url).split('?')[0] === '/api/state' && timing.stateReadMs === null) {
+        timing.stateReadMs = Date.now() - started;
+      }
+      return response;
+    };
+    const loadStartedAt = Date.now();
 
     const liveSources = [];
     const browser = createFakeBrowser({
@@ -185,6 +194,7 @@ describe('shipped client over a real server and real event stream (T-30 P0/Step 
     assert.equal(browser.connectivityText(), 'Connected');
     const firstReconcile = log.frames.find((frame) => frame.type === 'reconcile');
     assert.ok(firstReconcile, 'the server sent a reconciliation frame');
+    timing.firstReconcileMs = Date.now() - loadStartedAt;
 
     // 2. Heartbeats arrive on the documented 500 ms cadence (allow scheduler jitter).
     const heartbeatsBefore = log.frames.filter((frame) => frame.type === 'heartbeat').length;
@@ -228,6 +238,10 @@ describe('shipped client over a real server and real event stream (T-30 P0/Step 
     baseUrl.value = restarted.base;
     await waitForState(browser, 'awaiting_approval', 8000, 'reconnect reconciled the pending approval');
     assert.ok(log.reconnects >= 1, 'the client attempted a reconnect');
+
+    // Real measurements for the Package 6 evidence row. They describe this harness
+    // (Node fetch + vm client on loopback), not a browser.
+    t.diagnostic(`measured: first /api/state ${timing.stateReadMs} ms; first reconcile frame ${timing.firstReconcileMs} ms after load; degraded detection ${degradedAfter} ms after the server stopped; heartbeats ${heartbeats} in 1.2 s`);
 
     assert.deepEqual(browser.events.pageErrors, []);
     assert.equal(browser.events.consoleErrors.filter((line) => /ReferenceError|SyntaxError|not defined/i.test(line)).length, 0);

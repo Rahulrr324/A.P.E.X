@@ -1,8 +1,14 @@
 # T-30 Progress Report
 
-**Report checkpoint:** Packages 0–4 complete to their bounded scope, 2026-11-19 (UTC)
+**Report checkpoint:** Packages 0–5 complete to their bounded scope; Package 6 evidence in
+progress, 2026-11-19 (UTC)
 
-**Scope:** T-30 Packages 0–4 only. Packages 5–6 were intentionally not started.
+**Scope:** T-30 Packages 0–6.
+
+> **Superseded statement (2026-11-19, same day).** The previous checkpoint read "Packages 0–4
+> only. Packages 5–6 were intentionally not started." The owner then requested the P0 client
+> fix, real-browser re-verification, Package 5 and Package 6 on the same branch. That earlier
+> scope line is kept here as history and is no longer the current scope.
 
 ## Repository checkpoint
 
@@ -26,7 +32,8 @@
 | 2 — Authoritative state events and cross-process observation | **Complete and verified** | Bounded versioned owner snapshots, cross-process refresh, replay/reconciliation, heartbeat/watchdog handling and preservation of transient events. Package-focused tests pass (36/36); syntax passes across 223 source files. Full Core-state integration was not claimed at the P2 checkpoint; its later P3 completion is recorded below. |
 | 3 — T-18 UI defects and lockdown integration | **Complete and verified** | All seven authoritative owner snapshots feed the live Core projection with full precedence and fail-closed validation; truthful boot/Quick boot, request-thinking, state visuals, and ECP safety UI are covered. Safety routes require local UI auth/CSRF, enforce the action's 240-character reason limit and release confirmation, return audit evidence, and do not resume paused runtime work. Focused tests 44/44; full suite passes (3,751 total, 3,749 passed, 0 failed, 2 skipped); syntax and diff checks pass. Browser execution remains unverified. |
 | 4 — Truthful owner-backed workspaces | **Complete and verified** | Mission Control, Approval Centre, Sentinel, Memory Timeline, Conversation and the recorded Briefing are projections of the owning stores, including goals, plans, tasks, approvals, situational events, memory, knowledge and world-model history. Each workspace reports loading, empty, error, partial and unavailable states; provenance and lifecycle history are preserved, and writes stay on the existing controller paths. Focused tests 83/83 and 101/101; syntax passes; the P4 checkpoint full suite passed (see below). Browser execution remains unverified. |
-| 5–6 | Not started; intentionally deferred | Outside this request; no work on Packages 5–6 began. |
+| 5 — Experience system and desktop readiness | **Complete to its bounded scope; browser rendering unverified** | Design tokens from master §4.1 as shipped values, five owner-selectable presentation modes plus a latch-derived Lockdown presentation, reduced-motion and high-contrast support, `:focus-visible`, keyboard view traversal, five responsive breakpoints, and removal of the last dead element reference (`#situation`). Desktop shell ADR written (`reports/T30_P5_DESKTOP_SHELL_ADR.md`). Focused tests 10/10. Layout, pixels, overflow and perceived motion remain UNVERIFIED: no browser can be installed here (see `T30_P0_BROWSER_VERIFICATION.md` §4). |
+| 6 — Whole-system validation and evidence | In progress at this checkpoint | `node --check`, the full suite, real timings and the final evidence table are recorded in the Package 6 section below. Screenshots remain impossible in this environment and are reported as missing, not fabricated. |
 
 ## Package 0 work completed
 
@@ -183,6 +190,76 @@
 The P4 final `npm test` passed across the combined P0–P4 application code, served-client and documentation changes on code checkpoint `1ce7bf4`. Like the P3 run, it says nothing about browser behaviour; the Playwright blocker below still applies.
 
 The P3 final `npm test` passed across the combined P0–P3 application code and architecture/requirements changes. The progress report was then updated with that result; the exact full-suite total and log are shown above. This does not retroactively convert the P2 checkpoint's focused-only run into a P2-only full-suite claim. Playwright was attempted through the package CLI; browser-based validation could not execute without a browser binary. No browser download was attempted. No `npm ci` was run locally; the existing development installation was used.
+
+## Package 5 work completed (experience system and desktop readiness)
+
+- **Tokens.** `UI_CSS` now carries the master-document values as the canonical tokens
+  (`--bg-void #05080f`, `--bg-deep #0a1220`, `--glass rgba(12,28,48,0.55)`, `--arc-cyan #00e5ff`,
+  `--armor-gold #ffb000`, `--armor-red #e10600`, `--ok-green #2bff88`, `--text #dcebff`,
+  `--text-dim #7fa3c7`, `--radius 2px`) with aliases (`--cyan`, `--gold`, `--muted`, `--panel`,
+  …) so no pre-existing rule changed meaning silently. Tabular numerals are applied to the body
+  and to every numeric readout. `--armor-red-text #ff6b5a` exists because `#e10600` measures
+  below 4.5:1 on the void background; the raw red stays a fill/border colour.
+- **Modes.** Classic is the default skin; Tactical, Overwatch, Synthesis and Quiet are
+  token-only overlays (palette emphasis, one motion-duration change each) selected from a real
+  `<select>`; Lockdown is **derived from the ECP latch** through the Core projection and disables
+  the selector while active. No mode rule hides a record surface, and no mode reaches an API,
+  a store or the ECP — asserted by test.
+- **Accessibility.** `:focus-visible` outline on every interactive element, `aria-current="page"`
+  on the active nav item, `aria-pressed` on the motion/contrast toggles, a skip link, a labelled
+  mode selector, `prefers-reduced-motion` and a manual reduced-motion switch, `prefers-contrast:
+  more` plus a high-contrast toggle, and measured contrast ≥ 4.5:1 for seven text/surface token
+  pairs (the test computes the ratio from the shipped hex values).
+- **Responsiveness.** Breakpoints at 1600, 1280, 1100, 720 and 480 px, `min-width: 0` and
+  `overflow-wrap` on panels/rails/stages, and horizontal scrolling confined to `<pre>` blocks.
+  The layout itself is unverified without a browser.
+- **Dead controls.** A new audit found `getElementById('situation')` registered but absent from
+  the served page and never read; it was removed. The audit now fails the suite if any
+  `getElementById` target is missing, if a nav item has no view section (or vice versa), or if a
+  voice/microphone/push-to-talk control appears.
+- **Desktop shell ADR.** `reports/T30_P5_DESKTOP_SHELL_ADR.md` evaluates loopback browser +
+  thin shell, Tauri and Electron across IPC security, lifecycle, authentication, window
+  management, startup/shutdown, local data access, packaging/updates, crash recovery, resource
+  usage and security boundaries. Recommendation: thin shell now, Tauri if a native shell becomes
+  necessary, Electron rejected. No shell code was written.
+
+### Package 5 files changed
+
+- `apex_app/src/ui/assets.js` (tokens, modes, focus/contrast/motion rules, responsive breakpoints,
+  mode and preference controls, keyboard traversal, latch-derived Lockdown presentation)
+- `apex_app/tests/ui-experience-system.test.js` (new, 10 tests)
+- `apex_app/reports/T30_P5_DESKTOP_SHELL_ADR.md` (new)
+- `apex_app/reports/T30_PROGRESS.md` (this report)
+
+### Package 5 verification
+
+| Check | Result |
+|---|---|
+| `node --check` on every file under `apex_app/src` | **225 files, 0 failures** |
+| `node --test tests/ui-experience-system.test.js` | **10 tests, 10 passed, 0 failed** |
+| `node --test` on the nine UI/syntax suites | **71 tests, 71 passed, 0 failed** (18 suites, 13.7 s) |
+| Real-browser verification of modes, focus, overflow, screenshots | **UNVERIFIED** — no browser can be installed (see `T30_P0_BROWSER_VERIFICATION.md` §4) |
+
+## P0 client fix and Step 2 verification (recorded here for completeness)
+
+- **Defect.** The served client embedded Node functions with `.toString()`; the first event threw
+  `ReferenceError: STREAM_ID_RE is not defined` and the Core stayed on Degraded against a healthy
+  server. Reproduced against `d7ad87e` with the new test (4 of 5 cases fail with that exact error).
+- **Fix (commit `3cb33ea`).** One self-contained factory (`src/ui/client-contract.js`) is called by
+  Node and rendered verbatim into the browser; `core-state-tables.js` holds the vocabulary as
+  data; `core-state.js` and `event-contract.js` keep their public exports.
+- **Guards.** `ui-client-contract-source` (bare-vm execution and Node/browser equivalence),
+  `ui-client-runtime` (shipped script, fake stream, 1500 ms watchdog measured), and
+  `ui-live-stream` (real server, real SSE, real cross-process write, real restart).
+- **Step 2 (commit `0798d4b`).** `reports/T30_P0_BROWSER_VERIFICATION.md` records every failed
+  route to a Chromium binary (blocked CDN, missing shared libraries, no apt access, unreachable
+  release assets). No screenshot was produced and none is claimed.
+
+## Package 6 work (whole-system validation)
+
+See the evidence table and the measured timings below. Screenshots at 1600×900, 1280×720 and
+390×844 are **not available** in this environment; nothing in `reports/` was generated by this
+session, and the historical `t25_*.png` captures were not re-verified.
 
 ## Risks and blockers
 
