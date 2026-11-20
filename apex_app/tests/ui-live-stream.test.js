@@ -226,6 +226,7 @@ describe('shipped client over a real server and real event stream (T-30 P0/Step 
     assert.equal(browser.connectivityText(), 'Degraded');
 
     // 5. Restart on the same port. The client reconnects, reconciles and leaves Degraded.
+    const reconnectStartedAt = Date.now();
     let restarted = null;
     for (let attempt = 0; attempt < 20 && restarted === null; attempt += 1) {
       try {
@@ -237,11 +238,12 @@ describe('shipped client over a real server and real event stream (T-30 P0/Step 
     assert.ok(restarted, 'the server restarted on the same port');
     baseUrl.value = restarted.base;
     await waitForState(browser, 'awaiting_approval', 8000, 'reconnect reconciled the pending approval');
+    const reconnectMs = Date.now() - reconnectStartedAt;
     assert.ok(log.reconnects >= 1, 'the client attempted a reconnect');
 
     // Real measurements for the Package 6 evidence row. They describe this harness
     // (Node fetch + vm client on loopback), not a browser.
-    t.diagnostic(`measured: first /api/state ${timing.stateReadMs} ms; first reconcile frame ${timing.firstReconcileMs} ms after load; degraded detection ${degradedAfter} ms after the server stopped; heartbeats ${heartbeats} in 1.2 s`);
+    t.diagnostic(`measured: first /api/state ${timing.stateReadMs} ms; first reconcile frame ${timing.firstReconcileMs} ms after load; degraded detection ${degradedAfter} ms after the server stopped; reconnect-to-reconciled ${reconnectMs} ms (including the 300 ms client backoff); heartbeats ${heartbeats} in 1.2 s`);
 
     assert.deepEqual(browser.events.pageErrors, []);
     assert.equal(browser.events.consoleErrors.filter((line) => /ReferenceError|SyntaxError|not defined/i.test(line)).length, 0);

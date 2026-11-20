@@ -7,6 +7,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { UI_CLIENT } from '../src/ui/assets.js';
+import { CLIENT_CONTRACT_CONSTANTS, CLIENT_CONTRACT_SOURCE } from '../src/ui/client-contract.js';
 import {
   CORE_REACHABLE_STATES,
   CORE_RESERVED_STATES,
@@ -27,14 +28,17 @@ const EXPECTED_PRECEDENCE = [
   'lockdown', 'degraded', 'awaiting_approval', 'uncertain', 'executing', 'thinking', 'idle',
 ];
 
-function embeddedJson(name) {
-  const prefix = `const ${name} = `;
-  const start = UI_CLIENT.indexOf(prefix);
-  assert.notEqual(start, -1, `${name} is embedded in the served client`);
-  const valueStart = start + prefix.length;
-  const end = UI_CLIENT.indexOf(';\n', valueStart);
-  assert.notEqual(end, -1, `${name} has a complete JSON literal`);
-  return JSON.parse(UI_CLIENT.slice(valueStart, end));
+// T-30 P0 (2026-11-19): supersedes embeddedJson(), which parsed a JSON literal out of the
+// served client. The client no longer embeds JSON text: it binds the tables from the shared
+// contract program. This helper executes that program in a bare vm context and returns the
+// values the browser actually receives, which is a stronger check than string extraction.
+function servedTables() {
+  const sandbox = {};
+  vm.runInNewContext(
+    `${CLIENT_CONTRACT_SOURCE}\nthis.__tables = { definitions: CORE_STATE_DEFINITIONS, reachable: CORE_REACHABLE_STATES };`,
+    sandbox,
+  );
+  return JSON.parse(JSON.stringify(sandbox.__tables));
 }
 
 function functionSource(source, signature) {
@@ -123,8 +127,11 @@ describe('T-30 Core state ownership and reachability contract', () => {
   });
 
   test('the actual served setter refuses Dormant, Listening, Speaking and unknown states', () => {
-    assert.deepEqual(embeddedJson('CORE_STATE_DEFINITIONS'), CORE_STATE_DEFINITIONS);
-    assert.deepEqual(embeddedJson('CORE_REACHABLE_STATES'), CORE_REACHABLE_STATES);
+    const served = servedTables();
+    assert.deepEqual(served.definitions, CORE_STATE_DEFINITIONS);
+    assert.deepEqual(served.reachable, CORE_REACHABLE_STATES);
+    assert.deepEqual(CLIENT_CONTRACT_CONSTANTS.coreStateDefinitions, CORE_STATE_DEFINITIONS);
+    assert.deepEqual(CLIENT_CONTRACT_CONSTANTS.coreReachableStates, CORE_REACHABLE_STATES);
     const setter = functionSource(UI_CLIENT, 'function setCore(next, caption)');
     assert.match(setter, /!CORE_REACHABLE_STATES\.includes\(next\)/);
     assert.match(setter, /reachability === 'reachable'/);

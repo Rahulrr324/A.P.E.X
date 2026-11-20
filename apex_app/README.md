@@ -456,6 +456,30 @@ isolation, and it serves nothing beyond this machine.
 its own: with no model configured, its answers are the deterministic readings described above, and
 with one configured it sends the same request the CLI would.
 
+**T-30 Package 5 addendum (2026-11-19).** The page carries the master document's design tokens and a
+presentation layer that never touches authorization:
+
+| Control | Behaviour | What it cannot do |
+|---|---|---|
+| Mode selector (Classic, Tactical, Overwatch, Synthesis, Quiet) | Swaps accent tokens and, for Overwatch/Synthesis, one ring-motion duration. Stored in the page, not on disk. | Change a policy, an autonomy level, a latch, a route or a stored record. |
+| Lockdown presentation | Derived from the ECP kill-switch latch through the Core projection; it disables the selector while active. | Be selected by hand, or release the latch. Release still needs the confirm + typed-reason flow on the System workspace. |
+| Motion toggle | Sets `data-motion="reduced"`, which disables animation and transitions; the OS `prefers-reduced-motion` value is the starting point. | Affect timing, streaming or the watchdog. |
+| Contrast toggle | Sets `data-contrast="high"` (stronger lines, opaque panels, no scanline layer); `prefers-contrast: more` is the starting point. | Change colour meaning: red still means danger. |
+
+Keyboard: `Alt+←`/`Alt+→` move through the same views as the nav buttons, `/` focuses the message box
+when focus is not already in a field, every interactive element has a `:focus-visible` ring, and the
+active nav item carries `aria-current="page"`. Layout breakpoints are 1600, 1280, 1100, 720 and 480 px.
+
+Text tokens are checked at build time against WCAG 2.1: seven foreground/background pairs must measure
+at least 4.5:1, computed from the shipped hex values in `tests/ui-experience-system.test.js`. The raw
+danger red (`#e10600`) measures below that bar on the void background, so it stays a fill/border colour
+and red *text* uses `--armor-red-text` (`#ff6b5a`).
+
+The desktop shell is a decision, not a build: `reports/T30_P5_DESKTOP_SHELL_ADR.md` recommends keeping
+the loopback UI and wrapping it in a thin shell, with Tauri as the destination if a native shell becomes
+necessary and Electron rejected. **No shell exists in this repository**, and the browser UI remains the
+supported fallback.
+
 ### Exit codes
 
 | Code | Meaning |
