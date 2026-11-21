@@ -1290,7 +1290,7 @@ asserted.
 | Measurement | `ba8c508` (baseline) | T-35 |
 | --- | --- | --- |
 | `node --check` over `apex_app/src` | 244 files, 0 failures | 248 files, 0 failures |
-| `npm test` | 3955 tests, 3953 pass, 0 fail, 2 skipped, 0 cancelled, 1,421,635 ms (23.7 min) | 4013 tests, 4011 pass, 0 fail, 2 skipped, 0 cancelled, 1,426,953 ms (23.8 min) |
+| `npm test` | 3955 tests, 3953 pass, 0 fail, 2 skipped, 0 cancelled, 1,421,635 ms (23.7 min) | 4016 tests, 4014 pass, 0 fail, 2 skipped, 0 cancelled, 1,408,322 ms (23.5 min) |
 | registry | 151 default / 166 rooted (85 reads, 81 writes) | 154 default / 169 rooted (85 reads, 84 writes) |
 | doctor, isolated empty data directory | - | `degraded` in 3.2-15.8 ms across runs: 4 pass, 1 degraded (`browser_binary` - no browser on this host), 2 not configured (no store yet, no workspace root) |
 
@@ -1319,15 +1319,20 @@ real-browser step failed. The annotations named the cause rather than the sympto
 | Failure | Cause | Fix |
 | --- | --- | --- |
 | T-35, stage 1 | the walk asserted `--hud-bloom` is `0px` at stage 1 and read `18px`: the stylesheet dropped the painted glow (`filter: none`) but never zeroed the token itself | `body[data-hud-bloom="dropped"] { --hud-bloom: 0px; }` is now the first rule of the rung, and a unit test pins it against the served stylesheet. The browser found what the source reading had missed, which is the reason the walk exists |
-| T-35, stage 1 again (run `44884503520`) | the token was now zeroed, but the walk read it from `document.documentElement`: a custom property set on `<body>` overrides the `:root` default only *inside* the body subtree, so the root still computed `18px` | the walk reads the effective value where the deck inherits it - `getComputedStyle(document.body)` - for both the bloom token and the Z0-Z4 factors. The rule's job is the deck, not the root element, and the assertion now says so |
+| T-35, stage 1 (run `44884503520`) | the token was now zeroed, but the walk read it from `document.documentElement`: a custom property set on `<body>` overrides the `:root` default only *inside* the body subtree, so the root still computed `18px` | the walk reads the effective value where the deck inherits it - `getComputedStyle(document.body)` - for both the bloom token and the Z0-Z4 factors. The rule's job is the deck, not the root element, and the assertion now says so |
 | T-33, `idle` checkpoint | `/api/state` reported the governor's *deliveries* under `perception.advisories`, so when the governor deduplicated an unchanged signature the snapshot claimed there was no advisory while the workspace was still dirty. A settled deck then allowed wit with a condition standing. The comment above that code already said a condition is a condition whether or not its notice was delivered | the snapshot now reports the conditions the last reading implied (`advisories`, `activeAdvisories`) and the delivery count separately (`deliveredAdvisories`); the fixture test pins the deduplicated case, and the browser assertion becomes deterministic instead of timing-dependent |
 
 The second one is the more interesting: it had been latent since T-33 and only surfaced when a run's
 timing let the dedup land between the walk's last reading and its Idle checkpoint. It is reported here
 as a bug the milestone found, not as a flake to be re-run until green.
 
-The stage-1 red took two attempts, and the second attempt is the honest part: the first fix zeroed the
-token in a rule the *root read* cannot see, and the walk said so with `18px` again. Reading the
+The stage-1 red took three attempts, and each attempt is the honest part: the first fix zeroed the
+token in a rule the *root read* cannot see, and the walk said so with `18px` again; the second then
+zeroed the token where the deck inherits it and the walk moved on to the *painted* value, which was
+still a `drop-shadow` - the Core is `#core-reticle`, and the acknowledgement rule that carries an id
+outranked a stage rule written against `.core`. The stage now names that element (and the ack state),
+zeroes the filter transition so nothing is left mid-flight, and keeps the acknowledgement cue, which is
+the ring's opacity rather than the glow. Reading the
 effective value from the element that carries the stage is the correction. Two other assertions in the
 walk were hardened at the same time, before running again rather than after: the flat-mode check now
 asserts every panel transition *duration* is `0s` (a property name can be `none` or an empty list
@@ -1340,6 +1345,15 @@ presentation (a 0.26 s panel transition, for one) are taken on whatever the host
 hosted runs so far the automatic stage was 0 and 2, where those measurements are unaffected. A run on a
 host at stage 5 would see a flat deck, and that would be the ladder working rather than a regression.
 
+### The hosted run that carries the claim
+
+Run `44887035882` at commit `89e2229` is **green** end to end: the source check, the full unit suite,
+and the real-browser step with `binary microsoft-edge` - T-31's three viewports, T-32's contrast audit
+and HUD measurements, T-33's executive loop, T-34's mission walk and this milestone's
+`t35-stepdown-handoff-doctor` walk all reported `✓`. The three browser reds of the previous runs
+(§ "The first hosted run") are closed by the fixes above, not by skipping anything: the two failing
+checkpoints are back in the walk and assert the same properties as before.
+
 ### What is verified, and what is not
 
 Verified locally, with the shipped code: the ladder table and its thresholds; the override semantics;
@@ -1349,11 +1363,13 @@ HTTP; the ledger's survival of a reload and its refusal of a corrupt line; the d
 its budget, its exit code and its refusal to invent a pass; the Presence and System workspaces
 rendering from the routes under the project's browser stand-in.
 
-`UNVERIFIED` in a real browser: this sandbox has no Chromium-family browser at all, so
-`tests/e2e/t35-stepdown-handoff-doctor.spec.mjs` skips here with an explicit diagnostic. The walk
+`UNVERIFIED` **here**: this sandbox has no Chromium-family browser at all, so
+`tests/e2e/t35-stepdown-handoff-doctor.spec.mjs` skips locally with an explicit diagnostic. In the
+hosted run it does not skip - it runs against the system Microsoft Edge and reports its checkpoints.
+The walk
 asserts the computed styles at stages 0, 1, 3, 4 and 5 (bloom gone at 1, every parallax factor `0` at
 3, `backdrop-filter: none` with the reticle still visible at 5), measures the flash guard through the
 Web Animations API, checks the privacy indicator's text, stages and claims a real envelope and lands on
 the handed-off view and mission, runs the doctor and compares it with the route, and fails on any
-console error, page error or horizontal overflow. The hosted run is what turns that into evidence;
-until it is green the deliverable is the spec, not the claim.
+console error, page error or horizontal overflow. The hosted run `44887035882` is what turns that into
+evidence, and it is green.
