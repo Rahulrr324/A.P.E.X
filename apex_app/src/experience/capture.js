@@ -101,6 +101,10 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // not something APEX did. Capturing it would teach the pattern reads that "moved a tab" is behaviour
   // worth generalising from.
   presence: 'it records an owner act about where work should continue - an envelope, its digest, its claim or its revocation - rather than something APEX did; capture would make a device handoff look like behavioural evidence',
+  // T-36 Step 1: a cold-start bootstrap is the machine being read for the first time, not an act
+  // APEX chose. Every value it records is re-derivable by reading the machine again, and an
+  // experience of it would teach the pattern reads that "install and boot" is behavioural evidence.
+  system: 'it reads the machine and the repository for the first time and records what it found; every value it holds is re-derivable by reading them again, so an experience of it would say less than a fresh reading',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
@@ -117,6 +121,9 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'perception.state': 'perception',
   'perception.dismiss_alert': 'perception',
   'perception.revoke_suppression': 'perception',
+  // T-36 Step 1: the cold-start bootstrap and its status read.
+  'system.bootstrap': 'system',
+  'system.bootstrap_status': 'system',
   'app.status': 'read',
   'app.capabilities': 'read',
   'calc.evaluate': 'read',

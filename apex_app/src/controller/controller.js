@@ -1686,6 +1686,16 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // T-36 Step 1: the cold-start bootstrap. It is a governed write like every other one: the
+  // registry authorizes it, the control plane refuses it under lockdown, and the operation is
+  // audited. The service it calls does the reading; this only decides that the act is the owner's.
+  async systemBootstrap({ reason = null } = {}) {
+    const op = this.#newOp({ capability: 'system.bootstrap', origin: 'user', request: 'workstation bootstrap' });
+    const payload = reason === null || reason === undefined ? {} : { reason };
+    const step = await this.runAction('system.bootstrap', payload, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   async workshopSimulate({ artifactId } = {}) {
     const shown = typeof artifactId === 'string' && artifactId.trim() !== '' ? truncate(artifactId.trim(), 64) : '[missing artifact]';
     const op = this.#newOp({ capability: 'workshop.simulate', origin: 'user', request: `workshop simulate [${shown}]` });

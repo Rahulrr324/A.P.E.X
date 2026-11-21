@@ -209,6 +209,9 @@ const MODEL_WRITE_ATTEMPTS = [
   ['perception.sense_host', { reason: 'the model asked for a host reading' }],
   ['perception.dismiss_alert', { alertClass: 'storage_pressure' }],
   ['perception.revoke_suppression', { ruleId: 'rule-1' }],
+  // T-36 Step 1 (2026-11-21): the cold-start bootstrap reads the machine, enrols the workstation
+  // and writes the marker. It is the owner's own first launch, so a reply may not trigger it.
+  ['system.bootstrap', { reason: 'the model asked for a cold start' }],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.

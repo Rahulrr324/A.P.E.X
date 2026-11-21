@@ -762,7 +762,9 @@ export function createUiServer({
   }
   // T-35 Step 3: the doctor is composed with the same app the UI reads, so its checks are the
   // running system's and not a second opinion built from environment variables.
-  const doctor = createDoctor({ app, dataDir: app.dataDir });
+  // T-36 Step 1: the application now carries the doctor it composes, so the server, the CLI and
+  // the desktop shell read one instance of the same checks rather than three.
+  const doctor = app.doctor ?? createDoctor({ app, dataDir: app.dataDir });
   // Loopback stays the default and the only thing an unconfigured server will bind. A sandboxed
   // preview proxy cannot reach loopback inside the process's namespace, so an owner who explicitly
   // asks for it may bind 0.0.0.0; every request is still token-gated, and the frame/origin headers
@@ -1859,6 +1861,25 @@ export function createUiServer({
     body.coreReading = serverCoreReading({
       killSwitch, tasks, situation, unavailable,
     });
+    // T-36 Step 1: whether this data directory has been bootstrapped. The deck reads it to decide
+    // whether the opening screen is the boot sequence or the working Command Deck; an unconfigured
+    // bootstrap says "unavailable" rather than pretending the directory is unseeded.
+    if (app.bootstrap && typeof app.bootstrap.status === 'function') {
+      try {
+        const boot = app.bootstrap.status();
+        body.system = {
+          bootstrap: {
+            bootstrapped: boot.bootstrapped === true,
+            at: boot.at ?? null,
+            firstAt: boot.firstAt ?? null,
+            runs: boot.runs ?? 0,
+            status: boot.status ?? null,
+          },
+        };
+      } catch (err) {
+        body.system = { bootstrap: { available: false, error: singleLine(err.message, 160) } };
+      }
+    }
     body.unavailable = unavailable;
     body.comms = composeAllFramings({
       facts: commsFactsFrom(body),
@@ -2095,6 +2116,45 @@ export function createUiServer({
         sendJson(res, 200, await doctor.run());
       } catch (err) {
         sendJson(res, 503, { unavailable: true, error: `the doctor could not run: ${err.message}` });
+      }
+      return;
+    }
+    // T-36 Step 1: the cold-start bootstrap. It is a governed write: the route asks the controller
+    // to run `system.bootstrap`, the registry authorizes it, the control plane refuses it under
+    // lockdown, and the answer is reported from what the action verified - never from the click.
+    if (method === 'POST' && url.pathname === '/api/system/bootstrap') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => key !== 'reason');
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = await app.controller.systemBootstrap({
+          reason: typeof body.reason === 'string' && body.reason.trim() !== '' ? body.reason : null,
+        });
+        const step = result.operation?.steps?.[0] ?? null;
+        const data = step?.result?.data ?? null;
+        const verified = step?.verification?.outcome === 'success_verified';
+        if (!data) {
+          sendJson(res, 400, { status: result.status, error: step?.summary ?? 'the bootstrap returned no report', display: result.display });
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status, bootstrapVerified: verified, display: result.display });
+        broadcast('system', { at: data.at ?? null });
+        scheduleOwnerRefresh();
+      } catch (err) { sendJson(res, 400, { error: err.message }); }
+      return;
+    }
+    // T-36 Step 1: the bootstrap state, so the deck can tell whether this directory has been
+    // bootstrapped without reading the marker file itself.
+    if (method === 'GET' && url.pathname === '/api/system/bootstrap') {
+      try {
+        if (!app.bootstrap || typeof app.bootstrap.status !== 'function') {
+          sendJson(res, 503, { unavailable: true, error: 'the workstation bootstrap is not configured' });
+          return;
+        }
+        sendJson(res, 200, app.bootstrap.status());
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `the bootstrap state is unavailable: ${err.message}` });
       }
       return;
     }

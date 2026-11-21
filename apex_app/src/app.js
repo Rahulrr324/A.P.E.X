@@ -74,6 +74,9 @@ import { createWorkshopService } from './workshop/service.js';
 import { createPerceptionService } from './perception/service.js';
 import { perceptionActions } from './actions/perception-actions.js';
 import { DeviceTrustService } from './security/device-trust.js';
+import { createDoctor } from './system/doctor.js';
+import { createWorkstationBootstrap } from './system/bootstrap.js';
+import { systemBootstrapActions } from './actions/system-bootstrap-actions.js';
 
 export function createApp({
   dataDir,
@@ -479,7 +482,7 @@ export function createApp({
     },
   });
   for (const def of presenceHandoffActions(handoffs)) registry.register(def);
-  return {
+  const app = {
     controller,
     memory,
     conversation,
@@ -520,6 +523,17 @@ export function createApp({
     briefing,
     handoffs,
   };
+  // T-36 Step 1: the doctor and the workstation bootstrap. The doctor is composed with the same
+  // application the deck reads, so its six checks are the running system's and not a second opinion
+  // built from environment variables; the bootstrap uses that doctor for its readiness gate. Both
+  // are attached to the application so the CLI, the desktop shell and the UI server share one
+  // instance of each rather than three readings of the same thing.
+  const doctor = createDoctor({ app, dataDir });
+  const bootstrap = createWorkstationBootstrap({ app, dataDir, now: clock, doctor });
+  for (const def of systemBootstrapActions(bootstrap)) registry.register(def);
+  app.doctor = doctor;
+  app.bootstrap = bootstrap;
+  return app;
 }
 
 export function createAppFromEnv(env = process.env) {
