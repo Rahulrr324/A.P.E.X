@@ -394,6 +394,26 @@ export const UI_PAGE = `<!doctype html>
     </form>
     <div id="council-synthesis" class="panel"></div>
     <ul id="council" class="work"></ul>
+    <!-- T-37 Step 1: Track 2. The eight-region spiking substrate and its bridge, read from the same
+         service the capabilities step. Every number here is measured from the running substrate;
+         when the service is absent the panel says so rather than showing zeroes. -->
+    <h3>Track 2 — spiking substrate and neural-cognitive bridge</h3>
+    <p class="meta">A deterministic 8-region LIF/STDP simulation with a versioned bridge to the symbolic pipeline. Its signals are candidate associations only: they cannot authorize an action, write an observed fact or bypass the ECP. The bridge isolates itself if a producer breaks that contract, and the run falls back to pure Track 1.</p>
+    <p id="neural-status" class="workspace-status" role="status" aria-live="polite">Loading the neural substrate…</p>
+    <div class="row">
+      <label for="neural-steps" class="meta">Steps</label>
+      <input id="neural-steps" type="number" min="1" max="64" value="16" style="max-width:6rem">
+      <button id="neural-step" type="button" class="small">Advance substrate</button>
+      <button id="neural-reset-bridge" type="button" class="small">Reset bridge</button>
+      <span id="neural-action-status" class="meta" role="status"></span>
+    </div>
+    <dl id="neural-summary" class="facts"></dl>
+    <table id="neural-regions" class="work" hidden>
+      <caption class="meta">Per-region measured state</caption>
+      <thead><tr><th scope="col">Region</th><th scope="col">Cells</th><th scope="col">Spikes</th><th scope="col">Active</th><th scope="col">Membrane</th><th scope="col">Mean weight</th><th scope="col">Fan-out</th></tr></thead>
+      <tbody id="neural-region-rows"></tbody>
+    </table>
+    <div id="neural-bridge" class="panel"></div>
   </section>
   <section class="view" data-view="cognition" data-depth-plane="z3">
     <h2>Unified cognition — T-29 pipeline</h2>
@@ -1253,6 +1273,17 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   councilRun: document.getElementById('council-run'),
   councilStatus: document.getElementById('council-status'),
   councilSynthesis: document.getElementById('council-synthesis'),
+  // T-37 Step 1: the Track 2 panel. Every one of these is written only after a read succeeded; an
+  // unavailable substrate leaves them at whatever the status line says, never at a zero.
+  neuralStatus: document.getElementById('neural-status'),
+  neuralSummary: document.getElementById('neural-summary'),
+  neuralRegions: document.getElementById('neural-regions'),
+  neuralRegionRows: document.getElementById('neural-region-rows'),
+  neuralBridge: document.getElementById('neural-bridge'),
+  neuralSteps: document.getElementById('neural-steps'),
+  neuralStep: document.getElementById('neural-step'),
+  neuralResetBridge: document.getElementById('neural-reset-bridge'),
+  neuralActionStatus: document.getElementById('neural-action-status'),
   cognitionForm: document.getElementById('cognition-form'),
   cognitionIntent: document.getElementById('cognition-intent'),
   cognitionAction: document.getElementById('cognition-action'),
@@ -2661,6 +2692,152 @@ function renderCouncil(result) {
   els.councilSynthesis.append(list);
 }
 
+// T-37 Step 1: Track 2 in the deck. Every value is read from the substrate the capabilities actually
+// step; nothing is derived, estimated or defaulted. The bridge panel states its own status first,
+// because "isolated, contributing nothing" and "connected, contributing zero salience" are different
+// facts and a reader must be able to tell them apart at a glance.
+function renderNeural(result) {
+  if (!els.neuralStatus) return;
+  const owner = ownerStatusText(result, 'Neural substrate');
+  if (owner.text) {
+    setWorkspaceStatus(els.neuralStatus, owner.text, owner.state);
+    if (els.neuralSummary) els.neuralSummary.replaceChildren();
+    if (els.neuralRegions) els.neuralRegions.hidden = true;
+    if (els.neuralRegionRows) els.neuralRegionRows.replaceChildren();
+    if (els.neuralBridge) {
+      els.neuralBridge.replaceChildren();
+      els.neuralBridge.append(el('p', 'meta', 'Unavailable: the neural substrate could not be read, so no value is shown.'));
+    }
+    return;
+  }
+  const report = result.value || {};
+  const substrate = report.substrate || {};
+  const bridge = report.bridge || {};
+  const totals = substrate.totals || {};
+  const regions = Array.isArray(substrate.regions) ? substrate.regions : [];
+
+  if (regions.length === 0) {
+    setWorkspaceStatus(els.neuralStatus, 'The substrate reported no regions; nothing is shown rather than an empty table.', 'empty');
+    return;
+  }
+  setWorkspaceStatus(els.neuralStatus,
+    regions.length + ' region(s) · step ' + String(substrate.step ?? 'unknown')
+      + ' · bridge ' + String(bridge.status || 'unknown') + (bridge.isolated === true ? ' (isolated)' : '') + '.',
+    bridge.isolated === true ? 'degraded' : 'available');
+
+  // The headline facts. Each names the field it came from so a reader can check it against the API.
+  els.neuralSummary.replaceChildren();
+  const facts = [
+    ['Regions', String(regions.length) + ' (' + regions.map((region) => region.id).join(', ') + ')'],
+    ['Cells', String(totals.cells ?? 'unavailable')],
+    ['Synapses', String(totals.synapses ?? 'unavailable')],
+    ['Sparse density', totals.density === undefined ? 'unavailable' : String(totals.density)],
+    ['Steps run', String(substrate.step ?? 'unavailable')],
+    ['Seed', String(substrate.seed ?? 'unavailable')],
+    ['Bridge', String(bridge.bridgeVersion || 'unknown') + ' · ' + String(bridge.status || 'unknown')],
+    ['Crossings', String(bridge.crossings ?? 'unavailable') + ' · refusals ' + String(bridge.refusals ?? 'unavailable')],
+    ['Circuit breaker', 'threshold ' + String(bridge.threshold ?? 'unknown') + ' consecutive refusals'
+      + (bridge.isolated === true ? ' · ISOLATED (falling back to Track 1)' : '')],
+  ];
+  for (const [term, value] of facts) {
+    const dt = el('dt', null, term);
+    const dd = el('dd', null, value);
+    els.neuralSummary.append(dt, dd);
+  }
+
+  // The per-region table: the eight canonical regions with the numbers the brief asks for.
+  els.neuralRegionRows.replaceChildren();
+  for (const region of regions) {
+    const membrane = region.membranePotential || {};
+    const adjacency = region.adjacency || {};
+    const row = document.createElement('tr');
+    for (const cell of [
+      String(region.id),
+      String(region.cells ?? ''),
+      String(region.spikes ?? ''),
+      String(region.activeNow ?? ''),
+      membrane.meanMv === undefined ? '' : String(membrane.meanMv) + ' mV',
+      region.meanOutgoingWeight === undefined ? '' : String(region.meanOutgoingWeight),
+      adjacency.outgoingFanOut === undefined ? '' : String(adjacency.outgoingFanOut),
+    ]) {
+      row.append(el('td', null, cell));
+    }
+    els.neuralRegionRows.append(row);
+  }
+  els.neuralRegions.hidden = false;
+
+  // The bridge contract and its boundary, stated as data rather than as a promise.
+  els.neuralBridge.replaceChildren();
+  els.neuralBridge.append(el('h4', null, 'Bridge contract'));
+  const contract = bridge.contract || {};
+  const lines = [
+    'Version: ' + String(contract.bridgeVersion || bridge.bridgeVersion || 'unknown'),
+    'Signal schema: ' + String(contract.signalSchema || 'unknown'),
+    'Accepts: ' + (Array.isArray(contract.acceptedInputSchemas) ? contract.acceptedInputSchemas.join(', ') : 'unknown'),
+    'Fallback: ' + String(bridge.isolationFallback || contract.fallback || 'symbolic') ,
+    'Crossings: ' + String(bridge.crossings ?? 0) + ' · refusals: ' + String(bridge.refusals ?? 0)
+      + ' · consecutive: ' + String(bridge.consecutiveRefusals ?? 0) + ' of ' + String(bridge.threshold ?? '?'),
+  ];
+  if (bridge.lastRefusal) {
+    lines.push('Last refusal: ' + String(bridge.lastRefusal.refusal || 'unknown') + ' — ' + String(bridge.lastRefusal.detail || ''));
+  }
+  if (bridge.isolated === true) {
+    lines.push('The bridge is isolated: it translates nothing and the pipeline is running on Track 1 alone.');
+  }
+  for (const line of lines) els.neuralBridge.append(el('p', 'meta', line));
+  const boundary = report.boundary || {};
+  els.neuralBridge.append(el('p', 'meta',
+    'Boundary: every signal is ' + String(boundary.epistemicStatus || 'candidate_association')
+      + '. It cannot authorize (' + String(boundary.authorizesExecution === false ? 'false' : 'unstated')
+      + ') or write an observed fact (' + String(boundary.mutatesObservedFacts === false ? 'false' : 'unstated') + ').'));
+}
+
+async function loadNeural() {
+  renderNeural(await readApi('/api/neural/substrate'));
+}
+
+// The two governed acts. Both are writes, so both are answered by the action's own verification; the
+// button never says "done" until the server said the step verified.
+async function stepNeural() {
+  if (!els.neuralStep) return;
+  const steps = Math.max(1, Math.min(64, Number(els.neuralSteps && els.neuralSteps.value) || 1));
+  els.neuralStep.disabled = true;
+  if (els.neuralActionStatus) els.neuralActionStatus.textContent = 'Advancing ' + steps + ' step(s)…';
+  try {
+    const value = await api('/api/neural/step', { method: 'POST', body: { steps } });
+    if (els.neuralActionStatus) {
+      els.neuralActionStatus.textContent = value.stepVerified === true
+        ? 'Verified: ' + String(value.spikes) + ' spike(s), ' + String(value.potentiated) + ' potentiated / '
+          + String(value.depressed) + ' depressed; bridge ' + String(value.bridge?.status || 'unknown') + '.'
+        : 'The step ran but did not verify: ' + String(value.display || 'no detail');
+    }
+    await loadNeural();
+  } catch (error) {
+    if (els.neuralActionStatus) els.neuralActionStatus.textContent = 'Refused or unavailable: ' + String(error?.message || error);
+  } finally {
+    els.neuralStep.disabled = false;
+  }
+}
+
+async function resetNeuralBridge() {
+  if (!els.neuralResetBridge) return;
+  els.neuralResetBridge.disabled = true;
+  if (els.neuralActionStatus) els.neuralActionStatus.textContent = 'Resetting the bridge…';
+  try {
+    const value = await api('/api/neural/bridge/reset', { method: 'POST', body: { reason: 'deck reset' } });
+    if (els.neuralActionStatus) {
+      els.neuralActionStatus.textContent = value.verified === true
+        ? 'Bridge is ' + String(value.after?.status || 'unknown') + ' on an independent read.'
+        : 'The reset did not verify: ' + String(value.display || 'no detail');
+    }
+    await loadNeural();
+  } catch (error) {
+    if (els.neuralActionStatus) els.neuralActionStatus.textContent = 'Refused or unavailable: ' + String(error?.message || error);
+  } finally {
+    els.neuralResetBridge.disabled = false;
+  }
+}
+
 function renderWorkshop(result) {
   const owner = ownerStatusText(result, 'Workshop');
   const page = result?.ok === true ? result.value : null;
@@ -4006,6 +4183,15 @@ function setView(view) {
       runDoctor();
     }
   }
+  // T-37 Step 1: opening Council reads the live substrate, because its step count changes whenever a
+  // step is governed. Like the doctor, a second visit in the same moment asks once.
+  if (view === 'council') {
+    const at = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+    if (!state.neuralAt || at - state.neuralAt > 2000) {
+      state.neuralAt = at;
+      loadNeural();
+    }
+  }
 }
 
 // T-30 Package 5 (2026-11-19): presentation preferences. They change palette, motion and
@@ -4824,6 +5010,11 @@ if (els.cognitionForm) {
     }
   });
 }
+
+// T-37 Step 1: the two Track 2 buttons. Each one is a governed write on the server; the button only
+// reports what came back, and a refusal is shown as a refusal rather than as a silent no-op.
+if (els.neuralStep) els.neuralStep.addEventListener('click', stepNeural);
+if (els.neuralResetBridge) els.neuralResetBridge.addEventListener('click', resetNeuralBridge);
 
 if (els.councilForm) {
   els.councilForm.addEventListener('submit', async (event) => {

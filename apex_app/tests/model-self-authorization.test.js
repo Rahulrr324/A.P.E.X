@@ -212,6 +212,12 @@ const MODEL_WRITE_ATTEMPTS = [
   // T-36 Step 1 (2026-11-21): the cold-start bootstrap reads the machine, enrols the workstation
   // and writes the marker. It is the owner's own first launch, so a reply may not trigger it.
   ['system.bootstrap', { reason: 'the model asked for a cold start' }],
+  // [T-37 Step 1, 2026-11-21] A model may not step the substrate: if it could, it could manufacture
+  // the candidate associations it is then asked to weigh. Nor may it close a breaker the bridge
+  // opened on itself - an isolation is the bridge declining to translate, and only the owner may
+  // decide that it should try again.
+  ['neural.step', { steps: 8 }],
+  ['neural.bridge_reset', { reason: 'the model asked to reopen the bridge' }],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.

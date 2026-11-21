@@ -122,9 +122,12 @@ describe('AF-19: the registry is the inventory', () => {
     // `.revoke` - so the pinned totals move by three and the write count with them.
     // T-36 Step 1 (2026-11-21) adds two capabilities: the owner-only write `system.bootstrap` and
     // the read `system.bootstrap_status`, so the pinned totals move by two and the write count by one.
-    assert.equal(plain.registry.list().length, 156, 'the default registry has 156 actions');
+    // T-37 Step 1 (2026-11-21) adds three: the owner-only writes `neural.step` and
+    // `neural.bridge_reset`, and the read `neural.read`. Track 2 can advance a simulation and read
+    // it back; it authorizes nothing, so it adds no capability that could name another one.
+    assert.equal(plain.registry.list().length, 159, 'the default registry has 159 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 171, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 174, 'a configured workspace root adds fifteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -163,7 +166,10 @@ describe('AF-19: the registry is the inventory', () => {
     // like every other write in this list.
     // T-36 Step 1 (2026-11-21): `system.bootstrap` is the eighty-fifth write, and it is owner-only
     // like every other write in this list.
-    assert.equal(writes.length, 85, 'the inventory counts eighty-five write actions with a root configured');
+    // T-37 Step 1 (2026-11-21): `neural.step` and `neural.bridge_reset` are the eighty-sixth and
+    // eighty-seventh. Both are owner-only for the same reason: a model that could step the substrate
+    // could manufacture the candidate associations it is then asked to consider.
+    assert.equal(writes.length, 87, 'the inventory counts eighty-seven write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -257,7 +263,8 @@ describe('AF-19: the registry is the inventory', () => {
     const reads = app.registry.list().filter((d) => d.permission === 'read');
     // T-30 (2026-11-19) supersedes the prior 80-read count: Workshop adds list/get/inspect/simulate.
     // T-36 Step 1 (2026-11-21): `system.bootstrap_status` is the eighty-sixth read.
-    assert.equal(reads.length, 86, 'the inventory counts eighty-six read actions with a root configured');
+    // T-37 Step 1 (2026-11-21): `neural.read` is the eighty-seventh.
+    assert.equal(reads.length, 87, 'the inventory counts eighty-seven read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -455,6 +462,12 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         // repository said at that moment and enrols the workstation. It is a reading and a
         // registry, not a belief about the world, and it authorizes nothing it names.
         assert.equal(row.belief, def.permission === 'write' ? 'no (a machine reading is not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('neural.')) {
+        // [T-37 Step 1, 2026-11-21] Track 2 steps a deterministic spiking simulation and reads it back.
+        // A spike is a candidate association about its own substrate, not a claim about the world: it
+        // cannot authorize an action and it cannot write an observed fact. The bridge reset moves an
+        // in-memory breaker, which is a declaration of translator status rather than a belief.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a spike is not a belief)' : 'no', `${name}: README belief-state`);
       } else if (name.startsWith('perception.')) {
         // [T-32 Step 3, 2026-11-19] Perception appends host and workspace readings to its own ledger
         // and records the Sentinel's push discipline. A CPU reading is an observation about this

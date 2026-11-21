@@ -5,7 +5,7 @@
 // because session turns are ordered and the conversation log is the continuity record.
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { UI_CLIENT, UI_CSS, UI_PAGE } from './assets.js';
 import { BoundedEventHistory, canQueueEventFrame, EVENT_HEARTBEAT_MS, HEARTBEAT_SCHEMA, MAX_EVENT_FRAME_BYTES, OWNER_POLL_MS, STATE_EVENT_HISTORY_LIMIT, STATE_EVENT_OWNERS, STATE_EVENT_SCHEMA } from './event-contract.js';
@@ -2148,6 +2148,124 @@ export function createUiServer({
       } catch (err) { sendJson(res, 400, { error: err.message }); }
       return;
     }
+    // T-37 Step 1 (2026-11-21): Track 2, the 8-region spiking substrate and its versioned bridge.
+    // The bridge read is a GET because it advances nothing; the step is a POST because it advances
+    // a stateful simulation and appends to a ledger, so it goes through the controller and the ECP
+    // like every other write. Both refuse to invent numbers: an unconfigured service answers 503.
+    if (method === 'GET' && url.pathname === '/api/neural/bridge') {
+      try {
+        if (!app.neural || typeof app.neural.report !== 'function') {
+          sendJson(res, 503, { unavailable: true, error: 'the neural substrate is not configured' });
+          return;
+        }
+        const report = app.neural.report();
+        sendJson(res, 200, {
+          schema: 'apex.neural.bridge/1',
+          at: report.at,
+          bridgeVersion: report.bridge.bridgeVersion,
+          contract: report.bridge.contract,
+          status: report.bridge.status,
+          isolated: report.bridge.isolated,
+          enabled: report.bridge.enabled,
+          consecutiveRefusals: report.bridge.consecutiveRefusals,
+          threshold: report.bridge.threshold,
+          crossings: report.bridge.crossings,
+          refusals: report.bridge.refusals,
+          fallbacks: report.bridge.fallbacks,
+          lastCrossing: report.bridge.lastCrossing,
+          lastRefusal: report.bridge.lastRefusal,
+          isolationFallback: report.bridge.isolationFallback,
+          boundary: report.boundary,
+          indicators: report.indicators,
+        });
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `the neural bridge is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    // The full substrate report: every region's cells, spikes, membrane potentials and adjacency.
+    if (method === 'GET' && url.pathname === '/api/neural/substrate') {
+      try {
+        if (!app.neural || typeof app.neural.report !== 'function') {
+          sendJson(res, 503, { unavailable: true, error: 'the neural substrate is not configured' });
+          return;
+        }
+        const report = app.neural.report();
+        sendJson(res, 200, {
+          schema: 'apex.neural.substrate-report/1',
+          at: report.at,
+          substrate: report.substrate,
+          indicators: report.indicators,
+          bridge: {
+            bridgeVersion: report.bridge.bridgeVersion,
+            status: report.bridge.status,
+            isolated: report.bridge.isolated,
+            crossings: report.bridge.crossings,
+            refusals: report.bridge.refusals,
+          },
+          ledger: report.ledger,
+          boundary: report.boundary,
+        });
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `the neural substrate is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    // The governed step. It is a write, so it is the controller's: the registry authorizes it, the
+    // ECP refuses it under lockdown, and the answer is reported from what the action verified.
+    if (method === 'POST' && url.pathname === '/api/neural/step') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['steps', 'crossBridge', 'reason'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = await app.controller.runAction('neural.step', {
+          ...(body.steps === undefined ? {} : { steps: body.steps }),
+          ...(body.crossBridge === undefined ? {} : { crossBridge: body.crossBridge }),
+          ...(typeof body.reason === 'string' && body.reason.trim() !== '' ? { reason: body.reason } : {}),
+        }, 'user', `ui-neural-step-${randomUUID()}`, null);
+        // `runAction` returns the step itself: its outcome is the authority, and its `result.data`
+        // is what the action measured. A 400 carries the action's own summary so the caller is
+        // never left guessing why a step did not run.
+        const data = result?.result?.data ?? null;
+        const verified = result?.verification?.outcome === 'success_verified'
+          || result?.outcome === 'success_verified';
+        if (!data) {
+          sendJson(res, 400, {
+            status: result?.outcome ?? 'failed',
+            error: result?.summary || result?.execution?.error?.message || 'the substrate step returned no result',
+            display: result?.display ?? null,
+          });
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.outcome, stepVerified: verified, display: result.display });
+        broadcast('neural', { at: data.at ?? null });
+        scheduleOwnerRefresh();
+      } catch (err) { sendJson(res, 400, { error: err.message }); }
+      return;
+    }
+    // The explicit breaker reset after an isolation. A write, so it is the owner's.
+    if (method === 'POST' && url.pathname === '/api/neural/bridge/reset') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => key !== 'reason');
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = await app.controller.runAction('neural.bridge_reset', {
+          ...(typeof body.reason === 'string' && body.reason.trim() !== '' ? { reason: body.reason } : {}),
+        }, 'user', `ui-neural-reset-${randomUUID()}`, null);
+        const data = result?.result?.data ?? null;
+        sendJson(res, 200, {
+          ...(data ?? {}),
+          status: result?.outcome ?? 'unknown',
+          display: result?.display ?? null,
+          verified: (result?.verification?.outcome === 'success_verified' || result?.outcome === 'success_verified'),
+        });
+        broadcast('neural', { at: new Date().toISOString() });
+      } catch (err) { sendJson(res, 400, { error: err.message }); }
+      return;
+    }
+
     // T-36 Step 1: the bootstrap state, so the deck can tell whether this directory has been
     // bootstrapped without reading the marker file itself.
     if (method === 'GET' && url.pathname === '/api/system/bootstrap') {

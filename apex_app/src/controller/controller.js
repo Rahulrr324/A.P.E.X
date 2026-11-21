@@ -613,6 +613,10 @@ export class CognitiveController {
     reasoning = null,
     dataDir = null,
     neural = null,
+    // T-37 Step 1: the live Track 2 service. `neural` above stays the *boundary* declaration (what a
+    // transport would be); `neuralService` is the substrate the capabilities actually step. Keeping
+    // them separate is deliberate: the boundary is a contract, the service is state.
+    neuralService = null,
     council = null,
     workshop = null,
     evolution = null,
@@ -696,6 +700,7 @@ export class CognitiveController {
     // by the application, and even when one is injected for a test, an action sees only the plain
     // declaration. It is held here so `neural.contract` can report it.
     this.neural = neural;
+    this.neuralService = neuralService;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -3325,6 +3330,9 @@ export class CognitiveController {
       // transport is connected. Inspecting it contacts nothing; the simulated transport is
       // reported as available to tests, never as an integrated runtime.
       neuralContract: describeNeuralBoundary(this.neural),
+      // T-37 Step 1: the Track 2 substrate service, so `neural.step` and `neural.read` reach the one
+      // simulation the deck also reads. It carries no authorization: the registry decides above.
+      neural: this.neuralService,
       council: this.council,
       workshop: this.workshop,
       evolution: this.evolution,

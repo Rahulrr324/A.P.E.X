@@ -53,6 +53,9 @@ import { DeadlineStore } from './deadlines/store.js';
 import { deadlineActions } from './actions/deadline-actions.js';
 import { backupActions } from './actions/backup-actions.js';
 import { councilActions, createCouncilService } from './actions/council-actions.js';
+// T-37 Step 1: the 8-region LIF/STDP substrate and its versioned bridge, plus the capabilities that
+// step and read them. Track 2 produces candidate associations; it authorizes nothing.
+import { neuralActions, createNeural } from './actions/neural-actions.js';
 import { workshopActions } from './actions/workshop-actions.js';
 import { evolutionActions } from './actions/evolution-actions.js';
 import { briefingActions } from './actions/briefing-actions.js';
@@ -96,6 +99,9 @@ export function createApp({
   stepUpToken = null,
   experienceCapture = CAPTURE_OFF,
   neuralRuntime = null,
+  // T-37 Step 1: the Track 2 substrate seed. It is an option so a test can pin a substrate that is
+  // reproducible across processes; the default is the declared constant in substrate.js.
+  neuralSeed = null,
   integrationProviders = null,
   autonomyByDomain = {},
 } = {}) {
@@ -294,13 +300,18 @@ export function createApp({
     workspaceDir: rootForContext,
   });
 
+  // T-37 Step 1: Track 2. One deterministic spiking substrate per data directory, its versioned
+  // neural-cognitive bridge, and the ledger of steps that ran. It is constructed before action
+  // registration so `neural.step` is authorized by the same ECP path as every other write.
+  const neural = createNeural({ dataDir, now: clock, ...(neuralSeed ? { seed: neuralSeed } : {}) });
+
   // Device trust records enrollment and authenticates signed device messages. It does not
   // grant capabilities; all action authorization remains with the existing ECP.
   const deviceTrust = new DeviceTrustService(path.join(dataDir, 'devices.jsonl'), { now: clock, idFactory });
 
   for (const def of [...builtinActions(), ...safetyActions(registry.controlPlane), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
-    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...workshopActions(workshop), ...evolutionActions(evolution), ...perceptionActions(perception, { controlPlane: registry.controlPlane }), ...extraActions, ...fsActions]) registry.register(def);
+    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...workshopActions(workshop), ...evolutionActions(evolution), ...perceptionActions(perception, { controlPlane: registry.controlPlane }), ...neuralActions(neural), ...extraActions, ...fsActions]) registry.register(def);
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -402,6 +413,7 @@ export function createApp({
     reasoning,
     dataDir,
     neural: neuralRuntime,
+    neuralService: neural,
     council,
     workshop,
     evolution,
@@ -447,6 +459,10 @@ export function createApp({
     // stated before the mission's first step is recorded.
     workshop,
     council,
+    // T-37 Step 1: Track 2's substrate is available to a cognitive run as a read-only salience
+    // modulation. The pipeline reads the bridge; it never steps the substrate, because stepping is
+    // a governed write the owner authorizes.
+    neural,
     now: clock,
     idFactory,
   });
@@ -522,6 +538,10 @@ export function createApp({
     cognition,
     briefing,
     handoffs,
+    // T-37 Step 1: Track 2. Exposed so the UI server and the pipeline share the one substrate the
+    // actions already step - a second instance would be a second simulation, and the deck would be
+    // showing numbers no action produced.
+    neural,
   };
   // T-36 Step 1: the doctor and the workstation bootstrap. The doctor is composed with the same
   // application the deck reads, so its six checks are the running system's and not a second opinion

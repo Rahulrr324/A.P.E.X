@@ -177,6 +177,11 @@ export function createCognitivePipeline({
   // T-34 Step 1: optional. A compiled mission refuses an artifact this service cannot read, so the
   // mission's own precondition is stated before any step is recorded.
   workshop = null,
+  // T-37 Step 1: optional. Track 2's substrate is a salience modulator, not a decider. When it is
+  // present a run reads the candidate associations that already crossed the bridge and records them
+  // beside the symbolic salience it computed. It cannot raise a risk sensitivity, grant a permission,
+  // nominate the governing action, or reach the ECP; the numbers below are only ever reported.
+  neural = null,
   council,
   now = () => new Date(),
   idFactory = randomUUID,
@@ -455,6 +460,83 @@ export function createCognitivePipeline({
     };
   }
 
+  // T-37 Step 1: what Track 2 contributes to a run. It is deliberately a *read*: a cognitive run may
+  // not step the substrate, because stepping is a governed write and authorization for it belongs to
+  // the owner. What the run gets is the candidate associations that already crossed, and the bridge's
+  // status - so a reader can tell "the bridge is isolated and contributed nothing" from "the bridge
+  // contributed zero salience", which are very different facts.
+  function neuralStage() {
+    if (!neural || typeof neural.report !== 'function') {
+      return {
+        schema: 'apex.cognition.neural-stage/1',
+        available: false,
+        reason: 'Track 2 is not configured in this build; the run is purely symbolic (Track 1)',
+        contributions: [],
+        signals: [],
+        bridge: null,
+        // The boundary is stated even when there is nothing behind it. A reader diffing two run
+        // records must not have to know which build produced each one to read the same two fields.
+        epistemicStatus: 'candidate_association',
+        authorizesExecution: false,
+        mutatesObservedFacts: false,
+      };
+    }
+    let report;
+    try {
+      report = neural.report();
+    } catch (err) {
+      return {
+        schema: 'apex.cognition.neural-stage/1',
+        available: false,
+        reason: `the neural substrate could not be read: ${text(err.message, 160)}`,
+        contributions: [],
+        signals: [],
+        bridge: null,
+        epistemicStatus: 'candidate_association',
+        authorizesExecution: false,
+        mutatesObservedFacts: false,
+      };
+    }
+    const bridge = report.bridge ?? {};
+    // An isolated or disabled bridge contributes nothing, and says so rather than reporting zeroes.
+    const crossed = bridge.status === 'connected' && Array.isArray(report.indicators?.signals)
+      ? report.indicators.signals
+      : [];
+    const contributions = crossed.map((signal) => ({
+      id: text(signal.id, 40),
+      value: signal.value,
+      // The label is restated here rather than trusted from the producer: whatever the packet said,
+      // what a run records is a candidate association.
+      epistemicStatus: 'candidate_association',
+      basis: text(signal.basis ?? '', 160),
+    }));
+    return {
+      schema: 'apex.cognition.neural-stage/1',
+      available: true,
+      reason: crossed.length === 0
+        ? `the bridge is ${bridge.status}, so Track 2 contributed no candidate associations`
+        : `${contributions.length} candidate association(s) crossed the bridge`,
+      contributions,
+      signals: contributions,
+      bridge: {
+        bridgeVersion: bridge.bridgeVersion ?? null,
+        status: bridge.status ?? null,
+        isolated: bridge.isolated === true,
+        crossings: bridge.crossings ?? null,
+        refusals: bridge.refusals ?? null,
+      },
+      substrate: {
+        step: report.substrate?.step ?? null,
+        cells: report.substrate?.totals?.cells ?? null,
+        synapses: report.substrate?.totals?.synapses ?? null,
+      },
+      // Restated on the stage itself so no reader of a run record has to remember what Track 2 is.
+      epistemicStatus: 'candidate_association',
+      authorizesExecution: false,
+      mutatesObservedFacts: false,
+    };
+  }
+
   function councilEvidence(packet) {
     const supplies = [
       ...packet.memory.items.slice(0, 3).map((item) => ({
@@ -723,6 +805,10 @@ export function createCognitivePipeline({
     const salience = { ...salienceOf({ packet, definition: governing.definition }), resource_pressure: pressure.value };
     if (pressure.unavailable) salience.resource_basis = pressure.basis;
     salience.basis.resource_pressure = pressure.basis;
+    // T-37 Step 1: read what Track 2 already produced. This is a read of the bridge, not a step of
+    // the substrate, and it changes no field of `salience`: the candidate associations are recorded
+    // beside the decision so the owner can see them without any of them deciding anything.
+    const neuralReport = neuralStage();
     const councilStage = await deliberate({
       intent,
       packet,
@@ -784,6 +870,10 @@ export function createCognitivePipeline({
         risk: governing.definition.risk ?? null,
         description: text(governing.definition.description ?? '', 240),
       },
+      // T-37 Step 1: Track 2 is a sibling of `stages`, not a sixth stage. `COGNITION_STAGES` names the
+      // symbolic pipeline and stays exactly five; the substrate is a parallel input recorded beside
+      // it, so a reader can see what crossed the bridge without it ever appearing to decide anything.
+      neural: neuralReport,
       stages: {
         context: packet,
         salience,
@@ -971,6 +1061,9 @@ export function createCognitivePipeline({
     if (pressure.unavailable) salience.resource_basis = pressure.basis;
     salience.basis.resource_pressure = pressure.basis;
 
+    // T-37 Step 1: as on the mission path - read the bridge, record what crossed, decide nothing.
+    const neuralReport = neuralStage();
+
     const warranted = councilRequested === true
       || salience.uncertainty >= 0.4
       || salience.risk_sensitivity >= 0.5
@@ -1027,6 +1120,8 @@ export function createCognitivePipeline({
         risk: definition.risk ?? null,
         description: text(definition.description ?? '', 240),
       },
+      // T-37 Step 1: as on the mission path - a sibling of `stages`, never a stage of them.
+      neural: neuralReport,
       stages: {
         context: packet,
         salience,

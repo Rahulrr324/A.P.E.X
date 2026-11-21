@@ -112,6 +112,10 @@ export function cognitionActions(pipeline) {
             verification: run.verification,
             approval: run.approval,
             mission: run.mission ?? null,
+            // T-37 Step 1: Track 2's contribution, as a sibling of `stages` rather than a stage of it.
+            // `null` rather than omitted, so a reader can tell a build without Track 2 from a run that
+            // simply did not record one.
+            neural: run.neural ?? null,
             stages: run.stages,
           },
           display: traceText(run),

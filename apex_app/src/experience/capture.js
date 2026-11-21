@@ -105,6 +105,12 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // APEX chose. Every value it records is re-derivable by reading the machine again, and an
   // experience of it would teach the pattern reads that "install and boot" is behavioural evidence.
   system: 'it reads the machine and the repository for the first time and records what it found; every value it holds is re-derivable by reading them again, so an experience of it would say less than a fresh reading',
+  // T-37 Step 1 (2026-11-21): Track 2. The substrate is a deterministic simulation: its whole state is
+  // a function of its seed and its step count, and the ledger it writes already records every step.
+  // An experience of a step would copy a number that a replay reproduces exactly, and an experience
+  // of the bridge reset would record the state of a translator. Neither says anything about what APEX
+  // did to the owner's world, which is what the experience log is for.
+  neural: 'it advances a deterministic simulation whose entire state is a function of its seed and step count, and whose own ledger already records each step; an experience of one would copy a number that a replay reproduces exactly',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
@@ -124,6 +130,9 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // T-36 Step 1: the cold-start bootstrap and its status read.
   'system.bootstrap': 'system',
   'system.bootstrap_status': 'system',
+  'neural.step': 'neural',
+  'neural.read': 'neural',
+  'neural.bridge_reset': 'neural',
   'app.status': 'read',
   'app.capabilities': 'read',
   'calc.evaluate': 'read',
