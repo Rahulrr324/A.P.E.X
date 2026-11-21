@@ -1842,8 +1842,58 @@ transitions, and all eleven screen declarations — with zero console error, zer
 failed request and no horizontal overflow. It is wired into `playwright.config.mjs` and the CI
 workflow publishes its own annotation.
 
-**Unverified at the time of writing:** the browser walk itself. This host has no Chromium-family
-binary, so the spec skips here with an explicit diagnostic and the run is `UNVERIFIED` until CI
-reports it. The fixture behind it *was* exercised locally: it starts the real server, steps the
-substrate through the governed route (`stepVerified: true`, 338 spikes), and reads the bridge and
-the eight regions back over HTTP.
+**The browser walk is verified in a real browser, and it earned its keep.** This host ships no
+Chromium, so the first attempt was a hosted run — which went red, and every red was real. A real
+Chromium 153 (`@sparticuz/chromium`, extracted and pointed at with `APEX_BROWSER_BIN`, which the
+resolver already supports) then reproduced each failure locally in seconds instead of a CI round
+trip. Five defects came out of the walk:
+
+1. **The substrate panel printed `unknown` for three facts it had.** The panel renders the bridge
+   contract; `GET /api/neural/substrate` hand-picked five fields off the bridge summary and dropped
+   the contract. A reader saw "Signal schema: unknown", "Accepts: unknown" and "of ?" beside a
+   version the deck did have. The route passes the whole summary through now, so a field the service
+   exposes is a field the deck can show.
+2. **A verified mission was reported as "Compiled but not verified"** beside a literal `undefined`
+   run id. `/api/cognition/run` answers with the run nested under its own key and the button read
+   the envelope. It reads the record now — `verification.outcome: 'verified'`, a real `runId` and a
+   real `taskId`.
+3. **The Council panel was read while it still held the previous render.** The status line is set
+   before the deck refreshes, so waiting on the status is not waiting on the panel. The walk waits on
+   the rendered perspective rows.
+4. **Every dispatch was read one route behind.** The receipt panel stays visible after the first
+   dispatch, so waiting on visibility resolves against the previous receipt. The walk waits for the
+   receipt to carry the route it asked for.
+5. **A real layout defect, present since before T-37.** A full-width element on a `z1` depth plane is
+   translated by a fractional parallax offset, so its right edge lands a sub-pixel past the viewport,
+   the document widens by 1–2 px, and **the page scrolls sideways**. `overflow-x: hidden` on the
+   `body` cannot stop it, because the viewport's scrollbox is propagated from the root element, not
+   from `body`. The root clips now. Measured after the fix: all 15 views at 1440×900, 1280×720 and
+   390×844 have `scrollWidth === clientWidth` and cannot be scrolled horizontally at all.
+
+Also fixed here: a shipped inline `style="max-width:6rem"` on the neural step field, which violated
+the deck's own `style-src 'self'` and produced a console error in every browser suite; and the walk
+now records why it failed and which phase it reached, because the first hosted run wrote a summary
+full of `None` and nothing else.
+
+**Measured, in Chromium 153, from `reports/t37-neural-council-router.json`:**
+
+| Phase | Result |
+| --- | --- |
+| Track 2 regions | 8, in canonical order, each with cells/spikes/active/membrane/weight |
+| Bridge boundary | `candidate_association`, `authorizesExecution: false`, `mutatesObservedFacts: false` |
+| Constraint core | 6 rules on screen: 2 `satisfied`, 1 `not_applicable`, 3 `unverifiable` |
+| Council compile | `Compiled and run: success_verified · task task-1c5cb8d14a534dd59534` |
+| Receipts | `mode` (not verified), `sense`/`council`/`mission` all verified |
+| Screens | all 11 declared, each reachable, each message on one line |
+| Overflow | 1440 ≤ 1440 at every view |
+| Console / page / request errors | 0 / 0 / 0 |
+| Screenshots | 4 |
+
+The whole end-to-end suite — t31 through t37 — passes in that browser: **17/17**.
+
+**Local totals.** `node --test tests/*.test.js`: **4105 tests, 4103 pass, 0 fail, 2 skipped**
+(25m 5s). Both skips are pre-existing platform checks that only apply on Windows (case-insensitive
+paths and backslash separators). T-36's suite was 4046, so T-37 adds exactly its 59.
+
+`node --check` over every `apex_app/src` file: **256 checked, 0 failures** (250 at T-36, plus the
+six files T-37 added).
