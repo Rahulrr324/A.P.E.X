@@ -1593,9 +1593,17 @@ The two skips are the two real-browser fixtures that need a Chromium-family bina
 not have. `tests/e2e/t36-cold-boot-unseeded.spec.mjs` is one of them; it skips with an explicit
 diagnostic rather than passing.
 
-**Hosted CI.** Run **`44906434285`** at `bc4d857` — **success**, every step green: the source check, the
-full unit suite, the real-browser step, all seven publish steps and the artifact upload. The runner's
-own Edge: `microsoft-edge` at `/usr/bin/microsoft-edge`, browser `157.0.4341.60`.
+**Hosted CI.** Two runs, both **green**, because the evidence had to be written down before it could be
+quoted. Run **`44906434285`** at `bc4d857` is the green run of the code; run **`44909380889`** at
+**`56425e5`** — the final commit, which adds only this report — is green again end to end. In both, every
+step passed: the source check, the full unit suite, the real-browser step, all seven publish steps and
+the artifact upload. The runner's own Edge: `microsoft-edge` at `/usr/bin/microsoft-edge`, browser
+`157.0.4341.60`.
+
+The annotations below are quoted from `44906434285`; the t36 line from the final run `44909380889` reads
+`... | workspace trunk@e360b65 (repo trunk@e360b65) | ... | doctor 6/6 pass in 1.24 ms (within budget
+True) | cognition awaiting_approval task task-f996ccce58b74e90b520 approvals 1 | overflow 1440<=1440 |
+screenshots 8`, identical in every other respect.
 
 Verbatim annotations from all six browser suites:
 
