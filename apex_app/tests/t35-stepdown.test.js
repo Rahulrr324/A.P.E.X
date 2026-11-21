@@ -175,6 +175,14 @@ describe('T-35 the stage comes from real telemetry, through explicit thresholds'
     }
   });
 
+  test('stage 1 zeroes the bloom token, and names the Core element the ack rule also names', () => {
+    // The Core is #core-reticle; the acknowledgement rule carries an id, so a stage rule written
+    // against `.core` loses to it and the glow survives the drop. Found by the hosted walk.
+    assert.match(UI_CSS, /body\[data-hud-bloom="dropped"\] #core-reticle\[data-ack-state="active"\] \{ filter: none;/,
+      'the stage names the same element, with the ack state, so it wins on specificity');
+    assert.ok(UI_CSS.includes('transition-duration: 0s'), 'and leaves no glow mid-transition');
+  });
+
   test('stage 1 zeroes the bloom token itself, not only the elements a rule happens to cover', () => {
     // Found by the hosted run: the stylesheet dropped the painted glow but left `--hud-bloom` at its
     // 18px value, so the rung's own statement was not visible to anything reading the token.

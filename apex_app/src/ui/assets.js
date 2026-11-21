@@ -1010,7 +1010,11 @@ body[data-motion="reduced"] .core, body[data-motion="reduced"] .core-halo { anim
    readable. */
 body[data-hud-bloom="dropped"] { --hud-bloom: 0px; }
 .core { filter: drop-shadow(0 0 var(--hud-bloom) rgba(0, 229, 255, 0.25)); }
-body[data-hud-bloom="dropped"] .core { filter: none; }
+/* The Core is #core-reticle, and the acknowledgement rule below carries an id, so the stage has to
+   name the same element to win. The ack still shows: the opacity of its ring (.reticle-ack) is the
+   cue, and the filter transition is zeroed so no glow is left mid-flight when the bloom drops. */
+body[data-hud-bloom="dropped"] #core-reticle,
+body[data-hud-bloom="dropped"] #core-reticle[data-ack-state="active"] { filter: none; transition-duration: 0s; }
 body[data-hud-bloom="dropped"] .core-halo { opacity: 0.3; }
 body[data-hud-bloom="dropped"] .nav-item.active { box-shadow: none; }
 body[data-hud-bloom="dropped"] .panel, body[data-hud-bloom="dropped"] .rail, body[data-hud-bloom="dropped"] .stage { box-shadow: none; }

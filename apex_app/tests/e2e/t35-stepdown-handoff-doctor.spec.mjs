@@ -166,8 +166,17 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
       const stage1 = await setStage(1);
       run.stages[1] = stage1;
       expect(stage1.bloom).toBe('dropped');
-      expect(stage1.deckBloom, 'the bloom token the deck inherits is zeroed').toBe('0px');
-      expect(stage1.coreFilter, 'the bloom is gone from the painted Core').toBe('none');
+      // The reticle transitions its filter when it acknowledges a click, so read the settled value
+      // instead of whatever is in flight at the moment the stage is applied.
+      const settledFilter = () => page.evaluate(() => getComputedStyle(document.querySelector('.core')).filter);
+      await expect.poll(settledFilter, { timeout: 4000 }).toBe('none');
+      const stage1Settled = await page.evaluate(() => ({
+        deckBloom: getComputedStyle(document.body).getPropertyValue('--hud-bloom').trim(),
+        coreFilter: getComputedStyle(document.querySelector('.core')).filter,
+      }));
+      run.stages[1].settled = stage1Settled;
+      expect(stage1Settled.deckBloom, 'the bloom token the deck inherits is zeroed').toBe('0px');
+      expect(stage1Settled.coreFilter, 'the bloom is gone from the painted Core').toBe('none');
       expect(stage1.reticle.opacity, 'the reticle stays legible when the bloom drops').toBe('1');
       await shot('stage-1-no-bloom');
 
