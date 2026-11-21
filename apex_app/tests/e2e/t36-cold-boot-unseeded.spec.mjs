@@ -374,8 +374,11 @@ test.describe('T-36 cold boot on an unseeded workstation, in a real browser', ()
       expect(['awaiting_approval', 'completed']).toContain(runStatus);
       await page.locator('nav .nav-item[data-view="deck"]').click();
       await expect(page.locator('body')).toHaveAttribute('data-view', 'deck');
-      // The deck's own approval list, and the owner's approval queue, both name the run's step.
-      await expect(page.locator('#approvals')).toContainText(/memory|approval/i, { timeout: 30_000 });
+      // The owner's approval queue renders the run's gated step. `#approval-items` is the list the
+      // Approval Centre fills; `#approvals` is the deck rail's summary slot.
+      await expect(page.locator('#approval-state')).toContainText('owner-recorded pending request', { timeout: 30_000 });
+      await expect(page.locator('#approval-items')).toContainText(/memory|approval/i, { timeout: 30_000 });
+      await expect(page.locator('#approval-items li')).toHaveCount(1, { timeout: 30_000 });
       const approvals = (await handle.get('/api/approvals')).body;
       const approvalItems = Array.isArray(approvals?.items) ? approvals.items : [];
       expect(approvalItems.length, 'the ECP left exactly one step awaiting the owner').toBe(1);
