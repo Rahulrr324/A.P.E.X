@@ -175,6 +175,18 @@ describe('T-35 the stage comes from real telemetry, through explicit thresholds'
     }
   });
 
+  test('stage 1 zeroes the bloom token itself, not only the elements a rule happens to cover', () => {
+    // Found by the hosted run: the stylesheet dropped the painted glow but left `--hud-bloom` at its
+    // 18px value, so the rung's own statement was not visible to anything reading the token.
+    assert.ok(UI_CSS.includes('body[data-hud-bloom="dropped"] { --hud-bloom: 0px; }'),
+      'the token is zeroed at the root when the bloom is dropped');
+    assert.match(UI_CSS, /\.core \{ filter: drop-shadow\(0 0 var\(--hud-bloom\)/,
+      'the painted glow reads the same token, so the drop is the same drop');
+    const base = UI_CSS.match(/:root \{[\s\S]*?--hud-bloom: (\d+px);/);
+    assert.ok(base, 'the nominal value is declared once, in :root');
+    assert.notEqual(base[1], '0px', 'the nominal deck is not already flat');
+  });
+
   test('the ResourceFabric reports the load average it now measures, and null when it cannot', async () => {
     const strained = new ResourceFabric({
       loadAverage: () => [12, 9, 7],

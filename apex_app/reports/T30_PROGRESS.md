@@ -1311,6 +1311,20 @@ Neither was relaxed. The attempt list and the wiring assertion are the two place
 decided a new capability or a new walk has to be declared, and both caught the omission on the day it
 happened.
 
+### The first hosted run: two reds in the new work, one in older work
+
+Run `44869827194` at commit `7b0523d` passed the source check and the whole unit suite, and the
+real-browser step failed. The annotations named the cause rather than the symptom:
+
+| Failure | Cause | Fix |
+| --- | --- | --- |
+| T-35, stage 1 | the walk asserted `--hud-bloom` is `0px` at stage 1 and read `18px`: the stylesheet dropped the painted glow (`filter: none`) but never zeroed the token itself | `body[data-hud-bloom="dropped"] { --hud-bloom: 0px; }` is now the first rule of the rung, and a unit test pins it against the served stylesheet. The browser found what the source reading had missed, which is the reason the walk exists |
+| T-33, `idle` checkpoint | `/api/state` reported the governor's *deliveries* under `perception.advisories`, so when the governor deduplicated an unchanged signature the snapshot claimed there was no advisory while the workspace was still dirty. A settled deck then allowed wit with a condition standing. The comment above that code already said a condition is a condition whether or not its notice was delivered | the snapshot now reports the conditions the last reading implied (`advisories`, `activeAdvisories`) and the delivery count separately (`deliveredAdvisories`); the fixture test pins the deduplicated case, and the browser assertion becomes deterministic instead of timing-dependent |
+
+The second one is the more interesting: it had been latent since T-33 and only surfaced when a run's
+timing let the dedup land between the walk's last reading and its Idle checkpoint. It is reported here
+as a bug the milestone found, not as a flake to be re-run until green.
+
 ### What is verified, and what is not
 
 Verified locally, with the shipped code: the ladder table and its thresholds; the override semantics;

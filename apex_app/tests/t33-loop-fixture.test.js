@@ -110,6 +110,26 @@ describe('the T-33 executive-loop fixture', () => {
     assert.ok(classic.witWithheldBecause.includes('an owner approval is pending'));
   });
 
+  // [T-35, 2026-11-19] The distinction the browser walk depends on: the governor deduplicates an
+  // unchanged signature, so a second reading of the same dirty tree is delivered to nobody. The
+  // condition still stands, and the deck must follow the condition rather than the notice - the
+  // snapshot used to report the delivery count as the advisory list, which made "wit withheld" depend
+  // on whether a notice happened to be dispensed at that instant.
+  test('a deduplicated advisory is still a condition, and still withholds the wit', async () => {
+    handle.addUntrackedFile();
+    const first = await sense();
+    assert.ok(first.advisories.some((entry) => entry.alertClass === 'workspace_dirty'), 'the tree is dirty');
+    const second = await sense();
+    const delivery = second.deliveries.find((entry) => entry.alertClass === 'workspace_dirty');
+    assert.equal(delivery.admitted, false, 'the unchanged signature is deduplicated');
+    const view = await comms();
+    assert.equal(view.perception.deliveredAdvisories, 0, 'nothing was delivered this time');
+    assert.ok(view.perception.activeAdvisories > 0, 'the condition is still reported');
+    assert.deepEqual(view.perception.advisories.map((entry) => entry.alertClass), ['workspace_dirty']);
+    assert.equal(view.comms.framings.classic.witAllowed, false, 'wit follows the condition, not the notice');
+    assert.ok(view.comms.framings.classic.witWithheldBecause.includes('an advisory is active'));
+  });
+
   test('the sheet the deck stages from the reading is one the sandbox can actually verify', async () => {
     // Mirrors `stageFromTelemetry()` in src/ui/assets.js: every number is one the reading reported,
     // and the one service is the check that consumes them.

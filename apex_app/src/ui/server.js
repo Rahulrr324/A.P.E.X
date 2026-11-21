@@ -1794,12 +1794,20 @@ export function createUiServer({
           observedCount: view.observedCount,
           unavailableCount: view.unavailableCount,
           lastObservationAt: view.lastObservationAt,
-          activeAdvisories: view.alerts?.active?.length ?? 0,
+          // T-35 (2026-11-19): two different questions, two different numbers. `conditions` is what
+          // the last reading implies; `deliveredAdvisories` is what the governor let through. They
+          // are not interchangeable: the governor deduplicates an unchanged signature, so a second
+          // reading of the same dirty tree is delivered to nobody while the tree is still dirty.
+          // This view used to report the delivery count as the advisory list, which made "wit is
+          // withheld for a condition" depend on whether a notice happened to be dispensed at that
+          // moment - the T-33 browser walk caught it as a flake on a settled deck.
+          activeAdvisories: (view.alerts?.advisories ?? []).length,
+          deliveredAdvisories: (view.alerts?.active ?? []).length,
           suppressions: view.alerts?.suppressions?.length ?? 0,
           // T-33 Step 4 (2026-11-19): the advisory *conditions* the last reading implied, so the
           // exec-comms formatter can withhold wit while anything on this machine is out of order.
           // A suppressed class is still a condition: suppression is about delivery, not about truth.
-          advisories: (view.alerts?.active ?? []).map((entry) => ({
+          advisories: (view.alerts?.advisories ?? []).map((entry) => ({
             alertClass: entry.alertClass,
             severity: entry.severity,
             critical: entry.critical === true,
