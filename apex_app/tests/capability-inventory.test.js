@@ -116,9 +116,11 @@ describe('AF-19: the registry is the inventory', () => {
     // so the pinned totals moved by four; the write count moves with them because all four write.
     // T-32 Step 3 (2026-11-19) adds four perception capabilities (sense_host, state, dismiss_alert,
     // revoke_suppression), so the pinned totals move by four and the read/write split with them.
-    assert.equal(plain.registry.list().length, 150, 'the default registry has 150 actions');
+    // T-34 Step 3 (2026-11-19) adds one owner-only write, `briefing.acknowledge`, so the pinned totals
+    // move by one.
+    assert.equal(plain.registry.list().length, 151, 'the default registry has 151 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 165, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 166, 'a configured workspace root adds fifteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -153,7 +155,9 @@ describe('AF-19: the registry is the inventory', () => {
     const writes = app.registry.list().filter((d) => d.permission === 'write');
     // T-30 (2026-11-19) supersedes the prior 69-write count: Workshop adds one user-only compose
     // write, and T-29 adds `cognition.run`, which is owner-only and unplannable.
-    assert.equal(writes.length, 80, 'the inventory counts eighty write actions with a root configured');
+    // T-34 Step 3 (2026-11-19): `briefing.acknowledge` is the eighty-first write, and it is owner-only
+    // like every other write in this list.
+    assert.equal(writes.length, 81, 'the inventory counts eighty-one write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -429,6 +433,11 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         // both record what happened, not what APEX believes. The store it writes is an account, and
         // the model/knowledge/world writes it may cause are separate authorized steps.
         assert.equal(row.belief, 'no (a run record is an account, not a belief)', `${name}: README belief-state`);
+      } else if (name === 'briefing.acknowledge') {
+        // [T-34 Step 3, 2026-11-19] Acknowledging a briefing appends the reading it compared against to
+        // its own checkpoint log. That is a comparison of two readings, not a belief about the world,
+        // and the checkpoint authorizes nothing.
+        assert.equal(row.belief, 'no (a checkpoint is a reading, not a belief)', `${name}: README belief-state`);
       } else if (name.startsWith('perception.')) {
         // [T-32 Step 3, 2026-11-19] Perception appends host and workspace readings to its own ledger
         // and records the Sentinel's push discipline. A CPU reading is an observation about this

@@ -217,7 +217,67 @@ test.describe('T-34 mission DAG, in a real browser', () => {
     step('mission-verified', { taskId: seeded.missionTaskId, status: done.body.status, verified: done.body.verified });
     await shot('05-mission-verified');
 
-    // ---- 6. the page's own honesty: no console error, no page error, nothing overflowing ------
+    // ---- 6. the candidate association: a prior episode, shown as a candidate and nothing more ----
+    await nav('memory');
+    const associationRecord = await fetch(`${handle.base}/api/memory/associations?limit=10`, { headers: handle.headers }).then((response) => response.json());
+    expect(associationRecord.epistemicStatus, 'the route labels its answer').toBe('candidate_association');
+    expect(associationRecord.authorizesExecution).toBe(false);
+    const recall = (associationRecord.recalls ?? []).find((entry) => entry.sourceRecordId === seeded.priorRunId)
+      ?? (associationRecord.recalls ?? [])[0];
+    expect(recall, 'a prior episode was recalled for a later intent').toBeTruthy();
+    expect(recall.epistemicStatus).toBe('candidate_association');
+    expect(recall.epistemicStatus).not.toBe('observed');
+    const associationRow = page.locator(`#associations li[data-association-id="${recall.id}"]`);
+    await expect(associationRow).toBeVisible({ timeout: 30_000 });
+    await expect(associationRow).toHaveAttribute('data-epistemic', 'candidate_association');
+    await expect(associationRow).toHaveAttribute('data-source-record', recall.sourceRecordId);
+    await expect(associationRow.locator('span.badge')).toHaveText('candidate association — not observed fact');
+    await expect(page.locator('#associations-status')).toContainText('none of them is an observation');
+    step('candidate-association', { id: recall.id, source: recall.sourceRecordId, similarity: recall.similarity, epistemic: recall.epistemicStatus });
+    await shot('06-candidate-association');
+
+    // ---- 7. the briefing: the honest baseline, the acknowledgement, then the delta it enables -----
+    await nav('deck');
+    await expect(page.locator('#briefing-delta-status')).toContainText('No prior briefing checkpoint recorded — showing full current state', { timeout: 30_000 });
+    await expect(page.locator('#briefing-delta li')).toHaveCount(0);
+    await page.locator('#briefing-acknowledge').click();
+    await expect(page.locator('#briefing-ack-status')).toContainText('Acknowledged', { timeout: 45_000 });
+    await expect(page.locator('#briefing-delta-status')).toContainText('Nothing has changed since the briefing you acknowledged at', { timeout: 45_000 });
+    const checkpointId = (await page.locator('#briefing-ack-status').textContent())?.match(/bc-[a-z0-9]+/)?.[0] ?? null;
+    expect(checkpointId, 'the acknowledgement names the checkpoint it wrote').toMatch(/^bc-/);
+    step('briefing-acknowledged', { checkpointId });
+    await shot('07a-briefing-acknowledged');
+
+    // A real change after the checkpoint: the single-node task is cancelled through the deck's own
+    // route, so the next briefing has something true to report.
+    const cancelled = await fetch(`${handle.base}/api/tasks/${encodeURIComponent(seeded.singleTaskId)}/cancel`, {
+      method: 'POST', headers: { ...handle.headers, 'content-type': 'application/json' }, body: '{}',
+    }).then((response) => response.json());
+    expect(cancelled.status, 'the second task was cancelled').toBe('success_verified');
+    const deltaRecord = await fetch(`${handle.base}/api/briefing`, { headers: handle.headers }).then((response) => response.json());
+    expect(deltaRecord.delta.available).toBe(true);
+    expect(deltaRecord.delta.checkpointId).toBe(checkpointId);
+    const change = (deltaRecord.delta.items ?? []).find((item) => item.kind === 'task_status' || item.kind === 'task_new');
+    expect(change, 'the briefing reports the change it can see').toBeTruthy();
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.locator('#core-state')).toBeVisible({ timeout: 45_000 });
+    await expect(page.locator('#briefing-delta-status')).toContainText('Changes since the briefing you acknowledged at', { timeout: 45_000 });
+    const deltaRow = page.locator(`#briefing-delta li[data-kind="${change.kind}"]`).first();
+    await expect(deltaRow).toBeVisible({ timeout: 30_000 });
+    await expect(deltaRow).toHaveAttribute('data-goto-view', change.goto.view);
+    await expect(deltaRow).toHaveAttribute('data-goto-task', change.goto.task);
+    await shot('07b-briefing-delta');
+
+    // ---- 8. the click-through: a briefing item goes to the view and the task it names --------------
+    await deltaRow.locator('button[data-go]').click();
+    await expect(page.locator('body')).toHaveAttribute('data-view', change.goto.view, { timeout: 30_000 });
+    await expect(page.locator('#taskgraph-select')).toHaveValue(change.goto.task, { timeout: 30_000 });
+    await expect(page.locator('#dag-nodes li[data-node-id]').first()).toBeVisible({ timeout: 30_000 });
+    step('briefing-click-through', { view: change.goto.view, task: change.goto.task });
+    await shot('08-briefing-click-through');
+
+    // ---- 9. the page's own honesty: no console error, no page error, nothing overflowing ------
     const overflow = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,

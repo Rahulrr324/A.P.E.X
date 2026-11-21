@@ -55,6 +55,8 @@ import { backupActions } from './actions/backup-actions.js';
 import { councilActions, createCouncilService } from './actions/council-actions.js';
 import { workshopActions } from './actions/workshop-actions.js';
 import { evolutionActions } from './actions/evolution-actions.js';
+import { briefingActions } from './actions/briefing-actions.js';
+import { createBriefingService } from './briefing/service.js';
 import { createEvolutionLab } from './evolution/lab.js';
 import { goalActions } from './actions/goal-actions.js';
 import { planActions } from './actions/plan-actions.js';
@@ -444,6 +446,15 @@ export function createApp({
     idFactory,
   });
   for (const def of cognitionActions(cognition)) registry.register(def);
+  // T-34 Step 3: the briefing checkpoints. The service reads the stores it is given and writes one
+  // file in the isolated data directory; acknowledging is a governed write (briefing.acknowledge).
+  const briefing = createBriefingService({
+    dataDir,
+    now: clock,
+    idFactory,
+    owners: { taskStore, perception, workshop, evolution, cognition },
+  });
+  for (const def of briefingActions(briefing)) registry.register(def);
   return {
     controller,
     memory,
@@ -482,6 +493,7 @@ export function createApp({
     deviceTrust,
     perception,
     cognition,
+    briefing,
   };
 }
 

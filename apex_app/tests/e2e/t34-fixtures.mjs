@@ -90,6 +90,16 @@ export async function startT34Ui({ token = T34_TOKEN, port = 0 } = {}) {
 }
 
 async function seed(app, { base, headers }) {
+  // T-34 Step 2: a prior episode with the mission's own subject. The mission run below therefore
+  // recalls it as a candidate association, and the walk can assert the badge against a real record
+  // instead of a fabricated one.
+  const priorRun = await fetch(`${base}/api/cognition/run`, {
+    method: 'POST',
+    headers: { ...headers, 'content-type': 'application/json' },
+    body: JSON.stringify({ intent: 'audit the host and verify the staged artifact, as done before', action: 'memory.search', input: { query: 'audit the host' } }),
+  }).then((response) => response.json()).catch(() => null);
+  if (!priorRun?.run?.runId) throw new Error(`the T-34 fixture could not record the prior episode: ${JSON.stringify(priorRun)}`);
+
   const composed = await app.workshop.compose(DESIGN);
   const artifactId = composed.artifact?.artifactId ?? null;
   if (!artifactId) throw new Error('the T-34 fixture could not stage a workshop artifact');
@@ -118,6 +128,7 @@ async function seed(app, { base, headers }) {
 
   return {
     artifactId,
+    priorRunId: priorRun.run.runId,
     missionRunId: missionBody.run.runId,
     missionTaskId: missionBody.run.taskId,
     missionStatus: missionBody.run.status,

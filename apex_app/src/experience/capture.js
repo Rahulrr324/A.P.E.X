@@ -93,6 +93,10 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // CPU reading would start to count as evidence about behaviour.
   perception: 'it records readings of the host and the workspace, or the Sentinel push discipline over them; an experience of one would put machine telemetry and notice bookkeeping into the log the pattern and adaptation reads draw from',
   evolution: 'it records a proposed change to APEX\'s own behaviour, the measured sandbox result for it, or the owner\'s promotion decision; a candidate self-change is not an event that happened, and it must not enter the experience log the pattern and adaptation reads draw from',
+  // T-34 Step 3: acknowledging a briefing writes a checkpoint of what the stores held at that moment.
+  // Capturing it would put APEX's own reading of its state into the log the pattern and adaptation
+  // reads draw from, so "the owner read a briefing" would start to count as behavioural evidence.
+  briefing: 'it records a checkpoint of what the owning stores held when the owner read a briefing; an experience of one would put APEX\'s own reading of its state into the log the pattern and adaptation reads draw from',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
@@ -101,6 +105,7 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
 export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // T-32 Step 3: perception. A reading is re-derivable only while the machine is in the same state,
   // which is exactly why it belongs in its own ledger rather than in the experience log.
+  'briefing.acknowledge': 'briefing',
   'perception.sense_host': 'perception',
   'perception.state': 'perception',
   'perception.dismiss_alert': 'perception',

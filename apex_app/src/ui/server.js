@@ -305,6 +305,12 @@ function taskGraphOf(task) {
   };
 }
 
+// A list from a value that may be absent or of another shape; used by the recall route, which reads
+// records written by an earlier version of the pipeline too.
+function listOfRuns(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 const CONTROL_FOR_STATE = Object.freeze({
   awaiting_approval: 'approve',
   failed: 'retry',
@@ -1247,6 +1253,26 @@ export function createUiServer({
         degraded: briefingCore === 'degraded',
       },
     });
+    // T-34 Step 3: what changed since the owner last acknowledged a briefing. The comparison is made
+    // from the same reading the checkpoint stores (src/briefing/snapshot.js), and when there is no
+    // checkpoint the answer says so instead of presenting the whole state as news.
+    let delta = null;
+    if (app.briefing && typeof app.briefing.latestDelta === 'function') {
+      try {
+        const comparison = await app.briefing.latestDelta();
+        delta = comparison.delta;
+      } catch (err) {
+        delta = {
+          available: false,
+          text: 'the briefing checkpoint could not be read, so no delta is claimed',
+          items: [],
+          counts: { tasks: 0, advisories: 0, observations: 0, workshop: 0, evolution: 0 },
+          error: err.message,
+        };
+      }
+    } else {
+      delta = { available: false, text: 'the briefing checkpoint store is not configured', items: [], counts: null };
+    }
     return {
       ...briefing,
       status,
@@ -1257,6 +1283,7 @@ export function createUiServer({
       executiveComms,
       inferred: tasks.rows ? briefing.inferred : [],
       perception,
+      delta,
       note: briefing.note + ' A partial status means at least one owner could not be read; unavailable counts are not zero.',
     };
   }
@@ -2110,6 +2137,48 @@ export function createUiServer({
       }
       return;
     }
+    // T-34 Step 2: candidate associative recall. The recalls are read out of the runs that recorded
+    // them - each one already carries its source record id, its similarity and the terms that matched
+    // - and nothing here invents a recall or re-scores one. `epistemicStatus` is the record's own
+    // `candidate_association`; a recall is never `observed` and never a permission.
+    if (method === 'GET' && url.pathname === '/api/memory/associations') {
+      if (!app.cognition) {
+        sendJson(res, 503, { unavailable: true, error: 'the cognitive pipeline is not configured' });
+        return;
+      }
+      try {
+        const requested = Number(url.searchParams.get('limit') ?? '10');
+        const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, 50) : 10;
+        const page = await app.cognition.list({ limit });
+        const recalls = [];
+        for (const cognitionRun of listOfRuns(page.runs)) {
+          const packet = cognitionRun?.stages?.context ?? null;
+          for (const recall of listOfRuns(packet?.associativeRecalls?.recalls)) {
+            recalls.push({
+              ...recall,
+              runId: cognitionRun.runId ?? null,
+              forIntent: packet?.intent ? singleLine(packet.intent, 200) : null,
+              at: packet?.at ?? null,
+            });
+          }
+        }
+        recalls.sort((a, b) => String(b.at ?? '').localeCompare(String(a.at ?? '')) || b.similarity - a.similarity);
+        sendJson(res, 200, {
+          schema: 'apex.associations/1',
+          at: new Date().toISOString(),
+          epistemicStatus: 'candidate_association',
+          rule: 'recalls recorded by cognitive runs; each carries its own source record id and similarity',
+          count: recalls.length,
+          recalls,
+          runsRead: listOfRuns(page.runs).length,
+          authorizesExecution: false,
+          grantsPermission: false,
+        });
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `candidate associations are unavailable: ${err.message}` });
+      }
+      return;
+    }
     if (method === 'GET' && url.pathname === '/api/approvals') {
       sendJson(res, 200, await approvalCentreSnapshot());
       return;
@@ -2804,6 +2873,35 @@ export function createUiServer({
         sendJson(res, 200, await briefingSnapshot());
       } catch (err) {
         sendJson(res, 503, { error: `the briefing is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    // T-34 Step 3: acknowledging a briefing. The route carries the owner's reason through the
+    // controller, so the checkpoint is written by the governed action and audited like any other write.
+    if (method === 'POST' && url.pathname === '/api/briefing/acknowledge') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).find((key) => key !== 'reason');
+      if (extra) { sendJson(res, 400, { error: `unknown field: ${extra}` }); return; }
+      if (body.reason !== undefined && body.reason !== null && (typeof body.reason !== 'string' || body.reason.length > 240)) {
+        sendJson(res, 400, { error: 'reason must be text of at most 240 characters' });
+        return;
+      }
+      try {
+        const result = await app.controller.briefingAcknowledge({ reason: typeof body.reason === 'string' && body.reason.trim() !== '' ? body.reason.trim() : null });
+        const step = result.operation?.steps?.[0] ?? null;
+        const data = step?.result?.data ?? null;
+        const verified = step?.verification?.outcome === 'success_verified';
+        if (!data || verified !== true) {
+          sendJson(res, 400, { status: result.status, error: step?.verification?.detail ?? step?.summary ?? 'the checkpoint was not recorded', display: result.display });
+          return;
+        }
+        const briefing = await briefingSnapshot();
+        sendJson(res, 200, { status: result.status, checkpoint: data, delta: briefing.delta, display: result.display });
+        broadcast('briefing', { checkpoint: data.checkpointId, at: data.at });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
       }
       return;
     }

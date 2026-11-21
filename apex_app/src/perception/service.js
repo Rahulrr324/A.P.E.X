@@ -14,7 +14,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHostWorkspaceSensor, HOST_SENSOR_SCHEMA, HOST_SENSOR_SOURCE } from './host-workspace-sensor.js';
 import { PushGovernor, PUSH_GOVERNOR_SCHEMA } from './push-governor.js';
-import { deriveAdvisories, deliverAdvisories } from './advisories.js';
+import { ADVISORY_RULES, deriveAdvisories, deliverAdvisories } from './advisories.js';
 
 export const PERCEPTION_SCHEMA = 'apex.perception.view/1';
 export const OBSERVATION_SCHEMA = 'apex.perception.observation/1';
@@ -174,6 +174,9 @@ export function createPerceptionService({
       observedCount: observations.filter((entry) => entry?.epistemicStatus === 'observed' && entry?.reading !== true).length,
       unavailableCount: observations.filter((entry) => entry?.epistemicStatus === 'unavailable').length,
       governor: pushGovernor.snapshot(),
+      // T-34 Step 3: the watch rules themselves - their thresholds, the last signature each raised, how
+      // often each has fired and when it last did - read out of the governor's own admissions.
+      watches: pushGovernor.watchReport({ rules: ADVISORY_RULES }),
       // T-33 Step 1: the advisories the last reading implied, what the governor decided about each,
       // and which of them are suppressed right now. A suppressed class is reported as suppressed
       // rather than as absent, so the owner can see the rule doing its work and revoke it.

@@ -184,6 +184,18 @@ export const UI_PAGE = `<!doctype html>
       <p id="briefing-status" class="workspace-status" role="status" aria-live="polite">Loading recorded briefing…</p>
       <p id="briefing-perception" class="meta" role="status"></p>
       <ul id="briefings" class="work"></ul>
+      <!-- T-34 Step 3: what changed since the owner last acknowledged a briefing, with a link to the
+           view and the task each change belongs to, and the control that writes the next checkpoint. -->
+      <h3>Changes since last briefing</h3>
+      <p id="briefing-delta-status" class="workspace-status" role="status" aria-live="polite">Loading what changed…</p>
+      <ul id="briefing-delta" class="work"></ul>
+      <div class="row">
+        <label for="briefing-ack-reason" class="visually-hidden">Reason for this checkpoint</label>
+        <input id="briefing-ack-reason" type="text" maxlength="240" placeholder="optional reason for this checkpoint">
+        <button id="briefing-acknowledge" type="button" class="small">Acknowledge briefing</button>
+        <span id="briefing-ack-status" class="meta" role="status" aria-live="polite"></span>
+      </div>
+      <p class="meta">Acknowledging writes a checkpoint of what the stores hold now; it authorizes nothing and changes no other record.</p>
     </section>
   </aside>
 </main>
@@ -285,6 +297,11 @@ export const UI_PAGE = `<!doctype html>
         <span id="perception-sense-status" class="meta" role="status"></span>
       </div>
       <p id="perception-alert-policy" class="meta">Push policy: at most three non-critical notices an hour; two dismissals of one alert class suppress it for six hours; a safety, lockdown or degraded notice bypasses the cap.</p>
+      <!-- T-34 Step 3: the watch rules themselves. Each line states the boundary it fires on, the
+           last condition it raised, how many times it has fired and when it last did; a rule that has
+           never fired says so rather than showing an invented count. -->
+      <p id="perception-watch-status" class="workspace-status" role="status" aria-live="polite">Loading watch rules…</p>
+      <ul id="perception-watches" class="work"></ul>
       <p id="perception-alert-status" class="workspace-status" role="status" aria-live="polite"></p>
       <ul id="perception-alerts" class="work"></ul>
       <ul id="perception-observations" class="work"></ul>
@@ -306,6 +323,13 @@ export const UI_PAGE = `<!doctype html>
     <h3>World-model changes</h3>
     <p id="world-status" class="workspace-status" role="status" aria-live="polite">Loading world-model history…</p>
     <ul id="world" class="work"></ul>
+    <!-- T-34 Step 2: candidate associative recall. A recall is a guess from a prior episode, so it
+         is shown as its own class, with its source record and the terms that produced it, and never
+         beside the observations as if it were one. -->
+    <h3>Candidate associations</h3>
+    <p class="meta">Prior episodes recalled as candidates for a later intent. Each one names the record it came from and the terms it matched; none of them is an observation, a fact or a permission.</p>
+    <p id="associations-status" class="workspace-status" role="status" aria-live="polite">Loading candidate associations…</p>
+    <ul id="associations" class="work"></ul>
   </section>
   <section class="view" data-view="documents" data-depth-plane="z3">
     <h2>Authorized documents</h2>
@@ -917,6 +941,8 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   timeline: document.getElementById('memory-timeline'),
   timelineStatus: document.getElementById('timeline-status'),
   memoryRecordsStatus: document.getElementById('memory-records-status'),
+  associations: document.getElementById('associations'),
+  associationsStatus: document.getElementById('associations-status'),
   knowledgeStatus: document.getElementById('knowledge-status'),
   worldStatus: document.getElementById('world-status'),
   conversationStatus: document.getElementById('conversation-status'),
@@ -951,6 +977,8 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   perceptionObservations: document.getElementById('perception-observations'),
   perceptionSuppressions: document.getElementById('perception-suppressions'),
   perceptionBudget: document.getElementById('perception-budget'),
+  perceptionWatches: document.getElementById('perception-watches'),
+  perceptionWatchStatus: document.getElementById('perception-watch-status'),
   perceptionAlerts: document.getElementById('perception-alerts'),
   perceptionAlertStatus: document.getElementById('perception-alert-status'),
   perceptionAlertPolicy: document.getElementById('perception-alert-policy'),
@@ -1043,6 +1071,11 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   approvals: document.getElementById('approvals'),
   briefings: document.getElementById('briefings'),
   briefingStatus: document.getElementById('briefing-status'),
+  briefingDelta: document.getElementById('briefing-delta'),
+  briefingDeltaStatus: document.getElementById('briefing-delta-status'),
+  briefingAckReason: document.getElementById('briefing-ack-reason'),
+  briefingAcknowledge: document.getElementById('briefing-acknowledge'),
+  briefingAckStatus: document.getElementById('briefing-ack-status'),
   goals: document.getElementById('goals'),
   memory: document.getElementById('memory'),
   knowledge: document.getElementById('knowledge'),
@@ -1892,6 +1925,65 @@ function renderBriefing(result) {
     + (inference.kind || 'kind not recorded') + ' · basis: ' + (inference.basis || 'not recorded') });
   renderList(els.briefings, rows, (row) => itemFrom(row.title, row.meta),
     value.status === 'partial' ? 'No facts came from readable owners; unavailable owners are named above.' : 'No briefing facts are recorded.');
+  renderBriefingDelta(value.delta ?? null);
+}
+
+// T-34 Step 3: the delta. Each change names the view it belongs to and, for a task, the task itself,
+// so the owner can go and look at the thing that changed. When nothing has been acknowledged the panel
+// says exactly that instead of presenting the whole state as news.
+function renderBriefingDelta(delta) {
+  if (!els.briefingDelta) return;
+  if (!delta) {
+    setWorkspaceStatus(els.briefingDeltaStatus, 'No delta is recorded; the briefing could not be compared with a checkpoint.', 'empty');
+    renderList(els.briefingDelta, [], () => null, 'No delta is recorded.');
+    return;
+  }
+  if (delta.available !== true) {
+    setWorkspaceStatus(els.briefingDeltaStatus, String(delta.text || 'No prior briefing checkpoint recorded — showing full current state'), 'empty');
+    renderList(els.briefingDelta, [], () => null, String(delta.text || 'No prior briefing checkpoint recorded.'));
+    return;
+  }
+  const items = Array.isArray(delta.items) ? delta.items : [];
+  if (items.length === 0) {
+    setWorkspaceStatus(els.briefingDeltaStatus, String(delta.text || 'Nothing has changed since the last briefing.'), 'available');
+    renderList(els.briefingDelta, [], () => null, 'Nothing has changed since the last briefing.');
+    return;
+  }
+  setWorkspaceStatus(els.briefingDeltaStatus, String(delta.text || items.length + ' change(s) since the last briefing.')
+    + (delta.checkpointId ? ' · checkpoint ' + delta.checkpointId : ''), 'available');
+  renderList(els.briefingDelta, items, (item) => {
+    const node = itemFrom(item.text || item.kind, item.kind + (item.taskId ? ' · task ' + item.taskId : ''));
+    node.dataset.kind = item.kind;
+    if (item.goto && item.goto.view) node.dataset.gotoView = item.goto.view;
+    if (item.goto && item.goto.task) node.dataset.gotoTask = item.goto.task;
+    if (item.taskId) node.dataset.taskId = item.taskId;
+    // The whole row is the link: it moves the owner to the view, and to the task where one is named.
+    // Nothing is executed by looking.
+    if (item.goto && item.goto.view) {
+      node.tabIndex = 0;
+      node.setAttribute('role', 'link');
+      const go = () => {
+        setView(item.goto.view);
+        if (item.goto.task && els.dagSelect) {
+          els.dagSelect.value = item.goto.task;
+          loadSelectedTaskGraph(item.goto.task);
+        }
+      };
+      node.addEventListener('click', go);
+      node.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          go();
+        }
+      });
+      const button = el('button', 'small', 'Go to ' + item.goto.view);
+      button.type = 'button';
+      button.dataset.go = item.goto.view;
+      if (item.goto.task) button.dataset.gotoTask = item.goto.task;
+      node.append(button);
+    }
+    return node;
+  }, 'Nothing has changed since the last briefing.');
 }
 
 function renderHealth(result) {
@@ -2508,6 +2600,79 @@ function renderTaskGraph(result) {
   }
 }
 
+// T-34 Step 2: candidate associations, rendered as what they are. Every row carries the epistemic
+// status the record gave it, names the source record it came from and shows the terms that matched,
+// and the badge says "not observed fact" in as many words. A recall is never drawn as a memory, and a
+// recall the record marks as anything but a candidate is not drawn at all.
+function renderAssociations(result) {
+  if (!els.associations) return;
+  const response = result?.ok === true ? result.value : null;
+  if (!response) {
+    const reason = result?.error || 'the candidate associations could not be read';
+    setWorkspaceStatus(els.associationsStatus, (result?.status >= 500 ? 'Unavailable: ' : 'Read error: ') + reason,
+      result?.status >= 500 ? 'unavailable' : 'error');
+    renderList(els.associations, [], () => null, 'Unavailable: ' + reason);
+    return;
+  }
+  const recalls = (Array.isArray(response.recalls) ? response.recalls : [])
+    .filter((recall) => recall.epistemicStatus === 'candidate_association');
+  if (recalls.length === 0) {
+    setWorkspaceStatus(els.associationsStatus, 'No prior episode has been recalled for a later intent yet. An association appears only when a prior run shares enough terms with a new one.', 'empty');
+    renderList(els.associations, [], () => null, 'No candidate association is recorded.');
+    return;
+  }
+  setWorkspaceStatus(els.associationsStatus, recalls.length + ' candidate association(s) recalled from prior runs · none of them is an observation', 'available');
+  renderList(els.associations, recalls, (recall) => {
+    const item = itemFrom(recall.summary || 'a prior episode, recalled as a candidate',
+      'similarity ' + recall.similarity + ' · confidence ' + recall.confidence + ' · prior outcome ' + (recall.sourceOutcome || 'not recorded'));
+    item.dataset.associationId = recall.id;
+    item.dataset.epistemic = recall.epistemicStatus;
+    item.dataset.sourceRecord = recall.sourceRecordId || '';
+    item.dataset.runId = recall.runId || '';
+    item.dataset.similarity = String(recall.similarity);
+    const badge = el('span', 'badge association-candidate', 'candidate association — not observed fact');
+    badge.dataset.epistemic = recall.epistemicStatus;
+    item.append(badge);
+    item.append(el('div', 'meta', 'From ' + (recall.sourceType || 'a record') + ' ' + (recall.sourceRecordId || 'not recorded')
+      + (recall.forIntent ? ' · recalled for: ' + recall.forIntent : '')));
+    if (recall.basis) item.append(el('div', 'meta', recall.basis));
+    return item;
+  }, 'No candidate association is recorded.');
+}
+
+// T-34 Step 3: the Sentinel's watch rules, from the governor's own admissions. A rule that has never
+// fired reports 0 hits and no last-trigger time; a class the ledger recorded but this build does not
+// declare is shown as undeclared rather than given a threshold it does not have.
+function renderPerceptionWatches(watches) {
+  if (!els.perceptionWatches) return;
+  const rows = Array.isArray(watches) ? watches : null;
+  if (!rows) {
+    setWorkspaceStatus(els.perceptionWatchStatus, 'No watch rule is configured.', 'empty');
+    renderList(els.perceptionWatches, [], () => null, 'No watch rule is configured.');
+    return;
+  }
+  const fired = rows.filter((row) => row.hits > 0).length;
+  setWorkspaceStatus(els.perceptionWatchStatus, rows.length + ' watch rule(s) · ' + fired + ' have fired on this machine'
+    + (rows.length - fired > 0 ? ' · ' + (rows.length - fired) + ' have not' : ''), 'available');
+  renderList(els.perceptionWatches, rows, (row) => {
+    const node = itemFrom(row.alertClass + (row.declared === false ? ' (undeclared)' : ''),
+      'watch ' + (row.watch || 'not recorded') + ' · ' + (row.critical ? 'critical' : 'advisory')
+      + ' · ' + row.hits + ' hit(s) · last triggered ' + (row.lastTriggeredAt || 'never'));
+    node.dataset.watchClass = row.alertClass;
+    node.dataset.hits = String(row.hits);
+    node.dataset.admitted = String(row.admitted);
+    node.dataset.critical = row.critical ? 'true' : 'false';
+    node.dataset.lastTriggered = row.lastTriggeredAt || '';
+    if (row.signature) node.dataset.signature = row.signature;
+    node.dataset.suppressed = row.suppressed ? 'true' : 'false';
+    if (row.threshold) node.append(el('div', 'meta', 'Threshold: ' + row.threshold));
+    if (row.signature) node.append(el('div', 'meta', 'Last signature: ' + row.signature));
+    if (row.lastTriggeredAt) node.append(el('div', 'meta', 'Last fired ' + row.lastTriggeredAt + (row.lastReason ? ' — ' + row.lastReason : '')));
+    if (row.suppression) node.append(el('div', 'meta', 'Suppressed until ' + row.suppression.suppressedUntil + ' by rule ' + row.suppression.id));
+    return node;
+  }, 'No watch rule is configured.');
+}
+
 async function postTaskControl(path, body, button, label) {
   if (button) button.disabled = true;
   setWorkspaceStatus(els.dagControlStatus, label + ' is being sent through the controller…', 'loading');
@@ -2878,7 +3043,15 @@ function renderPerception(result) {
     els.perceptionBudget.textContent = budget
       ? 'Push budget: ' + budget.remaining + '/' + budget.limit + ' non-critical left this hour'
       : 'Push budget: unavailable';
+    // The numbers the badge states are also on the element, so a browser run asserts the record rather
+    // than parsing the owner's prose.
+    if (budget) {
+      els.perceptionBudget.dataset.remaining = String(budget.remaining);
+      els.perceptionBudget.dataset.limit = String(budget.limit);
+      els.perceptionBudget.dataset.used = String(budget.used);
+    }
   }
+  renderPerceptionWatches(value.watches);
   if (owner.text) {
     renderPerceptionAlerts(null);
     setWorkspaceStatus(els.perceptionStatus, owner.text, owner.state);
@@ -3133,7 +3306,7 @@ async function refresh() {
     situationResult, briefingResult, runtimeResult, sourcesResult, documentsResult,
     reasoningResult, councilResult, workshopResult, resourcesResult, cognitionResult,
     presenceResult, autonomyMatrixResult, worldResult, evolutionResult, stepUpResult, perceptionResult,
-    taskGraphResult] = await Promise.all([
+    taskGraphResult, associationResult] = await Promise.all([
     readApi('/api/state'),
     readApi('/api/health'),
     readApi('/api/mission-control'),
@@ -3158,6 +3331,7 @@ async function refresh() {
     // T-34 Step 1: a refresh keeps the task the owner selected. Looking at a task is a read; it changes
     // nothing, and it must not jump back to the newest one under the owner's cursor.
     readApi('/api/taskgraph' + (els.dagSelect && els.dagSelect.value ? '?taskId=' + encodeURIComponent(els.dagSelect.value) : '')),
+    readApi('/api/memory/associations?limit=10'),
   ]);
 
   // The authoritative snapshot carries the current session, transcript, badges, gauges and the
@@ -3237,6 +3411,7 @@ async function refresh() {
   // T-33 Step 3: the graph and the perception reading the Workshop stages a sheet from.
   state.perception = perceptionResult.ok === true ? perceptionResult.value : null;
   renderTaskGraph(taskGraphResult);
+  renderAssociations(associationResult);
   renderStepUp(stepUpResult);
 
   applyCoreProjection(snapshot ? '' : 'The authoritative state read failed.');
@@ -3601,6 +3776,32 @@ async function boot() {
     for (const line of lines) els.bootLines.append(el('div', null, line));
   }
   els.boot.classList.add('hidden');
+}
+
+// T-34 Step 3: acknowledging the briefing. The checkpoint is written by the governed action through
+// the controller, and the answer is reported from what the action verified - never from the click.
+if (els.briefingAcknowledge) {
+  els.briefingAcknowledge.addEventListener('click', async () => {
+    const reason = els.briefingAckReason ? String(els.briefingAckReason.value || '').trim() : '';
+    els.briefingAcknowledge.disabled = true;
+    setWorkspaceStatus(els.briefingAckStatus, 'Writing the checkpoint through the controller…', 'loading');
+    try {
+      const response = await api('/api/briefing/acknowledge', { method: 'POST', body: reason ? { reason } : {} });
+      if (response.error) {
+        setWorkspaceStatus(els.briefingAckStatus, 'Refused: ' + String(response.error), 'error');
+      } else {
+        const checkpointId = response.checkpoint?.checkpointId || 'recorded';
+        setWorkspaceStatus(els.briefingAckStatus, 'Acknowledged · checkpoint ' + checkpointId
+          + (response.delta?.text ? ' · ' + response.delta.text : ''), 'available');
+        if (els.briefingAckReason) els.briefingAckReason.value = '';
+      }
+    } catch (error) {
+      setWorkspaceStatus(els.briefingAckStatus, 'Failed: ' + String(error?.message || error), 'error');
+    } finally {
+      els.briefingAcknowledge.disabled = false;
+      await refresh();
+    }
+  });
 }
 
 document.querySelectorAll('.nav-item').forEach((button) => {

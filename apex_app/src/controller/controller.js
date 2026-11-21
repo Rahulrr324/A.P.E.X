@@ -1610,6 +1610,16 @@ export class CognitiveController {
   // One owner intent, one governed run. The capability is registered like any other, so the
   // operation audit, ECP authorization and verifier all apply; the pipeline itself halts
   // fail-closed and never executes a gated step without the owner's own approval.
+  // T-34 Step 3: acknowledging a briefing writes a checkpoint of what the owning stores hold. It is a
+  // governed write like any other: the ECP authorizes it, the lockdown latch refuses it, and the
+  // action verifies the line it claims to have written.
+  async briefingAcknowledge({ reason = null } = {}) {
+    const op = this.#newOp({ capability: 'briefing.acknowledge', origin: 'user', request: 'acknowledge the briefing' });
+    const payload = reason === null || reason === undefined ? {} : { reason };
+    const step = await this.runAction('briefing.acknowledge', payload, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   // T-34 Step 1: a mission is named explicitly, and the mission compiler - not this method - decides
   // what its steps are. The controller only carries the name and the artifact through.
   async cognitionRun({ intent, action = null, input = null, councilRequested = false, mission = null, artifactId = null } = {}) {

@@ -32,36 +32,42 @@ export const ADVISORY_RULES = Object.freeze([
     watch: 'workspace',
     critical: false,
     describe: 'the configured workspace has uncommitted or untracked files',
+    threshold: 'dirtyFiles or untrackedFiles greater than 0',
   }),
   Object.freeze({
     alertClass: 'workspace_unreadable',
     watch: 'workspace',
     critical: false,
     describe: 'the configured workspace could not be read, which is not the same as clean',
+    threshold: 'the workspace reading is unavailable',
   }),
   Object.freeze({
     alertClass: 'memory_pressure',
     watch: 'host.memory',
     critical: false,
     describe: `memory use is at or above ${Math.round(MEMORY_PRESSURE_RATIO * 100)}%`,
+    threshold: `used / total at or above ${MEMORY_PRESSURE_RATIO}`,
   }),
   Object.freeze({
     alertClass: 'load_pressure',
     watch: 'host.cpu',
     critical: false,
     describe: `per-core load is at or above ${Math.round(LOAD_PRESSURE_RATIO * 100)}%`,
+    threshold: `load 1m / logical cores at or above ${LOAD_PRESSURE_RATIO}`,
   }),
   Object.freeze({
     alertClass: 'storage_pressure',
     watch: 'host.storage',
     critical: false,
     describe: `a storage volume has ${Math.round(STORAGE_PRESSURE_RATIO * 100)}% or less free`,
+    threshold: `free / total at or below ${STORAGE_PRESSURE_RATIO}`,
   }),
   Object.freeze({
     alertClass: 'degraded',
     watch: 'host',
     critical: true,
     describe: 'every host value in the reading was unavailable, so the sensor cannot see the machine',
+    threshold: 'every host value in the reading is unavailable',
   }),
 ]);
 

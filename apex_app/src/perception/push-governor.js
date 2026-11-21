@@ -164,6 +164,50 @@ export class PushGovernor {
     return Object.freeze({ revoked: true, alreadyRevoked: false, rule: { ...revoked } });
   }
 
+  // T-34 Step 3 (2026-11-19): what the watched rules have actually done on this machine. The counters
+  // come from the admissions this governor recorded - every evaluation, admitted or deduplicated -
+  // and never from a rule's description. A rule that has never fired reports zero hits and no last
+  // trigger rather than an age it cannot know.
+  watchReport({ rules = [], at = this.now() } = {}) {
+    const moment = this.#at(at);
+    const suppressions = this.activeSuppressions(moment);
+    const seen = new Map();
+    for (const entry of this.admissions) {
+      if (typeof entry.alertClass !== 'string' || entry.alertClass.length === 0) continue;
+      const current = seen.get(entry.alertClass) ?? { hits: 0, admitted: 0, signature: null, lastTriggeredAt: null, lastReason: null };
+      current.hits += 1;
+      if (entry.admitted === true) current.admitted += 1;
+      current.signature = typeof entry.signature === 'string' ? entry.signature : current.signature;
+      current.lastTriggeredAt = entry.at ?? current.lastTriggeredAt;
+      current.lastReason = entry.reason ?? current.lastReason;
+      seen.set(entry.alertClass, current);
+    }
+    const declared = new Map((Array.isArray(rules) ? rules : []).map((rule) => [rule.alertClass, rule]));
+    const classes = [...new Set([...declared.keys(), ...seen.keys()])].sort();
+    return Object.freeze(classes.map((alertClass) => {
+      const rule = declared.get(alertClass) ?? null;
+      const counted = seen.get(alertClass) ?? { hits: 0, admitted: 0, signature: null, lastTriggeredAt: null, lastReason: null };
+      const suppression = suppressions.find((entry) => entry.alertClass === alertClass) ?? null;
+      return Object.freeze({
+        alertClass,
+        watch: rule?.watch ?? null,
+        critical: rule?.critical === true,
+        // The boundary the rule fires on, in the rule's own words. `null` when the class is one the
+        // ledger recorded but this build does not declare, so a reader is never shown a guess.
+        threshold: rule?.threshold ?? null,
+        describe: rule?.describe ?? null,
+        declared: rule !== null,
+        signature: counted.signature,
+        hits: counted.hits,
+        admitted: counted.admitted,
+        lastTriggeredAt: counted.lastTriggeredAt,
+        lastReason: counted.lastReason,
+        suppressed: suppression !== null,
+        suppression: suppression ? { id: suppression.id, suppressedUntil: suppression.suppressedUntil } : null,
+      });
+    }));
+  }
+
   snapshot(at = this.now()) {
     const moment = this.#at(at);
     return Object.freeze({

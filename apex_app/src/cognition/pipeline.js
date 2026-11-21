@@ -28,6 +28,7 @@ import { JsonlStore } from '../memory/jsonl-store.js';
 import { ValidationError } from '../errors.js';
 import { compileMission, MissionError } from './missions.js';
 import { blockedNodes as blockedNodesOf, unmetDependencies } from '../tasks/model.js';
+import { associationEnvelope, candidateAssociations } from './associations.js';
 
 export const PIPELINE_SCHEMA = 'apex.cognition.pipeline/1';
 export const RUN_SCHEMA = 'apex.cognition.run/1';
@@ -277,6 +278,28 @@ export function createCognitivePipeline({
     return attempt(() => perception.state({ limit: 8 }), null);
   }
 
+  // T-34 Step 2: the episodes this intent might be related to. A prior run is an episode: it has an
+  // intent, an outcome and an id a reader can open. Nothing else is read, and the current run cannot
+  // be among them because it has not been written yet.
+  async function priorEpisodes({ limit = 8, excludeRunId = null } = {}) {
+    const loaded = await attempt(() => store.load(), { records: [], corrupt: [] });
+    const records = listOf(loaded.value?.records).filter((record) => record && typeof record.runId === 'string'
+      && record.runId !== excludeRunId);
+    const recent = records.slice(-Math.max(0, limit)).reverse();
+    return recent.map((record) => ({
+      id: record.runId,
+      text: typeof record.intent === 'string' ? record.intent : '',
+      outcome: record.status ?? null,
+      at: record.at ?? null,
+    }));
+  }
+
+  async function candidateRecalls(intent, { excludeRunId = null } = {}) {
+    const episodes = await priorEpisodes({ excludeRunId });
+    const recalls = candidateAssociations({ intent, episodes });
+    return associationEnvelope({ intent, recalls, episodesConsidered: episodes.length });
+  }
+
   async function buildContext(intent) {
     const [memoryRead, knowledgeRead, worldRead, goalRead, sentinel, host] = await Promise.all([
       memory && typeof memory.search === 'function'
@@ -304,6 +327,9 @@ export function createCognitivePipeline({
     for (const item of [...worldItems, ...knowledgeItems]) {
       epistemic[item.epistemic ?? 'inferred'] = (epistemic[item.epistemic ?? 'inferred'] ?? 0) + 1;
     }
+    // T-34 Step 2: candidate associative recall, stated as its own thing. It is not memory, not
+    // knowledge and not an observation, and it is counted in its own epistemic class.
+    const associations = await candidateRecalls(intent);
     const problems = [];
     if (memoryRead.error) problems.push(`memory: ${memoryRead.error}`);
     if (knowledgeRead.error) problems.push(`knowledge: ${knowledgeRead.error}`);
@@ -323,6 +349,9 @@ export function createCognitivePipeline({
     // Live host facts are observations, so they are counted as such and never as inferences.
     const observedHost = hostObservations.filter((entry) => entry.epistemic === 'observed').length;
     epistemic.observed = (epistemic.observed ?? 0) + observedHost;
+    // A recall is counted as a candidate association, in its own class, so no reader can add it to the
+    // observed total by accident.
+    epistemic.candidate_association = associations.count;
 
     return {
       packet: {
@@ -333,6 +362,9 @@ export function createCognitivePipeline({
         memory: { count: memoryItems.length, items: memoryItems },
         knowledge: { count: knowledgeItems.length, items: knowledgeItems },
         world: { count: worldItems.length, entityCount: world ? listOf(world.entities).length : 0, facts: worldItems },
+        // T-34 Step 2: recalled prior episodes, each a candidate association with its own source id,
+        // similarity and basis. Never `observed`, never a permission.
+        associativeRecalls: { ...associations, at: at() },
         epistemic,
         sentinel: {
           reading: sentinel.state
