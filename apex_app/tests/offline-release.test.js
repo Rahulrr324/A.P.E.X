@@ -55,6 +55,24 @@ const SCHEDULE = [
   '',
 ].join('\n');
 
+// The CLI is a separate process, so it cannot be handed the fixed clock above: a command that runs
+// with today's date needs dates written relative to today. This fixture is the same two deadlines -
+// one five days out, one five days past - so `review --days 7` reports exactly one overdue whenever
+// the suite is run, instead of only while a hard-coded date happens to be in the future.
+function cliSchedule(today = new Date()) {
+  const day = (offset) => {
+    const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+    d.setUTCDate(d.getUTCDate() + offset);
+    return d.toISOString().slice(0, 10);
+  };
+  return [
+    'title,dueAt',
+    `submit the quarterly report,${day(5)}`,
+    `renew the parking permit,${day(-5)}`,
+    '',
+  ].join('\n');
+}
+
 function memoryStep(id, criterion, tag) {
   return {
     id,
@@ -290,7 +308,7 @@ describe('the release surface without a model', () => {
     const dataDir = tempDir();
     const root = tempDir();
     const archives = tempDir();
-    fs.writeFileSync(path.join(root, 'schedule.csv'), SCHEDULE);
+    fs.writeFileSync(path.join(root, 'schedule.csv'), cliSchedule());
     const env = cleanEnv({ APEX_DATA_DIR: dataDir, APEX_DATA_ISOLATED: '1', APEX_FILESYSTEM_ROOT: root });
     const destination = archivePath(archives, 'cli.json');
 

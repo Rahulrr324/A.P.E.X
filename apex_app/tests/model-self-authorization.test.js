@@ -123,6 +123,9 @@ const MODEL_WRITE_ATTEMPTS = [
   // Neither may be produced or applied by a reply.
   ['backup.export', { path: 'model-archive.json' }],
   ['backup.restore', { path: 'model-archive.json', confirm: '00000000', replaceExisting: true }],
+  // T-34 Step 3: acknowledging a briefing writes the checkpoint the next briefing is measured
+  // against, so it is the owner's own act and a reply cannot record it on their behalf.
+  ['briefing.acknowledge', { reason: 'the model acknowledged the briefing' }],
   ['prediction.record', { capability: 'memory.add', expectation: 'success', subject: 'the model expects success', inDays: 7 }],
   ['prediction.evaluate', { target: 'no-such-prediction' }],
   ['prediction.invalidate', { target: 'no-such-prediction', reason: 'the model withdrew it' }],

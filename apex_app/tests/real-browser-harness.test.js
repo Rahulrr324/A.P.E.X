@@ -169,7 +169,9 @@ describe('T-31 browser suite wiring', () => {
     // assertions predate the T-31 markup.
     // T-33 Step 4 (2026-11-19): the executive-loop walk joins them for the same reason, and it
     // writes its own summary so the workflow can state which checkpoints ran.
-    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs'\]/);
+    // T-34 Step 4 (2026-11-19): the mission-DAG walk joins them. It drives a fan-out/fan-in mission
+    // through its gates and writes its own summary, so the workflow can state what it reached.
+    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs'\]/);
     assert.match(config, /testIgnore: \['\*\*\/apex-browser\.spec\.mjs'\]/);
     const spec = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't31-real-browser.spec.mjs'), 'utf8');
     assert.match(spec, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/);
@@ -179,6 +181,11 @@ describe('T-31 browser suite wiring', () => {
       'the HUD suite launches the resolved browser');
     assert.match(hud, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
       'the HUD suite skips loudly when no browser exists');
+    const mission = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't34-mission-dag-and-briefing.spec.mjs'), 'utf8');
+    assert.match(mission, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/,
+      'the mission-DAG walk launches the resolved browser');
+    assert.match(mission, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
+      'the mission-DAG walk skips loudly when no browser exists');
     const loop = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't33-executive-loop.spec.mjs'), 'utf8');
     assert.match(loop, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/,
       'the executive-loop walk launches the resolved browser');

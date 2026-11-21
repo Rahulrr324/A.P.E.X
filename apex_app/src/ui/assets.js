@@ -3051,17 +3051,24 @@ function renderPerception(result) {
       els.perceptionBudget.dataset.used = String(budget.used);
     }
   }
-  renderPerceptionWatches(value.watches);
   if (owner.text) {
+    // T-34 Step 3: an unreadable perception owner is stated once, for every list it fills - the new
+    // watch rules included. Reading value.watches before this check threw on an unavailable read,
+    // which took the whole client down with it; the guard belongs here, not inside the renderer.
     renderPerceptionAlerts(null);
     setWorkspaceStatus(els.perceptionStatus, owner.text, owner.state);
     if (els.perceptionDetailStatus) setWorkspaceStatus(els.perceptionDetailStatus, owner.text, owner.state);
     renderList(els.perceptionSummary, [], () => null, owner.text);
     if (els.perceptionObservations) renderList(els.perceptionObservations, [], () => null, owner.text);
     if (els.perceptionSuppressions) renderList(els.perceptionSuppressions, [], () => null, owner.text);
+    if (els.perceptionWatches) {
+      setWorkspaceStatus(els.perceptionWatchStatus, owner.text, owner.state);
+      renderList(els.perceptionWatches, [], () => null, owner.text);
+    }
     if (els.briefingPerception) els.briefingPerception.textContent = 'Perception unavailable: ' + owner.text;
     return;
   }
+  renderPerceptionWatches(value.watches);
   renderPerceptionAlerts(value);
   const host = value.lastReading?.host ?? null;
   const workspace = value.lastReading?.workspace ?? null;

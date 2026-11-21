@@ -1014,3 +1014,135 @@ What T-33 does not establish: that the five voices are the right voices for a hu
 the TaskGraph is the right shape for a multi-step mission with real fan-out. Both are design
 judgements, not measurements, and the loop being walkable end to end is the claim this milestone can
 actually support.
+
+## T-34 (2026-11-19): real missions, candidate memories, and a briefing that knows what changed
+
+T-34 is the milestone that closes the two seams T-33 left open and adds the two Part-2 features the
+owner asked for by name. It ran on `arena/c4691a2f-a-p-e-x`, from `9dfc7e2`, in four ordered steps.
+
+The seams were these. T-29 could compile exactly one action into exactly one step, so the TaskGraph
+had a state and a control but never a *shape*: "multi-node missions with real fan-out" was listed under
+T-33's Not established, correctly. And the briefing was a snapshot of now with no memory of the last
+time the owner read one, so it could not answer the only question a briefing is for - what changed
+while I was not looking.
+
+### Step 1 (`db85d16`): a mission is a template, and a fan-out runs as a fan-out
+
+`src/cognition/missions.js` holds one fixed template, written out in source, with every node's
+capability, input, dependency and gate:
+
+```
+       n1  perception.state      (read)  ┐
+       ├── n2a sense_host: git   (write) │  <- gated: it appends a reading to the ledger
+       └── n2b workshop.list     (read)  ┴── n3 workshop.verify (write, gated)
+                                                └── n4 workshop.get   (read)
+```
+
+Compiling is deterministic - the same request produces the same graph, and two compiles compare equal
+in a test - and a mission that cannot be stated is refused with a code (`MISSION_UNKNOWN`,
+`MISSION_NEEDS_ARTIFACT`, and at run time `MISSION_ARTIFACT_UNKNOWN`), never guessed at.
+
+The gate is the template's own declaration, with the basis written next to it, and the compiler is not
+allowed to infer it from the registry class: `perception.sense_host` is write-class because it appends
+its reading to a store the owner reads, and the template says so in a sentence a reviewer can disagree
+with. A gated node is recorded `awaiting_approval` before anything runs, so a mission is never a
+permission; the ECP still authorizes every node at run time, and the lockdown latch still refuses them
+all.
+
+The task runner learned the other half. `nextStep()` now returns the first *ready* pending step rather
+than the first pending one, so a join waits for every branch it depends on and a branch runs as soon as
+its own dependencies hold; `blockedNodes()` derives what holds each node from the log on every read, so
+the join reports `blockedBy: ['n2a', 'n2b']` while a gated branch and an untouched one both still wait.
+A run that ends with a node waiting for the owner ends `paused` and names the nodes.
+
+The stop rule was **not** relaxed, and the first version of this step wrongly relaxed it (see *The red
+hosted run* below). A failed or uncertain step still stops the whole run: the dependents behind it are
+marked `skipped` - the state a retry of that step restores - and the step the run never reached stays
+`pending`, because taking a surviving sibling up is a *continuation*, the owner's own command that
+reads the records first, not something a run does by itself. The readiness change and the stop rule are
+compatible: readiness decides which node is next among the ones that may run, the stop rule decides
+when the run may run nothing at all.
+
+One pre-existing rule had to be re-stated rather than dropped. An older acceptance test asserts that
+"a resume is not an approval", and it still holds: a resume is refused when the waiting node *could run
+now*, because resuming would stand in for the decision. A waiting node that is itself blocked by an
+unfinished branch cannot be run by anything here, so a resume that leaves it alone and finishes the
+sibling is not an approval of it. That distinction is what makes a paused mission a real partial run
+instead of an empty plan.
+
+`GET /api/taskgraph` now carries the tasks that can be chosen, with their shape and their blocked
+nodes; `?taskId=` switches, and the default is decided by the records' own `createdAt` rather than by
+whatever order the store lists. The deck gained `#taskgraph-select`, a mission launcher, per-node
+"Blocked by: n2a" lines and a shape line.
+
+### Step 2: candidate associative recall, wired into Stage 1 and the Memory Timeline
+
+`src/cognition/associations.js` is deliberately small and deliberately weak. A recall is computed from
+prior run records by Sorensen-Dice relatedness of the two intents, with a threshold of 0.25 and at
+least two shared terms; the shared terms are printed as the basis, so a reader can see why the two were
+associated. Every recall is a `candidate_association` *by construction* - there is no code path that
+produces `observed` - carries its `sourceRecordId`, its `similarity`, a confidence capped at 0.6, and
+`authorizesExecution: false` / `grantsPermission: false`. It is not a capability and has no permission
+field at all.
+
+The Stage 1 packet gained `associativeRecalls`, counted in its own epistemic class so a recall can never
+be added to the observed total by accident. `/api/memory/associations` lists the recalls the runs
+recorded, and the Memory Timeline renders each one with the badge `candidate association — not observed
+fact`, its source record and its shared terms.
+
+### Step 3: a briefing delta with a real checkpoint, and the Sentinel's watch rules
+
+`src/briefing/snapshot.js` is the single reading used both by the acknowledge action and by the delta:
+task statuses, the advisories in force, the last observation time, the run statuses, and the
+verification counts of the workshop and the evolution lab. A store that cannot be read contributes
+`null` and is named in `unavailable`, because "could not be read" and "empty" are different readings.
+
+`src/briefing/checkpoints.js` appends that reading to `briefing-checkpoints.jsonl` in the isolated data
+directory and compares the newest checkpoint with a fresh reading. With no checkpoint the answer is the
+honest sentence, verbatim: `No prior briefing checkpoint recorded — showing full current state`. With
+one, the delta lists what changed - a new task, a status that moved, an advisory that appeared, a new
+host reading, workshop or evolution verifications - and every item names the view it belongs to and, for
+a task, the task itself.
+
+Acknowledging is a governed write, not a client flag: `briefing.acknowledge` is user-origin, the ECP
+authorizes it, the lockdown latch refuses it, and the action's verifier re-reads the log and reports
+success only when the line it wrote is the latest one. It is classified for experience capture
+exclusion (`briefing`), documented in the README inventory, and the pinned counts moved by exactly one
+(151 default / 166 with a root; 81 writes) with the reason recorded in the test.
+
+The Sentinel gained its watch register. `pushGovernor.watchReport()` derives, per rule, the threshold it
+fires on, the last signature it raised, how many times it has fired, whether it was admitted or held
+back, and when it last fired - from the governor's own admissions, never from the rule's description. A
+rule that has never fired reports zero hits and no last trigger. The deck shows the register, the push
+budget as `N/3 non-critical left this hour` with `data-remaining`/`data-limit` on the element, and the
+suppression rules with their revocation control.
+
+### The browser walk (T-34 Step 4)
+
+`tests/e2e/t34-mission-dag-and-briefing.spec.mjs` walks one session in a real Microsoft Edge: the
+mission's shape as the record states it, the gated branch holding the join (`data-blocked-by="n2a"`),
+the selector switching between two real tasks, the approval that clears the block while the verified
+sibling keeps its own operation id, the join running only after both branches and the mission
+completing verified, the candidate-association badge against a real prior run, and the briefing
+acknowledge → change → delta → click-through sequence that lands on the view and the task the item
+names. It asserts zero console errors, zero page errors and no horizontal overflow, and writes
+`reports/t34-mission-dag.json` for the CI annotation.
+
+### The red hosted run, and what it changed
+
+The first hosted run of these three steps (`44847873831`, commit `5314b03`) was red, and the report
+keeps the account rather than the claim. Fourteen suites failed; the annotations named every one, and
+they were read from the check run rather than guessed at:
+
+| Failure | Cause | Fix |
+| --- | --- | --- |
+| AM-F1, AM-D4 (`plan-continuation`), T-07 Scenario 6 | the ready-based selector had also removed the stop rule, so a first run carried on past a failed step and ran the independent sibling. The continuation tests then read that sibling as already `verified successful`, and a "read-only continuation" test found one memory record written. | the stop rule is restored in `nextStep()` and in the failure transition: a first run or a resume stops on the failed step, marks only its dependents `skipped`, and leaves the untouched sibling `pending`. The continuation path (`nextContivableStep`) is unchanged. |
+| AF-20 (`model-self-authorization`) | the sweep compares the registry's write actions against its own attempt list, and `briefing.acknowledge` was registered without being added | the attempt is in the list, with the reason written next to it |
+| `offline-release` release surface | the CLI is a separate process and cannot be handed the suite's fixed clock; the fixture's hard-coded 2026-11-20 deadline had passed, so `review --days 7` reported two overdue where the test expected one | the CLI fixture's dates are written relative to today, so one deadline is always five days out and one five days past |
+| T-30 P0 (`ui-client-runtime`), T-29 client, experience system client | the new watch register was rendered before the "owner unavailable" early return, so an unavailable `/api/perception` read threw `Cannot read properties of null (reading 'watches')` and took the whole client boot with it | the read is inside the available path; the unavailable path states the owner's reason in the watch list like every other list it fills |
+| T-31 browser suite wiring | the Playwright `testMatch` assertion did not know about the new spec | the assertion names the T-34 spec and asserts its `chromium.launch` and `test.skip` lines |
+| the T-34 browser walk itself (0 steps, 0 screenshots) | the same client exception: the page never wired its handlers, so the first navigation timed out before any checkpoint was recorded | fixed by the client guard above; the walk is re-run by the hosted job, and this report will carry its summary line when it does |
+
+Two of those are honest corrections to this milestone rather than to older code: the selector change
+was mine, and so was the client that only worked when the perception owner answered. The remaining two
+were latent time and inventory bugs that the new work made visible.

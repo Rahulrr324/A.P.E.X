@@ -235,9 +235,14 @@ describe('T-34 a mission is compiled, gated and run as one task', () => {
   });
 });
 
-describe('T-34 a failed branch leaves its sibling free and its join blocked', () => {
+describe('T-34 a failed branch stops its run and leaves its sibling to a continuation', () => {
   // A hand-built graph with the same shape as the mission, using the labelled test doubles: n2a is a
   // read that always fails, n2b is a read that verifies. It is a test graph, not a mission.
+  //
+  // The stop rule is the one every run has always had, and T-34 does not relax it: a branch that
+  // fails stops the run, and the sibling it never reached stays pending. That pending sibling is a
+  // continuation's work - the owner's own command, which reads the records first - because a run that
+  // quietly carried on past a failure would report a partial run as a whole one.
   async function brokenBranchTask(app) {
     await app.taskStore.createTask({
       taskId: 'task-t34-branch',
@@ -256,7 +261,9 @@ describe('T-34 a failed branch leaves its sibling free and its join blocked', ()
     return 'task-t34-branch';
   }
 
-  test('the sibling completes, the join stays blocked by the failed branch, and the task says so', async () => {
+  const statusOf = (task, id) => task.steps.find((step) => step.id === id)?.status;
+
+  test('the failed branch stops the run, its sibling is left pending, and the join names both branches', async () => {
     const { app } = await appWith();
     const taskId = await brokenBranchTask(app);
     const result = await app.controller.runTask(taskId, 'run');
@@ -264,37 +271,56 @@ describe('T-34 a failed branch leaves its sibling free and its join blocked', ()
 
     const task = await app.taskStore.get(taskId);
     assert.equal(task.status, TaskStatus.FAILED);
-    assert.equal(task.steps.find((step) => step.id === 'n2a').status, StepStatus.FAILED);
-    assert.equal(task.steps.find((step) => step.id === 'n2b').status, StepStatus.COMPLETED, 'the sibling branch ran');
-    assert.equal(task.steps.find((step) => step.id === 'n2b').outcome, 'success_verified');
-    assert.deepEqual(blockedNodes(task).filter((node) => node.id === 'n3').map((node) => node.blockedBy), [['n2a']]);
-    // The failed branch names what it left behind, in the log's own words.
+    assert.equal(statusOf(task, 'n1'), StepStatus.COMPLETED);
+    assert.equal(statusOf(task, 'n2a'), StepStatus.FAILED);
+    assert.equal(statusOf(task, 'n2b'), StepStatus.PENDING, 'the sibling never started: the run stopped on the failure');
+    // The branches behind the failure are marked skipped rather than left looking like work waiting on
+    // nothing, and a retry of n2a is the state that turns them back to pending.
+    assert.equal(statusOf(task, 'n3'), StepStatus.SKIPPED);
+    assert.equal(statusOf(task, 'n4'), StepStatus.SKIPPED);
+
+    // The branch view names what holds each node, from the records alone.
+    const blocked = blockedNodes(task);
+    assert.deepEqual(blocked.map((node) => node.id), ['n2b', 'n3', 'n4']);
+    assert.deepEqual(blocked.find((node) => node.id === 'n2b').blockedBy, [], 'nothing holds the untouched branch itself');
+    assert.deepEqual(blocked.find((node) => node.id === 'n3').blockedBy, ['n2a', 'n2b'], 'the join waits on both branches');
+
+    // The failed branch names what it stopped, in the log's own words.
     const log = fs.readFileSync(path.join(app.dataDir ?? '', 'tasks.jsonl'), 'utf8');
-    assert.match(log, /blocked: n3 by n2a/);
+    assert.match(log, /n2a failed/);
+    assert.match(log, /not run: depends on n2a/);
   });
 
-  test('retrying the branch restores the join to waiting without re-running the sibling', async () => {
+  test('a continuation takes up the untouched sibling and never re-runs the branch that failed', async () => {
     const { app, dir } = await appWith();
     const taskId = await brokenBranchTask(app);
     await app.controller.runTask(taskId, 'run');
-    const sibling = (await app.taskStore.get(taskId)).steps.find((step) => step.id === 'n2b');
+    const failedAttempt = (await app.taskStore.get(taskId)).steps.find((step) => step.id === 'n2a');
 
+    const continued = await app.controller.runTask(taskId, 'continue');
+    assert.notEqual(continued.status, Outcome.SUCCESS_VERIFIED, 'the failed branch still holds the run');
+    // The audit log is what the continuation itself wrote, so it says which step this command ran.
+    assert.deepEqual(stepOrder(dir, taskId).filter(Boolean), ['n1', 'n2a', 'n2b'],
+      'the step the failure never touched, and only it');
+    const after = await app.taskStore.get(taskId);
+    assert.equal(statusOf(after, 'n2b'), StepStatus.COMPLETED, 'the sibling ran in the continuation');
+    assert.equal(after.steps.find((step) => step.id === 'n2b').outcome, 'success_verified');
+    assert.equal(after.steps.find((step) => step.id === 'n2a').operationId, failedAttempt.operationId,
+      'the failed branch was not run again');
+    // The continuation cannot take up the join either: one of its branches still holds a verified
+    // failure, and the records say so instead of the runner assuming the branch had run.
+    assert.equal(statusOf(after, 'n3'), StepStatus.SKIPPED);
+    assert.equal(stepOrder(dir, taskId).filter((id) => id === 'n2a').length, 1, 'n2a ran exactly once');
+
+    // Retrying the failed branch is what puts the join back in front of the run.
     const retried = await app.controller.retryTask(taskId, 'n2a');
     assert.equal(retried.status, Outcome.SUCCESS_VERIFIED);
     const afterRetry = await app.taskStore.get(taskId);
-    assert.equal(afterRetry.steps.find((step) => step.id === 'n2a').status, StepStatus.PENDING);
-    assert.equal(afterRetry.steps.find((step) => step.id === 'n3').status, StepStatus.PENDING, 'the join is waiting again, not skipped');
-    assert.equal(afterRetry.steps.find((step) => step.id === 'n2b').status, StepStatus.COMPLETED);
-    assert.equal(afterRetry.steps.find((step) => step.id === 'n2b').operationId, sibling.operationId, 'the verified sibling was not touched');
-
-    // The double fails every time, so the second attempt fails as the first did - and the sibling is
-    // still untouched: an attempt on one branch never re-runs another.
-    await app.controller.runTask(taskId, 'resume').catch(() => null);
-    const afterResume = await app.taskStore.get(taskId);
-    assert.equal(afterResume.steps.find((step) => step.id === 'n2b').status, StepStatus.COMPLETED);
-    assert.equal(afterResume.steps.find((step) => step.id === 'n2b').operationId, sibling.operationId);
-    const siblings = stepOrder(dir, taskId).filter((id) => id === 'n2b').length;
-    assert.equal(siblings, 1, 'the sibling ran exactly once across both attempts');
+    assert.equal(statusOf(afterRetry, 'n2a'), StepStatus.PENDING);
+    assert.equal(statusOf(afterRetry, 'n3'), StepStatus.PENDING, 'the join is waiting again, not skipped');
+    assert.equal(statusOf(afterRetry, 'n2b'), StepStatus.COMPLETED, 'the verified sibling stays verified');
+    assert.equal(afterRetry.steps.find((step) => step.id === 'n2b').operationId,
+      after.steps.find((step) => step.id === 'n2b').operationId, 'and it is not touched by the retry');
   });
 
   test('cancel marks the steps that never ran as cancelled and records why', async () => {

@@ -45,15 +45,20 @@ export class TaskRunner {
   }
 
   // The step to act on next: the first step in dependency order that is pending and whose every
-  // dependency has completed. T-34 Step 1 (2026-11-19) replaced the whole-task stop with this
-  // ready-based selector. A join step therefore waits for all of its branches, and a branch runs as
-  // soon as its own dependencies hold - so one branch that failed does not stop a sibling that does
-  // not depend on it. Nothing is executed twice: a step that completed is not pending and is never
-  // selected again.
+  // dependency has completed. T-34 Step 1 (2026-11-19) made the selector ready-based, so a join waits
+  // for all of its branches and a branch runs as soon as its own dependencies hold. Nothing is
+  // executed twice: a step that completed is not pending and is never selected again.
+  //
+  // The stop rule is unchanged and deliberate: a failed or uncertain step stops the whole run, and
+  // the step the run never reached stays pending rather than being taken up on the strength of a
+  // sibling. Taking a surviving sibling up is a continuation - the owner's own command, which reads
+  // the records first - not something a run does by itself. Restoring the stop here after the
+  // ready-based selector is what keeps one failed branch from turning a run into a partial success.
   nextStep(task) {
     const byId = new Map(task.steps.map((s) => [s.id, s]));
     for (const id of topologicalOrder(task.steps)) {
       const s = byId.get(id);
+      if (s.status === StepStatus.FAILED || s.status === StepStatus.UNCERTAIN) return { blocked: s, step: null, unmet: [] };
       if (s.status !== StepStatus.PENDING) continue;
       const unmet = (s.dependsOn ?? []).filter((d) => byId.get(d)?.status !== StepStatus.COMPLETED);
       if (unmet.length === 0) return { blocked: null, step: s, unmet: [] };
@@ -235,22 +240,22 @@ export class TaskRunner {
 
         const skip = dependentsOf(task.steps, next.id).filter((id) => byId.get(id).status === StepStatus.PENDING);
         await this.#transition(task.id, `${next.id} ${result.step}: ${truncate(step.summary, 200)}`, {
-          // T-34 Step 1: the failure is recorded against its own branch, and the run does not stop
-          // here. Only the steps that depend on it are marked skipped - which is the state a retry of
-          // this step returns to pending - so an independent sibling still runs, the join it feeds
-          // stays blocked and says by which node, and retrying this step unblocks that join without
-          // re-running anything already verified. The task state is decided once, at the end of the
-          // run, from what the records then hold.
-          task: null,
+          // T-34 Step 1: the dependents of the failed node are marked skipped (the state a retry of
+          // this step returns to pending), so the join they feed is blocked by name and retrying this
+          // step unblocks it without re-running anything already verified. The task state is written
+          // once, here, from what the records then hold: a first run or a resume stops on the failure
+          // exactly as it did before, while a continuation records the step and stops taking up that
+          // branch without moving the task, because it is going on with the steps that never began.
+          task: continuing ? null : { from: TaskStatus.RUNNING, to: result.task },
           steps: [
             { id: next.id, from: StepStatus.RUNNING, to: result.step, outcome: step.outcome, summary: truncate(step.summary, 300), operationId },
             ...skip.map((id) => ({ id, from: StepStatus.PENDING, to: StepStatus.SKIPPED, summary: `not run: depends on ${next.id}` })),
           ],
         });
         failedSteps.push({ id: next.id, status: result.step, outcome: step.outcome ?? null });
-        // A continuation stops taking up that branch and reports what it did; a first run or a resume
-        // keeps going with whatever else is ready.
-        continue;
+        // A continuation records it and reports what it did; a first run or a resume stops here. The
+        // steps it never reached stay pending, which is what makes them a continuation's work.
+        if (!continuing) break;
       }
 
       task = await this.#task(taskId);
