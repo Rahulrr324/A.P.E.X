@@ -16,7 +16,10 @@ export default defineConfig({
   // shipped server and client with a real binary; neither is a simulation.
   // T-33 Step 4 (2026-11-19): the executive-loop walk joins them. It drives the whole five-character
   // loop in one session and writes its own JSON summary for the workflow annotation.
-  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs'],
+  // T-34 Step 4 (2026-11-19): the mission-DAG walk joins them. It drives a fan-out/fan-in mission
+  // from its gates to a verified completion, switches tasks in the selector and writes its own
+  // summary.
+  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs', '**/t34-mission-dag-and-briefing.spec.mjs'],
   testIgnore: ['**/apex-browser.spec.mjs'],
   // Generated traces/screenshots from a failing run must not be committed.
   outputDir: './test-results/playwright',

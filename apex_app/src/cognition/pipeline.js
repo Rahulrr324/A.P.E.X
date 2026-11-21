@@ -26,6 +26,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { ValidationError } from '../errors.js';
+import { compileMission, MissionError } from './missions.js';
+import { blockedNodes as blockedNodesOf, unmetDependencies } from '../tasks/model.js';
 
 export const PIPELINE_SCHEMA = 'apex.cognition.pipeline/1';
 export const RUN_SCHEMA = 'apex.cognition.run/1';
@@ -171,6 +173,9 @@ export function createCognitivePipeline({
   // T-32 Step 3: optional. When the perception service is present, a run reads the latest host and
   // workspace observations as facts about this machine instead of only the stores APEX keeps.
   perception = null,
+  // T-34 Step 1: optional. A compiled mission refuses an artifact this service cannot read, so the
+  // mission's own precondition is stated before any step is recorded.
+  workshop = null,
   council,
   now = () => new Date(),
   idFactory = randomUUID,
@@ -613,12 +618,19 @@ export function createCognitivePipeline({
             action: step.action ?? null,
             permission: step.permission ?? null,
             status: step.status ?? null,
+            // T-34 Step 1: the shape and the block, both derived from the records on every read. A
+            // reader of the run can say which node waits on which without reading the task log too.
+            dependsOn: [...(step.dependsOn ?? [])],
+            blockedBy: unmetDependencies(task, step.id),
+            outcome: step.outcome ?? null,
             execution: step.execution ?? null,
             verification: step.verification ?? null,
             approval: step.approval ?? null,
           })),
         }
         : null,
+      // The nodes the records leave unrun or waiting, with what they wait on. Derived, never stored.
+      blocked: task ? blockedNodesOf(task) : [],
       stages: {
         ...run.stages,
         execution: {
@@ -631,13 +643,280 @@ export function createCognitivePipeline({
     };
   }
 
-  async function run({ intent, action = null, input = null, councilRequested = false, requestedBy = 'owner', origin = 'user' } = {}) {
+  // T-34 Step 1 (2026-11-19): a mission is compiled from a fixed template, authorized node by node,
+  // and recorded as one task. Nothing about it is inferred: the template names the capability, the
+  // input and the dependencies of every node, and the compiler refuses anything it cannot state.
+  //
+  // The write nodes are gated at compile time, exactly as the single-action path gates its own write:
+  // the task is taken up to the gate and stopped with those steps awaiting the owner's approval, so
+  // the priority of a mission never authorizes a write. The owner approves a node, resumes, and the
+  // run continues to the next gate - the join included.
+  async function runMission({ mission, artifactId, intent, runId, startedAt, requestedBy, origin, councilRequested }) {
+    let compiled;
+    try {
+      compiled = compileMission({ mission, artifactId });
+    } catch (err) {
+      if (err instanceof MissionError) throw new ValidationError(`${err.code}: ${err.message}`);
+      throw err;
+    }
+
+    // Every node must name a registered capability whose own validator accepts the template's input.
+    // A mission is not allowed to bypass a capability's validation by carrying it in a template.
+    const nodes = [];
+    for (const node of compiled.nodes) {
+      const definition = registry.get(node.action);
+      if (!definition) {
+        throw new ValidationError(`MISSION_ACTION_UNKNOWN: node ${node.id} names ${node.action}, which is not registered`);
+      }
+      const input = typeof definition.validate === 'function' ? definition.validate(node.input) : node.input;
+      nodes.push({ ...node, input, permission: definition.permission ?? 'read', definition });
+    }
+
+    // The mission's own precondition, stated before any step is recorded: an artifact that cannot be
+    // read is not an artifact this mission can verify.
+    const artifactNode = nodes.find((node) => Object.hasOwn(node.input ?? {}, 'artifactId'));
+    if (artifactNode && workshop && typeof workshop.get === 'function') {
+      const found = (await attempt(() => workshop.get(artifactNode.input.artifactId), null)).value;
+      if (!found || found.found !== true) {
+        throw new ValidationError(`MISSION_ARTIFACT_UNKNOWN: no workshop artifact ${artifactNode.input.artifactId}`);
+      }
+    }
+
+    // The node whose permission and risk speak for the mission: the write with the most dependencies
+    // (the join), else the first write, else the root. It is used for salience and the Council only.
+    const governing = nodes.filter((node) => node.permission === 'write')
+      .sort((a, b) => b.dependsOn.length - a.dependsOn.length)[0] ?? nodes[0];
+    const { packet } = await buildContext(intent);
+    const pressure = await resourcePressure();
+    const salience = { ...salienceOf({ packet, definition: governing.definition }), resource_pressure: pressure.value };
+    if (pressure.unavailable) salience.resource_basis = pressure.basis;
+    salience.basis.resource_pressure = pressure.basis;
+    const councilStage = await deliberate({
+      intent,
+      packet,
+      definition: governing.definition,
+      action: governing.action,
+      warranted: councilRequested === true || salience.uncertainty >= 0.4 || salience.risk_sensitivity >= 0.5 || nodes.some((node) => node.permission === 'write'),
+      reason: 'not warranted: the mission holds no write step',
+    });
+
+    const missionGraph = {
+      mission: compiled.name,
+      title: compiled.title,
+      describe: compiled.describe,
+      nodes: nodes.map((node) => ({
+        id: node.id,
+        action: node.action,
+        role: node.role,
+        // The template's own gate declaration, with the basis written next to it, so the graph can
+        // say why a node waits for the owner instead of only that it does.
+        gate: node.gate,
+        gateBasis: node.gateBasis,
+        permission: node.permission,
+        risk: node.definition.risk ?? null,
+        description: text(node.description, 240),
+        input: redactInput(node.input),
+        dependsOn: [...node.dependsOn],
+      })),
+      edges: compiled.edges.map((edge) => ({ ...edge })),
+      shape: compiled.shape,
+      rule: `the ${compiled.name} template, compiled deterministically; no step was inferred`,
+      summary: compiled.summary,
+    };
+
+    const killSwitch = typeof ecp.killSwitchStatus === 'function' ? ecp.killSwitchStatus() : { active: false, policyUnavailable: true };
+    const authorization = {
+      decision: 'not_requested',
+      reason: null,
+      autonomyLevel: null,
+      autonomySource: null,
+      approvalRequired: false,
+      approvalRef: null,
+      auditRef: null,
+      verified: false,
+      latch: { active: killSwitch.active === true, policyUnavailable: killSwitch.policyUnavailable === true },
+      nodes: [],
+    };
+
+    const base = {
+      schema: RUN_SCHEMA,
+      runId,
+      at: startedAt,
+      intent,
+      requestedBy: text(requestedBy, 60) || 'owner',
+      origin,
+      mission: { name: compiled.name, title: compiled.title, shape: compiled.shape },
+      action: {
+        name: governing.action,
+        permission: governing.permission,
+        risk: governing.definition.risk ?? null,
+        description: text(governing.definition.description ?? '', 240),
+      },
+      stages: {
+        context: packet,
+        salience,
+        council: councilStage,
+        task_graph: missionGraph,
+        execution: authorization,
+      },
+      status: 'running',
+      halted: null,
+      taskId: null,
+    };
+
+    // Fail closed before anything exists - the latch first, then the ECP for every node.
+    if (authorization.latch.active || authorization.latch.policyUnavailable) {
+      const reason = authorization.latch.policyUnavailable ? 'POLICY_UNAVAILABLE' : 'KILL_SWITCH_ACTIVE';
+      authorization.decision = 'deny';
+      authorization.reason = reason;
+      const halted = {
+        ...base,
+        status: 'halted',
+        halted: {
+          reason,
+          detail: authorization.latch.policyUnavailable
+            ? 'the ECP kill-switch policy state is unreadable and has failed closed; the mission halts before any node exists'
+            : 'the ECP kill-switch latch is active; the mission halts before any node exists',
+          audit: 'this run record is the durable account; no task was created and no step executed',
+        },
+        stages: { ...base.stages, execution: { ...authorization, halt: true } },
+      };
+      await store.append(halted);
+      return project(halted);
+    }
+
+    for (const node of nodes) {
+      const decision = ecp.evaluate(node.action, origin, { phase: 'plan', operationId: runId });
+      authorization.nodes.push({ id: node.id, action: node.action, decision: decision.decision, reason: decision.reason });
+      if (decision.decision !== 'allow') {
+        authorization.decision = decision.decision;
+        authorization.reason = decision.reason;
+        authorization.auditRef = runId;
+        const halted = {
+          ...base,
+          status: 'halted',
+          halted: {
+            reason: decision.reason,
+            detail: `the ECP refused node ${node.id} (${node.action}) before the mission was created`,
+            audit: 'nothing was executed; this record holds the refusal',
+          },
+          stages: { ...base.stages, execution: { ...authorization, halt: true } },
+        };
+        await store.append(halted);
+        return project(halted);
+      }
+    }
+    authorization.decision = 'allow';
+    authorization.reason = 'PERMITTED';
+    authorization.auditRef = runId;
+
+    const taskId = `task-${runId.slice(4)}`;
+    try {
+      await taskStore.createTask({
+        taskId,
+        goal: intent,
+        origin,
+        planner: 'deterministic',
+        reason: `cognition run ${runId}: the ${compiled.name} mission`,
+        steps: nodes.map((node) => ({
+          id: node.id,
+          description: `${node.id} ${node.role}: ${node.action} — ${node.description}`,
+          action: node.action,
+          permission: node.permission,
+          input: node.input,
+          dependsOn: [...node.dependsOn],
+        })),
+      });
+    } catch (err) {
+      const failed = {
+        ...base,
+        status: 'failed',
+        halted: { reason: 'TASK_CREATION_FAILED', detail: text(String(err?.message ?? err), 240), audit: null },
+        stages: { ...base.stages, execution: { ...authorization, error: text(String(err?.message ?? err), 240) } },
+      };
+      await store.append(failed);
+      return project(failed);
+    }
+
+    // The gates. Every node the template declares `gate: 'approval'` is recorded awaiting the
+    // owner's approval, before any node runs: a mission is not a permission, and a template that
+    // writes twice is gated twice. The task is then taken up to those gates - the steps that need no
+    // decision run, and the run stops where the owner's answer is required.
+    const gated = nodes.filter((node) => node.gate === 'approval');
+    let task = null;
+    try {
+      if (gated.length > 0) {
+        await taskStore.transition(taskId, {
+          reason: `cognition run ${runId}: the mission is taken up to its authorization gates (${gated.map((node) => node.id).join(', ')})`,
+          task: { from: 'pending', to: 'running' },
+          steps: [],
+        });
+        await taskStore.transition(taskId, {
+          reason: `cognition run ${runId}: owner approval required before ${gated.map((node) => `${node.id} (${node.action}): ${node.gateBasis}`).join('; ')}`,
+          task: { from: 'running', to: 'paused' },
+          steps: gated.map((node) => ({ id: node.id, from: 'pending', to: 'awaiting_approval' })),
+        });
+        task = await taskOf({ taskId });
+      } else {
+        const outcome = await controller.runTask(taskId, 'run');
+        task = outcome?.task ?? (await taskOf({ taskId }));
+      }
+      // The mission starts working immediately and stops only where it must. `resume` takes up the
+      // steps that need no decision - the read root and the sibling branch - and leaves a gated step
+      // and everything behind it where they are, so a paused mission is a real partial run and not an
+      // empty plan.
+      if (gated.length > 0 && task && task.status === 'paused') {
+        const run = await controller.runTask(taskId, 'resume');
+        task = run?.task ?? (await taskOf({ taskId }));
+      }
+    } catch (err) {
+      const failed = {
+        ...base,
+        status: 'failed',
+        taskId,
+        halted: { reason: 'APPROVAL_GATE_FAILED', detail: text(String(err?.message ?? err), 240), audit: runId },
+        stages: { ...base.stages, execution: { ...authorization, error: text(String(err?.message ?? err), 240), gates: gated.map((node) => node.id) } },
+      };
+      await store.append(failed);
+      return project(failed);
+    }
+
+    const status = deriveRunStatus(base, task);
+    const verification = verificationOf(task);
+    const recorded = {
+      ...base,
+      status,
+      taskId,
+      stages: {
+        ...base.stages,
+        execution: {
+          ...authorization,
+          gates: gated.map((node) => node.id),
+          approvalRequired: gated.length > 0,
+          verified: verification.verified,
+          verification,
+          taskStatus: task?.status ?? null,
+        },
+      },
+    };
+    await store.append(recorded);
+    return project(recorded);
+  }
+
+  async function run({ intent, action = null, input = null, councilRequested = false, requestedBy = 'owner', origin = 'user', mission = null, artifactId = null } = {}) {
     if (typeof intent !== 'string' || intent.trim().length === 0 || intent.length > 500) {
       throw new ValidationError('a cognition run needs an intent of 1-500 characters');
     }
     const cleanIntent = intent.trim();
     const runId = `cog-${idFactory().replace(/-/g, '').slice(0, 20)}`;
     const startedAt = at();
+
+    // T-34 Step 1: a named mission is compiled from its template instead of selected from the intent.
+    // It is a separate path on purpose - the single-action path below is unchanged - and it shares the
+    // context packet, the salience, the Council and the ECP pre-check with it.
+    if (mission !== null && mission !== undefined) {
+      return runMission({ mission, artifactId, intent: cleanIntent, runId, startedAt, requestedBy, origin, councilRequested });
+    }
 
     const selected = action
       ? { action, input: input && typeof input === 'object' ? input : {}, rule: 'the owner named the action explicitly' }

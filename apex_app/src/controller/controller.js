@@ -1610,13 +1610,17 @@ export class CognitiveController {
   // One owner intent, one governed run. The capability is registered like any other, so the
   // operation audit, ECP authorization and verifier all apply; the pipeline itself halts
   // fail-closed and never executes a gated step without the owner's own approval.
-  async cognitionRun({ intent, action = null, input = null, councilRequested = false } = {}) {
+  // T-34 Step 1: a mission is named explicitly, and the mission compiler - not this method - decides
+  // what its steps are. The controller only carries the name and the artifact through.
+  async cognitionRun({ intent, action = null, input = null, councilRequested = false, mission = null, artifactId = null } = {}) {
     const shown = typeof intent === 'string' && intent.trim() !== '' ? truncate(intent.trim(), 80) : '[missing intent]';
-    const op = this.#newOp({ capability: 'cognition.run', origin: 'user', request: `cognition run [${shown}]` });
+    const op = this.#newOp({ capability: 'cognition.run', origin: 'user', request: `cognition run [${shown}]${mission ? ` [mission ${mission}]` : ''}` });
     const payload = { intent };
     if (action !== null && action !== undefined) payload.action = action;
     if (input !== null && input !== undefined) payload.input = input;
     if (councilRequested === true) payload.councilRequested = true;
+    if (mission !== null && mission !== undefined) payload.mission = mission;
+    if (artifactId !== null && artifactId !== undefined) payload.artifactId = artifactId;
     const step = await this.runAction('cognition.run', payload, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }

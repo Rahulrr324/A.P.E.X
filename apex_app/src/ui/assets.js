@@ -218,6 +218,24 @@ export const UI_PAGE = `<!doctype html>
     <section class="panel">
       <h3>TaskGraph — dependency and checkpoint view</h3>
       <p class="meta">Each node is a recorded step. Its state and its verification come from the task log; the controls post to the controller routes that already exist. A verified badge appears only when the step's own record says the verifier confirmed it.</p>
+      <!-- T-34 Step 1: an explicit mission launcher. The mission is named, not inferred: the
+           compiler holds one fixed template and the button starts that template, gated. -->
+      <div class="row">
+        <label for="mission-select">Start a mission</label>
+        <select id="mission-select">
+          <option value="audit_and_stage">audit_and_stage — sense, fan out, verify, read back</option>
+        </select>
+        <input id="mission-artifact" type="text" maxlength="64" placeholder="workshop artifact id (ws-…)">
+        <button id="mission-run" type="button" class="small">Compile and start the mission</button>
+        <span id="mission-run-status" class="meta" role="status" aria-live="polite"></span>
+      </div>
+      <div class="row">
+        <label for="taskgraph-select">Recorded task</label>
+        <select id="taskgraph-select">
+          <option value="">newest unfinished task</option>
+        </select>
+        <span class="meta">Switching reads that task's own log; nothing is re-run by looking.</span>
+      </div>
       <p id="dag-status" class="workspace-status" role="status" aria-live="polite">Loading the recorded graph…</p>
       <ul id="dag-nodes" class="work dag"></ul>
       <p id="dag-edges" class="meta"></p>
@@ -909,6 +927,11 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   workshopState: document.getElementById('workshop-state'),
   // T-31 Step 2 surfaces.
   dagStatus: document.getElementById('dag-status'),
+  dagSelect: document.getElementById('taskgraph-select'),
+  missionSelect: document.getElementById('mission-select'),
+  missionArtifact: document.getElementById('mission-artifact'),
+  missionRun: document.getElementById('mission-run'),
+  missionRunStatus: document.getElementById('mission-run-status'),
   dagNodes: document.getElementById('dag-nodes'),
   dagEdges: document.getElementById('dag-edges'),
   dagApprove: document.getElementById('dag-approve'),
@@ -2397,6 +2420,28 @@ function renderTaskGraph(result) {
     for (const button of [els.dagApprove, els.dagResume, els.dagRetry, els.dagCancel]) if (button) button.hidden = true;
     return;
   }
+  // The switch. One option per recorded task, labelled with what the owner needs to choose: the id,
+  // the state, and how far the task got. The value is the task id, so choosing is a plain read of that
+  // task's own log - nothing runs because a task was selected.
+  if (els.dagSelect) {
+    const tasks = Array.isArray(graph.tasks) ? graph.tasks : [];
+    const previous = els.dagSelect.value;
+    els.dagSelect.textContent = '';
+    const newest = el('option', null, 'newest unfinished task');
+    newest.value = '';
+    els.dagSelect.append(newest);
+    for (const task of tasks) {
+      const option = el('option', null, task.id + ' · ' + task.status + ' · ' + task.completed + '/' + task.steps + ' node(s)'
+        + (task.gated > 0 ? ' · ' + task.gated + ' gated' : '')
+        + (task.failed > 0 ? ' · ' + task.failed + ' failed' : ''));
+      option.value = task.id;
+      els.dagSelect.append(option);
+    }
+    // The graph in hand is the one to select: the requested task when there is one, otherwise the
+    // default the server chose. A stale value from a previous read is never left showing another task.
+    els.dagSelect.value = tasks.some((task) => task.id === graph.taskId) ? graph.taskId : '';
+    if (previous !== els.dagSelect.value) els.dagSelect.dataset.selected = els.dagSelect.value;
+  }
   setWorkspaceStatus(els.dagStatus, graph.completed + ' of ' + graph.nodes.length + ' node(s) completed · '
     + graph.gated + ' gated · ' + graph.failed + ' failed · task ' + graph.status
     + (graph.verified ? ' · every node verified' : ' · not every node verified'),
@@ -2409,6 +2454,19 @@ function renderTaskGraph(result) {
     item.dataset.verified = node.verified ? 'true' : 'false';
     item.dataset.control = node.control;
     if (node.dependsOn.length > 0) item.append(el('div', 'meta', 'Depends on: ' + node.dependsOn.join(', ')));
+    // T-34 Step 1: what holds this node, in words. A gated node is held by the owner's decision; a
+    // blocked one names the node it waits for; a ready one says so.
+    if (Array.isArray(node.blockedBy) && node.blockedBy.length > 0) {
+      const line = el('div', 'meta', 'Blocked by: ' + node.blockedBy.join(', ') + (node.state === 'awaiting_approval' ? ' · also needs your approval' : ''));
+      line.dataset.blockedBy = node.blockedBy.join(',');
+      item.dataset.blockedBy = node.blockedBy.join(',');
+      item.append(line);
+    } else if (node.state === 'awaiting_approval') {
+      const line = el('div', 'meta', 'Waiting for your approval; nothing has run.');
+      item.append(line);
+    } else if (node.state === 'pending') {
+      item.append(el('div', 'meta', node.dependsOn.length === 0 ? 'Ready to run.' : 'Ready: everything it depends on is complete.'));
+    }
     if (node.outcome) item.append(el('div', 'meta', 'Recorded outcome: ' + node.outcome));
     if (node.verificationOutcome) item.append(el('div', 'meta', 'Verification outcome: ' + node.verificationOutcome));
     if (node.approval) item.append(el('div', 'meta', 'Approved by ' + (node.approval.approvedBy || 'not recorded') + ' at ' + (node.approval.at || 'time not recorded')));
@@ -2421,9 +2479,11 @@ function renderTaskGraph(result) {
     return item;
   }, 'No node is recorded.');
   if (els.dagEdges) {
-    els.dagEdges.textContent = graph.edges.length === 0
+    const shape = graph.shape ? 'Shape: ' + graph.shape.nodes + ' node(s), ' + graph.shape.edges + ' edge(s), fan-out '
+      + graph.shape.fanOut + ', join ' + (graph.shape.joins.length > 0 ? graph.shape.joins.join(', ') : 'none') + '. ' : '';
+    els.dagEdges.textContent = shape + (graph.edges.length === 0
       ? 'No dependency edge is recorded; this task is a single node.'
-      : 'Edges: ' + graph.edges.map((edge) => edge.from + ' → ' + edge.to).join(', ');
+      : 'Edges: ' + graph.edges.map((edge) => edge.from + ' → ' + edge.to).join(', '));
   }
   const taskId = graph.taskId;
   const gatedNode = graph.nodes.find((node) => node.state === 'awaiting_approval') || null;
@@ -3095,7 +3155,9 @@ async function refresh() {
     readApi('/api/evolution'),
     readApi('/api/step-up'),
     readApi('/api/perception?limit=20'),
-    readApi('/api/taskgraph'),
+    // T-34 Step 1: a refresh keeps the task the owner selected. Looking at a task is a read; it changes
+    // nothing, and it must not jump back to the newest one under the owner's cursor.
+    readApi('/api/taskgraph' + (els.dagSelect && els.dagSelect.value ? '?taskId=' + encodeURIComponent(els.dagSelect.value) : '')),
   ]);
 
   // The authoritative snapshot carries the current session, transcript, badges, gauges and the
@@ -3316,6 +3378,66 @@ if (els.dagApprove) {
     postTaskControl('/api/tasks/' + encodeURIComponent(taskId) + '/approve', stepId ? { stepId } : {}, els.dagApprove, 'Approving the checkpoint');
   });
 }
+// T-34 Step 1: switching the recorded task. The select only asks for another task's log through the
+// same route the deck already reads; the response carries that task's full graph, and the renderer
+// fills the select back from it, so a task that has gone away is not left showing.
+async function loadSelectedTaskGraph(taskId) {
+  setWorkspaceStatus(els.dagStatus, 'Reading the recorded graph…', 'loading');
+  try {
+    const result = await readApi('/api/taskgraph' + (taskId ? '?taskId=' + encodeURIComponent(taskId) : ''));
+    renderTaskGraph(result);
+    if (result?.ok !== true) setWorkspaceStatus(els.dagStatus, 'Read error: ' + String(result?.error || 'the graph could not be read'), 'error');
+  } catch (error) {
+    setWorkspaceStatus(els.dagStatus, 'Read error: ' + String(error?.message || error), 'error');
+  }
+}
+
+if (els.dagSelect) {
+  els.dagSelect.addEventListener('change', () => {
+    loadSelectedTaskGraph(els.dagSelect.value);
+  });
+}
+
+// T-34 Step 1: starting a mission from the deck. The request names the template and the artifact; the
+// pipeline compiles the nodes, the ECP authorizes each one and the write nodes stop at the owner's
+// approval. The button reports what the pipeline answered - a mission that is paused at its gates is
+// reported as paused, never as done.
+if (els.missionRun) {
+  els.missionRun.addEventListener('click', async () => {
+    const mission = els.missionSelect ? els.missionSelect.value : 'audit_and_stage';
+    const artifactId = els.missionArtifact ? String(els.missionArtifact.value || '').trim() : '';
+    els.missionRun.disabled = true;
+    setWorkspaceStatus(els.missionRunStatus, 'Compiling and starting ' + mission + '…', 'loading');
+    try {
+      const response = await api('/api/cognition/run', {
+        method: 'POST',
+        body: { intent: 'run the ' + mission + ' mission', mission, artifactId: artifactId || null },
+      });
+      if (response.error) {
+        setWorkspaceStatus(els.missionRunStatus, 'Refused: ' + String(response.error), 'error');
+      } else {
+        const run = response.run || null;
+        setWorkspaceStatus(els.missionRunStatus, (run ? run.status : 'not recorded')
+          + (run && run.taskId ? ' · ' + run.taskId : '')
+          + (run && run.approval && run.approval.waitingSteps && run.approval.waitingSteps.length > 0
+            ? ' · waiting for your approval of ' + run.approval.waitingSteps.join(', ')
+            : ''),
+        run && run.status === 'awaiting_approval' ? 'partial' : (run && run.status === 'completed' ? 'available' : 'error'));
+        if (run && run.taskId && els.dagSelect) {
+          els.dagSelect.value = run.taskId;
+          await loadSelectedTaskGraph(run.taskId);
+        } else {
+          await refresh();
+        }
+      }
+    } catch (error) {
+      setWorkspaceStatus(els.missionRunStatus, 'Failed: ' + String(error?.message || error), 'error');
+    } finally {
+      els.missionRun.disabled = false;
+    }
+  });
+}
+
 if (els.dagResume) {
   els.dagResume.addEventListener('click', () => {
     const taskId = els.dagResume.dataset.taskId;

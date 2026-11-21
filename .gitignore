@@ -61,6 +61,8 @@ apex_app/reports/screenshots/t32-hud-run.json
 # summary are produced by the hosted browser job and uploaded as artifacts.
 apex_app/reports/screenshots/t33/
 apex_app/reports/t33-executive-loop.json
+apex_app/reports/screenshots/t34/
+apex_app/reports/t34-mission-dag.json
 playwright-report/
 apex_app/playwright-report/
 blob-report/

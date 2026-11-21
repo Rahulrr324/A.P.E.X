@@ -14,6 +14,7 @@ import { buildBriefing } from '../briefing/index.js';
 import { APP_NAME } from '../identity.js';
 import { planRisk } from '../plans/model.js';
 import { COGNITION_STAGES } from '../cognition/pipeline.js';
+import { blockedNodes as blockedNodesOf, unmetDependencies } from '../tasks/model.js';
 import { composeAllFramings, composeExecutiveComms } from '../cognition/persona-comms.js';
 import { AUTONOMY_LEVELS } from '../executive/control-plane.js';
 import { buildWorldState } from '../world/world-state.js';
@@ -253,6 +254,9 @@ function taskGraphOf(task) {
       outcome: step.outcome ?? null,
       summary: step.summary ? singleLine(step.summary, 240) : null,
       dependsOn: (Array.isArray(step.dependsOn) ? step.dependsOn : []).map(String),
+      // T-34 Step 1: what this node is waiting on, derived from the log on every read. A join whose
+      // branch is unfinished reads `blockedBy: ['n2a']` and the deck can say so in words.
+      blockedBy: unmetDependencies(task, step.id),
       approval: step.approval ? { approvedBy: step.approval.approvedBy ?? null, at: step.approval.at ?? null } : null,
       control: CONTROL_FOR_STATE[step.status] ?? 'none',
     };
@@ -262,12 +266,24 @@ function taskGraphOf(task) {
     for (const dependency of node.dependsOn) edges.push({ from: dependency, to: node.id });
   }
   const verified = nodes.length > 0 && nodes.every((node) => node.verified);
+  // The shape, counted rather than assumed: a fan-out is a node with more than one outgoing edge, a
+  // join a node with more than one dependency. A three-node chain reports fan-out 1 and no join.
+  const fanOut = Math.max(0, ...nodes.map((node) => edges.filter((edge) => edge.from === node.id).length));
   return {
     taskId: String(task.id),
     goal: task.goal ? singleLine(task.goal, 240) : null,
     status: task.status,
     nodes,
     edges,
+    shape: {
+      nodes: nodes.length,
+      edges: edges.length,
+      fanOut,
+      joins: nodes.filter((node) => node.dependsOn.length > 1).map((node) => node.id),
+      roots: nodes.filter((node) => node.dependsOn.length === 0).map((node) => node.id),
+    },
+    // What the log leaves unrun or waiting, and by which node.
+    blocked: blockedNodesOf(task),
     verified,
     completed: nodes.filter((node) => node.state === 'completed').length,
     gated: nodes.filter((node) => node.state === 'awaiting_approval').length,
@@ -276,11 +292,12 @@ function taskGraphOf(task) {
     // controller route that already exists - the UI never invents a transition.
     controls: {
       approve: nodes.some((node) => node.state === 'awaiting_approval'),
-      // A resume only makes sense for a paused task that is not waiting on the owner: an approved
-      // step left pending is exactly that state, and it is the state the deck's resume control acts on.
+      // A resume only makes sense for a paused task that still has something it may take up: a pending
+      // node whose own dependencies hold. T-34 Step 1 moved the decision from "no step is waiting for
+      // the owner" to "some step is ready", because a resume never takes up an awaiting step and a
+      // mission with one gated branch still has a sibling that may run.
       resume: task.status === 'paused'
-        && !nodes.some((node) => node.state === 'awaiting_approval')
-        && nodes.some((node) => node.state === 'pending'),
+        && nodes.some((node) => node.state === 'pending' && node.blockedBy.length === 0),
       retry: nodes.some((node) => node.state === 'failed'),
       cancel: !['cancelled', 'completed'].includes(task.status),
     },
@@ -2062,14 +2079,32 @@ export function createUiServer({
       try {
         const requested = url.searchParams.get('taskId');
         const tasks = await app.taskStore.list();
+        // T-34 Step 1: "newest" is decided by the record's own `createdAt`, not by the order the store
+        // happens to list its log in, so the default is the same answer whatever order it is read in.
+        const newestFirst = [...tasks].sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')) || String(b.id).localeCompare(String(a.id)));
         const chosen = requested
           ? tasks.find((task) => task.id === requested)
-          : [...tasks].reverse().find((task) => !['cancelled', 'completed'].includes(task.status)) ?? tasks.at(-1) ?? null;
+          : newestFirst.find((task) => !['cancelled', 'completed'].includes(task.status)) ?? newestFirst[0] ?? null;
+        // T-34 Step 1: the deck needs to switch between tasks, so the response carries the tasks that
+        // can be chosen - one line each, from the same records the graph is built from - and the full
+        // graph of the one chosen. The default is the newest task that has not finished, which is the
+        // one an owner is most likely looking at.
+        const summary = tasks.map((task) => ({
+          id: String(task.id),
+          goal: task.goal ? singleLine(task.goal, 120) : null,
+          status: task.status,
+          steps: Array.isArray(task.steps) ? task.steps.length : 0,
+          completed: (Array.isArray(task.steps) ? task.steps : []).filter((step) => step.status === 'completed').length,
+          gated: (Array.isArray(task.steps) ? task.steps : []).filter((step) => step.status === 'awaiting_approval').length,
+          failed: (Array.isArray(task.steps) ? task.steps : []).filter((step) => step.status === 'failed').length,
+          at: task.createdAt ?? null,
+          updatedAt: task.updatedAt ?? null,
+        }));
         if (!chosen) {
-          sendJson(res, 200, { taskId: null, nodes: [], edges: [], status: 'none', detail: 'no task record exists' });
+          sendJson(res, 200, { taskId: null, nodes: [], edges: [], status: 'none', tasks: summary, detail: 'no task record exists' });
           return;
         }
-        sendJson(res, 200, taskGraphOf(chosen));
+        sendJson(res, 200, { ...taskGraphOf(chosen), tasks: summary, selected: requested ?? null });
       } catch (err) {
         sendJson(res, 503, { unavailable: true, error: `the task graph is unavailable: ${err.message}` });
       }
@@ -2335,8 +2370,18 @@ export function createUiServer({
       }
       const body = await readJson(req, UI_LIMITS.maxBodyBytes);
       if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
-      const extra = Object.keys(body).find((key) => !['intent', 'action', 'input', 'councilRequested'].includes(key));
+      const extra = Object.keys(body).find((key) => !['intent', 'action', 'input', 'councilRequested', 'mission', 'artifactId'].includes(key));
       if (extra) { sendJson(res, 400, { error: `unknown field: ${extra}` }); return; }
+      // T-34 Step 1: a mission is named here and compiled by the pipeline. The route validates only
+      // the shape of the name; which missions exist is the compiler's answer, and it refuses the rest.
+      if (body.mission !== undefined && body.mission !== null && (typeof body.mission !== 'string' || body.mission.length === 0 || body.mission.length > 60)) {
+        sendJson(res, 400, { error: 'mission must name a mission template' });
+        return;
+      }
+      if (body.artifactId !== undefined && body.artifactId !== null && (typeof body.artifactId !== 'string' || body.artifactId.trim().length === 0 || body.artifactId.length > 64)) {
+        sendJson(res, 400, { error: 'artifactId must be a workshop artifact id' });
+        return;
+      }
       if (typeof body.intent !== 'string' || body.intent.trim().length === 0 || body.intent.length > 500) {
         sendJson(res, 400, { error: 'an intent of 1-500 characters is required' });
         return;
@@ -2355,6 +2400,8 @@ export function createUiServer({
           action: body.action ?? null,
           input: body.input ?? null,
           councilRequested: body.councilRequested === true,
+          mission: body.mission ?? null,
+          artifactId: body.artifactId ?? null,
         });
         const data = result.operation?.steps?.[0]?.result?.data ?? null;
         if (!data || typeof data.runId !== 'string') {

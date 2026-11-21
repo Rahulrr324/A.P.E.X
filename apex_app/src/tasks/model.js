@@ -161,6 +161,26 @@ export function topologicalOrder(steps) {
 }
 
 // Ids of every step that depends, directly or through others, on `stepId`.
+// T-34 Step 1 (2026-11-19): which of a step's dependencies do not hold a completed outcome. This is
+// derived from the records on every read and is never stored: a step is blocked because the log says
+// its dependency has not completed, not because some earlier write claimed it was.
+export function unmetDependencies(task, stepId) {
+  const byId = new Map((task?.steps ?? []).map((step) => [step.id, step]));
+  const step = byId.get(stepId);
+  return (step?.dependsOn ?? []).filter((id) => byId.get(id)?.status !== StepStatus.COMPLETED);
+}
+
+// The nodes a task log leaves unrun or in want of a decision, with what they are waiting on. A join
+// whose branch failed reads `blockedBy: ['n2a']`; a gated node with nothing unmet reads `blockedBy: []`
+// and is blocked by the owner's decision instead, which its own status says.
+export function blockedNodes(task) {
+  return (task?.steps ?? [])
+    .filter((step) => step.status === StepStatus.PENDING
+      || step.status === StepStatus.SKIPPED
+      || step.status === StepStatus.AWAITING_APPROVAL)
+    .map((step) => ({ id: step.id, status: step.status, blockedBy: unmetDependencies(task, step.id) }));
+}
+
 export function dependentsOf(steps, stepId) {
   const out = new Set();
   let grew = true;

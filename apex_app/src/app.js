@@ -436,6 +436,9 @@ export function createApp({
     // T-32 Step 3: live host and workspace facts, so a cognitive run reads the machine it is on
     // rather than only the stores it keeps.
     perception,
+    // T-34 Step 1: a mission refuses an artifact this service cannot read, so the precondition is
+    // stated before the mission's first step is recorded.
+    workshop,
     council,
     now: clock,
     idFactory,

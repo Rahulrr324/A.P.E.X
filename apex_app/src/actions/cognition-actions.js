@@ -4,6 +4,7 @@
 // create a governed task, and every concrete step inside that task is authorized separately and
 // pauses for explicit owner approval when it is a write or an L2+ action.
 import { ValidationError } from '../errors.js';
+import { compileMission, MissionError } from '../cognition/missions.js';
 
 function intentField(value) {
   if (typeof value !== 'string' || value.trim().length === 0 || value.length > 500) {
@@ -28,7 +29,9 @@ function traceText(run) {
     ? `${council.perspectives?.thesis?.verdict ?? 'no thesis'} / ${council.perspectives?.counter_risk?.verdict ?? 'no counter-risk'} / ${council.perspectives?.evidence_check?.verdict ?? 'no evidence check'} — deliberation data, not a permission`
     : `${council.status}: ${council.reason ?? 'not run'}`));
   const graph = run.stages.task_graph;
-  lines.push(stage('task_graph', '4 Task graph', `${graph.summary}`));
+  // T-34 Step 1: a compiled mission says which template it came from and what shape it has, so a
+  // reader can tell three nodes in a chain from a fan-out with a join.
+  lines.push(stage('task_graph', '4 Task graph', `${graph.summary}${graph.mission ? ` · mission ${graph.mission}` : ''}${graph.shape ? ` · fan-out ${graph.shape.fanOut}, join ${(graph.shape.joins ?? []).join(', ') || 'none'}` : ''}`));
   const execution = run.stages.execution;
   lines.push(stage('execution', '5 Execution', `${run.status}${run.verification?.verified ? ' · verified' : ` · ${run.verification?.outcome ?? 'not verified'}`}${run.halted ? ` · halted: ${run.halted.reason}` : ''}`));
   return lines.join('\n');
@@ -41,8 +44,8 @@ export function cognitionActions(pipeline) {
   return [
     {
       name: 'cognition.run',
-      description: 'Run the unified cognitive pipeline for one owner intent: context packet, salience and Sentinel advisories, Council synthesis, task graph, and governed execution through the ECP. A write or L2+ step pauses as awaiting_approval and executes only after an explicit owner approval. User origin only.',
-      inputHint: '{"intent":"what the owner is asking","action":"optional registered capability","input":{}}',
+      description: 'Run the unified cognitive pipeline for one owner intent: context packet, salience and Sentinel advisories, Council synthesis, task graph, and governed execution through the ECP. A write or L2+ step pauses as awaiting_approval and executes only after an explicit owner approval. A named mission (mission: "audit_and_stage") is compiled from a fixed template into a multi-node task with a fan-out and a join, and every write node in it is gated the same way. User origin only.',
+      inputHint: '{"intent":"what the owner is asking","action":"optional registered capability","input":{},"mission":"optional mission template","artifactId":"required by a mission that names one"}',
       permission: 'write',
       origins: ['user'],
       plannable: false,
@@ -50,7 +53,7 @@ export function cognitionActions(pipeline) {
         if (!input || typeof input !== 'object' || Array.isArray(input)) {
           throw new ValidationError('cognition.run expects an object');
         }
-        const allowed = new Set(['intent', 'action', 'input', 'councilRequested']);
+        const allowed = new Set(['intent', 'action', 'input', 'councilRequested', 'mission', 'artifactId']);
         for (const key of Object.keys(input)) {
           if (!allowed.has(key)) throw new ValidationError(`unexpected cognition.run input: ${key}`);
         }
@@ -69,10 +72,36 @@ export function cognitionActions(pipeline) {
           }
           payload = input.input;
         }
-        return { intent, action, input: payload, councilRequested: input.councilRequested === true };
+        let mission = null;
+        if (input.mission !== undefined && input.mission !== null) {
+          if (typeof input.mission !== 'string' || input.mission.length === 0 || input.mission.length > 60) {
+            throw new ValidationError('mission must name a mission template');
+          }
+          mission = input.mission;
+          // The compiler is the validator: a mission name it does not hold, or one whose required
+          // artifact is missing, is a rejected input rather than an execution that failed. The compile
+          // is pure and cheap, so validating by compiling states the same rule in one place.
+          try {
+            compileMission({ mission, artifactId: input.artifactId ?? null });
+          } catch (err) {
+            if (err instanceof MissionError) throw new ValidationError(err.message, err.code);
+            throw err;
+          }
+          if (action !== null) throw new ValidationError('a mission compiles its own steps, so action cannot also be named');
+          if (payload !== null) throw new ValidationError('a mission compiles its own inputs, so input cannot also be named');
+        }
+        let artifactId = null;
+        if (input.artifactId !== undefined && input.artifactId !== null) {
+          if (typeof input.artifactId !== 'string' || input.artifactId.trim().length === 0 || input.artifactId.length > 64) {
+            throw new ValidationError('artifactId must be a workshop artifact id');
+          }
+          artifactId = input.artifactId.trim();
+          if (mission === null) throw new ValidationError('artifactId is only an input to a mission');
+        }
+        return { intent, action, input: payload, councilRequested: input.councilRequested === true, mission, artifactId };
       },
-      async execute(_ctx, { intent, action, input, councilRequested }) {
-        const run = await pipeline.run({ intent, action, input, councilRequested, requestedBy: 'owner' });
+      async execute(_ctx, { intent, action, input, councilRequested, mission, artifactId }) {
+        const run = await pipeline.run({ intent, action, input, councilRequested, requestedBy: 'owner', mission, artifactId });
         return {
           summary: `cognitive run ${run.runId}: ${run.status}`,
           data: {
@@ -82,6 +111,7 @@ export function cognitionActions(pipeline) {
             halted: run.halted,
             verification: run.verification,
             approval: run.approval,
+            mission: run.mission ?? null,
             stages: run.stages,
           },
           display: traceText(run),
@@ -94,7 +124,20 @@ export function cognitionActions(pipeline) {
           return { ok: false, detail: `the run halted fail-closed (${run.halted?.reason ?? 'unknown'}); no step executed` };
         }
         if (run.status === 'awaiting_approval') {
-          return { ok: false, detail: 'the run is paused awaiting explicit owner approval; nothing has executed yet' };
+          // T-34 Step 1: a paused mission is a partial run, and saying "nothing has executed yet"
+          // about one would be false. The detail names what ran, what waits for the owner and what the
+          // records leave blocked behind it.
+          const steps = run.task?.steps ?? [];
+          const waiting = steps.filter((step) => step.status === 'awaiting_approval').map((step) => step.id);
+          const ran = steps.filter((step) => step.status === 'completed').map((step) => step.id);
+          const blocked = (run.blocked ?? []).filter((node) => node.blockedBy.length > 0)
+            .map((node) => `${node.id} by ${node.blockedBy.join(', ')}`);
+          return {
+            ok: false,
+            detail: `the run is paused awaiting explicit owner approval of ${waiting.join(', ') || 'a step'}; `
+              + `${ran.length > 0 ? `${ran.join(', ')} ran and verified` : 'nothing has executed yet'}`
+              + `${blocked.length > 0 ? `; blocked: ${blocked.join('; ')}` : ''}`,
+          };
         }
         if (run.status === 'completed' && run.verification?.verified === true) {
           return { ok: true, detail: `${run.taskId} completed and every step verified: ${run.verification.detail}` };

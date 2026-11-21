@@ -215,6 +215,41 @@ jobs:
               sys.exit(1)
           PY
 
+      # T-34 Step 4 (2026-11-19): the mission-DAG walk publishes its own one-line annotation, written by
+      # the spec from what the page and the API answered: the shape it saw, the checkpoints it reached
+      # and whether the join was held before it ran.
+      - name: Publish the T-34 mission-DAG result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't34-mission-dag.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t34-mission-dag::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          steps = [step.get('id') for step in run.get('steps', [])]
+          shots = len(run.get('screenshots', []))
+          failures = run.get('failures', [])
+          facts = run.get('facts') or {}
+          graph = ((facts.get('missionGraph') or {}).get('body') or {})
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"checkpoints {len(steps)}: {','.join(str(name) for name in steps) or 'none'}",
+              f"screenshots {shots}",
+              f"mission {graph.get('status') or 'not read'} verified {graph.get('verified')}",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t34-mission-dag::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       - name: Keep the browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -225,7 +260,9 @@ jobs:
             apex_app/test-results/playwright
             apex_app/reports/screenshots/t32
             apex_app/reports/screenshots/t33
+            apex_app/reports/screenshots/t34
             apex_app/reports/t33-executive-loop.json
+            apex_app/reports/t34-mission-dag.json
           if-no-files-found: warn
           retention-days: 14
 
