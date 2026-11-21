@@ -24,7 +24,9 @@ export default defineConfig({
   // the doctor, and writes its own summary.
   // T-36 Step 4 (2026-11-21): the cold-boot walk joins them. It is the only suite that starts from
   // an empty data directory, so the machine it reports was set up by the bootstrap during the walk.
-  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs', '**/t34-mission-dag-and-briefing.spec.mjs', '**/t35-stepdown-handoff-doctor.spec.mjs', '**/t36-cold-boot-unseeded.spec.mjs'],
+  // T-37 Step 4 (2026-11-21): the neural/Council/router walk joins them. It is the only suite that
+  // checks all eleven canonical screens by their declared ids in a live DOM.
+  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs', '**/t34-mission-dag-and-briefing.spec.mjs', '**/t35-stepdown-handoff-doctor.spec.mjs', '**/t36-cold-boot-unseeded.spec.mjs', '**/t37-neural-council-router.spec.mjs'],
   testIgnore: ['**/apex-browser.spec.mjs'],
   // Generated traces/screenshots from a failing run must not be committed.
   outputDir: './test-results/playwright',

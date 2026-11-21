@@ -2729,12 +2729,60 @@ function renderCouncil(result) {
     + ' · conflicting ' + (synthesis.conflictingEvidence?.length || 0)
     + ' · approvals listed: ' + (synthesis.requiredApprovals || []).join(', '));
   els.councilSynthesis.append(verdict, summary, disagreement, evidence);
+
+  // T-37 Step 2: the four canonical perspectives the owner reads first, named as the brief names
+  // them. They are the same eight positions the service evaluated - mapped onto the vocabulary the
+  // brief uses - so this is a view of the deliberation, not a second one.
+  const positions = Array.isArray(latest.positions) ? latest.positions : [];
+  const find = (id) => positions.find((entry) => entry.perspectiveId === id) ?? null;
+  const canonical = [
+    ['thesis', 'Thesis — objective alignment', find('objective_alignment')],
+    ['counter_risk', 'Counter-risk — safety and policy', find('safety_policy')],
+    ['evidence_check', 'Evidence check — what the records support', find('evidence_quality')],
+    ['constraint_check', 'Constraint check — values and constraints core', find('constraint_check')],
+  ];
+  const canonicalList = el('ul', 'work');
+  for (const [id, label, position] of canonical) {
+    const item = el('li');
+    const text = position
+      ? String(position.position?.verdict ?? position.status ?? 'status not recorded')
+        + (position.position?.summary ? ' — ' + String(position.position.summary) : '')
+      : 'not recorded in this session';
+    const entry = itemFrom(label, text);
+    entry.dataset.perspective = id;
+    canonicalList.append(entry);
+  }
+  els.councilSynthesis.append(canonicalList);
+
+  // The full evaluated set, including the constraint core's rule-by-rule verdicts when it ran.
   const list = el('ul', 'work');
-  for (const position of (latest.positions || []).slice(0, 7)) {
-    list.append(itemFrom(position.perspectiveName || position.perspectiveId,
-      (position.position && position.position.verdict) || position.status || 'status not recorded'));
+  for (const position of positions) {
+    const item = itemFrom(position.perspectiveName || position.perspectiveId,
+      (position.position && position.position.verdict) || position.status || 'status not recorded');
+    // The constraint core's own evaluation travels with it: each rule, its verdict and its reason.
+    if (position.evaluation && Array.isArray(position.evaluation.evaluations)) {
+      item.dataset.perspective = 'constraint_check';
+      item.title = position.evaluation.evaluations
+        .map((rule) => rule.name + ' — ' + rule.verdict + ': ' + rule.detail).join(String.fromCharCode(10));
+    }
+    list.append(item);
   }
   els.councilSynthesis.append(list);
+
+  // The constraint core's rules, shown rather than hidden in a tooltip, because a rule the owner
+  // cannot read is a rule they cannot disagree with.
+  const core = find('constraint_check');
+  if (core && core.evaluation && Array.isArray(core.evaluation.evaluations)) {
+    const heading = el('h4', null, 'Values & Constraints Core — ' + String(core.evaluation.overall || 'unknown'));
+    const rules = el('ul', 'work');
+    for (const rule of core.evaluation.evaluations) {
+      const row = itemFrom(rule.name + ' (' + rule.severity + ')', rule.verdict + ' — ' + rule.detail);
+      row.dataset.constraint = rule.id;
+      row.dataset.verdict = rule.verdict;
+      rules.append(row);
+    }
+    els.councilSynthesis.append(heading, rules);
+  }
 }
 
 // T-37 Step 1: Track 2 in the deck. Every value is read from the substrate the capabilities actually

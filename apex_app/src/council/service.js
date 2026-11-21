@@ -153,6 +153,9 @@ export class CouncilService {
       claims: resolvedCandidate ?? null,
       latch: typeof this.latchLookup === 'function' ? this.latchLookup() : null,
       inPlan: false,
+      // The session's own evaluation instant, so a replay of the session reproduces this position
+      // byte for byte. A wall-clock read here would make every replay disagree with its record.
+      at: evaluatedAt.toISOString(),
     }));
     const disagreement = classifyDisagreement(positions);
     const synthesis = synthesize({
@@ -280,6 +283,20 @@ export class CouncilService {
       resourceContext: input.resourceContext ?? null,
       taskRecord: input.taskRecord ?? null,
       evaluatedAt: evaluatedAt.toISOString(),
+    }));
+    // T-37 Step 2: the replay must rebuild the same eight positions the deliberation produced. The
+    // constraint core is evaluated here too, at the recorded instant, from the recorded declaration -
+    // otherwise a stored eight-position session could never match a replayed seven, and every replay
+    // would report a mismatch it did not have.
+    positions.push(constraintPerspective({
+      definition: input.candidate
+        ? this.capabilityLookup(input.candidate.action || input.candidate.id) ?? null
+        : null,
+      evidence: evidenceSet.items,
+      claims: input.candidate ?? null,
+      latch: typeof this.latchLookup === 'function' ? this.latchLookup() : null,
+      inPlan: false,
+      at: evaluatedAt.toISOString(),
     }));
     const disagreement = classifyDisagreement(positions);
     const synthesis = synthesize({

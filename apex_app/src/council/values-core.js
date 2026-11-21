@@ -190,6 +190,10 @@ export const CORE = Object.freeze({
 // Evaluate every hard rule against a candidate. The result is what a Council perspective shows: which
 // rules the candidate satisfies, which it violates, and which could not be checked.
 export function evaluateConstraints(input = {}) {
+  // The instant is supplied by the caller. Reading the wall clock here would make a deliberation
+  // unreplayable: `council.replay` recomputes from the recorded input and compares, so a timestamp
+  // taken at evaluation time would differ on every replay and the comparison would fail.
+  const at = typeof input.at === 'string' ? input.at : null;
   const evaluations = CONSTRAINTS.map((constraint) => {
     let outcome;
     try {
@@ -225,7 +229,7 @@ export function evaluateConstraints(input = {}) {
 
   return {
     schema: 'apex.values.constraint-evaluation/1',
-    at: new Date().toISOString(),
+    at,
     overall,
     counts: {
       satisfied: count('satisfied'),
