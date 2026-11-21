@@ -20,6 +20,8 @@ import { AUTONOMY_LEVELS } from '../executive/control-plane.js';
 import { buildWorldState } from '../world/world-state.js';
 import { Outcome } from '../outcomes.js';
 import { evolutionBoundaries } from '../evolution/lab.js';
+import { hudStatus } from './hud.js';
+import { createDoctor } from '../system/doctor.js';
 
 export const UI_LIMITS = Object.freeze({
   maxBodyBytes: 64 * 1024,
@@ -758,6 +760,9 @@ export function createUiServer({
   if (!app || typeof app.controller?.handle !== 'function' || typeof app.controller?.approveTask !== 'function') {
     throw new Error('createUiServer requires an APEX application');
   }
+  // T-35 Step 3: the doctor is composed with the same app the UI reads, so its checks are the
+  // running system's and not a second opinion built from environment variables.
+  const doctor = createDoctor({ app, dataDir: app.dataDir });
   // Loopback stays the default and the only thing an unconfigured server will bind. A sandboxed
   // preview proxy cannot reach loopback inside the process's namespace, so an owner who explicitly
   // asks for it may bind 0.0.0.0; every request is still token-gated, and the frame/origin headers
@@ -1777,9 +1782,13 @@ export function createUiServer({
 
     // T-33 Step 2: what the formatter needs, read from the same owners the page reads.
     let perceptionView = null;
+    // T-35 Step 1: the sensor indicator needs the raw reading (the host and git timestamps), while
+    // the formatter needs a small summary. One read of the service fills both.
+    let perceptionRaw = null;
     if (app.perception && typeof app.perception.state === 'function') {
       try {
         const view = app.perception.state({ limit: 1 });
+        perceptionRaw = view;
         perceptionView = {
           available: true,
           observedCount: view.observedCount,
@@ -1829,6 +1838,16 @@ export function createUiServer({
         oneRequestAtATime: true,
       },
     };
+    // T-35 Step 1: the HUD's own reading - the visual step-down ladder derived from this snapshot's
+    // ResourceFabric telemetry, and what the local sensors are doing. It is computed from the numbers
+    // above rather than stored, so a stale stage cannot outlive the machine it described.
+    body.hud = hudStatus({
+      telemetry: resources && resources.unavailable === undefined ? resources : null,
+      perception: perceptionRaw,
+      workspaceConfigured: Boolean(perceptionRaw && perceptionRaw.workspaceRoot),
+      registryNames: typeof app.registry?.list === 'function' ? app.registry.list().map((entry) => entry.name) : [],
+      now,
+    });
     body.coreReading = serverCoreReading({
       killSwitch, tasks, situation, unavailable,
     });
@@ -2061,6 +2080,16 @@ export function createUiServer({
       sendJson(res, 200, await snapshot());
       return;
     }
+    // T-35 Step 3: the doctor, on demand. It is read-only and bounded, but it reads the store files,
+    // so it is a route of its own rather than part of the five-second snapshot.
+    if (method === 'GET' && url.pathname === '/api/system/doctor') {
+      try {
+        sendJson(res, 200, await doctor.run());
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `the doctor could not run: ${err.message}` });
+      }
+      return;
+    }
     // T-33 Step 2: the executive comms framings. The page passes the Core state it has already
     // derived, so the wording follows what the deck is showing; an unknown state is refused rather
     // than quietly replaced, because a voice that disagrees with the Core is worse than no voice.
@@ -2237,6 +2266,11 @@ export function createUiServer({
             peers: [],
             connectedPeers: 0,
           },
+          // T-35 Step 2: the local handoff ledger. `remoteTransport: false` is stated in the payload
+          // by the service itself, so the deck cannot present a local envelope as a remote handoff.
+          handoffs: app.handoffs && typeof app.handoffs.status === 'function'
+            ? { ...app.handoffs.status(), recent: app.handoffs.list().slice(0, 20) }
+            : { available: false, implemented: false, remoteTransport: false, detail: 'the handoff ledger is not configured' },
           note: 'A trusted device authenticates messages. It grants no capability; the ECP authorizes every action.',
           readonly: true,
         });
@@ -2899,6 +2933,73 @@ export function createUiServer({
         const briefing = await briefingSnapshot();
         sendJson(res, 200, { status: result.status, checkpoint: data, delta: briefing.delta, display: result.display });
         broadcast('briefing', { checkpoint: data.checkpointId, at: data.at });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+    // T-35 Step 2: staging a presence handoff. The fields are checked here so a malformed request is
+    // a 400 rather than an audit entry, and then the governed action decides: trust, lockdown, the
+    // digest and the one-claim rule are all enforced below this line.
+    if (method === 'POST' && url.pathname === '/api/presence/handoffs') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const allowed = ['sourceDeviceId', 'targetDeviceId', 'targetView', 'taskId', 'briefingCheckpointId', 'artifactId', 'note'];
+      const unknown = Object.keys(body).find((key) => !allowed.includes(key));
+      if (unknown) { sendJson(res, 400, { error: `unknown field: ${unknown}` }); return; }
+      for (const key of ['sourceDeviceId', 'targetDeviceId', 'targetView']) {
+        if (typeof body[key] !== 'string' || body[key].trim() === '') { sendJson(res, 400, { error: `${key} is required and must be text` }); return; }
+      }
+      if (body.note !== undefined && body.note !== null && (typeof body.note !== 'string' || body.note.length > 240)) {
+        sendJson(res, 400, { error: 'note must be text of at most 240 characters' });
+        return;
+      }
+      try {
+        const result = await app.controller.presenceHandoffStage(body);
+        const step = result.operation?.steps?.[0] ?? null;
+        const data = step?.result?.data ?? null;
+        if (step?.verification?.outcome !== 'success_verified' || !data?.handoff) {
+          sendJson(res, 400, { status: result.status, error: step?.verification?.detail ?? step?.summary ?? 'the envelope was not staged', display: result.display });
+          return;
+        }
+        sendJson(res, 201, { status: result.status, handoff: data.handoff, verifiedTargets: data.verifiedTargets, display: result.display });
+        broadcast('presence', { handoff: data.handoff.id, status: data.handoff.status });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+    const claimMatch = url.pathname.match(/^\/api\/presence\/handoffs\/([^/]+)\/(claim|revoke)$/);
+    if (method === 'POST' && claimMatch) {
+      const handoffId = decodeURIComponent(claimMatch[1]);
+      const verb = claimMatch[2];
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const allowed = verb === 'claim' ? ['targetDeviceId'] : ['reason'];
+      const unknown = Object.keys(body).find((key) => !allowed.includes(key));
+      if (unknown) { sendJson(res, 400, { error: `unknown field: ${unknown}` }); return; }
+      if (verb === 'claim' && (typeof body.targetDeviceId !== 'string' || body.targetDeviceId.trim() === '')) {
+        sendJson(res, 400, { error: 'targetDeviceId is required: the claiming device must be named' });
+        return;
+      }
+      if (verb === 'revoke' && (typeof body.reason !== 'string' || body.reason.trim().length < 3 || body.reason.length > 240)) {
+        sendJson(res, 400, { error: 'a revocation reason of 3-240 characters is required' });
+        return;
+      }
+      try {
+        const result = verb === 'claim'
+          ? await app.controller.presenceHandoffClaim({ handoffId, targetDeviceId: body.targetDeviceId.trim() })
+          : await app.controller.presenceHandoffRevoke({ handoffId, reason: body.reason.trim() });
+        const step = result.operation?.steps?.[0] ?? null;
+        const data = step?.result?.data ?? null;
+        if (step?.verification?.outcome !== 'success_verified' || !data?.handoff) {
+          sendJson(res, 400, { status: result.status, error: step?.verification?.detail ?? step?.summary ?? `the envelope was not ${verb === 'claim' ? 'claimed' : 'revoked'}`, display: result.display });
+          return;
+        }
+        sendJson(res, 200, { status: result.status, handoff: data.handoff, restoration: data.restoration ?? null, display: result.display });
+        broadcast('presence', { handoff: data.handoff.id, status: data.handoff.status });
         scheduleOwnerRefresh();
       } catch (err) {
         sendJson(res, 400, { error: err.message });

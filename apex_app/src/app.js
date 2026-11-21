@@ -56,6 +56,8 @@ import { councilActions, createCouncilService } from './actions/council-actions.
 import { workshopActions } from './actions/workshop-actions.js';
 import { evolutionActions } from './actions/evolution-actions.js';
 import { briefingActions } from './actions/briefing-actions.js';
+import { presenceHandoffActions } from './actions/presence-handoff-actions.js';
+import { createPresenceHandoffs } from './presence/handoff.js';
 import { createBriefingService } from './briefing/service.js';
 import { createEvolutionLab } from './evolution/lab.js';
 import { goalActions } from './actions/goal-actions.js';
@@ -455,6 +457,28 @@ export function createApp({
     owners: { taskStore, perception, workshop, evolution, cognition },
   });
   for (const def of briefingActions(briefing)) registry.register(def);
+  // T-35 Step 2: the presence handoff envelopes. The ledger is local and append-only; the device ids
+  // are checked against the T-28 registry at staging and again at the claim, and the targets a
+  // handoff may name are looked up rather than trusted, so an envelope cannot point at a task or
+  // artifact that does not exist.
+  const handoffs = createPresenceHandoffs({
+    dataDir,
+    deviceTrust,
+    now: clock,
+    idFactory,
+    lookups: {
+      task: (taskId) => taskStore.get(taskId),
+      artifact: async (artifactId) => {
+        const found = await workshop.get(artifactId);
+        return found && found.found === true ? found.artifact ?? found : null;
+      },
+      checkpoint: async (checkpointId) => {
+        const recorded = await briefing.list({ limit: 200 });
+        return recorded.find((entry) => entry.id === checkpointId) ?? null;
+      },
+    },
+  });
+  for (const def of presenceHandoffActions(handoffs)) registry.register(def);
   return {
     controller,
     memory,
@@ -494,6 +518,7 @@ export function createApp({
     perception,
     cognition,
     briefing,
+    handoffs,
   };
 }
 

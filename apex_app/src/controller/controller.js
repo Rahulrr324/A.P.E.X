@@ -1613,6 +1613,33 @@ export class CognitiveController {
   // T-34 Step 3: acknowledging a briefing writes a checkpoint of what the owning stores hold. It is a
   // governed write like any other: the ECP authorizes it, the lockdown latch refuses it, and the
   // action verifies the line it claims to have written.
+  // T-35 Step 2: the presence handoff envelopes. Each of the three is a governed write with its own
+  // operation, so the audit log holds the request and the refusal as well as the success. The
+  // controller carries the fields; the envelope's checks (trust, digest, expiry, one claim) are the
+  // service's, and the verifier re-reads the ledger rather than trusting this return value.
+  async presenceHandoffStage(fields = {}) {
+    const shown = typeof fields.targetDeviceId === 'string' ? truncate(fields.targetDeviceId, 48) : '[missing device]';
+    const op = this.#newOp({ capability: 'presence.handoff.stage', origin: 'user', request: `stage a presence handoff for ${shown}` });
+    const payload = {};
+    for (const key of ['sourceDeviceId', 'targetDeviceId', 'targetView', 'taskId', 'briefingCheckpointId', 'artifactId', 'note']) {
+      if (fields[key] !== undefined && fields[key] !== null) payload[key] = fields[key];
+    }
+    const step = await this.runAction('presence.handoff.stage', payload, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async presenceHandoffClaim({ handoffId, targetDeviceId } = {}) {
+    const op = this.#newOp({ capability: 'presence.handoff.claim', origin: 'user', request: `claim presence handoff ${truncate(String(handoffId ?? '[missing]'), 48)}` });
+    const step = await this.runAction('presence.handoff.claim', { handoffId, targetDeviceId }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async presenceHandoffRevoke({ handoffId, reason } = {}) {
+    const op = this.#newOp({ capability: 'presence.handoff.revoke', origin: 'user', request: `revoke presence handoff ${truncate(String(handoffId ?? '[missing]'), 48)}` });
+    const step = await this.runAction('presence.handoff.revoke', { reason, handoffId }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   async briefingAcknowledge({ reason = null } = {}) {
     const op = this.#newOp({ capability: 'briefing.acknowledge', origin: 'user', request: 'acknowledge the briefing' });
     const payload = reason === null || reason === undefined ? {} : { reason };

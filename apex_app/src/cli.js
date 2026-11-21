@@ -17,6 +17,7 @@ import { MAX_QUEUED_SUMMARIES } from './tasks/summary-queue.js';
 import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
 import { State, collectDiagnostics, dataDirLabel, renderDiagnostics, safeText } from './diagnostics.js';
 import { collectHealth, renderHealth } from './health.js';
+import { DOCTOR_BUDGET_MS, DOCTOR_SCHEMA, createDoctor } from './system/doctor.js';
 import { MAX_WORLD_LIMIT } from './world/world-state.js';
 import { runRuntimeCommand } from './runtime/cli.js';
 import { runIntegrationCommand } from './integrations/cli.js';
@@ -38,6 +39,7 @@ Usage:
   node bin/apex.js model contracts [--json]           declared provider capabilities, limits and trust boundary (no endpoint is contacted)
   node bin/apex.js neural contract [--json]           declared neural runtime boundary, limits and isolation (no runtime is contacted; no inference)
   node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
+  node bin/apex.js doctor [--json]       six read-only checks in under 500 ms: safety latch, ECP authority, stores, capabilities, browser, workspace sensor
   node bin/apex.js health [--json] [--model]          unified operational health across every subsystem (inspects records; starts nothing, calls no model)
   node bin/apex.js workspace roots                     configured workspace roots and their names (read-only)
   node bin/apex.js workspace list [path] [--limit N] [--workspace <name>]        one directory inside a root (read-only)
@@ -1194,6 +1196,26 @@ export async function main(argv, {
       const diag = await collectDiagnostics(app, { checkModel: Boolean(flags.model) });
       out(renderDiagnostics(diag));
       return diag.needsAttention ? 1 : 0;
+    }
+
+    // T-35 Step 3: the doctor. Six read-only checks inside a stated budget, and a non-zero exit
+    // whenever one of them could not pass - a degraded or failed check is never reported as ok.
+    if (command === 'doctor') {
+      const { flags, rest } = parseFlags(args, ['json']);
+      rejectUnexpected(rest, 'doctor [--json]');
+      const doctor = createDoctor({ app, dataDir: app.dataDir });
+      const report = await doctor.run();
+      if (flags.json) {
+        out(JSON.stringify(report, null, 2));
+      } else {
+        out(`${APP_NAME} doctor  ${report.status.toUpperCase()}  (${report.durationMs} ms of a ${DOCTOR_BUDGET_MS} ms budget${report.withinBudget ? '' : ', OVER BUDGET'})`);
+        for (const entry of report.checks) {
+          out(`  [${entry.state}] ${entry.name}  ${entry.summary}`);
+        }
+        out('');
+        out(report.note);
+      }
+      return report.ok ? 0 : 1;
     }
 
     if (command === 'new') {

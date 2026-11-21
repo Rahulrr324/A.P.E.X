@@ -1172,3 +1172,159 @@ horizontal overflow.
 The walk's own failure path is the thing that made this possible: while it was red, the summary said
 `steps: 0` and nothing else, which is a red run that cannot be diagnosed. It now records the last
 checkpoint and the error before rethrowing, and the harness test asserts that it does.
+
+---
+
+## T-35 (2026-11-19): the step-down ladder, trusted handoff envelopes, and `apex doctor`
+
+Part 4 asks for a system that stays readable when the machine is under pressure; Part 3 asks for the
+owner's work to follow the owner between the surfaces they already trust; and an operator asks for one
+command that says whether the thing is actually intact. T-35 builds those three in that order, and
+each one states its own limit rather than leaving it to the reader.
+
+Branch `arena/c4691a2f-a-p-e-x`, from `ba8c508`. Nothing below is a projection: every number is a
+local measurement, and the one real-browser claim is marked `UNVERIFIED` because this sandbox has no
+browser at all.
+
+### Step 1 - the visual step-down ladder, from real pressure
+
+`apex_app/src/ui/hud.js` owns the ladder as a table. Six rungs, each naming exactly which layer it
+drops; the table is the single source for the payload, the CSS selectors and the tests, so a rung
+cannot drift between them:
+
+| Stage | Name | Drops | What still works |
+| --- | --- | --- | --- |
+| 0 | `nominal` | nothing | everything |
+| 1 | `drop_bloom` | `bloom` | rings, reticle cadence, every value on the deck |
+| 2 | `drop_particles` | `bloom`, `particles` | grid, planes, reticle |
+| 3 | `drop_parallax` | `+ parallax` | every Z0-Z4 factor is `0`; nothing moves against the pointer |
+| 4 | `drop_ambient_motion` | `+ ambientMotion` | secondary ring drift and the halo stop; the Core state indicator keeps its cadence |
+| 5 | `flat_mode` | `+ backdropBlur`, `panelTransitions` | no blur, no panel transitions; the reticle stays visible |
+
+The stage comes from the machine, through stated thresholds - memory used at 80 / 90 / 96 percent and
+one-minute load per logical CPU at 1.5 / 3 / 6 - with the worse of the two metrics winning. `nominal`
+is stage 0, `elevated` is 2, `high` is 4, `critical` is 5, and telemetry that cannot be read is
+reported as `unknown` with `source: 'telemetry-unavailable'` and never as `nominal`: a fabric that
+cannot see the machine has not seen an idle machine. `ResourceFabric` now reports `loadAverage1m` and
+`loadPerCpu1m`, and an unreadable load average is `null` rather than `0` for the same reason.
+
+The operator override (`auto`, `0`..`5`) is a presentation choice kept in the browser. It writes no
+store and calls no route, and it never rewrites `auto.stage`: the payload carries both, so the page
+can say "stage 3 by override, the machine reads elevated" instead of one value overwriting the other.
+An override outside the ladder is refused and named, not clamped into a rung that does not exist.
+
+`/api/state` carries the whole thing under `hud.stepDown` (schema, pressure, per-metric basis lines,
+the six stages, override acceptance, the resolved effective stage and layer map, and the flash guard).
+The page writes `data-stepdown-stage` and `data-hud-<layer>` on `<body>`; the stylesheet reads those
+attributes and nothing else. The reticle is deliberately absent from every `dropped` list, and the
+flat-mode rule does not touch `#core-reticle` - both facts are asserted rather than left to review.
+
+The flash guard is 334 ms (`ceil(1000 / 3)`; `floor` would allow 3.003 cycles a second). It is
+enforced by inspecting the shipped stylesheet: every `animation` duration must be `0` or at least
+334 ms, and every one of the ten Core-state cadence tokens is checked the same way. In the browser the
+same invariant is measured live through the Web Animations API rather than read off the source.
+
+### Step 1 - the sensor and privacy indicator
+
+`#sensor-privacy-indicator` sits in the top bar beside the gauges and reports what is wired, not what
+is hoped for: `host-telemetry` and `git-workspace`, each with the timestamp of its last read, and
+`audio/mic: disabled` and `camera/video: disabled` with the basis text. It is computed from the same
+single `/api/perception` read the formatter uses, so the indicator and the Sentinel cannot disagree.
+If a capture capability were ever registered, the indicator would name it and set
+`capturePossible: true` rather than continue to claim nothing can capture - the honest version of the
+statement is the one that would change if the system changed.
+
+### Step 2 - trusted presence handoff envelopes
+
+`apex_app/src/presence/handoff.js` keeps an append-only JSONL ledger in the isolated data directory.
+An envelope names a source device, a target device, a view, and optionally a task, a briefing
+checkpoint and a workshop artifact; its SHA-256 digest covers all of those fields plus the staging
+time and the expiry, so any edit to a line is a tamper rather than a handoff. The digest is
+recomputed on every claim and a mismatch refuses with `HANDOFF_DIGEST_MISMATCH`.
+
+Three governed actions carry the writes through the ECP - `presence.handoff.stage`,
+`presence.handoff.claim`, `presence.handoff.revoke` - and the verifiers re-read the ledger instead of
+trusting the call's own return value. The refusals are the substance:
+
+- both devices must be enrolled and trusted, checked at staging and again at the claim, so a device
+  revoked in between cannot collect the work;
+- the claimer must be the device the envelope names (`HANDOFF_WRONG_DEVICE`), not any trusted device;
+- a claim is accepted once (`HANDOFF_ALREADY_CLAIMED`), and a claimed envelope cannot be revoked;
+- expiry is enforced (`HANDOFF_EXPIRED`) and an expired envelope reads as `expired`, not `staged`;
+- `Lockdown` refuses all three, because the ECP refuses every write while the latch is engaged;
+- targets are looked up, not believed: an envelope naming a task or artifact that does not exist is
+  refused with `TARGET_UNKNOWN` rather than stored and discovered by a deck that cannot go there.
+
+The payload is explicit about the limit: `implemented: true`, `remoteTransport: false`,
+`transport: 'local loopback & store-backed handoff only'`, with the reason written out - there is no
+socket mesh, no peer discovery and no remote session. A claim restores a view and a mission; every
+action the restored surface then takes is authorized separately, exactly as before.
+
+The Presence workspace carries the form (source, target, view, mission, note), the ledger with each
+digest, and **Claim & Restore**, which claims on the named device and lands the deck on the handed-off
+view and mission. A row the owner can no longer collect says why instead of offering a dead button.
+
+### Step 3 - `apex doctor`
+
+`apex_app/src/system/doctor.js`, one command (`node bin/apex.js doctor [--json]`), one route
+(`GET /api/system/doctor`) and one panel in the System workspace. Six read-only checks inside a
+500 ms budget, each returning a state it can defend:
+
+| Check | Passes when | Otherwise |
+| --- | --- | --- |
+| `safety_latch` | the latch is readable and enforcing (engaged or clear, both are stated) | `failed` if the policy file is unreadable or the status cannot be read |
+| `ecp_authority` | no write is offered to the model origin, a policy probe of writes is refused, both safety controls exist | `failed` naming the capability, `degraded` if a probe cannot be evaluated |
+| `stores_integrity` | every store line parses and every file is readable | `failed` naming the file and line; `not_configured` before anything is written |
+| `capability_inventory` | every advertised capability resolves through the ECP with validation, execution and a description (0 orphans) | `failed` naming each orphan and its reason |
+| `browser_binary` | a Chromium-family browser is installed | `degraded`, with the candidates it tried |
+| `workspace_sensor` | the git sensor read a real repository | `degraded` with the reason, or `not_configured` with no root |
+
+`not_configured` is its own state, never a pass: a check with nothing to look at says so. The exit
+code is the report (`0` only when nothing is degraded or failed, `1` otherwise), and a corrupted store
+exits `1` with the failing check and line named. The doctor repairs nothing - it creates no data
+directory, writes no store and starts no runtime - and the budget is measured and printed rather than
+asserted.
+
+### The numbers
+
+| Measurement | `ba8c508` (baseline) | T-35 |
+| --- | --- | --- |
+| `node --check` over `apex_app/src` | 244 files, 0 failures | 248 files, 0 failures |
+| `npm test` | 3955 tests, 3953 pass, 0 fail, 2 skipped, 0 cancelled, 1,421,635 ms (23.7 min) | 4013 tests, 4011 pass, 0 fail, 2 skipped, 0 cancelled, 1,426,953 ms (23.8 min) |
+| registry | 151 default / 166 rooted (85 reads, 81 writes) | 154 default / 169 rooted (85 reads, 84 writes) |
+| doctor, isolated empty data directory | - | `degraded` in 3.2-15.8 ms across runs: 4 pass, 1 degraded (`browser_binary` - no browser on this host), 2 not configured (no store yet, no workspace root) |
+
+The baseline was measured on the exact committed tree, exported with `git archive ba8c508` into a
+temporary directory, so the comparison is the commit and not a working copy.
+
+### The two reds this milestone found in older tests, and why they were right
+
+The first full run of the finished tree was red in exactly two places, both of them the tests doing
+their job rather than the new code being wrong:
+
+| Failure | Cause | Fix |
+| --- | --- | --- |
+| AF-20 `a reply cannot create what only the user may create` | the sweep compares the registry's write actions against its own attempt list, and the three handoff writes were registered without being added to it - the same shape of failure T-34 hit with `briefing.acknowledge` | the three attempts are in the list, each with the reason a reply may not stage, claim or revoke an envelope |
+| T-31 `real-browser suite wiring` | the Playwright `testMatch` assertion names every spec in the default run, and the new one was not named | the assertion names the T-35 spec, and now also asserts that the walk launches the resolved browser, skips loudly with no browser, prints its short failure line first and authorizes the page it opens |
+
+Neither was relaxed. The attempt list and the wiring assertion are the two places the project has
+decided a new capability or a new walk has to be declared, and both caught the omission on the day it
+happened.
+
+### What is verified, and what is not
+
+Verified locally, with the shipped code: the ladder table and its thresholds; the override semantics;
+the flash guard over the shipped stylesheet; the sensor indicator's content; staging, claiming,
+revoking, expiry, tampering, wrong-device and lockdown refusals through the real controller and over
+HTTP; the ledger's survival of a reload and its refusal of a corrupt line; the doctor's six checks,
+its budget, its exit code and its refusal to invent a pass; the Presence and System workspaces
+rendering from the routes under the project's browser stand-in.
+
+`UNVERIFIED` in a real browser: this sandbox has no Chromium-family browser at all, so
+`tests/e2e/t35-stepdown-handoff-doctor.spec.mjs` skips here with an explicit diagnostic. The walk
+asserts the computed styles at stages 0, 1, 3, 4 and 5 (bloom gone at 1, every parallax factor `0` at
+3, `backdrop-filter: none` with the reticle still visible at 5), measures the flash guard through the
+Web Animations API, checks the privacy indicator's text, stages and claims a real envelope and lands on
+the handed-off view and mission, runs the doctor and compares it with the route, and fails on any
+console error, page error or horizontal overflow. The hosted run is what turns that into evidence;
+until it is green the deliverable is the spec, not the claim.

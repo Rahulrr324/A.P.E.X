@@ -126,6 +126,11 @@ const MODEL_WRITE_ATTEMPTS = [
   // T-34 Step 3: acknowledging a briefing writes the checkpoint the next briefing is measured
   // against, so it is the owner's own act and a reply cannot record it on their behalf.
   ['briefing.acknowledge', { reason: 'the model acknowledged the briefing' }],
+  // T-35 Step 2: an envelope says where the owner's work continues and on which of the owner's own
+  // devices. Staging, claiming and revoking one are the owner's acts; a reply may do none of them.
+  ['presence.handoff.stage', { sourceDeviceId: 'device-t35-a', targetDeviceId: 'device-t35-b', targetView: 'deck' }],
+  ['presence.handoff.claim', { handoffId: 'ph-000000000000', targetDeviceId: 'device-t35-b' }],
+  ['presence.handoff.revoke', { handoffId: 'ph-000000000000', reason: 'the model revoked it' }],
   ['prediction.record', { capability: 'memory.add', expectation: 'success', subject: 'the model expects success', inDays: 7 }],
   ['prediction.evaluate', { target: 'no-such-prediction' }],
   ['prediction.invalidate', { target: 'no-such-prediction', reason: 'the model withdrew it' }],

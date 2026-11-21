@@ -171,7 +171,9 @@ describe('T-31 browser suite wiring', () => {
     // writes its own summary so the workflow can state which checkpoints ran.
     // T-34 Step 4 (2026-11-19): the mission-DAG walk joins them. It drives a fan-out/fan-in mission
     // through its gates and writes its own summary, so the workflow can state what it reached.
-    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs'\]/);
+    // T-35 Step 4 (2026-11-19): the step-down / handoff / doctor walk joins the default run, and the
+    // assertion below names it so a spec that is written but never wired is a red test.
+    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs'\]/);
     assert.match(config, /testIgnore: \['\*\*\/apex-browser\.spec\.mjs'\]/);
     const spec = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't31-real-browser.spec.mjs'), 'utf8');
     assert.match(spec, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/);
@@ -187,6 +189,14 @@ describe('T-31 browser suite wiring', () => {
     assert.match(mission, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
       'the mission-DAG walk skips loudly when no browser exists');
     assert.match(mission, /T34_FAILURES/, 'the mission-DAG walk prints a short failure line first');
+    const stepdown = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't35-stepdown-handoff-doctor.spec.mjs'), 'utf8');
+    assert.match(stepdown, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/,
+      'the T-35 walk launches the resolved browser');
+    assert.match(stepdown, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
+      'the T-35 walk skips loudly when no browser exists');
+    assert.match(stepdown, /T35_FAILURES/, 'the T-35 walk prints a short failure line first');
+    assert.match(stepdown, /page\.goto\(`\$\{handle\.base\}\/\?token=\$\{encodeURIComponent\(handle\.token\)\}`/,
+      'the T-35 walk authorizes the page it opens');
     // The page itself is authorized with the same token the routes use. A walk that navigates to the
     // bare base gets the server's refusal page and no #core-state, which is a failure with no cause.
     assert.match(mission, /page\.goto\(`\$\{handle\.base\}\/\?token=\$\{encodeURIComponent\(handle\.token\)\}`/,

@@ -118,9 +118,11 @@ describe('AF-19: the registry is the inventory', () => {
     // revoke_suppression), so the pinned totals move by four and the read/write split with them.
     // T-34 Step 3 (2026-11-19) adds one owner-only write, `briefing.acknowledge`, so the pinned totals
     // move by one.
-    assert.equal(plain.registry.list().length, 151, 'the default registry has 151 actions');
+    // T-35 Step 2 (2026-11-19) adds three owner-only writes - `presence.handoff.stage`, `.claim` and
+    // `.revoke` - so the pinned totals move by three and the write count with them.
+    assert.equal(plain.registry.list().length, 154, 'the default registry has 154 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 166, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 169, 'a configured workspace root adds fifteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -157,7 +159,7 @@ describe('AF-19: the registry is the inventory', () => {
     // write, and T-29 adds `cognition.run`, which is owner-only and unplannable.
     // T-34 Step 3 (2026-11-19): `briefing.acknowledge` is the eighty-first write, and it is owner-only
     // like every other write in this list.
-    assert.equal(writes.length, 81, 'the inventory counts eighty-one write actions with a root configured');
+    assert.equal(writes.length, 84, 'the inventory counts eighty-four write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -438,6 +440,11 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         // its own checkpoint log. That is a comparison of two readings, not a belief about the world,
         // and the checkpoint authorizes nothing.
         assert.equal(row.belief, 'no (a checkpoint is a reading, not a belief)', `${name}: README belief-state`);
+      } else if (name.startsWith('presence.handoff.')) {
+        // [T-35 Step 2, 2026-11-19] An envelope says where work should continue and who may collect
+        // it; the ledger records the staging, the claim and the revocation. None of that is a claim
+        // about the world, and the envelope authorizes nothing it names.
+        assert.equal(row.belief, 'no (a destination is not a belief)', `${name}: README belief-state`);
       } else if (name.startsWith('perception.')) {
         // [T-32 Step 3, 2026-11-19] Perception appends host and workspace readings to its own ledger
         // and records the Sentinel's push discipline. A CPU reading is an observation about this

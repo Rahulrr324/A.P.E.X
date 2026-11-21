@@ -250,6 +250,46 @@ jobs:
               sys.exit(1)
           PY
 
+      # T-35 Step 4 (2026-11-19): the step-down / handoff / doctor walk publishes its own annotation,
+      # written by the spec from what the browser and the API answered: which rungs of the ladder were
+      # walked, whether the flash guard held, and whether the handoff and the doctor were real.
+      - name: Publish the T-35 step-down, handoff and doctor result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't35-stepdown-handoff-doctor.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t35-stepdown-handoff-doctor::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          steps = [step.get('id') for step in run.get('steps', [])]
+          shots = len(run.get('screenshots', []))
+          failures = run.get('failures', [])
+          stages = run.get('stages') or {}
+          guard = run.get('flashGuard') or {}
+          handoff = run.get('handoff') or {}
+          doctor = run.get('doctor') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"checkpoints {len(steps)}: {','.join(str(name) for name in steps) or 'none'}",
+              f"screenshots {shots}",
+              f"stages walked {','.join(str(key) for key in stages if str(key) != 'auto') or 'none'} (auto {stages.get('auto', {}).get('auto') if isinstance(stages.get('auto'), dict) else 'not read'})",
+              f"flash guard {guard.get('animations', 'not measured')} animation(s), {guard.get('violations', 'n/a')} violation(s)",
+              f"handoff {handoff.get('id') or 'none'} digest {str(handoff.get('digest') or '')[:12]} matched {handoff.get('digestMatchedAfterClaim')}",
+              f"doctor {doctor.get('status') or 'not run'} in {doctor.get('durationMs')} ms of 500 (within budget {doctor.get('withinBudget')})",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t35-stepdown-handoff-doctor::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       - name: Keep the browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -263,6 +303,8 @@ jobs:
             apex_app/reports/screenshots/t34
             apex_app/reports/t33-executive-loop.json
             apex_app/reports/t34-mission-dag.json
+            apex_app/reports/screenshots/t35
+            apex_app/reports/t35-stepdown-handoff-doctor.json
           if-no-files-found: warn
           retention-days: 14
 

@@ -22,6 +22,8 @@ export const UI_PAGE = `<!doctype html>
 <body data-core-state="degraded" data-view="deck" data-motion="full" data-mode="classic" data-contrast="standard" data-depth-plane="z0">
 <a class="skip-link" href="#main-content">Skip to main content</a>
 <div id="hud-grid" data-depth-plane="z1" aria-hidden="true"></div>
+<!-- T-35 Step 1: the background particle field, a real layer the step-down ladder can drop. -->
+<div id="hud-particles" data-depth-plane="z1" aria-hidden="true"></div>
 <div id="boot" class="boot" role="status" aria-live="polite">
   <div class="boot-core" aria-hidden="true"></div>
   <div class="boot-lines" id="boot-lines"></div>
@@ -44,6 +46,10 @@ export const UI_PAGE = `<!doctype html>
     <span id="gauge-cpu" class="badge" aria-label="CPU">CPU: —</span>
     <span id="gauge-mem" class="badge" aria-label="Memory">Mem: —</span>
     <span id="gauge-storage" class="badge" aria-label="Storage">Storage: —</span>
+    <!-- T-35 Step 1: Part 4's system sensor and privacy indicator. Every value on it is read from the
+         backend: which local sensors are wired, when each last read, and that capture is disabled. -->
+    <span id="sensor-privacy-indicator" class="badge" role="status" aria-live="polite"
+          data-audio="disabled" data-camera="disabled" aria-label="Local sensors and privacy">Sensors: reading…</span>
   </div>
   <div class="topbar-actions">
     <!-- T-32 Step 1: the command dispatch is reachable from the top bar, so Tab reaches it before the
@@ -61,6 +67,16 @@ export const UI_PAGE = `<!doctype html>
     </select>
     <button id="motion-toggle" type="button" class="quiet small" aria-pressed="false">Motion: full</button>
     <button id="contrast-toggle" type="button" class="quiet small" aria-pressed="false">Contrast: standard</button>
+    <label class="visually-hidden" for="stepdown-select">Visual step-down stage</label>
+    <select id="stepdown-select" class="small" aria-label="Visual step-down stage">
+      <option value="auto">Step-down: auto</option>
+      <option value="0">Stage 0 · nominal</option>
+      <option value="1">Stage 1 · drop bloom</option>
+      <option value="2">Stage 2 · drop particles</option>
+      <option value="3">Stage 3 · drop parallax</option>
+      <option value="4">Stage 4 · drop ambient motion</option>
+      <option value="5">Stage 5 · flat mode</option>
+    </select>
     <button id="new-session" type="button" class="quiet small">New session</button>
     <button id="quick-boot" type="button" class="quiet small">Quick boot</button>
   </div>
@@ -148,6 +164,9 @@ export const UI_PAGE = `<!doctype html>
       </svg>
       <div class="core-state" id="core-state" role="status" aria-live="polite">Degraded</div>
       <p class="core-caption" id="core-caption">Waiting for an authoritative owner snapshot.</p>
+      <!-- T-35 Step 1: which rung of the visual ladder the deck is on, and why. -->
+      <span id="stepdown-state" class="badge" role="status" aria-live="polite"
+            data-stage="0" data-source="auto">Step-down: reading…</span>
     </div>
     <!-- T-33 Step 2 (2026-11-19): the executive comms layer. The same facts in the voice of the
          mode the owner selected; the formatter withholds every flourish while anything is wrong. -->
@@ -393,6 +412,39 @@ export const UI_PAGE = `<!doctype html>
     <ul id="presence-devices" class="work"></ul>
     <h3>Mesh</h3>
     <ul id="presence-mesh" class="work"></ul>
+    <!-- T-35 Step 2: the handoff envelopes. Staging is a governed write, so the form is a request and
+         the answer below it is the ledger's, not the form's. The paragraph states the limit of what
+         this is before the owner uses it: a local envelope, not a remote handoff. -->
+    <h3>Handoff envelopes</h3>
+    <p class="meta">A handoff names the view, mission and artifact the owner wants next, on a device they have already enrolled. It is stored locally with a SHA-256 digest, it expires, and it can be collected once by the device it names. There is no remote transport: the target device has to be this installation. An envelope grants no capability — after it is claimed, every action is still authorized by the ECP.</p>
+    <p id="handoff-status" class="workspace-status" role="status" aria-live="polite">Loading the handoff ledger…</p>
+    <div class="handoff-form">
+      <label for="handoff-source">From device</label>
+      <select id="handoff-source"></select>
+      <label for="handoff-target">To device</label>
+      <select id="handoff-target"></select>
+      <label for="handoff-view">Open view</label>
+      <select id="handoff-view">
+        <option value="deck">deck</option>
+        <option value="missions">missions</option>
+        <option value="tasks">tasks</option>
+        <option value="approvals">approvals</option>
+        <option value="reasoning">reasoning</option>
+        <option value="cognition">cognition</option>
+        <option value="documents">documents</option>
+        <option value="memory">memory</option>
+        <option value="workshop">workshop</option>
+        <option value="system">system</option>
+        <option value="presence">presence</option>
+      </select>
+      <label for="handoff-task">Mission id (optional)</label>
+      <input id="handoff-task" type="text" maxlength="96" placeholder="task id">
+      <label for="handoff-note">Note (optional)</label>
+      <input id="handoff-note" type="text" maxlength="240" placeholder="what to pick up">
+      <button id="handoff-stage" type="button" class="small">Stage handoff</button>
+    </div>
+    <p id="handoff-message" class="meta" role="status" aria-live="polite"></p>
+    <ul id="handoff-list" class="work"></ul>
     <h3>Autonomy policy</h3>
     <p id="autonomy-status" class="workspace-status" role="status" aria-live="polite">Loading the autonomy matrix…</p>
     <table class="matrix" aria-describedby="autonomy-note">
@@ -409,6 +461,14 @@ export const UI_PAGE = `<!doctype html>
     <h2>System diagnostics and Resource Fabric</h2>
     <p class="meta">Read-only diagnostics from the health, runtime, ECP and resource owners. Unknown or unavailable readings are not treated as healthy.</p>
     <p id="system-status" class="workspace-status" role="status" aria-live="polite">Loading system diagnostics…</p>
+    <!-- T-35 Step 3: the doctor. Six read-only checks, each reporting the state it can defend. -->
+    <section class="panel" aria-labelledby="doctor-heading">
+      <h3 id="doctor-heading">Doctor</h3>
+      <p class="meta">Six read-only checks inside a 500 ms budget: the safety latch, ECP authority, store readability, the capability inventory, a browser binary, and the workspace sensor. A check that cannot be made says so; nothing here is repaired by running it.</p>
+      <p id="doctor-status" class="workspace-status" role="status" aria-live="polite">The doctor has not run yet.</p>
+      <button id="doctor-run" type="button" class="small">Run doctor</button>
+      <ul id="doctor-checks" class="work"></ul>
+    </section>
     <section class="panel safety" data-depth-plane="z4" aria-labelledby="safety-heading">
       <h3 id="safety-heading">Execution safety</h3>
       <p id="safety-status" class="meta" role="status" aria-live="polite">Reading the ECP safety latch…</p>
@@ -906,7 +966,92 @@ body[data-motion="reduced"] .core, body[data-motion="reduced"] .core-halo { anim
 .boot-core { width: 90px; height: 90px; border-radius: 50%; border: 2px solid var(--cyan); box-shadow: 0 0 30px rgba(0,229,255,0.4); animation: spin 6s linear infinite; }
 .boot-lines { font-family: var(--font-mono); color: var(--muted); max-width: 36rem; width: 100%; }
 .boot-lines div { padding: .2rem 0; }
+
+/* T-35 Step 1 (2026-11-19): Part 4's visual step-down ladder and its flash guard.
+   The ladder is a declaration, not a guess: src/ui/hud.js owns the table, the page writes the stage
+   onto <body> as data-stepdown-stage, and each dropped layer is a data-hud-* attribute the rules
+   below read. Nothing here changes authorization, state or text - only decoration. */
+:root {
+  --hud-bloom: 18px;
+  --hud-bloom-strong: 26px;
+  --hud-particle-opacity: 0.5;
+  /* Z0-Z4 parallax factors. Z0 is the void field, which cannot move against itself, and Z2 is the
+     reticle, whose transform belongs to its posture; the three container planes are the ones that
+     read these. All five are zeroed at stage 3, so the ladder's statement is exact. */
+  --parallax-z0: 0;
+  --parallax-z1: 0.35;
+  --parallax-z2: 0;
+  --parallax-z3: 0.8;
+  --parallax-z4: 1;
+  --parallax-damp: 6px;
+  --parallax-x: 0px;
+  --parallax-y: 0px;
+}
+#hud-particles {
+  position: fixed; inset: 0; pointer-events: none; z-index: 10; opacity: var(--hud-particle-opacity);
+  background-image:
+    radial-gradient(1.5px 1.5px at 20% 30%, rgba(0, 229, 255, 0.55) 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 70% 65%, rgba(0, 229, 255, 0.4) 50%, transparent 51%),
+    radial-gradient(1px 1px at 45% 80%, rgba(215, 227, 244, 0.45) 50%, transparent 51%),
+    radial-gradient(1px 1px at 85% 22%, rgba(215, 227, 244, 0.35) 50%, transparent 51%);
+  background-size: 320px 320px, 420px 420px, 260px 260px, 380px 380px;
+  animation: particle-drift 42s linear infinite;
+}
+@keyframes particle-drift { to { background-position: 320px 0, -420px 0, 260px 0, -380px 0; } }
+/* Stage 3's landing: the container planes read the factors, and the client writes the pointer
+   offset that makes them visible. At stage 3 the factor is 0 and every plane is back to identity. */
+[data-depth-plane="z1"] { transform: translate3d(calc(var(--parallax-z1) * var(--parallax-x)), calc(var(--parallax-z1) * var(--parallax-y)), 0); }
+[data-depth-plane="z3"] { transform: translate3d(calc(var(--parallax-z3) * var(--parallax-x)), calc(var(--parallax-z3) * var(--parallax-y)), 0); }
+[data-depth-plane="z4"] { transform: translate3d(calc(var(--parallax-z4) * var(--parallax-x)), calc(var(--parallax-z4) * var(--parallax-y)), 0); }
+/* Stage 1: bloom. The drop-shadow and the halo are the multi-tier glow; the rings, the reticle
+   geometry and its cadence are untouched, so the Core state stays readable. */
+.core { filter: drop-shadow(0 0 var(--hud-bloom) rgba(0, 229, 255, 0.25)); }
+body[data-hud-bloom="dropped"] .core { filter: none; }
+body[data-hud-bloom="dropped"] .core-halo { opacity: 0.3; }
+body[data-hud-bloom="dropped"] .nav-item.active { box-shadow: none; }
+body[data-hud-bloom="dropped"] .panel, body[data-hud-bloom="dropped"] .rail, body[data-hud-bloom="dropped"] .stage { box-shadow: none; }
+/* Stage 2: particles and the grid shimmer. Both are removed rather than dimmed, so a reviewer can
+   see the layer is gone rather than wonder whether it moved. */
+body[data-hud-particles="dropped"] #hud-particles { display: none; }
+body[data-hud-particles="dropped"] #hud-grid { opacity: 0; }
+/* Stage 3: parallax. The factors are zeroed at the root, which is what the planes read. */
+body[data-hud-parallax="dropped"] {
+  --parallax-z1: 0; --parallax-z3: 0; --parallax-z4: 0;
+}
+/* Stage 4: ambient motion - the secondary rings and the breathing halo stop, and the reticle's own
+   azimuth and telemetry layers keep their cadence, because that is the Core state indicator. */
+body[data-hud-ambient="dropped"] .core-ring.outer,
+body[data-hud-ambient="dropped"] .core-ring.mid,
+body[data-hud-ambient="dropped"] .core-halo,
+body[data-hud-ambient="dropped"] #hud-particles { animation: none; }
+/* Stage 5: flat mode. No backdrop blur, no panel transitions - and #core-reticle is not in this
+   list on purpose: Part 4 keeps the Core state indicator at every stage. */
+body[data-hud-flat="true"] .panel,
+body[data-hud-flat="true"] .rail,
+body[data-hud-flat="true"] .stage,
+body[data-hud-flat="true"] .view,
+body[data-hud-flat="true"] .command-bar,
+body[data-hud-flat="true"] .topbar {
+  backdrop-filter: none;
+  transition: none;
+}
+body[data-hud-flat="true"] .panel, body[data-hud-flat="true"] .rail, body[data-hud-flat="true"] .stage { background: var(--panel-solid, rgba(9, 16, 28, 0.96)); }
+/* T-35 Step 2: the handoff form. Two columns with minmax(0, ...) on the control side so a long
+   device id shrinks instead of widening the page. */
+.handoff-form {
+  display: grid; gap: .45rem .75rem; margin: .6rem 0;
+  grid-template-columns: minmax(7rem, 11rem) minmax(0, 1fr);
+  align-items: center;
+}
+.handoff-form select, .handoff-form input { min-width: 0; max-width: 100%; }
+.handoff-form button { justify-self: start; }
+@media (max-width: 760px) { .handoff-form { grid-template-columns: minmax(0, 1fr); } }
+.handoff-form label { color: var(--muted, #8fa3bd); font-size: .78rem; }
+#sensor-privacy-indicator[data-audio="disabled"][data-camera="disabled"] { color: var(--hud-text, #d7e3f4); }
+#sensor-privacy-indicator[data-capture-possible="true"] { color: var(--armor-red-text, #ff6b5a); }
+#stepdown-state[data-stage="5"] { border-color: var(--gold); }
 `;
+
 
 export const UI_CLIENT = `'use strict';
 ${CLIENT_CONTRACT_SOURCE}\nconst els = {
@@ -985,9 +1130,23 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   perceptionSense: document.getElementById('perception-sense'),
   perceptionSenseStatus: document.getElementById('perception-sense-status'),
   briefingPerception: document.getElementById('briefing-perception'),
+  // T-35 Step 3: the doctor panel in the System workspace.
+  doctorStatus: document.getElementById('doctor-status'),
+  doctorRun: document.getElementById('doctor-run'),
+  doctorChecks: document.getElementById('doctor-checks'),
   presenceStatus: document.getElementById('presence-status'),
   presenceDevices: document.getElementById('presence-devices'),
   presenceMesh: document.getElementById('presence-mesh'),
+  // T-35 Step 2: the handoff envelope form and ledger.
+  handoffStatus: document.getElementById('handoff-status'),
+  handoffSource: document.getElementById('handoff-source'),
+  handoffTarget: document.getElementById('handoff-target'),
+  handoffView: document.getElementById('handoff-view'),
+  handoffTask: document.getElementById('handoff-task'),
+  handoffNote: document.getElementById('handoff-note'),
+  handoffStage: document.getElementById('handoff-stage'),
+  handoffMessage: document.getElementById('handoff-message'),
+  handoffList: document.getElementById('handoff-list'),
   autonomyStatus: document.getElementById('autonomy-status'),
   autonomyMatrix: document.getElementById('autonomy-matrix'),
   autonomyCapabilities: document.getElementById('autonomy-capabilities'),
@@ -1084,6 +1243,10 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   sentinelFull: document.getElementById('sentinel-full'),
   conversationHistory: document.getElementById('conversation-history'),
   modeSelect: document.getElementById('mode-select'),
+  // T-35 Step 1: the visual step-down ladder and the system sensor indicator.
+  stepDownSelect: document.getElementById('stepdown-select'),
+  stepDownState: document.getElementById('stepdown-state'),
+  sensorPrivacy: document.getElementById('sensor-privacy-indicator'),
   motionToggle: document.getElementById('motion-toggle'),
   contrastToggle: document.getElementById('contrast-toggle'),
 };
@@ -1101,6 +1264,10 @@ const state = {
   safetyMutationInFlight: false,
   reducedMotion: false,
   mode: 'classic',
+  // T-35 Step 2: the enrolled devices the handoff form offers, and the ledger last read.
+  handoffDevices: [],
+  handoffLedger: null,
+  doctorAt: 0,
   contrast: 'standard',
   cognitionInFlight: false,
   lastCognitionRun: null,
@@ -2812,6 +2979,214 @@ async function simulateWorkshop(artifactId) {
   }
 }
 
+// T-35 Step 3: the doctor in the System workspace.
+//
+// The report is rendered exactly as the route returned it: a not_configured check is not shown as a
+// pass, a degraded check is not hidden behind a green total, and the duration is shown so the budget
+// claim is visible rather than asserted.
+function renderDoctor(report) {
+  if (!els.doctorChecks) return;
+  if (!report || !Array.isArray(report.checks)) {
+    setWorkspaceStatus(els.doctorStatus, 'Unavailable: the doctor returned no report.', 'unavailable');
+    renderList(els.doctorChecks, [], () => null, 'Unavailable: the doctor returned no report.');
+    return;
+  }
+  setWorkspaceStatus(els.doctorStatus, report.status.toUpperCase() + ' · ' + report.counts.pass + ' pass, '
+    + report.counts.degraded + ' degraded, ' + report.counts.failed + ' failed, '
+    + report.counts.notConfigured + ' not configured · ' + report.durationMs + ' ms of a '
+    + report.budgetMs + ' ms budget' + (report.withinBudget === true ? '' : ' (OVER BUDGET)'),
+  report.status === 'ok' ? 'available' : report.status === 'failed' ? 'error' : 'degraded');
+  renderList(els.doctorChecks, report.checks, (entry) => {
+    const li = itemFrom(entry.name + ' · ' + entry.state, entry.summary);
+    li.dataset.check = entry.name;
+    li.dataset.checkState = entry.state;
+    return li;
+  }, 'The doctor reported no checks.');
+}
+
+async function runDoctor() {
+  if (els.doctorStatus) setWorkspaceStatus(els.doctorStatus, 'Running the six read-only checks…', 'loading');
+  try {
+    renderDoctor(await api('/api/system/doctor'));
+  } catch (error) {
+    setWorkspaceStatus(els.doctorStatus, 'Unavailable: ' + String(error?.message || error), 'error');
+  }
+}
+
+// T-35 Step 2: the handoff ledger in the Presence workspace.
+//
+// The form asks, the ledger answers. Nothing here marks an envelope staged, claimed or revoked until
+// the route has come back with the record the service wrote, and a handoff the owner can no longer
+// collect is shown with the reason it cannot rather than a dead button.
+function fillHandoffDevices() {
+  const devices = Array.isArray(state.handoffDevices) ? state.handoffDevices : [];
+  const trusted = devices.filter((device) => device.status === 'trusted');
+  for (const select of [els.handoffSource, els.handoffTarget]) {
+    if (!select) continue;
+    const previous = select.value;
+    select.replaceChildren();
+    for (const device of trusted) {
+      const option = el('option', null, (device.label || device.deviceId) + ' · ' + device.deviceId.slice(0, 8));
+      option.value = device.deviceId;
+      select.append(option);
+    }
+    if (trusted.length === 0) {
+      const option = el('option', null, 'no trusted device is enrolled');
+      option.value = '';
+      select.append(option);
+    } else if (trusted.some((device) => device.deviceId === previous)) {
+      select.value = previous;
+    }
+  }
+  // The two sides default to different devices, because a handoff to the same device is refused.
+  if (els.handoffSource && els.handoffTarget && trusted.length > 1 && els.handoffSource.value === els.handoffTarget.value) {
+    els.handoffTarget.value = trusted.find((device) => device.deviceId !== els.handoffSource.value).deviceId;
+  }
+  if (els.handoffStage) els.handoffStage.disabled = trusted.length < 2;
+}
+
+function renderHandoffs(value) {
+  if (!els.handoffList) return;
+  if (value === null) {
+    setWorkspaceStatus(els.handoffStatus, 'Unavailable: the presence reading could not be taken, so the handoff ledger was not read.', 'unavailable');
+    renderList(els.handoffList, [], () => null, 'Unavailable: the handoff ledger could not be read.');
+    return;
+  }
+  state.handoffDevices = Array.isArray(value.deviceTrust?.devices) ? value.deviceTrust.devices : [];
+  const handoffs = value.handoffs;
+  if (!handoffs || handoffs.available === false) {
+    setWorkspaceStatus(els.handoffStatus, 'The handoff ledger is not configured in this deployment; staging is unavailable.', 'unavailable');
+    renderList(els.handoffList, [], () => null, 'Unavailable: the handoff ledger is not configured.');
+    fillHandoffDevices();
+    return;
+  }
+  fillHandoffDevices();
+  setWorkspaceStatus(els.handoffStatus, handoffs.total + ' envelope(s): ' + handoffs.staged + ' staged, '
+    + handoffs.claimed + ' claimed, ' + handoffs.revoked + ' revoked'
+    + (handoffs.expired ? ', ' + handoffs.expired + ' expired' : '')
+    + ' · ' + (handoffs.remoteTransport === true ? 'remote transport implemented'
+      : 'local, store-backed only — no remote transport'), 'available');
+  const recent = Array.isArray(handoffs.recent) ? handoffs.recent : [];
+  renderList(els.handoffList, recent, (handoff) => {
+    const li = itemFrom(handoff.targetView + ' → ' + handoff.targetDeviceId.slice(0, 8),
+      (handoff.status || 'status not recorded') + ' · digest ' + String(handoff.sha256Digest || '').slice(0, 12)
+      + ' · staged ' + (handoff.stagedAt || 'time not recorded') + ' · expires ' + (handoff.expiresAt || 'not recorded'));
+    li.dataset.handoffId = handoff.id;
+    li.dataset.handoffStatus = handoff.status;
+    if (handoff.taskId) li.append(el('div', 'meta', 'Mission: ' + handoff.taskId));
+    if (handoff.artifactId) li.append(el('div', 'meta', 'Artifact: ' + handoff.artifactId));
+    if (handoff.briefingCheckpointId) li.append(el('div', 'meta', 'Briefing checkpoint: ' + handoff.briefingCheckpointId));
+    if (handoff.note) li.append(el('div', 'meta', 'Note: ' + handoff.note));
+    if (handoff.revokeReason) li.append(el('div', 'meta', 'Revoked: ' + handoff.revokeReason));
+    if (handoff.status === 'staged' || handoff.status === 'claimed') {
+      const actions = el('div', 'meta');
+      if (handoff.status === 'staged') {
+        const claim = el('button', 'small', 'Claim & Restore');
+        claim.type = 'button';
+        claim.addEventListener('click', () => claimHandoff(handoff, claim));
+        actions.append(claim);
+        const revoke = el('button', 'quiet small', 'Revoke');
+        revoke.type = 'button';
+        revoke.addEventListener('click', () => revokeHandoff(handoff, revoke));
+        actions.append(revoke);
+      } else {
+        const restore = el('button', 'quiet small', 'Restore again');
+        restore.type = 'button';
+        restore.addEventListener('click', () => restoreFromHandoff(handoff.restoration));
+        actions.append(restore);
+      }
+      li.append(actions);
+    }
+    return li;
+  }, 'No handoff envelope has been staged.');
+}
+
+function restoreFromHandoff(restoration) {
+  if (!restoration || typeof restoration.view !== 'string') {
+    if (els.handoffMessage) els.handoffMessage.textContent = 'The envelope names no view to restore.';
+    return false;
+  }
+  setView(restoration.view);
+  if (restoration.taskId && els.dagSelect) {
+    els.dagSelect.value = restoration.taskId;
+    loadSelectedTaskGraph(restoration.taskId);
+  }
+  if (els.handoffMessage) {
+    els.handoffMessage.textContent = 'Restored ' + restoration.view
+      + (restoration.taskId ? ' on mission ' + restoration.taskId : '')
+      + (restoration.artifactId ? ' with artifact ' + restoration.artifactId : '')
+      + '. Nothing was executed by opening it.';
+  }
+  return true;
+}
+
+async function stageHandoff() {
+  const sourceDeviceId = els.handoffSource ? els.handoffSource.value : '';
+  const targetDeviceId = els.handoffTarget ? els.handoffTarget.value : '';
+  if (!sourceDeviceId || !targetDeviceId) {
+    if (els.handoffMessage) els.handoffMessage.textContent = 'Two enrolled, trusted devices are needed to stage a handoff.';
+    return null;
+  }
+  const body = {
+    sourceDeviceId,
+    targetDeviceId,
+    targetView: els.handoffView ? els.handoffView.value : 'deck',
+  };
+  const taskId = els.handoffTask ? els.handoffTask.value.trim() : '';
+  const note = els.handoffNote ? els.handoffNote.value.trim() : '';
+  if (taskId) body.taskId = taskId;
+  if (note) body.note = note;
+  if (els.handoffMessage) els.handoffMessage.textContent = 'Asking the ECP to stage the envelope…';
+  try {
+    const response = await api('/api/presence/handoffs', { method: 'POST', body });
+    if (els.handoffMessage) {
+      els.handoffMessage.textContent = 'Staged ' + response.handoff.id + ' for ' + response.handoff.targetView
+        + ' (digest ' + String(response.handoff.sha256Digest).slice(0, 12) + ', expires ' + response.handoff.expiresAt + ').';
+    }
+    if (els.handoffTask) els.handoffTask.value = '';
+    if (els.handoffNote) els.handoffNote.value = '';
+    await refresh();
+    return response.handoff;
+  } catch (error) {
+    if (els.handoffMessage) els.handoffMessage.textContent = 'Refused: ' + String(error?.message || error);
+    return null;
+  }
+}
+
+async function claimHandoff(handoff, button) {
+  if (button) button.disabled = true;
+  if (els.handoffMessage) els.handoffMessage.textContent = 'Claiming ' + handoff.id + '…';
+  try {
+    const response = await api('/api/presence/handoffs/' + encodeURIComponent(handoff.id) + '/claim',
+      { method: 'POST', body: { targetDeviceId: handoff.targetDeviceId } });
+    restoreFromHandoff(response.restoration);
+    await refresh();
+    return response.handoff;
+  } catch (error) {
+    if (els.handoffMessage) els.handoffMessage.textContent = 'Claim refused: ' + String(error?.message || error);
+    if (button) button.disabled = false;
+    return null;
+  }
+}
+
+async function revokeHandoff(handoff, button) {
+  const reason = typeof window.prompt === 'function' ? window.prompt('Why is this handoff being revoked?') : null;
+  if (reason === null) return null;
+  if (button) button.disabled = true;
+  if (els.handoffMessage) els.handoffMessage.textContent = 'Revoking ' + handoff.id + '…';
+  try {
+    const response = await api('/api/presence/handoffs/' + encodeURIComponent(handoff.id) + '/revoke',
+      { method: 'POST', body: { reason } });
+    if (els.handoffMessage) els.handoffMessage.textContent = 'Revoked ' + response.handoff.id + ': ' + (response.handoff.revokeReason || 'reason not reported');
+    await refresh();
+    return response.handoff;
+  } catch (error) {
+    if (els.handoffMessage) els.handoffMessage.textContent = 'Revocation refused: ' + String(error?.message || error);
+    if (button) button.disabled = false;
+    return null;
+  }
+}
+
 // ---- T-31 Step 2 surfaces -------------------------------------------------------
 // Presence, the read-only autonomy matrix, the epistemic world model, and the Evolution Lab. Each
 // renderer reports what the owner returned: an owner that could not be read says unavailable, an
@@ -2824,6 +3199,7 @@ function renderPresence(presenceResult, matrixResult) {
     setWorkspaceStatus(els.presenceStatus, owner.text, owner.state);
     renderList(els.presenceDevices, [], () => null, 'Unavailable: device trust could not be read.');
     renderList(els.presenceMesh, [], () => null, 'Unavailable: mesh state could not be read.');
+    renderHandoffs(null);
   } else {
     const trust = value.deviceTrust || { available: false, detail: 'device trust is not configured' };
     const devices = Array.isArray(trust.devices) ? trust.devices : [];
@@ -2851,6 +3227,7 @@ function renderPresence(presenceResult, matrixResult) {
     }
     const mesh = value.mesh || {};
     const peers = Array.isArray(mesh.peers) ? mesh.peers : [];
+    renderHandoffs(value);
     const meshItems = [itemFrom('Transport', mesh.implemented === true
       ? 'connected with ' + (mesh.connectedPeers ?? peers.length) + ' peer(s)'
       : (mesh.detail || 'no device mesh transport is implemented'))];
@@ -3381,6 +3758,22 @@ async function refresh() {
         ? Math.round((storage.availableBytes || 0) / 1048576) + '/' + Math.round((storage.totalBytes || 0) / 1048576) + ' MB'
         : 'not reported');
     }
+    // T-35 Step 1: the ladder and the sensor indicator, from this snapshot's own reading. An older
+    // server that reports no hud block says so instead of leaving a stale stage on the page.
+    if (snapshot.hud && snapshot.hud.stepDown) {
+      applyStepDown(snapshot.hud.stepDown);
+      renderSensorPrivacy(snapshot.hud.sensor || null);
+    } else {
+      if (els.stepDownState) {
+        els.stepDownState.dataset.stage = '0';
+        els.stepDownState.textContent = 'Step-down: not reported by this server';
+      }
+      if (els.sensorPrivacy) {
+        els.sensorPrivacy.dataset.audio = 'unknown';
+        els.sensorPrivacy.dataset.camera = 'unknown';
+        els.sensorPrivacy.textContent = 'Sensors: not reported by this server';
+      }
+    }
   } else {
     const reason = stateResult.error || 'the authoritative state read failed';
     setWorkspaceStatus(els.conversationStatus, (stateResult.status >= 500 ? 'Unavailable: ' : 'Read error: ') + reason,
@@ -3505,6 +3898,15 @@ function setView(view) {
   if (deck) deck.style.display = view === 'deck' ? '' : 'none';
   const workspace = document.getElementById('workspace');
   if (workspace) workspace.style.display = view === 'deck' ? 'none' : '';
+  // T-35 Step 3: opening System takes a reading, because the doctor is a statement about now. A
+  // view switch that lands on System twice in the same moment asks once.
+  if (view === 'system') {
+    const at = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+    if (!state.doctorAt || at - state.doctorAt > 2000) {
+      state.doctorAt = at;
+      runDoctor();
+    }
+  }
 }
 
 // T-30 Package 5 (2026-11-19): presentation preferences. They change palette, motion and
@@ -3541,6 +3943,108 @@ function applyContrast(high) {
     els.contrastToggle.textContent = state.contrast === 'high' ? 'Contrast: high' : 'Contrast: standard';
     els.contrastToggle.setAttribute('aria-pressed', state.contrast === 'high' ? 'true' : 'false');
   }
+}
+
+// ---- T-35 Step 1: the visual step-down ladder and the system sensor indicator ----------------
+//
+// The ladder is computed by the backend from real ResourceFabric pressure (src/ui/hud.js); this page
+// applies the stage the reading names and, when the owner has chosen a stage by hand, applies that
+// instead. The override is a presentation choice kept in the browser. It writes no store, calls no
+// route, authorizes nothing, and it does not change auto.stage, which stays the machine's own
+// reading - so the page can always show both without either overwriting the other.
+const STEPDOWN_OVERRIDE_KEY = 'apex.stepdown.override';
+
+function readStepDownOverride() {
+  try {
+    const raw = window.localStorage ? window.localStorage.getItem(STEPDOWN_OVERRIDE_KEY) : null;
+    if (raw === null || raw === undefined || raw === '' || raw === 'auto') return 'auto';
+    const numeric = Number(raw);
+    return Number.isInteger(numeric) && numeric >= 0 && numeric <= 5 ? numeric : 'auto';
+  } catch (error) {
+    return 'auto';
+  }
+}
+
+function writeStepDownOverride(value) {
+  try {
+    if (!window.localStorage) return false;
+    window.localStorage.setItem(STEPDOWN_OVERRIDE_KEY, String(value));
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function applyStepDown(stepDown) {
+  if (!stepDown || !Array.isArray(stepDown.stages) || stepDown.stages.length === 0) return null;
+  const override = readStepDownOverride();
+  const autoStage = Number.isInteger(stepDown.auto && stepDown.auto.stage) ? stepDown.auto.stage : 0;
+  const wanted = override === 'auto' ? autoStage : override;
+  const chosen = stepDown.stages.find((entry) => entry.stage === wanted) || stepDown.stages[0];
+  const layers = chosen.layers || {};
+  const body = document.body;
+  body.dataset.stepdownStage = String(chosen.stage);
+  body.dataset.stepdownSource = override === 'auto' ? 'auto' : 'override';
+  body.dataset.hudBloom = layers.bloom === 'dropped' ? 'dropped' : 'on';
+  body.dataset.hudParticles = layers.particles === 'dropped' ? 'dropped' : 'on';
+  body.dataset.hudParallax = layers.parallax === 'dropped' ? 'dropped' : 'on';
+  body.dataset.hudAmbient = layers.ambientMotion === 'dropped' ? 'dropped' : 'on';
+  body.dataset.hudBackdrop = layers.backdropBlur === 'dropped' ? 'dropped' : 'on';
+  body.dataset.hudFlat = layers.backdropBlur === 'dropped' || layers.panelTransitions === 'dropped' ? 'true' : 'false';
+  state.stepDown = stepDown;
+  if (els.stepDownSelect) els.stepDownSelect.value = override === 'auto' ? 'auto' : String(override);
+  if (els.stepDownState) {
+    els.stepDownState.dataset.stage = String(chosen.stage);
+    els.stepDownState.dataset.source = body.dataset.stepdownSource;
+    els.stepDownState.dataset.autoStage = String(autoStage);
+    els.stepDownState.textContent = 'Stage ' + chosen.stage + ' · ' + chosen.name
+      + (override === 'auto'
+        ? ' (auto: ' + String((stepDown.auto && stepDown.auto.level) || 'unknown') + ')'
+        : ' (override; auto ' + autoStage + ')');
+  }
+  return chosen;
+}
+
+function renderSensorPrivacy(sensor) {
+  if (!els.sensorPrivacy) return;
+  if (!sensor || !Array.isArray(sensor.sensors)) {
+    els.sensorPrivacy.textContent = 'Sensors: unavailable';
+    els.sensorPrivacy.dataset.audio = 'unknown';
+    els.sensorPrivacy.dataset.camera = 'unknown';
+    return;
+  }
+  const active = sensor.sensors.filter((entry) => entry.active === true);
+  const privacy = sensor.privacy || {};
+  const audio = privacy.audio && privacy.audio.state ? privacy.audio.state : 'unknown';
+  const camera = privacy.camera && privacy.camera.state ? privacy.camera.state : 'unknown';
+  els.sensorPrivacy.dataset.audio = audio;
+  els.sensorPrivacy.dataset.camera = camera;
+  els.sensorPrivacy.dataset.activeSensors = active.map((entry) => entry.id).join(',');
+  els.sensorPrivacy.dataset.capturePossible = privacy.capturePossible === true ? 'true' : 'false';
+  const lastRead = active.map((entry) => entry.id + ' ' + (entry.lastReadAt || 'never read')).join(' · ');
+  els.sensorPrivacy.textContent = 'Sensors: ' + (active.length === 0 ? 'none active' : active.map((entry) => entry.id).join(' + '))
+    + ' · audio/mic: ' + audio + ' · camera/video: ' + camera
+    + (lastRead ? ' · ' + lastRead : '');
+  els.sensorPrivacy.title = (privacy.audio && privacy.audio.basis ? privacy.audio.basis : '')
+    + ' ' + (privacy.camera && privacy.camera.basis ? privacy.camera.basis : '');
+}
+
+// The depth-plane pointer offset the parallax factors multiply. It is written only when the ladder
+// has not dropped parallax and the owner has not asked for reduced motion, and it is clamped to a
+// few pixels so it reads as depth rather than as a moving page.
+function trackParallax() {
+  if (typeof window.addEventListener !== 'function') return;
+  window.addEventListener('pointermove', (event) => {
+    if (!event || typeof event.clientX !== 'number' || typeof event.clientY !== 'number') return;
+    const width = Number(window.innerWidth) > 0 ? Number(window.innerWidth) : 1600;
+    const height = Number(window.innerHeight) > 0 ? Number(window.innerHeight) : 900;
+    const dropped = document.body.dataset.hudParallax === 'dropped';
+    const damp = state.reducedMotion || dropped ? 0 : 6;
+    const x = ((event.clientX / width) - 0.5) * 2 * damp;
+    const y = ((event.clientY / height) - 0.5) * 2 * damp;
+    document.body.style.setProperty('--parallax-x', x.toFixed(2) + 'px');
+    document.body.style.setProperty('--parallax-y', y.toFixed(2) + 'px');
+  }, { passive: true });
 }
 
 // Sequential keyboard traversal of the same views the nav buttons expose.
@@ -3645,9 +4149,22 @@ if (els.dagCancel) {
 if (els.workshopStageTelemetry) {
   els.workshopStageTelemetry.addEventListener('click', () => { composeFromTelemetry(els.workshopStageTelemetry); });
 }
+if (els.doctorRun) els.doctorRun.addEventListener('click', () => { runDoctor(); });
+if (els.handoffStage) els.handoffStage.addEventListener('click', () => { stageHandoff(); });
+if (els.handoffSource) els.handoffSource.addEventListener('change', () => { fillHandoffDevices(); });
 if (els.modeSelect) els.modeSelect.addEventListener('change', () => { applyMode(els.modeSelect.value); });
 if (els.motionToggle) els.motionToggle.addEventListener('click', () => { applyMotion(!state.reducedMotion); });
 if (els.contrastToggle) els.contrastToggle.addEventListener('click', () => { applyContrast(state.contrast !== 'high'); });
+if (els.stepDownSelect) {
+  els.stepDownSelect.addEventListener('change', () => {
+    const value = els.stepDownSelect.value === 'auto' ? 'auto' : Number(els.stepDownSelect.value);
+    writeStepDownOverride(value);
+    // The reading already holds the whole ladder, so the stage is applied without a round trip. A
+    // stage that is not in the ladder is refused here and the select returns to the auto reading.
+    if (!applyStepDown(state.stepDown || null) && state.last && state.last.hud) applyStepDown(state.last.hud.stepDown);
+  });
+}
+trackParallax();
 
 // T-32 Step 1: the keyboard-first command dispatch. Ctrl+K (or Cmd+K) and the slash key both focus
 // the dispatch input, and the reticle acknowledges within the Part 4 --motion-ack token (120 ms) by

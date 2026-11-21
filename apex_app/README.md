@@ -4066,6 +4066,11 @@ across the whole set, so they are stated once instead of per row:
 > the verified registry is **151 actions by default and 166 with a root: 85 reads and 81 writes**.
 > The earlier figures are retained as the state before T-34.
 
+> **T-35 Step 2 count correction (2026-11-19).** The three presence handoff capabilities
+> (`presence.handoff.stage`, `.claim`, `.revoke`) add three owner-only writes, so the verified registry
+> is **154 actions by default and 169 with a root: 85 reads and 84 writes**. The 151/166 figures above
+> are retained as the state before T-35.
+
 "Cognitive state" below means persistent state the application records: the belief stores
 (`memory.jsonl`, `knowledge.jsonl`, `experiences.jsonl`, `predictions.jsonl`) and, since Batch AG,
 the executive stores `goals.jsonl` and `plans.jsonl`. The executive records are intentions, not
@@ -4168,6 +4173,7 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `perception.sense_host`, `perception.dismiss_alert`, `perception.revoke_suppression` | user | write | never in a plan | `perception/observations.jsonl` (append-only reading ledger: one line per observed value, with its own timestamp, source and epistemic status) and `perception/governor.json` (the rolling push budget, the dismissals, and the suppression rules) | no (perception) | no (a reading is not a belief) |
 | `perception.state` | user + model | read | never in a plan | reads `perception/observations.jsonl` and `perception/governor.json` and writes nothing | no (perception) | no |
 | `briefing.acknowledge` | user | write | never in a plan | `briefing-checkpoints.jsonl` (append-only: a reading of the owning stores taken when the owner acknowledges a briefing, plus the delta the next briefing compares against) | no (briefing) | no (a checkpoint is a reading, not a belief) |
+| `presence.handoff.stage`, `presence.handoff.claim`, `presence.handoff.revoke` | user | write | never in a plan | `presence-handoffs.jsonl` (append-only envelope ledger: the staged envelope with its SHA-256 digest, the claim, the revocation and its reason). A local envelope only: no remote transport, and a claim restores a view and a mission id rather than granting anything | no (presence) | no (a destination is not a belief) |
 | `plan.activate`, `plan.reconcile` | user | not a registered action | - | `plans.jsonl`, `tasks.jsonl`, `operations.jsonl` when a plan is activated | no (executive) | through the created task only |
 | `plan.continuation` | user | not a registered action | - | `operations.jsonl` (its own audit line); the plan, task, goal and belief stores are unchanged, measured byte for byte | no (read) | no |
 | `plan.continue` | user | not a registered action | - | `tasks.jsonl` per step it takes up, each step's own store, `plans.jsonl`, `operations.jsonl` | no (executive) | through the steps it takes up only |

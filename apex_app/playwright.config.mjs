@@ -19,7 +19,10 @@ export default defineConfig({
   // T-34 Step 4 (2026-11-19): the mission-DAG walk joins them. It drives a fan-out/fan-in mission
   // from its gates to a verified completion, switches tasks in the selector and writes its own
   // summary.
-  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs', '**/t34-mission-dag-and-briefing.spec.mjs'],
+  // T-35 Step 4 (2026-11-19): the step-down / handoff / doctor walk joins them. It walks the ladder
+  // 0 -> 5, measures the flash guard with the Web Animations API, claims a staged envelope and runs
+  // the doctor, and writes its own summary.
+  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs', '**/t34-mission-dag-and-briefing.spec.mjs', '**/t35-stepdown-handoff-doctor.spec.mjs'],
   testIgnore: ['**/apex-browser.spec.mjs'],
   // Generated traces/screenshots from a failing run must not be committed.
   outputDir: './test-results/playwright',

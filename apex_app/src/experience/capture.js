@@ -97,6 +97,10 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // Capturing it would put APEX's own reading of its state into the log the pattern and adaptation
   // reads draw from, so "the owner read a briefing" would start to count as behavioural evidence.
   briefing: 'it records a checkpoint of what the owning stores held when the owner read a briefing; an experience of one would put APEX\'s own reading of its state into the log the pattern and adaptation reads draw from',
+  // T-35 Step 2: handing work to another enrolled device is an owner act about where the work lives,
+  // not something APEX did. Capturing it would teach the pattern reads that "moved a tab" is behaviour
+  // worth generalising from.
+  presence: 'it records an owner act about where work should continue - an envelope, its digest, its claim or its revocation - rather than something APEX did; capture would make a device handoff look like behavioural evidence',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
@@ -106,6 +110,9 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // T-32 Step 3: perception. A reading is re-derivable only while the machine is in the same state,
   // which is exactly why it belongs in its own ledger rather than in the experience log.
   'briefing.acknowledge': 'briefing',
+  'presence.handoff.stage': 'presence',
+  'presence.handoff.claim': 'presence',
+  'presence.handoff.revoke': 'presence',
   'perception.sense_host': 'perception',
   'perception.state': 'perception',
   'perception.dismiss_alert': 'perception',
