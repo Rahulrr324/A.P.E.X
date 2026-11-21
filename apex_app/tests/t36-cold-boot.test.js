@@ -128,6 +128,12 @@ describe('T-36: the cold boot on a genuinely unseeded workstation', () => {
       assert.ok(fact.kind, 'every fact says what kind of fact it is');
       assert.ok(typeof fact.text === 'string' && fact.text.length > 0, 'every fact is readable');
     }
+    // The same four readings the four checks produced, named the same way the browser walk names
+    // them: the doctor, the host, the workspace, and the device the bootstrap enrolled.
+    const kinds = latest.briefing.facts.map((fact) => fact.kind);
+    for (const kind of ['doctor', 'resource', 'workspace', 'device']) {
+      assert.ok(kinds.includes(kind), `the briefing carries a ${kind} fact`);
+    }
     // Zero synthetic data. A bootstrap that invented a demo goal or task would fail here.
     assert.equal(latest.syntheticGoalsCreated, 0);
     assert.equal(latest.syntheticTasksCreated, 0);

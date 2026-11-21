@@ -302,23 +302,38 @@ test.describe('T-36 cold boot on an unseeded workstation, in a real browser', ()
       // ---- a live Executive Briefing, compiled from those readings -----------------------------
       await page.locator('nav .nav-item[data-view="deck"]').click();
       await expect(page.locator('body')).toHaveAttribute('data-view', 'deck');
-      const briefing = (await handle.briefing()).body;
-      expect(briefing.schema).toBeTruthy();
-      const briefingText = JSON.stringify(briefing);
-      expect(briefingText).toContain('local-workstation');
-      expect(briefingText).toContain(handle.repository.branch);
-      // The opening briefing the bootstrap compiled, recorded in the marker it wrote.
+      // `/api/briefing` is the deck's work briefing - goals, plans, tasks, situational events - and on
+      // a machine with no work in it yet it is correctly empty. The *opening* briefing is a different
+      // thing: the one `system.bootstrap` compiled from the doctor, the resource reading and the git
+      // workspace. It is recorded in the marker the bootstrap wrote, and that is what is asserted.
+      const workBriefing = (await handle.briefing()).body;
+      expect(workBriefing.schema).toBeTruthy();
+      expect(workBriefing.available, 'the work briefing is readable').toBe(true);
+
       const openingBriefing = bootLatest?.briefing ?? null;
       expect(openingBriefing, 'the bootstrap compiled an opening Executive Briefing').not.toBeNull();
       expect(openingBriefing.concise).toContain('local-workstation');
       expect(openingBriefing.concise).toContain(handle.repository.branch);
       expect(openingBriefing.facts.length, 'the briefing carries the facts it was compiled from').toBeGreaterThan(0);
+      // Every fact names what kind of fact it is, and the set covers the three readings it was
+      // compiled from: the doctor, the host, and the workspace.
+      const kinds = openingBriefing.facts.map((fact) => fact.kind);
+      for (const fact of openingBriefing.facts) {
+        expect(fact.text, `a ${fact.kind} fact has text`).toBeTruthy();
+      }
+      for (const kind of ['doctor', 'resource', 'workspace']) {
+        expect(kinds, `the opening briefing carries a ${kind} fact`).toContain(kind);
+      }
+      // And the deck rendered it: the boot row for the briefing carries the compiled line.
+      const briefingRow = page.locator('#hud-boot-steps li[data-boot-step="executive_briefing"]');
+      await expect(briefingRow).toHaveAttribute('data-boot-state', 'ok');
+      expect(((await briefingRow.textContent()) ?? '').trim().length).toBeGreaterThan(0);
       run.briefing = {
-        schema: briefing.schema,
+        schema: workBriefing.schema,
         concise: openingBriefing.concise,
-        facts: openingBriefing.facts.map((fact) => fact.kind),
-        mentionsDevice: briefingText.includes('local-workstation'),
-        mentionsBranch: briefingText.includes(handle.repository.branch),
+        facts: kinds,
+        workBriefingCounts: workBriefing.counts ?? null,
+        rendered: (await briefingRow.textContent())?.trim() ?? null,
       };
       step('briefing', run.briefing);
       await shot('06-briefing');
