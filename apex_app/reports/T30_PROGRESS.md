@@ -1146,3 +1146,29 @@ they were read from the check run rather than guessed at:
 Two of those are honest corrections to this milestone rather than to older code: the selector change
 was mine, and so was the client that only worked when the perception owner answered. The remaining two
 were latent time and inventory bugs that the new work made visible.
+
+### The green run
+
+`44854025350`, commit `03617c6`: every step of the job passed - the source check, the full unit suite,
+the real-browser step, and all five publish steps. The workflow's own annotations, read back from the
+check run rather than retyped:
+
+```
+browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: mission-shape,join-held,selector,
+  selector-back,branch-unblocked,mission-verified,candidate-association,briefing-acknowledged,
+  briefing-click-through,console | screenshots 10 | mission completed verified True
+checkpoints 10: open,dispatch,intent,suppression,revoke,graph,idle,idle-clear,workshop,console |
+  screenshots 9 | core at end idle            (T-33, unchanged and still green)
+```
+
+So the T-34 walk really did run in a real Microsoft Edge: it read the mission's shape from the record,
+found the join held by the gated branch, switched to the other task and back, approved the branch and
+saw the block clear without the verified sibling's operation id changing, approved the join and saw the
+mission complete with every node verified, found the candidate association labelled as a candidate,
+acknowledged a briefing (writing a checkpoint), saw the delta report the cancelled task afterwards and
+clicked through to the view and task it named - with zero console errors, zero page errors and no
+horizontal overflow.
+
+The walk's own failure path is the thing that made this possible: while it was red, the summary said
+`steps: 0` and nothing else, which is a red run that cannot be diagnosed. It now records the last
+checkpoint and the error before rethrowing, and the harness test asserts that it does.
