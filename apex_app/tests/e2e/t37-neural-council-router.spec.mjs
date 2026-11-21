@@ -66,6 +66,7 @@ const run = {
   pageErrors: [],
   failedRequests: [],
   screenshots: 0,
+  failures: [],
   skip: null,
 };
 
@@ -163,11 +164,31 @@ test('T-37: Track 2, the Council with its constraint core, the command router an
     await page.locator('#council-run').click();
     await expect(page.locator('#council-status')).toHaveText(/deliberated/i, { timeout: 30_000 });
 
+    // The status line is set before the deck refreshes, so waiting on it alone reads the panel while
+    // it still holds the previous render - which is what the first walk did. Waiting on the rendered
+    // perspective rows is waiting for the thing being asserted.
+    // The canonical four are the first list in the panel; the full evaluated set below them also
+    // tags the constraint core, so the assertion is on the canonical list rather than a flat count.
+    await expect(page.locator('#council-synthesis ul.work').first().locator('[data-perspective]'))
+      .toHaveCount(4, { timeout: 30_000 });
+
+    const canonicalRendered = await page.locator('#council-synthesis ul.work').first()
+      .locator('[data-perspective]').evaluateAll((nodes) => nodes.map((node) => node.dataset.perspective));
+    expect(canonicalRendered).toEqual(['thesis', 'counter_risk', 'evidence_check', 'constraint_check']);
+
+    // What a reader sees is prose, not the identifier: "Counter-risk", "Evidence check". The
+    // identifiers are already asserted above through data-perspective, so this check is the one that
+    // matters for a person - the four are labelled, not numbered.
     const synthesis = await page.locator('#council-synthesis').textContent();
-    // The four canonical perspectives the brief named are all on screen.
-    for (const label of ['thesis', 'counter_risk', 'evidence_check', 'constraint_check']) {
-      expect(synthesis.toLowerCase(), `the synthesis should present ${label}`).toContain(label.toLowerCase());
+    for (const label of ['thesis', 'counter-risk', 'evidence check', 'constraint check']) {
+      expect(synthesis.toLowerCase(), `the synthesis should label ${label}`).toContain(label);
     }
+    // The core's rule-by-rule verdicts are on screen, not only in a tooltip.
+    const ruleRows = await page.locator('#council-synthesis [data-constraint]').evaluateAll(
+      (nodes) => nodes.map((node) => ({ id: node.dataset.constraint, verdict: node.dataset.verdict })));
+    expect(ruleRows.length, `constraint rules rendered: ${ruleRows.map((row) => row.id).join(', ')}`).toBeGreaterThan(0);
+    expect(ruleRows.every((row) => typeof row.verdict === 'string' && row.verdict.length > 0)).toBe(true);
+    run.constraints = ruleRows;
 
     // Epistemic labels are attached to citations, not to prose.
     const epistemic = await page.evaluate(() => {
@@ -200,10 +221,14 @@ test('T-37: Track 2, the Council with its constraint core, the command router an
     await page.locator('button.nav-item[data-view="deck"]').click();
     await expect(page.locator('body')).toHaveAttribute('data-view', 'deck');
 
-    const dispatch = async (line) => {
+    // Each dispatch is awaited on its own line text, not on visibility alone: the panel stays
+    // visible after the first dispatch, so waiting for visibility resolves against the previous
+    // receipt and every read is one route behind. The receipt carries the line it answered.
+    const dispatch = async (line, expectedRoute) => {
       await page.locator('#chat-text').fill(line);
       await page.locator('#send').click();
       await expect(page.locator('#dispatch-receipt')).toBeVisible({ timeout: 30_000 });
+      await expect(page.locator('#dispatch-receipt')).toHaveAttribute('data-route', expectedRoute, { timeout: 30_000 });
       const receipt = await page.evaluate(() => {
         const dl = document.getElementById('dispatch-receipt');
         const values = Array.from(dl.querySelectorAll('dd')).map((dd) => dd.textContent);
@@ -216,26 +241,26 @@ test('T-37: Track 2, the Council with its constraint core, the command router an
       return receipt;
     };
 
-    const mode = await dispatch('mode tactical');
+    const mode = await dispatch('mode tactical', 'mode');
     expect(mode.route, 'mode tactical').toBe('mode');
     expect(await page.locator('body')).toHaveAttribute('data-mode', 'tactical');
     run.receipts.push({ line: 'mode tactical', route: mode.route, verified: mode.verified });
 
-    const sensed = await dispatch('sense workspace');
+    const sensed = await dispatch('sense workspace', 'sense');
     expect(sensed.route, 'sense workspace').toBe('sense');
     expect(sensed.fields.join(' ')).toMatch(/perception\.sense_host/);
     expect(await page.locator('body')).toHaveAttribute('data-view', 'sentinel');
     run.receipts.push({ line: 'sense workspace', route: sensed.route, verified: sensed.verified });
 
     await page.locator('button.nav-item[data-view="deck"]').click();
-    const council = await dispatch('council: verify release readiness');
+    const council = await dispatch('council: verify release readiness', 'council');
     expect(council.route, 'council: verify release readiness').toBe('council');
     expect(council.fields.join(' ')).toMatch(/council\.deliberate/);
     expect(await page.locator('body')).toHaveAttribute('data-view', 'council');
     run.receipts.push({ line: 'council: verify release readiness', route: council.route, verified: council.verified });
 
     await page.locator('button.nav-item[data-view="deck"]').click();
-    const mission = await dispatch('summarise the workspace notes');
+    const mission = await dispatch('summarise the workspace notes', 'mission');
     expect(mission.route, 'a general intent').toBe('mission');
     expect(mission.fields.join(' ')).toMatch(/cognition\.run/);
     expect(await page.locator('body')).toHaveAttribute('data-view', 'cognition');
@@ -284,6 +309,15 @@ test('T-37: Track 2, the Council with its constraint core, the command router an
     run.consoleErrors = collected.consoleErrors;
     run.pageErrors = collected.pageErrors;
     run.failedRequests = collected.failedRequests;
+  } catch (error) {
+    // The summary is the only thing CI can read back, so a failed walk records why it failed and
+    // which phase it reached. Without this a red run is an annotation full of `None`.
+    run.failures.push({
+      phase: run.council ? 'council' : run.boundary ? 'bridge' : run.regions ? 'regions' : 'startup',
+      message: String(error?.message ?? error),
+      stack: String(error?.stack ?? '').split('\n').slice(0, 6),
+    });
+    throw error;
   } finally {
     run.consoleErrors = collected.consoleErrors;
     run.pageErrors = collected.pageErrors;

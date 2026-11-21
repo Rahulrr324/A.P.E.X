@@ -2228,13 +2228,13 @@ export function createUiServer({
           at: report.at,
           substrate: report.substrate,
           indicators: report.indicators,
-          bridge: {
-            bridgeVersion: report.bridge.bridgeVersion,
-            status: report.bridge.status,
-            isolated: report.bridge.isolated,
-            crossings: report.bridge.crossings,
-            refusals: report.bridge.refusals,
-          },
+          // T-37 Step 4 (2026-11-21): the substrate panel renders the bridge's contract - the
+          // version, the signal schema it accepts, the fallback and the refusal threshold - and it
+          // reads this object, not `/api/neural/bridge`. Hand-picking five fields here left it
+          // printing "unknown" for three facts the service already had, which is the exact lie the
+          // panel's own comment says it will not tell. The whole bridge summary is passed through,
+          // so a field the service exposes is a field the deck can show.
+          bridge: report.bridge,
           ledger: report.ledger,
           boundary: report.boundary,
         });

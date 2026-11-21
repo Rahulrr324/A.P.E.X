@@ -175,7 +175,10 @@ describe('T-31 browser suite wiring', () => {
     // assertion below names it so a spec that is written but never wired is a red test.
     // T-36 Step 4 (2026-11-21): the cold-boot walk joins too, and the assertion names it for the
     // same reason: a spec that exists but is never wired is a red test, not a green one.
-    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs', '\*\*\/t36-cold-boot-unseeded\.spec\.mjs'\]/);
+    // T-37 Step 4 (2026-11-21): the neural/Council/router walk joins the same list. It is the only
+    // suite that reads all eleven screen declarations and all eight substrate regions out of a live
+    // DOM, so it is wired here like the rest rather than living as a spec nothing runs.
+    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs', '\*\*\/t36-cold-boot-unseeded\.spec\.mjs', '\*\*\/t37-neural-council-router\.spec\.mjs'\]/);
     assert.match(config, /testIgnore: \['\*\*\/apex-browser\.spec\.mjs'\]/);
     const spec = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't31-real-browser.spec.mjs'), 'utf8');
     assert.match(spec, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/);
@@ -212,6 +215,21 @@ describe('T-31 browser suite wiring', () => {
     assert.match(coldBoot, /page\.goto\(`\$\{handle\.base\}\/\?token=\$\{encodeURIComponent\(handle\.token\)\}`/,
       'the cold-boot walk authorizes the page it opens');
     assert.match(coldBoot, /#hud-boot-sequence/, 'the cold-boot walk checks the boot overlay the deck ships');
+    // T-37 Step 4 (2026-11-21): the same three obligations, and one extra that only this walk has -
+    // it must not ship a screen that violates the deck's own Content-Security-Policy, because the
+    // shipped policy blocks inline styles and a single style attribute fails every browser suite.
+    const t37 = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't37-neural-council-router.spec.mjs'), 'utf8');
+    assert.match(t37, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/,
+      'the T-37 walk launches the resolved browser');
+    assert.match(t37, /test\.skip\(!resolution\.executable, noBrowserDiagnostic\(resolution\)\)/,
+      'the T-37 walk skips loudly when no browser exists');
+    assert.match(t37, /page\.goto\(`\$\{fixture\.base\}\/\?token=\$\{encodeURIComponent\(fixture\.token\)\}`/,
+      'the T-37 walk authorizes the page it opens');
+    for (const screen of ['boot', 'command-deck', 'mission-view', 'briefing', 'workshop', 'memory-timeline',
+      'council', 'presence-mesh', 'sentinel', 'policy-autonomy', 'lockdown']) {
+      const fixture = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't37-fixtures.mjs'), 'utf8');
+      assert.ok(fixture.includes(`'${screen}'`), `the T-37 fixture names the ${screen} screen`);
+    }
     const t36Fixture = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't36-fixtures.mjs'), 'utf8');
     // The fixture must not seed: no task creation, no enrollment, no perception run before the walk.
     for (const forbidden of ['createTask(', 'deviceTrust.enroll(', 'perception.sense_host']) {

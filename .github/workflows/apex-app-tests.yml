@@ -374,12 +374,14 @@ jobs:
               f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])}",
               f"screenshots {run.get('screenshots')}",
           ]
-          failures = run.get('consoleErrors') or []
-          failures = [{'message': message} for message in failures]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
           failures += [{'message': message} for message in (run.get('pageErrors') or [])]
           level = 'error' if failures else 'notice'
           if failures:
-              parts.append('failures: ' + ' ~ '.join(str(failure.get('message'))[:200] for failure in failures[:10]))
+              parts.append('failures: ' + ' ~ '.join(
+                  (str(failure.get('phase')) + ': ' if failure.get('phase') else '') + str(failure.get('message'))[:200]
+                  for failure in failures[:10]))
           message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
           print(f'::{level} title=t37-neural-council-router::{message[:20000]}')
           if failures:

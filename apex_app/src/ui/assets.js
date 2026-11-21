@@ -429,7 +429,7 @@ export const UI_PAGE = `<!doctype html>
     <p id="neural-status" class="workspace-status" role="status" aria-live="polite">Loading the neural substrate…</p>
     <div class="row">
       <label for="neural-steps" class="meta">Steps</label>
-      <input id="neural-steps" type="number" min="1" max="64" value="16" style="max-width:6rem">
+      <input id="neural-steps" class="narrow-input" type="number" min="1" max="64" value="16">
       <button id="neural-step" type="button" class="small">Advance substrate</button>
       <button id="neural-reset-bridge" type="button" class="small">Reset bridge</button>
       <span id="neural-action-status" class="meta" role="status"></span>
@@ -664,6 +664,14 @@ export const UI_CSS = `/* T-30 Package 5 (2026-11-19): design tokens from the ma
   --font-mono: "JetBrains Mono", "Share Tech Mono", "Consolas", monospace;
 }
 * { box-sizing: border-box; }
+/* T-37 Step 4 (2026-11-21): the depth planes are translated by a fractional parallax offset, and a
+   z1 plane the full width of the page therefore ends a sub-pixel past the viewport - which widens
+   the document by 1-2 px and lets the page scroll sideways. An overflow-x: hidden on the body cannot
+   stop that, because the viewport's scrollbox is propagated from the root element and not the body.
+   Clipping on the root is what makes the guarantee true; clip is used where it is supported because
+   it does not create a scroll container, so it cannot disturb a sticky topbar. */
+html { overflow-x: hidden; }
+@supports (overflow: clip) { html { overflow-x: clip; } }
 html, body { margin: 0; min-height: 100%; }
 body {
   font: 15px/1.5 var(--font-body);
@@ -722,6 +730,10 @@ body::before {
 h1 { margin: 0; font-family: var(--font-display); font-size: 1.35rem; letter-spacing: .18em; }
 .sub, .meta { color: var(--muted); margin: 0; font-size: .82rem; }
 .topbar-meta, .topbar-actions, .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+/* T-37 Step 1: a numeric field that should not stretch the row. Declared here rather than inline,
+   because the shipped Content-Security-Policy serves style-src 'self' and blocks inline styles -
+   an inline style attribute is a console error in every browser suite. */
+.narrow-input { max-width: 6rem; }
 .badge {
   border: 1px solid var(--line); border-radius: 999px; padding: .15rem .55rem;
   font-size: .72rem; color: var(--muted); background: rgba(0,0,0,0.25);
@@ -2958,20 +2970,28 @@ async function compileCouncilRecommendation() {
         councilRequested: true,
       },
     });
-    const verified = value.verification?.outcome === 'verified' || value.status === 'completed';
+    // The route answers with the whole run nested under its own key, and the run record is what
+    // carries the id, the task, the verification and the approval. Reading those off the envelope
+    // found nothing, so
+    // a verified run was reported as "not verified" beside a literal "undefined" run id - the exact
+    // claim this panel exists not to make.
+    const record = value.run ?? value;
+    const verified = record.verification?.verified === true
+      || record.verification?.outcome === 'verified'
+      || record.status === 'completed';
     if (els.councilCompileStatus) {
       els.councilCompileStatus.textContent = verified
-        ? 'Compiled and run: ' + String(value.status) + ' · task ' + String(value.taskId ?? 'none')
-        : 'Compiled but not verified: ' + String(value.status);
+        ? 'Compiled and run: ' + String(value.status ?? record.status) + ' · task ' + String(record.taskId ?? 'none')
+        : 'Compiled but not verified: ' + String(value.status ?? record.status ?? 'unknown');
     }
     if (els.councilCompileResult) {
       els.councilCompileResult.append(el('p', 'meta',
-        'Run ' + String(value.runId) + ' · status ' + String(value.status)
-          + ' · verification ' + String(value.verification?.outcome ?? 'not_run')
-          + (value.taskId ? ' · task ' + String(value.taskId) : '')));
-      if (value.approval && value.approval.required === true) {
+        'Run ' + String(record.runId ?? 'not recorded') + ' · status ' + String(value.status ?? record.status ?? 'unknown')
+          + ' · verification ' + String(record.verification?.outcome ?? 'not_run')
+          + (record.taskId ? ' · task ' + String(record.taskId) : '')));
+      if (record.approval && record.approval.required === true) {
         els.councilCompileResult.append(el('p', 'meta',
-          'Waiting for your approval: ' + String(value.approval.detail ?? 'a gated step needs it')));
+          'Waiting for your approval: ' + String(record.approval.detail ?? 'a gated step needs it')));
       }
     }
     await refresh();
