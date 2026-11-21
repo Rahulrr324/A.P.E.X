@@ -1290,7 +1290,7 @@ asserted.
 | Measurement | `ba8c508` (baseline) | T-35 |
 | --- | --- | --- |
 | `node --check` over `apex_app/src` | 244 files, 0 failures | 248 files, 0 failures |
-| `npm test` | 3955 tests, 3953 pass, 0 fail, 2 skipped, 0 cancelled, 1,421,635 ms (23.7 min) | 4016 tests, 4014 pass, 0 fail, 2 skipped, 0 cancelled, 1,408,322 ms (23.5 min) |
+| `npm test` | 3955 tests, 3953 pass, 0 fail, 2 skipped, 0 cancelled, 1,421,635 ms (23.7 min) | 4017 tests, 4015 pass, 0 fail, 2 skipped, 0 cancelled, 1,394,887 ms (23.3 min) |
 | registry | 151 default / 166 rooted (85 reads, 81 writes) | 154 default / 169 rooted (85 reads, 84 writes) |
 | doctor, isolated empty data directory | - | `degraded` in 3.2-15.8 ms across runs: 4 pass, 1 degraded (`browser_binary` - no browser on this host), 2 not configured (no store yet, no workspace root) |
 
@@ -1311,16 +1311,18 @@ Neither was relaxed. The attempt list and the wiring assertion are the two place
 decided a new capability or a new walk has to be declared, and both caught the omission on the day it
 happened.
 
-### The first hosted run: two reds in the new work, one in older work
+### The red hosted runs: what each one found, and what it changed
 
 Run `44869827194` at commit `7b0523d` passed the source check and the whole unit suite, and the
-real-browser step failed. The annotations named the cause rather than the symptom:
+real-browser step failed. The annotations named the cause rather than the symptom. Three further
+runs were red afterwards, each for its own reason, and the table below carries all four:
 
 | Failure | Cause | Fix |
 | --- | --- | --- |
 | T-35, stage 1 | the walk asserted `--hud-bloom` is `0px` at stage 1 and read `18px`: the stylesheet dropped the painted glow (`filter: none`) but never zeroed the token itself | `body[data-hud-bloom="dropped"] { --hud-bloom: 0px; }` is now the first rule of the rung, and a unit test pins it against the served stylesheet. The browser found what the source reading had missed, which is the reason the walk exists |
 | T-35, stage 1 (run `44884503520`) | the token was now zeroed, but the walk read it from `document.documentElement`: a custom property set on `<body>` overrides the `:root` default only *inside* the body subtree, so the root still computed `18px` | the walk reads the effective value where the deck inherits it - `getComputedStyle(document.body)` - for both the bloom token and the Z0-Z4 factors. The rule's job is the deck, not the root element, and the assertion now says so |
 | T-33, `idle` checkpoint | `/api/state` reported the governor's *deliveries* under `perception.advisories`, so when the governor deduplicated an unchanged signature the snapshot claimed there was no advisory while the workspace was still dirty. A settled deck then allowed wit with a condition standing. The comment above that code already said a condition is a condition whether or not its notice was delivered | the snapshot now reports the conditions the last reading implied (`advisories`, `activeAdvisories`) and the delivery count separately (`deliveredAdvisories`); the fixture test pins the deduplicated case, and the browser assertion becomes deterministic instead of timing-dependent |
+| T-35, doctor checkpoint (run `44888955451`) | the walk opens System, which takes its own reading, and then presses **Run doctor** - so two readings raced. The second one replaced the measured status line with "Running the six read-only checks…" and the walk read that line before the new measurement landed | a re-run now reads *over* the last measurement instead of replacing it, and the walk waits for the measured line with a retrying assertion rather than reading the panel once. A stand-in test presses the button twice and pins both states |
 
 The second one is the more interesting: it had been latent since T-33 and only surfaced when a run's
 timing let the dedup land between the walk's last reading and its Idle checkpoint. It is reported here
@@ -1339,6 +1341,11 @@ asserts every panel transition *duration* is `0s` (a property name can be `none`
 depending on the shorthand), and the flash guard measures CSS animations only - a transition is a
 one-shot state change and has no cycle rate.
 
+The fourth round was the doctor, and it is the same kind of thing: the walk pressed **Run doctor**
+while the workspace's own opening reading was still landing, so the panel said it was running and the
+walk believed it. A measurement that is replaced by a status message is a measurement that can be
+missed, so a re-run now reads over the last one.
+
 One interaction is worth stating rather than discovering later: the ladder is driven by the machine, so
 a host under real pressure presents the flat deck. The T-32 HUD measurements that assert the full-motion
 presentation (a 0.26 s panel transition, for one) are taken on whatever the host reports; on the two
@@ -1347,12 +1354,20 @@ host at stage 5 would see a flat deck, and that would be the ladder working rath
 
 ### The hosted run that carries the claim
 
-Run `44887035882` at commit `89e2229` is **green** end to end: the source check, the full unit suite,
+Run `44890155387` at commit `5e40aa4` is **green** end to end: the source check, the full unit suite,
 and the real-browser step with `binary microsoft-edge` - T-31's three viewports, T-32's contrast audit
 and HUD measurements, T-33's executive loop, T-34's mission walk and this milestone's
-`t35-stepdown-handoff-doctor` walk all reported `✓`. The three browser reds of the previous runs
-(§ "The first hosted run") are closed by the fixes above, not by skipping anything: the two failing
-checkpoints are back in the walk and assert the same properties as before.
+`t35-stepdown-handoff-doctor` walk all reported `✓`. The walk's own annotation lists six checkpoints
+(`auto-stage`, `flash-guard`, `sensor-indicator`, `handoff-claimed`, `doctor`, `clean`), the doctor
+`ok in 1.49 ms of 500 (within budget True)`, the flash guard `7 animation(s), 0 violation(s)` and the
+handoff digest `matched True`; the T-32 contrast audit checked 4,430 text runs with 0 violations.
+
+The four browser reds of the earlier runs (§ "The first hosted run") are closed by the fixes above,
+not by skipping anything: every failing checkpoint is back in the walk and asserts the same property
+as before. Run `44887035882` at `89e2229` was green as well; the run after it (`44888955451` at
+`dc92ed6`) is the one that exposed the doctor race, and the run after that is green with the race
+fixed. Nothing was re-run until it looked better - each round changed the code or the assertion that
+the round had proven wrong.
 
 ### What is verified, and what is not
 
@@ -1371,5 +1386,5 @@ asserts the computed styles at stages 0, 1, 3, 4 and 5 (bloom gone at 1, every p
 3, `backdrop-filter: none` with the reticle still visible at 5), measures the flash guard through the
 Web Animations API, checks the privacy indicator's text, stages and claims a real envelope and lands on
 the handed-off view and mission, runs the doctor and compares it with the route, and fails on any
-console error, page error or horizontal overflow. The hosted run `44887035882` is what turns that into
+console error, page error or horizontal overflow. The hosted run `44890155387` is what turns that into
 evidence, and it is green.
