@@ -10,6 +10,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { parseIsoInstant, singleLine } from '../util.js';
 import { StoreError, ValidationError } from '../errors.js';
+import { runWithWriterLockContext } from '../memory/writer-lock.js';
 import { TASK_SCHEMA, reduceEvents, validateEventShape } from './model.js';
 import { maskSecretLeaves } from '../security/secrets.js';
 import { inspectLock, recoverLock, identifiedPid, TAKEOVER_EPOCHS } from './lock-recovery.js';
@@ -257,7 +258,7 @@ export class TaskStore {
     }
     if (!acquired) throw new StoreError('could not acquire the task lock', 'LOCKED');
     try {
-      return await fn();
+      return await runWithWriterLockContext(this.filePath, fn);
     } finally {
       const mine = await fs.readFile(this.lockPath, 'utf8').catch(() => null);
       if (mine === body) await fs.rm(this.lockPath, { force: true }).catch(() => {});

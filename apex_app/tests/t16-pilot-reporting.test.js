@@ -27,7 +27,7 @@ function runPilot(...args) {
 describe('pilot measurements', () => {
   test('the security scenario publishes a real resident-byte reading', () => {
     const { code, stdout, stderr } = runPilot('--id', 'sec-01');
-    assert.equal(code, 0, stderr);
+    assert.equal(code, 0, stderr || stdout.slice(-12000));
     assert.doesNotMatch(stdout, /\[object Promise\]/);
     assert.doesNotMatch(stdout, /\bn\/a\b/);
     const line = stdout.split('\n').find((row) => row.includes('interface process memory')) ?? '';

@@ -428,6 +428,23 @@ tasks and plans the stores hold, and buttons that call the same user-origin cont
 log, so it includes replies the model path stores as notices (for example a deterministic reading)
 as well as replayed turns.
 
+**T-30 Package 4 addendum (2026-11-19).** The page now has named workspaces, and each one is a
+projection of an owner store, never a second source of truth:
+
+| Workspace | Route | Owner records shown |
+|---|---|---|
+| Mission Control | `GET /api/mission-control` | GoalStore, PlanStore and TaskStore records with criteria, provenance, blockers, checkpoints and bounded status/lifecycle history |
+| Approval Centre | `GET /api/approvals` | proposed tasks, steps awaiting approval, unapproved draft plans and situational approval requests, with recorded risk/scope/reversibility/expiry or an explicit "unknown"/"not recorded" |
+| Sentinel | `GET /api/situation` | recorded situational events, assessments, decisions and provenance |
+| Memory Timeline | `GET /api/timeline?limit=N` | chronological MemoryStore records, KnowledgeStore claims/lifecycle decisions and WorldModelStore changes with their provenance |
+| Briefing | `GET /api/briefing` | recorded facts and explicitly labelled heuristic inferences from the owner stores |
+
+Every workspace reports its own loading, empty, error and unavailable states. A store that cannot be
+read says so, and a partial read names the missing owners; an unavailable count is `null`, not zero.
+Writes stay on the existing controller paths: `POST /api/tasks/:id/approve`, `POST /api/plans/:id/approve`,
+`POST /api/plans/:id/cancel` (a reason is required) and `POST /api/situation/decide`. Approving a
+record changes intent only: no control starts a task, runs a plan or executes a situational response.
+
 The surface is bounded and local: a strict Content-Security-Policy, no remote origin in the page or
 client, text written with `textContent` only, a JSON content type and an `x-apex-ui` header required
 on POST, a same-origin check whenever an `Origin` header is present, a 64 KiB body cap, 4,000-character
@@ -438,6 +455,30 @@ isolation, and it serves nothing beyond this machine.
 `APEX_UI_PORT` selects the port (default 8787; `0` picks a free one). The page runs no inference of
 its own: with no model configured, its answers are the deterministic readings described above, and
 with one configured it sends the same request the CLI would.
+
+**T-30 Package 5 addendum (2026-11-19).** The page carries the master document's design tokens and a
+presentation layer that never touches authorization:
+
+| Control | Behaviour | What it cannot do |
+|---|---|---|
+| Mode selector (Classic, Tactical, Overwatch, Synthesis, Quiet) | Swaps accent tokens and, for Overwatch/Synthesis, one ring-motion duration. Stored in the page, not on disk. | Change a policy, an autonomy level, a latch, a route or a stored record. |
+| Lockdown presentation | Derived from the ECP kill-switch latch through the Core projection; it disables the selector while active. | Be selected by hand, or release the latch. Release still needs the confirm + typed-reason flow on the System workspace. |
+| Motion toggle | Sets `data-motion="reduced"`, which disables animation and transitions; the OS `prefers-reduced-motion` value is the starting point. | Affect timing, streaming or the watchdog. |
+| Contrast toggle | Sets `data-contrast="high"` (stronger lines, opaque panels, no scanline layer); `prefers-contrast: more` is the starting point. | Change colour meaning: red still means danger. |
+
+Keyboard: `Alt+←`/`Alt+→` move through the same views as the nav buttons, `/` focuses the message box
+when focus is not already in a field, every interactive element has a `:focus-visible` ring, and the
+active nav item carries `aria-current="page"`. Layout breakpoints are 1600, 1280, 1100, 720 and 480 px.
+
+Text tokens are checked at build time against WCAG 2.1: seven foreground/background pairs must measure
+at least 4.5:1, computed from the shipped hex values in `tests/ui-experience-system.test.js`. The raw
+danger red (`#e10600`) measures below that bar on the void background, so it stays a fill/border colour
+and red *text* uses `--armor-red-text` (`#ff6b5a`).
+
+The desktop shell is a decision, not a build: `reports/T30_P5_DESKTOP_SHELL_ADR.md` recommends keeping
+the loopback UI and wrapping it in a thin shell, with Tauri as the destination if a native shell becomes
+necessary and Electron rejected. **No shell exists in this repository**, and the browser UI remains the
+supported fallback.
 
 ### Exit codes
 
@@ -4006,10 +4047,29 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 134 registered actions declare both `validate()` and `verify()` - 149 with a
-  filesystem root - so the
-  independent verifier runs on every one - including the reads, which are verified against a fresh
-  re-read rather than trusted from the first result. Registration refuses an action that omits either.
+- **Verification.** All 139 registered actions declare both `validate()` and `verify()` - 154 with a
+  filesystem root - so the independent verifier runs on every one, including the reads, which are
+  verified against a fresh re-read rather than trusted from the first result. Registration refuses an
+  action that omits either.
+
+> **T-30 count correction (2026-11-19).** The earlier AF-19 count of 134 actions by default and 149
+> with a root (80 reads, 69 writes) is superseded by the verified registry: Workshop contributes four
+> reads and one user-only compose write, for 139/154 total, 84 reads, and 70 writes. The earlier
+> counts are retained here as historical context, not current inventory.
+
+> **T-29 / T-30 Package 5 count correction (2026-11-19).** `cognition.run` adds one owner-only write,
+> so the verified registry is **140 actions by default and 155 with a root: 85 reads and 71 writes**,
+> with 56 plannable (the pipeline capability is unplannable; the steps it plans are authorized
+> separately). The 139/154 figures above are retained as the state before T-29.
+
+> **T-34 Step 3 count correction (2026-11-19).** `briefing.acknowledge` adds one owner-only write, so
+> the verified registry is **151 actions by default and 166 with a root: 85 reads and 81 writes**.
+> The earlier figures are retained as the state before T-34.
+
+> **T-35 Step 2 count correction (2026-11-19).** The three presence handoff capabilities
+> (`presence.handoff.stage`, `.claim`, `.revoke`) add three owner-only writes, so the verified registry
+> is **154 actions by default and 169 with a root: 85 reads and 84 writes**. The 151/166 figures above
+> are retained as the state before T-35.
 
 "Cognitive state" below means persistent state the application records: the belief stores
 (`memory.jsonl`, `knowledge.jsonl`, `experiences.jsonl`, `predictions.jsonl`) and, since Batch AG,
@@ -4102,8 +4162,20 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `plan.outcome` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `work.review` | user + model | read | offered to both | nothing (measured) | no (read) | no |
 | `council.deliberate` | user | read | never in a plan | `council.jsonl` (append-only session; the synthesis is stored, not executed) | no (read) | no |
+| `cognition.run` | user | write | never in a plan | `cognition-runs.jsonl` and the governed `tasks.jsonl` record it creates through the controller | no (executive) | no (a run record is an account, not a belief) |
 | `council.list`, `council.get`, `council.replay`, `council.compare` | user + model | read | never in a plan | nothing (measured) | no (read) | no |
+| `workshop.compose` | user | write | never in a plan | `workshop.jsonl` (append-only design sheet; it is stored, never executed) | no (workshop) | no (a design is not a belief) |
+| `workshop.verify` | user | write | never in a plan | `workshop-verifications.jsonl` (append-only ledger: the check list, its result and the metrics it measured; a failed check is recorded as a failure) | no (workshop) | no (a check is not a belief) |
+| `workshop.promote` | user | write | never in a plan | `workshop-verifications.jsonl` (one promotion record citing the passing verification) plus one `memory.jsonl` entry naming the promotion; refuses without a passed verification for the same content | no (workshop) | no (accepting a design does not make it true) |
+| `workshop.list`, `workshop.get`, `workshop.inspect`, `workshop.simulate` | user + model | read | never in a plan | nothing (measured; simulation is arithmetic over the stored sheet) | no (read) | no |
 | `plan.assess` | user | write | never in a plan | `plans.jsonl` (one `plan_assessment` event; the plan record's own bytes, status, approval and timestamp are unchanged) | no (executive) | yes |
+| `evolution.propose`, `evolution.verify`, `evolution.promote`, `evolution.decide` | user | write | never in a plan | `evolution-proposals.jsonl` (append-only ledger: the proposal, the measured sandbox result, the promotion request and the owner's decision) | no (evolution) | no (a candidate self-change is not a belief) |
+| `perception.sense_host`, `perception.dismiss_alert`, `perception.revoke_suppression` | user | write | never in a plan | `perception/observations.jsonl` (append-only reading ledger: one line per observed value, with its own timestamp, source and epistemic status) and `perception/governor.json` (the rolling push budget, the dismissals, and the suppression rules) | no (perception) | no (a reading is not a belief) |
+| `perception.state` | user + model | read | never in a plan | reads `perception/observations.jsonl` and `perception/governor.json` and writes nothing | no (perception) | no |
+| `briefing.acknowledge` | user | write | never in a plan | `briefing-checkpoints.jsonl` (append-only: a reading of the owning stores taken when the owner acknowledges a briefing, plus the delta the next briefing compares against) | no (briefing) | no (a checkpoint is a reading, not a belief) |
+| `presence.handoff.stage`, `presence.handoff.claim`, `presence.handoff.revoke` | user | write | never in a plan | `presence-handoffs.jsonl` (append-only envelope ledger: the staged envelope with its SHA-256 digest, the claim, the revocation and its reason). A local envelope only: no remote transport, and a claim restores a view and a mission id rather than granting anything | no (presence) | no (a destination is not a belief) |
+| `system.bootstrap` | user | write | never in a plan | `system-bootstrap.json` (the completion marker: the timestamp, the check digests and the device, workspace and reading it recorded), plus the reading and the device it enrolls: `perception/observations.jsonl`, `devices.jsonl` and `world-model.jsonl`. It creates no task, no goal and no plan, and it is refused while the ECP lockdown latch is engaged | no (system) | no (a machine reading is not a belief) |
+| `system.bootstrap_status` | user + model | read | never in a plan | reads `system-bootstrap.json` and writes nothing | no (system) | no |
 | `plan.activate`, `plan.reconcile` | user | not a registered action | - | `plans.jsonl`, `tasks.jsonl`, `operations.jsonl` when a plan is activated | no (executive) | through the created task only |
 | `plan.continuation` | user | not a registered action | - | `operations.jsonl` (its own audit line); the plan, task, goal and belief stores are unchanged, measured byte for byte | no (read) | no |
 | `plan.continue` | user | not a registered action | - | `tasks.jsonl` per step it takes up, each step's own store, `plans.jsonl`, `operations.jsonl` | no (executive) | through the steps it takes up only |
@@ -4124,10 +4196,16 @@ the action ran to `success_verified` in an isolated data directory and no store 
 `filesystem.list`, `filesystem.read`, `filesystem.find`, `filesystem.summarize`, `filesystem.extract`,
 `filesystem.compare`, `filesystem.report`, the filesystem lifecycle and write actions, and
 `deadline.import` appear in the registry only when a workspace root is configured; there is no default
-root, and a model proposal cannot supply one, so the count is 134 registered actions by default and
-149 with a root. Batch T-25 added five council read actions (`council.deliberate`, `council.list`,
+root, and a model proposal cannot supply one, so the current count is 139 registered actions by default and
+154 with a root. Batch T-25 added five council read actions (`council.deliberate`, `council.list`,
 `council.get`, `council.replay`, `council.compare`) which are always present regardless of workspace
-configuration. `deadline.list` needs no root: it reads the ledger, not a workspace, and the three
+configuration. T-26/T-27 added five Workshop actions regardless of root configuration: `workshop.compose`
+(a user-only write of an immutable design sheet that is never executed) and four reads (`list`, `get`,
+`inspect`, `simulate`). The reads are repeatable and arithmetic-only; Workshop actions neither authorize
+execution nor change belief state. T-33 Step 3 (2026-11-19) added two more Workshop writes,
+`workshop.verify` and `workshop.promote`, so the pinned totals are now 150 registered actions by
+default and 165 with a root; the verification is a fixed check list over the stored sheet and the
+promotion refuses unless the newest recorded verification for the same content passed. `deadline.list` needs no root: it reads the ledger, not a workspace, and the three
 `backup.*` actions need no root either: they read and replace the data directory itself. Batch AG added ten user-origin write actions
 (`goal.*` and `plan.*`); Batch AH added four more (`goal.revise` and the three `proposal.*` decision
 actions); Batch AI added thirty World Model actions (eleven writes and nineteen reads); Batch AL added
@@ -4180,8 +4258,10 @@ The neural-boundary work (Batch T-05) added one more: `neural.contract`, a user 
 declares the versioned proposal contract APEX would speak - schemas, limits, refused shapes, the
 lifecycle counters and the trust class - and reports that no runtime is connected. It contacts no
 runtime, executes nothing, and is unplannable, so neither prompt count changes.
-The default registry holds 134 actions and 149 with a root. No other action was added by those
-batches.
+[Superseded 2026-11-19 by T-30 Package 0: this earlier inventory recorded 134 actions by default and
+149 with a root, before the five Workshop actions were included.]
+The default registry currently holds 139 actions and 154 with a root; the prior counts are retained
+above as historical evidence. No other action was added by the batches described in this subsection.
 
 ### The inconsistencies this found, and what became of them
 
@@ -8942,9 +9022,13 @@ apex situation execute <decision-id> --input <json>
 apex situation status
 ```
 
-The local UI shows the same state at `GET /api/situation` and in its "Situational awareness" panel:
-recent events, alerts, and pending approvals. Decisions and execution stay in the CLI so the page
-adds no write path.
+The local UI shows the same state at `GET /api/situation` and in its Sentinel workspace: recent
+events, alerts, and pending approvals. Historically this section said decisions and execution stay
+in the CLI. **T-30 Package 4 addendum (2026-11-19):** the page can now record a non-executing
+decision (`ignore`, `record`, `investigate`, `notify`, `recommend`) through
+`POST /api/situation/decide`, which calls the same user-origin controller method as the CLI; the
+page cannot choose `execute`, and an approved execution still happens only through the CLI's
+separate `situation execute` step.
 
 Limitations: every event in this batch is supplied through the published ingestion contract (from
 the user, a test provider, or a cited APEX operation). There is no polling daemon, no network
@@ -9619,9 +9703,11 @@ user-level scenario suite and six repairs; the T-14 suites remain in the full ru
 These are four different measurements reported separately. No percentage and no composite score is
 computed, because one number would hide which promise is unmet.
 
-1. **Architecture completion** — counted components, not the vision. The application exposes 149
-   actions in 26 families when a workspace root is configured (134 in 25 families without one):
-   80 reads, 69 writes, 56 plannable. One action registry authorizes; one controller serves the CLI
+1. **Architecture completion** — counted components, not the vision. [Superseded 2026-11-19: the
+   earlier T-16 count was 149 actions in 26 families with a workspace root (134 in 25 without one),
+   80 reads, and 69 writes.] The verified T-30 registry exposes 154 actions in 27 families with a
+   root (139 in 26 without one): 84 reads, 70 writes, and 56 plannable. One action registry authorizes;
+   one controller serves the CLI
    and the UI; 15 persisted data files form the backup contract; ten health areas each name their
    source. Absent: a neural transport and runtime, a general objective planner, a voice interface,
    model training, and a hosted multi-user deployment.

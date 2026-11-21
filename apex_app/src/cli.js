@@ -17,16 +17,22 @@ import { MAX_QUEUED_SUMMARIES } from './tasks/summary-queue.js';
 import { TAKEOVER_EPOCHS } from './tasks/lock-recovery.js';
 import { State, collectDiagnostics, dataDirLabel, renderDiagnostics, safeText } from './diagnostics.js';
 import { collectHealth, renderHealth } from './health.js';
+import { DOCTOR_BUDGET_MS, DOCTOR_SCHEMA, createDoctor } from './system/doctor.js';
 import { MAX_WORLD_LIMIT } from './world/world-state.js';
 import { runRuntimeCommand } from './runtime/cli.js';
 import { runIntegrationCommand } from './integrations/cli.js';
 import { runDocumentCommand } from './documents/cli.js';
 import { runReasoningCommand } from './reasoning/cli.js';
+import { createDesktopShell, DESKTOP_SCHEMA } from './ui/desktop-shell.js';
+import { pathToFileURL } from 'node:url';
 
 export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION})
 
 Usage:
   node bin/apex.js chat                  interactive conversation (same session across restarts)
+  node bin/apex.js desktop [--dry-run] [--print-launch-spec] [--browser <path>] [--port <n>]
+                            [--bootstrap | --no-bootstrap]
+                                         loopback UI in a thin Edge/Chrome/Chromium application frame (zero dependencies)
   node bin/apex.js ask [--save-answer] <request words...>
   node bin/apex.js new                   start a new conversation session
   node bin/apex.js status [--model]      subsystem counts (--model probes the endpoint; no inference)
@@ -34,6 +40,7 @@ Usage:
   node bin/apex.js model contracts [--json]           declared provider capabilities, limits and trust boundary (no endpoint is contacted)
   node bin/apex.js neural contract [--json]           declared neural runtime boundary, limits and isolation (no runtime is contacted; no inference)
   node bin/apex.js diagnose [--model]    read-only preflight: config, stores, guidance (--model probes; no inference)
+  node bin/apex.js doctor [--json]       six read-only checks in under 500 ms: safety latch, ECP authority, stores, capabilities, browser, workspace sensor
   node bin/apex.js health [--json] [--model]          unified operational health across every subsystem (inspects records; starts nothing, calls no model)
   node bin/apex.js workspace roots                     configured workspace roots and their names (read-only)
   node bin/apex.js workspace list [path] [--limit N] [--workspace <name>]        one directory inside a root (read-only)
@@ -488,7 +495,7 @@ function parseFlags(args, allowed, repeat = []) {
       'source', 'source-id', 'payload', 'operation-id', 'reporter', 'response', 'action', 'input',
       'adaptation', 'order', 'avoid', 'prefer', 'measurement', 'event', 'request',
       'events-file', 'endpoint', 'allowlist', 'root', 'exclude', 'path', 'interval', 'timeout',
-      'plan-priority',
+      'plan-priority', 'browser', 'port',
       'max-observations', 'max-files', 'max-depth', 'max-bytes', 'memory-percent', 'disk-percent', 'provider',
       'version', 'section', 'document'].includes(name)) {
         const v = args[i + 1];
@@ -918,6 +925,105 @@ async function repairLocks({ app, out, err }) {
   return failed > 0 ? 1 : 0;
 }
 
+// The thin desktop shell (T-30 Package 5). It is a launcher, not an authority: it starts the
+// same loopback server and stops it on exit. `--dry-run` and `--print-launch-spec` resolve the
+// executable and print the exact command without starting a browser, which is how the behaviour
+// is verified on a machine with no Chromium installed.
+//
+// T-36 Step 3 (2026-11-21): the shell performs the cold-start bootstrap before it opens the
+// window, so a first launch on a new machine shows a real CPU count, a real git branch and an
+// enrolled local workstation. `--no-bootstrap` skips it; `--bootstrap` asks for it explicitly
+// (the bootstrap is idempotent, so asking twice is safe).
+async function runDesktopCommand(args, { app, env, out, err, platform = process.platform }) {
+  const { flags, rest } = parseFlags(args, ['dry-run', 'print-launch-spec', 'browser', 'port', 'bootstrap', 'no-bootstrap']);
+  rejectUnexpected(rest, 'desktop [--dry-run] [--print-launch-spec] [--browser <path>] [--port <n>] [--bootstrap|--no-bootstrap]');
+  if (flags.bootstrap === true && flags['no-bootstrap'] === true) {
+    throw new ValidationError('--bootstrap and --no-bootstrap cannot both be given', 'USAGE');
+  }
+  const wantBootstrap = flags['no-bootstrap'] === true ? false : true;
+  let port = null;
+  if (flags.port !== undefined) {
+    if (!/^\d+$/.test(String(flags.port)) || Number(flags.port) > 65535) {
+      throw new ValidationError('--port needs a whole number from 0 to 65535', 'USAGE');
+    }
+    port = Number(flags.port);
+  }
+  const candidates = flags.browser === undefined || flags.browser === true
+    ? null
+    : [{ id: 'flag', label: '--browser', command: String(flags.browser) }];
+    // Progress lines go to stderr so `--print-launch-spec` stays machine-readable on stdout.
+  const shell = createDesktopShell({
+    app, env, platform, port, candidates,
+    bootstrap: wantBootstrap,
+    log: (line) => err(line),
+  });
+  const printSpec = flags['print-launch-spec'] === true;
+  const dryRun = flags['dry-run'] === true || printSpec;
+  try {
+    // The shell was constructed with the bootstrap decision (`bootstrap: wantBootstrap`), so the
+    // launch is not told twice: one flag, one place, one reported outcome.
+    const planned = await shell.launch({ dryRun });
+    if (printSpec) {
+      out(JSON.stringify({
+        schema: DESKTOP_SCHEMA,
+        url: planned.url,
+        host: planned.host,
+        port: planned.port,
+        ready: planned.ready,
+        found: planned.found,
+        browser: planned.browser,
+        tried: planned.tried,
+        profileDir: planned.profileDir,
+        spec: planned.spec,
+        diagnostic: planned.diagnostic,
+      }, null, 2));
+      return 0;
+    }
+    if (dryRun) {
+      // T-36 Step 3: the same table the live launch prints, so a dry run shows the owner what the
+      // window will open on. The lines that were already printed are still printed: the table is
+      // added, not substituted.
+      out(shell.banner(planned));
+      out(`Loopback interface: ${planned.url} (state read answered)`);
+      if (planned.found) {
+        out(`Browser: ${planned.executable}`);
+        out(`Command: ${[planned.executable, ...planned.spec.args].join(' ')}`);
+        out(`Profile: ${planned.profileDir ?? 'the browser default profile'}`);
+      } else {
+        err(planned.diagnostic);
+        err(`Tried: ${planned.tried.join(', ') || '(no candidates on this platform)'}`);
+      }
+      out('Dry run: nothing was started. The loopback server is stopping now.');
+      return 0;
+    }
+    // T-36 Step 3: the live launch prints the same table before the window opens.
+    out(shell.banner(planned));
+    if (!planned.spawned) {
+      // Honest fallback: no browser was found, so the shell says so and leaves the URL open
+      // for the owner to use. It does not pretend a window exists.
+      err(planned.diagnostic);
+      out('The loopback interface is running and will stop on Ctrl+C.');
+      out(`Open: ${planned.url}`);
+    }
+    out('Press Ctrl+C to stop the shell and the loopback server.');
+    await new Promise((resolve) => {
+      const done = () => resolve();
+      process.once('SIGINT', done);
+      process.once('SIGTERM', done);
+      if (planned.spawned) {
+        // The window closing is the ordinary way this ends. The child stays a child, so the
+        // server is stopped here rather than left listening after the window is gone.
+        setInterval(() => {
+          if (shell.status().childPid === null) { done(); }
+        }, 500).unref();
+      }
+    });
+    return 0;
+  } finally {
+    await shell.stop();
+  }
+}
+
 export async function main(argv, {
   env = process.env,
   stdout = process.stdout,
@@ -977,6 +1083,10 @@ export async function main(argv, {
   // directory in their own output and are left out to avoid saying it twice.
   if (app.config?.dataDirIsDefault === true && app.config?.isolated !== true && command !== 'status' && command !== 'diagnose') {
     err(`Data: this run uses the default data directory (${safeText(app.dataDir)}); APEX_DATA_DIR is not set. Set it to keep your store where you chose it.`);
+  }
+
+  if (command === 'desktop') {
+    return runDesktopCommand(args, { app, env, out, err, platform: process.platform });
   }
 
   try {
@@ -1107,6 +1217,26 @@ export async function main(argv, {
       const diag = await collectDiagnostics(app, { checkModel: Boolean(flags.model) });
       out(renderDiagnostics(diag));
       return diag.needsAttention ? 1 : 0;
+    }
+
+    // T-35 Step 3: the doctor. Six read-only checks inside a stated budget, and a non-zero exit
+    // whenever one of them could not pass - a degraded or failed check is never reported as ok.
+    if (command === 'doctor') {
+      const { flags, rest } = parseFlags(args, ['json']);
+      rejectUnexpected(rest, 'doctor [--json]');
+      const doctor = createDoctor({ app, dataDir: app.dataDir });
+      const report = await doctor.run();
+      if (flags.json) {
+        out(JSON.stringify(report, null, 2));
+      } else {
+        out(`${APP_NAME} doctor  ${report.status.toUpperCase()}  (${report.durationMs} ms of a ${DOCTOR_BUDGET_MS} ms budget${report.withinBudget ? '' : ', OVER BUDGET'})`);
+        for (const entry of report.checks) {
+          out(`  [${entry.state}] ${entry.name}  ${entry.summary}`);
+        }
+        out('');
+        out(report.note);
+      }
+      return report.ok ? 0 : 1;
     }
 
     if (command === 'new') {
@@ -3112,4 +3242,17 @@ async function runChat({ app, stdin, stdout, stderr, out }) {
   }
   rl.close();
   return 0;
+}
+
+// `node src/cli.js ...` runs the same CLI as `node bin/apex.js ...`, so the desktop shell can be
+// started from either path (T-30 Package 5). Importing this module, as every test does, has no
+// effect: the guard only fires when this file is the process entry point.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2)).then(
+    (code) => { process.exitCode = code; },
+    (error) => {
+      process.stderr.write(`fatal: ${error?.message ?? error}\n`);
+      process.exitCode = 1;
+    },
+  );
 }

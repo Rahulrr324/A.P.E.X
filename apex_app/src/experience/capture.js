@@ -83,12 +83,47 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // to itself.
   situation: 'it records or reads the situational event log, its assessments, decisions, and responses; an experience of one would put the awareness bookkeeping into the log the pattern and adaptation reads draw from',
   learning: 'it records or reads APEX\'s own outcome evaluations, adaptation measurements, and rollbacks; an experience of one would put APEX\'s judgement about its own behaviour into the log the pattern and adaptation reads draw from',
+  // T-31 Step 2: a lab proposal, its measured sandbox result, and the owner's promotion decision
+  // describe what APEX might become rather than what happened. Capturing one would put a candidate
+  // self-change into the log the pattern and adaptation reads draw from, so a proposal would start
+  // to count as an event and an idea would feed the loop that shapes behaviour.
+  // T-32 Step 3: perception records readings of the machine (CPU, memory, storage, process, and the
+  // workspace git state) and the Sentinel's push discipline over them. Capturing one would put host
+  // telemetry and notice bookkeeping into the log the pattern and adaptation reads draw from, so a
+  // CPU reading would start to count as evidence about behaviour.
+  perception: 'it records readings of the host and the workspace, or the Sentinel push discipline over them; an experience of one would put machine telemetry and notice bookkeeping into the log the pattern and adaptation reads draw from',
+  evolution: 'it records a proposed change to APEX\'s own behaviour, the measured sandbox result for it, or the owner\'s promotion decision; a candidate self-change is not an event that happened, and it must not enter the experience log the pattern and adaptation reads draw from',
+  // T-34 Step 3: acknowledging a briefing writes a checkpoint of what the stores held at that moment.
+  // Capturing it would put APEX's own reading of its state into the log the pattern and adaptation
+  // reads draw from, so "the owner read a briefing" would start to count as behavioural evidence.
+  briefing: 'it records a checkpoint of what the owning stores held when the owner read a briefing; an experience of one would put APEX\'s own reading of its state into the log the pattern and adaptation reads draw from',
+  // T-35 Step 2: handing work to another enrolled device is an owner act about where the work lives,
+  // not something APEX did. Capturing it would teach the pattern reads that "moved a tab" is behaviour
+  // worth generalising from.
+  presence: 'it records an owner act about where work should continue - an envelope, its digest, its claim or its revocation - rather than something APEX did; capture would make a device handoff look like behavioural evidence',
+  // T-36 Step 1: a cold-start bootstrap is the machine being read for the first time, not an act
+  // APEX chose. Every value it records is re-derivable by reading the machine again, and an
+  // experience of it would teach the pattern reads that "install and boot" is behavioural evidence.
+  system: 'it reads the machine and the repository for the first time and records what it found; every value it holds is re-derivable by reading them again, so an experience of it would say less than a fresh reading',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
 // appears in neither list is refused by autoCaptureDecision, but the coverage test fails first: a
 // new action has to be classified here or added to the subset on purpose.
 export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
+  // T-32 Step 3: perception. A reading is re-derivable only while the machine is in the same state,
+  // which is exactly why it belongs in its own ledger rather than in the experience log.
+  'briefing.acknowledge': 'briefing',
+  'presence.handoff.stage': 'presence',
+  'presence.handoff.claim': 'presence',
+  'presence.handoff.revoke': 'presence',
+  'perception.sense_host': 'perception',
+  'perception.state': 'perception',
+  'perception.dismiss_alert': 'perception',
+  'perception.revoke_suppression': 'perception',
+  // T-36 Step 1: the cold-start bootstrap and its status read.
+  'system.bootstrap': 'system',
+  'system.bootstrap_status': 'system',
   'app.status': 'read',
   'app.capabilities': 'read',
   'calc.evaluate': 'read',
@@ -224,6 +259,9 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'plan.resume': 'executive',
   'safety.lockdown': 'executive',
   'safety.release': 'executive',
+  // T-29 (2026-11-19): one cognitive run ends one operation whose real outcomes are the task
+  // records it created and ran, so it is classified with the executive commands that write those.
+  'cognition.run': 'executive',
   'recover': 'read',
   'task.plan': 'task',
   'task.run': 'task',
@@ -282,6 +320,15 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // draw from, turning a design into behavioural evidence; a simulation is re-derivable from the
   // stored sheet and says nothing about what happened.
   'workshop.compose': 'workshop',
+  // T-33 Step 3: a verification is a check of the user's own sheet and a promotion is the user's own
+  // decision about it. Recording either as an experience would copy the design into the log the
+  // pattern and adaptation reads draw from, which is the same reason composition is excluded.
+  'workshop.verify': 'workshop',
+  'workshop.promote': 'workshop',
+  'evolution.propose': 'evolution',
+  'evolution.verify': 'evolution',
+  'evolution.promote': 'evolution',
+  'evolution.decide': 'evolution',
   'workshop.list': 'read',
   'workshop.get': 'read',
   'workshop.inspect': 'read',

@@ -19,6 +19,23 @@ function artifactRef(value) {
   return textInput(value, 'artifact id', { max: 64 });
 }
 
+// T-33 Step 3: a reason is the owner's own words for a promotion. It is optional for a
+// verification (the check is the evidence) and required for a promotion (the decision is the act).
+function reasonField(value, { required = false } = {}) {
+  if (value === undefined || value === null) {
+    if (required) throw new ValidationError('a reason is required');
+    return null;
+  }
+  if (typeof value !== 'string') throw new ValidationError('reason must be text');
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    if (required) throw new ValidationError('a reason is required');
+    return null;
+  }
+  if (trimmed.length > 240) throw new ValidationError('reason must be at most 240 characters');
+  return trimmed;
+}
+
 // The pure module speaks WorkshopError; an action reports a rejected input the way the rest of
 // the registry does.
 function normalizeForAction(input) {
@@ -269,6 +286,141 @@ export function workshopActions(workshop) {
           return { ok: true, detail: `simulation of ${fresh.report.artifactId} reproduced exactly by an independent run` };
         } catch (err) {
           return { ok: false, detail: `the artifact could not be re-simulated: ${err?.message ?? err}` };
+        }
+      },
+    },
+    {
+      name: 'workshop.verify',
+      description: 'Run the deterministic sandbox verification over a stored workshop artifact: structure, resolved connections, isolation, feedback loops, supply against demand and the declared budget. Records the result in the workshop verification ledger. Nothing is executed; a failed verification is recorded as a failure, not as an absent record.',
+      inputHint: '{"artifactId": "ws-...", "reason": optional text}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (key !== 'artifactId' && key !== 'reason') throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        return { artifactId: artifactRef(input.artifactId), reason: reasonField(input.reason) };
+      },
+      async execute(ctx, input) {
+        if (!ctx?.workshop) throw new ExecutionError('WORKSHOP_UNAVAILABLE', 'the workshop is not available in this configuration');
+        const result = await ctx.workshop.verify(input.artifactId);
+        if (!result.found) throw new ExecutionError('WORKSHOP_NOT_FOUND', result.detail ?? `no workshop artifact for ${input.artifactId}`);
+        const verification = result.verification;
+        const failed = verification.checks.filter((check) => check.passed !== true);
+        return show(
+          `verified workshop artifact ${verification.artifactId}: ${verification.verified ? 'all checks passed' : `${failed.length} check(s) failed`}`,
+          {
+            artifactId: verification.artifactId,
+            identityDigest: verification.identityDigest,
+            verificationId: verification.id,
+            verified: verification.verified,
+            passed: verification.passed,
+            failed: verification.failed,
+            checks: verification.checks,
+            metrics: verification.metrics,
+            at: verification.at,
+            authorizesExecution: false,
+            executedCode: false,
+          },
+          `${verification.artifactId}  ${verification.verified ? 'VERIFIED' : 'NOT VERIFIED'}\n`
+            + verification.checks.map((check) => `  ${check.passed ? 'pass' : 'FAIL'}  ${check.id} — ${check.detail}`).join('\n')
+            + '\nThe checks are arithmetic and structure over the stored sheet. Nothing was executed and nothing was authorized.',
+        );
+      },
+      async verify(ctx, _input, result) {
+        try {
+          const state = await ctx.workshop.verificationState(result.data.artifactId);
+          if (!state.verification) return { ok: false, detail: 'the verification cannot be read back from the ledger' };
+          if (state.verification.id !== result.data.verificationId) {
+            return { ok: false, detail: 'the ledger holds a different verification than the one reported' };
+          }
+          if (state.verification.verified !== result.data.verified) {
+            return { ok: false, detail: 'the ledger disagrees with the reported outcome' };
+          }
+          return { ok: true, detail: `verification ${state.verification.id} confirmed by an independent read of the ledger` };
+        } catch (err) {
+          return { ok: false, detail: `the verification ledger could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+    {
+      name: 'workshop.promote',
+      description: 'Promote a stored workshop artifact after its newest recorded sandbox verification passed. Refuses when no verification exists, when the newest one failed, or when it was recorded against different content. Records the promotion with the owner\'s reason and writes one memory-timeline entry. It applies nothing and executes nothing.',
+      inputHint: '{"artifactId": "ws-...", "reason": "why this design is accepted"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (key !== 'artifactId' && key !== 'reason') throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        return { artifactId: artifactRef(input.artifactId), reason: reasonField(input.reason, { required: true }) };
+      },
+      async execute(ctx, input) {
+        if (!ctx?.workshop) throw new ExecutionError('WORKSHOP_UNAVAILABLE', 'the workshop is not available in this configuration');
+        const result = await ctx.workshop.promote(input.artifactId, { reason: input.reason });
+        if (!result.found) throw new ExecutionError('WORKSHOP_NOT_FOUND', result.detail ?? `no workshop artifact for ${input.artifactId}`);
+        if (result.promoted !== true) {
+          // A refusal is an outcome, not a crash: the reason code says which gate held.
+          throw new ExecutionError(
+            result.reasonCode ?? 'PROMOTION_REFUSED',
+            result.detail ?? 'the promotion was refused',
+          );
+        }
+        const promotion = result.promotion;
+        // The timeline entry is the visible consequence of accepting the design. It is a record about
+        // the design, never a belief that the design is true.
+        let memoryId = null;
+        try {
+          const record = await ctx.memory.add({
+            content: `workshop artifact ${promotion.artifactId} promoted after sandbox verification ${promotion.verificationId}`,
+            // The memory store accepts two kinds; a promotion is the owner's own act, so it is
+            // recorded as the owner's fact about it rather than as a model conclusion.
+            kind: 'user_fact',
+            source: 'user',
+            provenance: { context: `workshop.promote ${promotion.artifactId}` },
+          });
+          memoryId = record?.id ?? null;
+        } catch {
+          // A memory write that fails does not undo the promotion; the promotion record is the
+          // authority and the summary says the timeline entry is missing.
+        }
+        return show(
+          `promoted workshop artifact ${promotion.artifactId} on verification ${promotion.verificationId}${memoryId ? '' : ' (the memory timeline entry could not be written)'}`,
+          {
+            artifactId: promotion.artifactId,
+            promotionId: promotion.id,
+            verificationId: promotion.verificationId,
+            verified: true,
+            reason: promotion.reason,
+            memoryId,
+            at: promotion.at,
+            appliesNothing: true,
+            authorizesExecution: false,
+            executedCode: false,
+          },
+          `${promotion.artifactId} promoted.\n`
+            + `Verification ${promotion.verificationId} passed; the promotion is recorded with your reason.\n`
+            + `${memoryId ? 'One memory-timeline entry was written.' : 'The memory-timeline entry could not be written.'} Nothing was applied or executed.`,
+        );
+      },
+      async verify(ctx, input, result) {
+        try {
+          const state = await ctx.workshop.verificationState(result.data.artifactId);
+          if (!state.promotion) return { ok: false, detail: 'the promotion is not in the ledger' };
+          if (state.promotion.id !== result.data.promotionId) {
+            return { ok: false, detail: 'the ledger holds a different promotion than the one reported' };
+          }
+          if (state.promotion.verificationId !== result.data.verificationId) {
+            return { ok: false, detail: 'the promotion cites a different verification than the one reported' };
+          }
+          if (state.verified !== true) return { ok: false, detail: 'the verification behind the promotion does not read as passed' };
+          return { ok: true, detail: `promotion ${state.promotion.id} confirmed against verification ${state.promotion.verificationId}` };
+        } catch (err) {
+          return { ok: false, detail: `the promotion could not be re-read: ${err?.message ?? err}` };
         }
       },
     },

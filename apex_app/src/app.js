@@ -54,15 +54,29 @@ import { deadlineActions } from './actions/deadline-actions.js';
 import { backupActions } from './actions/backup-actions.js';
 import { councilActions, createCouncilService } from './actions/council-actions.js';
 import { workshopActions } from './actions/workshop-actions.js';
+import { evolutionActions } from './actions/evolution-actions.js';
+import { briefingActions } from './actions/briefing-actions.js';
+import { presenceHandoffActions } from './actions/presence-handoff-actions.js';
+import { createPresenceHandoffs } from './presence/handoff.js';
+import { createBriefingService } from './briefing/service.js';
+import { createEvolutionLab } from './evolution/lab.js';
 import { goalActions } from './actions/goal-actions.js';
 import { planActions } from './actions/plan-actions.js';
 import { proposalActions } from './actions/proposal-actions.js';
 import { workActions } from './actions/work-actions.js';
 import { taskFeedbackActions } from './actions/task-feedback-actions.js';
 import { safetyActions } from './actions/safety-actions.js';
+import { cognitionActions } from './actions/cognition-actions.js';
+import { createCognitivePipeline } from './cognition/pipeline.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 import { ResourceFabric } from './resources/fabric.js';
-import { createWorkshopService } from './workshop/service.js';\nimport { DeviceTrustService } from './security/device-trust.js';
+import { createWorkshopService } from './workshop/service.js';
+import { createPerceptionService } from './perception/service.js';
+import { perceptionActions } from './actions/perception-actions.js';
+import { DeviceTrustService } from './security/device-trust.js';
+import { createDoctor } from './system/doctor.js';
+import { createWorkstationBootstrap } from './system/bootstrap.js';
+import { systemBootstrapActions } from './actions/system-bootstrap-actions.js';
 
 export function createApp({
   dataDir,
@@ -76,6 +90,10 @@ export function createApp({
   filesystemMaxReadBytes = DEFAULT_FILESYSTEM_MAX_READ_BYTES,
   filesystemListDefaultLimit = FILESYSTEM_LIST_DEFAULT_LIMIT,
   filesystemListMaxLimit = FILESYSTEM_LIST_MAX_LIMIT,
+  // T-31 Step 3: an optional step-up secret. Off by default, so every existing deployment keeps its
+  // exact behaviour; when set, safety.release and evolution.decide require it in addition to the
+  // typed reason and the explicit confirmation.
+  stepUpToken = null,
   experienceCapture = CAPTURE_OFF,
   neuralRuntime = null,
   integrationProviders = null,
@@ -100,6 +118,9 @@ export function createApp({
     now: clock,
     idFactory,
     killSwitchPath: path.join(dataDir, 'kill-switch.json'),
+    // Absent by default: a deployment opts into step-up by setting APEX_STEP_UP_TOKEN, and the ECP
+    // then refuses the two acts that need it until the proof matches.
+    stepUpSecret: stepUpToken ?? null,
   });
   const goals = new GoalStore(path.join(dataDir, 'goals.jsonl'), { now: clock, idFactory, operations });
   const plans = new PlanStore(path.join(dataDir, 'plans.jsonl'), {
@@ -255,11 +276,31 @@ export function createApp({
 
   // The Workshop is a design sheet store: composition is a user write, inspection and simulation
   // are reads. Nothing in it executes code, and a simulation is never an authorization.
-  const workshop = createWorkshopService({ dataDir, now: clock });\n\n  // Device trust records enrollment and authenticates signed device messages. It does not\n  // grant capabilities; all action authorization remains with the existing ECP.\n  const deviceTrust = new DeviceTrustService(path.join(dataDir, 'devices.jsonl'), { now: clock, idFactory });
+  const workshop = createWorkshopService({ dataDir, now: clock });
+
+  // T-31 Step 2: the controlled Evolution Lab. It records proposals about APEX's own behaviour,
+  // the sandbox result that was measured for each one, and the owner's promotion decisions. It
+  // executes nothing: every act below is a user-origin capability the ECP authorizes.
+  const evolution = createEvolutionLab({ dataDir, now: clock, idFactory });
+
+  // T-32 Step 3: perception of the machine this process actually runs on. The sensor reads the host
+  // and the configured workspace (when there is one) and the service owns the observation ledger and
+  // the Sentinel's push discipline. It is constructed before action registration so
+  // perception.sense_host is registered through the same registry/ECP path as everything else.
+  const perception = createPerceptionService({
+    dataDir,
+    now: clock,
+    ...(idFactory ? { idFactory } : {}),
+    workspaceDir: rootForContext,
+  });
+
+  // Device trust records enrollment and authenticates signed device messages. It does not
+  // grant capabilities; all action authorization remains with the existing ECP.
+  const deviceTrust = new DeviceTrustService(path.join(dataDir, 'devices.jsonl'), { now: clock, idFactory });
 
   for (const def of [...builtinActions(), ...safetyActions(registry.controlPlane), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
-    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...workshopActions(workshop), ...extraActions, ...fsActions]) registry.register(def);
+    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...workshopActions(workshop), ...evolutionActions(evolution), ...perceptionActions(perception, { controlPlane: registry.controlPlane }), ...extraActions, ...fsActions]) registry.register(def);
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -272,7 +313,8 @@ export function createApp({
     const pr = await proposals.status();
     const wm = await worldModel.status();
     const dl = await deadlines.status();
-    const deviceStatus = await deviceTrust.status();\n    const current = await session.peek();
+    const deviceStatus = await deviceTrust.status();
+    const current = await session.peek();
     if (current.status === 'corrupt') {
       throw new StoreError(`${current.detail}; run "apex new" to start a new session`);
     }
@@ -321,7 +363,8 @@ export function createApp({
       corruptWorldModelLines: wm.counts === null ? null : wm.corrupt.length,
       worldModelDetail: wm.detail ?? null,
       sessionId: current.state?.sessionId ?? null,
-      model: gateway.describe(),\n      deviceTrust: deviceStatus,
+      model: gateway.describe(),
+      deviceTrust: deviceStatus,
       filesystemRoot: rootForContext,
       filesystemWorkspaces: workspaces === null ? [] : workspaces.list(),
     };
@@ -361,6 +404,7 @@ export function createApp({
     neural: neuralRuntime,
     council,
     workshop,
+    evolution,
   });
   const runtime = new ExecutiveRuntime({
     controller,
@@ -380,7 +424,65 @@ export function createApp({
     idFactory,
   });
   const resources = new ResourceFabric({ now: clock });
-  return {
+
+  // T-29: the unified cognitive pipeline. It is constructed after the resource fabric so the
+  // salience stage can read real pressure, and its capability is registered through the same
+  // registry/ECP path as every other action: the pipeline orchestrates, the ECP authorizes.
+  const cognition = createCognitivePipeline({
+    dataDir,
+    registry,
+    controlPlane: registry.controlPlane,
+    controller,
+    taskStore,
+    memory,
+    knowledge,
+    worldModel,
+    goals,
+    situation,
+    resources,
+    // T-32 Step 3: live host and workspace facts, so a cognitive run reads the machine it is on
+    // rather than only the stores it keeps.
+    perception,
+    // T-34 Step 1: a mission refuses an artifact this service cannot read, so the precondition is
+    // stated before the mission's first step is recorded.
+    workshop,
+    council,
+    now: clock,
+    idFactory,
+  });
+  for (const def of cognitionActions(cognition)) registry.register(def);
+  // T-34 Step 3: the briefing checkpoints. The service reads the stores it is given and writes one
+  // file in the isolated data directory; acknowledging is a governed write (briefing.acknowledge).
+  const briefing = createBriefingService({
+    dataDir,
+    now: clock,
+    idFactory,
+    owners: { taskStore, perception, workshop, evolution, cognition },
+  });
+  for (const def of briefingActions(briefing)) registry.register(def);
+  // T-35 Step 2: the presence handoff envelopes. The ledger is local and append-only; the device ids
+  // are checked against the T-28 registry at staging and again at the claim, and the targets a
+  // handoff may name are looked up rather than trusted, so an envelope cannot point at a task or
+  // artifact that does not exist.
+  const handoffs = createPresenceHandoffs({
+    dataDir,
+    deviceTrust,
+    now: clock,
+    idFactory,
+    lookups: {
+      task: (taskId) => taskStore.get(taskId),
+      artifact: async (artifactId) => {
+        const found = await workshop.get(artifactId);
+        return found && found.found === true ? found.artifact ?? found : null;
+      },
+      checkpoint: async (checkpointId) => {
+        const recorded = await briefing.list({ limit: 200 });
+        return recorded.find((entry) => entry.id === checkpointId) ?? null;
+      },
+    },
+  });
+  for (const def of presenceHandoffActions(handoffs)) registry.register(def);
+  const app = {
     controller,
     memory,
     conversation,
@@ -414,7 +516,24 @@ export function createApp({
     reasoning,
     council,
     workshop,
+    evolution,
+    deviceTrust,
+    perception,
+    cognition,
+    briefing,
+    handoffs,
   };
+  // T-36 Step 1: the doctor and the workstation bootstrap. The doctor is composed with the same
+  // application the deck reads, so its six checks are the running system's and not a second opinion
+  // built from environment variables; the bootstrap uses that doctor for its readiness gate. Both
+  // are attached to the application so the CLI, the desktop shell and the UI server share one
+  // instance of each rather than three readings of the same thing.
+  const doctor = createDoctor({ app, dataDir });
+  const bootstrap = createWorkstationBootstrap({ app, dataDir, now: clock, doctor });
+  for (const def of systemBootstrapActions(bootstrap)) registry.register(def);
+  app.doctor = doctor;
+  app.bootstrap = bootstrap;
+  return app;
 }
 
 export function createAppFromEnv(env = process.env) {
@@ -431,6 +550,7 @@ export function createAppFromEnv(env = process.env) {
     filesystemListMaxLimit: config.filesystem.listMaxLimit,
     experienceCapture: config.experienceCapture,
     autonomyByDomain: config.autonomyByDomain,
+    stepUpToken: config.stepUpToken ?? null,
   });
   return { config, ...app };
 }

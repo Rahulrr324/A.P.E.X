@@ -68,7 +68,7 @@ const readJsonl = (file) => (fs.existsSync(file)
 
 const STORE_FILES = ['memory.jsonl', 'conversation.jsonl', 'operations.jsonl', 'session.json',
   'tasks.jsonl', 'task-summary-queue.json', 'knowledge.jsonl', 'experiences.jsonl', 'predictions.jsonl',
-  'world-model.jsonl'];
+  'world-model.jsonl', 'workshop.jsonl'];
 function sizes(dir) {
   return Object.fromEntries(STORE_FILES.map((f) => {
     const p = path.join(dir, f);
@@ -93,6 +93,8 @@ const MODEL_WRITE_ATTEMPTS = [
   ['knowledge.add', { subject: 'gate', relationship: 'opens', object: 'on time' }],
   ['knowledge.retract', { target: 'no-such-claim', reason: 'the model decided' }],
   ['knowledge.resolve', { target: 'no-such-conflict', choose: 'no-such-record' }],
+  // T-29 (2026-11-19): a reply may not start a cognitive run, which can create and run a task.
+  ['cognition.run', { intent: 'the model asked for this' }],
   // Batch T-08: outcome learning judges APEX's own behaviour, so a reply may not evaluate, propose,
   // measure, or roll back anything.
   ['learning.observe', { operationId: 'op1' }],
@@ -121,6 +123,14 @@ const MODEL_WRITE_ATTEMPTS = [
   // Neither may be produced or applied by a reply.
   ['backup.export', { path: 'model-archive.json' }],
   ['backup.restore', { path: 'model-archive.json', confirm: '00000000', replaceExisting: true }],
+  // T-34 Step 3: acknowledging a briefing writes the checkpoint the next briefing is measured
+  // against, so it is the owner's own act and a reply cannot record it on their behalf.
+  ['briefing.acknowledge', { reason: 'the model acknowledged the briefing' }],
+  // T-35 Step 2: an envelope says where the owner's work continues and on which of the owner's own
+  // devices. Staging, claiming and revoking one are the owner's acts; a reply may do none of them.
+  ['presence.handoff.stage', { sourceDeviceId: 'device-t35-a', targetDeviceId: 'device-t35-b', targetView: 'deck' }],
+  ['presence.handoff.claim', { handoffId: 'ph-000000000000', targetDeviceId: 'device-t35-b' }],
+  ['presence.handoff.revoke', { handoffId: 'ph-000000000000', reason: 'the model revoked it' }],
   ['prediction.record', { capability: 'memory.add', expectation: 'success', subject: 'the model expects success', inDays: 7 }],
   ['prediction.evaluate', { target: 'no-such-prediction' }],
   ['prediction.invalidate', { target: 'no-such-prediction', reason: 'the model withdrew it' }],
@@ -181,6 +191,27 @@ const MODEL_WRITE_ATTEMPTS = [
   ['world.statement.retract', { targetType: 'fact', target: 'f-model', reason: 'the model withdrew it' }],
   ['world.statement.supersede', { targetType: 'fact', target: 'f-model', by: 'f-other', reason: 'the model replaced it' }],
   ['world.identity.decide', { left: 'e-model', right: 'e-other', decision: 'confirmed', reason: 'the model decided' }],
+  // T-30 (2026-11-19): Workshop composition is user-only even though it is not a belief-store write.
+  ['workshop.compose', {}],
+  // T-33 Step 3 (2026-11-19): so are the sandbox verification and the promotion. A model may read the
+  // design and its verification; it may not record a check or accept a design on the owner's behalf.
+  ['workshop.verify', { artifactId: 'ws-model-attempt', reason: 'the model ran the check' }],
+  ['workshop.promote', { artifactId: 'ws-model-attempt', reason: 'the model accepted it' }],
+  // [T-31 Step 2, 2026-11-19] The Evolution Lab's four writes. A model may not propose a change to
+  // APEX's own behaviour, record a sandbox result, request a promotion, or decide one.
+  ['evolution.propose', { title: 'the model proposed this' }],
+  ['evolution.verify', { proposalId: 'evo-modelattempt', verified: true, detail: 'the model said it passed' }],
+  ['evolution.promote', { proposalId: 'evo-modelattempt', reason: 'the model asked for it' }],
+  ['evolution.decide', { proposalId: 'evo-modelattempt', decision: 'approved', reason: 'the model approved it' }],
+  // T-32 Step 3: perception. A reading of the host, a dismissal of a notice class, and the revocation
+  // of a suppression rule are all owner acts; a model may read the ledger (`perception.state`) and
+  // may not take any of these three.
+  ['perception.sense_host', { reason: 'the model asked for a host reading' }],
+  ['perception.dismiss_alert', { alertClass: 'storage_pressure' }],
+  ['perception.revoke_suppression', { ruleId: 'rule-1' }],
+  // T-36 Step 1 (2026-11-21): the cold-start bootstrap reads the machine, enrols the workstation
+  // and writes the marker. It is the owner's own first launch, so a reply may not trigger it.
+  ['system.bootstrap', { reason: 'the model asked for a cold start' }],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.

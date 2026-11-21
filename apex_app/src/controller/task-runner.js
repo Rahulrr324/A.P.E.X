@@ -13,7 +13,7 @@ import { Outcome, OPERATION_SCHEMA } from '../outcomes.js';
 import { StoreError, ValidationError } from '../errors.js';
 import { APP_NAME, APP_STAGE } from '../identity.js';
 import { truncate, shortId, redact } from '../util.js';
-import { StepStatus, TaskStatus, topologicalOrder, dependentsOf, progressOf, inputHash } from '../tasks/model.js';
+import { StepStatus, TaskStatus, topologicalOrder, dependentsOf, progressOf, inputHash, blockedNodes, unmetDependencies } from '../tasks/model.js';
 
 // Maps a step's verified outcome to the next state. Only a verified success lets
 // the task continue. An unconfirmed result is uncertain, never success.
@@ -44,16 +44,35 @@ export class TaskRunner {
     return step.approval ? 'user' : 'model';
   }
 
-  // The step to act on next, in dependency order. A failed or uncertain step blocks
-  // everything after it: the stop rule applies to the whole task.
+  // The step to act on next: the first step in dependency order that is pending and whose every
+  // dependency has completed. T-34 Step 1 (2026-11-19) made the selector ready-based, so a join waits
+  // for all of its branches and a branch runs as soon as its own dependencies hold. Nothing is
+  // executed twice: a step that completed is not pending and is never selected again.
+  //
+  // The stop rule is unchanged and deliberate: a failed or uncertain step stops the whole run, and
+  // the step the run never reached stays pending rather than being taken up on the strength of a
+  // sibling. Taking a surviving sibling up is a continuation - the owner's own command, which reads
+  // the records first - not something a run does by itself. Restoring the stop here after the
+  // ready-based selector is what keeps one failed branch from turning a run into a partial success.
   nextStep(task) {
     const byId = new Map(task.steps.map((s) => [s.id, s]));
     for (const id of topologicalOrder(task.steps)) {
       const s = byId.get(id);
-      if (s.status === StepStatus.FAILED || s.status === StepStatus.UNCERTAIN) return { blocked: s, step: null };
-      if (s.status === StepStatus.PENDING || s.status === StepStatus.AWAITING_APPROVAL) return { blocked: null, step: s };
+      if (s.status === StepStatus.FAILED || s.status === StepStatus.UNCERTAIN) return { blocked: s, step: null, unmet: [] };
+      if (s.status !== StepStatus.PENDING) continue;
+      const unmet = (s.dependsOn ?? []).filter((d) => byId.get(d)?.status !== StepStatus.COMPLETED);
+      if (unmet.length === 0) return { blocked: null, step: s, unmet: [] };
     }
-    return { blocked: null, step: null };
+    return { blocked: null, step: null, unmet: [] };
+  }
+
+  // What the records say is waiting, and why. A node is blocked by every dependency that has not
+  // completed; a node whose dependency failed is skipped by the run, and a node awaiting the owner is
+  // waiting on a decision, not on a dependency. This is a read of the state, never a decision.
+  blockedNodes(task) {
+    // One implementation, in the task model, so the runner and every reader of a run derive the same
+    // answer from the same records.
+    return blockedNodes(task);
   }
 
   // The step a continuation may take up: pending, with every dependency holding a completed
@@ -129,13 +148,22 @@ export class TaskRunner {
     if (mode === 'resume' && task.status !== TaskStatus.PAUSED) refuse(`this task is ${task.status}; use: task run ${shortId(task.id)}`);
 
     if (!continuing) {
-      const first = this.nextStep(task);
-      if (first.blocked) {
-        const s = first.blocked;
-        refuse(`step ${s.id} is ${s.status} and was not run again. Retry it only if it is read-only (task retry ${shortId(task.id)} ${s.id}); otherwise cancel the task (task cancel ${shortId(task.id)})`);
+      // Nothing is retried automatically, and nothing is approved on the owner's behalf. A task that
+      // holds a failed or uncertain step refuses to be run again until that step is retried (which
+      // is allowed for a read-only step only), and a task that holds a step awaiting approval refuses
+      // to run until the owner decides. Both refusals name the step, because the owner's next command
+      // is the one that changes it.
+      const stopped = task.steps.find((s) => s.status === StepStatus.FAILED || s.status === StepStatus.UNCERTAIN);
+      if (stopped) {
+        refuse(`step ${stopped.id} is ${stopped.status} and was not run again. Retry it only if it is read-only (task retry ${shortId(task.id)} ${stopped.id}); otherwise cancel the task (task cancel ${shortId(task.id)})`);
       }
-      if (first.step && first.step.status === StepStatus.AWAITING_APPROVAL) {
-        refuse(`step ${first.step.id} needs your approval: task approve ${shortId(task.id)} --step ${first.step.id}`);
+      // T-34 Step 1: which waiting step makes a run premature. A step that could run now is exactly the
+      // decision a resume must not stand in for, and it is still refused. A step that is itself blocked
+      // by an unfinished branch cannot be run by anything here, so a resume that leaves it alone -
+      // and finishes the sibling branch that needs no decision - is not an approval of it.
+      const waiting = task.steps.find((s) => s.status === StepStatus.AWAITING_APPROVAL && unmetDependencies(task, s.id).length === 0);
+      if (waiting) {
+        refuse(`step ${waiting.id} needs your approval: task approve ${shortId(task.id)} --step ${waiting.id}`);
       }
     }
 
@@ -159,6 +187,9 @@ export class TaskRunner {
     // ran and was verified must not be reported as an execution that failed. The process
     // is still alive here, so this is a record that refused a write, not a lost process.
     const executedSteps = [];
+    // The steps that failed or could not be established in this run, in the order they did. The task
+    // state at the end is decided from the records; this list is what the run reports it saw.
+    const failedSteps = [];
     try {
       for (;;) {
         task = await this.#task(taskId);
@@ -209,16 +240,21 @@ export class TaskRunner {
 
         const skip = dependentsOf(task.steps, next.id).filter((id) => byId.get(id).status === StepStatus.PENDING);
         await this.#transition(task.id, `${next.id} ${result.step}: ${truncate(step.summary, 200)}`, {
-          // A continuation records the step that stopped and stops taking up that branch; it does
-          // not move the task, because the run is going on with the steps that never began. The task
-          // state is written once, at the end, from what the records then hold. A first run keeps its
-          // own rule and moves the task to the failure state here, exactly as it did before.
+          // T-34 Step 1: the dependents of the failed node are marked skipped (the state a retry of
+          // this step returns to pending), so the join they feed is blocked by name and retrying this
+          // step unblocks it without re-running anything already verified. The task state is written
+          // once, here, from what the records then hold: a first run or a resume stops on the failure
+          // exactly as it did before, while a continuation records the step and stops taking up that
+          // branch without moving the task, because it is going on with the steps that never began.
           task: continuing ? null : { from: TaskStatus.RUNNING, to: result.task },
           steps: [
             { id: next.id, from: StepStatus.RUNNING, to: result.step, outcome: step.outcome, summary: truncate(step.summary, 300), operationId },
             ...skip.map((id) => ({ id, from: StepStatus.PENDING, to: StepStatus.SKIPPED, summary: `not run: depends on ${next.id}` })),
           ],
         });
+        failedSteps.push({ id: next.id, status: result.step, outcome: step.outcome ?? null });
+        // A continuation records it and reports what it did; a first run or a resume stops here. The
+        // steps it never reached stay pending, which is what makes them a continuation's work.
         if (!continuing) break;
       }
 
@@ -226,7 +262,16 @@ export class TaskRunner {
       if (task.status === TaskStatus.RUNNING) {
         const { completed, total } = progressOf(task);
         const leftBehind = task.steps.filter((s) => s.status === StepStatus.PENDING || s.status === StepStatus.AWAITING_APPROVAL);
-        if (continuing && leftBehind.length > 0) {
+        const awaiting = task.steps.filter((s) => s.status === StepStatus.AWAITING_APPROVAL);
+        const blocked = this.blockedNodes(task);
+        if (awaiting.length > 0) {
+          // T-34 Step 1: a step that needs the owner's decision pauses the task instead of failing it,
+          // even when other steps already ran. The waiting steps are named in the reason, because the
+          // owner's next act is to approve one of them.
+          await this.#transition(task.id, `paused awaiting the owner's approval of ${awaiting.map((s) => s.id).join(', ')}`, {
+            task: { from: TaskStatus.RUNNING, to: TaskStatus.PAUSED },
+          });
+        } else if (continuing && leftBehind.length > 0) {
           // Steps remain that this run did not take up, because their own records or a step they
           // depend on do not establish that they may be. That is neither a completed run nor a
           // stopped-through-failure run: it is the run paused with what it did written down.
@@ -234,7 +279,14 @@ export class TaskRunner {
             task: { from: TaskStatus.RUNNING, to: TaskStatus.PAUSED },
           });
         } else {
-          await this.#transition(task.id, completed === total ? 'all steps completed' : 'stopped with steps unfinished', {
+          const stopped = blocked.filter((node) => node.status !== 'pending' || node.blockedBy.length > 0);
+          await this.#transition(task.id, completed === total
+            ? 'all steps completed'
+            : `stopped: ${failedSteps.length > 0
+              ? `${failedSteps.map((step) => `${step.id} ${step.status}`).join(', ')}`
+              : 'no step could be taken up'}${stopped.length > 0
+              ? `; blocked: ${stopped.map((node) => `${node.id}${node.blockedBy.length ? ` by ${node.blockedBy.join(', ')}` : ''}`).join('; ')}`
+              : ''}`, {
             task: { from: TaskStatus.RUNNING, to: completed === total ? TaskStatus.COMPLETED : TaskStatus.FAILED },
           });
         }
@@ -257,6 +309,10 @@ export class TaskRunner {
       underlyingStatus: outcome.status,
       auditGaps,
       recovery,
+      // T-34 Step 1: the branch view. A reader needs to know not only what ran but which nodes the
+      // records now leave blocked, and by which dependency.
+      failedSteps,
+      blocked: this.blockedNodes(task),
       // Which steps this run itself executed, in order. A continuation reports it, because the
       // claim a reader needs after a partial run is not "it resumed" but "these steps ran now, and
       // these were left where their records hold them".

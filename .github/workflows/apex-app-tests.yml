@@ -1,16 +1,12 @@
-name: APEX Local Alpha Tests
+name: APEX Local Alpha Checks
 
+# T-30 (2026-11-19): supersedes the earlier path-filtered trigger. Every push to main now
+# runs the source/client syntax guard and full APEX test suite, including repository-wide edits.
 on:
   push:
     branches: [main]
-    paths:
-      - "apex_app/**"
-      - ".github/workflows/apex-app-tests.yml"
   pull_request:
     branches: [main]
-    paths:
-      - "apex_app/**"
-      - ".github/workflows/apex-app-tests.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +20,7 @@ jobs:
   test:
     name: Node.js test suite
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -34,6 +30,356 @@ jobs:
           node-version: 22
       - name: Verify Node.js version
         run: node --version
-      - name: Run APEX tests
+      - name: Install development dependencies only
         working-directory: apex_app
-        run: npm test
+        run: npm ci --ignore-scripts
+      - name: Check source files and extracted UI client
+        working-directory: apex_app
+        run: npm run test:syntax
+      - name: Run the full APEX test suite
+        working-directory: apex_app
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/apex-test.log"
+      # T-31 Step 1 (2026-11-19): the real-browser verification. This job is the reason the step
+      # exists - the runner ships /usr/bin/microsoft-edge, so the suite launches a real Chromium
+      # build rather than skipping. The resolver in src/ui/browser-binary.js picks the binary and
+      # the summary below records exactly which one ran.
+      - name: Real-browser verification (system Edge/Chromium, headless)
+        # It runs even when the Node suite failed: the browser evidence is worth having on a red
+        # run too, and a skip here must mean "no browser", not "an earlier step failed".
+        if: ${{ !cancelled() }}
+        id: browser
+        working-directory: apex_app
+        run: |
+          set -o pipefail
+          node node_modules/playwright/cli.js test --reporter=list 2>&1 | tee "$RUNNER_TEMP/t31-browser.log"
+      # The browser result, the viewports and each screenshot's real dimensions, as one annotation
+      # this environment can read without downloading the job log.
+      - name: Publish the real-browser result
+        if: always()
+        shell: bash
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, re, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          log = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.log')
+          text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
+          match = re.search(r'^T31_BROWSER_SUMMARY (\{.*\})$', text, re.M)
+          parts = [f'step={outcome}']
+          if not match:
+              skipped = re.search(r'(\d+) skipped', text)
+              parts.append('no browser summary was printed')
+              if skipped:
+                  parts.append(f'{skipped.group(1)} test(s) skipped (no Chromium-family binary on the runner)')
+          else:
+              data = json.loads(match.group(1))
+              parts.append(f"browser={data['browserVersion']}")
+              parts.append(f"executable={data['resolved']['executable']} ({data['resolved']['source']})")
+              for viewport in data['viewports']:
+                  console_errors = viewport.get('errors', {}).get('console', [])
+                  page_errors = viewport.get('errors', {}).get('page', [])
+                  errors = len(console_errors) + len(page_errors)
+                  line = (
+                      f"{viewport['viewport']['width']}x{viewport['viewport']['height']}: core={viewport.get('core')} "
+                      f"overflow={viewport['overflow']['scrollWidth']}<={viewport['overflow']['clientWidth']} errors={errors}"
+                  )
+                  # The first error is quoted: a count alone cannot be acted on, and the browser log
+                  # is the only place the client's own message appears.
+                  if errors:
+                      first = (console_errors + page_errors)[0]
+                      line += ' firstError=' + str(first)
+                  parts.append(line)
+              for shot in data['screenshots']:
+                  parts.append(f"{shot['file']} {shot['width']}x{shot['height']} {shot['bytes']}B")
+              parts.append('checks=' + json.dumps(data.get('checks', {}), sort_keys=True))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          level = 'notice' if outcome == 'success' else 'error'
+          print(f'::{level} title=real-browser-verification::{message[:60000]}')
+          PY
+      # T-32 Step 2 (2026-11-19): the HUD experience result. Reticle posture per Core state, the
+      # plane ordering, the contrast audit totals, the focus traversal and the acknowledgement
+      # latency, plus every PNG the artifact holds, as one annotation.
+      - name: Publish the HUD experience result
+        if: always()
+        shell: bash
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, re, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          log = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.log')
+          text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
+          match = re.search(r'^T32_HUD_SUMMARY (\{.*\})$', text, re.M)
+          parts = [f'hud-step={outcome}']
+          if not match:
+              parts.append('no HUD summary was printed (the browser suite did not reach the T-32 file)')
+          else:
+              data = json.loads(match.group(1))
+              parts.append(f"browser={data.get('browserVersion')}")
+              reticle = data.get('reticle') or {}
+              for state in ('idle', 'awaiting_approval', 'degraded', 'lockdown'):
+                  posture = reticle.get(state) or {}
+                  parts.append(
+                      f"reticle[{state}]: stroke={posture.get('stroke')} weight={posture.get('weight')} "
+                      f"dash={posture.get('dash')} animation={posture.get('animationName')}"
+                  )
+              planes = data.get('planes') or {}
+              for viewport, table in planes.items():
+                  parts.append(f"planes[{viewport}]: " + ', '.join(
+                      f"{plane}={sorted(set(entry.get('zIndexes') or []))}" for plane, entry in sorted(table.items())
+                  ))
+              audits = data.get('contrast') or []
+              violations = sum(entry.get('violations') or 0 for entry in audits)
+              checks = sum(entry.get('checked') or 0 for entry in audits)
+              parts.append(f'contrast: {checks} text runs checked, {violations} violations')
+              if violations:
+                  first = next((entry for entry in audits if entry.get('violations')), None)
+                  parts.append('firstContrastFailure=' + json.dumps(first, sort_keys=True))
+              keyboard = data.get('keyboard') or {}
+              if keyboard:
+                  parts.append('ackMs=' + str(keyboard.get('inPageAckMs')) + ' inputBeforeTabs=' + str(keyboard.get('inputBeforeTabs')))
+                  parts.append('tabStops=' + ' > '.join(keyboard.get('stops') or []))
+                  parts.append('escapeTo=' + str(keyboard.get('escapeTo')))
+              motion = data.get('motion') or {}
+              if motion:
+                  parts.append('motion=' + json.dumps(motion, sort_keys=True))
+              failures = data.get('failures') or []
+              for failure in failures:
+                  parts.append(f"FAILED {failure.get('title')} :: {failure.get('message')}")
+              shots = data.get('screenshots') or []
+              parts.append(f'artifact: {len(shots)} PNG(s) under apex_app/reports/screenshots/t32')
+              for shot in shots:
+                  parts.append(f"{shot['state']} {shot['viewport']} {shot['bytes']}B")
+          # The short failure line first, in its own annotation, so it survives any truncation of
+          # the long summary below.
+          level = 'notice' if outcome == 'success' else 'error'
+          short = re.search(r'^T32_FAILURES (\{.*\})$', text, re.M)
+          if short:
+              detail = short.group(1).replace('%', '%25').replace('\r', '')
+              print(f'::{level} title=hud-failures::{detail[:4000]}')
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=hud-experience::{message[:60000]}')
+          PY
+
+      # The Playwright failure text, not only my summary of it: a failed browser run has to be
+      # actionable from the checks API alone, because the job log sits behind a download.
+      - name: Publish the browser failure detail
+        if: always()
+        shell: bash
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import os, re, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          log = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.log')
+          text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
+          wanted = re.compile(r'(\u2718|\u00d7|Error:|error:|Expected|Received|Timeout|waiting for|locator|spec\.mjs:\d+)')
+          lines = [line.strip() for line in text.splitlines() if wanted.search(line)]
+          detail = ' ~ '.join(lines[:60]) if lines else 'no failure lines were logged'
+          message = detail.replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          level = 'notice' if outcome == 'success' else 'error'
+          print(f'::{level} title=browser-failures::{message[:30000]}')
+          PY
+
+      # T-33 Step 4 (2026-11-19): the executive-loop walk publishes its own one-line annotation. The
+      # summary is written by the spec itself from what the page and the API answered, so the
+      # annotation states which of the seven checkpoints ran, or that no browser ran at all.
+      - name: Publish the T-33 executive-loop result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't33-executive-loop.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t33-executive-loop::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          steps = [step.get('id') for step in run.get('steps', [])]
+          shots = len(run.get('screenshots', []))
+          failures = run.get('failures', [])
+          facts = run.get('facts') or {}
+          core = (facts.get('state') or {}).get('body', {}).get('coreReading')
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"checkpoints {len(steps)}: {','.join(str(name) for name in steps) or 'none'}",
+              f"screenshots {shots}",
+              f"core at end {core or 'not read'}",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t33-executive-loop::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-34 Step 4 (2026-11-19): the mission-DAG walk publishes its own one-line annotation, written by
+      # the spec from what the page and the API answered: the shape it saw, the checkpoints it reached
+      # and whether the join was held before it ran.
+      - name: Publish the T-34 mission-DAG result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't34-mission-dag.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t34-mission-dag::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          steps = [step.get('id') for step in run.get('steps', [])]
+          shots = len(run.get('screenshots', []))
+          failures = run.get('failures', [])
+          facts = run.get('facts') or {}
+          graph = ((facts.get('missionGraph') or {}).get('body') or {})
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"checkpoints {len(steps)}: {','.join(str(name) for name in steps) or 'none'}",
+              f"screenshots {shots}",
+              f"mission {graph.get('status') or 'not read'} verified {graph.get('verified')}",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t34-mission-dag::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-35 Step 4 (2026-11-19): the step-down / handoff / doctor walk publishes its own annotation,
+      # written by the spec from what the browser and the API answered: which rungs of the ladder were
+      # walked, whether the flash guard held, and whether the handoff and the doctor were real.
+      - name: Publish the T-35 step-down, handoff and doctor result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't35-stepdown-handoff-doctor.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t35-stepdown-handoff-doctor::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          steps = [step.get('id') for step in run.get('steps', [])]
+          shots = len(run.get('screenshots', []))
+          failures = run.get('failures', [])
+          stages = run.get('stages') or {}
+          guard = run.get('flashGuard') or {}
+          handoff = run.get('handoff') or {}
+          doctor = run.get('doctor') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"checkpoints {len(steps)}: {','.join(str(name) for name in steps) or 'none'}",
+              f"screenshots {shots}",
+              f"stages walked {','.join(str(key) for key in stages if str(key) != 'auto') or 'none'} (auto {stages.get('auto', {}).get('auto') if isinstance(stages.get('auto'), dict) else 'not read'})",
+              f"flash guard {guard.get('animations', 'not measured')} animation(s), {guard.get('violations', 'n/a')} violation(s)",
+              f"handoff {handoff.get('id') or 'none'} digest {str(handoff.get('digest') or '')[:12]} matched {handoff.get('digestMatchedAfterClaim')}",
+              f"doctor {doctor.get('status') or 'not run'} in {doctor.get('durationMs')} ms of 500 (within budget {doctor.get('withinBudget')})",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t35-stepdown-handoff-doctor::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-36 Step 4 (2026-11-21): the cold boot on an unseeded workstation publishes its own
+      # annotation. Unlike every other browser suite, this one starts from an empty temporary data
+      # directory and a fresh temporary git repository, so what it reports - the host reading, the
+      # branch and head, the enrolled workstation - was produced by the bootstrap during the walk.
+      - name: Publish the T-36 cold-boot result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't36-cold-boot-unseeded.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t36-cold-boot-unseeded::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          unseeded = run.get('unseeded') or {}
+          cold = run.get('coldBoot') or {}
+          core = run.get('core') or {}
+          telemetry = run.get('telemetry') or {}
+          workspace = run.get('workspace') or {}
+          device = run.get('device') or {}
+          briefing = run.get('briefing') or {}
+          doctor = run.get('doctor') or {}
+          cognition = run.get('cognition') or {}
+          overflow = run.get('overflow') or {}
+          failures = run.get('failures', [])
+          rows = cold.get('rows') or []
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"unseeded entries {len(unseeded.get('entries') or [])} marker={unseeded.get('bootstrapMarker')} devices={unseeded.get('deviceRegistry')}",
+              f"boot rows {len(rows)}: {','.join(str(row.get('id')) + '=' + str(row.get('state')) for row in rows) or 'none'}",
+              f"dormant {cold.get('dormantSeen')} landing {core.get('landing')} trail {'>'.join(str(state) for state in core.get('trail') or [])}",
+              f"host {telemetry.get('host', {}).get('cpu')} cpu / {round((telemetry.get('host', {}).get('memoryTotalBytes') or 0) / 1073741824, 1)} GiB",
+              f"workspace {workspace.get('branch')}@{workspace.get('head')} (repo {workspace.get('expected', {}).get('branch')}@{workspace.get('expected', {}).get('head')})",
+              f"device {device.get('deviceId')} {device.get('status')} enrolled {device.get('enrolled')}",
+              f"briefing facts {','.join(str(kind) for kind in briefing.get('facts') or []) or 'none'}",
+              f"doctor {doctor.get('passing')}/{doctor.get('total')} pass in {doctor.get('durationMs')} ms (within budget {doctor.get('withinBudget')})",
+              f"cognition {cognition.get('runStatus')} task {cognition.get('taskId')} approvals {cognition.get('approvalCount')}",
+              f"overflow {overflow.get('scrollWidth')}<={overflow.get('clientWidth')}",
+              f"screenshots {len(run.get('screenshots') or [])}",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure.get('message')) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t36-cold-boot-unseeded::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      - name: Keep the browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t31-t32-real-browser
+          path: |
+            apex_app/reports/screenshots
+            apex_app/test-results/playwright
+            apex_app/reports/screenshots/t32
+            apex_app/reports/screenshots/t33
+            apex_app/reports/screenshots/t34
+            apex_app/reports/t33-executive-loop.json
+            apex_app/reports/t34-mission-dag.json
+            apex_app/reports/screenshots/t35
+            apex_app/reports/t35-stepdown-handoff-doctor.json
+            apex_app/reports/screenshots/t36
+            apex_app/reports/t36-cold-boot-unseeded.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      # T-30 S4 (2026-11-19): a red run's log lives behind a download this environment cannot
+      # reach, so the failing test names are echoed as one annotation, which the checks API can be
+      # read back without fetching the log.
+      - name: Report failing tests
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/apex-test.log"
+          summary="no test log was written"
+          if [ -f "$log" ]; then
+            summary="$(grep -E '^[[:space:]]*not ok [0-9]+' "$log" | head -30 | sed 's/^[[:space:]]*//' | paste -sd ' | ' -)"
+            [ -n "$summary" ] || summary="the suite failed without a 'not ok' line"
+          fi
+          summary="${summary//$'\n'/ }"
+          echo "::error title=apex-test-failures::${summary:0:30000}"
+          # The assertion text is what identifies the cause, so it is flattened into a second
+          # annotation next to the names above.
+          details=""
+          if [ -f "$log" ]; then
+            details="$(grep -E '^[[:space:]]*not ok [0-9]+|error:|Expected|actual:|expected:|stack:' "$log" | head -120 | sed 's/^[[:space:]]*//' | paste -sd ' ~ ' -)"
+          fi
+          details="${details//$'\n'/ }"
+          echo "::error title=apex-test-details::${details:0:30000}"

@@ -11,12 +11,19 @@ function safeNumber(value, fallback = null) {
 }
 
 export class ResourceFabric {
-  constructor({ now = () => new Date(), statfs = fs.promises.statfs, totalMemory = os.totalmem, freeMemory = os.freemem, cpus = os.cpus } = {}) {
+  constructor({
+    now = () => new Date(), statfs = fs.promises.statfs, totalMemory = os.totalmem,
+    freeMemory = os.freemem, cpus = os.cpus,
+    // T-35 Step 1: the load average the visual step-down ladder reads. It is injected like every
+    // other source here so a test can state a strained machine without loading one.
+    loadAverage = os.loadavg,
+  } = {}) {
     this.now = now;
     this.statfs = statfs;
     this.totalMemory = totalMemory;
     this.freeMemory = freeMemory;
     this.cpus = cpus;
+    this.loadAverage = loadAverage;
     this.reservations = new Map();
   }
 
@@ -38,10 +45,27 @@ export class ResourceFabric {
         storage.push({ path: target, availableBytes: null, totalBytes: null, reported: false, reason: 'UNAVAILABLE' });
       }
     }
+    // T-35 Step 1: the one-minute load average, read here so the fabric remains the sole owner of
+    // machine telemetry. An unreadable load average is null, never zero: zero would be a claim that
+    // the machine is idle.
+    const load = (() => {
+      try {
+        const values = this.loadAverage();
+        return Array.isArray(values) ? safeNumber(values[0]) : null;
+      } catch {
+        return null;
+      }
+    })();
+    const loadPerCpu1m = load !== null && logicalCpuCount ? load / logicalCpuCount : null;
     return Object.freeze({
       schema: RESOURCE_FABRIC_SCHEMA,
       at: this.now().toISOString(),
-      cpu: Object.freeze({ logicalCount: safeNumber(logicalCpuCount), available: logicalCpuCount !== null ? true : false }),
+      cpu: Object.freeze({
+        logicalCount: safeNumber(logicalCpuCount),
+        loadAverage1m: load,
+        loadPerCpu1m,
+        available: logicalCpuCount !== null ? true : false,
+      }),
       memory: Object.freeze({ totalBytes: totalMemory, freeBytes: freeMemory, available: totalMemory !== null && freeMemory !== null }),
       gpu: Object.freeze({ available: false, reported: false, reason: 'NO_GPU_METADATA_PROVIDER' }),
       network: Object.freeze({ available: null, reported: false, reason: 'NO_NETWORK_TELEMETRY_PROVIDER' }),
