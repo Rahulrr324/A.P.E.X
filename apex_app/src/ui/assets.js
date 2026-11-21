@@ -29,6 +29,18 @@ export const UI_PAGE = `<!doctype html>
   <div class="boot-lines" id="boot-lines"></div>
   <button id="boot-skip" type="button" class="quiet">Quick boot</button>
 </div>
+<!-- T-36 Step 2 (2026-11-21): Part 4 Screen #1 - the HUD boot sequence. It is the opening
+     screen of a workstation that has not been set up yet: one message - the system waking and
+     verifying readiness - over the six subsystems it actually checks. It is a panel and not a
+     modal: it never takes focus, it never covers the emergency controls, and Escape dismisses
+     it. Every line in it is a measured value; nothing here is a stage direction. -->
+<div id="hud-boot-sequence" class="hud-boot" role="region" aria-labelledby="hud-boot-message" hidden>
+  <div class="hud-boot-panel">
+    <p class="hud-boot-message" id="hud-boot-message">System waking and verifying readiness</p>
+    <ol class="hud-boot-steps" id="hud-boot-steps"></ol>
+    <button id="hud-boot-dismiss" type="button" class="quiet small">Skip &middot; dismiss (Esc)</button>
+  </div>
+</div>
 <header class="topbar">
   <div class="brand">
     <div class="brand-mark" aria-hidden="true">A</div>
@@ -79,6 +91,9 @@ export const UI_PAGE = `<!doctype html>
     </select>
     <button id="new-session" type="button" class="quiet small">New session</button>
     <button id="quick-boot" type="button" class="quiet small">Quick boot</button>
+    <!-- T-36 Step 2: the owner can replay the cold-start sequence on a machine that is already
+         set up. It is the same governed bootstrap, so it refreshes rather than re-creates. -->
+    <button id="boot-sequence-run" type="button" class="quiet small">Run Boot Sequence</button>
   </div>
 </header>
 <!-- T-32 Step 1: the command dispatch lives in its own bar between the top bar and the workspace
@@ -967,6 +982,39 @@ body[data-motion="reduced"] .core, body[data-motion="reduced"] .core-halo { anim
 .boot-lines { font-family: var(--font-mono); color: var(--muted); max-width: 36rem; width: 100%; }
 .boot-lines div { padding: .2rem 0; }
 
+/* T-36 Step 2 (2026-11-21): the boot sequence panel. It is deliberately NOT a full-screen
+   blocker: the backdrop takes no pointer events and the panel sits in the lower-left corner, so
+   the emergency controls above it stay clickable while the machine wakes. The hidden attribute is
+   used rather than a class, so the element is out of the tab order entirely while it is away. */
+.hud-boot {
+  position: fixed; inset: 0; z-index: 60; pointer-events: none;
+  display: flex; align-items: flex-end; justify-content: flex-start;
+  padding: 1.25rem;
+}
+.hud-boot[hidden] { display: none; }
+.hud-boot-panel {
+  pointer-events: auto;
+  background: rgba(9, 16, 28, 0.96);
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  border-radius: 4px;
+  padding: 1rem 1.25rem;
+  max-width: 34rem;
+  width: 100%;
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.55);
+}
+.hud-boot-message { font-family: var(--font-mono); color: var(--cyan); letter-spacing: .04em; margin: 0 0 .6rem; }
+.hud-boot-steps { list-style: none; margin: 0 0 .75rem; padding: 0; font-family: var(--font-mono); font-size: .82rem; }
+.hud-boot-steps li { display: flex; gap: .6rem; align-items: baseline; padding: .16rem 0; color: var(--muted); }
+.hud-boot-steps li[data-boot-state="ok"] { color: var(--text); }
+.hud-boot-steps li[data-boot-state="degraded"] { color: var(--gold); }
+.hud-boot-steps li[data-boot-state="failed"] { color: var(--red); }
+.hud-boot-steps li[data-boot-state="unavailable"] { color: var(--text-dim); }
+.hud-boot-steps li .boot-step-label { min-width: 11rem; }
+.hud-boot-steps li .boot-step-detail { flex: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .hud-boot-panel { transition: none !important; animation: none !important; }
+}
+
 /* T-35 Step 1 (2026-11-19): Part 4's visual step-down ladder and its flash guard.
    The ladder is a declaration, not a guess: src/ui/hud.js owns the table, the page writes the stage
    onto <body> as data-stepdown-stage, and each dropped layer is a data-hud-* attribute the rules
@@ -1232,6 +1280,12 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   bootLines: document.getElementById('boot-lines'),
   bootSkip: document.getElementById('boot-skip'),
   quickBoot: document.getElementById('quick-boot'),
+  // T-36 Step 2: the HUD boot sequence - the opening screen of a workstation that has not been
+  // set up yet.
+  bootSequence: document.getElementById('hud-boot-sequence'),
+  bootSequenceSteps: document.getElementById('hud-boot-steps'),
+  bootSequenceDismiss: document.getElementById('hud-boot-dismiss'),
+  bootSequenceRun: document.getElementById('boot-sequence-run'),
   missions: document.getElementById('missions-list'),
   taskgraph: document.getElementById('taskgraph'),
   sentinel: document.getElementById('sentinel'),
@@ -1280,6 +1334,9 @@ const state = {
   contrast: 'standard',
   cognitionInFlight: false,
   lastCognitionRun: null,
+  // T-36 Step 2: the boot sequence. While it is active the Core is held in Dormant, because a
+  // deck that is still verifying its own readiness is not Idle and not Degraded.
+  bootSequence: { active: false, running: false, dismissed: false, startedAt: null, steps: [], triggered: false, report: null, error: null },
 };
 let eventStreamDegraded = false;
 
@@ -1448,6 +1505,15 @@ function applyCoreProjection(reason = '') {
     stateReadAvailable: state.stateReadAvailable,
     thinking: state.thinking,
   });
+  // T-36 Step 2: while the boot sequence is running the Core is Dormant. The machine is still
+  // verifying its own readiness, and a deck that is waking is not Idle, not Degraded and not
+  // Awaiting Approval. The owners' states are still rendered; only the Core's own claim waits.
+  if (state.bootSequence.active) {
+    state.core = 'dormant';
+    document.body.dataset.coreState = 'dormant';
+    renderSafety();
+    return 'dormant';
+  }
   setCore(next, coreCaptionFor(next, reason));
   renderSafety();
   return next;
@@ -3792,6 +3858,15 @@ async function refresh() {
         els.sensorPrivacy.textContent = 'Sensors: not reported by this server';
       }
     }
+    // T-36 Step 2: a data directory that has never been bootstrapped opens on the boot sequence.
+    // This is the opening screen of a workstation that has not been set up yet, and it is what
+    // the owner's first window shows. The flag makes it once-only: the sequence is not replayed
+    // on every refresh.
+    if (snapshot.system && snapshot.system.bootstrap && snapshot.system.bootstrap.bootstrapped === false
+      && state.bootSequence.triggered !== true) {
+      state.bootSequence.triggered = true;
+      runBootSequence({ trigger: 'unseeded data directory' });
+    }
   } else {
     const reason = stateResult.error || 'the authoritative state read failed';
     setWorkspaceStatus(els.conversationStatus, (stateResult.status >= 500 ? 'Unavailable: ' : 'Read error: ') + reason,
@@ -4261,6 +4336,8 @@ document.addEventListener('keydown', (event) => {
   }
   if (event.key === 'Escape') {
     dismissCommandDispatch();
+    // T-36 Step 2: Escape also dismisses the boot sequence. The overlay never traps the owner.
+    if (state.bootSequence.active) dismissBootSequence();
     return;
   }
   if (event.ctrlKey || event.metaKey) return;
@@ -4275,6 +4352,192 @@ document.addEventListener('keydown', (event) => {
     focusCommandDispatch();
   }
 });
+
+// T-36 Step 2 (2026-11-21): Part 4 Screen #1 - the HUD boot sequence.
+//
+// The Core starts Dormant and wakes through the six subsystems the workstation actually checks.
+// Nothing in the sequence is a stage direction: every line is a measured value that came back from
+// the server, and a value that could not be read says so.
+//
+// Three properties the walk checks, and that the code has to earn:
+//   * it never traps focus - the panel takes no pointer events outside itself, nothing inside it is
+//     focused automatically, and the emergency controls stay clickable while it is up;
+//   * Escape dismisses it immediately, and dismissing it leaves the deck in its authoritative state;
+//   * with prefers-reduced-motion the transition is instant - no reveal delay, no animation.
+const BOOT_SEQUENCE_SUBSYSTEMS = Object.freeze([
+  { id: 'safety_latch', label: 'Safety Latch' },
+  { id: 'ecp_authority', label: 'ECP Authority' },
+  { id: 'resource_fabric', label: 'Resource Fabric' },
+  { id: 'git_workspace', label: 'Git Workspace' },
+  { id: 'device_trust', label: 'Device Trust' },
+  { id: 'executive_briefing', label: 'Executive Briefing' },
+]);
+const BOOT_SEQUENCE_STEP_DELAY_MS = 140;
+
+function bootWait(ms) {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+function bootRevealDelay() {
+  // Reduced motion means the state changes without an animation delay. The values are the same;
+  // only the pacing is gone.
+  return state.reducedMotion ? 0 : BOOT_SEQUENCE_STEP_DELAY_MS;
+}
+
+// A doctor's check state is the state of the subsystem it checked: 'pass' is ok, 'degraded' is
+// degraded, 'failed' is failed, and 'not_configured' is unavailable - a check with nothing to
+// look at is never reported as a success.
+function bootStateOf(checkState) {
+  if (checkState === 'pass') return 'ok';
+  if (checkState === 'degraded') return 'degraded';
+  if (checkState === 'failed') return 'failed';
+  return 'unavailable';
+}
+
+function renderBootSequenceSteps(steps) {
+  if (!els.bootSequenceSteps) return;
+  els.bootSequenceSteps.replaceChildren();
+  for (const def of BOOT_SEQUENCE_SUBSYSTEMS) {
+    const entry = steps.find((candidate) => candidate.id === def.id) ?? null;
+    const li = el('li');
+    li.dataset.bootStep = def.id;
+    li.dataset.bootState = entry ? entry.state : 'pending';
+    li.append(el('span', 'boot-step-label', def.label));
+    li.append(el('span', 'boot-step-detail', entry ? entry.detail : 'waiting'));
+    els.bootSequenceSteps.append(li);
+  }
+}
+
+function bootStepDetail(state, detail) {
+  return String(detail ?? '').slice(0, 160);
+}
+
+// The sequence proper. It runs the doctor read first - the safety latch and the ECP authority
+// are known before anything is written - and then the governed bootstrap, which does the reading,
+// the enrollment and the briefing.
+async function runBootSequence({ trigger = 'manual' } = {}) {
+  if (state.bootSequence.running) return null;
+  state.bootSequence.running = true;
+  state.bootSequence.active = true;
+  state.bootSequence.dismissed = false;
+  state.bootSequence.steps = [];
+  // The Core is Dormant for as long as the machine is waking. It is not Idle and it is not
+  // Degraded: the deck has not finished verifying its own readiness.
+  document.body.dataset.coreState = 'dormant';
+  if (els.coreCaption) els.coreCaption.textContent = 'The system is waking and verifying readiness.';
+  if (els.bootSequence) els.bootSequence.hidden = false;
+  renderBootSequenceSteps([]);
+  const revealed = [];
+  const reveal = async (step) => {
+    revealed.push(step);
+    state.bootSequence.steps = revealed.slice();
+    renderBootSequenceSteps(revealed);
+    if (state.bootSequence.dismissed) return;
+    // Reduced motion means no delay at all - not a zero-length timer. The values are identical.
+    const delay = bootRevealDelay();
+    if (delay > 0) await bootWait(delay);
+  };
+
+  try {
+    const doctor = await readApi('/api/system/doctor');
+    const doctorChecks = doctor.ok === true && Array.isArray(doctor.value?.checks) ? doctor.value.checks : [];
+    const latch = doctorChecks.find((entry) => entry.name === 'safety_latch') ?? null;
+    const authority = doctorChecks.find((entry) => entry.name === 'ecp_authority') ?? null;
+    await reveal({
+      id: 'safety_latch',
+      state: doctor.ok === true ? bootStateOf(latch?.state) : 'unavailable',
+      detail: doctor.ok === true
+        ? bootStepDetail(latch?.state, latch?.summary ?? 'the latch state was not reported')
+        : 'the doctor could not be read: ' + bootStepDetail(null, doctor.error),
+    });
+    await reveal({
+      id: 'ecp_authority',
+      state: doctor.ok === true ? bootStateOf(authority?.state) : 'unavailable',
+      detail: doctor.ok === true
+        ? bootStepDetail(authority?.state, authority?.summary ?? 'the authority state was not reported')
+        : 'the doctor could not be read',
+    });
+
+    let report = null;
+    let failure = null;
+    try {
+      report = await api('/api/system/bootstrap', { method: 'POST', body: { reason: 'HUD boot sequence (' + trigger + ')' } });
+    } catch (error) {
+      failure = String(error?.message || error);
+    }
+    const reading = report?.perception?.reading ?? null;
+    const workspace = reading?.workspace ?? null;
+    const device = report?.device ?? null;
+    const briefing = report?.briefing ?? null;
+    const resourceFact = Array.isArray(briefing?.facts) ? briefing.facts.find((fact) => fact.kind === 'resource') : null;
+
+    await reveal({
+      id: 'resource_fabric',
+      state: report ? (reading ? 'ok' : 'degraded') : 'failed',
+      detail: report
+        ? bootStepDetail(null, reading
+          ? (reading.host?.cpu?.logicalCount ?? 'unavailable') + ' CPU · '
+            + Math.round((reading.host?.memory?.freeBytes ?? 0) / 1048576) + '/'
+            + Math.round((reading.host?.memory?.totalBytes ?? 0) / 1048576) + ' MB free'
+          : resourceFact?.text ?? 'the host reading was not recorded')
+        : bootStepDetail(null, failure ?? 'the bootstrap failed'),
+    });
+    await reveal({
+      id: 'git_workspace',
+      state: report ? (workspace?.available === true ? 'ok' : 'unavailable') : 'failed',
+      detail: report
+        ? bootStepDetail(null, workspace?.available === true
+          ? (workspace.branch ?? 'detached') + ' at ' + (workspace.head ?? '(no head)')
+          : 'unavailable (' + (workspace?.reason ?? 'no reason recorded') + ')')
+        : 'the bootstrap did not complete',
+    });
+    await reveal({
+      id: 'device_trust',
+      state: report ? (device?.deviceId ? 'ok' : 'degraded') : 'failed',
+      detail: report
+        ? bootStepDetail(null, device?.deviceId
+          ? device.deviceId + ' (' + (device.status ?? 'unknown') + ')'
+          : device?.detail ?? 'no device was enrolled')
+        : 'the bootstrap did not complete',
+    });
+    await reveal({
+      id: 'executive_briefing',
+      state: report ? (briefing ? 'ok' : 'degraded') : 'failed',
+      detail: report
+        ? bootStepDetail(null, briefing?.concise ?? 'no briefing was compiled')
+        : 'the bootstrap did not complete',
+    });
+    state.bootSequence.report = report ?? null;
+    state.bootSequence.error = failure ?? null;
+  } finally {
+    state.bootSequence.running = false;
+    // The Core returns to its authoritative state: whatever the owners say, not what the boot
+    // screen hoped for. A lockdown latch still reads as Lockdown.
+    state.bootSequence.active = false;
+    dismissBootSequence();
+    await refresh();
+  }
+  return state.bootSequence.report ?? null;
+}
+
+// Dismissing the overlay never leaves the deck in a made-up state. It applies the authoritative
+// projection and lets the owners speak.
+function dismissBootSequence() {
+  state.bootSequence.active = false;
+  state.bootSequence.dismissed = true;
+  if (els.bootSequence) els.bootSequence.hidden = true;
+  if (els.coreCaption && document.body.dataset.coreState === 'dormant') {
+    els.coreCaption.textContent = 'The system is awake.';
+  }
+  applyCoreProjection('The boot sequence finished; the state below is the authoritative one.');
+}
+
+if (els.bootSequenceDismiss) {
+  els.bootSequenceDismiss.addEventListener('click', () => { dismissBootSequence(); });
+}
+if (els.bootSequenceRun) {
+  els.bootSequenceRun.addEventListener('click', () => { runBootSequence({ trigger: 'owner request' }); });
+}
 
 async function boot() {
   if (!els.boot) return;
@@ -4777,5 +5040,18 @@ setView('deck');
 connectEvents();
 refresh();
 boot();
+// T-36 Step 2: the boot overlay starts away. It is shown by the sequence and hidden again when the
+// sequence ends; nothing else may leave it on the page.
+if (els.bootSequence) els.bootSequence.hidden = true;
+// T-36 Step 2: ?boot=1 replays the cold-start sequence on demand, on a machine that is already
+// set up as well as on one that is not. It is the same governed bootstrap, so it refreshes the
+// readings rather than re-creating them.
+if (typeof window !== 'undefined' && window.location && window.location.search) {
+  const requested = new URLSearchParams(window.location.search).get('boot');
+  if (requested === '1') {
+    state.bootSequence.triggered = true;
+    runBootSequence({ trigger: 'owner request (?boot=1)' });
+  }
+}
 setInterval(refresh, 15000);
 `;

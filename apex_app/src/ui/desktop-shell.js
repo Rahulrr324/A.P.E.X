@@ -11,6 +11,12 @@
 // The shell also owns the lifecycle: it stops the server when the shell exits, on SIGINT and
 // on SIGTERM, so a closed window cannot leave a listening socket behind.
 //
+// T-36 Step 3 (2026-11-21): the shell now performs the cold-start bootstrap before it opens the
+// window, so the owner's very first launch shows a real machine and not an empty deck. The
+// bootstrap is the governed capability the ECP authorizes - the shell does not run it behind the
+// ECP's back, it asks the controller to run it, exactly as the HTTP route does. With
+// `--no-bootstrap` the shell skips it, and with the lockdown latch engaged it is refused.
+//
 // Everything the shell would do can be inspected without doing it: `plan()` returns the exact
 // launch specification, `launch({ dryRun: true })` returns it without spawning, and the spawner
 // is injectable, so the behaviour is testable on a machine with no browser installed.
@@ -68,12 +74,16 @@ export function createDesktopShell({
   readinessTimeoutMs = 15000,
   readinessIntervalMs = 100,
   log = () => {},
+  // T-36 Step 3: the cold-start bootstrap. It is on by default, it is idempotent, and it is
+  // skipped when the owner asks for `--no-bootstrap` or when the lockdown latch is engaged.
+  bootstrap = true,
 } = {}) {
   if (!app || typeof app !== 'object') throw new TypeError('the desktop shell needs an APEX application');
   let ui = null;
   let info = null;
   let child = null;
   let stopped = false;
+  let bootstrapReport = null;
   const resolvedProfile = profileDir ?? (typeof dataDir === 'string' && dataDir.length > 0
     ? path.join(dataDir, PROFILE_DIR_NAME)
     : null);
@@ -101,6 +111,53 @@ export function createDesktopShell({
       }
       await sleep(readinessIntervalMs);
     }
+  }
+
+  // T-36 Step 3: the cold start. The shell asks the controller to run the governed bootstrap, so
+  // the ECP authorizes it and the operation is audited. A locked-down system refuses the write and
+  // the shell says so rather than pretending the machine was set up.
+  async function runBootstrap({ reason = 'desktop shell cold start' } = {}) {
+    if (bootstrap === false) {
+      // A skipped bootstrap is still a reported outcome: the banner has to say that it was
+      // skipped and why, rather than leaving the row empty as though nothing had been decided.
+      bootstrapReport = { skipped: true, reason: 'the owner passed --no-bootstrap' };
+      return bootstrapReport;
+    }
+    const latch = (() => {
+      try {
+        return app.ecp?.killSwitchStatus?.() ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    if (latch && (latch.active === true || latch.policyUnavailable === true)) {
+      bootstrapReport = {
+        skipped: true,
+        reason: latch.active === true
+          ? 'lockdown is engaged, so the bootstrap was not attempted'
+          : 'the safety latch could not be read, so the bootstrap was not attempted',
+        lockdown: latch.active === true,
+      };
+      return bootstrapReport;
+    }
+    if (!app.controller || typeof app.controller.systemBootstrap !== 'function') {
+      bootstrapReport = { skipped: true, reason: 'this application does not carry the workstation bootstrap' };
+      return bootstrapReport;
+    }
+    const result = await app.controller.systemBootstrap({ reason });
+    const step = result?.operation?.steps?.[0] ?? null;
+    const report = step?.result?.data ?? null;
+    bootstrapReport = {
+      status: report?.status ?? result?.status ?? 'unknown',
+      verified: step?.verification?.outcome === 'success_verified',
+      checks: Array.isArray(report?.checks) ? report.checks.length : 0,
+      verifiedChecks: Array.isArray(report?.checks) ? report.checks.filter((entry) => entry.verified === true).length : 0,
+      doctor: report?.doctor ?? null,
+      device: report?.device?.deviceId ?? null,
+      workspace: report?.perception?.reading?.workspace?.branch ?? null,
+      headline: report?.detail ?? null,
+    };
+    return bootstrapReport;
   }
 
   async function start() {
@@ -150,13 +207,63 @@ export function createDesktopShell({
       profileDir: profile,
       spec,
       found: resolution.browser !== null,
+      bootstrap: bootstrapReport,
       diagnostic: resolution.browser
         ? null
         : 'No Chromium-family browser was found (Edge, Chrome or Chromium, or APEX_DESKTOP_BROWSER_BIN). The loopback interface is running; open the URL above in any browser.',
     };
   }
 
-  async function launch({ dryRun = false } = {}) {
+  // T-36 Step 3: the startup banner. It is a table, because a table is what a person reads at a
+  // glance, and every row is a measured value: the loopback URL, the binary that was resolved,
+  // the data directory, the doctor's own count and the autonomy profile the ECP holds.
+  function banner(planned) {
+    const doctor = planned.bootstrap?.doctor ?? null;
+    const doctorRow = doctor && Array.isArray(doctor.checks)
+      ? doctor.counts.pass + '/' + doctor.checks.length + ' ok (' + doctor.status + ')'
+      : 'not read';
+    let autonomy = 'not configured';
+    try {
+      const status = app.ecp?.autonomyStatus?.();
+      const configured = status && status.configured ? status.configured : {};
+      const entries = Object.entries(configured);
+      autonomy = entries.length
+        ? entries.map((entry) => entry[0] + '=' + entry[1]).join(', ')
+        : 'not configured';
+    } catch {
+      autonomy = 'unavailable';
+    }
+    const rows = [
+      ['Command Deck', planned.url],
+      ['Browser', planned.executable ?? 'none resolved (open the URL above)'],
+      ['Data directory', dataDir ?? 'not configured'],
+      ['Doctor', doctorRow],
+      ['Autonomy', autonomy],
+      ['Bootstrap', planned.bootstrap
+        ? (planned.bootstrap.skipped
+          ? 'skipped (' + planned.bootstrap.reason + ')'
+          : planned.bootstrap.status + ' · ' + planned.bootstrap.verifiedChecks + '/' + planned.bootstrap.checks + ' check(s) verified')
+        : 'not run'],
+    ];
+    const width = Math.max(...rows.map((row) => row[0].length));
+    const lines = ['APEX desktop shell ' + DESKTOP_SCHEMA];
+    for (const row of rows) {
+      lines.push('  ' + row[0].padEnd(width) + '  ' + String(row[1]));
+    }
+    return lines.join('\n');
+  }
+
+  async function launch({ dryRun = false, withBootstrap = true } = {}) {
+    // The shell's own `bootstrap` option is the single source of the decision; `withBootstrap`
+    // only lets a caller decline to attempt it at all, and either way the outcome is recorded so
+    // the banner can say what happened instead of leaving the row blank.
+    if (withBootstrap) {
+      const outcome = await runBootstrap();
+      if (outcome?.skipped) log('Bootstrap: ' + outcome.reason);
+      else if (outcome) log('Bootstrap: ' + outcome.status + ' · ' + outcome.verifiedChecks + '/' + outcome.checks + ' check(s) verified');
+    } else if (!bootstrapReport) {
+      bootstrapReport = { skipped: true, reason: 'the launch did not request the bootstrap' };
+    }
     const planned = await plan();
     if (dryRun) return { ...planned, spawned: false, dryRun: true };
     if (!planned.found) {
@@ -192,6 +299,8 @@ export function createDesktopShell({
     start,
     plan,
     launch,
+    runBootstrap,
+    banner,
     stop,
     status() {
       return {

@@ -211,7 +211,9 @@ export function createWorkstationBootstrap({
       return check('host_workspace_perception', 'Resource Fabric', 'failed', false,
         `the host reading was not verified: ${step.verification?.detail ?? step.summary ?? 'unknown'}`);
     }
-    const state = app.perception.state({ limit: 1 });
+    // The ledger is read with the full observation window, not with one entry: the question is how
+    // many values the reading produced, and the last entry alone would answer a different one.
+    const state = app.perception.state({ limit: 40 });
     const reading = state.lastReading;
     if (!reading) {
       return check('host_workspace_perception', 'Resource Fabric', 'degraded', false,

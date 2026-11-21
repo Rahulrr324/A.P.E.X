@@ -31,6 +31,7 @@ export const HELP = `${APP_NAME} - ${APP_EXPANSION} (${APP_STAGE} ${APP_VERSION}
 Usage:
   node bin/apex.js chat                  interactive conversation (same session across restarts)
   node bin/apex.js desktop [--dry-run] [--print-launch-spec] [--browser <path>] [--port <n>]
+                            [--bootstrap | --no-bootstrap]
                                          loopback UI in a thin Edge/Chrome/Chromium application frame (zero dependencies)
   node bin/apex.js ask [--save-answer] <request words...>
   node bin/apex.js new                   start a new conversation session
@@ -928,9 +929,18 @@ async function repairLocks({ app, out, err }) {
 // same loopback server and stops it on exit. `--dry-run` and `--print-launch-spec` resolve the
 // executable and print the exact command without starting a browser, which is how the behaviour
 // is verified on a machine with no Chromium installed.
+//
+// T-36 Step 3 (2026-11-21): the shell performs the cold-start bootstrap before it opens the
+// window, so a first launch on a new machine shows a real CPU count, a real git branch and an
+// enrolled local workstation. `--no-bootstrap` skips it; `--bootstrap` asks for it explicitly
+// (the bootstrap is idempotent, so asking twice is safe).
 async function runDesktopCommand(args, { app, env, out, err, platform = process.platform }) {
-  const { flags, rest } = parseFlags(args, ['dry-run', 'print-launch-spec', 'browser', 'port']);
-  rejectUnexpected(rest, 'desktop [--dry-run] [--print-launch-spec] [--browser <path>] [--port <n>]');
+  const { flags, rest } = parseFlags(args, ['dry-run', 'print-launch-spec', 'browser', 'port', 'bootstrap', 'no-bootstrap']);
+  rejectUnexpected(rest, 'desktop [--dry-run] [--print-launch-spec] [--browser <path>] [--port <n>] [--bootstrap|--no-bootstrap]');
+  if (flags.bootstrap === true && flags['no-bootstrap'] === true) {
+    throw new ValidationError('--bootstrap and --no-bootstrap cannot both be given', 'USAGE');
+  }
+  const wantBootstrap = flags['no-bootstrap'] === true ? false : true;
   let port = null;
   if (flags.port !== undefined) {
     if (!/^\d+$/.test(String(flags.port)) || Number(flags.port) > 65535) {
@@ -942,10 +952,16 @@ async function runDesktopCommand(args, { app, env, out, err, platform = process.
     ? null
     : [{ id: 'flag', label: '--browser', command: String(flags.browser) }];
     // Progress lines go to stderr so `--print-launch-spec` stays machine-readable on stdout.
-  const shell = createDesktopShell({ app, env, platform, port, candidates, log: (line) => err(line) });
+  const shell = createDesktopShell({
+    app, env, platform, port, candidates,
+    bootstrap: wantBootstrap,
+    log: (line) => err(line),
+  });
   const printSpec = flags['print-launch-spec'] === true;
   const dryRun = flags['dry-run'] === true || printSpec;
   try {
+    // The shell was constructed with the bootstrap decision (`bootstrap: wantBootstrap`), so the
+    // launch is not told twice: one flag, one place, one reported outcome.
     const planned = await shell.launch({ dryRun });
     if (printSpec) {
       out(JSON.stringify({
@@ -964,7 +980,10 @@ async function runDesktopCommand(args, { app, env, out, err, platform = process.
       return 0;
     }
     if (dryRun) {
-      out(`APEX desktop shell ${DESKTOP_SCHEMA}`);
+      // T-36 Step 3: the same table the live launch prints, so a dry run shows the owner what the
+      // window will open on. The lines that were already printed are still printed: the table is
+      // added, not substituted.
+      out(shell.banner(planned));
       out(`Loopback interface: ${planned.url} (state read answered)`);
       if (planned.found) {
         out(`Browser: ${planned.executable}`);
@@ -977,6 +996,8 @@ async function runDesktopCommand(args, { app, env, out, err, platform = process.
       out('Dry run: nothing was started. The loopback server is stopping now.');
       return 0;
     }
+    // T-36 Step 3: the live launch prints the same table before the window opens.
+    out(shell.banner(planned));
     if (!planned.spawned) {
       // Honest fallback: no browser was found, so the shell says so and leaves the URL open
       // for the owner to use. It does not pretend a window exists.
