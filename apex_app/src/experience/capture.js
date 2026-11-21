@@ -342,6 +342,15 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'workshop.get': 'read',
   'workshop.inspect': 'read',
   'workshop.simulate': 'read',
+  // T-38 Step 2: the file-backed Workshop. The two workspace reads are reads. The three sandbox
+  // writes are excluded for the reason the composed sheet is: they carry the user's own proposed
+  // content, and copying that into the experience log would turn a proposal into behavioural
+  // evidence the pattern and adaptation reads then draw from.
+  'workspace.inspect': 'read',
+  'workspace.read_file': 'read',
+  'workshop.stage_file': 'workshop',
+  'workshop.verify_file': 'workshop',
+  'workshop.promote_file': 'workshop',
   none: 'no-action',
 });
 

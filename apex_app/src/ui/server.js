@@ -2964,6 +2964,106 @@ export function createUiServer({
       }
       return;
     }
+    // T-38 Step 2 (2026-11-21): the file-backed Workshop. The GETs read the configured workspace
+    // through the same containment gate the capabilities use; the POSTs run the four staged-file
+    // capabilities through the controller, so the registry authorizes and the ECP decides.
+    if (method === 'GET' && url.pathname === '/api/workshop/workspace') {
+      try {
+        if (!app.workshopSandbox || !app.workshopSandbox.inspector.available) {
+          sendJson(res, 503, { unavailable: true, error: 'no target workspace is configured, so there is nothing to inspect' });
+          return;
+        }
+        const result = await app.controller.workshopInspect({ maxEntries: 400 });
+        const data = result.operation?.steps?.[0]?.result?.data ?? null;
+        if (!data) {
+          sendJson(res, 400, { status: result.status, error: result.output ?? 'the workspace could not be read' });
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status });
+      } catch (err) {
+        sendJson(res, 503, { error: `the workspace is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    // One file. A refusal is answered with the code the containment gate produced - 403 for a path
+    // that escapes the root or is absolute, 404 for one that is not there - so a client can tell
+    // "you may not look there" from "it is not there" from "there are no files".
+    if (method === 'GET' && url.pathname === '/api/workshop/file') {
+      const requested = url.searchParams.get('path');
+      if (typeof requested !== 'string' || requested.trim().length === 0) {
+        sendJson(res, 400, { error: 'a path query parameter is required' });
+        return;
+      }
+      const startLine = Number(url.searchParams.get('startLine') ?? '1');
+      const lines = Number(url.searchParams.get('lines') ?? '80');
+      try {
+        const result = await app.controller.workshopReadFile({
+          path: requested,
+          startLine: Number.isInteger(startLine) && startLine > 0 ? startLine : 1,
+          lines: Number.isInteger(lines) && lines > 0 ? lines : 80,
+        });
+        const data = result.operation?.steps?.[0]?.result?.data ?? null;
+        if (!data) {
+          const code = result.operation?.steps?.[0]?.execution?.error?.code ?? null;
+          const status = code === 'ACCESS_DENIED' || code === 'INVALID_INPUT' ? 403
+            : code === 'PATH_NOT_FOUND' ? 404
+              : code === 'NOT_TEXT' || code === 'NOT_A_FILE' ? 415 : 400;
+          sendJson(res, status, {
+            error: result.output ?? 'the file could not be read',
+            code,
+            // The refusal is recorded, because a refused read is exactly the event an owner auditing
+            // the inspector wants to see.
+            audited: true,
+            operationId: result.operation?.id ?? null,
+          });
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status });
+      } catch (err) {
+        sendJson(res, 503, { error: `the workspace is unavailable: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname.startsWith('/api/workshop/stage')
+      || method === 'POST' && url.pathname === '/api/workshop/verify-file'
+      || method === 'POST' && url.pathname === '/api/workshop/promote-file') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const staging = url.pathname === '/api/workshop/stage';
+      const verifying = url.pathname === '/api/workshop/verify-file';
+      const allowed = staging ? ['relativePath', 'proposedContent', 'rationale'] : verifying ? ['candidateId'] : ['candidateId', 'reason'];
+      const extra = Object.keys(body).filter((key) => !allowed.includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = staging
+          ? await app.controller.workshopStageFile({
+            relativePath: body.relativePath,
+            proposedContent: body.proposedContent,
+            rationale: body.rationale ?? null,
+          })
+          : verifying
+            ? await app.controller.workshopVerifyFile({ candidateId: body.candidateId })
+            : await app.controller.workshopPromoteFile({ candidateId: body.candidateId, reason: body.reason });
+        const data = result.operation?.steps?.[0]?.result?.data ?? null;
+        if (!data) {
+          const code = result.operation?.steps?.[0]?.execution?.error?.code ?? null;
+          const status = code === 'PROMOTION_REFUSED' || code === 'WORKSHOP_NOT_FOUND' ? 409 : 400;
+          sendJson(res, status, {
+            status: result.status,
+            error: result.output ?? 'the workshop refused the request',
+            code,
+            display: result.display,
+          });
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status, display: result.display });
+        if (!staging) broadcast('workshop', { candidateId: data.candidateId ?? null, verified: data.verified === true });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
     // T-31 Step 2: the controlled Evolution Lab. The GET is a read of the ledger plus the live
     // safety boundaries. The POSTs are the four audited capabilities; each one runs through the
     // controller, so the ECP authorizes it and the verifier checks the ledger afterwards.

@@ -215,6 +215,16 @@ const DECLARATIONS = Object.freeze({
   // It writes one marker and one device record; both are recoverable by re-running it.
   'system.bootstrap': ['reversible', 'local_store'],
 
+  // ------------------------------------------------- the file-backed workshop (T-38 Step 2) ---
+  // The two reads see the workspace tree but change nothing. The three writes change only the sandbox
+  // under the APEX data directory, which is why they are `workspace_sandbox` and not `local_store`:
+  // the sandbox is a scratch space whose contents are proposed changes, not records.
+  'workspace.inspect': ['read_only', 'none'],
+  'workspace.read_file': ['read_only', 'none'],
+  'workshop.stage_file': ['reversible', 'workspace_sandbox'],
+  'workshop.verify_file': ['reversible', 'workspace_sandbox'],
+  'workshop.promote_file': ['reversible', 'workspace_sandbox'],
+
   // ----------------------------------------------------------------------- safety ---
   // The latch is system-wide and stays engaged until released. It is *reversible* - release is a
   // supported, required operation - but its blast radius is the whole system, which is why the

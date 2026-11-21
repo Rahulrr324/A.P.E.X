@@ -125,9 +125,14 @@ describe('AF-19: the registry is the inventory', () => {
     // T-37 Step 1 (2026-11-21) adds three: the owner-only writes `neural.step` and
     // `neural.bridge_reset`, and the read `neural.read`. Track 2 can advance a simulation and read
     // it back; it authorizes nothing, so it adds no capability that could name another one.
-    assert.equal(plain.registry.list().length, 159, 'the default registry has 159 actions');
+    // T-38 Step 2 (2026-11-21) adds five: the reads `workspace.inspect` and `workspace.read_file`, and
+    // the owner-only sandbox writes `workshop.stage_file`, `workshop.verify_file` and
+    // `workshop.promote_file`. They are registered whether or not a workspace root is configured, and
+    // both totals move by five; an inspector with no root reports WORKSPACE_UNAVAILABLE rather than
+    // disappearing from the inventory, so the absence is visible instead of silent.
+    assert.equal(plain.registry.list().length, 164, 'the default registry has 164 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 174, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 179, 'a configured workspace root adds fifteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -169,7 +174,10 @@ describe('AF-19: the registry is the inventory', () => {
     // T-37 Step 1 (2026-11-21): `neural.step` and `neural.bridge_reset` are the eighty-sixth and
     // eighty-seventh. Both are owner-only for the same reason: a model that could step the substrate
     // could manufacture the candidate associations it is then asked to consider.
-    assert.equal(writes.length, 87, 'the inventory counts eighty-seven write actions with a root configured');
+    // T-38 Step 2 (2026-11-21): the three sandbox writes are the eighty-eighth, eighty-ninth and
+    // ninetieth. All three are owner-only: staging and verifying a candidate are the owner's acts, and
+    // a model that could stage and verify could manufacture a passing check for its own content.
+    assert.equal(writes.length, 90, 'the inventory counts ninety write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -264,7 +272,10 @@ describe('AF-19: the registry is the inventory', () => {
     // T-30 (2026-11-19) supersedes the prior 80-read count: Workshop adds list/get/inspect/simulate.
     // T-36 Step 1 (2026-11-21): `system.bootstrap_status` is the eighty-sixth read.
     // T-37 Step 1 (2026-11-21): `neural.read` is the eighty-seventh.
-    assert.equal(reads.length, 87, 'the inventory counts eighty-seven read actions with a root configured');
+    // T-38 Step 2 (2026-11-21): `workspace.inspect` and `workspace.read_file` are the eighty-eighth and
+    // eighty-ninth reads. Both are offered to the model origin, because reading a workspace is not
+    // authoring one - and both are refused outside the configured root.
+    assert.equal(reads.length, 89, 'the inventory counts eighty-nine read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -274,6 +285,10 @@ describe('AF-19: the registry is the inventory', () => {
         'experience.compare': { aSince: '2026-01-01', bSince: '2026-06-01' },
         'prediction.show': { target: pr.result.data.id },
         'prediction.history': { target: pr.result.data.id },
+        // T-38 Step 2 (2026-11-21): the two workspace reads. The probe's app is rooted at the temporary
+        // workspace, so both run against a real tree and neither may change a byte of it.
+        'workspace.inspect': { maxEntries: 20 },
+        'workspace.read_file': { path: 'session.json' },
         'filesystem.list': { path: '.' },
         'filesystem.read': { path: 'session.json' },
         'filesystem.find': { path: '.', extension: 'json' },
@@ -437,6 +452,14 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         // a promotion records the user's decision to accept it. Neither is a belief about the world,
         // and neither can change what APEX is permitted to do.
         assert.equal(row.belief, name === 'workshop.verify' ? 'no (a check is not a belief)' : 'no (accepting a design does not make it true)', `${name}: README belief-state`);
+      } else if (name === 'workshop.stage_file' || name === 'workshop.verify_file' || name === 'workshop.promote_file') {
+        // [T-38 Step 2, 2026-11-21] The file-backed sandbox records a proposed change, the real
+        // parser's verdict on it, and the owner's decision to accept it. A proposal is not a belief
+        // about the world, and none of the three can write the workspace or change what APEX may do.
+        const stated = name === 'workshop.stage_file' ? 'no (a proposal is not a belief)'
+          : name === 'workshop.verify_file' ? 'no (a check is not a belief)'
+            : 'no (accepting a candidate does not make it true)';
+        assert.equal(row.belief, stated, `${name}: README belief-state`);
       } else if (name.startsWith('evolution.')) {
         // [T-31 Step 2, 2026-11-19] The lab appends proposals, measured sandbox results and the
         // owner's promotion decisions to its own ledger. A candidate self-change is not a belief

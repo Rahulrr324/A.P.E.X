@@ -197,6 +197,12 @@ const MODEL_WRITE_ATTEMPTS = [
   // design and its verification; it may not record a check or accept a design on the owner's behalf.
   ['workshop.verify', { artifactId: 'ws-model-attempt', reason: 'the model ran the check' }],
   ['workshop.promote', { artifactId: 'ws-model-attempt', reason: 'the model accepted it' }],
+  // [T-38 Step 2, 2026-11-21] The file-backed sandbox. A model may read the workspace, but it may not
+  // stage content, record a parse result, or promote a candidate - a model that could do all three
+  // could manufacture a passing verification for content of its own choosing and then cite it.
+  ['workshop.stage_file', { relativePath: 'model.js', proposedContent: 'export const model = 1;\n', rationale: 'the model staged it' }],
+  ['workshop.verify_file', { candidateId: 'wsc-000000000000' }],
+  ['workshop.promote_file', { candidateId: 'wsc-000000000000', reason: 'the model promoted it' }],
   // [T-31 Step 2, 2026-11-19] The Evolution Lab's four writes. A model may not propose a change to
   // APEX's own behaviour, record a sandbox result, request a promotion, or decide one.
   ['evolution.propose', { title: 'the model proposed this' }],

@@ -93,7 +93,10 @@ test('T-38 metadata: every registered capability declares reversibility and blas
 test('T-38 metadata: every write declares a blast radius that is not none', () => {
   withApp((app) => {
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    assert.equal(writes.length, 80, `expected 80 writes at T-37, got ${writes.length}`);
+    // T-37 measured 80 writes. T-38 Step 2 adds the three sandbox writes - stage, verify and
+    // promote - each of which declares `workspace_sandbox`, so the count is 83. The number is pinned
+    // rather than bounded so that a new write cannot arrive without someone deciding this question.
+    assert.equal(writes.length, 83, `expected 83 writes after T-38 Step 2, got ${writes.length}`);
     for (const definition of writes) {
       assert.notEqual(definition.blastRadius, 'none',
         `${definition.name} is a write that claims to change nothing`);

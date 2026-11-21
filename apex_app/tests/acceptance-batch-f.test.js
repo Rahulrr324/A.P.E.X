@@ -378,9 +378,16 @@ describe('074: Batch F integrated acceptance', () => {
     // under a hard timeout and with no shell. It is a read-only observation of the machine the owner
     // already sits at, it takes no caller-supplied command, and its argument list is pinned in
     // tests/perception-sensor.test.js.
+    // [T-38 Step 2, 2026-11-21] A third reviewed exception, and only for one file: the Workshop's
+    // sandbox verifier runs the owner's own Node binary as a parser - `execFileSync(process.execPath,
+    // ['--check', <staged path>])` - with a fixed three-element argument vector, no shell, a hard
+    // timeout and a capped buffer. It takes no caller-supplied command, it parses a file the owner
+    // staged inside the APEX data directory, and it executes nothing: a parse check only reads. The
+    // argument vector and the no-shell setting are pinned in tests/t38-workshop-sandbox.test.js.
     const processSpawnAllowlist = new Set([
       path.join(APP_ROOT, 'src', 'ui', 'desktop-shell.js'),
       path.join(APP_ROOT, 'src', 'perception', 'host-workspace-sensor.js'),
+      path.join(APP_ROOT, 'src', 'workshop', 'sandbox.js'),
     ]);
     for (const file of appSources) {
       const text = fs.readFileSync(file, 'utf8');

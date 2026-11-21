@@ -10,6 +10,10 @@ import {
 } from '../workshop/index.js';
 import { textInput } from './inputs.js';
 import { ORIGIN_MODEL, ORIGIN_USER } from './origins.js';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import { join } from 'node:path';
+import { MAX_EXCERPT_LINES, MAX_INSPECT_ENTRIES } from '../workshop/sandbox.js';
 
 function show(summary, data, display) {
   return { summary, data, display: display ?? summary };
@@ -419,6 +423,289 @@ export function workshopActions(workshop) {
           }
           if (state.verified !== true) return { ok: false, detail: 'the verification behind the promotion does not read as passed' };
           return { ok: true, detail: `promotion ${state.promotion.id} confirmed against verification ${state.promotion.verificationId}` };
+        } catch (err) {
+          return { ok: false, detail: `the promotion could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+    ...fileBackedActions(),
+  ];
+}
+
+// T-38 Step 2 (2026-11-21): the file-backed Workshop. These four capabilities read the configured
+// workspace tree and stage candidates in an isolated sandbox under the APEX data directory. Two rules
+// run through all of them:
+//
+//   - the live workspace tree is opened for reading and never for writing, so `workshop.stage_file`
+//     writes only under `<dataDir>/workshop-sandbox/<candidateId>/`;
+//   - `verified` is a measurement, not a claim. `workshop.verify_file` runs the real parser against the
+//     staged bytes and records its exit code and stderr, and a syntax error makes `verified` false.
+function fileBackedActions() {
+  const requireSandbox = (ctx) => {
+    if (!ctx?.workshopSandbox) {
+      throw new ExecutionError('WORKSHOP_SANDBOX_UNAVAILABLE', 'the workshop sandbox is not available in this configuration');
+    }
+    return ctx.workshopSandbox;
+  };
+
+  return [
+    {
+      name: 'workspace.inspect',
+      description: 'List the files and directories of the configured target workspace, with byte size, line count and SHA-256 content digest for each text file. Skips .git, node_modules and build trees, and reports a binary file as binary rather than reading it. Every path is resolved with realpath and refused if it escapes the root. Read-only: nothing is written and nothing is executed.',
+      inputHint: '{"maxEntries": 1-400}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (key !== 'maxEntries') throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        if (input.maxEntries === undefined) return { maxEntries: MAX_INSPECT_ENTRIES };
+        if (!Number.isInteger(input.maxEntries) || input.maxEntries < 1 || input.maxEntries > MAX_INSPECT_ENTRIES) {
+          throw new ValidationError(`maxEntries must be an integer from 1 to ${MAX_INSPECT_ENTRIES}`);
+        }
+        return { maxEntries: input.maxEntries };
+      },
+      async execute(ctx, input) {
+        const sandbox = requireSandbox(ctx);
+        const listing = sandbox.inspector.list({ maxEntries: input.maxEntries });
+        const files = listing.entries.filter((entry) => entry.kind === 'file');
+        return show(
+          `inspected the workspace: ${files.length} text file(s), ${listing.entries.filter((e) => e.kind === 'directory').length} director(ies)`,
+          {
+            root: listing.root,
+            entries: listing.entries,
+            total: listing.total,
+            truncated: listing.truncated,
+            authorizesExecution: false,
+          },
+          `Workspace ${listing.root}\n`
+            + listing.entries.slice(0, 40).map((entry) => `  ${entry.kind === 'directory' ? 'dir ' : entry.kind === 'binary' ? 'bin ' : 'file'}  ${entry.path}`).join('\n')
+            + (listing.truncated ? '\n(the listing was capped)' : ''),
+        );
+      },
+      async verify(ctx, _input, result) {
+        try {
+          const again = requireSandbox(ctx).inspector.list({ maxEntries: result.data.total || MAX_INSPECT_ENTRIES });
+          if (again.entries.length !== result.data.entries.length) {
+            return { ok: false, detail: 'a second read of the tree found a different number of entries' };
+          }
+          return { ok: true, detail: `the tree was read back: ${again.entries.length} entries` };
+        } catch (err) {
+          return { ok: false, detail: `the workspace could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+    {
+      name: 'workspace.read_file',
+      description: 'Read a bounded, line-numbered excerpt of one text file inside the configured workspace, with its SHA-256 digest. The path is canonicalized with realpath and refused if it escapes the root, is absolute, or contains a traversal component. Read-only.',
+      inputHint: '{"path": "relative/path.js", "startLine": 1, "lines": 1-200}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (!['path', 'startLine', 'lines'].includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        const filePath = textInput(input.path, 'path', { max: 512 });
+        const startLine = input.startLine === undefined ? 1 : input.startLine;
+        const lines = input.lines === undefined ? 80 : input.lines;
+        if (!Number.isInteger(startLine) || startLine < 1) throw new ValidationError('startLine must be a positive integer');
+        if (!Number.isInteger(lines) || lines < 1 || lines > MAX_EXCERPT_LINES) {
+          throw new ValidationError(`lines must be an integer from 1 to ${MAX_EXCERPT_LINES}`);
+        }
+        return { path: filePath, startLine, lines };
+      },
+      async execute(ctx, input) {
+        const sandbox = requireSandbox(ctx);
+        const excerpt = sandbox.inspector.read(input.path, { startLine: input.startLine, lines: input.lines });
+        return show(
+          `read ${excerpt.path}: lines ${excerpt.startLine}-${excerpt.startLine + excerpt.lines - 1} of ${excerpt.totalLines}`,
+          excerpt,
+          excerpt.excerpt,
+        );
+      },
+      async verify(ctx, input, result) {
+        try {
+          const again = requireSandbox(ctx).inspector.read(input.path, { startLine: input.startLine, lines: input.lines });
+          if (again.digest !== result.data.digest) {
+            return { ok: false, detail: 'the file changed between the read and the re-read' };
+          }
+          return { ok: true, detail: `digest ${again.digest.slice(0, 16)} confirmed by a second read` };
+        } catch (err) {
+          return { ok: false, detail: `the file could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+    {
+      name: 'workshop.stage_file',
+      description: 'Stage a proposed new or modified file into an isolated sandbox under the APEX data directory, recording its SHA-256 digest, a line diff against the current workspace file when one exists, and the rationale. The live workspace tree is never written to. A staged file is not verified; verifying it is a separate, measured step.',
+      inputHint: '{"relativePath": "src/thing.js", "proposedContent": "text", "rationale": "why"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (!['relativePath', 'proposedContent', 'rationale'].includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        const relativePath = textInput(input.relativePath, 'relativePath', { max: 512 });
+        if (typeof input.proposedContent !== 'string') throw new ValidationError('proposedContent must be text');
+        const rationale = input.rationale === undefined || input.rationale === null ? null : textInput(input.rationale, 'rationale', { max: 2000 });
+        return { relativePath, proposedContent: input.proposedContent, rationale };
+      },
+      async execute(ctx, input) {
+        const sandbox = requireSandbox(ctx);
+        const record = sandbox.stage(input);
+        return show(
+          `staged ${record.relativePath} as ${record.candidateId}: ${record.bytes} byte(s), ${record.lines} line(s), digest ${record.digest.slice(0, 16)}`,
+          {
+            candidateId: record.candidateId,
+            relativePath: record.relativePath,
+            bytes: record.bytes,
+            lines: record.lines,
+            digest: record.digest,
+            base: record.base,
+            diff: record.diff,
+            verified: false,
+            sandboxDir: record.sandboxDir,
+            mutatesLiveWorkspace: false,
+            authorizesExecution: false,
+          },
+          `Staged ${record.relativePath} in the sandbox.\n`
+            + `  ${record.bytes} byte(s), ${record.lines} line(s), sha256 ${record.digest}\n`
+            + `  base: ${record.base.exists ? record.base.path + ' (sha256 ' + String(record.base.digest).slice(0, 16) + ')' : 'no such file in the workspace'}\n`
+            + `  diff: +${record.diff.addedLines} -${record.diff.removedLines}\n`
+            + 'Nothing was verified and the live workspace was not written.',
+        );
+      },
+      async verify(ctx, _input, result) {
+        try {
+          const record = requireSandbox(ctx).load(result.data.candidateId);
+          if (!record) return { ok: false, detail: 'the staged candidate cannot be read back' };
+          if (record.digest !== result.data.digest) return { ok: false, detail: 'the staged record holds a different digest' };
+          return { ok: true, detail: `candidate ${record.candidateId} confirmed in the sandbox` };
+        } catch (err) {
+          return { ok: false, detail: `the candidate could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+    {
+      name: 'workshop.verify_file',
+      description: 'Verify a staged file by running the real parser against the staged bytes in the sandbox: node --check for .js/.mjs/.cjs, strict JSON.parse for .json. Records the exact exit code and stderr, the staged and base SHA-256 digests, and the diff. verified is true only when every check passed; a syntax error makes it false and keeps the parser message.',
+      inputHint: '{"candidateId": "wsc-..."}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (key !== 'candidateId') throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        const candidateId = textInput(input.candidateId, 'candidateId', { max: 64 });
+        if (!/^wsc-[0-9a-f]{12}$/.test(candidateId)) throw new ValidationError('candidateId must look like wsc-<12 hex characters>');
+        return { candidateId };
+      },
+      async execute(ctx, input) {
+        const sandbox = requireSandbox(ctx);
+        const result = sandbox.verify(input.candidateId);
+        if (!result.found) throw new ExecutionError('WORKSHOP_NOT_FOUND', result.detail ?? `no staged candidate ${input.candidateId}`);
+        const verification = result.verification;
+        const failed = verification.checks.filter((check) => check.passed !== true);
+        return show(
+          `verified staged file ${verification.relativePath}: ${verification.verified ? 'all checks passed' : `${failed.length} check(s) failed`}`,
+          verification,
+          `${verification.relativePath}  ${verification.verified ? 'VERIFIED' : 'NOT VERIFIED'}\n`
+            + verification.checks.map((check) => `  ${check.passed ? 'pass' : 'FAIL'}  ${check.id} — ${check.detail}`).join('\n')
+            + (verification.parser.ran ? `\n\n${verification.parser.kind} exited ${verification.parser.exitCode} as ${verification.parser.moduleKind}` : '')
+            + (verification.parser.stderr ? `\n${verification.parser.stderr}` : '')
+            + '\nThe file was parsed in the sandbox. The live workspace was not written and nothing was authorized.',
+        );
+      },
+      async verify(ctx, input, result) {
+        try {
+          const recorded = requireSandbox(ctx).latestVerification(input.candidateId);
+          if (!recorded) return { ok: false, detail: 'the verification cannot be read back from the sandbox' };
+          if (recorded.id !== result.data.id) return { ok: false, detail: 'the sandbox holds a different verification than the one reported' };
+          if (recorded.verified !== result.data.verified) return { ok: false, detail: 'the sandbox disagrees with the reported outcome' };
+          return { ok: true, detail: `verification ${recorded.id} confirmed by an independent read of the sandbox` };
+        } catch (err) {
+          return { ok: false, detail: `the verification could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+    {
+      name: 'workshop.promote_file',
+      description: 'Promote a staged file after its newest sandbox verification passed. Refuses when no verification exists, when the newest one failed, or when the sandbox digest has changed since that verification. Records the promotion with the owner\'s reason. It applies nothing: the live workspace is not written and the candidate is not copied anywhere.',
+      inputHint: '{"candidateId": "wsc-...", "reason": "why this candidate is accepted"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (!['candidateId', 'reason'].includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        const candidateId = textInput(input.candidateId, 'candidateId', { max: 64 });
+        if (!/^wsc-[0-9a-f]{12}$/.test(candidateId)) throw new ValidationError('candidateId must look like wsc-<12 hex characters>');
+        return { candidateId, reason: reasonField(input.reason, { required: true }) };
+      },
+      async execute(ctx, input) {
+        const sandbox = requireSandbox(ctx);
+        const record = sandbox.load(input.candidateId);
+        if (!record) throw new ExecutionError('WORKSHOP_NOT_FOUND', `no staged candidate ${input.candidateId}`);
+        const verification = sandbox.latestVerification(input.candidateId);
+        if (!verification) {
+          throw new ExecutionError('PROMOTION_REFUSED', 'the candidate has not been verified in the sandbox');
+        }
+        if (verification.verified !== true) {
+          throw new ExecutionError('PROMOTION_REFUSED', `the newest verification failed: ${verification.failed.join(', ') || 'unknown check'}`);
+        }
+        if (verification.stagedDigest !== record.digest) {
+          throw new ExecutionError('PROMOTION_REFUSED', 'the sandbox holds different bytes than the verification recorded');
+        }
+        const promotion = {
+          schema: 'apex.workshop.file-promotion/1',
+          kind: 'file_promotion',
+          id: `wsp-${createHash('sha256').update(`${input.candidateId}:${verification.id}:${sandbox.now().toISOString()}`).digest('hex').slice(0, 12)}`,
+          candidateId: input.candidateId,
+          relativePath: record.relativePath,
+          verificationId: verification.id,
+          digest: record.digest,
+          reason: input.reason,
+          at: sandbox.now().toISOString(),
+          appliesNothing: true,
+          mutatesLiveWorkspace: false,
+          authorizesExecution: false,
+        };
+        fs.writeFileSync(join(record.sandboxDir, 'promotion.json'), `${JSON.stringify(promotion, null, 2)}\n`, 'utf8');
+        return show(
+          `promoted staged file ${record.relativePath} on verification ${verification.id}`,
+          {
+            candidateId: promotion.candidateId,
+            relativePath: promotion.relativePath,
+            promotionId: promotion.id,
+            verificationId: promotion.verificationId,
+            digest: promotion.digest,
+            verified: true,
+            reason: promotion.reason,
+            appliesNothing: true,
+            mutatesLiveWorkspace: false,
+            authorizesExecution: false,
+          },
+          `${record.relativePath} promoted on verification ${verification.id}.\n`
+            + 'The promotion is a record. The live workspace was not written and nothing was applied.',
+        );
+      },
+      async verify(ctx, input, result) {
+        try {
+          const verification = requireSandbox(ctx).latestVerification(input.candidateId);
+          if (!verification) return { ok: false, detail: 'the verification behind the promotion cannot be read back' };
+          if (verification.id !== result.data.verificationId) return { ok: false, detail: 'the sandbox cites a different verification' };
+          if (verification.verified !== true) return { ok: false, detail: 'the verification behind the promotion does not read as passed' };
+          return { ok: true, detail: `promotion confirmed against verification ${verification.id}` };
         } catch (err) {
           return { ok: false, detail: `the promotion could not be re-read: ${err?.message ?? err}` };
         }

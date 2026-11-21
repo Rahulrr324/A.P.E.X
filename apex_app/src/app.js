@@ -77,6 +77,7 @@ import { createCognitivePipeline } from './cognition/pipeline.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 import { ResourceFabric } from './resources/fabric.js';
 import { createWorkshopService } from './workshop/service.js';
+import { WorkshopSandbox } from './workshop/sandbox.js';
 import { createPerceptionService } from './perception/service.js';
 import { perceptionActions } from './actions/perception-actions.js';
 import { DeviceTrustService } from './security/device-trust.js';
@@ -291,6 +292,15 @@ export function createApp({
   // The Workshop is a design sheet store: composition is a user write, inspection and simulation
   // are reads. Nothing in it executes code, and a simulation is never an authorization.
   const workshop = createWorkshopService({ dataDir, now: clock });
+  // T-38 Step 2 (2026-11-21): the file-backed Workshop. The inspector reads the configured target
+  // workspace; the sandbox stages candidates under this data directory. The two never cross: the
+  // workspace root is opened for reading and every staged byte lives under `<dataDir>/workshop-sandbox`.
+  const workshopSandbox = new WorkshopSandbox({
+    dataDir,
+    workspaceRoot: rootForContext,
+    now: clock,
+    ...(idFactory ? { idFactory } : {}),
+  });
 
   // T-31 Step 2: the controlled Evolution Lab. It records proposals about APEX's own behaviour,
   // the sandbox result that was measured for each one, and the owner's promotion decisions. It
@@ -424,6 +434,7 @@ export function createApp({
     neuralService: neural,
     council,
     workshop,
+    workshopSandbox,
     evolution,
   });
   const runtime = new ExecutiveRuntime({
@@ -521,6 +532,8 @@ export function createApp({
     taskStore,
     summaryQueue,
     filesystemRoot: rootForContext,
+    // T-38 Step 2: the file-backed Workshop, so the UI routes reach the one sandbox the actions use.
+    workshopSandbox,
     filesystemWorkspaces: workspaces,
     knowledge,
     notes,

@@ -619,6 +619,10 @@ export class CognitiveController {
     neuralService = null,
     council = null,
     workshop = null,
+    // T-38 Step 2: the file-backed Workshop sandbox. Optional, like every other service here: a
+    // controller built without one simply has no file-backed capabilities, and the actions that need
+    // it throw WORKSHOP_SANDBOX_UNAVAILABLE rather than pretending to read a workspace.
+    workshopSandbox = null,
     evolution = null,
   }) {
     this.memory = memory;
@@ -689,6 +693,7 @@ export class CognitiveController {
     // The workshop store holds design sheets the user composed. Reading and simulating one is a
     // read; composing is a user write. Neither path executes the design.
     this.workshop = workshop;
+    this.workshopSandbox = workshopSandbox;
     // The Evolution Lab holds the record of candidate self-changes: proposals, the measured sandbox
     // result for each, and promotion requests and decisions. Holding it here lets the read surfaces
     // report it and lets the action context append to it; the ECP still authorizes every append.
@@ -1553,6 +1558,44 @@ export class CognitiveController {
     const stated = typeof reason === 'string' && reason.trim() !== '' ? truncate(reason.trim(), 60) : '[missing reason]';
     const op = this.#newOp({ capability: 'workshop.promote', origin: 'user', request: `workshop promote [${shown}] ${stated}` });
     const step = await this.runAction('workshop.promote', { artifactId, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // ---- T-38 file-backed workshop -------------------------------------------------
+  // Each of these runs the capability through `runAction`, so the registry authorizes, the ECP
+  // decides and the verifier reads the record back - the same path every other capability takes. A
+  // command method is a request shape, never an authorization.
+  async workshopInspect({ maxEntries = 400 } = {}) {
+    const op = this.#newOp({ capability: 'workspace.inspect', origin: 'user', request: 'workshop inspect workspace' });
+    const step = await this.runAction('workspace.inspect', { maxEntries }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopReadFile({ path: filePath, startLine = 1, lines = 80 } = {}) {
+    const shown = typeof filePath === 'string' ? truncate(filePath, 60) : '[missing path]';
+    const op = this.#newOp({ capability: 'workspace.read_file', origin: 'user', request: `workshop read [${shown}]` });
+    const step = await this.runAction('workspace.read_file', { path: filePath, startLine, lines }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopStageFile({ relativePath, proposedContent, rationale = null } = {}) {
+    const shown = typeof relativePath === 'string' ? truncate(relativePath, 60) : '[missing path]';
+    const op = this.#newOp({ capability: 'workshop.stage_file', origin: 'user', request: `workshop stage [${shown}]` });
+    const step = await this.runAction('workshop.stage_file', { relativePath, proposedContent, rationale }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopVerifyFile({ candidateId } = {}) {
+    const shown = typeof candidateId === 'string' ? truncate(candidateId, 40) : '[missing candidate]';
+    const op = this.#newOp({ capability: 'workshop.verify_file', origin: 'user', request: `workshop verify file [${shown}]` });
+    const step = await this.runAction('workshop.verify_file', { candidateId }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopPromoteFile({ candidateId, reason = null } = {}) {
+    const shown = typeof candidateId === 'string' ? truncate(candidateId, 40) : '[missing candidate]';
+    const op = this.#newOp({ capability: 'workshop.promote_file', origin: 'user', request: `workshop promote file [${shown}]` });
+    const step = await this.runAction('workshop.promote_file', { candidateId, reason }, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 
@@ -3335,6 +3378,9 @@ export class CognitiveController {
       neural: this.neuralService,
       council: this.council,
       workshop: this.workshop,
+      // T-38 Step 2: the file-backed Workshop. Reaching it is a read of the configured workspace and a
+      // write inside the APEX data directory's sandbox; the registry authorizes above, as always.
+      workshopSandbox: this.workshopSandbox,
       evolution: this.evolution,
     };
   }
