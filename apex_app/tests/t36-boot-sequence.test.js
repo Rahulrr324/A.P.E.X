@@ -12,6 +12,7 @@
 //   * an unseeded data directory opens on the sequence, and a set-up one does not.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import vm from 'node:vm';
 import { UI_CLIENT, UI_PAGE } from '../src/ui/assets.js';
 import { createFakeBrowser, flushMicrotasks } from './helpers/fake-browser.js';
@@ -233,5 +234,29 @@ describe('T-36: the HUD boot sequence', () => {
     assert.equal(browser.coreState(), 'dormant', 'and the Core went Dormant');
     await settle(browser);
     assert.equal(browser.getElement('hud-boot-sequence').hidden, true, 'and it dismissed when it finished');
+  });
+
+  // T-36 regression (2026-11-21): the boot sequence put the Core in `dormant`, and the deck asks
+  // the comms owner for the current state's voice. `dormant` was not a state the owner knew, so its
+  // own boot read answered 400 and every browser suite recorded a console error. The two directions
+  // are pinned here: the server knows the state, and the client never asks for one it would refuse.
+  test('the server knows the Dormant state the boot sequence puts the Core in', () => {
+    const server = fs.readFileSync(new URL('../src/ui/server.js', import.meta.url), 'utf8');
+    const known = /const KNOWN = \[([^\]]+)\]/.exec(server);
+    assert.ok(known, 'the comms route names the Core states it accepts');
+    const states = known[1].split(',').map((entry) => entry.trim().replace(/'/g, ''));
+    assert.ok(states.includes('dormant'), 'dormant is one of them');
+    for (const state of ['idle', 'awaiting_approval', 'degraded', 'lockdown']) {
+      assert.ok(states.includes(state), state + ' is still accepted');
+    }
+  });
+
+  test('the client asks the comms owner only for a state the owner accepts', () => {
+    const source = fs.readFileSync(new URL('../src/ui/assets.js', import.meta.url), 'utf8');
+    // The projection that decides the voice filters the state rather than forwarding it blind.
+    assert.match(source, /const COMMS_STATES = \[[^\]]*'dormant'[^\]]*\]/,
+      'the client names the states it may ask for');
+    assert.match(source, /COMMS_STATES\.includes\(state\.core\)/,
+      'and checks the deck\'s state against them');
   });
 });

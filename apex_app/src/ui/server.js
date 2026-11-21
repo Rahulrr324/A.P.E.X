@@ -2167,7 +2167,11 @@ export function createUiServer({
     // than quietly replaced, because a voice that disagrees with the Core is worse than no voice.
     if (method === 'GET' && url.pathname === '/api/comms') {
       const requested = url.searchParams.get('core');
-      const KNOWN = ['idle', 'thinking', 'awaiting_approval', 'running', 'paused', 'degraded', 'lockdown'];
+      // T-36 Step 2 (2026-11-21): `dormant` joins the list. The HUD boot sequence puts the Core in
+      // Dormant while the machine verifies its own readiness, and the deck asks the comms owner for
+      // that state's voice the same way it asks for any other. Refusing it made the client's own
+      // boot read a 400, which surfaced as a console error in every browser suite.
+      const KNOWN = ['dormant', 'idle', 'thinking', 'awaiting_approval', 'running', 'paused', 'degraded', 'lockdown'];
       if (requested !== null && !KNOWN.includes(requested)) {
         sendJson(res, 400, { error: `core must be one of ${KNOWN.join(', ')}` });
         return;

@@ -3965,7 +3965,11 @@ function renderExecComms() {
 // request, no loop: the answer is stored and rendered, and the request is skipped when the server
 // already agrees about the Core state.
 async function refreshExecComms() {
-  const core = state.core || 'degraded';
+  // The comms owner knows the live states, and dormant - the boot sequence's own state - is one
+  // of them. A state this deck invented is asked for as degraded, so a partial projection can
+  // never turn into a request the server rejects.
+  const COMMS_STATES = ['dormant', 'idle', 'thinking', 'awaiting_approval', 'running', 'paused', 'degraded', 'lockdown'];
+  const core = COMMS_STATES.includes(state.core) ? state.core : 'degraded';
   try {
     const set = await api('/api/comms?core=' + encodeURIComponent(core));
     state.comms = set;
