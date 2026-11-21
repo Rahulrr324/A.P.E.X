@@ -3403,6 +3403,51 @@ export function createUiServer({
       }
       return;
     }
+    // T-38 Step 3 (2026-11-21): the cross-ledger search and trace behind the Memory Timeline. Both
+    // are reads of ledgers that already exist; neither writes a record, and both say so in the body.
+    if (method === 'GET' && url.pathname === '/api/memory/search') {
+      if (!app.memoryTrace) { sendJson(res, 503, { unavailable: true, error: 'the trace service is not configured' }); return; }
+      try {
+        const kind = url.searchParams.get('kind');
+        const epistemicStatus = url.searchParams.get('epistemicStatus');
+        const correlationId = url.searchParams.get('correlationId');
+        const limit = Number(url.searchParams.get('limit') ?? '50');
+        const result = app.memoryTrace.search({
+          q: url.searchParams.get('q'),
+          kind: kind === null || kind === '' ? null : kind,
+          epistemicStatus: epistemicStatus === null || epistemicStatus === '' ? null : epistemicStatus,
+          correlationId: correlationId === null || correlationId === '' ? null : correlationId,
+          limit: Number.isFinite(limit) ? limit : 50,
+        });
+        // A rejected filter is a refusal, not an empty result: the caller asked for something the
+        // surface does not understand, and an empty list would imply it understood and found nothing.
+        if (!result.ok) { sendJson(res, 400, result); return; }
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: `the search failed: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname.startsWith('/api/memory/trace/')) {
+      if (!app.memoryTrace) { sendJson(res, 503, { unavailable: true, error: 'the trace service is not configured' }); return; }
+      let raw;
+      try {
+        raw = decodeURIComponent(url.pathname.slice('/api/memory/trace/'.length));
+      } catch {
+        sendJson(res, 400, { error: 'the id is not valid percent-encoding' });
+        return;
+      }
+      try {
+        const result = app.memoryTrace.trace(raw);
+        // "No ledger holds that id" is a 404 rather than an empty chain, so a caller cannot mistake
+        // an unknown id for a run that did nothing.
+        if (!result.ok) { sendJson(res, result.code === 'NOT_FOUND' ? 404 : 400, result); return; }
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { error: `the trace failed: ${err.message}` });
+      }
+      return;
+    }
     if (method === 'GET' && url.pathname === '/api/memory') {
       try {
         if (!app.memory) { sendJson(res, 503, { error: 'memory is not configured' }); return; }

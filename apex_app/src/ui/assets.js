@@ -363,6 +363,43 @@ export const UI_PAGE = `<!doctype html>
     <h2>Memory Timeline</h2>
     <p class="meta">Chronological records from MemoryStore, KnowledgeStore and WorldModelStore. Corrections and lifecycle events are kept as provenance-linked history; the timeline does not make claims true.</p>
     <p id="timeline-status" class="workspace-status" role="status" aria-live="polite">Loading memory and world-model records…</p>
+    <!-- T-38 Step 3 (2026-11-21): search across every ledger, and the causal chain inspector.
+         A result is a record that exists; the chain is the records in time order with the link
+         that joins each one named. Nothing here writes, and an absent ledger is reported as
+         missing rather than shown as an empty step. -->
+    <h3>Search every ledger</h3>
+    <p class="meta">One query across memory, cognitive runs, Council sessions, task graphs, sandbox verifications and authorized operations. Each result names its ledger and the record it came from, and a result can be opened as a causal chain.</p>
+    <form id="trace-search-form" class="row">
+      <label for="trace-search-q" class="visually-hidden">Search terms</label>
+      <input id="trace-search-q" type="search" maxlength="200" placeholder="Search terms">
+      <label for="trace-search-kind" class="visually-hidden">Ledger</label>
+      <select id="trace-search-kind">
+        <option value="">every ledger</option>
+        <option value="memory">memory</option>
+        <option value="cognition_run">cognitive runs</option>
+        <option value="council_session">Council sessions</option>
+        <option value="task">task graphs</option>
+        <option value="workshop_verification">sandbox verifications</option>
+        <option value="ecp_audit">authorized operations</option>
+      </select>
+      <label for="trace-search-status" class="visually-hidden">Epistemic status</label>
+      <select id="trace-search-status">
+        <option value="">any status</option>
+        <option value="asserted">asserted</option>
+        <option value="observed">observed</option>
+        <option value="inferred">inferred</option>
+        <option value="candidate_association">candidate association</option>
+        <option value="model_output">model output</option>
+        <option value="unverified">unverified</option>
+        <option value="contradicted">contradicted</option>
+      </select>
+      <button id="trace-search-button" type="submit" class="small">Search</button>
+      <span id="trace-search-statusline" class="meta" role="status" aria-live="polite"></span>
+    </form>
+    <ul id="trace-results" class="work"></ul>
+    <h3>Causal chain</h3>
+    <p id="trace-chain-status" class="workspace-status" role="status" aria-live="polite">Open a search result to read its chain.</p>
+    <ol id="trace-chain" class="work"></ol>
     <h3>Combined timeline</h3>
     <ul id="memory-timeline" class="work"></ul>
     <h3>Memory and corrections</h3>
@@ -580,6 +617,34 @@ export const UI_PAGE = `<!doctype html>
          data-screen-message="The workshop: user-authored sheets with their components and declared numbers, inspected and simulated deterministically; a sheet authorizes nothing.">
     <h2>Workshop — deterministic design sheets</h2>
     <p class="meta">This is not a 3D or interactive holographic workspace. It stores design sheets and performs arithmetic over declared values. Nothing here is executed, and a simulation never authorizes an action.</p>
+    <!-- T-38 Step 2 (2026-11-21): the real file inspector and its sandbox. Every value here comes from
+         a backend reading of the tree - bytes, line counts, SHA-256, and the parser's own verdict and
+         message. A candidate shows "verified" only when the backend recorded verified: true, and a
+         promotion is refused by the backend, not by this markup. -->
+    <h3>The workspace</h3>
+    <p class="meta">These are the real files under the configured workspace root. A path outside that root is refused by the backend, so an entry that appears here is one the backend agreed to read. Nothing on this panel writes the live tree.</p>
+    <div class="row">
+      <button id="ws-refresh" type="button" class="small">Inspect workspace</button>
+      <span id="ws-state" class="meta" role="status" aria-live="polite">Not inspected yet.</span>
+    </div>
+    <ul id="ws-entries" class="work"></ul>
+    <div id="ws-excerpt-panel" class="panel" hidden>
+      <h4 id="ws-excerpt-title" class="meta"></h4>
+      <pre id="ws-excerpt" class="code"></pre>
+    </div>
+    <h4>Stage a candidate</h4>
+    <p class="meta">Staging copies your proposed content into a sandbox under the APEX data directory. It does not touch the file you name. Verifying runs the real parser against the staged copy; promoting is refused unless that check passed.</p>
+    <form id="ws-stage-form" class="row">
+      <label for="ws-stage-path" class="visually-hidden">Relative path inside the workspace</label>
+      <input id="ws-stage-path" maxlength="400" placeholder="src/example.js">
+      <label for="ws-stage-rationale" class="visually-hidden">Why this change</label>
+      <input id="ws-stage-rationale" maxlength="240" placeholder="rationale (optional)">
+      <button id="ws-stage-submit" type="submit" class="small">Stage candidate</button>
+      <span id="ws-stage-status" class="meta" role="status" aria-live="polite"></span>
+    </form>
+    <label for="ws-stage-content" class="visually-hidden">Proposed content</label>
+    <textarea id="ws-stage-content" rows="6" placeholder="the proposed content of the file"></textarea>
+    <ul id="ws-candidates" class="work"></ul>
     <p id="workshop-state" class="workspace-status" role="status" aria-live="polite">Loading stored designs…</p>
     <form id="workshop-form" class="row">
       <label for="workshop-title" class="visually-hidden">Title</label>
@@ -1235,6 +1300,30 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   dagCancel: document.getElementById('dag-cancel'),
   dagControlStatus: document.getElementById('dag-control-status'),
   workshopStageTelemetry: document.getElementById('workshop-stage-telemetry'),
+  // T-38 Step 3: cross-ledger search and the causal chain.
+  traceSearchForm: document.getElementById('trace-search-form'),
+  traceSearchQ: document.getElementById('trace-search-q'),
+  traceSearchKind: document.getElementById('trace-search-kind'),
+  traceSearchStatus: document.getElementById('trace-search-status'),
+  traceSearchStatusLine: document.getElementById('trace-search-statusline'),
+  traceSearchButton: document.getElementById('trace-search-button'),
+  traceResults: document.getElementById('trace-results'),
+  traceChain: document.getElementById('trace-chain'),
+  traceChainStatus: document.getElementById('trace-chain-status'),
+  // T-38 Step 2: the real file inspector.
+  wsRefresh: document.getElementById('ws-refresh'),
+  wsState: document.getElementById('ws-state'),
+  wsEntries: document.getElementById('ws-entries'),
+  wsExcerptPanel: document.getElementById('ws-excerpt-panel'),
+  wsExcerptTitle: document.getElementById('ws-excerpt-title'),
+  wsExcerpt: document.getElementById('ws-excerpt'),
+  wsStageForm: document.getElementById('ws-stage-form'),
+  wsStagePath: document.getElementById('ws-stage-path'),
+  wsStageRationale: document.getElementById('ws-stage-rationale'),
+  wsStageContent: document.getElementById('ws-stage-content'),
+  wsStageSubmit: document.getElementById('ws-stage-submit'),
+  wsStageStatus: document.getElementById('ws-stage-status'),
+  wsCandidates: document.getElementById('ws-candidates'),
   workshopSandboxStatus: document.getElementById('workshop-sandbox-status'),
   execCommsHeadline: document.getElementById('exec-comms-headline'),
   execCommsLines: document.getElementById('exec-comms-lines'),
@@ -3435,6 +3524,379 @@ async function simulateWorkshop(artifactId) {
   }
 }
 
+// T-38 Step 3 (2026-11-21): cross-ledger search and the causal chain inspector.
+//
+// A result is a record that exists in a ledger. The chain is those records in time order, each one
+// labelled with the link that joined it, and a chain that could not reach a task graph says so
+// instead of appearing to be the whole story.
+const traceState = { results: [], chain: null, lastQuery: null };
+
+const TRACE_KIND_LABELS = {
+  memory: 'memory', cognition_run: 'cognitive run', council_session: 'Council session',
+  task: 'task graph', workshop_verification: 'sandbox verification', ecp_audit: 'authorized operation',
+};
+
+// Which identifier on a result can be opened as a chain. A task event that is not the creation
+// event has no chain of its own to open; the creation event does.
+function traceIdFor(result) {
+  if (!result || !result.identity) return null;
+  if (result.kind === 'cognition_run') return result.identity.runId ?? null;
+  if (result.kind === 'council_session') return result.identity.sessionId ?? null;
+  if (result.kind === 'task') return result.identity.taskId ?? null;
+  if (result.kind === 'ecp_audit') return result.identity.operationId ?? null;
+  return null;
+}
+
+function renderTraceResults(payload) {
+  if (!els.traceResults) return;
+  els.traceResults.replaceChildren();
+  if (!payload || payload.ok !== true) {
+    els.traceResults.append(el('li', 'meta', 'No results.'));
+    return;
+  }
+  if (!payload.results.length) {
+    els.traceResults.append(el('li', 'meta',
+      payload.total === 0
+        ? 'No record in any ledger matches that query.'
+        : 'No result to show.'));
+    return;
+  }
+  for (const result of payload.results) {
+    const item = el('li', 'work-item');
+    const head = el('div', 'row');
+    head.append(el('span', 'badge', TRACE_KIND_LABELS[result.kind] ?? result.kind));
+    head.append(el('span', 'meta', result.at ?? 'no timestamp'));
+    if (result.epistemicStatus) head.append(el('span', 'badge', result.epistemicStatus));
+    item.append(head);
+    item.append(el('p', '', result.summary || '(this record has no text of its own)'));
+    const traceId = traceIdFor(result);
+    if (traceId) {
+      const open = el('button', 'small', 'Open chain');
+      open.type = 'button';
+      open.addEventListener('click', () => { openTrace(traceId, open); });
+      item.append(open);
+    } else {
+      // A memory record has no cross-ledger chain. Saying so is better than a button that does nothing.
+      item.append(el('p', 'meta', 'This ledger records no chain of its own.'));
+    }
+    els.traceResults.append(item);
+  }
+}
+
+async function runTraceSearch() {
+  if (!els.traceSearchStatusLine) return;
+  const q = (els.traceSearchQ?.value ?? '').trim();
+  const kind = els.traceSearchKind?.value ?? '';
+  const epistemicStatus = els.traceSearchStatus?.value ?? '';
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (kind) params.set('kind', kind);
+  if (epistemicStatus) params.set('epistemicStatus', epistemicStatus);
+  traceState.lastQuery = { q, kind, epistemicStatus };
+  setWorkspaceStatus(els.traceSearchStatusLine, 'Searching every ledger…', 'loading');
+  if (els.traceSearchButton) els.traceSearchButton.disabled = true;
+  try {
+    const data = await api('/api/memory/search?' + params.toString());
+    traceState.results = data.results ?? [];
+    renderTraceResults(data);
+    // The availability map is reported as it is: a ledger that is not there says it is not there,
+    // rather than being counted as a ledger with nothing in it.
+    const missing = Object.entries(data.availability ?? {}).filter(([, v]) => v.present === false).map(([k]) => TRACE_KIND_LABELS[k] ?? k);
+    const corrupt = Object.entries(data.availability ?? {}).filter(([, v]) => v.corrupt > 0).map(([k]) => TRACE_KIND_LABELS[k] ?? k);
+    setWorkspaceStatus(els.traceSearchStatusLine,
+      data.total + ' record' + (data.total === 1 ? '' : 's') + ' matched'
+      + (data.truncated ? ' (showing the first ' + data.returned + ')' : '')
+      + (missing.length ? ' · not present yet: ' + missing.join(', ') : '')
+      + (corrupt.length ? ' · corrupt lines in: ' + corrupt.join(', ') : '') + '.',
+      'available');
+  } catch (error) {
+    setWorkspaceStatus(els.traceSearchStatusLine, 'Search failed: ' + error.message, 'error');
+    els.traceResults?.replaceChildren(el('li', 'meta', 'No results.'));
+  } finally {
+    if (els.traceSearchButton) els.traceSearchButton.disabled = false;
+  }
+}
+
+function renderTraceChain(payload) {
+  if (!els.traceChain) return;
+  els.traceChain.replaceChildren();
+  if (!payload || payload.ok !== true) {
+    els.traceChain.append(el('li', 'meta', 'No chain.'));
+    return;
+  }
+  for (const entry of payload.entries) {
+    const item = el('li', 'work-item');
+    const head = el('div', 'row');
+    head.append(el('span', 'badge', TRACE_KIND_LABELS[entry.kind] ?? entry.kind));
+    head.append(el('strong', '', entry.label));
+    head.append(el('span', 'meta', entry.at ?? 'no timestamp'));
+    if (entry.sameInstantAsPrevious) head.append(el('span', 'badge', 'same instant'));
+    item.append(head);
+    // The link is named, so a reader can tell a foreign key from a match of text.
+    item.append(el('p', 'meta', 'linked by: ' + entry.linkedBy));
+    item.append(el('pre', 'code', JSON.stringify(entry.detail, null, 2)));
+    els.traceChain.append(item);
+  }
+}
+
+async function openTrace(id, button) {
+  if (!els.traceChainStatus) return;
+  if (button) button.disabled = true;
+  setWorkspaceStatus(els.traceChainStatus, 'Reading the chain for ' + id + '…', 'loading');
+  try {
+    const data = await api('/api/memory/trace/' + encodeURIComponent(id));
+    traceState.chain = data;
+    renderTraceChain(data);
+    const counts = data.counts ?? {};
+    setWorkspaceStatus(els.traceChainStatus,
+      (data.complete ? 'Complete chain' : 'Partial chain')
+      + ' · ' + counts.runs + ' run(s), ' + counts.councilSessions + ' Council session(s), '
+      + counts.taskEvents + ' task event(s), ' + counts.verifications + ' verification(s), '
+      + counts.operations + ' operation(s)'
+      + (data.missing?.length ? ' · ' + data.missing.join('; ') : '') + '.',
+      data.complete ? 'available' : 'error');
+  } catch (error) {
+    // A 404 is "no ledger holds that id", which is a fact about the ledgers rather than a failure.
+    setWorkspaceStatus(els.traceChainStatus,
+      error.status === 404 ? 'No ledger holds a record for ' + id + '.' : 'Read error: ' + error.message,
+      error.status === 404 ? 'unavailable' : 'error');
+    els.traceChain?.replaceChildren(el('li', 'meta', 'No chain.'));
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+// T-38 Step 2 (2026-11-21): the real file inspector.
+//
+// Every number on this panel is one the backend measured. A file's bytes, line count and digest come
+// from the inspector's reading of the tree; a candidate's verdict comes from the parser's own exit
+// code. Nothing here infers a value, and a candidate that has not been verified says so rather than
+// showing an empty place where a badge would go.
+const wsState = { entries: [], candidates: [], inspectedAt: null };
+
+function formatBytes(bytes) {
+  if (typeof bytes !== 'number') return 'unavailable';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function shortDigest(digest) {
+  return typeof digest === 'string' ? digest.slice(0, 12) : 'unavailable';
+}
+
+function renderWorkspaceEntries() {
+  if (!els.wsEntries) return;
+  els.wsEntries.replaceChildren();
+  if (!wsState.entries.length) {
+    els.wsEntries.append(el('li', 'meta', 'No entries to show.'));
+    return;
+  }
+  for (const entry of wsState.entries) {
+    const item = el('li', 'work-item');
+    const head = el('div', 'row');
+    head.append(el('strong', '', entry.path));
+    head.append(el('span', 'meta', entry.kind));
+    if (entry.kind === 'file') {
+      head.append(el('span', 'meta', formatBytes(entry.bytes) + ' · ' + entry.lines + ' lines'));
+      head.append(el('span', 'meta', 'sha256 ' + shortDigest(entry.digest)));
+      const open = el('button', 'small', 'Read');
+      open.type = 'button';
+      open.addEventListener('click', () => { readWorkspaceFile(entry.path, open); });
+      head.append(open);
+    } else if (entry.kind === 'binary') {
+      head.append(el('span', 'meta', 'binary · not read'));
+    }
+    item.append(head);
+    els.wsEntries.append(item);
+  }
+}
+
+async function readWorkspaceFile(path, button) {
+  if (button) button.disabled = true;
+  try {
+    const data = await api('/api/workshop/file?path=' + encodeURIComponent(path));
+    if (els.wsExcerptTitle) {
+      els.wsExcerptTitle.textContent = data.path + ' · lines ' + data.startLine + '–' + (data.startLine + data.lines - 1)
+        + ' of ' + data.totalLines + ' · sha256 ' + shortDigest(data.digest);
+    }
+    if (els.wsExcerpt) els.wsExcerpt.textContent = data.excerpt;
+    if (els.wsExcerptPanel) els.wsExcerptPanel.hidden = false;
+  } catch (error) {
+    if (els.wsExcerptTitle) els.wsExcerptTitle.textContent = 'Refused: ' + path;
+    // The refusal is shown as the backend phrased it, because the reason is the useful part.
+    if (els.wsExcerpt) els.wsExcerpt.textContent = error.message;
+    if (els.wsExcerptPanel) els.wsExcerptPanel.hidden = false;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function inspectWorkspace() {
+  if (!els.wsState) return;
+  setWorkspaceStatus(els.wsState, 'Inspecting the workspace…', 'loading');
+  if (els.wsRefresh) els.wsRefresh.disabled = true;
+  try {
+    const data = await api('/api/workshop/workspace');
+    wsState.entries = Array.isArray(data.entries) ? data.entries : [];
+    wsState.inspectedAt = data.at ?? null;
+    renderWorkspaceEntries();
+    const files = wsState.entries.filter((e) => e.kind === 'file').length;
+    const dirs = wsState.entries.filter((e) => e.kind === 'directory').length;
+    const skipped = wsState.entries.filter((e) => e.skipped === true).length;
+    setWorkspaceStatus(els.wsState,
+      'Read ' + files + ' file' + (files === 1 ? '' : 's') + ' in ' + dirs + ' director' + (dirs === 1 ? 'y' : 'ies')
+      + (skipped ? ', skipped ' + skipped + ' unreadable or binary' : '')
+      + (data.truncated ? ' (listing truncated at the bound)' : '') + '.', 'available');
+  } catch (error) {
+    // An unavailable workspace is a state, not an empty tree.
+    setWorkspaceStatus(els.wsState,
+      error.status === 503 ? 'Unavailable: no workspace root is configured.' : 'Read error: ' + error.message,
+      error.status === 503 ? 'unavailable' : 'error');
+    wsState.entries = [];
+    renderWorkspaceEntries();
+  } finally {
+    if (els.wsRefresh) els.wsRefresh.disabled = false;
+  }
+}
+
+function renderCandidates() {
+  if (!els.wsCandidates) return;
+  els.wsCandidates.replaceChildren();
+  if (!wsState.candidates.length) {
+    els.wsCandidates.append(el('li', 'meta', 'No candidates staged in this page session.'));
+    return;
+  }
+  for (const candidate of wsState.candidates) {
+    const item = el('li', 'work-item');
+    const head = el('div', 'row');
+    head.append(el('strong', '', candidate.relativePath));
+    head.append(el('span', 'meta', candidate.candidateId));
+    // The badge is the backend's verdict, not a local guess.
+    const verified = candidate.verification && candidate.verification.verified === true;
+    const failed = candidate.verification && candidate.verification.verified === false;
+    const badge = el('span', verified ? 'badge badge-ok' : failed ? 'badge badge-bad' : 'badge',
+      verified ? 'verified' : failed ? 'not verified' : 'not checked');
+    head.append(badge);
+    const check = el('button', 'small', 'Verify');
+    check.type = 'button';
+    check.disabled = Boolean(candidate.busy);
+    check.addEventListener('click', () => { verifyCandidate(candidate.candidateId, check); });
+    head.append(check);
+    const promote = el('button', 'small', 'Promote');
+    promote.type = 'button';
+    // Promotion stays disabled until this page has seen verified: true from the backend. The server
+    // refuses anyway; this is only so the button never advertises an action that will be refused.
+    promote.disabled = !verified || Boolean(candidate.busy);
+    promote.addEventListener('click', () => { promoteCandidate(candidate.candidateId, promote); });
+    head.append(promote);
+    item.append(head);
+
+    item.append(el('p', 'meta',
+      'sha256 ' + shortDigest(candidate.digest) + ' · staged ' + formatBytes(candidate.bytes)
+      + ' · ' + candidate.lines + ' lines · diff +' + (candidate.diff?.addedLines ?? '?')
+      + '/-' + (candidate.diff?.removedLines ?? '?')));
+    if (candidate.verification) {
+      const parser = candidate.verification.parser ?? {};
+      item.append(el('p', 'meta',
+        'parser ' + (parser.kind ?? 'n/a') + ' · ran ' + (parser.ran === true ? 'yes' : 'no')
+        + ' · exit ' + (parser.exitCode === null || parser.exitCode === undefined ? 'n/a' : parser.exitCode)
+        + ' · ' + candidate.verification.passed + '/' + candidate.verification.total + ' checks passed'));
+      const failure = candidate.verification.checks?.find((c) => c.passed === false);
+      if (failure) item.append(el('pre', 'code', failure.id + ': ' + failure.detail));
+      // The parser's own words, verbatim - this is the message that names the broken line.
+      if (parser.stderr) item.append(el('pre', 'code', parser.stderr));
+    }
+    els.wsCandidates.append(item);
+  }
+}
+
+async function stageCandidate() {
+  if (!els.wsStageStatus) return;
+  const relativePath = (els.wsStagePath?.value ?? '').trim();
+  const proposedContent = els.wsStageContent?.value ?? '';
+  const rationale = (els.wsStageRationale?.value ?? '').trim();
+  if (!relativePath) {
+    setWorkspaceStatus(els.wsStageStatus, 'A relative path is required.', 'error');
+    return;
+  }
+  setWorkspaceStatus(els.wsStageStatus, 'Staging ' + relativePath + ' in the sandbox…', 'loading');
+  if (els.wsStageSubmit) els.wsStageSubmit.disabled = true;
+  try {
+    const data = await api('/api/workshop/stage', {
+      method: 'POST',
+      body: { relativePath, proposedContent, ...(rationale ? { rationale } : {}) },
+    });
+    wsState.candidates.unshift({
+      candidateId: data.candidateId,
+      relativePath: data.relativePath,
+      digest: data.digest,
+      bytes: data.bytes,
+      lines: data.lines,
+      diff: data.diff,
+      verification: null,
+    });
+    renderCandidates();
+    setWorkspaceStatus(els.wsStageStatus,
+      'Staged ' + data.candidateId + '. The live file is unchanged; verify to run the parser.', 'available');
+  } catch (error) {
+    setWorkspaceStatus(els.wsStageStatus, 'Refused: ' + error.message, 'error');
+  } finally {
+    if (els.wsStageSubmit) els.wsStageSubmit.disabled = false;
+  }
+}
+
+async function verifyCandidate(candidateId, button) {
+  const candidate = wsState.candidates.find((c) => c.candidateId === candidateId);
+  if (button) button.disabled = true;
+  if (candidate) candidate.busy = true;
+  renderCandidates();
+  try {
+    const data = await api('/api/workshop/verify-file', { method: 'POST', body: { candidateId } });
+    if (candidate) {
+      candidate.verification = data;
+      // The rendered badge follows the record written to the sandbox, not the response alone.
+      candidate.verifiedOnRecord = data.verified === true;
+    }
+    renderCandidates();
+    if (els.wsStageStatus) {
+      setWorkspaceStatus(els.wsStageStatus, data.verified
+        ? 'Verified ' + candidateId + ' — the parser exited 0 and every check passed.'
+        : 'Not verified: ' + (data.failed?.join(', ') ?? 'a check failed') + '. Promotion is refused.',
+      data.verified ? 'available' : 'error');
+    }
+  } catch (error) {
+    if (els.wsStageStatus) setWorkspaceStatus(els.wsStageStatus, 'Verification failed: ' + error.message, 'error');
+  } finally {
+    if (candidate) candidate.busy = false;
+    renderCandidates();
+  }
+}
+
+async function promoteCandidate(candidateId, button) {
+  if (button) button.disabled = true;
+  const reason = window.prompt('Why are you accepting this candidate? The promotion records your reason.');
+  if (!reason || !reason.trim()) {
+    if (button) button.disabled = false;
+    if (els.wsStageStatus) setWorkspaceStatus(els.wsStageStatus, 'A promotion needs your reason, so nothing was sent.', 'error');
+    return;
+  }
+  try {
+    const data = await api('/api/workshop/promote-file', { method: 'POST', body: { candidateId, reason: reason.trim() } });
+    const candidate = wsState.candidates.find((c) => c.candidateId === candidateId);
+    if (candidate) candidate.promotion = data;
+    renderCandidates();
+    if (els.wsStageStatus) {
+      setWorkspaceStatus(els.wsStageStatus,
+        'Promoted ' + candidateId + ' — recorded, and the live workspace was still not written.', 'available');
+    }
+  } catch (error) {
+    if (els.wsStageStatus) setWorkspaceStatus(els.wsStageStatus, 'Promotion refused: ' + error.message, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 // T-35 Step 3: the doctor in the System workspace.
 //
 // The report is rendered exactly as the route returned it: a not_configured check is not shown as a
@@ -4636,6 +5098,18 @@ if (els.dagCancel) {
 if (els.workshopStageTelemetry) {
   els.workshopStageTelemetry.addEventListener('click', () => { composeFromTelemetry(els.workshopStageTelemetry); });
 }
+// T-38 Step 3: the search bar. Submitting an empty query is allowed and searches every ledger.
+if (els.traceSearchForm) {
+  els.traceSearchForm.addEventListener('submit', (event) => { event.preventDefault(); runTraceSearch(); });
+}
+// T-38 Step 2: the file inspector and the sandbox loop.
+if (els.wsRefresh) els.wsRefresh.addEventListener('click', () => { inspectWorkspace(); });
+if (els.wsStageForm) {
+  els.wsStageForm.addEventListener('submit', (event) => { event.preventDefault(); stageCandidate(); });
+}
+// The candidate list starts empty with a line that says so, rather than blank space that could be
+// mistaken for a load still in progress.
+renderCandidates();
 if (els.doctorRun) els.doctorRun.addEventListener('click', () => { runDoctor(); });
 if (els.handoffStage) els.handoffStage.addEventListener('click', () => { stageHandoff(); });
 if (els.handoffSource) els.handoffSource.addEventListener('change', () => { fillHandoffDevices(); });

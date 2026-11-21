@@ -78,6 +78,7 @@ import { CAPTURE_OFF } from './experience/capture.js';
 import { ResourceFabric } from './resources/fabric.js';
 import { createWorkshopService } from './workshop/service.js';
 import { WorkshopSandbox } from './workshop/sandbox.js';
+import { MemoryTraceService } from './memory/trace.js';
 import { createPerceptionService } from './perception/service.js';
 import { perceptionActions } from './actions/perception-actions.js';
 import { DeviceTrustService } from './security/device-trust.js';
@@ -295,6 +296,9 @@ export function createApp({
   // T-38 Step 2 (2026-11-21): the file-backed Workshop. The inspector reads the configured target
   // workspace; the sandbox stages candidates under this data directory. The two never cross: the
   // workspace root is opened for reading and every staged byte lives under `<dataDir>/workshop-sandbox`.
+  // T-38 Step 3 (2026-11-21): the cross-ledger trace and search. It reads six ledgers and writes
+  // none; it needs only the data directory, because every record it assembles already exists.
+  const memoryTrace = new MemoryTraceService({ dataDir, now: clock });
   const workshopSandbox = new WorkshopSandbox({
     dataDir,
     workspaceRoot: rootForContext,
@@ -534,6 +538,8 @@ export function createApp({
     filesystemRoot: rootForContext,
     // T-38 Step 2: the file-backed Workshop, so the UI routes reach the one sandbox the actions use.
     workshopSandbox,
+    // T-38 Step 3: the cross-ledger trace and search, for the Memory Timeline.
+    memoryTrace,
     filesystemWorkspaces: workspaces,
     knowledge,
     notes,
