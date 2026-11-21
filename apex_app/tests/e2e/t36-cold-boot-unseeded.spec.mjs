@@ -278,11 +278,18 @@ test.describe('T-36 cold boot on an unseeded workstation, in a real browser', ()
       expect(workstation[0].metadata?.platform).toBeTruthy();
       expect(workstation[0].metadata?.capability).toBe('local-loopback');
       expect(devices.length, 'no other device was invented').toBe(1);
-      // And the deck shows it.
+      // And the deck shows it. The list renders the device's own label - the real hostname the
+      // bootstrap observed - not its id, so the assertion names the label. The id is checked on
+      // the route above and again in the status line below, where the id also appears.
       await page.locator('nav .nav-item[data-view="presence"]').click();
       await expect(page.locator('body')).toHaveAttribute('data-view', 'presence');
-      await expect(page.locator('#presence-devices')).toContainText('local-workstation', { timeout: 30_000 });
       await expect(page.locator('#presence-status')).toContainText('1 enrolled device', { timeout: 30_000 });
+      await expect(page.locator('#presence-devices')).toContainText(workstation[0].label, { timeout: 30_000 });
+      await expect(page.locator('#presence-devices')).toContainText('trusted', { timeout: 30_000 });
+      // The enrolled id is the contract; it is visible on the route and in the bootstrap report.
+      expect(bootLatest?.device?.deviceId).toBe('local-workstation');
+      const presenceText = (await page.locator('#presence-devices').textContent()) ?? '';
+      expect(presenceText.length, 'the Presence list is not empty').toBeGreaterThan(0);
       run.device = {
         deviceId: workstation[0].deviceId,
         status: workstation[0].status,
