@@ -179,7 +179,7 @@ describe('T-35 the stage comes from real telemetry, through explicit thresholds'
     // Found by the hosted run: the stylesheet dropped the painted glow but left `--hud-bloom` at its
     // 18px value, so the rung's own statement was not visible to anything reading the token.
     assert.ok(UI_CSS.includes('body[data-hud-bloom="dropped"] { --hud-bloom: 0px; }'),
-      'the token is zeroed at the root when the bloom is dropped');
+      'the token is zeroed on the element that carries the stage, which the deck inherits from');
     assert.match(UI_CSS, /\.core \{ filter: drop-shadow\(0 0 var\(--hud-bloom\)/,
       'the painted glow reads the same token, so the drop is the same drop');
     const base = UI_CSS.match(/:root \{[\s\S]*?--hud-bloom: (\d+px);/);

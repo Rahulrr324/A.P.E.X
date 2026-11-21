@@ -134,7 +134,9 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
           parallax: document.body.dataset.hudParallax,
           ambient: document.body.dataset.hudAmbient,
           flat: document.body.dataset.hudFlat,
-          rootBloom: getComputedStyle(document.documentElement).getPropertyValue('--hud-bloom').trim(),
+          // Read where the deck inherits from: the stage is written on <body>, so the effective
+          // token is the body's computed value, not the :root default the body overrides.
+          deckBloom: getComputedStyle(document.body).getPropertyValue('--hud-bloom').trim(),
           coreFilter: getComputedStyle(document.querySelector('.core')).filter,
           panelBackdrop: (() => {
             const panel = document.querySelector('.view.active .panel') || document.querySelector('.panel');
@@ -164,7 +166,7 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
       const stage1 = await setStage(1);
       run.stages[1] = stage1;
       expect(stage1.bloom).toBe('dropped');
-      expect(stage1.rootBloom, 'the bloom token is zeroed where a reader can see it').toBe('0px');
+      expect(stage1.deckBloom, 'the bloom token the deck inherits is zeroed').toBe('0px');
       expect(stage1.coreFilter, 'the bloom is gone from the painted Core').toBe('none');
       expect(stage1.reticle.opacity, 'the reticle stays legible when the bloom drops').toBe('1');
       await shot('stage-1-no-bloom');
@@ -178,7 +180,7 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
       run.stages[3] = stage3;
       expect(stage3.parallax).toBe('dropped');
       const factors = await page.evaluate(() => ['--parallax-z1', '--parallax-z3', '--parallax-z4']
-        .map((token) => getComputedStyle(document.documentElement).getPropertyValue(token).trim()));
+        .map((token) => getComputedStyle(document.body).getPropertyValue(token).trim()));
       expect(factors, 'every depth plane factor is zero at stage 3').toEqual(['0', '0', '0']);
       await shot('stage-3-no-parallax');
 
@@ -195,9 +197,13 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
       expect(stage5.panelBackdrop, 'flat mode removes the backdrop blur').toBe('none');
       const panelTransition = await page.evaluate(() => {
         const panel = document.querySelector('.view.active .panel') || document.querySelector('.panel');
-        return panel ? getComputedStyle(panel).transitionProperty : 'no-panel';
+        if (!panel) return null;
+        const style = getComputedStyle(panel);
+        return { property: style.transitionProperty, duration: style.transitionDuration };
       });
-      expect(panelTransition, 'flat mode removes the panel transitions').toBe('none');
+      expect(panelTransition, 'the deck still has a panel to measure').not.toBeNull();
+      expect(panelTransition.duration.replace(/[\s,]+/g, ''), 'flat mode removes every panel transition duration')
+        .toMatch(/^(0s)+$/);
       const reticleBox = page.locator('#core-reticle');
       await expect(reticleBox).toBeVisible();
       const reticleBoxPx = await reticleBox.boundingBox();
@@ -220,12 +226,15 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
             const timing = animation.effect?.getTiming?.();
             duration = typeof timing?.duration === 'number' ? timing.duration : null;
           } catch { duration = null; }
-          return { duration, name: animation.animationName ?? null };
+          // Only animations cycle; a transition is a one-shot state change and has no flash rate.
+          return { duration, name: animation.animationName ?? null, kind: animation.constructor?.name ?? 'unknown' };
         });
       });
       expect(animations, 'the Web Animations API is available to measure the guard').not.toBeNull();
       const GUARD_MS = 334;
-      const fast = animations.filter((entry) => typeof entry.duration === 'number' && entry.duration > 0 && entry.duration < GUARD_MS);
+      const cycles = animations.filter((entry) => entry.kind === 'CSSAnimation');
+      expect(cycles.length, 'the deck is still animating something, so the guard is measured and not vacuous').toBeGreaterThan(0);
+      const fast = cycles.filter((entry) => typeof entry.duration === 'number' && entry.duration > 0 && entry.duration < GUARD_MS);
       expect(fast, `no animation may cycle faster than ${GUARD_MS} ms: ${JSON.stringify(fast)}`).toEqual([]);
 
       const samples = await page.evaluate(async () => {
@@ -243,7 +252,10 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
         return { changes: seen.size, elapsed: Math.round(performance.now() - started), values: [...seen].slice(0, 4) };
       });
       expect(samples.changes, 'the reticle does not flicker between values').toBeLessThanOrEqual(3);
-      run.flashGuard = { guardMs: GUARD_MS, animations: animations.length, violations: fast.length, reticleSamples: samples };
+      run.flashGuard = {
+        guardMs: GUARD_MS, animations: animations.length, cycles: cycles.length,
+        durations: cycles.map((entry) => entry.duration), violations: fast.length, reticleSamples: samples,
+      };
       step('flash-guard', run.flashGuard);
 
       // ---- the sensor and privacy indicator ---------------------------------------------------

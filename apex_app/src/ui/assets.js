@@ -1003,10 +1003,11 @@ body[data-motion="reduced"] .core, body[data-motion="reduced"] .core-halo { anim
 [data-depth-plane="z1"] { transform: translate3d(calc(var(--parallax-z1) * var(--parallax-x)), calc(var(--parallax-z1) * var(--parallax-y)), 0); }
 [data-depth-plane="z3"] { transform: translate3d(calc(var(--parallax-z3) * var(--parallax-x)), calc(var(--parallax-z3) * var(--parallax-y)), 0); }
 [data-depth-plane="z4"] { transform: translate3d(calc(var(--parallax-z4) * var(--parallax-x)), calc(var(--parallax-z4) * var(--parallax-y)), 0); }
-/* Stage 1: bloom. The token itself is zeroed at the root, so anything that reads --hud-bloom sees
-   the dropped value rather than only the elements this rule happens to cover; the drop-shadow and
-   the halo are the multi-tier glow, and the rings, the reticle geometry and its cadence are
-   untouched, so the Core state stays readable. */
+/* Stage 1: bloom. The token itself is zeroed on the element that carries the stage (the body, which
+   the whole deck inherits from), so anything reading the effective value sees the dropped one rather
+   than only the elements this rule happens to cover. The drop-shadow and the halo are the multi-tier
+   glow; the rings, the reticle geometry and its cadence are untouched, so the Core state stays
+   readable. */
 body[data-hud-bloom="dropped"] { --hud-bloom: 0px; }
 .core { filter: drop-shadow(0 0 var(--hud-bloom) rgba(0, 229, 255, 0.25)); }
 body[data-hud-bloom="dropped"] .core { filter: none; }

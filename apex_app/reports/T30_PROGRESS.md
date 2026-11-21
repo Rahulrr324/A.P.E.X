@@ -1319,11 +1319,26 @@ real-browser step failed. The annotations named the cause rather than the sympto
 | Failure | Cause | Fix |
 | --- | --- | --- |
 | T-35, stage 1 | the walk asserted `--hud-bloom` is `0px` at stage 1 and read `18px`: the stylesheet dropped the painted glow (`filter: none`) but never zeroed the token itself | `body[data-hud-bloom="dropped"] { --hud-bloom: 0px; }` is now the first rule of the rung, and a unit test pins it against the served stylesheet. The browser found what the source reading had missed, which is the reason the walk exists |
+| T-35, stage 1 again (run `44884503520`) | the token was now zeroed, but the walk read it from `document.documentElement`: a custom property set on `<body>` overrides the `:root` default only *inside* the body subtree, so the root still computed `18px` | the walk reads the effective value where the deck inherits it - `getComputedStyle(document.body)` - for both the bloom token and the Z0-Z4 factors. The rule's job is the deck, not the root element, and the assertion now says so |
 | T-33, `idle` checkpoint | `/api/state` reported the governor's *deliveries* under `perception.advisories`, so when the governor deduplicated an unchanged signature the snapshot claimed there was no advisory while the workspace was still dirty. A settled deck then allowed wit with a condition standing. The comment above that code already said a condition is a condition whether or not its notice was delivered | the snapshot now reports the conditions the last reading implied (`advisories`, `activeAdvisories`) and the delivery count separately (`deliveredAdvisories`); the fixture test pins the deduplicated case, and the browser assertion becomes deterministic instead of timing-dependent |
 
 The second one is the more interesting: it had been latent since T-33 and only surfaced when a run's
 timing let the dedup land between the walk's last reading and its Idle checkpoint. It is reported here
 as a bug the milestone found, not as a flake to be re-run until green.
+
+The stage-1 red took two attempts, and the second attempt is the honest part: the first fix zeroed the
+token in a rule the *root read* cannot see, and the walk said so with `18px` again. Reading the
+effective value from the element that carries the stage is the correction. Two other assertions in the
+walk were hardened at the same time, before running again rather than after: the flat-mode check now
+asserts every panel transition *duration* is `0s` (a property name can be `none` or an empty list
+depending on the shorthand), and the flash guard measures CSS animations only - a transition is a
+one-shot state change and has no cycle rate.
+
+One interaction is worth stating rather than discovering later: the ladder is driven by the machine, so
+a host under real pressure presents the flat deck. The T-32 HUD measurements that assert the full-motion
+presentation (a 0.26 s panel transition, for one) are taken on whatever the host reports; on the two
+hosted runs so far the automatic stage was 0 and 2, where those measurements are unaffected. A run on a
+host at stage 5 would see a flat deck, and that would be the ladder working rather than a regression.
 
 ### What is verified, and what is not
 
