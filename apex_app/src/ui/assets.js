@@ -1276,6 +1276,7 @@ const state = {
   handoffDevices: [],
   handoffLedger: null,
   doctorAt: 0,
+  doctorRan: false,
   contrast: 'standard',
   cognitionInFlight: false,
   lastCognitionRun: null,
@@ -3013,10 +3014,19 @@ function renderDoctor(report) {
 }
 
 async function runDoctor() {
-  if (els.doctorStatus) setWorkspaceStatus(els.doctorStatus, 'Running the six read-only checks…', 'loading');
+  // A re-run keeps the last report on screen while it reads. Replacing a measured line with
+  // "Running..." would hide a real measurement behind a status message - and the hosted walk caught
+  // exactly that: opening System and then pressing Run again left the panel claiming it was running
+  // while the six checks from the first reading were already listed underneath.
+  if (els.doctorStatus && state.doctorRan !== true) {
+    setWorkspaceStatus(els.doctorStatus, 'Running the six read-only checks…', 'loading');
+  }
   try {
-    renderDoctor(await api('/api/system/doctor'));
+    const report = await api('/api/system/doctor');
+    state.doctorRan = true;
+    renderDoctor(report);
   } catch (error) {
+    state.doctorRan = true;
     setWorkspaceStatus(els.doctorStatus, 'Unavailable: ' + String(error?.message || error), 'error');
   }
 }

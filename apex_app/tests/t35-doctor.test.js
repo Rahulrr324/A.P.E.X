@@ -399,4 +399,41 @@ describe('T-35 the System workspace shows the doctor report as it stands', () =>
     assert.equal(sensorRow.dataset.checkState, 'not_configured', 'a check with nothing to read is not shown as a pass');
     assert.deepEqual(browser.events.pageErrors, []);
   });
+
+  // The hosted walk caught this: opening System takes a reading, and pressing Run again while that
+  // reading was still landing left the panel saying "Running..." over six checks it had already
+  // listed. A re-run now keeps the last measured line on screen until it has a new one.
+  test('a second run keeps the measured line on screen instead of replacing it with a status', async () => {
+    const routes = new Map([
+      ['/api/state', { session: { id: 'session-t35', status: 'ok' }, turns: [], tasks: [], plans: [], goals: [], autonomy: { configured: {} }, resources: {} }],
+      ['/api/killswitch', { active: false, policyUnavailable: false, persistence: 'durable' }],
+      ['/api/health', { overall: 'healthy', areas: [] }],
+      ['/api/system/doctor', report],
+    ]);
+    const browser = createFakeBrowser({ routes });
+    const context = vm.createContext(browser.sandbox, { name: 'apex-ui-client-t35-doctor-rerun' });
+    vm.runInContext(UI_CLIENT, context, { filename: 'ui-client.js', displayErrors: true });
+    const source = browser.events.sources.at(-1);
+    source.open();
+    source.emit('reconcile', {
+      schema: 'apex.state-event/1', streamId: 'f'.repeat(32), seq: 2, at: '2026-11-19T00:00:00.000Z',
+      type: 'reconcile', versions: {}, payload: { reason: 'initial', snapshotUrl: '/api/state', owners: {} },
+      correlationId: null,
+    }, { lastEventId: `${'f'.repeat(32)}:2` });
+    await flushMicrotasks();
+
+    const status = browser.getElement('doctor-status');
+    browser.getElement('doctor-run').click();
+    for (let index = 0; index < 6; index += 1) await flushMicrotasks();
+    const measured = status.textContent;
+    assert.match(measured, /12.5 ms of a 500 ms budget/);
+
+    browser.getElement('doctor-run').click();
+    const duringRerun = status.textContent;
+    assert.match(duringRerun, /ms of a 500 ms budget/,
+      'the re-run reads over the last measurement rather than hiding it behind "Running..."');
+    for (let index = 0; index < 6; index += 1) await flushMicrotasks();
+    assert.match(status.textContent, /12.5 ms of a 500 ms budget/);
+    assert.deepEqual(browser.events.pageErrors, []);
+  });
 });

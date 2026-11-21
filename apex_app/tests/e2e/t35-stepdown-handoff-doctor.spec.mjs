@@ -329,7 +329,9 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
       await page.locator('nav .nav-item[data-view="system"]').click();
       await expect(page.locator('body')).toHaveAttribute('data-view', 'system');
       await page.locator('#doctor-run').click();
-      await expect(page.locator('#doctor-status')).not.toHaveText(/The doctor has not run yet/, { timeout: 30_000 });
+      // Auto-retrying: a second run must not be able to leave the panel mid-sentence when it is read.
+      await expect(page.locator('#doctor-status'))
+        .toHaveText(/\d+(\.\d+)? ms of a 500 ms budget/, { timeout: 30_000 });
       const checkRows = page.locator('#doctor-checks li[data-check]');
       await expect(checkRows).toHaveCount(6, { timeout: 30_000 });
       const states = await checkRows.evaluateAll((rows) => rows.map((row) => ({ name: row.dataset.check, state: row.dataset.checkState })));
