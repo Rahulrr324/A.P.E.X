@@ -246,7 +246,11 @@ test.describe('T-34 mission DAG, in a real browser', () => {
     // ---- 7. the briefing: the honest baseline, the acknowledgement, then the delta it enables -----
     await nav('deck');
     await expect(page.locator('#briefing-delta-status')).toContainText('No prior briefing checkpoint recorded — showing full current state', { timeout: 30_000 });
-    await expect(page.locator('#briefing-delta li')).toHaveCount(0);
+    // No checkpoint means no delta item. The list still holds the sentence that says so - one
+    // placeholder <li class="meta">, which is not a change and carries no data-kind - so the walk
+    // counts the items rather than the rows.
+    await expect(page.locator('#briefing-delta li[data-kind]')).toHaveCount(0);
+    await expect(page.locator('#briefing-delta li.meta')).toContainText('No prior briefing checkpoint recorded');
     await page.locator('#briefing-acknowledge').click();
     await expect(page.locator('#briefing-ack-status')).toContainText('Acknowledged', { timeout: 45_000 });
     await expect(page.locator('#briefing-delta-status')).toContainText('Nothing has changed since the briefing you acknowledged at', { timeout: 45_000 });
