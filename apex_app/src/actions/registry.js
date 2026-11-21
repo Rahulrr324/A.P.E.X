@@ -7,6 +7,7 @@
 //    propose an action, but a proposal is never authorization by itself.
 import { ORIGINS_LIST } from './origins.js';
 import { ExecutiveControlPlane } from '../executive/control-plane.js';
+import { BLAST_RADIUS_KINDS, REVERSIBILITY_KINDS, applySafetyMetadata } from './safety-metadata.js';
 
 export const PERMISSIONS = Object.freeze(['read', 'write']);
 // One grammar for action names, shared with the proposal parser so that text which
@@ -57,6 +58,15 @@ export function validateDefinition(def) {
   if (def.risk !== undefined && !['low', 'medium', 'high'].includes(def.risk)) {
     throw new TypeError(`${def.name}: risk must be low, medium, or high`);
   }
+  // T-38 Step 1 (2026-11-21): a capability may state its own reversibility and blast radius, and the
+  // vocabulary is closed. A declaration outside it is refused at registration rather than carried
+  // into a rule that would then read a value it does not know.
+  if (def.reversibility !== undefined && def.reversibility !== null && !REVERSIBILITY_KINDS.includes(def.reversibility)) {
+    throw new TypeError(`${def.name}: reversibility must be one of: ${REVERSIBILITY_KINDS.join(', ')}`);
+  }
+  if (def.blastRadius !== undefined && def.blastRadius !== null && !BLAST_RADIUS_KINDS.includes(def.blastRadius)) {
+    throw new TypeError(`${def.name}: blastRadius must be one of: ${BLAST_RADIUS_KINDS.join(', ')}`);
+  }
   if (def.permission === 'write' && def.origins.includes('agent')
     && (def.delegable !== true || !def.resourceScope || !def.resourceDemand || !Number.isInteger(def.maxAutonomy) || def.maxAutonomy < 3 || !def.risk)) {
     throw new TypeError(`${def.name}: agent writes require delegable=true, an exact resource scope, finite resourceDemand, maxAutonomy >= 3, and a risk classification`);
@@ -85,6 +95,10 @@ export class ActionRegistry {
     if (this.#actions.has(def.name)) throw new Error(`duplicate action: ${def.name}`);
     this.#actions.set(def.name, Object.freeze({
       ...def,
+      // T-38 Step 1: the safety overlay is applied here, once, so every reader of a definition -
+      // the constraints core, the Council, the inventory report, the UI - sees the same facts, and a
+      // capability that forgot to declare them is visibly undeclared rather than quietly absent.
+      ...applySafetyMetadata(def),
       origins: Object.freeze([...def.origins]),
       verify: def.verify ?? null,
     }));

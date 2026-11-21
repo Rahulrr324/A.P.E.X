@@ -17,6 +17,7 @@ import {
 } from './index.js';
 // T-37 Step 2: the Values & Constraints Core, evaluated as the Council's eighth position.
 import { constraintPerspective } from './values-core.js';
+import { resolveCandidateCapabilities } from './candidate-resolver.js';
 
 const MAX_TASK_STEPS = 200;
 
@@ -49,9 +50,13 @@ export function mapRelation(relation) {
 }
 
 export class CouncilService {
-  constructor({ store = null, capabilityLookup, latchLookup = null, evidenceProvider = null, evidenceProviderName = null, context = null, now = () => new Date(), idFactory } = {}) {
+  constructor({ store = null, capabilityLookup, latchLookup = null, evidenceProvider = null, evidenceProviderName = null, context = null, registry = null, now = () => new Date(), idFactory } = {}) {
     this.store = store ?? null;
     this.capabilityLookup = capabilityLookup ?? (() => null);
+    // T-38 Step 1: the registry, read-only, so a deliberation that names no candidate can resolve one
+    // from the sentence. A service built without it simply keeps the pre-T-38 behaviour: no candidate,
+    // and every rule that needs one reports `unverifiable`.
+    this.registry = registry;
     // T-37 Step 2: the safety latch, read-only, for the constraint core's lockdown rule. A lookup
     // that throws or returns nothing leaves the rule `unverifiable`, which is the honest answer -
     // an unreadable latch is not a released one.
@@ -123,7 +128,17 @@ export class CouncilService {
       });
     }
 
-    const resolvedCandidate = candidate ?? (await this.candidateContext(candidateId));
+    // T-38 Step 1 (2026-11-21): a deliberation that names no candidate still has one if the sentence
+    // names a capability. The resolution is deterministic and comes from the controller's own router
+    // first, then from exact matching against registered names; when neither finds anything the
+    // candidate stays null and the constraints core reports `unverifiable` with `no_mapped_capability`
+    // as its stated reason. An explicit candidate or candidateId always wins over this reading.
+    let resolution = null;
+    let resolvedCandidate = candidate ?? (await this.candidateContext(candidateId));
+    if (!resolvedCandidate && this.registry) {
+      resolution = resolveCandidateCapabilities(objective, { registry: this.registry });
+      if (resolution.candidate) resolvedCandidate = resolution.candidate;
+    }
     const capability = resolvedCandidate ? this.capabilityLookup(resolvedCandidate.action || resolvedCandidate.id) : null;
 
     const evaluatedAt = this.#evaluationTime();
@@ -153,6 +168,11 @@ export class CouncilService {
       claims: resolvedCandidate ?? null,
       latch: typeof this.latchLookup === 'function' ? this.latchLookup() : null,
       inPlan: false,
+      // The resolution travels with the evaluation: when it found nothing, the core's detail says so
+      // with this reason rather than a generic "no declaration was supplied".
+      resolution: resolution
+        ? { kind: resolution.kind, reason: resolution.reason, detail: resolution.detail ?? null }
+        : null,
       // The session's own evaluation instant, so a replay of the session reproduces this position
       // byte for byte. A wall-clock read here would make every replay disagree with its record.
       at: evaluatedAt.toISOString(),

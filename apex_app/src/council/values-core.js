@@ -29,6 +29,21 @@ export const CONSTRAINT_VERDICTS = Object.freeze(['satisfied', 'violated', 'unve
 //
 // The predicates read only what the registry already declares. None of them reaches a store, a
 // network, a model or the ECP, so evaluating the core cannot itself have an effect.
+// T-38 Step 1 (2026-11-21): what to say when there is no candidate. The resolver records why it found
+// nothing, and a rule that cannot be checked should name that reason: `no_mapped_capability` means the
+// sentence named nothing registered, which is the honesty rule working rather than a gap, while an
+// absent declaration means the registry itself is missing a fact.
+function missingDeclaration(resolution, tail = '') {
+  if (resolution && resolution.reason === 'no_mapped_capability') {
+    return {
+      verdict: 'unverifiable',
+      detail: 'no_mapped_capability - the objective names no registered capability, so there is no declaration to read'
+        + (tail ? `, ${tail.replace(/^so /, 'so ')}` : ''),
+    };
+  }
+  return { verdict: 'unverifiable', detail: `no registry declaration was supplied${tail ? `, ${tail}` : ''}` };
+}
+
 export const CONSTRAINTS = Object.freeze([
   {
     id: 'no-model-authored-write',
@@ -37,8 +52,8 @@ export const CONSTRAINTS = Object.freeze([
     value: 'The owner is the only author of a change to APEX’s stores',
     because: 'AF-20: a reply never authorizes itself. A candidate that a model origin could execute '
       + 'would let the model manufacture the permission it is then asked about.',
-    evaluate({ definition }) {
-      if (!definition) return { verdict: 'unverifiable', detail: 'no registry declaration was supplied, so the origins cannot be read' };
+    evaluate({ definition, resolution }) {
+      if (!definition) return missingDeclaration(resolution, 'so the origins cannot be read');
       if (definition.permission !== 'write') return { verdict: 'not_applicable', detail: 'the candidate is a read; it writes nothing' };
       const origins = Array.isArray(definition.origins) ? definition.origins : [];
       if (origins.includes('model')) {
@@ -54,8 +69,8 @@ export const CONSTRAINTS = Object.freeze([
     value: 'A plan is a proposal the owner can read before anything runs',
     because: 'An unplannable capability is one whose effect is not a step in a world model - a '
       + 'simulation step, a lockdown, a release. Putting one in a plan would record it as work.',
-    evaluate({ definition, inPlan }) {
-      if (!definition) return { verdict: 'unverifiable', detail: 'no registry declaration was supplied' };
+    evaluate({ definition, resolution, inPlan }) {
+      if (!definition) return missingDeclaration(resolution);
       if (inPlan !== true) return { verdict: 'not_applicable', detail: 'the candidate is not being proposed as a plan step' };
       if (definition.plannable === false) {
         return { verdict: 'violated', detail: `"${truncate(definition.name, 60)}" is declared unplannable and was proposed as a plan step` };
@@ -70,8 +85,8 @@ export const CONSTRAINTS = Object.freeze([
     value: 'Nothing irreversible happens without the owner asking for it',
     because: 'A reversible step can be undone by reading the record of it. An irreversible one cannot, '
       + 'so the same autonomy that is appropriate elsewhere is not appropriate here.',
-    evaluate({ definition }) {
-      if (!definition) return { verdict: 'unverifiable', detail: 'no registry declaration was supplied' };
+    evaluate({ definition, resolution }) {
+      if (!definition) return missingDeclaration(resolution);
       const reversibility = definition.reversibility ?? definition.reversible;
       if (reversibility === undefined || reversibility === null) {
         return { verdict: 'unverifiable', detail: `"${truncate(definition.name, 60)}" declares no reversibility, so it cannot be read as safe` };

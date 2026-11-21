@@ -178,9 +178,22 @@ test('T-37 values: a live deliberation evaluates a real registered declaration',
     assert.equal(modelWrite.verdict, 'satisfied');
     assert.match(modelWrite.detail, /restricted to user/);
     // Its reversibility is undeclared, so that rule must say it could not be read.
+    //
+    // T-38 Step 1 (2026-11-21) changed the fact this assertion was reading, not the rule: every
+    // registered capability now declares `reversibility` and `blastRadius` (src/actions/safety-metadata.js),
+    // so the rule has a real value and answers `satisfied` instead of `unverifiable`. The assertion is
+    // kept and its expectation moved with the fact, rather than deleted, because the thing worth
+    // pinning was never "the field is missing" - it is "the rule reports what the registry actually
+    // declares". The undeclared case is pinned separately, below.
     const reversibility = core.evaluation.evaluations.find((entry) => entry.id === 'irreversible-needs-the-owner');
-    assert.equal(reversibility.verdict, 'unverifiable');
-    assert.match(reversibility.detail, /declares no reversibility/);
+    assert.equal(reversibility.verdict, 'satisfied');
+    assert.match(reversibility.detail, /is declared reversible/);
+
+    // And the fact the rule read is inspectable rather than implied.
+    const definition = app.registry.get('neural.step');
+    assert.equal(definition.reversibility, 'reversible');
+    assert.equal(definition.blastRadius, 'local_store');
+    assert.equal(definition.metadataSource, 'declared');
 
     // Deliberation still authorizes nothing.
     assert.equal(result.result.data.authorizesExecution, false);

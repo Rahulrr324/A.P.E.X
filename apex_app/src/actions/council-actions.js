@@ -429,6 +429,9 @@ export function createCouncilService({ dataDir, now, idFactory, registry, reason
   return new CouncilService({
     store,
     capabilityLookup: (name) => registry.get(name),
+    // T-38 Step 1: the registry itself, so a deliberation whose objective names no candidate can
+    // resolve one deterministically from the sentence (see council/candidate-resolver.js).
+    registry,
     // T-37 Step 2: a candidate may be named by the id of a registered capability. Resolving one is a
     // read of the registry - it creates nothing and authorizes nothing - and it is what lets the
     // constraint core evaluate a real declaration instead of reporting every rule unverifiable.
