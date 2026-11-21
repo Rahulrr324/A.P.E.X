@@ -96,6 +96,10 @@ test.describe('T-34 mission DAG, in a real browser', () => {
     // A five-node mission, two approvals, two resumes and three navigations: the default 90 s is for
     // one page assertion, not for a session.
     test.setTimeout(300_000);
+    // A red run has to say what it was. The summary is the only thing the workflow can annotate, and a
+    // failure that reports "0 steps" tells the next reader nothing, so the first failing checkpoint and
+    // the error are recorded before the throw.
+    try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     const consoleErrors = [];
@@ -288,5 +292,13 @@ test.describe('T-34 mission DAG, in a real browser', () => {
     expect(consoleErrors, `console errors: ${consoleErrors.join(' | ')}`).toEqual([]);
     step('console', { errors: 0, pageErrors: 0, overflow: false });
     await context.close();
+    } catch (error) {
+      run.failures.push({
+        checkpoint: run.steps.at(-1)?.id ?? null,
+        message: String(error?.message ?? error).slice(0, 1500),
+        stack: String(error?.stack ?? '').split('\n').slice(0, 8).join('\n'),
+      });
+      throw error;
+    }
   });
 });

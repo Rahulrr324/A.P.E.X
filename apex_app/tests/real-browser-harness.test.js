@@ -186,7 +186,14 @@ describe('T-31 browser suite wiring', () => {
       'the mission-DAG walk launches the resolved browser');
     assert.match(mission, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
       'the mission-DAG walk skips loudly when no browser exists');
+    assert.match(mission, /T34_FAILURES/, 'the mission-DAG walk prints a short failure line first');
     const loop = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't33-executive-loop.spec.mjs'), 'utf8');
+    // A red browser run is diagnosed from its own summary, so a failure has to reach it: both walks
+    // record the last checkpoint and the error before rethrowing, and print the short line first.
+    for (const [name, spec] of [['the mission-DAG walk', mission], ['the executive-loop walk', loop]]) {
+      assert.match(spec, /run\.failures\.push\(/, `${name} records a failure in its summary`);
+      assert.match(spec, /checkpoint: run\.steps\.at\(-1\)\?\.id \?\? null/, `${name} names the last checkpoint it reached`);
+    }
     assert.match(loop, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/,
       'the executive-loop walk launches the resolved browser');
     assert.match(loop, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
