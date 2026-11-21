@@ -2148,6 +2148,38 @@ export function createUiServer({
       } catch (err) { sendJson(res, 400, { error: err.message }); }
       return;
     }
+    // T-37 Step 3 (2026-11-21): the deterministic executive command router. The deck's input posts
+    // here; the router decides which capability a line names and calls it through the controller, so
+    // the same ECP gate applies as if the owner had used the form. There is no inference here: an
+    // unmatched line goes to the T-29 pipeline, which is the one component whose job is to interpret.
+    if (method === 'POST' && url.pathname === '/api/command/dispatch') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        sendJson(res, 400, { error: 'the body must be a JSON object' });
+        return;
+      }
+      const extra = Object.keys(body).filter((key) => key !== 'line');
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      if (typeof body.line !== 'string' || body.line.trim().length === 0 || body.line.length > 2000) {
+        sendJson(res, 400, { error: 'a line of 1-2000 characters is required' });
+        return;
+      }
+      try {
+        const router = app.commandRouter;
+        if (!router || typeof router.dispatch !== 'function') {
+          sendJson(res, 503, { unavailable: true, error: 'the command router is not configured' });
+          return;
+        }
+        const receipt = await router.dispatch(body.line, { operationId: `ui-dispatch-${randomUUID()}` });
+        sendJson(res, 200, receipt);
+        broadcast('command', { at: receipt.at, routeKind: receipt.routeKind });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
     // T-37 Step 1 (2026-11-21): Track 2, the 8-region spiking substrate and its versioned bridge.
     // The bridge read is a GET because it advances nothing; the step is a POST because it advances
     // a stateful simulation and appends to a ledger, so it goes through the controller and the ECP

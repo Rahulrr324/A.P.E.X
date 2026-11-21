@@ -56,6 +56,9 @@ import { councilActions, createCouncilService } from './actions/council-actions.
 // T-37 Step 1: the 8-region LIF/STDP substrate and its versioned bridge, plus the capabilities that
 // step and read them. Track 2 produces candidate associations; it authorizes nothing.
 import { neuralActions, createNeural } from './actions/neural-actions.js';
+// T-37 Step 3: the deterministic executive command router. No inference; every route names a
+// capability or hands the line to the T-29 pipeline.
+import { createCommandRouter } from './cognition/command-router.js';
 import { workshopActions } from './actions/workshop-actions.js';
 import { evolutionActions } from './actions/evolution-actions.js';
 import { briefingActions } from './actions/briefing-actions.js';
@@ -278,7 +281,12 @@ export function createApp({
 
   // Council is constructed before action registration so its read-oriented actions are
   // registered exactly once, through the same registry/ECP path as every other capability.
-  const council = createCouncilService({ dataDir, now: clock, idFactory, registry, reasoning });
+  // T-37 Step 2: the Council also reads the safety latch, so its Values & Constraints Core can
+  // evaluate its lockdown rule. The read is of the latch's state; the Council cannot move it.
+  const council = createCouncilService({
+    dataDir, now: clock, idFactory, registry, reasoning,
+    controlPlane: registry.controlPlane,
+  });
 
   // The Workshop is a design sheet store: composition is a user write, inspection and simulation
   // are reads. Nothing in it executes code, and a simulation is never an authorization.
@@ -553,6 +561,27 @@ export function createApp({
   for (const def of systemBootstrapActions(bootstrap)) registry.register(def);
   app.doctor = doctor;
   app.bootstrap = bootstrap;
+
+  // T-37 Step 3: the deterministic command router, composed with the controller so every route it
+  // names is authorized by the same registry and gated by the same ECP. It is attached before the
+  // server can serve a dispatch, and it reads the doctor and the briefing through `dispatchRead`
+  // below rather than through a second implementation of either.
+  app.dispatchRead = async (pathname) => {
+    try {
+      if (pathname === '/api/system/doctor') {
+        const report = await doctor.run();
+        return { ok: report?.status !== 'failed', status: 200, value: report };
+      }
+      if (pathname === '/api/briefing') {
+        const report = await briefing.latest();
+        return { ok: true, status: 200, value: report };
+      }
+      return { ok: false, status: 404, error: `this build cannot read ${pathname} internally` };
+    } catch (err) {
+      return { ok: false, status: 500, error: String(err?.message ?? err) };
+    }
+  };
+  app.commandRouter = createCommandRouter({ controller, app });
   return app;
 }
 

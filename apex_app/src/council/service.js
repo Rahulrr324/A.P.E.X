@@ -15,6 +15,8 @@ import {
   buildEvidenceSet, canonicalJson, classifyDisagreement, councilSessionId, digestOf, evaluatePerspective,
   MAX_EVIDENCE_ITEMS, parseObjective, PERSPECTIVES, synthesize,
 } from './index.js';
+// T-37 Step 2: the Values & Constraints Core, evaluated as the Council's eighth position.
+import { constraintPerspective } from './values-core.js';
 
 const MAX_TASK_STEPS = 200;
 
@@ -47,9 +49,13 @@ export function mapRelation(relation) {
 }
 
 export class CouncilService {
-  constructor({ store = null, capabilityLookup, evidenceProvider = null, evidenceProviderName = null, context = null, now = () => new Date(), idFactory } = {}) {
+  constructor({ store = null, capabilityLookup, latchLookup = null, evidenceProvider = null, evidenceProviderName = null, context = null, now = () => new Date(), idFactory } = {}) {
     this.store = store ?? null;
     this.capabilityLookup = capabilityLookup ?? (() => null);
+    // T-37 Step 2: the safety latch, read-only, for the constraint core's lockdown rule. A lookup
+    // that throws or returns nothing leaves the rule `unverifiable`, which is the honest answer -
+    // an unreadable latch is not a released one.
+    this.latchLookup = latchLookup;
     this.evidenceProvider = evidenceProvider;
     this.evidenceProviderName = evidenceProviderName ?? (evidenceProvider ? 'reasoning' : null);
     this.context = context ?? null;
@@ -131,6 +137,22 @@ export class CouncilService {
       resourceContext: resourceContext ?? null,
       taskRecord: boundTaskRecord(taskRecord),
       evaluatedAt: evaluatedAt.toISOString(),
+    }));
+    // T-37 Step 2: the eighth position is the Values & Constraints Core. It is appended rather than
+    // folded into the seven engineering perspectives, because it answers a different question: not
+    // "how strong is this candidate" but "does it contradict a rule the owner set". Its own evaluation
+    // travels with it, so the owner can read which rule produced which verdict.
+    positions.push(constraintPerspective({
+      // The registry's own declaration, which is what the rules are written against: permission,
+      // origins, plannability and reversibility. `capability` is the Council's narrower view and does
+      // not carry the origins a rule needs.
+      definition: resolvedCandidate
+        ? this.capabilityLookup(resolvedCandidate.action || resolvedCandidate.id) ?? null
+        : null,
+      evidence: evidenceSet.items,
+      claims: resolvedCandidate ?? null,
+      latch: typeof this.latchLookup === 'function' ? this.latchLookup() : null,
+      inPlan: false,
     }));
     const disagreement = classifyDisagreement(positions);
     const synthesis = synthesize({

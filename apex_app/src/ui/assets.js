@@ -34,7 +34,9 @@ export const UI_PAGE = `<!doctype html>
      verifying readiness - over the six subsystems it actually checks. It is a panel and not a
      modal: it never takes focus, it never covers the emergency controls, and Escape dismisses
      it. Every line in it is a measured value; nothing here is a stage direction. -->
-<div id="hud-boot-sequence" class="hud-boot" role="region" aria-labelledby="hud-boot-message" hidden>
+<div id="hud-boot-sequence" class="hud-boot" role="region" aria-labelledby="hud-boot-message"
+     data-screen-id="boot"
+     data-screen-message="The system waking and verifying readiness over the six subsystems it actually checks; every line is a measured value." hidden>
   <div class="hud-boot-panel">
     <p class="hud-boot-message" id="hud-boot-message">System waking and verifying readiness</p>
     <ol class="hud-boot-steps" id="hud-boot-steps"></ol>
@@ -107,6 +109,11 @@ export const UI_PAGE = `<!doctype html>
       <button id="send" type="submit">Send</button>
       <span id="activity" class="meta" role="status"></span>
     </div>
+    <!-- T-37 Step 3: the dispatch receipt. The router answers with a structured record - route kind,
+         capability, ECP decision, whether it verified - and this renders that record. It never
+         guesses: a refused line shows the refusal, and an unmatched line says it went to the
+         pipeline rather than pretending the router understood it. -->
+    <dl id="dispatch-receipt" class="facts" hidden></dl>
   </form>
 </section>
 <nav class="nav" aria-label="Primary">
@@ -126,7 +133,9 @@ export const UI_PAGE = `<!doctype html>
   <button type="button" data-view="integrations" class="nav-item">Integrations</button>
   <button type="button" data-view="workshop" class="nav-item">Workshop</button>
 </nav>
-<main id="main-content" class="deck">
+<main id="main-content" class="deck"
+      data-screen-id="command-deck"
+      data-screen-message="Live command deck: core state, gauges, transcript and the governed composer that turns an intent into a recorded run.">
   <aside class="rail left" data-depth-plane="z3" aria-label="Missions">
     <section class="panel">
       <h2>Active missions</h2>
@@ -240,7 +249,9 @@ export const UI_PAGE = `<!doctype html>
     <p id="conversation-status" class="workspace-status" role="status" aria-live="polite">Loading conversation records…</p>
     <ul id="conversation-history" class="work"></ul>
   </section>
-  <section class="view" data-view="missions" data-depth-plane="z3">
+  <section class="view" data-view="missions" data-depth-plane="z3"
+         data-screen-id="mission-view"
+         data-screen-message="Mission control and the task graph: the steps a mission actually ran, each with the outcome the controller recorded rather than one predicted for it.">
     <h2>Mission Control</h2>
     <p class="meta">Goals, plans and tasks projected from their owning stores. Dependencies, blockers, checkpoints and verification are shown only when recorded; a plan or approval does not start work.</p>
     <p id="mission-status" class="workspace-status" role="status" aria-live="polite">Loading owner records…</p>
@@ -294,7 +305,9 @@ export const UI_PAGE = `<!doctype html>
       </div>
     </section>
   </section>
-  <section class="view" data-view="tasks" data-depth-plane="z3">
+  <section class="view" data-view="tasks" data-depth-plane="z3"
+         data-screen-id="briefing"
+         data-screen-message="The work briefing: what changed since the last acknowledged checkpoint, with the delta stated rather than summarised away.">
     <h2>Tasks and execution</h2>
     <p id="task-status" class="workspace-status" role="status" aria-live="polite">Loading tasks…</p>
     <ul id="tasks" class="work"></ul>
@@ -314,7 +327,9 @@ export const UI_PAGE = `<!doctype html>
     <p id="approval-action-status" class="workspace-status" role="status" aria-live="polite"></p>
     <ul id="approval-items" class="work"></ul>
   </section>
-  <section class="view" data-view="sentinel" data-depth-plane="z3">
+  <section class="view" data-view="sentinel" data-depth-plane="z3"
+         data-screen-id="sentinel"
+         data-screen-message="Sentinel advisories and host readings: what the governor noticed, what it suppressed and why, from the observation ledger rather than from a claim.">
     <h2>Sentinel — recorded situational events</h2>
     <p class="meta">A bounded view of recorded observations, assessments, decisions and provenance. It does not imply that an external source is currently being watched.</p>
     <p id="sentinel-status" class="workspace-status" role="status" aria-live="polite">Loading situational records…</p>
@@ -342,7 +357,9 @@ export const UI_PAGE = `<!doctype html>
       <ul id="perception-suppressions" class="work"></ul>
     </section>
   </section>
-  <section class="view" data-view="memory" data-depth-plane="z3">
+  <section class="view" data-view="memory" data-depth-plane="z3"
+         data-screen-id="memory-timeline"
+         data-screen-message="The combined timeline of memory, knowledge and world-model records, corrections and lifecycle changes kept as provenance-linked history.">
     <h2>Memory Timeline</h2>
     <p class="meta">Chronological records from MemoryStore, KnowledgeStore and WorldModelStore. Corrections and lifecycle events are kept as provenance-linked history; the timeline does not make claims true.</p>
     <p id="timeline-status" class="workspace-status" role="status" aria-live="polite">Loading memory and world-model records…</p>
@@ -381,7 +398,9 @@ export const UI_PAGE = `<!doctype html>
     <p id="reasoning-status" class="workspace-status" role="status" aria-live="polite">Loading reasoning records…</p>
     <ul id="reasoning" class="work"></ul>
   </section>
-  <section class="view" data-view="council" data-depth-plane="z3">
+  <section class="view" data-view="council" data-depth-plane="z3"
+         data-screen-id="council"
+         data-screen-message="Council deliberation and Track 2: deterministic perspectives over owned evidence beside the spiking substrate and its bridge, none of which authorizes execution.">
     <h2>Council</h2>
     <p class="meta">Seven deterministic perspectives over evidence owned by the existing stores. This is not multi-model deliberation: no model is contacted. A synthesis explains disagreement and never authorizes execution.</p>
     <p id="council-state" class="workspace-status" role="status" aria-live="polite">Loading recorded council sessions…</p>
@@ -393,6 +412,14 @@ export const UI_PAGE = `<!doctype html>
       <span id="council-status" class="meta" role="status"></span>
     </form>
     <div id="council-synthesis" class="panel"></div>
+    <!-- T-37 Step 2: the deliberation's recommendation, and the one governed act it can lead to.
+         Compiling is a real ECP-gated T-29 mission run, not a shortcut: the button names the same
+         /api/cognition/run route the composer uses, and the answer below it is that run's record. -->
+    <div class="row">
+      <button id="council-compile" type="button" class="small" disabled>Compile to TaskGraph Mission</button>
+      <span id="council-compile-status" class="meta" role="status" aria-live="polite">Deliberate first; the recommendation is what gets compiled.</span>
+    </div>
+    <div id="council-compile-result" class="panel"></div>
     <ul id="council" class="work"></ul>
     <!-- T-37 Step 1: Track 2. The eight-region spiking substrate and its bridge, read from the same
          service the capabilities step. Every number here is measured from the running substrate;
@@ -439,7 +466,9 @@ export const UI_PAGE = `<!doctype html>
     <h3>Recorded runs</h3>
     <ul id="cognition-runs" class="work"></ul>
   </section>
-  <section class="view" data-view="presence" data-depth-plane="z3">
+  <section class="view" data-view="presence" data-depth-plane="z3"
+         data-screen-id="presence-mesh"
+         data-screen-message="Presence, device trust and the autonomy matrix: which devices are enrolled, which work can be handed off, and what each domain is permitted to do without asking.">
     <h2>Presence, device trust and autonomy policy</h2>
     <p class="meta">Device trust is an append-only enrollment log: a trusted device authenticates signed messages and grants no capability. Autonomy is read-only here. It is configured through the APEX_AUTONOMY_LEVELS environment at start-up, and the matrix below reports the level the ECP actually applies, not a value this page can change.</p>
     <p id="presence-status" class="workspace-status" role="status" aria-live="polite">Loading device trust and presence…</p>
@@ -492,7 +521,9 @@ export const UI_PAGE = `<!doctype html>
     <h3>Capabilities in the matrix</h3>
     <ul id="autonomy-capabilities" class="work"></ul>
   </section>
-  <section class="view" data-view="system" data-depth-plane="z3">
+  <section class="view" data-view="system" data-depth-plane="z3"
+         data-screen-id="policy-autonomy"
+         data-screen-message="System health, the doctor and the safety latch: six read-only checks, the ECP authority, and the lockdown form that requires a typed reason and an explicit confirmation.">
     <h2>System diagnostics and Resource Fabric</h2>
     <p class="meta">Read-only diagnostics from the health, runtime, ECP and resource owners. Unknown or unavailable readings are not treated as healthy.</p>
     <p id="system-status" class="workspace-status" role="status" aria-live="polite">Loading system diagnostics…</p>
@@ -504,7 +535,9 @@ export const UI_PAGE = `<!doctype html>
       <button id="doctor-run" type="button" class="small">Run doctor</button>
       <ul id="doctor-checks" class="work"></ul>
     </section>
-    <section class="panel safety" data-depth-plane="z4" aria-labelledby="safety-heading">
+    <section class="panel safety" data-depth-plane="z4" aria-labelledby="safety-heading"
+             data-screen-id="lockdown"
+             data-screen-message="The execution safety latch: activating it requires a typed reason, releasing it requires the reason, an explicit confirmation and the step-up secret when one is configured.">
       <h3 id="safety-heading">Execution safety</h3>
       <p id="safety-status" class="meta" role="status" aria-live="polite">Reading the ECP safety latch…</p>
       <form id="safety-lock-form" class="safety-form">
@@ -536,12 +569,15 @@ export const UI_PAGE = `<!doctype html>
     <p id="resources-status" class="workspace-status" role="status" aria-live="polite">Loading resource telemetry…</p>
     <ul id="resources" class="work"></ul>
   </section>
-  <section class="view" data-view="integrations" data-depth-plane="z3">
+  <section class="view" data-view="integrations" data-depth-plane="z3"
+>
     <h2>Integrations</h2>
     <p id="integrations-status" class="workspace-status" role="status" aria-live="polite">Loading integration state…</p>
     <ul id="integrations" class="work"></ul>
   </section>
-  <section class="view" data-view="workshop" data-depth-plane="z3">
+  <section class="view" data-view="workshop" data-depth-plane="z3"
+         data-screen-id="workshop"
+         data-screen-message="The workshop: user-authored sheets with their components and declared numbers, inspected and simulated deterministically; a sheet authorizes nothing.">
     <h2>Workshop — deterministic design sheets</h2>
     <p class="meta">This is not a 3D or interactive holographic workspace. It stores design sheets and performs arithmetic over declared values. Nothing here is executed, and a simulation never authorizes an action.</p>
     <p id="workshop-state" class="workspace-status" role="status" aria-live="polite">Loading stored designs…</p>
@@ -1272,7 +1308,11 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   councilGather: document.getElementById('council-gather'),
   councilRun: document.getElementById('council-run'),
   councilStatus: document.getElementById('council-status'),
+  dispatchReceipt: document.getElementById('dispatch-receipt'),
   councilSynthesis: document.getElementById('council-synthesis'),
+  councilCompile: document.getElementById('council-compile'),
+  councilCompileStatus: document.getElementById('council-compile-status'),
+  councilCompileResult: document.getElementById('council-compile-result'),
   // T-37 Step 1: the Track 2 panel. Every one of these is written only after a read succeeded; an
   // unavailable substrate leaves them at whatever the status line says, never at a zero.
   neuralStatus: document.getElementById('neural-status'),
@@ -2662,6 +2702,11 @@ function renderCouncil(result) {
   setWorkspaceStatus(els.councilState, total === 0 ? 'No council sessions are recorded.'
     : 'Showing ' + sessions.length + ' of ' + total + ' recorded council session(s)'
       + (corrupt ? ' · ' + corrupt + ' corrupt record(s)' : '') + '.', corrupt ? 'partial' : (total === 0 ? 'empty' : 'available'));
+  // T-37 Step 2: the compile button is live only when there is a recommendation in hand.
+  if (els.councilCompile) {
+    const ready = Boolean(state.lastCouncil && state.lastCouncil.result?.synthesis?.recommendedOption);
+    els.councilCompile.disabled = !ready;
+  }
   renderList(els.council, sessions, (session) => {
     const title = (session.recommendation ? session.recommendation + ' · ' : '') + (session.objective || session.sessionId);
     const meta = 'support ' + (session.support || 'unknown') + ' · ' + (session.at ? String(session.at).slice(0, 19) : 'time not recorded');
@@ -2836,6 +2881,95 @@ async function resetNeuralBridge() {
   } finally {
     els.neuralResetBridge.disabled = false;
   }
+}
+
+// T-37 Step 2: compiling a recommendation into a mission. This is deliberately not a shortcut: it
+// calls the same /api/cognition/run route the composer calls, with the same ECP gate, and it reports
+// the run record rather than a claim that a mission exists.
+async function compileCouncilRecommendation() {
+  const held = state.lastCouncil;
+  if (!held || !held.objective) {
+    if (els.councilCompileStatus) els.councilCompileStatus.textContent = 'Deliberate first; there is nothing to compile.';
+    return;
+  }
+  const option = held.result?.synthesis?.recommendedOption ?? null;
+  if (!option) {
+    if (els.councilCompileStatus) els.councilCompileStatus.textContent = 'The deliberation produced no recommendation, so there is nothing to compile.';
+    return;
+  }
+  if (els.councilCompile) els.councilCompile.disabled = true;
+  if (els.councilCompileStatus) els.councilCompileStatus.textContent = 'Compiling into a governed T-29 mission…';
+  if (els.councilCompileResult) els.councilCompileResult.replaceChildren();
+  try {
+    // The mission is the deliberation's own objective. The recommendation is cited in the intent so
+    // the run record shows what was compiled from, not just what was asked for.
+    const value = await api('/api/cognition/run', {
+      method: 'POST',
+      body: {
+        intent: held.objective,
+        councilRequested: true,
+      },
+    });
+    const verified = value.verification?.outcome === 'verified' || value.status === 'completed';
+    if (els.councilCompileStatus) {
+      els.councilCompileStatus.textContent = verified
+        ? 'Compiled and run: ' + String(value.status) + ' · task ' + String(value.taskId ?? 'none')
+        : 'Compiled but not verified: ' + String(value.status);
+    }
+    if (els.councilCompileResult) {
+      els.councilCompileResult.append(el('p', 'meta',
+        'Run ' + String(value.runId) + ' · status ' + String(value.status)
+          + ' · verification ' + String(value.verification?.outcome ?? 'not_run')
+          + (value.taskId ? ' · task ' + String(value.taskId) : '')));
+      if (value.approval && value.approval.required === true) {
+        els.councilCompileResult.append(el('p', 'meta',
+          'Waiting for your approval: ' + String(value.approval.detail ?? 'a gated step needs it')));
+      }
+    }
+    await refresh();
+  } catch (error) {
+    if (els.councilCompileStatus) els.councilCompileStatus.textContent = 'Refused or unavailable: ' + String(error?.message || error);
+  } finally {
+    if (els.councilCompile) els.councilCompile.disabled = false;
+  }
+}
+
+// T-37 Step 3: the dispatch receipt. Every field the router reported is shown with the name the brief
+// gave it, so a reader can check the claim against the record rather than against a sentence.
+function renderDispatchReceipt(receipt) {
+  if (!els.dispatchReceipt) return;
+  els.dispatchReceipt.replaceChildren();
+  if (!receipt) { els.dispatchReceipt.hidden = true; return; }
+  const rows = [
+    ['Route', String(receipt.routeKind || 'unknown')],
+    ['Capability', receipt.actionInvoked ? String(receipt.actionInvoked) : (receipt.route ? String(receipt.route) : 'none')],
+    ['Target view', receipt.targetView ? String(receipt.targetView) : 'none'],
+    ['ECP decision', String(receipt.ecpDecision || 'not_applicable')],
+    ['Verified', receipt.verified === true ? 'yes' : 'no'],
+    ['Result', String(receipt.summary || '')],
+  ];
+  if (receipt.detail) rows.push(['Detail', String(receipt.detail)]);
+  for (const [term, value] of rows) {
+    els.dispatchReceipt.append(el('dt', null, term), el('dd', null, value));
+  }
+  els.dispatchReceipt.hidden = false;
+  els.dispatchReceipt.dataset.verified = receipt.verified === true ? 'yes' : 'no';
+  els.dispatchReceipt.dataset.route = String(receipt.routeKind || 'unknown');
+}
+
+// The one place the deck submits a line. The router decides; this only reports what it decided and
+// moves the owner to the screen the route named.
+async function dispatchCommand(line) {
+  const receipt = await api('/api/command/dispatch', { method: 'POST', body: { line } });
+  renderDispatchReceipt(receipt);
+  // Applying a presentation mode is the deck's job: a mode is presentation, not an API call the
+  // server can make on the owner's behalf. A refused mode is not applied - the latch wins, and the
+  // receipt already says so.
+  if (receipt.routeKind === 'mode' && receipt.target && receipt.ecpDecision !== 'deny') {
+    applyMode(receipt.target);
+  }
+  if (receipt.targetView) setView(receipt.targetView);
+  return receipt;
 }
 
 function renderWorkshop(result) {
@@ -4815,10 +4949,15 @@ if (els.form) {
     applyCoreProjection();
     showBanner('');
     els.send.disabled = true;
-    if (els.activity) els.activity.textContent = 'working…';
+    if (els.activity) els.activity.textContent = 'dispatching…';
     try {
-      await api('/api/chat', { method: 'POST', body: { text } });
+      const receipt = await dispatchCommand(text.trim());
       els.text.value = '';
+      if (els.activity) {
+        els.activity.textContent = receipt.verified === true
+          ? String(receipt.routeKind) + ' · verified'
+          : String(receipt.routeKind) + ' · ' + String(receipt.summary || '').slice(0, 80);
+      }
       await refresh();
     } catch (error) {
       showBanner(error.message);
@@ -5013,6 +5152,7 @@ if (els.cognitionForm) {
 
 // T-37 Step 1: the two Track 2 buttons. Each one is a governed write on the server; the button only
 // reports what came back, and a refusal is shown as a refusal rather than as a silent no-op.
+if (els.councilCompile) els.councilCompile.addEventListener('click', compileCouncilRecommendation);
 if (els.neuralStep) els.neuralStep.addEventListener('click', stepNeural);
 if (els.neuralResetBridge) els.neuralResetBridge.addEventListener('click', resetNeuralBridge);
 
@@ -5034,8 +5174,10 @@ if (els.councilForm) {
       if (els.councilStatus) {
         els.councilStatus.textContent = result.persisted === false
           ? 'deliberated, but the session was not persisted: ' + (result.persistenceError || 'store unavailable')
-          : 'deliberated: ' + result.synthesis.recommendedOption.level;
+          : 'deliberated: ' + (result.synthesis?.recommendedOption?.level ?? 'no recommendation');
       }
+      // Keep what was deliberated so the compile button knows what it would compile.
+      state.lastCouncil = { objective, result };
       await refresh();
     } catch (error) {
       if (els.councilStatus) els.councilStatus.textContent = error.message;
