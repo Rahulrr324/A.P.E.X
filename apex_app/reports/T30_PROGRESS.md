@@ -1540,8 +1540,8 @@ checked=250 pass=250 fail=0
 
 ### The local suite
 
-The full `npm test` run (see the closing section for the exact totals) found one real regression, and it
-is worth recording because it was not in any T-36 file. `tests/ui-core-projection.test.js` extracts
+The full `npm test` run found one real regression, and it is worth recording because it was not in any
+T-36 file. `tests/ui-core-projection.test.js` extracts
 `applyCoreProjection` from the shipped client and runs it in a sandbox with a partial state object. The
 Step 2 code read `state.bootSequence.active` unguarded, and that sandbox has no boot sequence, so the
 projection threw. The fix is in the implementation rather than the test: a state with no boot sequence
@@ -1561,3 +1561,94 @@ server-side surface of the unseeded walk.
 `tests/e2e/t36-cold-boot-unseeded.spec.mjs` skips locally with an explicit diagnostic rather than
 passing. The hosted run is what turns the DOM claims into evidence, and it is the one place the walk
 actually opens a page.
+
+### The evidence, exactly
+
+**Branch and commits.** `arena/c4691a2f-a-p-e-x`, started from `f2f68a2` (the T-35 head). Four commits
+carry T-36: `8492fd1` (Step 1, the governed cold-start bootstrap), `66a6d08` (Steps 2 and 3, the HUD
+boot sequence and the desktop launcher cold start), `fe0155a` (Step 4, the cold-boot walk), then the
+three fix commits the hosted runs earned — `4a58afd`, `5d699d6`, `ee516e5`, `bc4d857`. Final commit:
+**`bc4d8579509771ba190d135c71292c689ab98eeb`**.
+
+**Source check.** `node --check`, one process per file, over every file under `apex_app/src`:
+
+```
+checked=250 pass=250 fail=0
+```
+
+**The full local suite** (`npm test`, i.e. `node --test`, on the final commit):
+
+```
+# tests 4046
+# suites 645
+# pass 4044
+# fail 0
+# cancelled 0
+# skipped 2
+# todo 0
+# duration_ms 1446472.06183
+```
+
+The two skips are the two real-browser fixtures that need a Chromium-family binary this sandbox does
+not have. `tests/e2e/t36-cold-boot-unseeded.spec.mjs` is one of them; it skips with an explicit
+diagnostic rather than passing.
+
+**Hosted CI.** Run **`44906434285`** at `bc4d857` — **success**, every step green: the source check, the
+full unit suite, the real-browser step, all seven publish steps and the artifact upload. The runner's
+own Edge: `microsoft-edge` at `/usr/bin/microsoft-edge`, browser `157.0.4341.60`.
+
+Verbatim annotations from all six browser suites:
+
+* **t31 — `real-browser-verification`**
+  `step=success | browser=157.0.4341.60 | executable=/usr/bin/microsoft-edge (system) | 1600x900: core=Awaiting Approval overflow=1600<=1600 errors=0 | 1280x720: core=Awaiting Approval overflow=1280<=1280 errors=0 | 390x844: core=Awaiting Approval overflow=390<=390 errors=0 | reports/screenshots/t31_desktop-wide_1600x900.png 1600x900 391374B | reports/screenshots/t31_desktop_1280x720.png 1280x720 234972B | reports/screenshots/t31_mobile_390x844.png 390x844 130460B | checks={"connectivityWhileDegraded": "Degraded", "degradedAfterMs": 30, "modeLockedByLockdown": true, "modes": ["tactical", "overwatch", "synthesis", "quiet", "classic"], "recoveredConnectivity": "Connected", "recoveredCore": "Awaiting Approval", "releasedAfterLockdown": true, "seeded": {...}, "stepUp": {"hidden": true, "note": "No step-up secret is configured in this deployment; the reason and the confirmation are the gate."}}`
+
+* **t32 — `hud-experience`**
+  `hud-step=success | browser=157.0.4341.60 | reticle[idle]: stroke=rgb(0, 229, 255) weight=calc(1.5px) dash=8px, 6px animation=spin | reticle[awaiting_approval]: stroke=rgb(255, 176, 0) weight=calc(1.8px) dash=2px, 8px animation=spin | reticle[degraded]: stroke=rgb(255, 176, 0) weight=calc(1.2px) dash=6px, 12px animation=spin | reticle[lockdown]: stroke=rgb(225, 6, 0) weight=calc(3.84px) dash=12px, 12px animation=none | planes[desktop-wide]: z0=[0], z1=[10], z2=[20], z3=[30], z4=[40] | planes[desktop]: z0=[0], z1=[10], z2=[20], z3=[30], z4=[40] | planes[mobile]: z0=[0], z1=[10], z2=[20], z3=[30], z4=[40] | contrast: 4655 text runs checked, 0 violations | ackMs=2 inputBeforeTabs=True | tabStops=a.skip-link > button#command-trigger.hud-chip > ... | escapeTo=#body | motion={"system": {...}, "toggle": {...}} | artifact: 18 PNG(s) under apex_app/reports/screenshots/t32 ...`
+  and `hud-failures`: `{"failures":[],"screenshots":18,"contrastChecked":4655,"viewports":["1600x900","1280x720","390x844"]}`
+
+* **t33 — `t33-executive-loop`**
+  `browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: open,dispatch,intent,suppression,revoke,graph,idle,idle-clear,workshop,console | screenshots 9 | core at end idle`
+
+* **t34 — `t34-mission-dag`**
+  `browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: mission-shape,join-held,selector,selector-back,branch-unblocked,mission-verified,candidate-association,briefing-acknowledged,briefing-click-through,console | screenshots 10 | mission completed verified True`
+
+* **t35 — `t35-stepdown-handoff-doctor`**
+  `browser 157.0.4341.60 | binary microsoft-edge | checkpoints 6: auto-stage,flash-guard,sensor-indicator,handoff-claimed,doctor,clean | screenshots 7 | stages walked 0,1,2,3,4,5 (auto None) | flash guard 9 animation(s), 0 violation(s) | handoff ph-13d538b5e71d47acbe6c92b0 digest 3b39fb8e87b8 matched True | doctor ok in 1.33 ms of 500 (within budget True)`
+
+* **t36 — `t36-cold-boot-unseeded`** (the new one)
+  `browser 157.0.4341.60 | binary microsoft-edge | unseeded entries 0 marker=False devices=False | boot rows 6: safety_latch=ok,ecp_authority=ok,resource_fabric=ok,git_workspace=ok,device_trust=ok,executive_briefing=ok | dormant True landing idle trail degraded>dormant>idle | host 4 cpu / 15.3 GiB | workspace trunk@8318d58 (repo trunk@8318d58) | device local-workstation trusted enrolled 1 | briefing facts doctor,resource,workspace,device | doctor 6/6 pass in 1.09 ms (within budget True) | cognition awaiting_approval task task-f9852729b9ca49259ca9 approvals 1 | overflow 1440<=1440 | screenshots 8`
+
+Read together, those six lines are the milestone: a directory that started with **zero entries and no
+marker**, six measured subsystem states all `ok`, the Core `Dormant` and then `Idle`, **4 CPUs and 15.3
+GiB** read from the runner itself, **`trunk@8318d58`** matching the repository the fixture created,
+`local-workstation` trusted with exactly **one** device enrolled, an opening briefing carrying all four
+fact kinds, **6/6 doctor checks passing**, a T-29 cognitive intent sitting at `awaiting_approval` with
+one task and one approval, no overflow, and eight screenshots — with the other five suites green beside
+it.
+
+### What the hosted runs found, and what was fixed
+
+Four hosted runs were needed, and every red was a real defect rather than a flake. They are recorded
+because they are the evidence that the suites bite:
+
+1. **`66a6d08` — `applyCoreProjection` threw** (`Cannot read properties of undefined (reading 'active')`).
+   Step 2 read `state.bootSequence.active` unguarded; a partial projection threw on its way to the
+   owners' answer. Guarded, and pinned by the existing projection suite.
+2. **`fe0155a` — every browser suite recorded three 400s.** The boot sequence put the Core in `dormant`,
+   the deck asked the comms owner for that state's voice, and `dormant` was not a state the route knew.
+   The client's own boot read answered 400 and the console-error assertion failed in t31, t33, t34 and
+   t35, while one perception test lost a budget unit to the same request. Both directions were wrong and
+   both were fixed: the route accepts `dormant`, and the client filters the state it asks for instead of
+   forwarding it blind. Two regression tests pin the pair.
+3. **`5d699d6` — my Presence assertion.** The list renders each device's label (the real hostname) while
+   `local-workstation` is the id. The product was right; the test asked the wrong surface.
+4. **`ee516e5` — my briefing assertion.** `/api/briefing` is the deck's *work* briefing and is correctly
+   empty on a machine with no work; the *opening* briefing is the one the bootstrap compiles and records
+   in its marker.
+5. **`bc4d857` — my approval assertion.** `#approval-items` is the list the Approval Centre fills;
+   `#approvals` is a rail slot no renderer writes to.
+
+The distinction matters for how this milestone should be read. Items 3, 4 and 5 were the walk learning
+which surface carries which fact — the walk was wrong, the deck was right. Items 1 and 2 were real
+product defects that only a real browser against the real server could surface, and both are now fixed
+and pinned.
