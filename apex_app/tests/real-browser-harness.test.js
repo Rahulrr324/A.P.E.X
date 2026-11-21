@@ -187,6 +187,10 @@ describe('T-31 browser suite wiring', () => {
     assert.match(mission, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
       'the mission-DAG walk skips loudly when no browser exists');
     assert.match(mission, /T34_FAILURES/, 'the mission-DAG walk prints a short failure line first');
+    // The page itself is authorized with the same token the routes use. A walk that navigates to the
+    // bare base gets the server's refusal page and no #core-state, which is a failure with no cause.
+    assert.match(mission, /page\.goto\(`\$\{handle\.base\}\/\?token=\$\{encodeURIComponent\(handle\.token\)\}`/,
+      'the mission-DAG walk authorizes the page it opens');
     const loop = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't33-executive-loop.spec.mjs'), 'utf8');
     // A red browser run is diagnosed from its own summary, so a failure has to reach it: both walks
     // record the last checkpoint and the error before rethrowing, and print the short line first.

@@ -122,7 +122,10 @@ test.describe('T-34 mission DAG, in a real browser', () => {
     };
     const node = (id) => page.locator(`#dag-nodes li[data-node-id="${id}"]`);
 
-    await page.goto(handle.base, { waitUntil: 'domcontentloaded' });
+    // The UI server authorizes the page with the same token the routes use, so the browser is pointed
+    // at it explicitly. Without it the server answers its own refusal page, which has no #core-state -
+    // that is what the first hosted run of this walk hit, and the summary now says so.
+    await page.goto(`${handle.base}/?token=${encodeURIComponent(handle.token)}`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await expect(page.locator('#core-state')).toBeVisible({ timeout: 45_000 });
     await nav('missions');
 
