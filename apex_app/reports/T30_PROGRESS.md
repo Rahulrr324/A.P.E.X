@@ -1660,3 +1660,190 @@ The distinction matters for how this milestone should be read. Items 3, 4 and 5 
 which surface carries which fact — the walk was wrong, the deck was right. Items 1 and 2 were real
 product defects that only a real browser against the real server could surface, and both are now fixed
 and pinned.
+
+---
+
+## T-37 — Part 2 Track 2, Part 4 Screen #7 and the executive router (2026-11-21)
+
+Branch `arena/c4691a2f-a-p-e-x` from `0b14e2049968a93758f58449df47b49fd88add3a`. Four ordered steps;
+this section is the evidence, and it is appended rather than replacing anything T-30 to T-36 recorded.
+
+### Step 1 — Track 2: the 8-region substrate and its bridge
+
+`src/neural/substrate.js`, `src/neural/bridge.js`, `src/neural/service.js`, plus
+`src/actions/neural-actions.js`. The eight canonical regions are the brief's own:
+`sensory`, `associative`, `temporal`, `predictive`, `attention`, `working`, `plasticity`,
+`integration`.
+
+Measured constants (not declarations copied from a plan):
+
+| Property | Value |
+| --- | --- |
+| Cells | 132 (16 / 24 / 20 / 20 / 12 / 16 / 10 / 14) |
+| Synapses | 192 directed, over 12 fixed projections |
+| Sparse density | 0.01102 |
+| LIF | rest −65 mV, threshold −52 mV, reset −70 mV, τm 10 ms, refractory 3 ms, dt 1 ms |
+| STDP | τ± 20 ms, A+ 0.012, A− 0.014, weights [0.02, 0.95], max Δ 0.08/step |
+| Seed | `apex-track2-8-region-deterministic` |
+
+**The measured 40-step assay run** (deterministic; two fresh substrates produce byte-identical
+summaries, and a different seed does not):
+
+| Region | Cells | Spikes | Active now | Membrane mean | Mean weight |
+| --- | --- | --- | --- | --- | --- |
+| sensory | 16 | 32 | 2 | −68.61 mV | 0.6107 |
+| associative | 24 | 70 | 5 | −62.35 mV | 0.3838 |
+| temporal | 20 | 60 | 6 | −65.81 mV | 0.3765 |
+| predictive | 20 | 49 | 3 | −60.91 mV | 0.3731 |
+| attention | 12 | 38 | 2 | −67.72 mV | 0.3494 |
+| working | 16 | 48 | 2 | −65.44 mV | 0.4825 |
+| plasticity | 10 | 10 | 0 | −53.18 mV | 0.3084 |
+| integration | 14 | 34 | 1 | −56.25 mV | 0.2190 |
+
+Plasticity over that run: 314 potentiations, 539 depressions, **192/192 synapses changed**, mean weight
+0.40194, σ 0.11552. The first spike is at step 15 — the membrane needs that long to charge at the
+declared assay drive — which is why every step count in this milestone is 40 rather than 10.
+
+**Two real bugs were found by the tests, and both would have shipped as healthy-looking numbers:**
+
+1. A refractory cell kept integrating a suprathreshold drive it could not discharge and was never
+   clamped, so `membranePotential` walked to **−31.57 mV on a cell whose threshold is −52 mV**. The
+   summary reported a membrane voltage no cell could hold. The absolute refractory period now clamps
+   at reset; the measured range across the whole run is now **−70.00 … −52.04 mV**.
+2. The bridge silently relabelled a signal claiming `epistemicStatus: 'observed'` into a candidate
+   association. That launders a producer's contract violation — it crosses, and the producer never
+   learns. A wrong status, a truthy `authorizesExecution` and a truthy `mutatesObservedFacts` are now
+   refused with named refusals; an explicit `false` is a declaration and still crosses.
+
+**The boundary, checked at every layer.** Crossing the substrate's own indicators produces four
+signals — `salience`, `predictive_pressure`, `integration_load`, `plasticity_churn` — every one
+`candidate_association`, `authorizesExecution: false`, `mutatesObservedFacts: false`. No indicator
+names a capability. `authority_claim`, `epistemic_violation` and `version_unsupported` are refused
+by name; three consecutive refusals isolate the bridge; isolation refuses even a valid crossing;
+only an explicit `reset({reason})` reconnects it.
+
+**The three capabilities** are registered through the same registry/ECP path as every other one, all
+unplannable. `neural.step` and `neural.bridge_reset` are **user-origin only** — a model that could
+step the substrate could manufacture the candidate associations it is then asked to consider — and
+both are refused under lockdown because they are writes. `neural.read` is a read and a model may run
+it.
+
+**The pipeline integration is a sibling, not a stage.** `neural` is a field beside `stages`, so
+`COGNITION_STAGES` stays exactly the five symbolic stages and Track 2 never appears to decide
+anything. A cognitive run *reads* the bridge and does not step the substrate, because stepping is a
+governed write and a run is not the owner. Measured: substrate step before a run `0`, after `0`.
+
+**One regression the full suite caught:** constructing the service created `neural/` eagerly, so a
+read-only command left a new directory behind. `074: Batch F` failed with "read-only commands created
+the data directory". The directory is now created on the first write only; a read leaves the data
+directory as cold as it found it, verified after construction, after `report()`, and after `advance`.
+
+### Step 2 — the Values & Constraints Core and the 11 screens
+
+`src/council/values-core.js` is V2-0317 built as data: six hard rules and four advisory values, each
+rule a predicate over what a candidate *declares*, each carrying the value it protects and the reason
+it exists. It is appended as the Council's **eighth** position rather than folded into the seven
+engineering perspectives, because it answers a different question: not "how strong is this candidate"
+but "does it contradict a rule the owner set".
+
+The verdict vocabulary is the point. A rule that could not be checked is `unverifiable`, **never**
+`satisfied`; a rule that throws while evaluating is unverifiable too. A live deliberation on
+`candidateId: 'neural.step'` therefore scores `partly_unverifiable` — its declaration says nothing
+about reversibility, so the reversibility rule says so rather than assuming the benign case.
+
+| Rule | Severity | Evaluated on `neural.step` |
+| --- | --- | --- |
+| no-model-authored-write | blocking | satisfied — "a write restricted to user" |
+| no-unplannable-in-a-plan | blocking | not_applicable — not proposed as a plan step |
+| irreversible-needs-the-owner | blocking | **unverifiable** — declares no reversibility |
+| evidence-before-inference | caution | satisfied — 1 cited item names a record |
+| no-candidate-as-permission | blocking | satisfied — claims no authority |
+| lockdown-fails-closed | blocking | satisfied — no latch engaged |
+
+**Three defects fixed here, two of them found only by the wider suites:**
+
+- `candidateId` resolved to nothing, so every rule reported `unverifiable` for the uninteresting
+  reason. A candidate may now be named by a registered capability id, resolved through the registry
+  as a read.
+- `constraintPerspective` stamped its own evaluation with `new Date()`, which made **every Council
+  session unreplayable**: replay recomputes from the recorded input and compares, so the timestamp
+  differed on every replay. The instant now comes from the session's recorded `evaluatedAt`.
+- `replay()` rebuilt positions from the seven engineering perspectives only, so a stored
+  eight-position session could never match a seven-position replay. It now appends the core too.
+
+**All 11 canonical screens** declare `data-screen-id` and a one-line `data-screen-message`:
+`boot`, `command-deck`, `mission-view`, `briefing`, `workshop`, `memory-timeline`, `council`,
+`presence-mesh`, `sentinel`, `policy-autonomy`, `lockdown`. They are declared on the elements that
+already exist — the boot overlay, the deck's `main`, eight view sections, and the safety panel that
+actually holds the latch. `lockdown` is on the safety panel and not on Integrations: an integrations
+screen claiming to be the lockdown screen would be a false label on a real control.
+
+**The Council workspace** now renders the four canonical perspectives — `thesis`, `counter_risk`,
+`evidence_check`, `constraint_check` — with their own labels, shows the constraint core's rules as
+rows rather than hiding them in a tooltip, and carries a **Compile to TaskGraph Mission** button that
+calls the same `/api/cognition/run` route the composer calls, through the same ECP gate.
+
+### Step 3 — the deterministic executive command router
+
+`src/cognition/command-router.js`. Every route is a literal phrase or a narrow prefix; the module's
+only import is the string helper, and a test asserts that. No inference, no embedding, no fuzzy score.
+
+| Line | Route | Result |
+| --- | --- | --- |
+| `sense workspace` (also `sense host`, `refresh telemetry`) | sense → `perception.sense_host` | verified, focuses Sentinel |
+| `run doctor` (also `system check`, `status report`) | health → `/api/system/doctor` | "3 pass, 1 degraded, 0 failed, 2 not configured" |
+| `council: <q>` / `deliberate <q>` | council → `council.deliberate` | verified, focuses Council |
+| `acknowledge briefing` / `briefing delta` | briefing | verified / read |
+| `verify workshop` | workshop → `workshop.verify` | verified |
+| `mode tactical\|classic\|overwatch\|synthesis\|quiet` | mode | presentation only |
+| `lockdown <reason>` | safety → `safety.lockdown` | verified, latches the ECP |
+| anything else | mission → `cognition.run` | verified, focuses Cognition |
+
+**A phrase matches as a whole line or followed by a separator, never by containment.** "run doctor"
+runs the doctor; "do not run doctor" goes to the pipeline. This distinction is asserted directly,
+because matching on containment would run the doctor for the second.
+
+Every dispatch returns a `CommandDispatchReceipt` — `routeKind`, `actionInvoked`, `targetView`,
+`ecpDecision`, `verified`, `summary` — and the deck renders that record rather than describing what
+it thinks happened. `authorizesExecution: false` is on every receipt.
+
+**Lockdown fails closed through the router too.** After `lockdown the sensor is compromised`, the
+latch reads `active: true`, `mode tactical` is refused with `ecp: deny`, and `sense workspace` is
+denied by the ECP itself with `KILL_SWITCH_ACTIVE`. No line reaches `safety.release`: a release needs
+a typed reason, an explicit confirmation and the step-up secret, none of which a one-line command
+supplies — asserted against four phrasings.
+
+**One defect fixed:** the doctor summary rendered `?/?` because the router assumed a `passed/total`
+pair. The doctor reports `counts: {pass, degraded, failed, notConfigured}`. It now reads what the
+doctor actually reports, and the test fails on any `?/?`.
+
+### Step 4 — verification
+
+New suites, all additive:
+
+| Suite | Tests | Result |
+| --- | --- | --- |
+| `tests/t37-neural-substrate.test.js` | 25 | pass |
+| `tests/t37-values-core.test.js` | 11 | pass |
+| `tests/t37-command-router.test.js` | 17 | pass |
+| `tests/t37-screens.test.js` | 6 | pass |
+| **T-37 total** | **59** | **59 pass, 0 fail** |
+
+Pinned totals updated additively where T-37 legitimately moved them: 156 → 159 actions, 85 → 87
+writes, 86 → 87 reads, 171 → 174 with a workspace root. `neural.*` gained an explicit capture
+classification (`neural`, "a deterministic simulation whose entire state is a function of its seed
+and step count") and explicit README inventory rows, because that suite requires an explicit decision
+for every capability rather than a default.
+
+`tests/e2e/t37-neural-council-router.spec.mjs` drives one real-browser session: the eight regions
+read out of the live DOM, the bridge boundary, a governed step from the deck, a deliberation showing
+all four perspectives, a compile into a real mission, four router receipts with their target
+transitions, and all eleven screen declarations — with zero console error, zero page error, zero
+failed request and no horizontal overflow. It is wired into `playwright.config.mjs` and the CI
+workflow publishes its own annotation.
+
+**Unverified at the time of writing:** the browser walk itself. This host has no Chromium-family
+binary, so the spec skips here with an explicit diagnostic and the run is `UNVERIFIED` until CI
+reports it. The fixture behind it *was* exercised locally: it starts the real server, steps the
+substrate through the governed route (`stepVerified: true`, 338 spikes), and reads the bridge and
+the eight regions back over HTTP.

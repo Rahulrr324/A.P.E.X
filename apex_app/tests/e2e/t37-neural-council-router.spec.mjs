@@ -120,13 +120,12 @@ test('T-37: Track 2, the Council with its constraint core, the command router an
       expect(Number(weight), `${T37_REGIONS[index]} mean weight`).toBeGreaterThan(0);
     }
 
-    // The bridge panel names the version, the schema and the fallback.
+    // The bridge panel names the version, the schema and the fallback, and the API says the same.
     const bridgeText = await page.locator('#neural-bridge').textContent();
     expect(bridgeText).toMatch(/apex\.neural\.cognitive-bridge\/1/);
     expect(bridgeText).toMatch(/apex\.neural\.bridge-signal\/1/);
     expect(bridgeText).toMatch(/Boundary:/);
     expect(bridgeText).toMatch(/candidate_association/);
-    run.bridge = { text: bridgeText.slice(0, 600) };
 
     // The API agrees with the screen - a screen that showed numbers the API did not have would be
     // the failure this assertion exists to catch.
@@ -136,6 +135,13 @@ test('T-37: Track 2, the Council with its constraint core, the command router an
     expect(bridgeApi.body.boundary.authorizesExecution).toBe(false);
     expect(bridgeApi.body.boundary.mutatesObservedFacts).toBe(false);
     run.boundary = bridgeApi.body.boundary;
+    run.bridge = {
+      version: bridgeApi.body.bridgeVersion,
+      status: bridgeApi.body.status,
+      // The text is kept short: the annotation reads `version`, the detail is for a human opening
+      // the artifact.
+      text: bridgeText.slice(0, 240),
+    };
 
     const substrateApi = await fixture.get('/api/neural/substrate');
     expect(substrateApi.body.substrate.regions.map((region) => region.id)).toEqual(T37_REGIONS);
