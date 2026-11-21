@@ -1897,3 +1897,66 @@ paths and backslash separators). T-36's suite was 4046, so T-37 adds exactly its
 
 `node --check` over every `apex_app/src` file: **256 checked, 0 failures** (250 at T-36, plus the
 six files T-37 added).
+
+### Step 4 — the hosted run
+
+Run **44920768362**, head `6828da5`, conclusion **success**. The browser is the
+runner's own system Microsoft Edge **157.0.4341.60**, so T-37's walk ran in Edge — the second
+browser it has been proven in, after Chromium 153 locally.
+
+Each suite publishes its own annotation, because a hosted log lives behind a download this
+environment cannot reach. All eight, verbatim:
+
+**`real-browser-verification`** (t31)
+```
+step=success | browser=157.0.4341.60 | executable=/usr/bin/microsoft-edge (system) | 1600x900: core=Awaiting Approval overflow=1600<=1600 errors=0 | 1280x720: core=Awaiting Approval overflow=1280<=1280 errors=0 | 390x844: core=Awaiting Approval overflow=390<=390 errors=0 | reports/screenshots/t31_desktop-wide_1600x900.png 1600x900 390391B | reports/screenshots/t31_desktop_1280x720.png 1280x720 235371B | reports/screenshots/t31_mobile_390x844.png 390x844 131080B | checks={"connectivityWhileDegraded": "Degraded", "degradedAfterMs": 10, "modeLockedByLockdown": true, "modes": ["tactical", "overwatch", "synthesis", "quiet", "classic"], "recoveredConnectivity": "Connected", "recoveredCore": "Awaiting Approval", "releasedAfterLockdown": true, ... "stepUp": {"hidden": true, "note": "No step-up secret
+```
+
+**`hud-experience`** (t32)
+```
+hud-step=success | browser=157.0.4341.60 | reticle[idle]: stroke=rgb(0, 229, 255) weight=calc(1.5px) dash=8px, 6px animation=spin | reticle[awaiting_approval]: stroke=rgb(255, 176, 0) weight=calc(1.8px) dash=2px, 8px animation=spin | reticle[degraded]: stroke=rgb(255, 176, 0) weight=calc(1.2px) dash=6px, 12px animation=spin | reticle[lockdown]: stroke=rgb(225, 6, 0) weight=calc(3.84px) dash=12px, 12px animation=none | planes[desktop-wide]: z0=[0], z1=[10], z2=[20], z3=[30], z4=[40] | planes[desktop]: z0=[0], z1=[10], z2=[20], z3=[30], z4=[40] | planes[mobile]: z0=[0], z1=[10], z2=[20], z3=[30], z4=[40] | contrast: 4793 text runs checked, 0 violations | ackMs=1.9 inputBeforeTabs=True | tabStops=a.skip-link > button#command-trigger.hud-chip > select#mode-select.small > ... | escapeTo=#body
+```
+
+**`hud-failures`** (t32)
+```
+{"failures":[],"screenshots":18,"contrastChecked":4793,"viewports":["1600x900","1280x720","390x844"]}
+```
+
+**`t33-executive-loop`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: open,dispatch,intent,suppression,revoke,graph,idle,idle-clear,workshop,console | screenshots 9 | core at end idle
+```
+
+**`t34-mission-dag`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: mission-shape,join-held,selector,selector-back,branch-unblocked,mission-verified,candidate-association,briefing-acknowledged,briefing-click-through,console | screenshots 10 | mission completed verified True
+```
+
+**`t35-stepdown-handoff-doctor`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | checkpoints 6: auto-stage,flash-guard,sensor-indicator,handoff-claimed,doctor,clean | screenshots 7 | stages walked 0,1,2,3,4,5 (auto 0) | flash guard 7 animation(s), 0 violation(s) | handoff ph-c14d77e5e7df4011a264466a digest ed640dd524e9 matched True | doctor ok in 1.61 ms of 500 (within budget True)
+```
+
+**`t36-cold-boot-unseeded`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | unseeded entries 0 marker=False devices=False | boot rows 6: safety_latch=ok,ecp_authority=ok,resource_fabric=ok,git_workspace=ok,device_trust=ok,executive_briefing=ok | dormant True landing idle trail degraded>dormant>idle | host 4 cpu / 15.6 GiB | workspace trunk@735acc7 (repo trunk@735acc7) | device local-workstation trusted enrolled 1 | briefing facts doctor,resource,workspace,device | doctor 6/6 pass in 5.47 ms (within budget True) | cognition awaiting_approval task task-c0d7dedef3634cfb8966 approvals 1 | overflow 1440<=1440 | screenshots 8
+```
+
+**`t37-neural-council-router`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | regions 8: sensory,associative,temporal,predictive,attention,working,plasticity,integration | bridge apex.neural.cognitive-bridge/1 | boundary candidate_association authoritative=False writesObserved=False | council sessions 2 compile Compiled and run: success_verified · task task-870bdaf4588a4 | receipts 4: mode tactical=>mode/no;sense workspace=>sense/yes;council: verify release readiness=>council/yes;summarise the workspace notes=>mission/yes | screens 11: boot,command-deck,mission-view,briefing,sentinel,memory-timeline,council,presence-mesh,policy-autonomy,lockdown,workshop | overflow 1440<=1440 | console 0 page 0 requests 0 | screenshots 4
+```
+
+The T-37 line is the milestone's acceptance criteria in one row, read out of a live DOM in Edge:
+eight regions in canonical order, the bridge on `apex.neural.cognitive-bridge/1` with a boundary
+that authorizes nothing and writes no observed fact, a Council deliberation compiled into a verified
+mission, four dispatches each on its own route with the mode route correctly unverified, all eleven
+screens declared, no overflow, and no console error, page error or failed request.
+
+### What the walk cost, and what that says
+
+The first hosted attempt was red, and it is worth being plain about why: the suite had never run in a
+browser, so its five defects shipped into a walk that had only ever been reviewed. That is exactly
+what a real-browser step is for, and it is why this milestone kept the suite rather than replacing it
+with the fixture's server-side proof. The fixture proved the substrate, the routes and the ECP; only
+the browser could prove the panel was showing what the API had.
