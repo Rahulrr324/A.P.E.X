@@ -290,6 +290,57 @@ jobs:
               sys.exit(1)
           PY
 
+      # T-36 Step 4 (2026-11-21): the cold boot on an unseeded workstation publishes its own
+      # annotation. Unlike every other browser suite, this one starts from an empty temporary data
+      # directory and a fresh temporary git repository, so what it reports - the host reading, the
+      # branch and head, the enrolled workstation - was produced by the bootstrap during the walk.
+      - name: Publish the T-36 cold-boot result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't36-cold-boot-unseeded.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t36-cold-boot-unseeded::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          unseeded = run.get('unseeded') or {}
+          cold = run.get('coldBoot') or {}
+          core = run.get('core') or {}
+          telemetry = run.get('telemetry') or {}
+          workspace = run.get('workspace') or {}
+          device = run.get('device') or {}
+          briefing = run.get('briefing') or {}
+          doctor = run.get('doctor') or {}
+          cognition = run.get('cognition') or {}
+          overflow = run.get('overflow') or {}
+          failures = run.get('failures', [])
+          rows = cold.get('rows') or []
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"unseeded entries {len(unseeded.get('entries') or [])} marker={unseeded.get('bootstrapMarker')} devices={unseeded.get('deviceRegistry')}",
+              f"boot rows {len(rows)}: {','.join(str(row.get('id')) + '=' + str(row.get('state')) for row in rows) or 'none'}",
+              f"dormant {cold.get('dormantSeen')} landing {core.get('landing')} trail {'>'.join(str(state) for state in core.get('trail') or [])}",
+              f"host {telemetry.get('host', {}).get('cpu')} cpu / {round((telemetry.get('host', {}).get('memoryTotalBytes') or 0) / 1073741824, 1)} GiB",
+              f"workspace {workspace.get('branch')}@{workspace.get('head')} (repo {workspace.get('expected', {}).get('branch')}@{workspace.get('expected', {}).get('head')})",
+              f"device {device.get('deviceId')} {device.get('status')} enrolled {device.get('enrolled')}",
+              f"briefing facts {','.join(str(kind) for kind in briefing.get('facts') or []) or 'none'}",
+              f"doctor {doctor.get('passing')}/{doctor.get('total')} pass in {doctor.get('durationMs')} ms (within budget {doctor.get('withinBudget')})",
+              f"cognition {cognition.get('runStatus')} task {cognition.get('taskId')} approvals {cognition.get('approvalCount')}",
+              f"overflow {overflow.get('scrollWidth')}<={overflow.get('clientWidth')}",
+              f"screenshots {len(run.get('screenshots') or [])}",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure.get('message')) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t36-cold-boot-unseeded::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       - name: Keep the browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -305,6 +356,8 @@ jobs:
             apex_app/reports/t34-mission-dag.json
             apex_app/reports/screenshots/t35
             apex_app/reports/t35-stepdown-handoff-doctor.json
+            apex_app/reports/screenshots/t36
+            apex_app/reports/t36-cold-boot-unseeded.json
           if-no-files-found: warn
           retention-days: 14
 

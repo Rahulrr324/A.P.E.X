@@ -1508,7 +1508,9 @@ function applyCoreProjection(reason = '') {
   // T-36 Step 2: while the boot sequence is running the Core is Dormant. The machine is still
   // verifying its own readiness, and a deck that is waking is not Idle, not Degraded and not
   // Awaiting Approval. The owners' states are still rendered; only the Core's own claim waits.
-  if (state.bootSequence.active) {
+  // A state that carries no boot sequence is simply not booting, so the read is guarded: a
+  // partial projection must never throw on the way to the owners' answer.
+  if (state.bootSequence && state.bootSequence.active) {
     state.core = 'dormant';
     document.body.dataset.coreState = 'dormant';
     renderSafety();

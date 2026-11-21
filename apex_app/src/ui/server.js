@@ -1874,6 +1874,10 @@ export function createUiServer({
             firstAt: boot.firstAt ?? null,
             runs: boot.runs ?? 0,
             status: boot.status ?? null,
+            // T-36 Step 4: the last measured reading, in the same shape the deck and the
+            // verification walk read. Absent on an unbootstrapped directory, never invented.
+            latest: boot.latest ?? null,
+            detail: boot.detail ?? null,
           },
         };
       } catch (err) {
@@ -2325,6 +2329,10 @@ export function createUiServer({
                 revokedAt: device.revokedAt,
                 revocationReason: device.revocationReason ?? null,
                 lastAcceptedSequence: device.lastAcceptedSequence ?? null,
+                // T-36 Step 4: the device's own description of itself - the hostname, platform and
+                // capability the bootstrap enrolled it with. It is part of the hashed enrollment
+                // event, so it cannot be edited afterwards, and it is null when none was given.
+                metadata: device.metadata ?? null,
               })),
               total: trust.length,
             },

@@ -1388,3 +1388,176 @@ Web Animations API, checks the privacy indicator's text, stages and claims a rea
 the handed-off view and mission, runs the doctor and compares it with the route, and fails on any
 console error, page error or horizontal overflow. The hosted run `44890155387` is what turns that into
 evidence, and it is green.
+
+---
+
+## T-36 — Part 4 Screen #1: the HUD boot sequence and the real cold-start workstation bootstrap
+
+### What this milestone is for
+
+T-35 closed with a claim that was true and narrower than it sounded: five real-Edge walks, all green,
+all of them against a **seeded** data directory. Every one of them called a fixture that enrolled its
+own devices, wrote its own perception reading and created its own task. So the evidence proved that the
+deck renders a machine that has already been set up. It said nothing about the only launch that matters
+to a new owner: `node src/cli.js desktop` on a Windows box, pointed at a data directory with nothing in
+it.
+
+That launch had three problems, and each is a step of this milestone. The stores started empty, so the
+deck opened on dashes and an empty Presence view - honest, and useless. Nothing had sensed the host or
+the repository, so `Resource Fabric` and `Git Workspace` had nothing to say. And Part 4's first screen,
+*Boot: "One message: System waking and verifying readiness"*, was a design in a document rather than a
+sequence the product ran.
+
+T-36 is the answer: a governed bootstrap the ECP authorizes, a boot screen that reports what the
+bootstrap measured, a launcher that performs the bootstrap before the window opens, and a sixth
+real-browser walk that starts from a genuinely empty directory.
+
+### Step 1 — `system.bootstrap` and `POST /api/system/bootstrap`
+
+`src/system/bootstrap.js` is the orchestration, and `src/actions/system-bootstrap-actions.js` is the
+contract. Four checks, in order, each of which either measured something or says what it could not
+measure:
+
+1. **Doctor readiness** runs all six read-only checks and gates on exactly one of them: `safety_latch`.
+   That distinction was a real correction during the build. The first version treated the whole doctor
+   score as the gate, which meant a missing browser blocked the bootstrap - wrong, because a missing
+   browser does not stop APEX from reading its own host. A latch that is engaged *or unreadable* halts
+   the pass immediately and fail-closed; the other five checks are reported and do not gate.
+2. **Real host and git perception** runs the governed `perception.sense_host` capability through the
+   controller, so the ECP authorizes it like any other write and the observation lands in the ledger
+   with `source: 'host-workspace-sensor'`. It reads this machine's CPU count, memory, storage and
+   uptime from Resource Fabric, and the configured workspace with git itself.
+3. **Local workstation enrollment** runs only when the T-28 device-trust registry is empty. It enrolls
+   `local-workstation` as `trusted` with `kind: workstation`, the real `hostname`, `platform` and
+   `arch`, `capability: local-loopback` and `enrolledBy: system.bootstrap`. The metadata goes inside
+   the hashed enrollment event, so it is chain-bound and cannot be edited afterwards. On a second run
+   the registry is not empty, so nothing is enrolled and the check reports `alreadyEnrolled: true`.
+4. **The opening Executive Briefing** compiles from the readings the three checks actually produced, and
+   the pass writes `system-bootstrap.json` with the timestamp, the run count, the doctor's own counts,
+   the device, the workspace branch and head, and a digest per check over the evidence it produced
+   rather than over its label.
+
+Two properties are worth stating because they are what the tests pin. The bootstrap creates **zero
+synthetic goals and zero synthetic tasks** - a cold deck is empty on purpose, and a bootstrap that
+invented a demonstration task would be lying about the machine. And it is **idempotent**: a second run
+refreshes the reading and the doctor, increments the run count, and still leaves exactly one device.
+
+One real defect surfaced during this step and is worth recording. The bootstrap's perception read asked
+the ledger for `limit: 1`, so Resource Fabric's check found one entry where nine existed and reported
+the subsystem as unverified. The reading was fine; the window was wrong. Reading the full 40-entry
+window fixed it, and Resource Fabric now verifies against the observations that are actually there.
+
+The capability is a governed write, so it is covered by the model-origin sweep in
+`tests/model-self-authorization.test.js` (17/17 passing, with `system.bootstrap` included) and counted
+in the pinned inventory: **156 default actions, 171 rooted actions, 85 writes, 86 reads**. Both
+capabilities are capture-excluded under the `system` domain.
+
+### Step 2 — the HUD boot sequence
+
+`#hud-boot-sequence` is a region, not a modal. It carries no `aria-modal`, it never takes focus, it
+never covers the emergency controls, and Escape dismisses it from anywhere including from inside a
+field. While it runs, the Core is `Dormant` - not `Idle`, not `Degraded` - and when it finishes the
+Core takes the owners' authoritative answer, which a latched system renders as `Lockdown` and not as
+the thing the boot screen was hoping for.
+
+It runs on three triggers: an unbootstrapped data directory found in `/api/state`, `?boot=1`, and the
+**Run Boot Sequence** control. Its six rows are the six subsystems - Safety Latch, ECP Authority,
+Resource Fabric, Git Workspace, Device Trust, Executive Briefing - and each row carries a measured
+detail: the latch's own summary, the CPU count and free memory, `trunk at 83b7bd8`, the enrolled
+device's id and status, the briefing's concise line. A subsystem with nothing to report says
+`unavailable`; it does not say `ok`.
+
+`prefers-reduced-motion` removes the stagger entirely - not by setting a zero-length timer, which still
+yields to the event loop, but by not awaiting at all. Six fake-browser tests in
+`tests/t36-boot-sequence.test.js` cover the three triggers, the Dormant projection, the measured rows,
+Escape without a focus trap, reduced motion, and the on-demand re-run: **6/6 passing**, with the 28
+related UI-surface tests.
+
+### Step 3 — the desktop launcher
+
+`node src/cli.js desktop` now performs the bootstrap **before** the window opens, and it does it the
+same way the HTTP route does: through the controller, so the ECP authorizes it and the operation is
+audited. The shell is not a second authority and never runs the capability behind the ECP's back.
+
+Three behaviours are pinned by `tests/t36-desktop-bootstrap.test.js` (**7/7 passing**):
+
+- a cold launch bootstraps, enrolls one `local-workstation`, verifies all four checks and writes the
+  marker; a second launch refreshes the reading and leaves the device count at one;
+- `--no-bootstrap` leaves the directory completely untouched and the banner says `Bootstrap skipped`
+  with the reason;
+- with the lockdown latch engaged the shell refuses, states that the bootstrap was not attempted, and
+  writes nothing at all.
+
+The startup banner is a table of measured values: the loopback URL, the resolved browser binary (or
+`none resolved` with the URL to open by hand), the data directory, the doctor's own count as
+`passed/total ok (status)`, the autonomy profile the ECP holds, and the bootstrap's outcome with
+verified checks over total. A dry run prints the same table and starts nothing, so the owner can see
+what the window will open on.
+
+One real bug was found by writing these tests: the CLI passed the bootstrap decision twice - once as a
+shell option and once as a `launch()` argument - so `--no-bootstrap` skipped the work but never recorded
+the skip, and the banner read `Bootstrap not run`. The decision now lives in one place. That is the kind
+of defect a banner is for.
+
+### Step 4 — the real-browser walk, and the unseeded fixture
+
+`tests/e2e/t36-cold-boot-unseeded.spec.mjs` is the sixth browser suite and the only one that starts
+from nothing. Its fixture, `tests/e2e/t36-fixtures.mjs`, creates an empty temporary data directory and a
+real temporary git repository with one commit on a branch named `trunk` - a name no other fixture uses,
+so a stale reading is visible - and then **asserts that the directory really was empty** before the
+browser is opened. The fixture can not seed: a harness test reads it and fails if it ever calls
+`createTask(`, `deviceTrust.enroll(` or `perception.sense_host`.
+
+The walk verifies, in real Edge on the hosted runner: the overlay appearing and the Core going
+`Dormant`; the six measured rows; the Core landing on `idle` with the trail showing the transition; the
+gauges carrying real digits; the workspace branch and head matching the repository the fixture created;
+`local-workstation` enrolled exactly once and rendered in Presence; a live briefing naming the device
+and the branch; six doctor checks with `browser_binary` passing because this suite only runs where a
+browser resolved; a T-29 cognitive intent reaching `awaiting_approval` with one task and one approval;
+zero synthetic goals and tasks; and zero console errors, zero page errors, zero horizontal overflow.
+
+`tests/t36-cold-boot.test.js` is the other half, and it is the part that runs everywhere: **9/9
+passing** on a machine with no browser at all. It drives the same fixture and makes every server-side
+claim the walk makes - the empty starting point, the four verified checks with digests, the real host
+counters, the branch and head, the single enrollment with chain-bound metadata, the briefing, the
+zero-synthetic-data contract, the idempotent second run, the lockdown refusal writing nothing, the
+cognitive intent, and the marker and ledgers on disk. What it can not do is render the page, and it says
+so: the last test in the file asserts which claims the browser walk owns.
+
+Two additions were needed to make the walk's claims readable from the outside, and both are additive:
+the bootstrap marker now records the last measured reading (`latest`), including the host counters, the
+workspace branch and head, the briefing's facts, the doctor's counts and the explicit zeros for
+synthetic goals and tasks; `/api/state` exposes it; and `/api/presence` now includes each device's
+own metadata, which it had been dropping.
+
+### Source check
+
+`node --check` over every file under `apex_app/src`, one process per file:
+
+```
+checked=250 pass=250 fail=0
+```
+
+### The local suite
+
+The full `npm test` run (see the closing section for the exact totals) found one real regression, and it
+is worth recording because it was not in any T-36 file. `tests/ui-core-projection.test.js` extracts
+`applyCoreProjection` from the shipped client and runs it in a sandbox with a partial state object. The
+Step 2 code read `state.bootSequence.active` unguarded, and that sandbox has no boot sequence, so the
+projection threw. The fix is in the implementation rather than the test: a state with no boot sequence
+is simply not booting, and the read is guarded. A partial projection must never throw on its way to the
+owners' answer.
+
+### What is verified, and what is not
+
+Verified locally, with the shipped code: the bootstrap's four checks and their digests; the real host
+and workspace readings; the single enrollment and its chain-bound metadata; the briefing's facts; the
+marker's contents and its run count; idempotence; the lockdown refusal writing nothing; the boot
+sequence's triggers, Dormant projection, measured rows, Escape and reduced motion; the launcher's
+bootstrap-before-window behaviour, `--no-bootstrap`, lockdown refusal and banner values; the whole
+server-side surface of the unseeded walk.
+
+`UNVERIFIED` **here**: this sandbox still has no Chromium-family browser, so
+`tests/e2e/t36-cold-boot-unseeded.spec.mjs` skips locally with an explicit diagnostic rather than
+passing. The hosted run is what turns the DOM claims into evidence, and it is the one place the walk
+actually opens a page.

@@ -144,6 +144,10 @@ export function createWorkstationBootstrap({
       status: marker.status ?? null,
       markerPath,
       detail: marker.detail ?? null,
+      // T-36 Step 4: what the last pass actually measured. It is read back from the marker rather
+      // than sensed again, so a reader sees the reading the bootstrap verified - and sees nothing
+      // at all on a directory that has not been bootstrapped.
+      latest: marker.latest ?? null,
     };
   }
 
@@ -527,6 +531,46 @@ export function createWorkstationBootstrap({
         }
         : null,
       readingAt: perception.evidence?.reading?.at ?? null,
+      // The last measured reading, in the shape the deck reads: the host counters the sensor
+      // observed and the workspace it read with git. Only measured values appear here.
+      latest: {
+        at,
+        perception: {
+          source: 'host-workspace-sensor',
+          reading: perception.evidence?.reading
+            ? {
+              at: perception.evidence.reading.at ?? null,
+              host: perception.evidence.reading.host ?? null,
+              workspace: perception.evidence.reading.workspace ?? null,
+            }
+            : null,
+        },
+        briefing: briefing.evidence?.briefing
+          ? {
+            concise: briefing.evidence.briefing.concise ?? null,
+            facts: Array.isArray(briefing.evidence.briefing.facts)
+              ? briefing.evidence.briefing.facts.map((fact) => ({ kind: fact.kind ?? null, text: fact.text ?? null }))
+              : [],
+          }
+          : null,
+        device: enrollment.evidence?.deviceId ? {
+          deviceId: enrollment.evidence.deviceId,
+          status: enrollment.evidence.status ?? null,
+          alreadyEnrolled: enrollment.evidence.alreadyEnrolled === true,
+        } : null,
+        doctor: finalReport
+          ? {
+            status: finalReport.status,
+            passed: finalReport.counts.pass,
+            total: finalReport.checks.length,
+            checks: finalReport.checks.map((entry) => ({ name: entry.name, state: entry.state })),
+          }
+          : null,
+        // T-36: the bootstrap creates no goals and no tasks. This is stated as a measured zero
+        // rather than left implicit, because "it did not invent work" is part of the contract.
+        syntheticGoalsCreated: 0,
+        syntheticTasksCreated: 0,
+      },
     };
     try {
       writeJsonFile(markerPath, marker);

@@ -173,7 +173,9 @@ describe('T-31 browser suite wiring', () => {
     // through its gates and writes its own summary, so the workflow can state what it reached.
     // T-35 Step 4 (2026-11-19): the step-down / handoff / doctor walk joins the default run, and the
     // assertion below names it so a spec that is written but never wired is a red test.
-    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs'\]/);
+    // T-36 Step 4 (2026-11-21): the cold-boot walk joins too, and the assertion names it for the
+    // same reason: a spec that exists but is never wired is a red test, not a green one.
+    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs', '\*\*\/t36-cold-boot-unseeded\.spec\.mjs'\]/);
     assert.match(config, /testIgnore: \['\*\*\/apex-browser\.spec\.mjs'\]/);
     const spec = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't31-real-browser.spec.mjs'), 'utf8');
     assert.match(spec, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/);
@@ -197,6 +199,24 @@ describe('T-31 browser suite wiring', () => {
     assert.match(stepdown, /T35_FAILURES/, 'the T-35 walk prints a short failure line first');
     assert.match(stepdown, /page\.goto\(`\$\{handle\.base\}\/\?token=\$\{encodeURIComponent\(handle\.token\)\}`/,
       'the T-35 walk authorizes the page it opens');
+    // T-36 Step 4 (2026-11-21): the cold-boot walk is the only one that asserts its own starting
+    // point, so these three are what keep it honest: it must launch the resolved browser, skip
+    // loudly when there is none, and record a failure and its last checkpoint in its summary.
+    const coldBoot = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't36-cold-boot-unseeded.spec.mjs'), 'utf8');
+    assert.match(coldBoot, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/,
+      'the cold-boot walk launches the resolved browser');
+    assert.match(coldBoot, /test\.skip\(resolution\.executable === null, noBrowserDiagnostic\(resolution\)\)/,
+      'the cold-boot walk skips loudly when no browser exists');
+    assert.match(coldBoot, /T36_FAILURES/, 'the cold-boot walk prints a short failure line first');
+    assert.match(coldBoot, /run\.failures\.push\(/, 'the cold-boot walk records a failure in its summary');
+    assert.match(coldBoot, /page\.goto\(`\$\{handle\.base\}\/\?token=\$\{encodeURIComponent\(handle\.token\)\}`/,
+      'the cold-boot walk authorizes the page it opens');
+    assert.match(coldBoot, /#hud-boot-sequence/, 'the cold-boot walk checks the boot overlay the deck ships');
+    const t36Fixture = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't36-fixtures.mjs'), 'utf8');
+    // The fixture must not seed: no task creation, no enrollment, no perception run before the walk.
+    for (const forbidden of ['createTask(', 'deviceTrust.enroll(', 'perception.sense_host']) {
+      assert.ok(!t36Fixture.includes(forbidden), `the T-36 fixture must not seed ${forbidden} before the cold boot`);
+    }
     // The page itself is authorized with the same token the routes use. A walk that navigates to the
     // bare base gets the server's refusal page and no #core-state, which is a failure with no cause.
     assert.match(mission, /page\.goto\(`\$\{handle\.base\}\/\?token=\$\{encodeURIComponent\(handle\.token\)\}`/,
