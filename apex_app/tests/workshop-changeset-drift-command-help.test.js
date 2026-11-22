@@ -438,6 +438,16 @@ test('T-40 command help: the client bundle is real JavaScript, and installs the 
   }
   assert.ok(UI_CLIENT.includes('dataset.rollbackChangeset'), 'the batch rollback control is not built');
   assert.ok(UI_CLIENT.includes('dataset.selectCandidate'), 'the selection checkbox is not built');
+  // The error contract. `api()` copies a bounded set of refusal fields onto the thrown error, and a
+  // field missing from that list is silently unavailable to every handler above it - which is exactly
+  // how the T-40 walk reached the screen with an empty diagnostic while the server had sent the whole
+  // per-file diagnosis. Both batch refusals depend on `problems`, so its presence is pinned.
+  const apiBody = UI_CLIENT.slice(UI_CLIENT.indexOf('async function api('), UI_CLIENT.indexOf('async function readApi('));
+  for (const field of ['problems', 'refusedRelativePath', 'refusedCandidateId', 'filesChecked',
+    'filesRefused', 'undone', 'expectedBaseSha256', 'actualDiskSha256', 'expectedAppliedSha256']) {
+    assert.ok(apiBody.includes(`'${field}'`), `api() drops the ${field} field from a refusal`);
+  }
+  assert.ok(UI_CLIENT.includes('dataset.rollbackChangeset'), 'the batch rollback control is not built');
   assert.ok(UI_CLIENT.includes("event.key === '?'"), 'the question-mark binding is not installed');
   assert.ok(UI_CLIENT.includes('/api/command/catalog'), 'the client does not read the catalogue');
 });

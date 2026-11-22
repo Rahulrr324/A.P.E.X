@@ -1598,7 +1598,14 @@ async function api(path, options = {}) {
     // the refusal contract defines; the body is never re-thrown wholesale.
     if (data && typeof data === 'object') {
       for (const key of ['code', 'expectedBaseSha256', 'actualDiskSha256',
-        'expectedAppliedSha256', 'restoredSha256', 'display']) {
+        'expectedAppliedSha256', 'restoredSha256', 'display',
+        // T-40: a batch refusal is a LIST of problems, not one pair of digests. Without these the
+        // client received a 409 whose per-file diagnosis had been dropped on the floor, which is how
+        // the T-40 walk reached the screen with an empty diagnostic while the server had answered with
+        // everything needed to explain itself. The same three scalar fields are copied too, because a
+        // caller that only wants the first offending file should not have to walk the list.
+        'problems', 'refusedCandidateId', 'refusedRelativePath', 'filesChecked', 'filesRefused',
+        'undone']) {
         if (typeof data[key] !== 'undefined') error[key] = data[key];
       }
     }

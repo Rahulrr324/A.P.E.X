@@ -271,7 +271,12 @@ test('T-40: a two-file changeset is atomic, disk drift is measured and blocks th
     // And nothing was recorded, because nothing happened.
     expect(fixture.ledger().filter((record) => record.kind === 'changeset_apply').length).toBe(0);
     // The refusal on screen names the offending file, with both digests.
-    const refusalText = await page.locator('.diagnostic').last().textContent();
+    // Scoped to the changeset status line, not to any `.diagnostic` on the page: a candidate row can
+    // also carry one, and `last()` is a lazy locator that would happily match the wrong box. The box
+    // that must exist here is the one the batch refusal appended beside #ws-changeset-state.
+    const refusalBox = page.locator('#ws-changeset-state + .diagnostic').first();
+    await expect(refusalBox).toContainText('Changeset refused', { timeout: 15_000 });
+    const refusalText = await refusalBox.textContent();
     expect(refusalText).toContain('Changeset refused');
     expect(refusalText).toContain('src/data.json');
     expect(refusalText).toContain(dataBase);

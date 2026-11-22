@@ -2638,3 +2638,18 @@ failures: [both candidates verified] expect(locator).toContainText() failed
 Every field after `staged` is `None` because the walk stopped before the step that fills it. The
 `scheduledRefusals 1` is the pre-flight refusal arriving, which is the proof the request was made and
 the server did answer; what failed was the sentence surviving on screen long enough to be asserted.
+
+**Hosted evidence, second attempt (run 45020012216, `74317a2`).** The notice fix worked - the run now
+gets past the refusal message and fails on the digest inside it, again at the same phase. The cause was
+the same class of bug one layer down: the client's `api()` helper copies a *whitelist* of refusal fields
+onto the error it throws, and `problems` was not on the list. T-39 had extended that list with the two
+single-file digests; T-40 added a per-file `problems` array and did not extend it again. So the client
+received a 409 whose entire diagnosis had been dropped on the floor, `error.problems` was always `[]`,
+the diagnostic box never rendered, and the walk's scoped assertion found no digest to read.
+
+The lesson is worth stating because this is the second time in the same helper: **a field that is not on
+the `api()` whitelist does not exist anywhere above it, and nothing fails loudly when that happens.**
+The list now carries `problems`, `refusedCandidateId`, `refusedRelativePath`, `filesChecked`,
+`filesRefused` and `undone`, a unit test pins every field the two batch refusals depend on, and the walk
+asserts the diagnostic box is scoped to the changeset status line rather than to any `.diagnostic` on
+the page.
