@@ -35,6 +35,17 @@ import { resolveNewFile } from '../filesystem/path.js';
 
 export const WORKSHOP_APPLY_SCHEMA = 'apex.workshop.file-apply/1';
 export const WORKSHOP_ROLLBACK_SCHEMA = 'apex.workshop.file-rollback/1';
+// T-40 Step 2: a changeset is one governed act touching 2..MAX_CHANGESET_FILES files. It has its own
+// record kinds because an all-or-nothing batch is a different promise from N independent applies, and
+// a ledger that could not tell them apart could not prove the batch was atomic.
+export const WORKSHOP_CHANGESET_SCHEMA = 'apex.workshop.changeset-apply/1';
+export const WORKSHOP_CHANGESET_ROLLBACK_SCHEMA = 'apex.workshop.changeset-rollback/1';
+// Two is the floor because a "changeset" of one file is an apply with extra ceremony. Eight is the
+// ceiling because a batch that must be pre-flighted, snapshotted and either wholly applied or wholly
+// abandoned has a cost per file, and an unbounded batch makes the rollback-on-failure path the one
+// that runs when the machine is already in trouble.
+export const MIN_CHANGESET_FILES = 2;
+export const MAX_CHANGESET_FILES = 8;
 export const BACKUPS_DIR = 'workshop-backups';
 export const APPLY_LEDGER = 'workshop-applies.jsonl';
 
@@ -445,6 +456,599 @@ export class WorkshopApplier {
     fs.appendFileSync(this.ledgerPath, `${JSON.stringify(entry)}\n`, 'utf8');
   }
 
+  // ------------------------------------------------------------- the changeset ---
+
+  // Every reason a changeset may be refused, gathered into one place so the pre-flight is one ordered
+  // list of checks rather than a set of guards scattered through a write path. The rule the milestone
+  // exists for: NOTHING is written until EVERY file has passed EVERY check.
+  preflightChangeset({ candidateIds } = {}) {
+    const ids = Array.isArray(candidateIds) ? candidateIds : [];
+    const problems = [];
+
+    // Every refusal from this function is an exception carrying `detail.problems`, including the ones
+    // that are about the request rather than about a file. The first draft returned a result object for
+    // the count cases, and applyChangeset - which expects either an exception or a usable entries list -
+    // carried on with `undefined` and crashed after creating a backup directory. One shape, always.
+    const refuse = (code, detail, problems) => {
+      const error = new ExecutionError(code, detail);
+      error.detail = { problems, filesChecked: ids.length, filesRefused: problems.length };
+      throw error;
+    };
+
+    if (!this.available) {
+      refuse('WORKSPACE_UNAVAILABLE', 'no workspace root is configured, so there is nothing to apply to', [
+        { reason: 'WORKSPACE_UNAVAILABLE', detail: 'no workspace root is configured' },
+      ]);
+    }
+    if (ids.length < MIN_CHANGESET_FILES) {
+      refuse('CHANGESET_PREFLIGHT_REFUSED',
+        `a changeset needs at least ${MIN_CHANGESET_FILES} candidates; ${ids.length} given`,
+        [{ reason: 'TOO_FEW_FILES', detail: `at least ${MIN_CHANGESET_FILES} are required` }]);
+    }
+    if (ids.length > MAX_CHANGESET_FILES) {
+      refuse('CHANGESET_PREFLIGHT_REFUSED',
+        `a changeset holds at most ${MAX_CHANGESET_FILES} candidates; ${ids.length} given`,
+        [{ reason: 'TOO_MANY_FILES', detail: `at most ${MAX_CHANGESET_FILES} are allowed` }]);
+    }
+
+    // Ledger capacity first: a changeset that cannot be recorded must not be attempted, for the same
+    // reason a single apply checks it before touching a file.
+    this.#assertRoom();
+
+    const entries = [];
+    const seenPaths = new Map();
+    for (const [index, candidateId] of ids.entries()) {
+      const slot = index + 1;
+      const record = this.sandbox.load(candidateId);
+      if (!record) {
+        problems.push({ candidateId, slot, reason: 'UNKNOWN_CANDIDATE', detail: `no staged candidate ${candidateId}` });
+        continue;
+      }
+      // Two candidates writing the same path would make "atomic" impossible to define, because the
+      // second write would land over the first. It is refused as an ordering question, not a conflict.
+      const relativePath = record.relativePath;
+      if (seenPaths.has(relativePath)) {
+        problems.push({
+          candidateId, slot, reason: 'DUPLICATE_PATH', relativePath,
+          detail: `${relativePath} is already written by the candidate in slot ${seenPaths.get(relativePath)}; two writes to one path have no single atomic result`,
+        });
+        continue;
+      }
+      seenPaths.set(relativePath, slot);
+
+      // The same two gates a single apply runs, in the same order, reported per file rather than by
+      // throwing on the first: the owner needs to know every reason at once, not one per attempt.
+      const verification = this.sandbox.latestVerification(candidateId);
+      if (!verification || verification.verified !== true) {
+        problems.push({ candidateId, slot, reason: 'UNVERIFIED', relativePath, detail: 'the candidate has no passing sandbox verification' });
+        continue;
+      }
+      let stagedDigest;
+      try {
+        stagedDigest = sha256(fs.readFileSync(record.stagedPath));
+      } catch (err) {
+        problems.push({ candidateId, slot, reason: 'STAGED_BYTES_MISSING', relativePath, detail: `the staged bytes cannot be read: ${err?.message ?? err}` });
+        continue;
+      }
+      if (stagedDigest !== verification.stagedDigest || stagedDigest !== record.digest) {
+        problems.push({ candidateId, slot, reason: 'UNVERIFIED', relativePath, detail: 'the sandbox holds different bytes than the passing verification recorded' });
+        continue;
+      }
+
+      // Containment, through the same helper a single apply uses.
+      let target;
+      try {
+        target = this.#resolveTarget(relativePath);
+      } catch (err) {
+        problems.push({ candidateId, slot, reason: 'ACCESS_DENIED', relativePath, detail: String(err?.message ?? err) });
+        continue;
+      }
+
+      const expectedBaseSha256 = record.base?.exists === true ? (record.base.digest ?? null) : null;
+      const existsNow = fs.existsSync(target);
+      let actualDiskSha256 = null;
+      if (existsNow) {
+        const stat = fs.statSync(target);
+        if (!stat.isFile()) {
+          problems.push({ candidateId, slot, reason: 'NOT_A_FILE', relativePath, detail: 'the target is not a regular file' });
+          continue;
+        }
+        actualDiskSha256 = sha256(fs.readFileSync(target));
+      }
+      if (actualDiskSha256 !== expectedBaseSha256) {
+        problems.push({
+          candidateId, slot, reason: 'WORKSPACE_DRIFT', relativePath,
+          expectedBaseSha256, actualDiskSha256, appliedSha256: stagedDigest,
+          detail: expectedBaseSha256 === null
+            ? `${relativePath} did not exist when the candidate was staged, and now it does`
+            : `${relativePath} changed on disk after the candidate was staged`,
+        });
+        continue;
+      }
+
+      entries.push({
+        candidateId,
+        slot,
+        relativePath,
+        target,
+        stagedBytes: fs.readFileSync(record.stagedPath),
+        stagedDigest,
+        verificationId: verification.id ?? null,
+        expectedBaseSha256,
+        actualDiskSha256,
+        existedBefore: existsNow,
+      });
+    }
+
+    if (problems.length > 0) {
+      // The refusal names the first offending candidate by id and both digests, and carries every
+      // problem it found. Every file is still exactly as it was: the checks above only read.
+      const first = problems[0];
+      const error = new ExecutionError(
+        'CHANGESET_PREFLIGHT_REFUSED',
+        problems.length === 1
+          ? `the changeset was refused before writing anything: ${first.relativePath ? first.relativePath + ' - ' : ''}${first.detail}`
+          : `the changeset was refused before writing anything: ${problems.length} of ${ids.length} files failed, the first being ${first.relativePath ?? first.candidateId} - ${first.detail}`,
+      );
+      error.detail = {
+        problems,
+        refusedCandidateId: first.candidateId ?? null,
+        refusedRelativePath: first.relativePath ?? null,
+        expectedBaseSha256: first.expectedBaseSha256 ?? null,
+        actualDiskSha256: first.actualDiskSha256 ?? null,
+        filesChecked: ids.length,
+        filesRefused: problems.length,
+      };
+      throw error;
+    }
+
+    return { ok: true, entries };
+  }
+
+  // Apply 2..8 verified candidates as ONE atomic change.
+  //
+  // Two phases, and the first one writes nothing at all. That is the whole design: the pre-flight can
+  // fail for any file and for any reason, and when it does the answer is a refusal rather than a
+  // partial change nobody asked for. The second phase snapshots every file, writes them all, verifies
+  // every one against its applied digest, and - if any single OS write or read-back fails - restores
+  // every file it already touched before it reports the failure.
+  applyChangeset({ candidateIds, title, rationale = null } = {}) {
+    const preflight = this.preflightChangeset({ candidateIds });
+    const entries = preflight.entries;
+
+    const appliedAt = this.now().toISOString();
+    const changesetId = `wcs-${createHash('sha256').update(`${candidateIds.join(',')}:${appliedAt}`).digest('hex').slice(0, 12)}`;
+    const backupDir = path.join(this.backupsRoot, changesetId);
+
+    // ---- phase 1: snapshot every file before a single byte is written ----
+    fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+    const snaps = [];
+    for (const entry of entries) {
+      const backupFile = entry.existedBefore ? `before-${entry.actualDiskSha256}-${entry.slot}.bin` : null;
+      if (entry.existedBefore) {
+        const bytes = fs.readFileSync(entry.target);
+        // The file is re-hashed as it is copied. A file that changed between the pre-flight and the
+        // snapshot would otherwise be backed up under a digest it does not have.
+        if (sha256(bytes) !== entry.actualDiskSha256) {
+          fs.rmSync(backupDir, { recursive: true, force: true });
+          const error = new ExecutionError('WORKSPACE_DRIFT', `${entry.relativePath} changed while its snapshot was being taken; nothing was written`);
+          error.detail = { expectedBaseSha256: entry.actualDiskSha256, actualDiskSha256: sha256(bytes), problems: [{ candidateId: entry.candidateId, slot: entry.slot, relativePath: entry.relativePath, reason: 'WORKSPACE_DRIFT' }] };
+          throw error;
+        }
+        fs.writeFileSync(path.join(backupDir, backupFile), bytes, { mode: 0o600 });
+      }
+      snaps.push({ ...entry, backupFile, backupPath: backupFile === null ? null : path.join(backupDir, backupFile) });
+    }
+    const snapshot = {
+      schema: 'apex.workshop.changeset-snapshot/1',
+      changesetId,
+      title,
+      at: appliedAt,
+      files: snaps.map((snap) => ({
+        slot: snap.slot,
+        candidateId: snap.candidateId,
+        relativePath: snap.relativePath,
+        existedBefore: snap.existedBefore,
+        beforeSha256: snap.actualDiskSha256,
+        appliedSha256: snap.stagedDigest,
+        backupFile: snap.backupFile,
+      })),
+    };
+    fs.writeFileSync(path.join(backupDir, 'snapshot.json'), `${JSON.stringify(snapshot, null, 2)}\n`, { mode: 0o600 });
+
+    // ---- phase 2: write every file, remembering what was written so it can be undone ----
+    const written = [];
+    const undoAll = () => {
+      // Undo in reverse order, and restore through the same atomic sibling-rename the write used, so a
+      // failure while undoing cannot itself leave a half-written file.
+      for (const done of [...written].reverse()) {
+        try {
+          if (done.existedBefore) {
+            const temporary = temporaryName(done.target);
+            fs.writeFileSync(temporary, fs.readFileSync(done.backupPath));
+            fs.renameSync(temporary, done.target);
+          } else {
+            fs.rmSync(done.target, { force: true });
+          }
+        } catch {
+          // A restore that fails here is reported by the caller with the files that could not be
+          // restored named; it must not mask the error that caused the unwind.
+        }
+      }
+    };
+
+    try {
+      for (const snap of snaps) {
+        // The temporary name is taken ONCE. temporaryName() is random per call, so calling it twice
+        // writes one file and renames a different, non-existent one - which is exactly the bug this
+        // loop had in its first draft, and the reason the changeset suite writes and re-reads every
+        // file rather than trusting the loop to be right.
+        const temporary = temporaryName(snap.target);
+        fs.writeFileSync(temporary, snap.stagedBytes, {
+          mode: snap.existedBefore ? fs.statSync(snap.target).mode & 0o777 : 0o644,
+        });
+        fs.renameSync(temporary, snap.target);
+        written.push(snap);
+      }
+    } catch (err) {
+      undoAll();
+      const error = new ExecutionError('CHANGESET_WRITE_FAILED', `the changeset did not complete and was undone: ${err?.message ?? err}`);
+      error.detail = { changesetId, undone: written.map((w) => w.relativePath), problems: [{ reason: 'WRITE_FAILED', detail: String(err?.message ?? err) }] };
+      throw error;
+    }
+
+    // ---- phase 3: prove every file on disk, and undo the whole batch if any one does not ----
+    const verifiedFiles = [];
+    for (const snap of snaps) {
+      let disk = null;
+      try {
+        disk = sha256(fs.readFileSync(snap.target));
+      } catch {
+        disk = null;
+      }
+      if (disk !== snap.stagedDigest) {
+        undoAll();
+        const error = new ExecutionError('CHANGESET_VERIFY_FAILED', `${snap.relativePath} does not match the candidate after the write; the whole changeset was undone`);
+        error.detail = { changesetId, expectedAppliedSha256: snap.stagedDigest, actualDiskSha256: disk, problems: [{ slot: snap.slot, relativePath: snap.relativePath, reason: 'VERIFY_FAILED' }] };
+        throw error;
+      }
+      verifiedFiles.push({
+        slot: snap.slot,
+        candidateId: snap.candidateId,
+        relativePath: snap.relativePath,
+        existedBefore: snap.existedBefore,
+        beforeSha256: snap.actualDiskSha256,
+        appliedSha256: snap.stagedDigest,
+        diskSha256: disk,
+        backupFile: snap.backupFile,
+        verifiedOnDisk: true,
+      });
+    }
+
+    const entry = {
+      schema: WORKSHOP_CHANGESET_SCHEMA,
+      kind: 'changeset_apply',
+      changesetId,
+      at: appliedAt,
+      title: title ?? null,
+      rationale,
+      files: verifiedFiles,
+      fileCount: verifiedFiles.length,
+      backupDir,
+      // The three claims a caller must be able to assert about a batch.
+      atomic: true,
+      appliedToWorkspace: true,
+      everyFileVerifiedOnDisk: verifiedFiles.every((file) => file.verifiedOnDisk === true),
+      mutatesLiveWorkspace: true,
+      authorizesExecution: false,
+    };
+    this.#append(entry);
+    return entry;
+  }
+
+  // Undo a whole changeset, or nothing.
+  //
+  // The pre-flight is the same shape as the apply's and the reason is the mirror of it: a batch
+  // rollback that restored four files and refused the fifth would leave the owner in a state neither
+  // the apply nor the rollback ever described. So every file is checked first, and one externally
+  // edited file refuses the entire revert.
+  rollbackChangeset({ changesetId, reason = null } = {}) {
+    const record = this.changesetRecord(changesetId);
+    if (!record) throw new ExecutionError('WORKSHOP_NOT_FOUND', `no applied changeset ${changesetId}`);
+    const prior = this.records().find((r) => r.kind === 'changeset_rollback' && r.changesetId === record.changesetId);
+    if (prior) throw new ExecutionError('ALREADY_ROLLED_BACK', `that changeset was already rolled back at ${prior.at}`);
+    this.#assertRoom();
+
+    // Pre-flight every file. Nothing is restored until all of them pass.
+    const problems = [];
+    const restorable = [];
+    for (const file of record.files) {
+      let target;
+      try {
+        target = this.#resolveTarget(file.relativePath);
+      } catch (err) {
+        problems.push({ relativePath: file.relativePath, reason: 'ACCESS_DENIED', detail: String(err?.message ?? err) });
+        continue;
+      }
+      const exists = fs.existsSync(target);
+      const disk = exists ? sha256(fs.readFileSync(target)) : null;
+      if (disk !== file.appliedSha256) {
+        problems.push({
+          relativePath: file.relativePath,
+          reason: 'ROLLBACK_DRIFT',
+          expectedAppliedSha256: file.appliedSha256,
+          actualDiskSha256: disk,
+          detail: disk === null
+            ? 'the file is no longer on disk'
+            : 'the file was edited outside APEX after it was applied',
+        });
+        continue;
+      }
+      restorable.push({ ...file, target });
+    }
+
+    if (problems.length > 0) {
+      const first = problems[0];
+      const error = new ExecutionError(
+        'CHANGESET_ROLLBACK_DRIFT',
+        `the batch rollback was refused and no file was restored: ${first.relativePath} is not what the changeset wrote`,
+      );
+      error.detail = {
+        changesetId,
+        problems,
+        refusedRelativePath: first.relativePath,
+        expectedAppliedSha256: first.expectedAppliedSha256 ?? null,
+        actualDiskSha256: first.actualDiskSha256 ?? null,
+        filesChecked: record.files.length,
+        filesRefused: problems.length,
+      };
+      throw error;
+    }
+
+    const rolledBackAt = this.now().toISOString();
+    const restored = [];
+    const done = [];
+    try {
+      for (const file of restorable) {
+        if (file.existedBefore) {
+          const backupPath = path.join(record.backupDir, file.backupFile);
+          const bytes = fs.readFileSync(backupPath);
+          if (sha256(bytes) !== file.beforeSha256) {
+            throw new ExecutionError('BACKUP_DAMAGED', `the snapshot for ${file.relativePath} does not match the digest the changeset recorded`);
+          }
+          const temporary = temporaryName(file.target);
+          fs.writeFileSync(temporary, bytes, { mode: fs.statSync(file.target).mode & 0o777 });
+          fs.renameSync(temporary, file.target);
+        } else {
+          fs.rmSync(file.target, { force: false });
+        }
+        done.push(file);
+        const now = fs.existsSync(file.target) ? sha256(fs.readFileSync(file.target)) : null;
+        const expected = file.existedBefore ? file.beforeSha256 : null;
+        if (now !== expected) {
+          throw new ExecutionError('CHANGESET_ROLLBACK_VERIFY_FAILED', `${file.relativePath} does not hold the pre-apply bytes after the restore`);
+        }
+        restored.push({
+          slot: file.slot,
+          relativePath: file.relativePath,
+          existedBefore: file.existedBefore,
+          restoredSha256: now,
+          removedFile: file.existedBefore === false,
+          verifiedOnDisk: true,
+        });
+      }
+    } catch (err) {
+      // A failed rollback must not leave a half-reverted changeset. Every file already restored is put
+      // back to the bytes the changeset applied, so the batch ends in the state it was in when the
+      // rollback was requested - complete or unchanged, never half.
+      const reinstateFailures = [];
+      for (const file of [...done].reverse()) {
+        try {
+          const applied = record.files.find((entry) => entry.relativePath === file.relativePath);
+          if (!applied) continue;
+          if (applied.existedBefore === false) {
+            // The rollback removed a file the changeset created; recreating it needs the bytes, and
+            // they are not in the record by design (the record holds digests, not content). This is
+            // reported rather than guessed at.
+            reinstateFailures.push({ relativePath: file.relativePath, reason: 'CREATED_FILE_BYTES_NOT_RETAINED' });
+            continue;
+          }
+          const temporary = temporaryName(file.target);
+          fs.writeFileSync(temporary, fs.readFileSync(path.join(record.backupDir, applied.backupFile)));
+          fs.renameSync(temporary, file.target);
+        } catch (reinstateError) {
+          reinstateFailures.push({ relativePath: file.relativePath, reason: String(reinstateError?.message ?? reinstateError) });
+        }
+      }
+      const error = err instanceof ExecutionError ? err : new ExecutionError('CHANGESET_ROLLBACK_FAILED', String(err?.message ?? err));
+      error.detail = {
+        ...(error.detail ?? {}),
+        changesetId,
+        restoredBeforeFailure: done.map((file) => file.relativePath),
+        reinstateFailures,
+        // Stated plainly, because it is the one case this module cannot fully repair.
+        note: reinstateFailures.length === 0
+          ? 'every file already restored was put back to the bytes the changeset applied'
+          : 'some files could not be put back; the list names them and the workspace needs the owner',
+      };
+      throw error;
+    }
+
+    const entry = {
+      schema: WORKSHOP_CHANGESET_ROLLBACK_SCHEMA,
+      kind: 'changeset_rollback',
+      changesetRollbackId: `wcsr-${createHash('sha256').update(`${changesetId}:${rolledBackAt}`).digest('hex').slice(0, 12)}`,
+      changesetId,
+      at: rolledBackAt,
+      title: record.title ?? null,
+      reason,
+      files: restored,
+      fileCount: restored.length,
+      atomic: true,
+      rolledBack: true,
+      everyFileVerifiedOnDisk: restored.every((file) => file.verifiedOnDisk === true),
+      mutatesLiveWorkspace: true,
+      authorizesExecution: false,
+    };
+    this.#append(entry);
+    return entry;
+  }
+
+  changesetRecord(changesetId) {
+    const want = typeof changesetId === 'string' ? changesetId.trim() : '';
+    if (want === '') return null;
+    const matches = this.records().filter((record) => record.kind === 'changeset_apply' && record.changesetId === want);
+    return matches.length === 0 ? null : matches[matches.length - 1];
+  }
+
+  // The open changesets, newest first, with their live disk status. Read-only.
+  openChangesets() {
+    const records = this.records();
+    const rolledBack = new Set(records.filter((r) => r.kind === 'changeset_rollback').map((r) => r.changesetId));
+    return records
+      .filter((record) => record.kind === 'changeset_apply' && !rolledBack.has(record.changesetId))
+      .reverse();
+  }
+
+  // ------------------------------------------------------- the live disk re-verification ---
+
+  // What happened to a file AFTER it was applied, measured now.
+  //
+  // T-39 measured `verifiedOnDisk` at the instant of the write. That was honest and it was also a
+  // closed question: a file can be edited, reverted or deleted by anything on this machine after the
+  // apply, and until T-40 the Workshop had no way to say so. This reads the file again and classifies
+  // what it finds. It writes nothing, and it never repairs - a report, not a reconciler.
+  //
+  // The four states are exhaustive over the two digests an apply records, and each one is a different
+  // answer to "can I roll this back safely":
+  //
+  //   intact               disk still hashes to what the apply wrote: a rollback restores the prior
+  //                        bytes and destroys nothing.
+  //   modified_externally  disk hashes to neither the applied nor the before bytes: somebody edited it
+  //                        after the apply. A rollback would refuse with ROLLBACK_DRIFT, and the
+  //                        report says so rather than leaving the owner to discover it by trying.
+  //   reverted_externally  disk hashes to the bytes the apply replaced: the owner has already put the
+  //                        file back by hand, so there is nothing left to roll back.
+  //   deleted_externally    the file is not there at all.
+  diskState(record) {
+    const state = {
+      applyId: record.applyId,
+      candidateId: record.candidateId,
+      relativePath: record.relativePath,
+      // re-measured, so a screen can say when the truth was taken rather than when the apply happened
+      checkedAt: this.now().toISOString(),
+      appliedSha256: record.appliedSha256 ?? null,
+      beforeSha256: record.beforeSha256 ?? null,
+      existedBefore: record.existedBefore === true,
+      currentDiskSha256: null,
+      state: 'unknown',
+      rollbackReady: false,
+      // The sentence a screen shows. It is written here, beside the classification, so the two cannot
+      // drift apart into a status code the panel has to interpret.
+      detail: null,
+    };
+    if (!this.available) {
+      state.detail = 'no workspace root is configured, so the file cannot be measured';
+      return state;
+    }
+
+    // Containment is applied to the read exactly as it was to the write: an apply whose path no longer
+    // resolves inside the root (a parent replaced by a symlink, say) cannot be measured, and saying so
+    // is more honest than reporting a digest read from somewhere else.
+    let target = null;
+    try {
+      target = this.#resolveTarget(record.relativePath);
+    } catch (err) {
+      state.state = 'unreadable';
+      state.detail = `the path cannot be resolved inside the workspace root: ${err?.message ?? err}`;
+      return state;
+    }
+
+    if (!fs.existsSync(target)) {
+      state.state = 'deleted_externally';
+      state.detail = 'the file is no longer on disk; there is nothing to inspect and nothing to roll back';
+      return state;
+    }
+    const stat = fs.statSync(target);
+    if (!stat.isFile()) {
+      state.state = 'unreadable';
+      state.detail = 'the path is no longer a regular file, so its content cannot be compared';
+      return state;
+    }
+    const current = sha256(fs.readFileSync(target));
+    state.currentDiskSha256 = current;
+
+    if (current === record.appliedSha256) {
+      state.state = 'intact';
+      state.rollbackReady = true;
+      state.detail = 'the file still holds exactly what the apply wrote; a rollback restores the prior bytes';
+    } else if (record.existedBefore === true && current === record.beforeSha256) {
+      state.state = 'reverted_externally';
+      state.rollbackReady = false;
+      state.detail = 'the file already holds the bytes the apply replaced; it was reverted outside APEX, so there is nothing to roll back';
+    } else {
+      state.state = 'modified_externally';
+      state.rollbackReady = false;
+      state.detail = 'the file was edited outside APEX after the apply; an automatic rollback will refuse with ROLLBACK_DRIFT so that edit is not discarded';
+    }
+    return state;
+  }
+
+  // Every applied change that is still open, measured against the disk right now. This is the read the
+  // Workshop screen and `GET /api/workshop/applies/status` share, so the panel and the API cannot
+  // disagree about what the disk holds.
+  liveStatus() {
+    const records = this.records();
+    const rolledBack = new Set(records.filter((r) => r.kind === 'rollback').map((r) => r.applyId));
+    const openApplies = records
+      .filter((record) => record.kind === 'apply' && record.applyId && !rolledBack.has(record.applyId))
+      // The newest first: a screen shows the most recent change at the top.
+      .reverse();
+
+    // A changeset's files are applied changes too, and the milestone asks for every applied file to be
+    // measured - so a changeset contributes one entry per file, carrying the changeset it belongs to.
+    // Leaving them out would make `open 0` mean "nothing was applied" when a whole batch was.
+    const openChangesets = this.openChangesets();
+    const changesetStates = [];
+    for (const changeset of openChangesets) {
+      for (const file of changeset.files ?? []) {
+        // The single-apply classifier reads exactly the fields a changeset file entry carries, so the
+        // classification is shared rather than reimplemented and cannot drift from it.
+        const state = this.diskState({
+          applyId: changeset.changesetId,
+          candidateId: file.candidateId,
+          relativePath: file.relativePath,
+          appliedSha256: file.appliedSha256,
+          beforeSha256: file.beforeSha256,
+          existedBefore: file.existedBefore,
+        });
+        changesetStates.push({ ...state, changesetId: changeset.changesetId, changesetTitle: changeset.title ?? null });
+      }
+    }
+
+    const checked = [...openApplies.map((record) => this.diskState(record)), ...changesetStates];
+    const counts = { intact: 0, modified_externally: 0, reverted_externally: 0, deleted_externally: 0, unreadable: 0 };
+    for (const entry of checked) counts[entry.state] = (counts[entry.state] ?? 0) + 1;
+
+    return {
+      schema: 'apex.workshop.disk-status/1',
+      available: this.available,
+      at: this.now().toISOString(),
+      open: checked.length,
+      counts,
+      // A change is rollback-ready only when every file it touched is intact. One externally edited
+      // file makes the whole change unsafe to revert, which is what the batch gate enforces.
+      allIntact: checked.length > 0 && checked.every((entry) => entry.state === 'intact'),
+      states: checked,
+      // Every one of these is the point of the record rather than decoration.
+      measuredFromDisk: true,
+      readOnly: true,
+      wroteNothing: true,
+      mutatesLiveWorkspace: false,
+      authorizesExecution: false,
+    };
+  }
+
   // The status the Workshop screen reads: what has been applied and what is still open. A read that
   // touches no file, so it is safe to call from a page that has just loaded.
   status() {
@@ -468,7 +1072,13 @@ export class WorkshopApplier {
         appliedSha256: record.appliedSha256,
         existedBefore: record.existedBefore,
         rolledBack: rolledBack.has(record.applyId),
+        // T-40 Step 1: what the disk holds NOW, for an open change. A rolled-back change has no live
+        // state to report, and null says that rather than reusing `intact`.
+        live: rolledBack.has(record.applyId) ? null : this.diskState(record),
       })),
+      // A single read that answers both questions the panel asks: what was applied, and what is true
+      // about those files at this instant.
+      disk: this.liveStatus(),
       readOnly: true,
       wroteNothing: true,
     };

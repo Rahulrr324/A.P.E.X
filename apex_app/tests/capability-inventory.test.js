@@ -134,9 +134,13 @@ describe('AF-19: the registry is the inventory', () => {
     // `workshop.rollback_file`. They are registered whether or not a workspace root is configured -
     // without one they refuse with WORKSPACE_UNAVAILABLE - so both totals move by two. They add no
     // capability that could name another one: an apply writes one file, and a rollback restores it.
-    assert.equal(plain.registry.list().length, 166, 'the default registry has 166 actions');
+    // T-40 adds three more, for the same reason: `workshop.check_applied` (an owner read of the files
+    // an apply wrote), and `workshop.apply_changeset` / `workshop.rollback_changeset` (two owner-only
+    // writes for the all-or-nothing batch). All three are registered with or without a root and refuse
+    // there with WORKSPACE_UNAVAILABLE, so both totals move by three.
+    assert.equal(plain.registry.list().length, 169, 'the default registry has 169 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 181, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 184, 'a configured workspace root adds fifteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -185,7 +189,11 @@ describe('AF-19: the registry is the inventory', () => {
     // ninety-first and ninety-second. Both are owner-only for the strongest version of the same
     // reason: a model that could apply could write into the owner's real tree, and a model that could
     // roll back could undo the owner's accepted change.
-    assert.equal(writes.length, 92, 'the inventory counts ninety-two write actions with a root configured');
+    // T-40 Step 2 (2026-11-22): `workshop.apply_changeset` and `workshop.rollback_changeset` are the
+    // ninety-third and ninety-fourth. Both are owner-only for the same reason the single-file writes
+    // are, and more so: a model that could assemble a batch could write many files in one authorized-
+    // looking act.
+    assert.equal(writes.length, 94, 'the inventory counts ninety-four write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -283,7 +291,7 @@ describe('AF-19: the registry is the inventory', () => {
     // T-38 Step 2 (2026-11-21): `workspace.inspect` and `workspace.read_file` are the eighty-eighth and
     // eighty-ninth reads. Both are offered to the model origin, because reading a workspace is not
     // authoring one - and both are refused outside the configured root.
-    assert.equal(reads.length, 89, 'the inventory counts eighty-nine read actions with a root configured');
+    assert.equal(reads.length, 90, 'the inventory counts ninety read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -468,6 +476,18 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
           : name === 'workshop.verify_file' ? 'no (a check is not a belief)'
             : 'no (accepting a candidate does not make it true)';
         assert.equal(row.belief, stated, `${name}: README belief-state`);
+      } else if (name === 'workshop.check_applied') {
+        // [T-40 Step 1, 2026-11-22] Re-reading the applied files measures what is on disk now. That is
+        // an observation and it is not recorded as a belief: the next check re-measures it, and a
+        // value that is derived on demand must not be stored as though it were knowledge.
+        assert.equal(row.belief, 'no (a re-reading is an observation, not a belief)', `${name}: README belief-state`);
+      } else if (name === 'workshop.apply_changeset' || name === 'workshop.rollback_changeset') {
+        // [T-40 Step 2, 2026-11-22] A batch writes files and records their digests, and a batch rollback
+        // restores them. Neither records a belief: what the files contain is the owner's artifact, and
+        // the identical argument that held for one file does not become weaker for eight.
+        assert.equal(row.belief, name === 'workshop.apply_changeset'
+          ? 'no (writing files is not a belief)'
+          : 'no (undoing a batch is not a belief)', `${name}: README belief-state`);
       } else if (name === 'workshop.apply_file' || name === 'workshop.rollback_file') {
         // [T-39 Step 1, 2026-11-22] These two change a file on disk and record the digests, which is
         // an account of what happened. Neither writes a belief: a file in the workspace is the

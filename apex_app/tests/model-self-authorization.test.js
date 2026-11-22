@@ -208,6 +208,10 @@ const MODEL_WRITE_ATTEMPTS = [
   // change the owner accepted. These are the strongest refusals in the table.
   ['workshop.apply_file', { candidateId: 'wsc-000000000000', reason: 'the model applied it' }],
   ['workshop.rollback_file', { applyId: 'wsa-000000000000', reason: 'the model rolled it back' }],
+  // T-40 Step 2: the batch writes. A model that could name a changeset could write many files in one
+  // act, so they are swept here on the day they are registered like every other write.
+  ['workshop.apply_changeset', { candidateIds: ['wsc-000000000000', 'wsc-111111111111'], title: 'the model applied it', rationale: 'the model decided this' }],
+  ['workshop.rollback_changeset', { changesetId: 'wcs-000000000000', reason: 'the model rolled it back' }],
   // [T-31 Step 2, 2026-11-19] The Evolution Lab's four writes. A model may not propose a change to
   // APEX's own behaviour, record a sandbox result, request a promotion, or decide one.
   ['evolution.propose', { title: 'the model proposed this' }],

@@ -316,10 +316,116 @@ export function createCommandRouter({ controller, app = null, now = () => new Da
     }
   }
 
+  // T-40 Step 3: the router's own catalogue, so the HUD help panel lists what the router will actually
+  // do rather than a hand-written list that can drift from it.
+  //
+  // Every entry is derived from the same PHRASES and PREFIXES tables that dispatch reads, so a command
+  // added to the router appears in the help without anyone remembering to add it in two places - and a
+  // command removed from the router cannot linger in the help as a lie. The ECP governance column is
+  // read from the registry, not asserted: `not_applicable` means the line focuses a workspace or reads a
+  // route and never invokes a capability, which is a different answer from `allow`.
+  function catalog() {
+    // The registry's decision is asked once per capability rather than once per row, so a catalogue of
+    // twenty rows costs at most a handful of ECP evaluations and every row that names the same
+    // capability reports the same answer.
+    const decisions = new Map();
+    const capabilityOf = (action) => {
+      if (!action) return null;
+      if (decisions.has(action)) return decisions.get(action);
+      const definition = typeof controller.registry?.get === 'function' ? controller.registry.get(action) : null;
+      let value = null;
+      if (definition) {
+        let ecpDecision = 'unknown';
+        try {
+          ecpDecision = controller.registry.authorize?.(action, 'user')?.decision ?? 'unknown';
+        } catch {
+          ecpDecision = 'unknown';
+        }
+        value = {
+          name: definition.name,
+          permission: definition.permission ?? null,
+          reversibility: definition.reversibility ?? null,
+          blastRadius: definition.blastRadius ?? null,
+          origins: Array.isArray(definition.origins) ? [...definition.origins] : [],
+          ecpDecision,
+        };
+      }
+      decisions.set(action, value);
+      return value;
+    };
+
+    const rows = [];
+    // The literal phrases, exactly as dispatch reads them. `phrases` is the array in the table and the
+    // row is built once per phrase, so the help shows every string that will actually match.
+    for (const entry of PHRASES) {
+      for (const phrase of entry.phrases) {
+        rows.push({
+          syntax: phrase,
+          routeKind: entry.kind,
+          summary: entry.summary,
+          targetView: entry.targetView ?? null,
+          action: entry.action ?? null,
+          route: entry.route ?? null,
+          argument: null,
+          capability: capabilityOf(entry.action ?? null),
+        });
+      }
+    }
+    for (const entry of PREFIXES) {
+      rows.push({
+        // A prefix is shown with its argument slot, because the slot is the part the owner fills in.
+        syntax: `${entry.prefix} ${entry.kind === ROUTE_KIND.MODE ? '<mode>' : '<text>'}`,
+        routeKind: entry.kind,
+        summary: entry.summary,
+        targetView: entry.targetView ?? null,
+        action: entry.action ?? null,
+        route: entry.route ?? null,
+        argument: entry.kind === ROUTE_KIND.MODE ? [...PRESENTATION_MODES] : null,
+        capability: capabilityOf(entry.action ?? null),
+      });
+    }
+    // A line nothing matches is still routed - to the T-29 pipeline - so the help names that too rather
+    // than implying the list above is exhaustive of what the bar accepts.
+    rows.push({
+      syntax: '<anything else>',
+      routeKind: ROUTE_KIND.MISSION,
+      summary: 'hand the line to the deterministic mission planner as an intent',
+      targetView: 'cognition',
+      // The fallback does invoke a capability - `cognition.run` - so the help names it rather than
+      // implying the line goes nowhere unseen.
+      action: 'cognition.run',
+      route: null,
+      argument: null,
+      capability: capabilityOf('cognition.run'),
+    });
+
+    return Object.freeze({
+      schema: 'apex.command.catalog/1',
+      // Listed so the `mode` row's argument slot can be read without guessing at the vocabulary.
+      modes: [...PRESENTATION_MODES],
+      commands: rows,
+      // The keyboard reference. These are the bindings the deck installs, and the end-to-end suite that
+      // exercises them reads this same list, so a binding cannot be documented here and missing there.
+      shortcuts: [
+        { keys: 'Ctrl+K', also: 'Cmd+K', effect: 'focus the command bar from anywhere, including from inside a field' },
+        { keys: '/', effect: 'focus the command bar when not typing in a field' },
+        { keys: '?', effect: 'open this reference when not typing in a field' },
+        { keys: 'Escape', effect: 'dismiss the command bar, this reference, or the boot sequence' },
+        { keys: 'Tab', effect: 'move through the HUD in document order' },
+        { keys: 'Alt+ArrowRight', also: 'Alt+ArrowLeft', effect: 'move to the next or previous workspace' },
+      ],
+      // A catalogue describes what exists. It authorizes nothing, changes nothing, and says so.
+      readOnly: true,
+      wroteNothing: true,
+      authorizesExecution: false,
+    });
+  }
+
   return Object.freeze({
     schema: ROUTER_SCHEMA,
     routeLine,
     dispatch,
+    catalog,
     modes: () => [...PRESENTATION_MODES],
     routes: () => ({ phrases: PHRASES.length, prefixes: PREFIXES.length }),
   });

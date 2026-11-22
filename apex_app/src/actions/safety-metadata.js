@@ -236,6 +236,15 @@ const DECLARATIONS = Object.freeze({
   // apply recorded, and undoing a rollback is re-applying.
   'workshop.apply_file': ['compensatable', 'workspace_fs'],
   'workshop.rollback_file': ['reversible', 'workspace_fs'],
+  // T-40 Step 1: a read over the workspace, so it changes nothing. It is declared here anyway,
+  // because the declarations are exhaustive over capabilities that touch the tree, and a reader
+  // should not have to infer that "check" means "opens files but writes none".
+  'workshop.check_applied': ['read_only', 'none'],
+  // T-40 Step 2: the batch writes. Compensatable for the same reason an apply is, and `workspace_fs`
+  // because they land in the owner's real tree. A changeset is not more reversible for being bigger:
+  // it is exactly as reversible as its least reversible file.
+  'workshop.apply_changeset': ['compensatable', 'workspace_fs'],
+  'workshop.rollback_changeset': ['reversible', 'workspace_fs'],
 
   // ----------------------------------------------------------------------- safety ---
   // The latch is system-wide and stays engaged until released. It is *reversible* - release is a

@@ -523,6 +523,63 @@ jobs:
               sys.exit(1)
           PY
 
+      # T-40 Step 4 (2026-11-22): the changeset, disk-drift and command-help walk. Its annotation
+      # states the six claims by name - that the pre-flight refused the batch and left BOTH files
+      # untouched, that the clean batch applied atomically with each file re-read from disk, that the
+      # disk re-check flipped one row to modified_externally with both digests, that the batch rollback
+      # was refused with the external edit intact, that the clean rollback returned both files
+      # byte-for-byte, and that the command reference opened by key and dismissed with Escape.
+      - name: Publish the T-40 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't40-changeset-drift-command-help.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t40-changeset-drift-command-help::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          preflight = run.get('preflight') or {}
+          refused = preflight.get('refused') or {}
+          applied = run.get('apply') or {}
+          drift = run.get('drift') or {}
+          rollbackRefused = drift.get('rollbackRefused') or {}
+          rollback = run.get('rollback') or {}
+          help_ = run.get('help') or {}
+          trace = run.get('trace') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"staged selectable={preflight.get('selectable')} liveUnchanged={preflight.get('liveUnchangedBeforeApply')}",
+              f"preflight {refused.get('code')} refused={refused.get('refusedRelativePath')} bothUntouched={refused.get('bothFilesUntouched')} digestsShown={refused.get('uiNamesFileAndBothDigests')} ledgerChangesets={refused.get('ledgerChangesets')}",
+              f"apply {applied.get('changesetId')} files={applied.get('fileCount')} atomic={applied.get('atomic')} everyVerified={applied.get('everyFileVerifiedOnDisk')} backupHoldsBoth={applied.get('backupHoldsBothPriorFiles')} ui={applied.get('uiShowsChangesetAndRollback')}",
+              f"disk intact={drift.get('intactBeforeEdit')} modified={drift.get('modifiedAfterEdit')} path={drift.get('modifiedRelativePath')} bothDigests={drift.get('bothDigestsShown')}",
+              f"rollbackRefused {rollbackRefused.get('code')} restoredNothing={rollbackRefused.get('restoredNothing')} externalEditIntact={rollbackRefused.get('externalEditIntact')} ui={rollbackRefused.get('uiSaidRefused')}",
+              f"rollback files={rollback.get('fileCount')} byteIdentical={rollback.get('byteIdentical')} everyVerified={rollback.get('everyFileVerifiedOnDisk')} uiConfirmed={rollback.get('uiConfirmed')}",
+              f"help rows={help_.get('rows')} shortcuts={help_.get('shortcuts')} byKey={help_.get('openedByKey')} byToggle={help_.get('openedByToggle')} filled={help_.get('templateFilledBar')} escape={help_.get('escapeDismissed')} lineSurvived={help_.get('typedLineSurvived')}",
+              f"trace applies={trace.get('applies')} ordered={trace.get('ordered')} complete={trace.get('complete')} counts {json.dumps(trace.get('counts') or {})}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} scheduledRefusals {len(run.get('scheduledRefusals') or [])}",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t40-changeset-drift-command-help::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       - name: Keep the browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -546,6 +603,8 @@ jobs:
             apex_app/reports/t38-values-workspace-trace.json
             apex_app/reports/screenshots/t39
             apex_app/reports/t39-workshop-apply-rollback.json
+            apex_app/reports/screenshots/t40
+            apex_app/reports/t40-changeset-drift-command-help.json
           if-no-files-found: warn
           retention-days: 14
 

@@ -71,6 +71,11 @@ export const UI_PAGE = `<!doctype html>
     <button id="command-trigger" type="button" class="hud-chip" aria-keyshortcuts="Control+K" aria-controls="chat-text">
       Command <kbd>Ctrl K</kbd>
     </button>
+    <!-- T-40 Step 3: the command and keyboard reference. It opens as a panel rather than a modal, so the
+         owner can read it while still typing in the bar, and Escape closes it without losing the line. -->
+    <button id="hud-help-toggle" type="button" class="hud-chip" aria-keyshortcuts="?" aria-controls="hud-command-help" aria-expanded="false">
+      Help <kbd>?</kbd>
+    </button>
     <label class="visually-hidden" for="mode-select">Presentation mode</label>
     <select id="mode-select" class="small" aria-label="Presentation mode">
       <option value="classic">Classic</option>
@@ -102,6 +107,25 @@ export const UI_PAGE = `<!doctype html>
      tabs. One input, one place, and Tab reaches it before the tabs because that is where it is in
      the document rather than because a tabindex was raised above its neighbours. -->
 <section class="command-bar" data-depth-plane="z1" aria-label="Command dispatch">
+  <!-- T-40 Step 3: what the bar accepts, read from the router at the moment it is opened. Nothing in this
+       panel is written by hand: every row is a route the router will actually take, with the live ECP
+       decision for the capability behind it. It is not a modal and traps nothing. -->
+  <div id="hud-command-help" class="panel hud-help" data-depth-plane="z3" role="region"
+       aria-labelledby="hud-command-help-title" hidden>
+    <div class="row">
+      <h3 id="hud-command-help-title">Command reference</h3>
+      <button id="hud-help-close" type="button" class="quiet small">Close</button>
+    </div>
+    <p id="hud-command-help-state" class="meta" role="status" aria-live="polite">Reading the command catalogue…</p>
+    <table class="hud-help-table">
+      <caption class="visually-hidden">Commands the command bar accepts</caption>
+      <thead><tr><th scope="col">Type</th><th scope="col">Route</th><th scope="col">Governance</th></tr></thead>
+      <tbody id="hud-command-help-rows"></tbody>
+    </table>
+    <h4>Keys</h4>
+    <ul id="hud-command-help-keys" class="work"></ul>
+    <p class="meta">Clicking a command fills the bar with it. Pressing Escape closes this panel and leaves whatever you had typed in place.</p>
+  </div>
   <form id="chat-form">
     <label for="chat-text" class="visually-hidden">Message</label>
     <textarea id="chat-text" rows="2" maxlength="4000" placeholder="Command APEX, or ask for a verified read"></textarea>
@@ -646,6 +670,23 @@ export const UI_PAGE = `<!doctype html>
     <label for="ws-stage-content" class="visually-hidden">Proposed content</label>
     <textarea id="ws-stage-content" rows="6" placeholder="the proposed content of the file"></textarea>
     <ul id="ws-candidates" class="work"></ul>
+    <!-- T-40 Step 1 and 2: the live disk check, the all-or-nothing changeset controls, and the list of
+         applied changesets. A checkbox selects a verified candidate for the batch; the Apply Changeset
+         button is enabled only when the selection holds at least two, because that is what the backend
+         will accept and a button that can only be refused teaches the owner to distrust refusals. -->
+    <div class="row">
+      <button id="ws-check-disk" type="button" class="small">Check Disk Status</button>
+      <span id="ws-disk-state" class="meta" role="status" aria-live="polite">The disk has not been re-read in this page yet.</span>
+    </div>
+    <ul id="ws-disk-status" class="work"></ul>
+    <div class="row">
+      <label for="ws-changeset-title" class="visually-hidden">Changeset title</label>
+      <input id="ws-changeset-title" maxlength="160" placeholder="changeset title">
+      <button id="ws-apply-changeset" type="button" class="small" disabled>Apply Changeset</button>
+      <span id="ws-changeset-state" class="meta" role="status" aria-live="polite">Select two or more verified candidates to apply them as one change.</span>
+    </div>
+    <p class="meta">A changeset writes every selected file or none of them. Before the first byte is written the backend re-checks each candidate and the file it targets; if any single one fails, the whole batch is refused and nothing on disk changes. The previous bytes of every file are saved together under the changeset id, so the batch can be rolled back as a batch.</p>
+    <ul id="ws-changesets" class="work"></ul>
     <p id="workshop-state" class="workspace-status" role="status" aria-live="polite">Loading stored designs…</p>
     <form id="workshop-form" class="row">
       <label for="workshop-title" class="visually-hidden">Title</label>
@@ -1325,6 +1366,19 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   wsStageSubmit: document.getElementById('ws-stage-submit'),
   wsStageStatus: document.getElementById('ws-stage-status'),
   wsCandidates: document.getElementById('ws-candidates'),
+  hudHelpToggle: document.getElementById('hud-help-toggle'),
+  hudCommandHelp: document.getElementById('hud-command-help'),
+  hudCommandHelpState: document.getElementById('hud-command-help-state'),
+  hudCommandHelpRows: document.getElementById('hud-command-help-rows'),
+  hudCommandHelpKeys: document.getElementById('hud-command-help-keys'),
+  hudHelpClose: document.getElementById('hud-help-close'),
+  wsCheckDisk: document.getElementById('ws-check-disk'),
+  wsDiskState: document.getElementById('ws-disk-state'),
+  wsDiskStatus: document.getElementById('ws-disk-status'),
+  wsChangesetTitle: document.getElementById('ws-changeset-title'),
+  wsApplyChangeset: document.getElementById('ws-apply-changeset'),
+  wsChangesetState: document.getElementById('ws-changeset-state'),
+  wsChangesets: document.getElementById('ws-changesets'),
   workshopSandboxStatus: document.getElementById('workshop-sandbox-status'),
   execCommsHeadline: document.getElementById('exec-comms-headline'),
   execCommsLines: document.getElementById('exec-comms-lines'),
@@ -3701,7 +3755,17 @@ async function openTrace(id, button) {
 // from the inspector's reading of the tree; a candidate's verdict comes from the parser's own exit
 // code. Nothing here infers a value, and a candidate that has not been verified says so rather than
 // showing an empty place where a badge would go.
-const wsState = { entries: [], candidates: [], inspectedAt: null };
+const wsState = {
+  entries: [],
+  candidates: [],
+  inspectedAt: null,
+  // T-40: the last disk reading (null until the page asks for one), the changesets applied in this
+  // session, and the busy flag that keeps two batch writes from overlapping.
+  disk: null,
+  changesets: [],
+  changesetBusy: false,
+  changesetRefusal: null,
+};
 
 function formatBytes(bytes) {
   if (typeof bytes !== 'number') return 'unavailable';
@@ -3816,6 +3880,9 @@ async function refreshApplyState() {
         // matches today is a fresh question, and the screen does not answer it from a stale record.
         verifiedOnDisk: true,
       };
+      // T-40 Step 1: the ledger read now carries the disk's own answer, measured when the ledger was
+      // read. It is attached rather than inferred, and it is labelled with the moment it was taken.
+      candidate.live = record.live ?? null;
     }
     renderCandidates();
   } catch {
@@ -3833,6 +3900,20 @@ function renderCandidates() {
   for (const candidate of wsState.candidates) {
     const item = el('li', 'work-item');
     const head = el('div', 'row');
+    // T-40 Step 2: selection for the batch apply. Enabled only for a candidate the backend verified,
+    // because the backend refuses an unverified one and the control should say so before it is pressed.
+    const pick = document.createElement('input');
+    pick.type = 'checkbox';
+    pick.dataset.selectCandidate = candidate.candidateId;
+    const candidateVerified = candidate.verification && candidate.verification.verified === true;
+    pick.disabled = !candidateVerified || Boolean(candidate.applied) || Boolean(candidate.busy);
+    pick.checked = candidateVerified && !candidate.applied ? Boolean(candidate.selected) : false;
+    pick.setAttribute('aria-label', 'select ' + candidate.relativePath + ' for the changeset');
+    pick.addEventListener('change', () => {
+      candidate.selected = pick.checked;
+      updateChangesetControls();
+    });
+    head.append(pick);
     head.append(el('strong', '', candidate.relativePath));
     const idNode = el('span', 'meta', candidate.candidateId);
     idNode.dataset.candidateId = candidate.candidateId;
@@ -3892,6 +3973,33 @@ function renderCandidates() {
       undo.disabled = Boolean(candidate.busy);
       undo.addEventListener('click', () => { rollbackApply(applied.applyId, candidate.candidateId, undo); });
       item.append(undo);
+
+      // T-40 Step 1: what the disk holds NOW. This is only ever drawn from a measurement the backend
+      // sent - never inferred from the fact that an apply once succeeded - and it says which state it
+      // was drawn from when the page has not re-read the disk.
+      const live = candidate.live ?? null;
+      const liveLine = el('div', 'row');
+      if (live) {
+        const stateBadge = el('span', live.state === 'intact' ? 'badge badge-ok' : 'badge badge-bad', live.state.replace(/_/g, ' '));
+        stateBadge.dataset.liveState = live.state;
+        liveLine.append(stateBadge);
+        liveLine.append(el('span', 'meta', 'measured ' + live.checkedAt));
+        item.append(liveLine);
+        item.append(el('p', 'meta', live.detail ?? ''));
+        // Both digests, named, whenever the file is not intact. A "drifted" badge without the two
+        // digests is a riddle rather than a diagnosis.
+        if (live.state !== 'intact') {
+          item.append(el('p', 'meta', 'applied ' + (live.appliedSha256 ? shortDigest(live.appliedSha256) : 'n/a')
+            + ' · on disk ' + (live.currentDiskSha256 ? shortDigest(live.currentDiskSha256) : 'absent')));
+        }
+        if (live.state === 'modified_externally') {
+          item.append(el('p', 'meta', 'A rollback would refuse with ROLLBACK_DRIFT while the file is in this state. Your edit is intact.'));
+        }
+      } else {
+        liveLine.append(el('span', 'badge', 'disk not re-read'));
+        liveLine.append(el('span', 'meta', 'Press Check Disk Status to measure it.'));
+        item.append(liveLine);
+      }
     }
 
     // A refusal that names the two digests is a diagnosis; one that says "drift" is a riddle. The
@@ -3924,6 +4032,254 @@ function renderCandidates() {
       if (parser.stderr) item.append(el('pre', 'code', parser.stderr));
     }
     els.wsCandidates.append(item);
+  }
+}
+
+// T-40 Step 1: the live disk check. It asks the backend to measure every applied file against the
+// disk at this instant and attaches the answer to the rows by candidate id, so a reloaded page and a
+// pressed button show the same facts.
+async function checkDiskStatus() {
+  if (!els.wsDiskState) return;
+  if (els.wsCheckDisk) els.wsCheckDisk.disabled = true;
+  setWorkspaceStatus(els.wsDiskState, 'Re-reading every applied file from disk…', 'loading');
+  try {
+    const data = await api('/api/workshop/applies/status');
+    wsState.disk = data;
+    // The applied files, by relative path: a changeset's files are not candidates this page staged,
+    // and they still belong on the panel.
+    const byCandidate = new Map();
+    const byPath = new Map();
+    for (const state of Array.isArray(data.states) ? data.states : []) {
+      if (state.candidateId) byCandidate.set(state.candidateId, state);
+      byPath.set(state.relativePath, state);
+    }
+    for (const candidate of wsState.candidates) {
+      if (!candidate.applied) continue;
+      candidate.live = byCandidate.get(candidate.candidateId) ?? byPath.get(candidate.applied.relativePath) ?? null;
+    }
+    renderCandidates();
+    renderDiskStatus(data);
+    const counts = data.counts ?? {};
+    setWorkspaceStatus(els.wsDiskState,
+      data.open === 0
+        ? 'No applied file is being tracked, so there is nothing to re-read.'
+        : data.allIntact
+          ? 'All ' + data.open + ' applied files still match what was written.'
+          : data.open + ' applied files re-read: ' + Object.entries(counts)
+              .filter(([, n]) => n > 0)
+              .map(([state, n]) => n + ' ' + state.replace(/_/g, ' '))
+              .join(', ') + '.',
+      data.allIntact || data.open === 0 ? 'available' : 'error');
+  } catch (error) {
+    wsState.disk = null;
+    renderDiskStatus(null);
+    setWorkspaceStatus(els.wsDiskState, 'The disk could not be re-read: ' + (error.message ?? 'the server refused it'), 'error');
+  } finally {
+    if (els.wsCheckDisk) els.wsCheckDisk.disabled = false;
+  }
+}
+
+function renderDiskStatus(data) {
+  if (!els.wsDiskStatus) return;
+  els.wsDiskStatus.replaceChildren();
+  if (!data) {
+    els.wsDiskStatus.append(el('li', 'meta', 'No disk reading in this page yet.'));
+    return;
+  }
+  const states = Array.isArray(data.states) ? data.states : [];
+  if (states.length === 0) {
+    els.wsDiskStatus.append(el('li', 'meta', 'No applied file is being tracked.'));
+    return;
+  }
+  for (const state of states) {
+    const item = el('li', 'work-item');
+    const head = el('div', 'row');
+    head.append(el('strong', '', state.relativePath));
+    const badge = el('span', state.state === 'intact' ? 'badge badge-ok' : 'badge badge-bad', state.state.replace(/_/g, ' '));
+    badge.dataset.diskState = state.state;
+    head.append(badge);
+    head.append(el('span', 'meta', state.applyId));
+    item.append(head);
+    item.append(el('p', 'meta', state.detail ?? ''));
+    item.append(el('p', 'meta',
+      'applied ' + (state.appliedSha256 ? shortDigest(state.appliedSha256) : 'n/a')
+      + ' · on disk ' + (state.currentDiskSha256 ? shortDigest(state.currentDiskSha256) : 'absent')));
+    els.wsDiskStatus.append(item);
+  }
+}
+
+// T-40 Step 2: enabling the batch control only when the backend would accept the batch. Two is the
+// backend's own floor; the button reads it rather than choosing a different one.
+function selectedCandidates() {
+  return wsState.candidates.filter((candidate) => candidate.selected === true);
+}
+
+function updateChangesetControls() {
+  const selected = selectedCandidates();
+  if (els.wsApplyChangeset) els.wsApplyChangeset.disabled = selected.length < 2 || Boolean(wsState.changesetBusy);
+  if (!els.wsChangesetState) return;
+  if (wsState.changesetBusy) return;
+  if (selected.length === 0) {
+    setWorkspaceStatus(els.wsChangesetState, 'Select two or more verified candidates to apply them as one change.', 'idle');
+    return;
+  }
+  setWorkspaceStatus(els.wsChangesetState,
+    selected.length + ' selected: ' + selected.map((c) => c.relativePath).join(', ')
+    + (selected.length < 2 ? ' — a changeset needs at least two files.' : ''),
+    selected.length < 2 ? 'idle' : 'available');
+}
+
+async function applyChangeset(button) {
+  const selected = selectedCandidates();
+  if (selected.length < 2) {
+    if (els.wsChangesetState) setWorkspaceStatus(els.wsChangesetState, 'A changeset needs at least two files, so nothing was sent.', 'error');
+    return;
+  }
+  const rationale = window.prompt(
+    'This writes ' + selected.length + ' files into your workspace as one all-or-nothing change. If any file fails its check, none of them are written. Type a reason to apply:');
+  if (!rationale || !rationale.trim()) {
+    if (els.wsChangesetState) setWorkspaceStatus(els.wsChangesetState, 'A changeset needs your reason, so nothing was written.', 'error');
+    return;
+  }
+  const title = (els.wsChangesetTitle?.value ?? '').trim() || 'changeset of ' + selected.length + ' files';
+  wsState.changesetBusy = true;
+  if (button) button.disabled = true;
+  if (els.wsChangesetState) setWorkspaceStatus(els.wsChangesetState, 'Applying ' + selected.length + ' files as one change…', 'loading');
+  try {
+    const data = await api('/api/workshop/changesets/apply', {
+      method: 'POST',
+      body: { candidateIds: selected.map((c) => c.candidateId), title, rationale: rationale.trim() },
+    });
+    for (const candidate of selected) candidate.selected = false;
+    wsState.changesets.unshift(data);
+    // Every file in the batch is now applied; the rows say so from the response, not from hope.
+    for (const file of Array.isArray(data.files) ? data.files : []) {
+      const candidate = wsState.candidates.find((c) => c.candidateId === file.candidateId);
+      if (!candidate) continue;
+      candidate.applied = {
+        applyId: data.changesetId,
+        relativePath: file.relativePath,
+        appliedSha256: file.appliedSha256,
+        beforeSha256: file.beforeSha256,
+        backupId: data.changesetId,
+        verifiedOnDisk: file.verifiedOnDisk === true,
+      };
+      candidate.live = {
+        state: 'intact',
+        checkedAt: data.at,
+        appliedSha256: file.appliedSha256,
+        currentDiskSha256: file.diskSha256 ?? file.appliedSha256,
+        detail: 'Written by ' + data.changesetId + ' and read back from disk immediately afterwards.',
+      };
+    }
+    renderCandidates();
+    renderChangesets();
+    if (els.wsChangesetState) {
+      setWorkspaceStatus(els.wsChangesetState,
+        'Applied ' + data.fileCount + ' files atomically as ' + data.changesetId + '. Each was read back from disk and matched.',
+        'available');
+    }
+    // The ledger is the source of truth for what is open; re-read it rather than trusting this page.
+    void refreshApplyState();
+  } catch (error) {
+    // A pre-flight refusal is not one file's problem, it is the batch's, and the response names which
+    // file failed and both digests. That is rendered where the owner pressed the button.
+    const problems = Array.isArray(error.problems) ? error.problems : [];
+    const first = problems[0] ?? null;
+    const box = el('div', 'work-item diagnostic');
+    box.append(el('strong', '', 'Changeset refused: ' + (error.code ?? 'CHANGESET_PREFLIGHT_REFUSED')));
+    box.append(el('p', 'meta', error.message ?? 'the server refused it'));
+    if (first) {
+      box.append(el('p', 'meta', 'first refused file: ' + (first.relativePath ?? first.candidateId ?? 'unknown') + ' — ' + (first.detail ?? first.reason ?? '')));
+      if (first.expectedBaseSha256 !== undefined) box.append(el('p', 'meta', 'expected base ' + (first.expectedBaseSha256 ?? 'absent')));
+      if (first.actualDiskSha256 !== undefined) box.append(el('p', 'meta', 'on disk ' + (first.actualDiskSha256 ?? 'absent')));
+    }
+    box.append(el('p', 'meta', 'No file was written: the pre-flight runs before the first byte.'));
+    wsState.changesetRefusal = { code: error.code ?? null, first, problems };
+    if (els.wsChangesetState) {
+      setWorkspaceStatus(els.wsChangesetState,
+        'Changeset refused before writing anything' + (first ? ': ' + (first.relativePath ?? first.candidateId) : '') + '.',
+        'error');
+      els.wsChangesetState.after(box);
+    }
+  } finally {
+    wsState.changesetBusy = false;
+    if (button) button.disabled = false;
+    updateChangesetControls();
+    renderCandidates();
+  }
+}
+
+async function rollbackChangeset(changesetId, button) {
+  const reason = window.prompt(
+    'This restores every file in the changeset to the bytes it had before the batch was applied. If any file was edited outside APEX, the whole rollback is refused. Type a reason to roll back:');
+  if (!reason || !reason.trim()) {
+    if (els.wsChangesetState) setWorkspaceStatus(els.wsChangesetState, 'A batch rollback needs your reason, so no file was restored.', 'error');
+    return;
+  }
+  if (button) button.disabled = true;
+  wsState.changesetBusy = true;
+  try {
+    const data = await api('/api/workshop/changesets/' + encodeURIComponent(changesetId) + '/rollback', {
+      method: 'POST',
+      body: { reason: reason.trim() },
+    });
+    wsState.changesets = wsState.changesets.filter((entry) => entry.changesetId !== changesetId);
+    for (const file of Array.isArray(data.files) ? data.files : []) {
+      const candidate = wsState.candidates.find((c) => c.applied && c.applied.applyId === changesetId && c.relativePath === file.relativePath);
+      if (!candidate) continue;
+      candidate.applied = null;
+      candidate.live = null;
+      candidate.selected = false;
+      candidate.drift = null;
+    }
+    // A candidate the changeset created no longer exists on disk; the row should not claim otherwise.
+    renderCandidates();
+    renderChangesets();
+    if (els.wsChangesetState) {
+      setWorkspaceStatus(els.wsChangesetState,
+        'Rolled back ' + data.fileCount + ' files. Each holds the bytes it had before the changeset, verified on disk.',
+        'available');
+    }
+  } catch (error) {
+    if (els.wsChangesetState) {
+      const problems = Array.isArray(error.problems) ? error.problems : [];
+      const first = problems[0] ?? null;
+      setWorkspaceStatus(els.wsChangesetState,
+        'Batch rollback refused: ' + (error.code ?? 'CHANGESET_ROLLBACK_DRIFT')
+        + (first ? ' — ' + (first.relativePath ?? '') + ' is not what the changeset wrote' : '')
+        + '. No file was restored; your edit is intact.',
+        'error');
+    }
+  } finally {
+    wsState.changesetBusy = false;
+    if (button) button.disabled = false;
+    renderChangesets();
+  }
+}
+
+function renderChangesets() {
+  if (!els.wsChangesets) return;
+  els.wsChangesets.replaceChildren();
+  if (!wsState.changesets.length) {
+    els.wsChangesets.append(el('li', 'meta', 'No changeset applied in this page session.'));
+    return;
+  }
+  for (const changeset of wsState.changesets) {
+    const item = el('li', 'work-item');
+    const head = el('div', 'row');
+    head.append(el('strong', '', changeset.title || changeset.changesetId));
+    head.append(el('span', 'meta', changeset.changesetId));
+    head.append(el('span', 'badge badge-ok', changeset.fileCount + ' files, atomic'));
+    item.append(head);
+    item.append(el('p', 'meta', changeset.files.map((file) => file.relativePath).join(' · ')));
+    item.append(el('p', 'meta', 'applied ' + changeset.at + ' · every file verified on disk: ' + (changeset.everyFileVerifiedOnDisk ? 'yes' : 'no')));
+    const undo = el('button', 'small', 'Rollback Changeset');
+    undo.type = 'button';
+    undo.dataset.rollbackChangeset = changeset.changesetId;
+    undo.addEventListener('click', () => { rollbackChangeset(changeset.changesetId, undo); });
+    item.append(undo);
+    els.wsChangesets.append(item);
   }
 }
 
@@ -5314,6 +5670,12 @@ if (els.traceSearchForm) {
 }
 // T-38 Step 2: the file inspector and the sandbox loop.
 if (els.wsRefresh) els.wsRefresh.addEventListener('click', () => { inspectWorkspace(); });
+// T-40 Steps 1 and 2: the disk re-check and the batch controls.
+if (els.wsCheckDisk) els.wsCheckDisk.addEventListener('click', () => { checkDiskStatus(); });
+if (els.wsApplyChangeset) els.wsApplyChangeset.addEventListener('click', () => { applyChangeset(els.wsApplyChangeset); });
+if (els.wsChangesetTitle) {
+  els.wsChangesetTitle.addEventListener('input', () => { updateChangesetControls(); });
+}
 if (els.wsStageForm) {
   els.wsStageForm.addEventListener('submit', (event) => { event.preventDefault(); stageCandidate(); });
 }
@@ -5413,6 +5775,13 @@ document.addEventListener('keydown', (event) => {
     return;
   }
   if (event.key === 'Escape') {
+    // T-40 Step 3: Escape closes the reference first. Closing it is not the same as clearing the
+    // command bar, so the line the owner was writing survives.
+    if (helpState.open) {
+      event.preventDefault();
+      closeCommandHelp();
+      return;
+    }
     dismissCommandDispatch();
     // T-36 Step 2: Escape also dismisses the boot sequence. The overlay never traps the owner.
     if (state.bootSequence.active) dismissBootSequence();
@@ -5425,11 +5794,152 @@ document.addEventListener('keydown', (event) => {
     return;
   }
   if (typing) return;
-  if (event.key === '/' && els.text) {
+  if (event.key === '/' && !event.shiftKey && els.text) {
     event.preventDefault();
     focusCommandDispatch();
+    return;
+  }
+  // T-40 Step 3: the question mark opens the command reference. On a layout where Shift+/ does not resolve to it,
+  // the physical key path is accepted too, so the binding is not a UK-only or US-only accident.
+  if ((event.key === '?' || (event.key === '/' && event.shiftKey)) && !state.bootSequence.active) {
+    event.preventDefault();
+    void openCommandHelp();
   }
 });
+
+// T-40 Step 3: the command and keyboard reference.
+//
+// The panel is filled from GET /api/command/catalog, which the router builds from the same tables it
+// routes with. So this code contains no list of commands: it renders rows, and a row that is not in the
+// router cannot appear here. The ECP column is the router's live decision, which means the panel tells
+// the truth during a lockdown rather than showing a reference to commands that would all be refused.
+const helpState = { open: false, loadedAt: null, catalog: null };
+
+function setHelpState(message, tone) {
+  if (!els.hudCommandHelpState) return;
+  els.hudCommandHelpState.textContent = message;
+  els.hudCommandHelpState.dataset.tone = tone ?? 'idle';
+}
+
+function renderHelpKeys(shortcuts) {
+  if (!els.hudCommandHelpKeys) return;
+  els.hudCommandHelpKeys.replaceChildren();
+  for (const shortcut of Array.isArray(shortcuts) ? shortcuts : []) {
+    const item = el('li', 'work-item');
+    const keys = el('span', 'row');
+    const kbd = document.createElement('kbd');
+    kbd.textContent = shortcut.keys;
+    keys.append(kbd);
+    if (shortcut.also) {
+      keys.append(el('span', 'meta', 'or'));
+      const also = document.createElement('kbd');
+      also.textContent = shortcut.also;
+      keys.append(also);
+    }
+    item.append(keys);
+    item.append(el('p', 'meta', shortcut.effect ?? ''));
+    els.hudCommandHelpKeys.append(item);
+  }
+}
+
+function renderHelpRows(catalog) {
+  if (!els.hudCommandHelpRows) return;
+  els.hudCommandHelpRows.replaceChildren();
+  const commands = Array.isArray(catalog?.commands) ? catalog.commands : [];
+  for (const command of commands) {
+    const row = document.createElement('tr');
+    row.dataset.commandRoute = command.routeKind;
+    // The command itself, as a button: pressing it fills the bar. That is the whole interaction, and it
+    // is why a template is safe - it types a line, it does not run one.
+    const syntaxCell = document.createElement('td');
+    const fill = document.createElement('button');
+    fill.type = 'button';
+    fill.className = 'quiet small';
+    fill.dataset.fillCommand = command.syntax;
+    fill.textContent = command.syntax;
+    fill.addEventListener('click', () => { fillCommandFromHelp(command); });
+    syntaxCell.append(fill);
+    row.append(syntaxCell);
+
+    const routeCell = document.createElement('td');
+    routeCell.append(el('span', 'meta', command.routeKind));
+    routeCell.append(el('p', 'meta', command.summary ?? ''));
+    if (Array.isArray(command.argument) && command.argument.length > 0) {
+      routeCell.append(el('p', 'meta', 'one of: ' + command.argument.join(', ')));
+    }
+    row.append(routeCell);
+
+    const govCell = document.createElement('td');
+    const capability = command.capability;
+    if (capability) {
+      const decision = capability.ecpDecision ?? 'unknown';
+      const badge = el('span', decision === 'allow' ? 'badge badge-ok' : decision === 'deny' ? 'badge badge-bad' : 'badge', 'ECP: ' + decision);
+      badge.dataset.ecpDecision = decision;
+      govCell.append(badge);
+      govCell.append(el('p', 'meta', capability.name + (capability.permission ? ' · ' + capability.permission : '')));
+      govCell.append(el('p', 'meta', 'reversibility ' + (capability.reversibility ?? 'undeclared')
+        + ' · blast ' + (capability.blastRadius ?? 'undeclared')));
+    } else {
+      govCell.append(el('span', 'badge', 'no capability'));
+      govCell.append(el('p', 'meta', command.route ? 'reads ' + command.route : 'focuses a workspace'));
+    }
+    row.append(govCell);
+    els.hudCommandHelpRows.append(row);
+  }
+}
+
+// Filling the bar is a convenience, never a dispatch: the owner still presses Send. A template whose
+// argument slot has already been chosen is filled completely; a prefix keeps its slot open.
+function fillCommandFromHelp(command) {
+  if (!els.text) return;
+  let value = command.syntax;
+  if (value === '<anything else>') value = '';
+  else if (Array.isArray(command.argument) && command.argument.length > 0) value = command.syntax.replace('<mode>', command.argument[0]);
+  else if (value.includes('<text>')) value = value.replace('<text>', '').trim() + ' ';
+  els.text.value = value;
+  if (typeof els.text.focus === 'function') els.text.focus({ preventScroll: true });
+  if (typeof els.text.setSelectionRange === 'function') els.text.setSelectionRange(value.length, value.length);
+  setHelpState('Filled "' + value + '" into the command bar. Press Send to dispatch it.', 'available');
+}
+
+async function openCommandHelp() {
+  if (!els.hudCommandHelp) return;
+  els.hudCommandHelp.hidden = false;
+  helpState.open = true;
+  if (els.hudHelpToggle) els.hudHelpToggle.setAttribute('aria-expanded', 'true');
+  if (els.activity) els.activity.textContent = 'Command reference open. Escape closes it.';
+  setHelpState('Reading the command catalogue…', 'loading');
+  try {
+    const catalog = await api('/api/command/catalog');
+    helpState.catalog = catalog;
+    helpState.loadedAt = catalog.at ?? new Date().toISOString();
+    renderHelpRows(catalog);
+    renderHelpKeys(catalog.shortcuts);
+    setHelpState(catalog.commands.length + ' commands from the router, with the current ECP decision for each.', 'available');
+  } catch (error) {
+    // A catalogue that cannot be read leaves the panel open and empty rather than showing an
+    // out-of-date copy: a reference to commands that may no longer exist is worse than none.
+    renderHelpRows({ commands: [] });
+    renderHelpKeys([]);
+    setHelpState('The command catalogue could not be read: ' + (error.message ?? 'the server refused it'), 'error');
+  }
+}
+
+function closeCommandHelp() {
+  if (!els.hudCommandHelp) return;
+  els.hudCommandHelp.hidden = true;
+  helpState.open = false;
+  if (els.hudHelpToggle) els.hudHelpToggle.setAttribute('aria-expanded', 'false');
+  if (els.activity) els.activity.textContent = '';
+}
+
+function toggleCommandHelp() {
+  if (helpState.open) closeCommandHelp();
+  else void openCommandHelp();
+}
+
+if (els.hudHelpToggle) els.hudHelpToggle.addEventListener('click', () => { toggleCommandHelp(); });
+if (els.hudHelpClose) els.hudHelpClose.addEventListener('click', () => { closeCommandHelp(); });
 
 // T-36 Step 2 (2026-11-21): Part 4 Screen #1 - the HUD boot sequence.
 //

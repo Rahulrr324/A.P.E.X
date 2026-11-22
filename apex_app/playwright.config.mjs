@@ -26,7 +26,10 @@ export default defineConfig({
   // an empty data directory, so the machine it reports was set up by the bootstrap during the walk.
   // T-37 Step 4 (2026-11-21): the neural/Council/router walk joins them. It is the only suite that
   // checks all eleven canonical screens by their declared ids in a live DOM.
-  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs', '**/t34-mission-dag-and-briefing.spec.mjs', '**/t35-stepdown-handoff-doctor.spec.mjs', '**/t36-cold-boot-unseeded.spec.mjs', '**/t37-neural-council-router.spec.mjs', '**/t38-values-workspace-trace.spec.mjs', '**/t39-workshop-apply-rollback.spec.mjs'],
+  // T-40 Step 4 (2026-11-22): the changeset / disk-drift / command-help walk joins them. It is the
+  // only suite that applies more than one file in a single governed act and then measures the disk
+  // afterwards, and the only one that opens the command reference with a key.
+  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs', '**/t34-mission-dag-and-briefing.spec.mjs', '**/t35-stepdown-handoff-doctor.spec.mjs', '**/t36-cold-boot-unseeded.spec.mjs', '**/t37-neural-council-router.spec.mjs', '**/t38-values-workspace-trace.spec.mjs', '**/t39-workshop-apply-rollback.spec.mjs', '**/t40-changeset-drift-command-help.spec.mjs'],
   testIgnore: ['**/apex-browser.spec.mjs'],
   // Generated traces/screenshots from a failing run must not be committed.
   outputDir: './test-results/playwright',

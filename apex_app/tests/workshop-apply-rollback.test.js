@@ -343,8 +343,14 @@ test('T-39 apply: the step-up status names both capabilities, and the secret is 
   const secret = 't39-step-up-secret-value';
   await withApp({ stepUpToken: secret }, async ({ app }) => {
     const status = app.ecp.stepUpStatus();
+    // T-40 extended this list with the two batch capabilities. The assertion still pins the exact
+    // list - an addition has to be made deliberately here - and it still requires the two T-39
+    // entries, which a T-40 change must not quietly drop.
     assert.deepEqual([...status.appliesTo],
-      ['safety.release', 'evolution.decide', 'workshop.apply_file', 'workshop.rollback_file']);
+      ['safety.release', 'evolution.decide', 'workshop.apply_file', 'workshop.rollback_file',
+        'workshop.apply_changeset', 'workshop.rollback_changeset']);
+    assert.equal(status.appliesTo.includes('workshop.apply_file'), true);
+    assert.equal(status.appliesTo.includes('workshop.rollback_file'), true);
     assert.equal(JSON.stringify(status).includes(secret), false);
   });
 });

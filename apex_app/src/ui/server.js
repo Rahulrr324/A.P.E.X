@@ -745,6 +745,45 @@ function projectPlanning(planning) {
   };
 }
 
+// T-40 Step 2: the status a changeset refusal is answered with, and the body it carries.
+//
+// Three codes are 409 because the owner can act on each by looking at the file: a pre-flight refusal
+// (fix the staged candidate or the file it targets), a batch rollback drift (restore the file first),
+// and a write or verify failure (the batch was undone, so retry). Lockdown is 423 - the system is
+// latched, not wrong. Everything else is 400: the request never reached the point of touching a file.
+function changesetRefusalStatus(step) {
+  const code = step?.execution?.error?.code ?? step?.authorization?.reason ?? null;
+  if (code === 'KILL_SWITCH_ACTIVE') return 423;
+  if (code === 'CHANGESET_PREFLIGHT_REFUSED' || code === 'CHANGESET_ROLLBACK_DRIFT'
+    || code === 'CHANGESET_WRITE_FAILED' || code === 'CHANGESET_VERIFY_FAILED'
+    || code === 'ALREADY_ROLLED_BACK' || code === 'WORKSHOP_NOT_FOUND') return 409;
+  return 400;
+}
+
+// The refusal body. It carries the per-file problems the executor preserved, the first offending
+// candidate, and both digests where a digest question was the reason - never a bare "refused", because
+// a batch refusal is only actionable if it says which file failed and why.
+function changesetRefusalBody(result, step) {
+  const failed = step?.execution?.error ?? null;
+  const code = failed?.code ?? (step?.authorization?.decision === 'deny' ? step.authorization.reason : null);
+  const problems = Array.isArray(failed?.problems) ? failed.problems : [];
+  return {
+    status: result?.status ?? null,
+    error: result?.output ?? 'the workshop refused the changeset',
+    code,
+    problems,
+    refusedCandidateId: failed?.refusedCandidateId ?? null,
+    refusedRelativePath: failed?.refusedRelativePath ?? null,
+    expectedBaseSha256: failed?.expectedBaseSha256 ?? null,
+    actualDiskSha256: failed?.actualDiskSha256 ?? null,
+    expectedAppliedSha256: failed?.expectedAppliedSha256 ?? null,
+    filesChecked: failed?.filesChecked ?? null,
+    filesRefused: failed?.filesRefused ?? null,
+    undone: Array.isArray(failed?.undone) ? failed.undone : null,
+    display: result?.display ?? null,
+  };
+}
+
 export function createUiServer({
   app,
   token,
@@ -2880,7 +2919,13 @@ export function createUiServer({
           app.workshop.status(),
           typeof app.workshop.verificationSummary === 'function' ? app.workshop.verificationSummary() : Promise.resolve(null),
         ]);
-        sendJson(res, 200, { ...page, status, verificationSummary, authorizesExecution: false });
+        // T-40 Step 1: the same read also carries what the disk holds now, so the Workshop view gets
+        // its applied rows and their live status in one answer rather than two that could disagree.
+        let applyStatus = null;
+        if (app.workshopApplier && typeof app.workshopApplier.status === 'function') {
+          try { applyStatus = app.workshopApplier.status(); } catch { applyStatus = null; }
+        }
+        sendJson(res, 200, { ...page, status, verificationSummary, applyStatus, authorizesExecution: false });
       } catch (err) {
         sendJson(res, 503, { unavailable: true, error: `the Workshop is unavailable: ${err.message}` });
       }
@@ -3116,6 +3161,102 @@ export function createUiServer({
         }
         sendJson(res, 200, { ...data, status: result.status, display: result.display });
         broadcast('workshop', { applied: applyMatch ? data.applyId ?? null : null, rolledBack: rollbackMatch ? data.applyId ?? null : null });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+    // T-40 Step 3: the router's own catalogue. Read from the router rather than written out here, so
+    // the help panel and the `?` overlay describe the commands that exist at this instant - including
+    // the ECP's live decision for each one, which changes under lockdown.
+    if (method === 'GET' && url.pathname === '/api/command/catalog') {
+      try {
+        if (!app.commandRouter || typeof app.commandRouter.catalog !== 'function') {
+          sendJson(res, 503, { unavailable: true, error: 'the command router is not running, so there is no catalogue to read' });
+          return;
+        }
+        sendJson(res, 200, app.commandRouter.catalog());
+      } catch (err) {
+        sendJson(res, 500, { error: `the command catalogue could not be read: ${err.message}` });
+      }
+      return;
+    }
+    // T-40 Step 1: the live disk re-verification. A governed read - the capability runs through the
+    // controller, so the ECP authorizes it - and every applied file is measured against the disk at
+    // this instant rather than at the instant it was written.
+    if (method === 'GET' && url.pathname === '/api/workshop/applies/status') {
+      try {
+        const result = await app.controller.workshopCheckApplied();
+        const step = result.operation?.steps?.[0] ?? {};
+        const data = step.result?.data ?? null;
+        if (!data) {
+          // A refusal here is a real state (no workspace root), and it is reported as a 503 with the
+          // reason rather than as an empty list that would read as "every change is fine".
+          const code = step.execution?.error?.code ?? step.authorization?.reason ?? null;
+          sendJson(res, code === 'WORKSPACE_SANDBOX_UNAVAILABLE' || code === 'WORKSPACE_UNAVAILABLE' ? 503 : 400, {
+            status: result.status,
+            unavailable: true,
+            error: result.output ?? 'the disk status could not be measured',
+            code,
+          });
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status });
+      } catch (err) {
+        sendJson(res, 503, { unavailable: true, error: `the disk status could not be measured: ${err.message}` });
+      }
+      return;
+    }
+    // T-40 Step 2: the batch writes. Separate routes from the single-file ones so a refusal carries
+    // the per-file problems the owner needs, and so the all-or-nothing code is impossible to confuse
+    // with the one-file code at the call site.
+    if (method === 'POST' && url.pathname === '/api/workshop/changesets/apply') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['candidateIds', 'title', 'rationale', 'stepUp'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = await app.controller.workshopApplyChangeset({
+          candidateIds: body.candidateIds,
+          title: body.title,
+          rationale: body.rationale ?? null,
+          stepUp: body.stepUp ?? null,
+        });
+        const step = result.operation?.steps?.[0] ?? {};
+        const data = step.result?.data ?? null;
+        if (!data) {
+          sendJson(res, changesetRefusalStatus(step), changesetRefusalBody(result, step));
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status, display: result.display });
+        broadcast('workshop', { changesetId: data.changesetId ?? null, fileCount: data.fileCount ?? null });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+    const changesetRollbackMatch = method === 'POST' && url.pathname.match(/^\/api\/workshop\/changesets\/([^/]+)\/rollback$/);
+    if (changesetRollbackMatch) {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['reason', 'stepUp'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = await app.controller.workshopRollbackChangeset({
+          changesetId: decodeURIComponent(changesetRollbackMatch[1]),
+          reason: body.reason ?? null,
+          stepUp: body.stepUp ?? null,
+        });
+        const step = result.operation?.steps?.[0] ?? {};
+        const data = step.result?.data ?? null;
+        if (!data) {
+          sendJson(res, changesetRefusalStatus(step), changesetRefusalBody(result, step));
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status, display: result.display });
+        broadcast('workshop', { rolledBackChangeset: data.changesetId ?? null });
         scheduleOwnerRefresh();
       } catch (err) {
         sendJson(res, 400, { error: err.message });

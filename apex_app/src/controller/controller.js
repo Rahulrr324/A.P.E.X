@@ -1613,6 +1613,30 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // T-40 Step 1: the live disk check. A read through the governed capability, so the ECP authorizes
+  // it like any other and the result is verified by an independent second read.
+  async workshopCheckApplied() {
+    const op = this.#newOp({ capability: 'workshop.check_applied', origin: 'user', request: 'workshop check applied files' });
+    const step = await this.runAction('workshop.check_applied', {}, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-40 Step 2: the batch writes. Both go through runAction, so the ECP decides before the applier is
+  // reached and the verifier re-reads every file afterwards.
+  async workshopApplyChangeset({ candidateIds, title, rationale = null, stepUp = null } = {}) {
+    const count = Array.isArray(candidateIds) ? candidateIds.length : 0;
+    const op = this.#newOp({ capability: 'workshop.apply_changeset', origin: 'user', request: `workshop apply changeset [${count} file(s)]` });
+    const step = await this.runAction('workshop.apply_changeset', { candidateIds, title, rationale, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopRollbackChangeset({ changesetId, reason = null, stepUp = null } = {}) {
+    const shown = typeof changesetId === 'string' ? truncate(changesetId, 40) : '[missing changeset]';
+    const op = this.#newOp({ capability: 'workshop.rollback_changeset', origin: 'user', request: `workshop rollback changeset [${shown}]` });
+    const step = await this.runAction('workshop.rollback_changeset', { changesetId, reason, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   async workshopRollbackFile({ applyId, reason = null, stepUp = null } = {}) {
     const shown = typeof applyId === 'string' ? truncate(applyId, 40) : '[missing apply]';
     const op = this.#newOp({ capability: 'workshop.rollback_file', origin: 'user', request: `workshop rollback file [${shown}]` });

@@ -2470,3 +2470,147 @@ plainly, because they are the next milestone's work rather than this one's:
 None of those is a claim this milestone makes, and the panel says so where it matters. What is claimed
 is narrower and is now measured: the bytes change, the change is recorded, the previous bytes are
 recoverable, and every refusal names what it refused.
+
+---
+
+## T-40: closing the four operational limits T-39 named
+
+T-39 ended with a list of what it did not do, and said so plainly. T-40 exists to close three of those
+limits and, in doing so, to make a fourth one visible rather than quietly fixed. It ran as four ordered
+steps on `arena/c4691a2f-a-p-e-x`, starting from `ada3797`.
+
+| Limit T-39 named | What T-40 does about it |
+| --- | --- |
+| "There is no automatic re-verification on disk after the apply." | **Step 1.** A governed read, `workshop.check_applied`, re-hashes every applied file and classifies it `intact` / `modified_externally` / `reverted_externally` / `deleted_externally`, served at `GET /api/workshop/applies/status` and folded into `GET /api/workshop`, with a **Check Disk Status** control that redraws every applied row with the measurement and its timestamp. |
+| "One file per apply. A multi-file change is not offered." | **Step 2.** `workshop.apply_changeset` writes 2 to 8 verified candidates as one all-or-nothing act, and `workshop.rollback_changeset` undoes the whole batch or none of it. Both are pre-flighted in full before the first byte. |
+| (No public reference for the command bar's vocabulary.) | **Step 3.** `GET /api/command/catalog` exposes the router's own tables - every phrase, every prefix, the target capability, its ECP decision right now, and the keyboard bindings - and `?` or **Help** opens a non-modal panel that lists them and fills the command bar from a template. |
+| "Rollback is per apply, not per session." | **Not closed, deliberately.** A batch is one act with one rollback; there is still no undo stack, and the milestone does not pretend otherwise. |
+
+### Step 1: the disk re-verification is a measurement, not a memory
+
+The important design decision is that `liveStatus()` is the *only* producer of the disk verdict, and the
+panel, the ledger read and the dedicated endpoint all call it. There is no second implementation that
+could disagree with the first. Each state carries both digests - what the apply wrote and what is on
+disk now - because a row that says "drifted" without them is a riddle rather than a diagnosis.
+
+One defect was found by the probe and fixed before it could reach a test: the first draft of the
+per-file classifier was reachable only for single-file applies, so a batch of two files was reported as
+`open: 0` - a screen saying "nothing was applied" while a whole changeset was on disk. `liveStatus()`
+now walks the open changesets too and emits one entry per file, reusing the same classifier.
+
+### Step 2: the batch, and the two bugs the probe found
+
+The pre-flight is an ordered list of checks over every file, and it writes nothing. It refuses for
+ledger capacity, for a count outside 2..8, for an unknown candidate, for a duplicate `relativePath`, for
+a candidate with no passing verification, for staged bytes that no longer match the digest the
+verification recorded, for a path that escapes the root through `realpath`, and for a file whose digest
+is not the base the candidate was staged against. A failure returns `409 CHANGESET_PREFLIGHT_REFUSED`
+naming the offending candidate and both digests; the file that would have passed is not written either.
+
+Two real defects were caught by probing rather than by reading:
+
+1. **A refused count still created a backup directory and then crashed.** The count refusals *returned*
+   a result object while every other refusal *threw*, so `applyChangeset` carried on with
+   `preflight.entries === undefined`. Every refusal from the pre-flight now has one shape: an exception
+   carrying `detail.problems`.
+2. **The write loop renamed a file that did not exist.** `temporaryName()` is random per call, and the
+   first draft called it twice - once to write the temporary file and once to rename it. Every batch
+   write would have failed. The name is now taken once, and the suite asserts the contents of both
+   files rather than trusting the loop to be right.
+
+The atomicity claim is proven the hard way: a probe patches `fs.renameSync` to fail on the second file
+with `ENOSPC`, and asserts that the first file is restored to its exact original bytes, the second is
+never written, and **no ledger record is written**. That probe became
+`T-40 changeset: an OS write failure on the second file restores the first, and records nothing`.
+
+### Step 3: the reference is derived, so it cannot lie
+
+`catalog()` reads `PHRASES` and `PREFIXES` - the same frozen tables `routeLine()` matches against - and
+asks the registry for each capability's permission, reversibility, blast radius and live ECP decision.
+A command added to the router appears in the panel without anyone remembering to add it in two places,
+and a command removed from the router cannot linger in the help. The probe checks this in both
+directions: every documented phrase routes to the kind its row claims (17 rows, 0 mismatches), and
+under lockdown the panel's `verify workshop` row flips to `ECP: deny` rather than showing a stale
+`allow`.
+
+**The bug worth recording.** The UI client is one template literal in `src/ui/assets.js`, so
+`node --check` never parses it. A stray apostrophe inside a single-quoted string (`'... the ECP's
+decision ...'`) was invisible to every static check and would have thrown `SyntaxError` in the browser
+the first time the owner pressed `?`. It was found by extracting `UI_CLIENT` and compiling it with
+`new Function` - which parses without running - and that check is now a permanent test:
+`T-40 command help: the client bundle is real JavaScript`.
+
+### Registry, and what moved
+
+| | Before T-40 | After T-40 |
+| --- | --- | --- |
+| Default registry | 166 (81 read / 85 write) | **169 (82 read / 87 write)** |
+| With a workspace root | 181 (89 read / 92 write) | **184 (90 read / 94 write)** |
+| Plannable | 56 | **56** (unchanged - none of the three is plannable) |
+
+The three new capabilities are owner-only for the writes and user+model for the read, all unplannable,
+and the step-up list grew from four capabilities to six. All three have README inventory rows, belief
+state, capture classification and a safety-metadata declaration (`check_applied` is `read_only`/`none`,
+the two batch writes are `compensatable`/`workspace_fs` and `reversible`/`workspace_fs`).
+
+### What was verified here, and what could not be
+
+- `node --check` over all of `src` and `bin`: **263 files, 0 failures**.
+- Full `npm test`, final run: **4193 tests / 4190 pass / 1 fail / 2 skipped / 645 suites / 1746270.82 ms**.
+  The one failure is the environmental loopback check described below; the two skipped are the browser
+  suites, which have no binary in this sandbox.
+- The four new and changed test files, run directly: `workshop-changeset-drift-command-help` **12/12**,
+  `workshop-apply-rollback` **16/16**, `capability-inventory` **11/11**, `model-self-authorization`
+  **17/17**, `real-browser-harness` **10/10**, `ui-server` **33/33**.
+- **The browser walk is UNVERIFIED in this environment.** There is no Chromium or Edge binary in this
+  sandbox, so `t40-changeset-drift-command-help.spec.mjs` skips locally with its diagnostic. Only the
+  hosted runner can prove it, and its annotation is the evidence - not this paragraph.
+- **One local failure is environmental, and it was measured rather than assumed.** The first full run
+  failed `tests/t16-pilot-reporting.test.js` with `boundLoopbackOnly=false`. That check asks the kernel
+  which sockets listen on the port an `apex-serve` child just bound. In this sandbox the answer is two:
+  our child's `127.0.0.1:<port>` (uid 1001) and a second socket on `169.254.0.21:<port>` owned by
+  **uid 0** - the sandbox's own preview proxy, which binds a wildcard listener on every ephemeral port
+  a server reports. The pilot's loopback claim is true of APEX and false of the sandbox hosting it, so
+  the scenario cannot pass here. It passed in isolation in this same sandbox before, because the proxy
+  only takes the port after the server announces it. The `139` test run above therefore reports
+  **4188 pass / 3 fail**, and two of those three were real T-40 pins this milestone had to move.
+
+
+### Three-axis assessment at T-40
+
+**A. Deterministic backend maturity.** This milestone's hardest property is not "write several files"
+but "write several files or none", and the difference is entirely in what happens *before* the first
+byte. The pre-flight is now a single ordered list of nine checks that returns every failure rather than
+stopping at the first, so an owner who gets a refusal learns all of it at once. Three defects were
+caught by probing rather than by reading - a refusal path that returned where every other path threw,
+a random temporary name taken twice, and a batch that read as `open: 0` while two files sat applied -
+and each of the three would have produced a green-looking result on a machine where nothing went wrong.
+The suite therefore proves the unhappy paths on purpose: an `ENOSPC` injected into the second rename,
+an external edit between staging and applying, a duplicate target path, and a batch rollback attempted
+over a file somebody else changed. The claim that survived all of it is narrow and measured: a batch
+either lands whole, or every file it touched holds the bytes it held before.
+
+**B. APEX v2 architecture completion.** T-39's own report named three operational limits; T-40 closes
+all three and says which one it deliberately leaves open. The disk re-verification is a governed
+capability rather than a background watcher, which is the architecturally honest choice: the ECP decides
+who may look, the ledger records that they looked, and the answer is a measurement taken at the moment
+of the question rather than a state that has to be kept fresh. The command catalogue is derived from
+the router's own tables, so the reference cannot describe a vocabulary the router does not have - the
+same rule that keeps the inventory from lying about the registry. And the batch capabilities joined the
+existing fences rather than bypassing them: owner-only at the registry, `workspace_fs` in the
+blast-radius vocabulary, in the step-up list, in the capture classification, and refused by the ECP
+under lockdown before the applier is reached.
+
+**C. Real-world capability validation.** The capability claim is now "APEX can change two files as one
+change, prove both, notice when one of them was edited behind its back, refuse to undo either until
+that is resolved, and then put both back". That is a materially more useful claim than T-39's, and it
+is the one an owner would actually make of a code assistant. What remains honestly outside it:
+
+- **No merge.** A file that changed after staging is a refusal, not a three-way merge. The owner
+  re-stages. This is correct for the size of the tool and is a real limit.
+- **No undo stack.** A changeset is one act with one rollback. "Undo the last five changes" is not
+  offered and is not implied.
+- **No watcher.** Drift is detected when asked, not when it happens. A file edited at 03:00 is reported
+  when the owner presses Check Disk Status, not before.
+- **The browser walk is unverified here.** It skips without a browser binary in this sandbox; only the
+  hosted Edge run can prove it, and that annotation - not this paragraph - is the evidence.

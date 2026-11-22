@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { MAX_EXCERPT_LINES, MAX_INSPECT_ENTRIES } from '../workshop/sandbox.js';
-import { WorkshopApplier } from '../workshop/applier.js';
+import { WorkshopApplier, MIN_CHANGESET_FILES, MAX_CHANGESET_FILES } from '../workshop/applier.js';
 
 function show(summary, data, display) {
   return { summary, data, display: display ?? summary };
@@ -462,6 +462,61 @@ function fileBackedActions() {
 
   return [
     {
+      name: 'workshop.check_applied',
+      description: 'Re-measure every applied workspace change against the file on disk right now, and classify each one: intact (still the bytes the apply wrote, so a rollback is safe), modified_externally (edited outside APEX since the apply, with both digests reported, so an automatic rollback would refuse rather than discard the edit), reverted_externally (already put back by hand, so there is nothing to roll back), or deleted_externally. Read-only: it opens each file for reading inside the configured root and writes nothing, repairs nothing, and authorizes nothing.',
+      inputHint: '{}',
+      permission: 'read',
+      origins: [ORIGIN_USER, ORIGIN_MODEL],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) throw new ValidationError(`unexpected input field "${key}"`);
+        return {};
+      },
+      async execute(ctx) {
+        const applier = requireApplier(ctx);
+        const live = applier.liveStatus();
+        return show(
+          live.available
+            ? `checked ${live.open} applied change(s): ${live.counts.intact} intact, ${live.counts.modified_externally} modified, ${live.counts.reverted_externally} reverted, ${live.counts.deleted_externally} deleted`
+            : 'no workspace root is configured, so no applied change can be measured against a disk',
+          {
+            ...live,
+            // The counts are summed here rather than left to a reader, because a screen that adds up
+            // four numbers for itself can add them up wrongly.
+            summary: {
+              open: live.open,
+              intact: live.counts.intact,
+              modifiedExternally: live.counts.modified_externally,
+              revertedExternally: live.counts.reverted_externally,
+              deletedExternally: live.counts.deleted_externally,
+            },
+            checkedAt: live.at,
+          },
+          live.available
+            ? [
+              `Measured ${live.open} applied change(s) against the disk at ${live.at}.`,
+              ...live.states.slice(0, 20).map((entry) => `  ${entry.state.padEnd(19)} ${entry.relativePath}`),
+              live.allIntact ? 'Every open change still holds what was applied.' : 'At least one open change does not, so a batch rollback would refuse.',
+            ].join('\n')
+            : 'No workspace root is configured; there is nothing to measure.',
+        );
+      },
+      async verify(ctx, _input, result) {
+        try {
+          // An independent second read. Two reads of the same disk that disagree would mean the disk
+          // changed between them, and saying so is more useful than reporting the first answer twice.
+          const again = requireApplier(ctx).liveStatus();
+          if (again.open !== result.data.open) {
+            return { ok: false, detail: `the second read found ${again.open} open change(s) where the first found ${result.data.open}` };
+          }
+          return { ok: true, detail: `re-read ${again.open} applied change(s) from disk; both reads agree` };
+        } catch (err) {
+          return { ok: false, detail: `the disk status could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+    {
       name: 'workspace.inspect',
       description: 'List the files and directories of the configured target workspace, with byte size, line count and SHA-256 content digest for each text file. Skips .git, node_modules and build trees, and reports a binary file as binary rather than reading it. Every path is resolved with realpath and refused if it escapes the root. Read-only: nothing is written and nothing is executed.',
       inputHint: '{"maxEntries": 1-400}',
@@ -798,6 +853,149 @@ function fileBackedActions() {
           return { ok: true, detail: `the ledger, the file on disk and the backup agree on ${record.appliedSha256}` };
         } catch (err) {
           return { ok: false, detail: `the apply could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+    {
+      name: 'workshop.apply_changeset',
+      description: 'Apply 2 to 8 verified candidates to the live workspace as ONE all-or-nothing change. Pre-flights every file before writing anything - ledger capacity, duplicate target paths, a passing verification per candidate whose digest still matches the staged bytes, realpath containment, and the base digest on disk - and refuses the entire changeset with CHANGESET_PREFLIGHT_REFUSED naming the offending candidate if any single file fails. Then snapshots every file, writes them all atomically, and reads each one back from disk; if any write or read-back fails, every file already written is restored before the failure is reported. Records one changeset in the ledger and the causal trace.',
+      inputHint: '{"candidateIds": ["wsc-...", "wsc-..."], "title": "what this change is", "rationale": "why it may be written", "stepUp": "the configured step-up secret, only when step-up is configured"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (!['candidateIds', 'title', 'rationale', 'stepUp'].includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        if (!Array.isArray(input.candidateIds)) throw new ValidationError('candidateIds must be an array');
+        if (input.candidateIds.length < MIN_CHANGESET_FILES) {
+          throw new ValidationError(`a changeset needs at least ${MIN_CHANGESET_FILES} candidates`);
+        }
+        if (input.candidateIds.length > MAX_CHANGESET_FILES) {
+          throw new ValidationError(`a changeset holds at most ${MAX_CHANGESET_FILES} candidates`);
+        }
+        const candidateIds = input.candidateIds.map((value, index) => {
+          const id = textInput(value, `candidateIds[${index}]`, { max: 64 });
+          if (!/^wsc-[0-9a-f]{12}$/.test(id)) throw new ValidationError(`candidateIds[${index}] must look like wsc-<12 hex characters>`);
+          return id;
+        });
+        const title = textInput(input.title, 'title', { max: 160 });
+        const stepUp = input.stepUp === undefined || input.stepUp === null ? null : input.stepUp;
+        if (stepUp !== null && (typeof stepUp !== 'string' || stepUp.length === 0 || stepUp.length > 200)) {
+          throw new ValidationError('stepUp must be the configured step-up secret');
+        }
+        return { candidateIds, title, rationale: reasonField(input.rationale, { required: true }), stepUp };
+      },
+      async execute(ctx, input) {
+        const controlPlane = ctx.registry?.controlPlane;
+        if (controlPlane && typeof controlPlane.verifyStepUp === 'function') {
+          const gate = controlPlane.verifyStepUp(input.stepUp, { capability: 'workshop.apply_changeset' });
+          if (!gate.ok) {
+            throw new ValidationError(gate.reason === 'STEP_UP_REQUIRED'
+              ? 'step-up is required to write a changeset into the workspace and no proof was given'
+              : 'the step-up proof did not match; nothing was written');
+          }
+        }
+        const changeset = requireApplier(ctx).applyChangeset({
+          candidateIds: input.candidateIds,
+          title: input.title,
+          rationale: input.rationale,
+        });
+        return show(
+          `applied a ${changeset.fileCount}-file changeset ${changeset.changesetId} to the workspace`,
+          { ...changeset, rationale: input.rationale },
+          [
+            `${changeset.fileCount} files applied atomically as ${changeset.changesetId}.`,
+            ...changeset.files.map((file) => `  ${file.relativePath}  ${String(file.appliedSha256).slice(0, 12)}`),
+            'Every file was read back from disk and compared with its candidate; a change that fails that check is undone whole.',
+            `The bytes these replaced are saved under ${changeset.changesetId}, so the whole changeset can be rolled back.`,
+          ].join('\n'),
+        );
+      },
+      async verify(ctx, _input, result) {
+        try {
+          const applier = requireApplier(ctx);
+          const record = applier.changesetRecord(result.data.changesetId);
+          if (!record) return { ok: false, detail: 'the changeset cannot be read back from the ledger' };
+          if (record.files.length !== result.data.fileCount) return { ok: false, detail: 'the ledger holds a different number of files than were reported' };
+          // Every file is re-read from disk, not from the record.
+          for (const file of record.files) {
+            let target;
+            try {
+              target = applier.inspector.resolve(file.relativePath);
+            } catch (err) {
+              return { ok: false, detail: `${file.relativePath} cannot be resolved: ${err?.message ?? err}` };
+            }
+            if (!target.ok) return { ok: false, detail: `${file.relativePath} is no longer inside the root` };
+            const disk = createHash('sha256').update(fs.readFileSync(target.realPath)).digest('hex');
+            if (disk !== file.appliedSha256) return { ok: false, detail: `${file.relativePath} no longer matches the digest the changeset recorded` };
+          }
+          return { ok: true, detail: `re-read all ${record.files.length} files from disk; each matches its applied digest` };
+        } catch (err) {
+          return { ok: false, detail: `the changeset could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+    {
+      name: 'workshop.rollback_changeset',
+      description: 'Roll back a whole applied changeset, or none of it. Pre-flights every file first and refuses with CHANGESET_ROLLBACK_DRIFT if any one of them was edited outside APEX after the apply, restoring nothing in that case. When every file still holds what the changeset wrote, restores all of them to their exact pre-apply bytes atomically and verifies each one on disk before reporting success. Records the batch rollback in the ledger and the causal trace.',
+      inputHint: '{"changesetId": "wcs-...", "reason": "why this is being undone", "stepUp": "the configured step-up secret, only when step-up is configured"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (!['changesetId', 'reason', 'stepUp'].includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        const changesetId = textInput(input.changesetId, 'changesetId', { max: 64 });
+        if (!/^wcs-[0-9a-f]{12}$/.test(changesetId)) throw new ValidationError('changesetId must look like wcs-<12 hex characters>');
+        const stepUp = input.stepUp === undefined || input.stepUp === null ? null : input.stepUp;
+        if (stepUp !== null && (typeof stepUp !== 'string' || stepUp.length === 0 || stepUp.length > 200)) {
+          throw new ValidationError('stepUp must be the configured step-up secret');
+        }
+        return { changesetId, reason: reasonField(input.reason, { required: true }), stepUp };
+      },
+      async execute(ctx, input) {
+        const controlPlane = ctx.registry?.controlPlane;
+        if (controlPlane && typeof controlPlane.verifyStepUp === 'function') {
+          const gate = controlPlane.verifyStepUp(input.stepUp, { capability: 'workshop.rollback_changeset' });
+          if (!gate.ok) {
+            throw new ValidationError(gate.reason === 'STEP_UP_REQUIRED'
+              ? 'step-up is required to roll back a changeset and no proof was given'
+              : 'the step-up proof did not match; no file was restored');
+          }
+        }
+        const rolledBack = requireApplier(ctx).rollbackChangeset({ changesetId: input.changesetId, reason: input.reason });
+        return show(
+          `rolled back the ${rolledBack.fileCount}-file changeset ${rolledBack.changesetId}`,
+          { ...rolledBack, reason: input.reason },
+          [
+            `${rolledBack.fileCount} files restored atomically, every one verified against its pre-apply digest.`,
+            ...rolledBack.files.map((file) => `  ${file.relativePath}  ${file.existedBefore ? `restored ${String(file.restoredSha256).slice(0, 12)}` : 'created by the changeset, removed'}`),
+            'The rollback is recorded in the Workshop ledger and in the causal trace.',
+          ].join('\n'),
+        );
+      },
+      async verify(ctx, _input, result) {
+        try {
+          const applier = requireApplier(ctx);
+          const rollback = applier.records().find((entry) => entry.kind === 'changeset_rollback' && entry.changesetId === result.data.changesetId);
+          if (!rollback) return { ok: false, detail: 'the changeset rollback cannot be read back from the ledger' };
+          for (const file of rollback.files) {
+            const resolved = applier.inspector.resolve(file.relativePath);
+            if (file.existedBefore === false) {
+              if (resolved.ok) return { ok: false, detail: `${file.relativePath} was created by the changeset and should now be absent` };
+              continue;
+            }
+            if (!resolved.ok) return { ok: false, detail: `${file.relativePath} cannot be resolved after the rollback` };
+            const disk = createHash('sha256').update(fs.readFileSync(resolved.realPath)).digest('hex');
+            if (disk !== file.restoredSha256) return { ok: false, detail: `${file.relativePath} no longer holds the pre-apply bytes` };
+          }
+          return { ok: true, detail: `re-read all ${rollback.files.length} files; each holds the bytes it had before the changeset` };
+        } catch (err) {
+          return { ok: false, detail: `the changeset rollback could not be re-read: ${err?.message ?? err}` };
         }
       },
     },

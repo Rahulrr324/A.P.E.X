@@ -361,6 +361,12 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // digests; copying the file's content here would turn the owner's source into behavioural evidence.
   'workshop.apply_file': 'workspace-write',
   'workshop.rollback_file': 'workspace-write',
+  // T-40: the check is a read of those same files, so it is excluded as a read - its result is
+  // re-derivable at any moment and copying it into the experience log would say less than a fresh
+  // check. The two batch writes are excluded for the reason the single-file writes are.
+  'workshop.check_applied': 'read',
+  'workshop.apply_changeset': 'workspace-write',
+  'workshop.rollback_changeset': 'workspace-write',
   none: 'no-action',
 });
 

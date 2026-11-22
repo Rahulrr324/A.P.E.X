@@ -4050,7 +4050,9 @@ across the whole set, so they are stated once instead of per row:
 - **Verification.** All 139 registered actions declare both `validate()` and `verify()` - 154 with a
   filesystem root - so the independent verifier runs on every one, including the reads, which are
   verified against a fresh re-read rather than trusted from the first result. Registration refuses an
-  action that omits either.
+  action that omits either. The three T-40 capabilities join that set: `workshop.check_applied` is
+  verified by a second independent read of every applied file, and both batch capabilities re-read
+  every file in the changeset from disk rather than reporting their own return value back.
 
 > **T-30 count correction (2026-11-19).** The earlier AF-19 count of 134 actions by default and 149
 > with a root (80 reads, 69 writes) is superseded by the verified registry: Workshop contributes four
@@ -4077,9 +4079,11 @@ across the whole set, so they are stated once instead of per row:
 > `neural.bridge_reset` and the read `neural.read`; T-38 Step 2 added the reads `workspace.inspect` and
 > `workspace.read_file` and the owner-only sandbox writes `workshop.stage_file`, `workshop.verify_file`
 > and `workshop.promote_file`; T-39 Step 1 adds the owner-only writes `workshop.apply_file` and
-> `workshop.rollback_file`, the only two capabilities that write the owner's live workspace tree. The
-> verified registry is therefore **166 actions by default (81 reads and 85 writes) and 181 with a
-> root (89 reads and 92 writes)**. The 154/169 figures above are retained as the state before those
+> `workshop.rollback_file`, the only two capabilities that write the owner's live workspace tree; and
+> T-40 adds the read `workshop.check_applied` and the owner-only batch writes
+> `workshop.apply_changeset` and `workshop.rollback_changeset`. The
+> verified registry is therefore **169 actions by default (82 reads and 87 writes) and 184 with a
+> root (90 reads and 94 writes)**. The 154/169 figures above are retained as the state before those
 > milestones. Of the rooted total, 56 are plannable, unchanged: none of the added capabilities is
 > plannable, and the two that write the live tree are deliberately not, because a plan is a model
 > proposal and a model may never name a workspace write. T-39 also
@@ -4189,6 +4193,9 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `workshop.promote_file` | user | write | never in a plan | one `workshop-sandbox/<candidate>/promotion.json` record citing the passing verification; refuses without one for the same content, and applies nothing to the workspace | no (workshop) | no (accepting a candidate does not make it true) |
 | `workshop.apply_file` | user | write | never in a plan | the target workspace file itself (the only capability that writes the owner's live tree): the staged bytes go in through a sibling temporary file and a rename, the previous bytes are saved under `workshop-backups/<applyId>/` before the write, and the file is re-read to prove the digest; refuses an unverified candidate, a path outside the root, a file that drifted from the recorded base, and any apply during lockdown | no (workspace-write) | no (writing a file is not a belief) |
 | `workshop.rollback_file` | user | write | never in a plan | the target workspace file itself: the exact bytes the apply replaced, taken from the apply's ledger record and its content-addressed backup, restored atomically and re-read to prove the pre-apply digest; refuses when the file no longer matches what the apply wrote | no (workspace-write) | no (undoing a write is not a belief) |
+| `workshop.check_applied` | user + model | read | never in a plan | nothing - it opens and hashes every applied file under the workspace root and writes no byte, proved by the suite asserting the ledger and the backups are byte-identical afterwards and the result carries `wroteNothing: true` | no (read) | no (a re-reading is an observation, not a belief) |
+| `workshop.apply_changeset` | user | write | never in a plan | between two and eight files in the owner's workspace, all or none: every candidate is pre-flighted before the first byte (verification present, staged bytes still matching the candidate digest, realpath containment, current disk digest equal to the recorded base, no duplicate path, ledger capacity), the previous bytes are saved together under `workshop-backups/<changesetId>/`, each file is written through a sibling temporary file and a rename, and every one is re-read to prove its applied digest - any write or read-back failure restores every file already written; refuses with `409 CHANGESET_PREFLIGHT_REFUSED` naming the offending candidate when one of them fails, writing nothing | no (workspace-write) | no (writing files is not a belief) |
+| `workshop.rollback_changeset` | user | write | never in a plan | the same set of files in one act: the whole batch is pre-flighted first, and one file that no longer holds what the changeset wrote refuses the entire revert with `409 CHANGESET_ROLLBACK_DRIFT` and restores nothing; otherwise every file is restored to its exact `beforeSha256` atomically and re-read, files the changeset created removed and their absence confirmed | no (workspace-write) | no (undoing a batch is not a belief) |
 | `plan.assess` | user | write | never in a plan | `plans.jsonl` (one `plan_assessment` event; the plan record's own bytes, status, approval and timestamp are unchanged) | no (executive) | yes |
 | `evolution.propose`, `evolution.verify`, `evolution.promote`, `evolution.decide` | user | write | never in a plan | `evolution-proposals.jsonl` (append-only ledger: the proposal, the measured sandbox result, the promotion request and the owner's decision) | no (evolution) | no (a candidate self-change is not a belief) |
 | `perception.sense_host`, `perception.dismiss_alert`, `perception.revoke_suppression` | user | write | never in a plan | `perception/observations.jsonl` (append-only reading ledger: one line per observed value, with its own timestamp, source and epistemic status) and `perception/governor.json` (the rolling push budget, the dismissals, and the suppression rules) | no (perception) | no (a reading is not a belief) |

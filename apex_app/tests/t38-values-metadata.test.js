@@ -100,9 +100,11 @@ test('T-38 metadata: every write declares a blast radius that is not none', () =
     // T-37 measured 80 writes. T-38 Step 2 adds the three sandbox writes - stage, verify and
     // promote - each of which declares `workspace_sandbox`, so the count was 83. T-39 Step 1 adds the
     // two writes that reach the live tree, `workshop.apply_file` and `workshop.rollback_file`, so it
-    // is 85. The number is pinned rather than bounded so that a new write cannot arrive without
-    // someone deciding this question - which is exactly what happened here.
-    assert.equal(writes.length, 85, `expected 85 writes after T-39 Step 1, got ${writes.length}`);
+    // is 85. T-40 Step 2 adds the two batch writes, `workshop.apply_changeset` and
+    // `workshop.rollback_changeset`, both declaring `workspace_fs`, so it is 87. The number is pinned
+    // rather than bounded so that a new write cannot arrive without someone deciding this question -
+    // which is exactly what happened here.
+    assert.equal(writes.length, 87, `expected 87 writes after T-40 Step 2, got ${writes.length}`);
     for (const definition of writes) {
       assert.notEqual(definition.blastRadius, 'none',
         `${definition.name} is a write that claims to change nothing`);
