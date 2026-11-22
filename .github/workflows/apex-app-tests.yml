@@ -426,7 +426,15 @@ jobs:
           failures += [{'message': message} for message in (run.get('pageErrors') or [])]
           level = 'error' if failures else 'notice'
           if failures:
-              parts.append('failures: ' + ' ~ '.join(str(failure.get('message'))[:200] for failure in failures[:10]))
+              # `failures` mixes strings the walk pushed and dicts built from console messages, so
+              # each entry is read by its own shape. Assuming one shape crashed this step silently,
+              # which is worse than a bad message: no annotation at all, and a second red step that
+              # was only a symptom of the first.
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      return str(failure.get('message') or failure)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
           message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
           print(f'::{level} title=t38-values-workspace-trace::{message[:20000]}')
           if failures:
