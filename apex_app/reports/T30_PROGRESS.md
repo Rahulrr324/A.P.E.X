@@ -2653,3 +2653,16 @@ The list now carries `problems`, `refusedCandidateId`, `refusedRelativePath`, `f
 `filesRefused` and `undone`, a unit test pins every field the two batch refusals depend on, and the walk
 asserts the diagnostic box is scoped to the changeset status line rather than to any `.diagnostic` on
 the page.
+
+**Hosted evidence, third attempt (run 45021134904, `3509d76`).** The pre-flight is now fully verified in a
+real browser - `refused=src/data.json bothUntouched=True digestsShown=True ledgerChangesets=0` - and the
+atomic apply passed: `files=2 atomic=True everyVerified=True backupHoldsBoth=True ui=True`. The walk then
+failed at the changeset row, and the cause was the same mistake a third time, in a smaller place: the row
+shortened each digest with `shortDigest()` to twelve characters. Twelve characters identify a record; they
+cannot be compared with a file the owner hashed, and this panel exists to be compared. The disk-status rows
+and the changeset rows now show whole digests, and a unit test asserts that neither panel contains
+`shortDigest(` at all.
+
+Three hosted cycles, three defects, and all three had the same shape: **the fact was correct everywhere
+except on the screen.** That is the argument for the walk rather than against it - no unit test in this
+repository, and no amount of reading the client source, would have found any of them.
