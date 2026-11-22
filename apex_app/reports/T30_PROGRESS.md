@@ -2330,3 +2330,143 @@ One process note, because it cost more time than any of the code: editing an ass
 dense regex literal through shell heredocs is a way to corrupt a file. Four attempts produced a line
 with doubled backslashes and a duplicated entry before the working approach - derive the new entry from
 the existing one by substitution, so the escaping cannot drift - was found. The file is one line changed.
+
+### What the hosted run measured
+
+CI run `45009289786` on `ab4b8b5` is green, every one of the nineteen steps. All nine browser suites
+report as a `notice`, in Microsoft Edge `157.0.4341.60`. The T-39 line first:
+
+**`t39-workshop-apply-rollback`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | candidate wsc-ee61b79f82ed liveUnchangedBeforeApply=True | apply wsa-ee3853e7c23b diskMatches=True backupHoldsPrior=True badge=True rollbackControl=True | drift WORKSPACE_DRIFT digestsShown=True externalEditIntact=True ledgerApplies=1 | rollback wsa-ee3853e7c23b byteIdentical=True restoredMatchesBefore=True removedFile=False uiConfirmed=True | trace changes 2 ordered=True digests=True complete=True counts {"runs": 0, "councilSessions": 0, "taskEvents": 0, "verifications": 2, "applies": 2, "operations": 4} | console 0 page 0 requests 0 scheduledRefusals 1 | screenshots 4
+```
+
+Every clause is a measurement made in the browser or on the disk, not a claim:
+
+- `liveUnchangedBeforeApply=True` - the file was read by the walk before the apply and was still the
+  fixture's original bytes after staging and verifying.
+- `diskMatches=True` - the walk recomputed the SHA-256 of the real file with `createHash` after the
+  apply and compared it with the candidate's digest. The backup was read and compared with the bytes
+  the apply replaced (`backupHoldsPrior=True`).
+- `badge=True rollbackControl=True` - the panel showed **Applied to workspace - disk SHA-256 verified**
+  with its backup id, and offered the rollback control addressed by the ledger's own apply id.
+- `drift WORKSPACE_DRIFT digestsShown=True externalEditIntact=True ledgerApplies=1` - a second candidate
+  was verified, the file was then edited outside APEX, the apply was refused with `409`, both digests
+  were rendered in the panel, the external edit was byte-identical afterwards, and the ledger still held
+  exactly one apply.
+- `rollback ... byteIdentical=True restoredMatchesBefore=True` - the file was restored to the digest it
+  had before the apply, read back from disk.
+- `trace changes 2 ordered=True digests=True complete=True` - the causal chain held the apply and the
+  rollback in time order with their digests, and reported complete.
+- `scheduledRefusals 1` - exactly one deliberate `409` was filtered from the console, and the count is
+  pinned so the filter cannot grow into a blanket exemption. Nothing else was noise.
+
+The other eight, verbatim:
+
+**`real-browser-verification`**
+```
+step=success | browser=157.0.4341.60 | executable=/usr/bin/microsoft-edge (system) | 1600x900: core=Awaiting Approval overflow=1600<=1600 errors=0 | 1280x720: core=Awaiting Approval overflow=1280<=1280 errors=0 | 390x844: core=Awaiting Approval overflow=390<=390 errors=0 | ... | t37-neural-council-router.spec.mjs :: T-37: Track 2, the Council with its constraint core, the command route -> passed (15s) | t38-values-workspace-trace.spec.mjs :: T-38: safety metadata, the real workspace sandbox, and the causal chai -> passed (10s) | t39-workshop-apply-rollback.spec.mjs :: T-39: a verified candidate is applied to the real workspace, a stale o -> passed (7s)
+```
+
+**`hud-experience`**
+```
+hud-step=success | browser=157.0.4341.60 | ... | contrast: 4886 text runs checked, 0 violations | ackMs=4.5 inputBeforeTabs=True | ... | artifact: 18 PNG(s) under apex_app/reports/screenshots/t32 | ...
+```
+
+**`t33-executive-loop`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: open,dispatch,intent,suppression,revoke,graph,idle,idle-clear,workshop,console | screenshots 9 | core at end idle
+```
+
+**`t34-mission-dag`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: mission-shape,join-held,selector,selector-back,branch-unblocked,mission-verified,candidate-association,briefing-acknowledged,briefing-click-through,console | screenshots 10 | mission completed verified True
+```
+
+**`t35-stepdown-handoff-doctor`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | checkpoints 6: auto-stage,flash-guard,sensor-indicator,handoff-claimed,doctor,clean | screenshots 7 | stages walked 0,1,2,3,4,5 (auto None) | flash guard 5 animation(s), 0 violation(s) | handoff ph-c698470902764a8693e9358a digest d2e27f6da7a9 matched True | doctor ok in 2.39 ms of 500 (within budget True)
+```
+
+**`t36-cold-boot-unseeded`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | unseeded entries 0 marker=False devices=False | boot rows 6: safety_latch=ok,ecp_authority=ok,resource_fabric=ok,git_workspace=ok,device_trust=ok,executive_briefing=ok | dormant True landing idle trail degraded>dormant>idle | host 4 cpu / 15.6 GiB | workspace trunk@4b8a0ce (repo trunk@4b8a0ce) | device local-workstation trusted enrolled 1 | briefing facts doctor,resource,workspace,device | doctor 6/6 pass in 1.44 ms (within budget True) | cognition awaiting_approval task task-ee3e7cc9b31c431eae75 approvals 1 | overflow 1440<=1440 | screenshots 8
+```
+
+**`t37-neural-council-router`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | regions 8: sensory,associative,temporal,predictive,attention,working,plasticity,integration | bridge apex.neural.cognitive-bridge/1 | boundary candidate_association authoritative=False writesObserved=False | council sessions 2 compile Compiled and run: success_verified · task task-1683917fc55e4 | receipts 4: mode tactical=>mode/no;sense workspace=>sense/yes;council: verify release readiness=>council/yes;summarise the workspace notes=>mission/yes | screens 11: boot,command-deck,mission-view,briefing,sentinel,memory-timeline,council,presence-mesh,policy-autonomy,lockdown,workshop | overflow 1440<=1440 | console 0 page 0 requests 0 | screenshots 4
+```
+
+**`t38-values-workspace-trace`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | council verdict satisfied counts {"satisfied": 5, "violated": 0, "unverifiable": 0, "not_applicable": 1} | candidate neural.step reversibility=reversible blastRadius=local_store source=declared | unmapped verdict partly_unverifiable | workspace listed README.md,src,src/data.json,src/greeting.js digestMatchesDisk=True | sandbox refusedPromotion 409/PROMOTION_REFUSED liveUnchanged=True verified=True promotedWithoutWriting=True | trace results 4 kinds task graph,Council session,cognitive run,authorized operation chain 11 complete=True | console 0 page 0 requests 0 | screenshots 2
+```
+
+### What went wrong on the hosted run
+
+One cycle was red, and it is the most instructive failure in the milestone because it is the same
+species as the T-38 post-mortem's first two defects.
+
+The run failed in 22 seconds with `locator.click: Target page, context or browser has been closed`
+while waiting for the rollback control. The browser was not the problem. Two defects had combined:
+
+1. The stage helper returned `page.locator('#ws-candidates li').first()`. A Playwright locator is lazy:
+   it re-resolves every time it is used. Staging the second candidate pushed it to the top of the list,
+   so every later assertion about the *first* candidate was silently addressing the *second* one - and
+   the rollback control, which belongs to the first, was being looked for on the wrong row and waited
+   for until the test's own budget expired. The helper now reads the id once and scopes every locator
+   by it.
+2. The dialogs were awaited as bare `waitForEvent` promises. When such a promise rejects while the walk
+   is awaiting something else, it becomes an **unhandled rejection**, which Node treats as fatal: the
+   worker exits, the browser closes, and whatever was in flight is reported as a dead browser. The
+   second defect therefore reported itself as the first - a symptom wearing a cause's clothes, which is
+   precisely the reporting pattern that made three green-looking cycles unreadable in T-38. Dialogs now
+   go through `acceptNextDialog`, which attaches its rejection handler at creation, returns a record,
+   and lets the walk assert that the prompt appeared and asked for a reason.
+
+The fix was eight lines of test code and two comments. The diagnosis is what took the cycle: the
+annotation named the phase (`[drift screenshot]`) and the selector, and both were in the record because
+the walk checkpoints after every phase and records `{phase, message, stack}`. **The instrumentation that
+was built in response to T-38's reporting defects is what made this one a single cycle.**
+
+### Three-axis assessment at T-39
+
+**A. Deterministic backend maturity.** This is the first milestone whose central claim is about the
+filesystem rather than about a ledger, and the difference showed in the defect profile. Every gate is
+now a measured refusal rather than a declared one: the ledger bound is checked before the write instead
+of after it, the containing path is resolved through `realpath` for both existing and
+not-yet-existing targets, and `verifiedOnDisk` is the digest of a file re-read from disk rather than
+the return value of a write call. The suite grew by sixteen tests and the number of ways this module
+can leave the owner worse off went down, not up: a refusal can no longer leave a change unrecorded, and
+a rollback can no longer discard an edit made after the apply. The errors also became structured - a
+drift refusal carries both digests through the executor, the route and the client to the screen - which
+is the difference between a system that refuses and a system that explains.
+
+**B. APEX v2 architecture completion.** T-38 left a written gap: "promotion records a decision and
+applies nothing". That gap is closed, and it was closed without weakening the boundary that made it
+honest. The ECP is still the only authority - lockdown refuses both writes with `KILL_SWITCH_ACTIVE`
+before the applier runs, a model origin is refused at the registry, and the step-up now names both
+capabilities. The blast-radius vocabulary gained a fifth member rather than bending an existing one,
+which matters more than it sounds: `workspace_sandbox` means "never the live workspace tree", and using
+it for an apply would have made the whole vocabulary quietly unreliable at exactly the moment a reader
+needed it. The Workshop is now a complete loop - inspect, stage, verify, apply, roll back, and find all
+of it in one causal chain - and each step of that loop is a separate audited capability.
+
+**C. Real-world capability validation.** The claim "APEX can change one line of my code, prove it did,
+and put it back" is now demonstrated end to end in a real browser against a real directory, by a walk
+that hashes the file itself rather than trusting the response. The honest limits are worth stating
+plainly, because they are the next milestone's work rather than this one's:
+
+- One file per apply. A multi-file change is not offered, and the applier refuses rather than
+  approximating it.
+- The drift gate compares the base digest. It cannot merge, so a concurrent edit is a refusal and the
+  owner must re-stage - which is the correct behaviour for a tool of this size, and a real constraint.
+- Rollback is per apply, not per session. There is no "undo the last five changes" and no revert of a
+  rollback beyond re-applying.
+- There is no automatic re-verification on disk after the apply. `verifiedOnDisk` is a measurement at
+  the moment of writing; a later external edit is detected by the rollback gate, not by a watcher.
+
+None of those is a claim this milestone makes, and the panel says so where it matters. What is claimed
+is narrower and is now measured: the bytes change, the change is recorded, the previous bytes are
+recoverable, and every refusal names what it refused.
