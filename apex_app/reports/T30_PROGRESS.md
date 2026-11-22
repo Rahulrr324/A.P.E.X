@@ -2762,3 +2762,164 @@ generated ids (`apply wcs-0879f9db3b12`, `help rows=17 shortcuts=6`, `trace appl
 complete=True`, `console 0 page 0 requests 0 scheduledRefusals 2`, `screenshots 7`). **Three consecutive
 hosted runs are green**, which is everything this milestone can prove from a sandbox with no browser in
 it.
+
+---
+
+## T-41 — Sandboxed behavioural verification, and a governance boundary with no override
+
+**Branch** `arena/c4691a2f-a-p-e-x` · **start** `58792b1` · **2026-11-22** · additive; no earlier
+section was rewritten.
+
+T-40 taught the Workshop to refuse a batch when a file had drifted. It still could not answer the
+question that comes before that one: *does the candidate do what it claims?* A file that parses is a
+file the parser accepts. The only claim worth making before writing into someone's tree is the one a
+test makes, so T-41 runs the test — inside the sandbox, with a fixed command, a short clock, and a
+measurement across the run — and then builds the bridge that lets an Evolution Lab proposal reach it
+without becoming a way around the boundary.
+
+### Step 1 — the pilot asked the wrong question about sockets
+
+The T-40 suite had one local failure (`t16-pilot-reporting`), and it had **two** causes, not one.
+
+The check asked *"is every listener on this port loopback?"* when the claim was *"is the listener APEX
+owns loopback?"*. In a container there is a proxy on `169.254.0.21`, so the answer was correctly "no"
+to a question nobody was asking. The fix resolves ownership: read `/proc/<pid>/fd`, collect the
+`socket:[<inode>]` inodes that process holds, and treat a listener as APEX's only when its inode is in
+that set. Everything else is recorded in `foreignListenersIgnored` with its uid and address rather than
+failing the verdict. An **APEX-owned** socket on `0.0.0.0`, `::` or `169.254.x.x` still fails
+immediately — the ownership split narrows what counts, it does not soften what fails.
+
+The second cause was the one that mattered. Even with ownership, the check still said `false`, because
+the pilot measures **a child process**: `bin/apex-serve.js` owns the socket, and `selfSocketInodes()`
+was reading the harness's own fds, where no such socket exists. The verdict was false because the check
+was looking in the wrong process. Threading the server's pid through `inspectLoopbackListeners` fixed it.
+
+`/proc/net/tcp6` is not IPv6 text: it is four host-order 32-bit words, so `::1` arrives as
+`0:0:0:0:0:0:0:1` and `::ffff:127.0.0.1` as `::ffff:7f00:1`. Comparing raw hex would have quietly
+mis-classified loopback, which is the failure mode where a check passes for the wrong reason. RFC 5952
+compression plus explicit `::ffff:` handling is what makes the six-address table in the tests real.
+
+`tests/pilot-loopback-check.test.js` **17/17**; `tests/t16-pilot-reporting.test.js` went from 1/2 to
+**2/2** locally. That environment failure is gone rather than tolerated.
+
+### Step 2 — a test that actually runs, in a place that cannot hurt the tree
+
+`WorkshopSandbox.stage()` now accepts an optional `testContent`, written into the candidate's own
+sandbox directory, and `verify()` executes it:
+
+```
+execFileSync(process.execPath, ['--test', testPath], {
+  shell: false, timeout: 5_000, cwd: path.dirname(testPath),
+  env: { PATH, HOME: sandboxDir, NODE_OPTIONS: '', APEX_SANDBOX_TEST: '1' },
+})
+```
+
+No shell, so a candidate's text is never parsed by one — a test body of `$(touch canary)` is a TAP
+failure, not a command (pinned by a test that checks the canary does not exist). The environment is
+stripped to three variables, so a test that needs a credential fails instead of succeeding. The counts
+come from the runner's own summary lines, not from counting characters. A timeout is **one failure**,
+never a pass.
+
+Two checks were added to the record:
+
+* `sandbox_test_passed` — no test staged is not a failure and not evidence; the check says which.
+* `workspace_untouched_by_test` — a tree fingerprint (path, size, mtime, digested) is taken before and
+  after the run. A test that writes through an absolute path **can** escape the sandbox; the write is
+  real, and the check is what catches it. This was verified with a canary rather than assumed: the
+  escape test asserts the file was created *and* that `verified` is false.
+
+`sandboxTestResult: {ran, exitCode, passedCount, failedCount, durationMs, outputExcerpt, timedOut,
+testDigest, mutatedLiveWorkspace}` lands on the verification; `executedCode` is now true exactly when
+code ran, and `mutatesLiveWorkspace` stays false. A failing test makes `verified: false`, which the T-39
+applier already refuses — measured end to end as **409 APPLY_REFUSED_UNVERIFIED** with the file
+byte-identical afterwards. The Workshop renders the runner's counts and the failing output verbatim.
+
+### Step 3 — the boundary is a policy module, and it has no override
+
+`src/evolution/governance-boundary.js` names what APEX may not propose changing: `src/executive/`,
+`src/security/`, `src/governance/`, `src/autonomy/`, `src/workshop/applier.js`, the safety latch and
+autonomy matrix files, and audit ledgers (matched by pattern, because a ledger that moved is still a
+ledger). Matching is canonical — case-folded, separators normalised, `..` resolved lexically — so
+`SRC/Executive/Control-Plane.js` and `src/security/../executive/x.js` are both refused. There is no
+`force`, no `override`, no owner-may-proceed path. `governanceBoundaryPolicy()` generates the UI's list
+from the same constants the refusal uses, so the screen cannot describe a boundary stricter or looser
+than the one enforced.
+
+`evolution.stage_to_workshop` is registered like every other capability (ECP-authorised, audited,
+`workspace_sandbox`, unplannable). Its order is the design: **boundary first**, before the proposal is
+even read; then a passing sandbox verification; then staging with `sourceProposalId` on the candidate
+record. Refusals are **403 IMMUTABLE_GOVERNANCE_BOUNDARY** with the boundary's path, category and
+reason — at proposal time *and* at stage time. The proposal-time refusal is not redundancy: a refusal
+that only happened at staging would let a boundary-targeting proposal sit in the ledger looking
+legitimate.
+
+The causal trace follows the new link. A trace asked for by proposal id returns the chain
+`proposal → stage → sandbox verify → apply → ECP audit`, and reports `sourceProposalId` on the
+verification step.
+
+### Step 4 — two defects the walk found, both real
+
+**The trace returned every verification ever recorded.** The filter read
+`chainText.includes(k)` where `chainText` was built *from* `keys` — so the first clause was true for
+every verification in the sandbox. It was invisible while every walk staged exactly one candidate;
+T-41 stages several, and the trace for an applied candidate came back holding another candidate's
+failing verification. A causal trace that attributes one candidate's failure to another is the one
+thing it cannot do. Replaced with the explicit link (`keys.has(candidateId)` or
+`keys.has(sourceProposalId)`).
+
+**A T-40 test asserted the wrong number.** It expected 2 trace entries for a two-file batch apply
+followed by a rollback; the reader correctly expands per file, so the answer is 4 (two files × two
+acts). Confirmed by stashing all of T-41 and re-running: **this test was already failing at
+`58792b1`**, before any of this work. The reader was right and the count was stale, so the count moved.
+
+Inventories moved with the new capability, deliberately and in one place each: registry 169→**170**
+plain / 184→**185** rooted, writes 94→**95**, blast radius 87→**88**, capture classification
+(`workshop`), README row, and the AF-20 model-origin sweep — `evolution.stage_to_workshop` is denied at
+model origin like every other write, because a model that could stage could put its own bytes where the
+applier reads.
+
+### Evidence
+
+| | |
+|---|---|
+| `node --check` over `apex_app/src` + `apex_app/bin` | **264 files, 0 failures** |
+| local `npm test` | **4231 tests · 4229 pass · 0 fail · 2 skipped** (654 suites) |
+| new tests | `t41-sandbox-test-verification` **12/12**, `t41-evolution-bridge` **9/9**, `pilot-loopback-check` **17/17**, `t16-pilot-reporting` **2/2** |
+| Playwright wiring | 10 → **11** suites in `testMatch`, pinned in `real-browser-harness` |
+| CI | t41 annotation added beside t31–t40; evidence paths uploaded |
+
+### What is proven, and what is not
+
+Proven locally, by measurement: the sandbox test really runs and really gates; a boundary-targeting
+proposal is refused at both ends with the code and the reason; the trace joins the chain; and 55 of 55
+non-browser assertions from the Edge spec were replayed headlessly against a live fixture before the
+spec was committed.
+
+**Not proven here: the browser walk itself, on this machine.** There is no Chromium or Edge in this
+sandbox, so the suite skips with its diagnostic and the hosted run is the only place it can pass. Every
+statement about t41 in a browser is **UNVERIFIED** until a hosted run says otherwise, and this section
+will be amended rather than quietly left standing.
+
+### Three-axis assessment
+
+**(A) Deterministic Backend Maturity — advanced, and advanced by refusal.** The backend now runs code
+it did not write, and the thing that makes that safe is not a promise in a comment: it is a fixed
+argv, `shell: false`, a stripped environment, a 5 s clock, a sandbox `cwd`, and a fingerprint
+comparison across the run that catches a test reaching outside. Two defects were found by asserting
+against real records rather than inspecting them — the trace filter and the stale count — and both had
+been invisible to a green suite. 4231 tests with 0 fail is the strongest local number this project has
+carried.
+
+**(B) APEX v2 Architecture Completion — the self-change path is now closed at the top.** The Evolution
+Lab could propose and record, and the Workshop could verify and apply, but nothing connected them; the
+connection is where a system can quietly acquire the ability to rewrite its own governor. That path is
+now explicit, governed, audited, and blocked by a canonical policy with no override, with the boundary
+readable from the same module the refusal uses. `src/workshop/applier.js` sits inside it: the write path
+is part of the constitution.
+
+**(C) Real-World Capability Validation — the honest limit.** The local evidence is strong and the
+browser evidence does not exist yet on this machine. The sandbox test is validated against the real
+runner; the boundary against real files; the trace against real ledgers. But the walk that proves it in
+a browser — the only place the panel, the refusals and the rendering are exercised together — has not
+run here. Until the hosted run reports, the UI half of T-41 is **UNVERIFIED**, and it is written down
+that way on purpose.
