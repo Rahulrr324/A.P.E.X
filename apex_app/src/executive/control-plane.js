@@ -463,7 +463,10 @@ export class ExecutiveControlPlane {
     return Object.freeze({
       schema: 'apex.step-up/1',
       configured: this.#stepUp !== null,
-      appliesTo: Object.freeze(['safety.release', 'evolution.decide']),
+      // T-39: the two Workshop writes take the step-up too. These are the only capabilities in the
+      // system whose refusal costs nothing if the proof is absent and everything if it is not: an
+      // unproven apply writes into the owner's real tree.
+      appliesTo: Object.freeze(['safety.release', 'evolution.decide', 'workshop.apply_file', 'workshop.rollback_file']),
       method: 'shared secret, hashed and compared in constant time',
       note: this.#stepUp === null
         ? 'No step-up secret is configured, so step-up is not required. The reason and the explicit confirmation are still required.'

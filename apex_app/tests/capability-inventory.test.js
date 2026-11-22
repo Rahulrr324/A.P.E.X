@@ -130,9 +130,13 @@ describe('AF-19: the registry is the inventory', () => {
     // `workshop.promote_file`. They are registered whether or not a workspace root is configured, and
     // both totals move by five; an inspector with no root reports WORKSPACE_UNAVAILABLE rather than
     // disappearing from the inventory, so the absence is visible instead of silent.
-    assert.equal(plain.registry.list().length, 164, 'the default registry has 164 actions');
+    // T-39 Step 1 (2026-11-22) adds two owner-only writes: `workshop.apply_file` and
+    // `workshop.rollback_file`. They are registered whether or not a workspace root is configured -
+    // without one they refuse with WORKSPACE_UNAVAILABLE - so both totals move by two. They add no
+    // capability that could name another one: an apply writes one file, and a rollback restores it.
+    assert.equal(plain.registry.list().length, 166, 'the default registry has 166 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 179, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 181, 'a configured workspace root adds fifteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -177,7 +181,11 @@ describe('AF-19: the registry is the inventory', () => {
     // T-38 Step 2 (2026-11-21): the three sandbox writes are the eighty-eighth, eighty-ninth and
     // ninetieth. All three are owner-only: staging and verifying a candidate are the owner's acts, and
     // a model that could stage and verify could manufacture a passing check for its own content.
-    assert.equal(writes.length, 90, 'the inventory counts ninety write actions with a root configured');
+    // T-39 Step 1 (2026-11-22): `workshop.apply_file` and `workshop.rollback_file` are the
+    // ninety-first and ninety-second. Both are owner-only for the strongest version of the same
+    // reason: a model that could apply could write into the owner's real tree, and a model that could
+    // roll back could undo the owner's accepted change.
+    assert.equal(writes.length, 92, 'the inventory counts ninety-two write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -460,6 +468,13 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
           : name === 'workshop.verify_file' ? 'no (a check is not a belief)'
             : 'no (accepting a candidate does not make it true)';
         assert.equal(row.belief, stated, `${name}: README belief-state`);
+      } else if (name === 'workshop.apply_file' || name === 'workshop.rollback_file') {
+        // [T-39 Step 1, 2026-11-22] These two change a file on disk and record the digests, which is
+        // an account of what happened. Neither writes a belief: a file in the workspace is the
+        // owner's artifact, and no belief-state column describes whether its content is true.
+        assert.equal(row.belief, name === 'workshop.apply_file'
+          ? 'no (writing a file is not a belief)'
+          : 'no (undoing a write is not a belief)', `${name}: README belief-state`);
       } else if (name.startsWith('evolution.')) {
         // [T-31 Step 2, 2026-11-19] The lab appends proposals, measured sandbox results and the
         // owner's promotion decisions to its own ledger. A candidate self-change is not a belief

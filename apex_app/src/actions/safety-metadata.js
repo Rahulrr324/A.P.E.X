@@ -22,7 +22,11 @@
 // A module that sets them on its own definition wins: this is a defaulting layer, not an override.
 
 export const REVERSIBILITY_KINDS = Object.freeze(['read_only', 'reversible', 'compensatable', 'irreversible']);
-export const BLAST_RADIUS_KINDS = Object.freeze(['none', 'session', 'local_store', 'workspace_sandbox', 'system_latch']);
+// T-39 adds `workspace_fs`: a write that lands in the owner's real workspace tree. It is separate from
+// `workspace_sandbox` because that kind's stated meaning is "never the live workspace tree", and a
+// T-39 apply is precisely the live tree. Declaring an apply as sandbox-bounded would have read as
+// reassured while being false, which is worse than having no vocabulary at all.
+export const BLAST_RADIUS_KINDS = Object.freeze(['none', 'session', 'local_store', 'workspace_sandbox', 'workspace_fs', 'system_latch']);
 
 // What each kind means, stated once so a rule or a UI can show the owner the claim rather than the
 // word. These are the definitions the Values Core cites.
@@ -43,6 +47,7 @@ export const BLAST_RADIUS_MEANING = Object.freeze({
   session: 'the change is bounded to this conversation or run',
   local_store: 'the change is bounded to one append-only store under the APEX data directory',
   workspace_sandbox: 'the change is bounded to the staged sandbox, never the live workspace tree',
+  workspace_fs: 'the change lands in one file of the owner\'s live workspace tree, with the previous bytes saved before the write',
   system_latch: 'the change takes effect across the whole system until it is released',
 });
 
@@ -224,6 +229,13 @@ const DECLARATIONS = Object.freeze({
   'workshop.stage_file': ['reversible', 'workspace_sandbox'],
   'workshop.verify_file': ['reversible', 'workspace_sandbox'],
   'workshop.promote_file': ['reversible', 'workspace_sandbox'],
+  // T-39: these two are the only actions in APEX that reach the live tree. Apply is `compensatable`
+  // rather than `reversible` because, unlike a rollback, it is not a supported undo of itself - the
+  // rollback is a separate, separately authorized operation. Its blast radius is `workspace_fs`, one
+  // file, with the previous bytes saved. Rollback is `reversible`: it restores exactly the bytes the
+  // apply recorded, and undoing a rollback is re-applying.
+  'workshop.apply_file': ['compensatable', 'workspace_fs'],
+  'workshop.rollback_file': ['reversible', 'workspace_fs'],
 
   // ----------------------------------------------------------------------- safety ---
   // The latch is system-wide and stays engaged until released. It is *reversible* - release is a

@@ -58,6 +58,10 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // held in its own append-only log, and an experience of a composition would copy that design
   // into the log the pattern and adaptation reads draw from.
   workshop: 'it reads or writes the workshop design log, whose records are the user\'s own composed sheet; an experience of one would copy that design into the log the pattern and adaptation reads draw from',
+  // T-39: an apply or a rollback writes the owner's own file into the owner's own tree. The ledger
+  // and the causal trace already carry the digests, and an experience of the operation would put the
+  // file's content into the log the pattern and adaptation reads draw from.
+  'workspace-write': 'it writes a file into the owner\'s live workspace tree, whose content is the owner\'s own and is already recorded by digest in the apply ledger and the causal trace',
   'no-action': 'the request ran no action, so there is no postcondition that could have been verified',
   // The prediction ledger's own operations. This is a separate category from `self-bookkeeping`
   // because the reason is not about filling a log with its own traffic: an experience answers "what
@@ -351,6 +355,12 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'workshop.stage_file': 'workshop',
   'workshop.verify_file': 'workshop',
   'workshop.promote_file': 'workshop',
+  // T-39 Step 1: the two writes that reach the live tree. They are excluded for a sharper reason
+  // than the sandbox writes had: what an apply puts in the workspace is the user's own file, and the
+  // experience log answers what APEX did. The apply ledger and the causal trace already record the
+  // digests; copying the file's content here would turn the owner's source into behavioural evidence.
+  'workshop.apply_file': 'workspace-write',
+  'workshop.rollback_file': 'workspace-write',
   none: 'no-action',
 });
 

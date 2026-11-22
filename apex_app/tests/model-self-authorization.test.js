@@ -203,6 +203,11 @@ const MODEL_WRITE_ATTEMPTS = [
   ['workshop.stage_file', { relativePath: 'model.js', proposedContent: 'export const model = 1;\n', rationale: 'the model staged it' }],
   ['workshop.verify_file', { candidateId: 'wsc-000000000000' }],
   ['workshop.promote_file', { candidateId: 'wsc-000000000000', reason: 'the model promoted it' }],
+  // [T-39 Step 1, 2026-11-22] The two writes that reach the owner's live tree. A model that could
+  // apply could write a file the owner never chose, and a model that could roll back could undo a
+  // change the owner accepted. These are the strongest refusals in the table.
+  ['workshop.apply_file', { candidateId: 'wsc-000000000000', reason: 'the model applied it' }],
+  ['workshop.rollback_file', { applyId: 'wsa-000000000000', reason: 'the model rolled it back' }],
   // [T-31 Step 2, 2026-11-19] The Evolution Lab's four writes. A model may not propose a change to
   // APEX's own behaviour, record a sandbox result, request a promotion, or decide one.
   ['evolution.propose', { title: 'the model proposed this' }],

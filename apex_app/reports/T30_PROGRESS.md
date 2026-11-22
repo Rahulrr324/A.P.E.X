@@ -2180,3 +2180,153 @@ The lesson is narrow and it is not "test more". Three of the seven were **report
 disguised the actual failure, and one of those disguised a failure for three cycles by producing no
 report at all. A milestone that measures itself has to measure its own failure path too, which is why
 the walk now writes a checkpoint after every phase and a JSON reporter records each test's own status.
+
+## T-39: the editor that refuses
+
+T-38 ended with an honest gap written down rather than papered over: the Workshop verified a candidate
+in a sandbox and then applied nothing. `workshop.promote_file` recorded a decision and left the tree
+untouched. That was defensible, and it was still incomplete, because a tool that can only say "this
+would be fine" is not the thing the owner needs when the change is one line in a real file.
+
+T-39 closes it. The Workshop now writes into the live workspace - and the design question was never
+"how do we write", it was "what does the writer refuse". Every promise below is a refusal, and the
+suite tests the refusals as hard as it tests the write.
+
+### Step 1: the applier, and the four gates
+
+`src/workshop/applier.js` is the only module in APEX that writes a file into the owner's tree. It is
+small on purpose: every line is a promise about somebody's files. An apply runs four gates, in order,
+and each one is a reason to stop rather than a reason to continue:
+
+1. **Room to record it.** The ledger is bounded, and the bound is checked *first*, before anything on
+   disk is touched. An applier that refuses *after* writing would leave the workspace changed with no
+   record of the change, which is worse than any other failure here. This gate is the one the suite
+   caught a real ordering bug in: the first version wrote the file and then discovered it could not
+   record it. The test now pins the file unchanged on that path.
+2. **Verified, and verifiably the same bytes.** The newest sandbox verification must have passed, and
+   the digest it recorded must still describe the staged bytes. A record that says "verified" about
+   different bytes is not evidence about these bytes.
+3. **Inside the root.** An existing target is resolved through `realpath`; a target that does not exist
+   yet is resolved through its parent, so a symlinked directory inside the root cannot redirect a
+   create outside it. A `..` string, an absolute path, or a link pointing out is `ACCESS_DENIED`.
+4. **The base has not moved.** The candidate recorded the file's SHA-256 when it was staged. If the
+   file on disk hashes to anything else, the apply is `409 WORKSPACE_DRIFT` and *both* digests travel
+   with the refusal, because "it drifted" without the two values is a message nobody can act on.
+
+Then the write itself: the previous bytes are saved under `<dataDir>/workshop-backups/<applyId>/` named
+by their own digest, the new bytes go to a sibling temporary file and are renamed into place, and the
+file is **read back from disk** and compared with the candidate. Nothing reports `applied` on the
+strength of a successful write call. `verifiedOnDisk` is that read-back, not the write.
+
+The declaration is honest about what this is. `workspace_sandbox` is defined in the vocabulary as
+"never the live workspace tree", so declaring an apply that way would have read as reassurance while
+being false. T-39 adds a fifth blast-radius kind, `workspace_fs` - one file of the owner's live tree,
+with the previous bytes saved - and `workshop.apply_file` is `compensatable` rather than `reversible`,
+because it is not a supported undo of itself. The rollback is a separate, separately authorized act.
+
+### Step 2: the rollback, and the gate that protects work
+
+`workshop.rollback_file` restores the bytes an apply replaced, and it reads them from the apply's own
+ledger record and its content-addressed backup - never from the request. The request supplies an id.
+
+Its gate is the mirror of the apply's and it exists for a different reason. The apply refuses to
+overwrite a concurrent edit; the rollback refuses to *discard* one. If the file on disk no longer hashes
+to what the apply wrote, the rollback is `409 ROLLBACK_DRIFT` and the owner's later edit survives
+untouched. An editor that quietly reverts manual work is worse than one that refuses, because the
+manual work is the newest intent in the system.
+
+A file the apply *created* is removed instead of restored, and its absence is confirmed after removal.
+A second rollback of the same apply is refused by name (`ALREADY_ROLLED_BACK`) rather than restoring
+twice, which would make the ledger lie about how many changes are open.
+
+Both writes are refused in lockdown by the ECP (`KILL_SWITCH_ACTIVE`, HTTP 423) before the applier is
+reached, both refuse a model origin at the registry, and both take the owner step-up when
+`APEX_STEP_UP_TOKEN` is configured. `stepUpStatus().appliesTo` now names them, which is what makes the
+step-up apply rather than merely be offered.
+
+### Step 3: the panel and the chain
+
+The Workshop panel gains **Apply to Workspace** (`data-apply-candidate`), enabled only after the backend
+reported `verified: true`, and showing the two digests the gate will compare: `base … -> candidate …`.
+After an apply it shows the badge **Applied to workspace - disk SHA-256 verified**, the apply id, the
+backup id and the digest it holds, and **Rollback to Prior File** (`data-rollback-apply`).
+
+A drift refusal renders both digests as a diagnosis rather than the word "drift". That required a
+change below the surface: the API helper was copying only the HTTP status onto the error it threw, so
+the digests the server sent could not reach anything that displayed them. A refusal the screen cannot
+explain is a reporting defect, and this milestone already knew what those cost.
+
+The causal trace gained a seventh searchable kind, `workshop_apply`, holding both an apply and the
+rollback that undid it. A chain opened from a candidate id now assembles the verification, the apply and
+the rollback in time order, each stating its digests. And `complete` was corrected while doing it: it
+meant "reaches a run and a task graph", so a Workshop chain - which is never about a run - reported
+`complete: false`. It now means "every record this kind of chain should hold was found", and the
+`missing` list says so in words instead of reporting a normal shape as a gap.
+
+### What the suite pins
+
+`tests/workshop-apply-rollback.test.js`, sixteen tests against a temporary workspace and data directory:
+
+- an unverified candidate is refused, and the live file is byte-identical afterwards;
+- a *failed* verification is refused as firmly as a missing one;
+- a file that drifted after staging is refused with `expectedBaseSha256` and `actualDiskSha256`, and the
+  concurrent edit survives;
+- a verified candidate is applied atomically: the real file holds the new bytes, the backup holds the
+  exact old ones, no temporary sibling is left behind, and the ledger's record agrees with the disk;
+- the same candidate cannot be applied twice while the apply is open;
+- a manual edit after an apply makes the rollback `ROLLBACK_DRIFT`, and the edit survives;
+- a clean rollback restores byte-identical bytes, and a created file is removed and proved absent;
+- lockdown refuses both writes through the ECP, and a model origin is refused at the registry;
+- a configured step-up is required for both, a wrong proof writes nothing, and the right one works;
+- a path escaping the root through a real symlink is refused even from a verified candidate;
+- a full ledger refuses *before* touching the file;
+- the apply and rollback appear in the causal trace in order, with their digests;
+- with no workspace root both actions refuse with `WORKSPACE_UNAVAILABLE` rather than pretending.
+
+### Local totals
+
+```
+node --check:  263 files, 0 failures        (T-38 measured 262)
+npm test:      4181 tests, 4179 pass, 0 fail, 2 skipped, 645 suites, 1541983.65 ms
+                                                     (T-38 measured 4165 / 4163 / 0 / 2)
+```
+
+The two skips are the real-browser specs, which skip on this machine because it has no Chromium-family
+binary; they run on CI, where the runner ships Edge, and the section below is their result there. The
+suite grew by 16 tests and one source module: the applier, its two capabilities, and the apply/rollback
+walk. Sixteen tests are `tests/workshop-apply-rollback.test.js`, which grew from the planned fifteen
+when the ledger-bound test found the ordering bug described above.
+
+### What went wrong, and what it cost
+
+Nothing went to CI red this time, and that is not because the milestone was easier. It is because the
+T-38 post-mortem's lesson was applied: the failure path was measured before the green path was trusted.
+Four defects were found by tests written in this session, before a hosted cycle saw them:
+
+1. **The ledger bound was enforced at the wrong end.** The first applier wrote the file, then tried to
+   record it, then discovered the ledger was full - leaving the workspace changed with no record of the
+   change. That is the worst state this module can reach, and it is exactly what a bound that refuses
+   at append time produces. The fix was to check for room before the snapshot and before the write, and
+   the test asserts the file is byte-identical after the refusal.
+2. **A drift refusal carried its digests into a void.** The digests were attached to the error object,
+   and `executeAction` flattens every error to `{code, message}` - so `expectedBaseSha256` and
+   `actualDiskSha256` never reached the route, and the panel could not have shown the diagnosis the
+   brief asked for. `ApexError` now carries a `detail` object the executor copies, and the route
+   forwards it explicitly rather than spreading an error it does not control.
+3. **The client's error path dropped the refusal body.** `api()` copied only the HTTP status, so even a
+   route that sent both digests could not have rendered them. It now copies the six fields the refusal
+   contract defines.
+4. **`complete` was false for a chain that was not incomplete.** It meant "reaches a run and a task
+   graph", and a candidate id is never a run id, so every Workshop chain reported a gap that could not
+   exist. It now means "every record this kind of chain should hold was found".
+
+Two more were caught by existing pins rather than by new tests, which is the pins working: the closed
+blast-radius vocabulary, the write count, the step-up capability list, the searchable-kind list, and the
+`testMatch` regex in `real-browser-harness.test.js` all had to be changed deliberately. That last one is
+the exact defect the T-38 post-mortem listed first - a spec wired into Playwright but not into the test
+that pins the list - and this time it was caught locally, by running that test before pushing.
+
+One process note, because it cost more time than any of the code: editing an assertion that contains a
+dense regex literal through shell heredocs is a way to corrupt a file. Four attempts produced a line
+with doubled backslashes and a duplicated entry before the working approach - derive the new entry from
+the existing one by substitution, so the escaping cannot drift - was found. The file is one line changed.

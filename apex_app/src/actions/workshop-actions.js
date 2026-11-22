@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { MAX_EXCERPT_LINES, MAX_INSPECT_ENTRIES } from '../workshop/sandbox.js';
+import { WorkshopApplier } from '../workshop/applier.js';
 
 function show(summary, data, display) {
   return { summary, data, display: display ?? summary };
@@ -447,6 +448,17 @@ function fileBackedActions() {
     }
     return ctx.workshopSandbox;
   };
+  // The applier shares the sandbox's inspector, so the containment an apply obeys is the same one the
+  // inspection obeys. It is constructed per call rather than cached, because a cached instance would
+  // keep writing to whatever directory the first request happened to configure.
+  const requireApplier = (ctx) => {
+    if (ctx?.workshopApplier) return ctx.workshopApplier;
+    const sandbox = requireSandbox(ctx);
+    if (!sandbox?.dataDir) {
+      throw new ExecutionError('WORKSHOP_SANDBOX_UNAVAILABLE', 'the workshop sandbox has no data directory, so changes cannot be recorded');
+    }
+    return new WorkshopApplier({ dataDir: sandbox.dataDir, sandbox, now: () => sandbox.now?.() ?? new Date() });
+  };
 
   return [
     {
@@ -708,6 +720,153 @@ function fileBackedActions() {
           return { ok: true, detail: `promotion confirmed against verification ${verification.id}` };
         } catch (err) {
           return { ok: false, detail: `the promotion could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+
+    {
+      name: 'workshop.apply_file',
+      description: 'Apply a staged, verified candidate to the live workspace: the first and only action in APEX that writes into the owner\'s real workspace tree. Refuses unless the newest sandbox verification passed and its digest still matches the staged bytes; refuses a path that resolves outside the configured root; refuses when the file on disk no longer hashes to the base the candidate was staged against, reporting both digests. Saves the previous bytes under a content-addressed backup before writing, writes atomically through a sibling temporary file, and re-reads the file from disk to prove the result before reporting success.',
+      inputHint: '{"candidateId": "wsc-...", "reason": "why this file may be written", "stepUp": "the configured step-up secret, only when step-up is configured"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (!['candidateId', 'reason', 'stepUp'].includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        const candidateId = textInput(input.candidateId, 'candidateId', { max: 64 });
+        if (!/^wsc-[0-9a-f]{12}$/.test(candidateId)) throw new ValidationError('candidateId must look like wsc-<12 hex characters>');
+        const stepUp = input.stepUp === undefined || input.stepUp === null ? null : input.stepUp;
+        if (stepUp !== null && (typeof stepUp !== 'string' || stepUp.length === 0 || stepUp.length > 200)) {
+          throw new ValidationError('stepUp must be the configured step-up secret');
+        }
+        return { candidateId, reason: reasonField(input.reason, { required: true }), stepUp };
+      },
+      async execute(ctx, input) {
+        // Writing into the owner's tree takes the step-up when one is configured, exactly as approving
+        // an evolution promotion does. Lockdown and model-origin refusals happened in the ECP already.
+        const controlPlane = ctx.registry?.controlPlane;
+        if (controlPlane && typeof controlPlane.verifyStepUp === 'function') {
+          const gate = controlPlane.verifyStepUp(input.stepUp, { capability: 'workshop.apply_file' });
+          if (!gate.ok) {
+            throw new ValidationError(gate.reason === 'STEP_UP_REQUIRED'
+              ? 'step-up is required to write a file into the workspace and no proof was given'
+              : 'the step-up proof did not match; nothing was written');
+          }
+        }
+        const applier = requireApplier(ctx);
+        const applied = applier.apply({ candidateId: input.candidateId });
+        return show(
+          `applied ${applied.relativePath} to the workspace as ${applied.applyId}`,
+          {
+            ...applied,
+            verificationId: applied.verificationId ?? null,
+            reason: input.reason,
+            // The three claims a caller must be able to assert: it happened, it was proved, and it
+            // amended a real file rather than a copy.
+            appliedToWorkspace: true,
+            verifiedOnDisk: applied.diskSha256 === applied.appliedSha256,
+            mutatesLiveWorkspace: true,
+            authorizesExecution: false,
+          },
+          [
+            `${applied.relativePath} applied to the workspace.`,
+            `Disk SHA-256 ${applied.appliedSha256}, read back from the file and compared with the candidate.`,
+            applied.beforeSha256
+              ? `The bytes it replaced (${applied.beforeSha256}) are saved as backup ${applied.backupId}, so this can be rolled back.`
+              : 'The file did not exist before, so a rollback removes it.',
+            'The change is recorded in the Workshop ledger and can be rolled back.',
+          ].join('\n'),
+        );
+      },
+      async verify(ctx, input, result) {
+        try {
+          const applier = requireApplier(ctx);
+          const record = applier.applyRecord(result.data.applyId);
+          if (!record) return { ok: false, detail: 'the apply cannot be read back from the ledger' };
+          if (record.appliedSha256 !== result.data.appliedSha256) return { ok: false, detail: 'the ledger holds a different digest than the one reported' };
+          const resolved = applier.inspector.resolve(record.relativePath);
+          if (!resolved.ok) return { ok: false, detail: `the written path can no longer be resolved: ${resolved.detail}` };
+          const disk = createHash('sha256').update(fs.readFileSync(resolved.realPath)).digest('hex');
+          if (disk !== record.appliedSha256) return { ok: false, detail: 'the file on disk no longer matches the digest the apply recorded' };
+          const backupFile = join(record.backupDir, `before-${record.beforeSha256 ?? 'none'}.bin`);
+          if (record.existedBefore === true && !fs.existsSync(backupFile)) {
+            return { ok: false, detail: 'the rollback snapshot cannot be found' };
+          }
+          return { ok: true, detail: `the ledger, the file on disk and the backup agree on ${record.appliedSha256}` };
+        } catch (err) {
+          return { ok: false, detail: `the apply could not be re-read: ${err?.message ?? err}` };
+        }
+      },
+    },
+    {
+      name: 'workshop.rollback_file',
+      description: 'Roll back an applied change: restore the exact bytes the apply replaced, or remove a file the apply created. The bytes come from the apply\'s own ledger record and its content-addressed backup, never from the request. Refuses when the file on disk no longer hashes to what the apply wrote, because a rollback would then destroy an edit made after it. Restores atomically and re-reads the file to prove the pre-apply digest before reporting success.',
+      inputHint: '{"applyId": "wsa-...", "reason": "why this is being undone", "stepUp": "the configured step-up secret, only when step-up is configured"}',
+      permission: 'write',
+      origins: [ORIGIN_USER],
+      plannable: false,
+      validate(input) {
+        if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
+        for (const key of Object.keys(input)) {
+          if (!['applyId', 'reason', 'stepUp'].includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+        }
+        const applyId = textInput(input.applyId, 'applyId', { max: 64 });
+        if (!/^wsa-[0-9a-f]{12}$/.test(applyId)) throw new ValidationError('applyId must look like wsa-<12 hex characters>');
+        const stepUp = input.stepUp === undefined || input.stepUp === null ? null : input.stepUp;
+        if (stepUp !== null && (typeof stepUp !== 'string' || stepUp.length === 0 || stepUp.length > 200)) {
+          throw new ValidationError('stepUp must be the configured step-up secret');
+        }
+        return { applyId, reason: reasonField(input.reason, { required: true }), stepUp };
+      },
+      async execute(ctx, input) {
+        const controlPlane = ctx.registry?.controlPlane;
+        if (controlPlane && typeof controlPlane.verifyStepUp === 'function') {
+          const gate = controlPlane.verifyStepUp(input.stepUp, { capability: 'workshop.rollback_file' });
+          if (!gate.ok) {
+            throw new ValidationError(gate.reason === 'STEP_UP_REQUIRED'
+              ? 'step-up is required to roll back a workspace change and no proof was given'
+              : 'the step-up proof did not match; the file is unchanged');
+          }
+        }
+        const rolledBack = requireApplier(ctx).rollback({ applyId: input.applyId, reason: input.reason });
+        return show(
+          rolledBack.removedFile
+            ? `removed ${rolledBack.relativePath}, which ${rolledBack.applyId} created`
+            : `restored ${rolledBack.relativePath} to the bytes ${rolledBack.applyId} replaced`,
+          { ...rolledBack, reason: input.reason, mutatesLiveWorkspace: true, authorizesExecution: false },
+          [
+            rolledBack.removedFile
+              ? `${rolledBack.relativePath} was created by the apply and has been removed.`
+              : `${rolledBack.relativePath} restored to SHA-256 ${rolledBack.restoredSha256}, read back from the file.`,
+            rolledBack.removedFile
+              ? 'Its absence was confirmed after removal.'
+              : `That is the digest the apply recorded before it wrote; the restore is byte-identical.`,
+            'The rollback is recorded in the Workshop ledger and in the causal trace.',
+          ].join('\n'),
+        );
+      },
+      async verify(ctx, input, result) {
+        try {
+          const applier = requireApplier(ctx);
+          const records = applier.records();
+          const rollback = records.find((entry) => entry.kind === 'rollback' && entry.applyId === result.data.applyId);
+          if (!rollback) return { ok: false, detail: 'the rollback cannot be read back from the ledger' };
+          const resolved = applier.inspector.resolve(rollback.relativePath);
+          if (rollback.existedBefore === false) {
+            const exists = resolved.ok;
+            return exists
+              ? { ok: false, detail: 'the file the rollback removed is present again' }
+              : { ok: true, detail: 'the ledger records the removal and the file is absent' };
+          }
+          if (!resolved.ok) return { ok: false, detail: `the restored path cannot be resolved: ${resolved.detail}` };
+          const disk = createHash('sha256').update(fs.readFileSync(resolved.realPath)).digest('hex');
+          if (disk !== rollback.restoredSha256) return { ok: false, detail: 'the restored file no longer matches the pre-apply digest' };
+          return { ok: true, detail: `the restored file hashes to ${rollback.restoredSha256}, the digest recorded before the apply` };
+        } catch (err) {
+          return { ok: false, detail: `the rollback could not be re-read: ${err?.message ?? err}` };
         }
       },
     },

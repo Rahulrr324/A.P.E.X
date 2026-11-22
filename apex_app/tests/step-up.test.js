@@ -74,7 +74,10 @@ describe('T-31 step-up configuration', () => {
     assert.equal(status, 200);
     assert.equal(body.schema, 'apex.step-up/1');
     assert.equal(body.configured, false);
-    assert.deepEqual(body.appliesTo, ['safety.release', 'evolution.decide']);
+    // T-39 Step 1 adds the two Workshop writes that reach the live workspace tree. The list is pinned
+    // because it is a promise about which acts a stolen session cannot perform without the secret.
+    assert.deepEqual(body.appliesTo,
+      ['safety.release', 'evolution.decide', 'workshop.apply_file', 'workshop.rollback_file']);
     assert.match(body.note, /not required/i);
     // Off means "no proof needed": the existing release path is unchanged.
     assert.equal(app.ecp.verifyStepUp(null, { capability: 'safety.release' }).ok, true);

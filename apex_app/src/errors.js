@@ -5,6 +5,11 @@ export class ApexError extends Error {
     super(message);
     this.name = 'ApexError';
     this.code = code;
+    // T-39: structured detail a refusal can carry to the caller. The executor copies it onto the
+    // error it reports, so a refusal that names two digests does not lose them on the way out - a
+    // caller cannot act on "it drifted" without being told from what to what. Additive: an error with
+    // no detail reports none, and no existing consumer reads this field.
+    this.detail = null;
   }
 }
 

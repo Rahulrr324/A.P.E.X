@@ -3064,6 +3064,75 @@ export function createUiServer({
       }
       return;
     }
+    // T-39 Step 1: the two governed writes into the live workspace. They are separate from the block
+    // above because their refusals carry structure the owner needs: a drift refusal reports both the
+    // digest that was expected and the one on disk, and a screen that shows only "refused" would be
+    // telling the owner to guess.
+    const applyMatch = method === 'POST' && url.pathname.match(/^\/api\/workshop\/candidates\/([^/]+)\/apply$/);
+    const rollbackMatch = method === 'POST' && url.pathname.match(/^\/api\/workshop\/applies\/([^/]+)\/rollback$/);
+    if (applyMatch || rollbackMatch) {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const allowed = ['reason', 'stepUp'];
+      const extra = Object.keys(body).filter((key) => !allowed.includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      const id = decodeURIComponent(applyMatch ? applyMatch[1] : rollbackMatch[1]);
+      try {
+        const result = applyMatch
+          ? await app.controller.workshopApplyFile({ candidateId: id, reason: body.reason ?? null, stepUp: body.stepUp ?? null })
+          : await app.controller.workshopRollbackFile({ applyId: id, reason: body.reason ?? null, stepUp: body.stepUp ?? null });
+        const step = result.operation?.steps?.[0] ?? {};
+        const data = step.result?.data ?? null;
+        const failed = step.execution?.error ?? null;
+        if (!data) {
+          // A refusal arrives on one of two channels and they must not be confused. The ECP denies
+          // before execution, which sets `authorization` and leaves `execution` empty; an action that
+          // ran and refused sets `execution.error`. Reading only the second would have reported a
+          // lockdown as a bad request.
+          const denied = step.authorization?.decision === 'deny' ? (step.authorization.reason ?? null) : null;
+          const code = failed?.code ?? denied ?? null;
+          // 409 is for a refusal the owner can act on by re-reading the file: drift, an unverified
+          // candidate, an apply that is already open, a rollback that already happened. 400 is for an
+          // input the registry never accepted. 423 is lockdown: the system is latched, not wrong.
+          const status = code === 'WORKSPACE_DRIFT' || code === 'ROLLBACK_DRIFT'
+            || code === 'APPLY_REFUSED_UNVERIFIED' || code === 'ALREADY_APPLIED' || code === 'ALREADY_ROLLED_BACK'
+            || code === 'WORKSHOP_NOT_FOUND'
+            ? 409
+            : code === 'KILL_SWITCH_ACTIVE'
+              ? 423
+              : 400;
+          sendJson(res, status, {
+            status: result.status,
+            error: result.output ?? 'the workshop refused the request',
+            code,
+            // Both digests travel on a drift refusal; absent, they are simply not shown, never invented.
+            ...(typeof failed?.expectedBaseSha256 !== 'undefined' ? { expectedBaseSha256: failed.expectedBaseSha256 } : {}),
+            ...(typeof failed?.actualDiskSha256 !== 'undefined' ? { actualDiskSha256: failed.actualDiskSha256 } : {}),
+            ...(typeof failed?.expectedAppliedSha256 !== 'undefined' ? { expectedAppliedSha256: failed.expectedAppliedSha256 } : {}),
+            ...(typeof failed?.restoredSha256 !== 'undefined' ? { restoredSha256: failed.restoredSha256 } : {}),
+            display: result.display,
+          });
+          return;
+        }
+        sendJson(res, 200, { ...data, status: result.status, display: result.display });
+        broadcast('workshop', { applied: applyMatch ? data.applyId ?? null : null, rolledBack: rollbackMatch ? data.applyId ?? null : null });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+    // T-39 Step 1: what has been applied and what is still open. A read of the ledger, so the screen
+    // can show an applied badge and a rollback control after a reload rather than only in one session.
+    if (method === 'GET' && url.pathname === '/api/workshop/applies') {
+      try {
+        if (!app.workshopApplier) { sendJson(res, 503, { unavailable: true, error: 'the workshop applier is not configured' }); return; }
+        sendJson(res, 200, app.workshopApplier.status());
+      } catch (err) {
+        sendJson(res, 500, { error: `the apply ledger could not be read: ${err.message}` });
+      }
+      return;
+    }
     // T-31 Step 2: the controlled Evolution Lab. The GET is a read of the ledger plus the live
     // safety boundaries. The POSTs are the four audited capabilities; each one runs through the
     // controller, so the ECP authorizes it and the verifier checks the ledger afterwards.

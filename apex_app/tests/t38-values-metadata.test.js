@@ -35,7 +35,11 @@ function withApp(fn) {
 
 test('T-38 metadata: the two vocabularies are closed and every kind is explained', () => {
   assert.deepEqual([...REVERSIBILITY_KINDS], ['read_only', 'reversible', 'compensatable', 'irreversible']);
-  assert.deepEqual([...BLAST_RADIUS_KINDS], ['none', 'session', 'local_store', 'workspace_sandbox', 'system_latch']);
+  // T-39 Step 1 adds `workspace_fs` in the position it belongs in: after the sandbox kind and before
+  // the system-wide latch. It is a separate word because `workspace_sandbox` means "never the live
+  // workspace tree", and a T-39 apply is exactly that tree. The list stays closed and pinned; it is
+  // this test's job to make a new member a deliberate act rather than a side effect.
+  assert.deepEqual([...BLAST_RADIUS_KINDS], ['none', 'session', 'local_store', 'workspace_sandbox', 'workspace_fs', 'system_latch']);
   // A vocabulary whose words are not defined is a vocabulary a reader has to guess at.
   for (const kind of REVERSIBILITY_KINDS) {
     assert.equal(typeof REVERSIBILITY_MEANING[kind], 'string', `${kind} has no stated meaning`);
@@ -94,9 +98,11 @@ test('T-38 metadata: every write declares a blast radius that is not none', () =
   withApp((app) => {
     const writes = app.registry.list().filter((d) => d.permission === 'write');
     // T-37 measured 80 writes. T-38 Step 2 adds the three sandbox writes - stage, verify and
-    // promote - each of which declares `workspace_sandbox`, so the count is 83. The number is pinned
-    // rather than bounded so that a new write cannot arrive without someone deciding this question.
-    assert.equal(writes.length, 83, `expected 83 writes after T-38 Step 2, got ${writes.length}`);
+    // promote - each of which declares `workspace_sandbox`, so the count was 83. T-39 Step 1 adds the
+    // two writes that reach the live tree, `workshop.apply_file` and `workshop.rollback_file`, so it
+    // is 85. The number is pinned rather than bounded so that a new write cannot arrive without
+    // someone deciding this question - which is exactly what happened here.
+    assert.equal(writes.length, 85, `expected 85 writes after T-39 Step 1, got ${writes.length}`);
     for (const definition of writes) {
       assert.notEqual(definition.blastRadius, 'none',
         `${definition.name} is a write that claims to change nothing`);

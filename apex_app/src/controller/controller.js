@@ -623,6 +623,7 @@ export class CognitiveController {
     // controller built without one simply has no file-backed capabilities, and the actions that need
     // it throw WORKSHOP_SANDBOX_UNAVAILABLE rather than pretending to read a workspace.
     workshopSandbox = null,
+    workshopApplier = null,
     evolution = null,
   }) {
     this.memory = memory;
@@ -694,6 +695,9 @@ export class CognitiveController {
     // read; composing is a user write. Neither path executes the design.
     this.workshop = workshop;
     this.workshopSandbox = workshopSandbox;
+    // T-39 Step 1: the applier, so `workshop.apply_file` and `workshop.rollback_file` reach the one
+    // ledger the UI routes read. Null leaves both actions refusing with WORKSHOP_SANDBOX_UNAVAILABLE.
+    this.workshopApplier = workshopApplier;
     // The Evolution Lab holds the record of candidate self-changes: proposals, the measured sandbox
     // result for each, and promotion requests and decisions. Holding it here lets the read surfaces
     // report it and lets the action context append to it; the ECP still authorizes every append.
@@ -1596,6 +1600,23 @@ export class CognitiveController {
     const shown = typeof candidateId === 'string' ? truncate(candidateId, 40) : '[missing candidate]';
     const op = this.#newOp({ capability: 'workshop.promote_file', origin: 'user', request: `workshop promote file [${shown}]` });
     const step = await this.runAction('workshop.promote_file', { candidateId, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-39 Step 1: the two governed writes into the live workspace. Each one runs the registered
+  // capability through runAction, so the ECP authorizes it (and refuses in lockdown, or from a model
+  // origin) and the verifier re-reads the result. Nothing reaches the applier before that.
+  async workshopApplyFile({ candidateId, reason = null, stepUp = null } = {}) {
+    const shown = typeof candidateId === 'string' ? truncate(candidateId, 40) : '[missing candidate]';
+    const op = this.#newOp({ capability: 'workshop.apply_file', origin: 'user', request: `workshop apply file [${shown}]` });
+    const step = await this.runAction('workshop.apply_file', { candidateId, reason, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopRollbackFile({ applyId, reason = null, stepUp = null } = {}) {
+    const shown = typeof applyId === 'string' ? truncate(applyId, 40) : '[missing apply]';
+    const op = this.#newOp({ capability: 'workshop.rollback_file', origin: 'user', request: `workshop rollback file [${shown}]` });
+    const step = await this.runAction('workshop.rollback_file', { applyId, reason, stepUp }, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 
@@ -3381,6 +3402,9 @@ export class CognitiveController {
       // T-38 Step 2: the file-backed Workshop. Reaching it is a read of the configured workspace and a
       // write inside the APEX data directory's sandbox; the registry authorizes above, as always.
       workshopSandbox: this.workshopSandbox,
+      // T-39 Step 1: the one writer into the live tree. The registry authorizes above, and the ECP has
+      // already refused a lockdown or a model origin by the time execute is reached.
+      workshopApplier: this.workshopApplier,
       evolution: this.evolution,
     };
   }

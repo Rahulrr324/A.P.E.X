@@ -4071,6 +4071,21 @@ across the whole set, so they are stated once instead of per row:
 > is **154 actions by default and 169 with a root: 85 reads and 84 writes**. The 151/166 figures above
 > are retained as the state before T-35.
 
+> **T-36 through T-39 count correction (2026-11-22).** Three milestones since T-35 each added
+> capabilities. T-36 Step 1 added the owner-only write `system.bootstrap` and the read
+> `system.bootstrap_status`; T-37 Step 1 added the owner-only writes `neural.step` and
+> `neural.bridge_reset` and the read `neural.read`; T-38 Step 2 added the reads `workspace.inspect` and
+> `workspace.read_file` and the owner-only sandbox writes `workshop.stage_file`, `workshop.verify_file`
+> and `workshop.promote_file`; T-39 Step 1 adds the owner-only writes `workshop.apply_file` and
+> `workshop.rollback_file`, the only two capabilities that write the owner's live workspace tree. The
+> verified registry is therefore **166 actions by default (81 reads and 85 writes) and 181 with a
+> root (89 reads and 92 writes)**. The 154/169 figures above are retained as the state before those
+> milestones. Of the rooted total, 56 are plannable, unchanged: none of the added capabilities is
+> plannable, and the two that write the live tree are deliberately not, because a plan is a model
+> proposal and a model may never name a workspace write. T-39 also
+> adds the fifth blast-radius kind, `workspace_fs`, because `workspace_sandbox` is defined as "never
+> the live workspace tree" and an apply is exactly that tree.
+
 "Cognitive state" below means persistent state the application records: the belief stores
 (`memory.jsonl`, `knowledge.jsonl`, `experiences.jsonl`, `predictions.jsonl`) and, since Batch AG,
 the executive stores `goals.jsonl` and `plans.jsonl`. The executive records are intentions, not
@@ -4172,6 +4187,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `workshop.stage_file` | user | write | never in a plan | `workshop-sandbox/<candidate>/` under the data directory (a proposed change; the live workspace is never written) | no (workshop) | no (a proposal is not a belief) |
 | `workshop.verify_file` | user | write | never in a plan | `workshop-sandbox/<candidate>/verification.json` (the real parser's exit code and stderr, both SHA-256 digests, and the diff summary; a failed parse is stored as a failure) | no (workshop) | no (a check is not a belief) |
 | `workshop.promote_file` | user | write | never in a plan | one `workshop-sandbox/<candidate>/promotion.json` record citing the passing verification; refuses without one for the same content, and applies nothing to the workspace | no (workshop) | no (accepting a candidate does not make it true) |
+| `workshop.apply_file` | user | write | never in a plan | the target workspace file itself (the only capability that writes the owner's live tree): the staged bytes go in through a sibling temporary file and a rename, the previous bytes are saved under `workshop-backups/<applyId>/` before the write, and the file is re-read to prove the digest; refuses an unverified candidate, a path outside the root, a file that drifted from the recorded base, and any apply during lockdown | no (workspace-write) | no (writing a file is not a belief) |
+| `workshop.rollback_file` | user | write | never in a plan | the target workspace file itself: the exact bytes the apply replaced, taken from the apply's ledger record and its content-addressed backup, restored atomically and re-read to prove the pre-apply digest; refuses when the file no longer matches what the apply wrote | no (workspace-write) | no (undoing a write is not a belief) |
 | `plan.assess` | user | write | never in a plan | `plans.jsonl` (one `plan_assessment` event; the plan record's own bytes, status, approval and timestamp are unchanged) | no (executive) | yes |
 | `evolution.propose`, `evolution.verify`, `evolution.promote`, `evolution.decide` | user | write | never in a plan | `evolution-proposals.jsonl` (append-only ledger: the proposal, the measured sandbox result, the promotion request and the owner's decision) | no (evolution) | no (a candidate self-change is not a belief) |
 | `perception.sense_host`, `perception.dismiss_alert`, `perception.revoke_suppression` | user | write | never in a plan | `perception/observations.jsonl` (append-only reading ledger: one line per observed value, with its own timestamp, source and epistemic status) and `perception/governor.json` (the rolling push budget, the dismissals, and the suppression rules) | no (perception) | no (a reading is not a belief) |

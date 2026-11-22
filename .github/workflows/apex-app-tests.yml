@@ -474,6 +474,55 @@ jobs:
               sys.exit(1)
           PY
 
+      # T-39 Step 4 (2026-11-22): the governed apply and rollback walk. Its annotation states the four
+      # claims by name - that staging left the live file untouched, that the applied bytes matched the
+      # candidate's digest as read from disk, that a stale candidate was refused with both digests and
+      # the external edit survived, and that the rollback restored the file byte-for-byte and the chain
+      # holds both events in order.
+      - name: Publish the T-39 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't39-workshop-apply-rollback.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t39-workshop-apply-rollback::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          applied = run.get('apply') or {}
+          drift = run.get('drift') or {}
+          rollback = run.get('rollback') or {}
+          trace = run.get('trace') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"candidate {applied.get('candidateId')} liveUnchangedBeforeApply={applied.get('liveUnchangedBeforeApply')}",
+              f"apply {applied.get('applyId')} diskMatches={applied.get('diskMatchesAppliedSha256')} backupHoldsPrior={applied.get('backupHoldsPriorBytes')} badge={applied.get('uiShowsAppliedBadge')} rollbackControl={applied.get('uiShowsRollbackControl')}",
+              f"drift {drift.get('code')} digestsShown={drift.get('uiShowsBothDigests')} externalEditIntact={drift.get('externalEditIntact')} ledgerApplies={drift.get('ledgerApplyCount')}",
+              f"rollback {rollback.get('applyId')} byteIdentical={rollback.get('byteIdentical')} restoredMatchesBefore={bool(rollback.get('restoredSha256'))} removedFile={rollback.get('removedFile')} uiConfirmed={rollback.get('uiConfirmed')}",
+              f"trace changes {trace.get('workspaceChanges')} ordered={trace.get('orderedApplyThenRollback')} digests={trace.get('digestsPresent')} complete={trace.get('complete')} counts {json.dumps(trace.get('counts') or {})}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} scheduledRefusals {len(run.get('scheduledRefusals') or [])}",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t39-workshop-apply-rollback::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       - name: Keep the browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -495,6 +544,8 @@ jobs:
             apex_app/reports/t37-neural-council-router.json
             apex_app/reports/screenshots/t38
             apex_app/reports/t38-values-workspace-trace.json
+            apex_app/reports/screenshots/t39
+            apex_app/reports/t39-workshop-apply-rollback.json
           if-no-files-found: warn
           retention-days: 14
 

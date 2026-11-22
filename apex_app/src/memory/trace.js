@@ -31,7 +31,7 @@ export const SEARCH_SCHEMA = 'apex.memory.search/1';
 
 // The kinds a caller may name explicitly. Each one is a ledger this module can read.
 export const SEARCH_KINDS = Object.freeze([
-  'memory', 'cognition_run', 'council_session', 'task', 'workshop_verification', 'ecp_audit',
+  'memory', 'cognition_run', 'council_session', 'task', 'workshop_verification', 'workshop_apply', 'ecp_audit',
 ]);
 
 // The epistemic statuses a memory record can carry. The filter is offered on the search surface
@@ -92,6 +92,33 @@ function resultId(kind, identity) {
 
 // Every staged candidate has a directory under this name, and each directory that holds a
 // verification.json is a verification worth searching. The directory is read only.
+// T-39 Step 1: the Workshop's apply ledger, read in place. It holds both kinds a chain needs - an
+// apply and the rollback that undid it - and it is the only ledger that records the digests that make
+// a write into the owner's tree checkable after the fact.
+function readWorkshopApplies(dataDir) {
+  const { present, records, corrupt } = readJsonl(path.join(dataDir, 'workshop-applies.jsonl'));
+  return {
+    present,
+    corrupt,
+    records: records.map((r) => ({
+      kind: 'workshop_apply',
+      recordKind: r.kind ?? null,
+      at: r.at ?? null,
+      id: r.applyId ?? r.rollbackId ?? null,
+      applyId: r.kind === 'rollback' ? (r.applyId ?? null) : (r.applyId ?? null),
+      rollbackId: r.rollbackId ?? null,
+      candidateId: r.candidateId ?? null,
+      relativePath: r.relativePath ?? null,
+      beforeSha256: r.beforeSha256 ?? null,
+      appliedSha256: r.appliedSha256 ?? null,
+      restoredSha256: r.restoredSha256 ?? null,
+      existedBefore: r.existedBefore ?? null,
+      rolledBack: r.kind === 'rollback' ? true : false,
+      record: r,
+    })),
+  };
+}
+
 function readWorkshopVerifications(dataDir) {
   const sandboxDir = path.join(dataDir, 'workshop-sandbox');
   let names;
@@ -217,6 +244,7 @@ function ledgers(dataDir) {
       };
     },
     workshop_verification: () => readWorkshopVerifications(dataDir),
+    workshop_apply: () => readWorkshopApplies(dataDir),
     ecp_audit: () => {
       const { present, records, corrupt } = readJsonl(path.join(dataDir, 'operations.jsonl'));
       return {
@@ -255,6 +283,7 @@ function searchableText(entry) {
     case 'council_session': return entry.objective;
     case 'task': return entry.goal;
     case 'workshop_verification': return `${entry.relativePath ?? ''} ${entry.rationale ?? ''} ${entry.candidateId ?? ''}`;
+    case 'workshop_apply': return `${entry.relativePath ?? ''} ${entry.candidateId ?? ''} ${entry.applyId ?? ''} ${entry.recordKind ?? ''}`;
     case 'ecp_audit': return `${entry.capability ?? ''} ${JSON.stringify(entry.request ?? '')}`;
     default: return '';
   }
@@ -331,6 +360,7 @@ export class MemoryTraceService {
           : entry.kind === 'council_session' ? { sessionId: entry.sessionId }
             : entry.kind === 'task' ? { taskId: entry.taskId, eventId: entry.eventId, type: entry.type }
               : entry.kind === 'workshop_verification' ? { candidateId: entry.candidateId, verified: entry.verified }
+                : entry.kind === 'workshop_apply' ? { applyId: entry.applyId, rollbackId: entry.rollbackId, relativePath: entry.relativePath }
                 : { operationId: entry.operationId, capability: entry.capability },
       traceable: entry.kind !== 'task' || entry.type === 'task_created',
     }));
@@ -418,6 +448,15 @@ export class MemoryTraceService {
       return [...keys].some((k) => chainText.includes(k))
         || (typeof e.candidateId === 'string' && chainText.includes(e.candidateId));
     });
+    // T-39 Step 1: the applies and rollbacks whose candidate this chain names. They are linked by the
+    // candidate id the verifications already carry, which is what makes "verified, then applied, then
+    // rolled back" one readable sequence rather than three unrelated records.
+    const applies = all.entries.filter((e) => {
+      if (e.kind !== 'workshop_apply') return false;
+      if (typeof e.candidateId === 'string' && chainText.includes(e.candidateId)) return true;
+      if (typeof e.applyId === 'string' && [...keys].some((k) => k === e.applyId)) return true;
+      return false;
+    });
     // The operations whose steps or result name one of these runs or tasks.
     const operations = all.entries.filter((e) => {
       if (e.kind !== 'ecp_audit') return false;
@@ -425,7 +464,8 @@ export class MemoryTraceService {
       return [...keys].some((k) => text.includes(k)) || [...taskIds].some((k) => text.includes(k));
     });
 
-    if (runs.length === 0 && tasks.length === 0 && operations.length === 0 && councils.length === 0) {
+    if (runs.length === 0 && tasks.length === 0 && operations.length === 0 && councils.length === 0
+      && verifications.length === 0 && applies.length === 0) {
       return {
         ok: false,
         code: 'NOT_FOUND',
@@ -547,6 +587,32 @@ export class MemoryTraceService {
         },
       });
     }
+    for (const change of applies) {
+      const rolledBack = change.recordKind === 'rollback';
+      steps.push({
+        at: change.at,
+        kind: 'workshop_apply',
+        label: rolledBack
+          ? (change.record?.removedFile === true ? 'workspace rollback removed a created file' : 'workspace rollback restored the prior file')
+          : 'workspace file applied',
+        linkedBy: 'the chain names this candidate or apply',
+        detail: {
+          applyId: change.applyId,
+          rollbackId: change.rollbackId,
+          candidateId: change.candidateId,
+          relativePath: change.relativePath,
+          // The digests are the point: a reader can recompute the file and see which record it matches.
+          beforeSha256: change.beforeSha256,
+          appliedSha256: change.appliedSha256,
+          restoredSha256: change.restoredSha256,
+          existedBefore: change.existedBefore,
+          rolledBack,
+          // Both of these are stated so a chain can never be read as permission for anything.
+          mutatesLiveWorkspace: change.record?.mutatesLiveWorkspace === true,
+          authorizesExecution: false,
+        },
+      });
+    }
     for (const operation of operations) {
       steps.push({
         at: operation.at,
@@ -580,20 +646,37 @@ export class MemoryTraceService {
       schema: TRACE_SCHEMA,
       id: wanted,
       keys: [...keys],
-      // A chain is complete when it reaches a run and a task graph. A Council session, a sandbox
-      // verification and an operation are recorded when they happened; their absence is normal.
-      complete: runs.length > 0 && tasks.length > 0,
+      // Complete means "every record this kind of chain should hold was found", and what that is
+      // depends on what the id names.
+      //
+      //   - A run chain is complete when it reaches a run and a task graph. A Council session, a
+      //     sandbox verification and an operation are recorded when they happened; their absence is
+      //     normal.
+      //   - A candidate chain is complete when its verifications and its applies are assembled. It
+      //     cannot contain a run by construction: a candidate id is never a run id, and T-39 made
+      //     that chain worth opening in its own right.
+      //
+      // Before T-39 the second case reported `complete: false`, which said "a run is missing" about a
+      // chain that was never about a run. That is the kind of false negative that teaches a reader to
+      // ignore the flag.
+      complete: runs.length > 0 ? tasks.length > 0 : (applies.length > 0 || verifications.length > 0),
       // An incomplete chain says what it could not find rather than omitting the gap.
       missing: [
-        runs.length === 0 ? 'no cognition run names this id' : null,
-        tasks.length === 0 ? 'no task graph event names this id' : null,
-        councils.length === 0 ? 'no Council session evaluated this objective' : null,
+        runs.length === 0 && (applies.length > 0 || verifications.length > 0)
+          ? 'this is a Workshop change chain: a candidate id is never a cognition run id, so no run is expected'
+          : null,
+        runs.length === 0 && applies.length === 0 && verifications.length === 0 ? 'no cognition run names this id' : null,
+        runs.length > 0 && tasks.length === 0 ? 'no task graph event names this id' : null,
+        councils.length === 0 && runs.length > 0 ? 'no Council session evaluated this objective' : null,
       ].filter(Boolean),
       counts: {
         runs: runs.length,
         councilSessions: councils.length,
         taskEvents: tasks.length,
         verifications: verifications.length,
+        // T-39 Step 1: the applies and rollbacks linked to this chain, so a count of what the chain
+        // did to the workspace is available without walking the entries.
+        applies: applies.length,
         operations: operations.length,
       },
       sameInstant,

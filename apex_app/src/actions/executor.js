@@ -20,6 +20,16 @@ export async function executeAction(def, ctx, rawInput) {
     }
     return { status: 'ok', input, result };
   } catch (err) {
-    return { status: 'failed', error: { code: err?.code || 'EXECUTION_ERROR', message: String(err?.message ?? err) } };
+    // A refusal may carry structured detail (T-39: the expected and actual digests on a drift
+    // refusal). It is copied only when it is a plain object, so nothing exotic is propagated.
+    const detail = err?.detail && typeof err.detail === 'object' && !Array.isArray(err.detail) ? err.detail : null;
+    return {
+      status: 'failed',
+      error: {
+        code: err?.code || 'EXECUTION_ERROR',
+        message: String(err?.message ?? err),
+        ...(detail ? detail : {}),
+      },
+    };
   }
 }

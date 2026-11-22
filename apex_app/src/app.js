@@ -78,6 +78,7 @@ import { CAPTURE_OFF } from './experience/capture.js';
 import { ResourceFabric } from './resources/fabric.js';
 import { createWorkshopService } from './workshop/service.js';
 import { WorkshopSandbox } from './workshop/sandbox.js';
+import { WorkshopApplier } from './workshop/applier.js';
 import { MemoryTraceService } from './memory/trace.js';
 import { createPerceptionService } from './perception/service.js';
 import { perceptionActions } from './actions/perception-actions.js';
@@ -305,6 +306,9 @@ export function createApp({
     now: clock,
     ...(idFactory ? { idFactory } : {}),
   });
+  // T-39 Step 1 (2026-11-22): the applier is the one place that writes into the live workspace tree.
+  // It shares the sandbox's inspector, so an apply obeys exactly the containment a read obeys.
+  const workshopApplier = new WorkshopApplier({ dataDir, sandbox: workshopSandbox, now: clock });
 
   // T-31 Step 2: the controlled Evolution Lab. It records proposals about APEX's own behaviour,
   // the sandbox result that was measured for each one, and the owner's promotion decisions. It
@@ -439,6 +443,7 @@ export function createApp({
     council,
     workshop,
     workshopSandbox,
+    workshopApplier,
     evolution,
   });
   const runtime = new ExecutiveRuntime({
@@ -538,6 +543,8 @@ export function createApp({
     filesystemRoot: rootForContext,
     // T-38 Step 2: the file-backed Workshop, so the UI routes reach the one sandbox the actions use.
     workshopSandbox,
+    // T-39 Step 1: and its applier, so the apply and rollback routes reach the one ledger.
+    workshopApplier,
     // T-38 Step 3: the cross-ledger trace and search, for the Memory Timeline.
     memoryTrace,
     filesystemWorkspaces: workspaces,

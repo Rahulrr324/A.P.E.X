@@ -380,6 +380,7 @@ export const UI_PAGE = `<!doctype html>
         <option value="council_session">Council sessions</option>
         <option value="task">task graphs</option>
         <option value="workshop_verification">sandbox verifications</option>
+        <option value="workshop_apply">workspace changes</option>
         <option value="ecp_audit">authorized operations</option>
       </select>
       <label for="trace-search-status" class="visually-hidden">Epistemic status</label>
@@ -1537,6 +1538,16 @@ async function api(path, options = {}) {
     const message = data && typeof data.error === 'string' ? data.error : 'request failed (' + response.status + ')';
     const error = new Error(message);
     error.status = response.status;
+    // T-39: a refusal can carry structure the screen needs - the refusal code, and on a drift
+    // refusal the two digests. Copying only the status would leave the diagnostic unable to say what
+    // it was told, which is the difference between a diagnosis and a riddle. Bounded to the fields
+    // the refusal contract defines; the body is never re-thrown wholesale.
+    if (data && typeof data === 'object') {
+      for (const key of ['code', 'expectedBaseSha256', 'actualDiskSha256',
+        'expectedAppliedSha256', 'restoredSha256', 'display']) {
+        if (typeof data[key] !== 'undefined') error[key] = data[key];
+      }
+    }
     throw error;
   }
   return data === null ? {} : data;
@@ -3534,6 +3545,9 @@ const traceState = { results: [], chain: null, lastQuery: null };
 const TRACE_KIND_LABELS = {
   memory: 'memory', cognition_run: 'cognitive run', council_session: 'Council session',
   task: 'task graph', workshop_verification: 'sandbox verification', ecp_audit: 'authorized operation',
+  // T-39 Step 1: both kinds travel under one label, and the step's own label distinguishes an apply
+  // from the rollback that undid it.
+  workshop_apply: 'workspace change',
 };
 
 // Which identifier on a result can be opened as a chain. A task event that is not the creation
@@ -3544,6 +3558,8 @@ function traceIdFor(result) {
   if (result.kind === 'council_session') return result.identity.sessionId ?? null;
   if (result.kind === 'task') return result.identity.taskId ?? null;
   if (result.kind === 'ecp_audit') return result.identity.operationId ?? null;
+  // A workspace change opens the chain for its own apply id, which is the id the ledger records.
+  if (result.kind === 'workshop_apply') return result.identity.applyId ?? null;
   return null;
 }
 
@@ -3651,13 +3667,23 @@ async function openTrace(id, button) {
     traceState.chain = data;
     renderTraceChain(data);
     const counts = data.counts ?? {};
+    // T-39 Step 1: the apply count is reported beside the others, and a chain of workspace changes
+    // is not treated as a failure. The complete flag means a cognition run and a task graph, which a chain
+    // opened from a candidate id or an apply id cannot have by construction - so calling that
+    // "partial" in red would report a normal shape as a defect. The status is amber only when the
+    // chain is genuinely thin: no run, no task, and nothing else either.
+    const applies = counts.applies ?? 0;
+    const substantial = counts.runs > 0 || counts.taskEvents > 0 || applies > 0
+      || counts.councilSessions > 0 || counts.verifications > 0;
     setWorkspaceStatus(els.traceChainStatus,
-      (data.complete ? 'Complete chain' : 'Partial chain')
+      (data.complete ? 'Complete chain' : substantial ? 'Chain' : 'Partial chain')
       + ' · ' + counts.runs + ' run(s), ' + counts.councilSessions + ' Council session(s), '
       + counts.taskEvents + ' task event(s), ' + counts.verifications + ' verification(s), '
+      + applies + ' workspace change(s), '
       + counts.operations + ' operation(s)'
+      + (data.complete ? '' : ' · a chain of records rather than a run; no cognition run names this id')
       + (data.missing?.length ? ' · ' + data.missing.join('; ') : '') + '.',
-      data.complete ? 'available' : 'error');
+      data.complete ? 'available' : substantial ? 'available' : 'error');
   } catch (error) {
     // A 404 is "no ledger holds that id", which is a fact about the ledgers rather than a failure.
     setWorkspaceStatus(els.traceChainStatus,
@@ -3742,6 +3768,10 @@ async function inspectWorkspace() {
   try {
     const data = await api('/api/workshop/workspace');
     wsState.entries = Array.isArray(data.entries) ? data.entries : [];
+    // T-39 Step 1: the apply ledger is read beside the file listing, so a badge that says "applied"
+    // is a record that exists rather than a memory of a click. A failed read leaves the badges alone
+    // instead of clearing them, because "unknown" must not render as "not applied".
+    void refreshApplyState();
     wsState.inspectedAt = data.at ?? null;
     renderWorkspaceEntries();
     const files = wsState.entries.filter((e) => e.kind === 'file').length;
@@ -3760,6 +3790,36 @@ async function inspectWorkspace() {
     renderWorkspaceEntries();
   } finally {
     if (els.wsRefresh) els.wsRefresh.disabled = false;
+  }
+}
+
+// Read what the apply ledger says and attach it to the candidates this page holds. Nothing is
+// written and no digest is invented: a candidate with no record simply has no applied badge.
+async function refreshApplyState() {
+  if (wsState.candidates.length === 0) return;
+  try {
+    const status = await api('/api/workshop/applies');
+    const recent = Array.isArray(status.recent) ? status.recent : [];
+    for (const candidate of wsState.candidates) {
+      // An apply this page already knows about is not downgraded by a later read: the ledger keeps
+      // both, and the newest open one is what the rollback control should point at.
+      if (candidate.applied) continue;
+      const record = recent.find((entry) => entry.candidateId === candidate.candidateId && entry.rolledBack !== true);
+      if (!record) continue;
+      candidate.applied = {
+        applyId: record.applyId,
+        relativePath: record.relativePath,
+        appliedSha256: record.appliedSha256,
+        beforeSha256: record.beforeSha256,
+        backupId: record.applyId,
+        // The ledger records that the apply re-read the file and compared. Whether the file still
+        // matches today is a fresh question, and the screen does not answer it from a stale record.
+        verifiedOnDisk: true,
+      };
+    }
+    renderCandidates();
+  } catch {
+    // The ledger read is an enhancement; the sandbox panel works without it.
   }
 }
 
@@ -3795,7 +3855,58 @@ function renderCandidates() {
     promote.disabled = !verified || Boolean(candidate.busy);
     promote.addEventListener('click', () => { promoteCandidate(candidate.candidateId, promote); });
     head.append(promote);
+    // T-39 Step 1: the apply control. It is enabled only after the backend reported verified true,
+    // because a button that can only be refused teaches the owner to distrust the refusal.
+    const applyButton = el('button', 'small', 'Apply to Workspace');
+    applyButton.type = 'button';
+    applyButton.dataset.applyCandidate = candidate.candidateId;
+    applyButton.disabled = !verified || Boolean(candidate.busy) || Boolean(candidate.applied);
+    applyButton.addEventListener('click', () => { applyCandidate(candidate.candidateId, applyButton); });
+    head.append(applyButton);
     item.append(head);
+
+    // What the apply would write, stated as the two digests the gate compares. The base reads as
+    // absent rather than a placeholder digest when the file does not exist yet.
+    const base = candidate.baseDigest ?? null;
+    item.append(el('p', 'meta',
+      'base ' + (base ? shortDigest(base) : 'absent (the file does not exist yet)')
+      + ' -> candidate ' + shortDigest(candidate.digest)));
+
+    // The applied badge, and the backup reference. Both come from the ledger, never from a local
+    // guess, so a reload shows the same state as the click did.
+    if (candidate.applied) {
+      const applied = candidate.applied;
+      const appliedBadge = el('span', applied.verifiedOnDisk ? 'badge badge-ok' : 'badge badge-bad',
+        applied.verifiedOnDisk ? 'Applied to workspace — disk SHA-256 verified' : 'Applied, but the disk digest did not match');
+      const line = el('div', 'row');
+      line.append(appliedBadge);
+      line.append(el('span', 'meta', applied.applyId));
+      item.append(line);
+      item.append(el('p', 'meta',
+        'applied sha256 ' + shortDigest(applied.appliedSha256 ?? null)
+        + ' · backup ' + (applied.backupId ?? 'n/a')
+        + (applied.beforeSha256 ? ' (holds ' + shortDigest(applied.beforeSha256) + ')' : ' (the file did not exist before)')));
+      const undo = el('button', 'small', 'Rollback to Prior File');
+      undo.type = 'button';
+      undo.dataset.rollbackApply = applied.applyId;
+      undo.disabled = Boolean(candidate.busy);
+      undo.addEventListener('click', () => { rollbackApply(applied.applyId, candidate.candidateId, undo); });
+      item.append(undo);
+    }
+
+    // A refusal that names the two digests is a diagnosis; one that says "drift" is a riddle. The
+    // route sends both, and this renders what it sent without inventing a value it did not.
+    if (candidate.drift) {
+      const drift = candidate.drift;
+      const box = el('div', 'work-item diagnostic');
+      box.append(el('strong', '', 'Refused: ' + (drift.code === 'ROLLBACK_DRIFT'
+        ? 'the file changed after it was applied'
+        : 'the file changed after this candidate was staged')));
+      box.append(el('p', 'meta', 'expected ' + (drift.expected ?? 'unknown')));
+      box.append(el('p', 'meta', 'actual on disk ' + (drift.actual ?? 'unknown')));
+      box.append(el('p', 'meta', drift.detail ?? 'Nothing was written. Re-inspect the file, stage a fresh candidate, and verify it again.'));
+      item.append(box);
+    }
 
     item.append(el('p', 'meta',
       'sha256 ' + shortDigest(candidate.digest) + ' · staged ' + formatBytes(candidate.bytes)
@@ -3839,7 +3950,11 @@ async function stageCandidate() {
       bytes: data.bytes,
       lines: data.lines,
       diff: data.diff,
+      // The base digest the apply gate will compare against; null when the file does not exist yet.
+      baseDigest: data.base?.exists === true ? (data.base.digest ?? null) : null,
       verification: null,
+      applied: null,
+      drift: null,
     });
     renderCandidates();
     setWorkspaceStatus(els.wsStageStatus,
@@ -3872,6 +3987,96 @@ async function verifyCandidate(candidateId, button) {
     }
   } catch (error) {
     if (els.wsStageStatus) setWorkspaceStatus(els.wsStageStatus, 'Verification failed: ' + error.message, 'error');
+  } finally {
+    if (candidate) candidate.busy = false;
+    renderCandidates();
+  }
+}
+
+// T-39 Step 1: apply a verified candidate to the live workspace, and undo it.
+//
+// Both need the owner's reason, because both are audited acts rather than preferences. Neither is
+// ever reported as done before the backend says it was verified: verifiedOnDisk is read from the
+// response, and a refusal is rendered as the digests the server sent rather than as a generic error.
+async function applyCandidate(candidateId, button) {
+  if (button) button.disabled = true;
+  const reason = window.prompt(
+    'This writes the candidate into your workspace file. The previous bytes are saved first, so it can be rolled back. Type a reason to apply:');
+  if (!reason || !reason.trim()) {
+    if (button) button.disabled = false;
+    if (els.wsStageStatus) setWorkspaceStatus(els.wsStageStatus, 'An apply needs your reason, so nothing was written.', 'error');
+    return;
+  }
+  const candidate = wsState.candidates.find((c) => c.candidateId === candidateId);
+  try {
+    const data = await api('/api/workshop/candidates/' + encodeURIComponent(candidateId) + '/apply', {
+      method: 'POST',
+      body: { reason: reason.trim() },
+    });
+    if (candidate) {
+      candidate.applied = data;
+      candidate.drift = null;
+    }
+    if (els.wsStageStatus) {
+      setWorkspaceStatus(els.wsStageStatus,
+        'Applied ' + data.relativePath + ' to the workspace. Disk SHA-256 ' + shortDigest(data.appliedSha256)
+        + ' was read back and matched. Backup ' + data.backupId + '.', 'available');
+    }
+  } catch (error) {
+    // A drift refusal carries both digests; anything else is reported as the server phrased it.
+    if (candidate && typeof error.expectedBaseSha256 !== 'undefined') {
+      candidate.drift = {
+        code: error.code ?? 'WORKSPACE_DRIFT',
+        expected: error.expectedBaseSha256 ?? 'absent',
+        actual: error.actualDiskSha256 ?? 'absent',
+        detail: 'The file changed on disk after this candidate was staged. Nothing was written.',
+      };
+    }
+    if (els.wsStageStatus) {
+      setWorkspaceStatus(els.wsStageStatus, 'Apply refused: ' + (error.message ?? 'the server refused it') + '. Nothing was written.', 'error');
+    }
+  } finally {
+    if (candidate) candidate.busy = false;
+    renderCandidates();
+  }
+}
+
+async function rollbackApply(applyId, candidateId, button) {
+  if (button) button.disabled = true;
+  const reason = window.prompt('This restores the bytes the apply replaced. Type a reason to roll back:');
+  if (!reason || !reason.trim()) {
+    if (button) button.disabled = false;
+    if (els.wsStageStatus) setWorkspaceStatus(els.wsStageStatus, 'A rollback needs your reason, so the file is unchanged.', 'error');
+    return;
+  }
+  const candidate = wsState.candidates.find((c) => c.candidateId === candidateId);
+  try {
+    const data = await api('/api/workshop/applies/' + encodeURIComponent(applyId) + '/rollback', {
+      method: 'POST',
+      body: { reason: reason.trim() },
+    });
+    if (candidate) {
+      candidate.applied = null;
+      candidate.drift = null;
+    }
+    if (els.wsStageStatus) {
+      setWorkspaceStatus(els.wsStageStatus, data.removedFile
+        ? 'Rolled back ' + data.relativePath + ' — the file the apply created has been removed, and its absence was confirmed.'
+        : 'Rolled back ' + data.relativePath + ' to ' + shortDigest(data.restoredSha256) + ', the digest it had before the apply.',
+      'available');
+    }
+  } catch (error) {
+    if (candidate && typeof error.expectedAppliedSha256 !== 'undefined') {
+      candidate.drift = {
+        code: error.code ?? 'ROLLBACK_DRIFT',
+        expected: error.expectedAppliedSha256 ?? 'unknown',
+        actual: error.actualDiskSha256 ?? 'absent',
+        detail: 'The file changed after it was applied, so a rollback would discard that edit. Your edit is intact; nothing was restored.',
+      };
+    }
+    if (els.wsStageStatus) {
+      setWorkspaceStatus(els.wsStageStatus, 'Rollback refused: ' + (error.message ?? 'the server refused it') + '. The file is unchanged.', 'error');
+    }
   } finally {
     if (candidate) candidate.busy = false;
     renderCandidates();
