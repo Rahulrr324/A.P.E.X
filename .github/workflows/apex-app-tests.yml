@@ -388,6 +388,51 @@ jobs:
               sys.exit(1)
           PY
 
+      # T-38 Step 4 (2026-11-21): the values/workspace/trace walk. Its annotation carries the three
+      # claims the brief asked for by name - the constraint verdict and the candidate's declared
+      # metadata, whether the sandbox caught a real syntax error with a real exit code, and whether a
+      # chain reached every ledger - so a green run states what it proved rather than that it passed.
+      - name: Publish the T-38 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't38-values-workspace-trace.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t38-values-workspace-trace::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          values = run.get('values') or {}
+          workspace = run.get('workspace') or {}
+          sandbox = run.get('sandbox') or {}
+          trace = run.get('trace') or {}
+          declaration = (values.get('definition') or values.get('declaration') or {})
+          sandbox_valid = sandbox.get('valid') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"council verdict {values.get('verdict')} counts {json.dumps(values.get('counts') or {})}",
+              f"candidate {declaration.get('capability')} reversibility={declaration.get('reversibility')} blastRadius={declaration.get('blastRadius')} source={declaration.get('metadataSource')}",
+              f"unmapped verdict {(values.get('unmapped') or {}).get('verdict')}",
+              f"workspace listed {','.join(str(p) for p in (workspace.get('listed') or [])) or 'none'} digestMatchesDisk={workspace.get('digestMatchesDisk')}",
+              f"sandbox refusedPromotion {sandbox.get('refusedPromotionStatus')}/{sandbox.get('refusedPromotionCode')} liveUnchanged={sandbox.get('liveFileUnchangedAfterRefusal')} verified={('verified' in str(sandbox_valid.get('rendered') or ''))} promotedWithoutWriting={sandbox.get('promotedWithoutWritingLiveTree')}",
+              f"trace results {trace.get('resultCount')} kinds {','.join(str(k) for k in (trace.get('kinds') or []))} chain {trace.get('chainLength')} complete={trace.get('complete')}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])}",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure.get('message'))[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t38-values-workspace-trace::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       - name: Keep the browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -407,6 +452,8 @@ jobs:
             apex_app/reports/t36-cold-boot-unseeded.json
             apex_app/reports/screenshots/t37
             apex_app/reports/t37-neural-council-router.json
+            apex_app/reports/screenshots/t38
+            apex_app/reports/t38-values-workspace-trace.json
           if-no-files-found: warn
           retention-days: 14
 

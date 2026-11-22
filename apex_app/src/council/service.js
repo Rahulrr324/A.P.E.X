@@ -424,10 +424,19 @@ function canonicalInput({ objective, evidence, candidateId, candidate, resourceC
   return {
     objective,
     candidateId: candidateId ? String(candidateId).slice(0, 128) : null,
+    // T-38 Step 2 (2026-11-21): a resolved candidate carries the safety metadata the constraints core
+    // reads, so the record says what the deliberation knew rather than only what it was called. A
+    // candidate supplied by a caller without metadata records `null`, which is the honest answer: the
+    // core then reports the rule it could not check instead of assuming a value.
     candidate: candidate ? {
       id: candidate.id ?? null,
       action: candidate.action ?? null,
       description: candidate.description ?? null,
+      capability: candidate.capability ?? null,
+      permission: candidate.permission ?? null,
+      reversibility: candidate.reversibility ?? null,
+      blastRadius: candidate.blastRadius ?? null,
+      metadataSource: candidate.metadataSource ?? null,
     } : null,
     evidence: evidence.map((item) => ({
       evidenceId: item.evidenceId,

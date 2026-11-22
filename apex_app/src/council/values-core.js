@@ -294,6 +294,21 @@ export function constraintPerspective(input = {}) {
       uncertainty: evaluation.counts.unverifiable > 0 ? 'some' : 'low',
     },
     evaluation,
+    // T-38 Step 2 (2026-11-21): the declaration the core actually read. Without it a session record
+    // says what was concluded but not what it was concluded against, and a later reader cannot tell
+    // a rule that passed from a rule that had nothing to check. `null` means the capability had no
+    // declaration; every field is the registry's own value, never a value inferred here.
+    declaration: input.definition
+      ? {
+        capability: input.definition.name ?? null,
+        permission: input.definition.permission ?? null,
+        origins: Array.isArray(input.definition.origins) ? [...input.definition.origins] : [],
+        plannable: input.definition.plannable !== false,
+        reversibility: input.definition.reversibility ?? null,
+        blastRadius: input.definition.blastRadius ?? null,
+        metadataSource: input.definition.metadataSource ?? null,
+      }
+      : null,
     values: VALUES,
   };
 }

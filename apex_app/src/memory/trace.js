@@ -472,12 +472,34 @@ export class MemoryTraceService {
           sessionId: council.sessionId,
           objective: council.objective,
           status: council.status,
+          // The resolved candidate with the metadata the constraints core read. A record written
+          // before T-38 Step 2 carries nulls here, which is the honest reading of that record.
           candidate: council.candidate === null || council.candidate === undefined ? null : {
             id: council.candidate.capability ?? council.candidate.id ?? null,
             permission: council.candidate.permission ?? null,
             reversibility: council.candidate.reversibility ?? null,
             blastRadius: council.candidate.blastRadius ?? null,
+            metadataSource: council.candidate.metadataSource ?? null,
           },
+          // The constraint core's verdict, read from the position it recorded. This is the step the
+          // T-38 brief asks for: a chain shows what the Council concluded about the candidate.
+          constraints: (() => {
+            const position = Array.isArray(council.record?.positions)
+              ? council.record.positions.find((p) => p && p.perspectiveId === 'constraint_check')
+              : null;
+            if (!position) return null;
+            return {
+              verdict: position.position?.verdict ?? null,
+              // What the core read, as the registry declared it.
+              declaration: position.declaration ?? null,
+              summary: position.position?.summary ?? null,
+              counts: position.evaluation?.counts ?? null,
+              rules: Array.isArray(position.evaluation?.evaluations)
+                ? position.evaluation.evaluations.map((rule) => ({ id: rule.id, name: rule.name, verdict: rule.verdict }))
+                : [],
+              authorizesExecution: false,
+            };
+          })(),
           // The verdict, read from where the Council recorded it.
           decision: council.decision ?? council.record?.synthesis?.decision ?? null,
           constraintCheck: council.record?.constraintCheck ?? null,
