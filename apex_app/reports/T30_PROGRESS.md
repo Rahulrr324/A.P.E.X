@@ -2755,3 +2755,10 @@ The same result repeated on the final tree: **run 45025270169 (`4cebc9f`) succee
 steps passed, with the T-40 annotation identical except for the generated ids
 (`apply wcs-4fbbc8455258`, same every-file assertions). Two consecutive hosted runs of the shipped
 branch are green, which is the last thing this milestone can prove from here.
+
+And on the shipped commit: **run 45026365973 (`afb936f`) succeeded**, 19 of 19 executed steps passed,
+`Report failing tests` skipped because nothing failed, and the T-40 annotation unchanged except for its
+generated ids (`apply wcs-0879f9db3b12`, `help rows=17 shortcuts=6`, `trace applies=2 ordered=True
+complete=True`, `console 0 page 0 requests 0 scheduledRefusals 2`, `screenshots 7`). **Three consecutive
+hosted runs are green**, which is everything this milestone can prove from a sandbox with no browser in
+it.
