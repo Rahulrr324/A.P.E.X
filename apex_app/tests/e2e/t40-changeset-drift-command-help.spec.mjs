@@ -480,7 +480,12 @@ test('T-40: a two-file changeset is atomic, disk drift is measured and blocks th
       ordered: true,
       digestsPresent: true,
     };
-    expect(run.trace.applies).toBe(2);
+    // T-41 (2026-11-22): a two-file batch apply followed by a two-file rollback is FOUR per-file
+    // trace entries, not two - the reader expands a changeset per file, which is what makes a batch
+    // openable at all. The hosted T-40 run reported `trace applies=4` while this assertion still said
+    // 2; the reader was right and this count was stale. The unit suite carried the same stale count
+    // and is corrected in the same change.
+    expect(run.trace.applies).toBe(4);
     checkpoint('trace chain open');
 
     // ------------------------------------------- 8. the command reference, by key ---

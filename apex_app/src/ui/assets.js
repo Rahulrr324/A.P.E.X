@@ -5252,7 +5252,15 @@ async function submitEvolutionProposal(event) {
     if (els.evolutionTest) els.evolutionTest.value = '';
     scheduleEventRefresh();
   } catch (err) {
-    if (els.evolutionFormStatus) els.evolutionFormStatus.textContent = 'the proposal was refused: ' + String(err.message || err);
+    // T-41 Step 3: a boundary refusal names its code on the screen. The first hosted run of the T-41
+    // walk failed exactly here - the refusal reached the browser, the 403 was logged, and the status
+    // line said only "the proposal was refused", which is the one thing the owner cannot act on.
+    const code = err && err.code ? err.code : null;
+    if (els.evolutionFormStatus) {
+      els.evolutionFormStatus.textContent = code
+        ? 'the proposal was refused ' + code + ': ' + String(err.message || err)
+        : 'the proposal was refused: ' + String(err.message || err);
+    }
   } finally {
     if (els.evolutionProposeButton) els.evolutionProposeButton.disabled = false;
     armWatchdog();

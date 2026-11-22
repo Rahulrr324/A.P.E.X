@@ -325,8 +325,11 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     await expect(validCandidate.locator('.badge')).toHaveText('not checked');
     await validCandidate.locator('button', { hasText: 'Verify' }).click();
     await expect(validCandidate.locator('.badge')).toHaveText('verified', { timeout: 25_000 });
-    // Six checks, a parser that ran, an exit code of zero, and a diff.
-    await expect(validCandidate).toContainText('6/6 checks passed');
+    // T-41 Step 2 (2026-11-22): eight checks, not six. The sandbox verification gained
+    // `sandbox_test_passed` (no companion test was staged, so it states that rather than pretending
+    // behaviour was exercised) and `workspace_untouched_by_test` (nothing ran, so nothing could have
+    // been touched). Both pass, and both are named, which is the point of the count being explicit.
+    await expect(validCandidate).toContainText('8/8 checks passed');
     await expect(validCandidate).toContainText('exit 0');
     // The diff is line-based: one line changed and one was added, so +2/-1. The numbers are pinned
     // rather than matched loosely, because a diff summary that drifts from the change is exactly the
