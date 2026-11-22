@@ -2665,4 +2665,39 @@ and the changeset rows now show whole digests, and a unit test asserts that neit
 
 Three hosted cycles, three defects, and all three had the same shape: **the fact was correct everywhere
 except on the screen.** That is the argument for the walk rather than against it - no unit test in this
-repository, and no amount of reading the client source, would have found any of them.
+repository, and no amount of reading the client source, would have found any of them. The fourth was
+different, and worse.
+
+**Hosted evidence, fourth attempt (run 45022149725, `73a1150`).** Steps 1 and 2 are now fully verified in
+a real browser, every claim of the milestone's first two steps in one annotation:
+
+```
+preflight CHANGESET_PREFLIGHT_REFUSED refused=src/data.json bothUntouched=True
+  digestsShown=True ledgerChangesets=0
+apply wcs-e4985bd9528f files=2 atomic=True everyVerified=True backupHoldsBoth=True ui=True
+disk intact=2 modified=1 path=src/greeting.js bothDigests=True
+rollbackRefused CHANGESET_ROLLBACK_DRIFT restoredNothing=True externalEditIntact=True ui=True
+rollback files=2 byteIdentical=True everyVerified=True uiConfirmed=True
+console 0 page 0 requests 0 scheduledRefusals 2 | screenshots 6
+```
+
+The walk then failed in the trace phase, and this one was not a display problem. The ledger held the
+batch correctly and the panel showed it correctly; the **causal trace could not read it**.
+`readWorkshopApplies` assumed one ledger record is one file, so a `changeset_apply` record - which has no
+top-level `candidateId` and no top-level `relativePath` - produced *zero* chain entries. A two-file batch
+that was applied and rolled back left a chain that could not be opened at all. Worse, the chain's
+`rolledBack` flag was computed from `recordKind === 'rollback'`, so had the batch been expanded it would
+have labelled every batch rollback as an apply: a trace that says the opposite of what happened.
+
+The fix expands a batch into one entry per file **at the point the ledger is read**, so every reader
+above it - search, chain assembly, counts - keeps working with the shape it already understood, rather
+than each of them learning about batches. The rollback record now carries each file's `candidateId` for
+the same reason the apply does, with a fallback that reads it from the matching apply record so a ledger
+written yesterday is not less readable today. The chain for a two-file batch now reads:
+
+```
+["workspace file applied", "workspace rollback restored the prior file"]
+counts {"runs":0,"councilSessions":0,"taskEvents":0,"verifications":2,"applies":2,"operations":4}
+```
+
+which is the same shape T-39's chain has, for the same reason - and a unit test pins it.
