@@ -2085,3 +2085,98 @@ horizontal overflow on any view.
 
 The walk is CI-only. This sandbox has no Chromium and no Edge, so the spec was run here and skipped
 with its diagnostic; the browser evidence in the next section is from the hosted run.
+
+### What the hosted run measured
+
+CI run `44990480701` on `6f97a22` is green, every step. The eight browser suites each report as a
+`notice`, in Microsoft Edge `157.0.4341.60`, verbatim:
+
+**`real-browser-verification`**
+```
+step=success | browser=157.0.4341.60 | executable=/usr/bin/microsoft-edge (system) | 1600x900: core=Awaiting Approval overflow=1600<=1600 errors=0 | 1280x720: core=Awaiting Approval overflow=1280<=1280 errors=0 | 390x844: core=Awaiting Approval overflow=390<=390 errors=0 | ... | t37-neural-council-router.spec.mjs :: T-37: Track 2, the Council with its constraint core, the command route -> passed (14s) | t38-values-workspace-trace.spec.mjs :: T-38: safety metadata, the real workspace sandbox, and the causal chai -> passed (9s)
+```
+
+**`hud-experience`**
+```
+hud-step=success | browser=157.0.4341.60 | ... | contrast: 4865 text runs checked, 0 violations | ackMs=2 inputBeforeTabs=True | ... | artifact: 18 PNG(s) under apex_app/reports/screenshots/t32 | ...
+```
+
+**`t33-executive-loop`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: open,dispatch,intent,suppression,revoke,graph,idle,idle-clear,workshop,console | screenshots 9 | core at end idle
+```
+
+**`t34-mission-dag`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: mission-shape,join-held,selector,selector-back,branch-unblocked,mission-verified,candidate-association,briefing-acknowledged,briefing-click-through,console | screenshots 10 | mission completed verified True
+```
+
+**`t35-stepdown-handoff-doctor`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | checkpoints 6: auto-stage,flash-guard,sensor-indicator,handoff-claimed,doctor,clean | screenshots 7 | stages walked 0,1,2,3,4,5 (auto None) | flash guard 7 animation(s), 0 violation(s) | handoff ph-09184278f7404f349255aa0f digest 2179e061fd97 matched True | doctor ok in 2.52 ms of 500 (within budget True)
+```
+
+**`t36-cold-boot-unseeded`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | unseeded entries 0 marker=False devices=False | boot rows 6: safety_latch=ok,ecp_authority=ok,resource_fabric=ok,git_workspace=ok,device_trust=ok,executive_briefing=ok | dormant True landing idle trail degraded>dormant>idle | host 4 cpu / 15.6 GiB | workspace trunk@8c29d10 (repo trunk@8c29d10) | device local-workstation trusted enrolled 1 | briefing facts doctor,resource,workspace,device | doctor 6/6 pass in 1.77 ms (within budget True) | cognition awaiting_approval task task-91893291d37b4b36bdd0 approvals 1 | overflow 1440<=1440 | screenshots 8
+```
+
+**`t37-neural-council-router`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | regions 8: sensory,associative,temporal,predictive,attention,working,plasticity,integration | bridge apex.neural.cognitive-bridge/1 | boundary candidate_association authoritative=False writesObserved=False | council sessions 2 compile Compiled and run: success_verified · task task-f7be5110dfb84 | receipts 4: mode tactical=>mode/no;sense workspace=>sense/yes;council: verify release readiness=>council/yes;summarise the workspace notes=>mission/yes | screens 11: boot,command-deck,mission-view,briefing,sentinel,memory-timeline,council,presence-mesh,policy-autonomy,lockdown,workshop | overflow 1440<=1440 | console 0 page 0 requests 0 | screenshots 4
+```
+
+**`t38-values-workspace-trace`**
+```
+browser 157.0.4341.60 | binary microsoft-edge | council verdict satisfied counts {"satisfied": 5, "violated": 0, "unverifiable": 0, "not_applicable": 1} | candidate neural.step reversibility=reversible blastRadius=local_store source=declared | unmapped verdict partly_unverifiable | workspace listed README.md,src,src/data.json,src/greeting.js digestMatchesDisk=True | sandbox refusedPromotion 409/PROMOTION_REFUSED liveUnchanged=True verified=True promotedWithoutWriting=True | trace results 4 kinds task graph,Council session,cognitive run,authorized operation chain 11 complete=True | console 0 page 0 requests 0 | screenshots 2
+```
+
+The T-38 line is the milestone in one row, and every clause of it is a measurement rather than a
+claim: the core reached `satisfied` with no `unverifiable` rule and the candidate's declared metadata
+beside the verdict; a sentence naming nothing still reported `partly_unverifiable`; the listing's
+digest was recomputed from disk and matched; the broken candidate was refused `409 PROMOTION_REFUSED`
+and the live file was byte-identical afterwards; the valid one verified and promoted without writing
+it; and the chain reached four ledger kinds in time order and declared itself complete at eleven
+entries.
+
+### Local totals
+
+```
+node --check:  262 files, 0 failures        (T-37 measured 256)
+npm test:      4165 tests, 4163 pass, 0 fail, 2 skipped, 645 suites, 1431938.29 ms
+                                                     (T-37 measured 4105 / 4103 / 0 / 2)
+```
+
+The two skips are the real-browser specs, which skip on this machine because it has no Chromium-family
+binary; they run on CI, where the runner ships Edge, and the section above is their result there. The
+suite grew by 60 tests and six source files: the workspace inspector and sandbox, their five
+capabilities, the trace service, and two hundred new lines of client.
+
+### What went wrong, and what it cost
+
+Seven hosted cycles were red before this one, and every one of them was my defect rather than a flaky
+test. It is worth writing down what they were, because the pattern is the useful part:
+
+1. A new spec was wired into Playwright but not into the test that pins the `testMatch` list, so a
+   spec that ran was still a red test.
+2. The served-client contract forbids source-text serialisation, and my search built its query with
+   one. My first fix failed the same rule because the comment explaining it contained the text.
+3. The T-38 walk started its fixture and its browser outside its own `try`, so a throw there left no
+   summary - and the annotation step then failed a second time, for a reason that was only a symptom.
+4. The publish step read every entry of the failure list as a dictionary, but the walk pushes strings.
+   It raised `AttributeError` before printing and produced no annotation at all. **This is why three
+   cycles produced no T-38 line: not a missing summary, as I first read it, but a reporter that died
+   quietly.**
+5. The walk looked for the SHA-256 in the excerpt body; it is in the panel title. The backend was
+   right and my reading of the client was wrong.
+6. Chromium logs a 409 as a console error even when the client asked for it, so the deliberate refusal
+   was counted as noise.
+7. The catch recorded only `error.message` and the annotation printed only that string, so a real
+   assertion failure and a clean run were indistinguishable from the outside. The failing test took
+   **twelve seconds**, not a timeout - six cycles were spent inferring what a machine-readable report
+   answered in one.
+
+The lesson is narrow and it is not "test more". Three of the seven were **reporting** defects that
+disguised the actual failure, and one of those disguised a failure for three cycles by producing no
+report at all. A milestone that measures itself has to measure its own failure path too, which is why
+the walk now writes a checkpoint after every phase and a JSON reporter records each test's own status.
