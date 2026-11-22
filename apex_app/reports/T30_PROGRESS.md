@@ -2750,3 +2750,8 @@ correctly recorded; one was a key press the binding correctly ignored because fo
 Not one of the five was reachable from `node --check`, from the unit suite, or from reading the client.
 A real browser against a real server and a real directory found every one of them, which is the whole
 argument for the walk existing.
+
+The same result repeated on the final tree: **run 45025270169 (`4cebc9f`) succeeded**, 19 of 19 executed
+steps passed, with the T-40 annotation identical except for the generated ids
+(`apply wcs-4fbbc8455258`, same every-file assertions). Two consecutive hosted runs of the shipped
+branch are green, which is the last thing this milestone can prove from here.
