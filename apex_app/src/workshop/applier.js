@@ -830,6 +830,10 @@ export class WorkshopApplier {
         }
         restored.push({
           slot: file.slot,
+          // The candidate id travels with the restored file for the same reason the apply records it:
+          // the causal trace links a verification to a write by candidate, and a rollback that dropped
+          // it would be an orphan record in a chain that otherwise reads as a sequence.
+          candidateId: file.candidateId ?? null,
           relativePath: file.relativePath,
           existedBefore: file.existedBefore,
           restoredSha256: now,

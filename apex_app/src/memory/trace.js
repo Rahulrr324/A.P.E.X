@@ -97,26 +97,76 @@ function resultId(kind, identity) {
 // a write into the owner's tree checkable after the fact.
 function readWorkshopApplies(dataDir) {
   const { present, records, corrupt } = readJsonl(path.join(dataDir, 'workshop-applies.jsonl'));
-  return {
-    present,
-    corrupt,
-    records: records.map((r) => ({
-      kind: 'workshop_apply',
-      recordKind: r.kind ?? null,
-      at: r.at ?? null,
-      id: r.applyId ?? r.rollbackId ?? null,
-      applyId: r.kind === 'rollback' ? (r.applyId ?? null) : (r.applyId ?? null),
-      rollbackId: r.rollbackId ?? null,
-      candidateId: r.candidateId ?? null,
-      relativePath: r.relativePath ?? null,
-      beforeSha256: r.beforeSha256 ?? null,
-      appliedSha256: r.appliedSha256 ?? null,
-      restoredSha256: r.restoredSha256 ?? null,
-      existedBefore: r.existedBefore ?? null,
-      rolledBack: r.kind === 'rollback' ? true : false,
-      record: r,
-    })),
-  };
+    // T-40 Step 2: a changeset is ONE ledger record that touches several files, so a single flat
+    // record cannot describe it - there is no `relativePath` and no `candidateId` at the top level.
+    // It is expanded into one entry per file here, at the point the ledger is read, so every reader
+    // above - search, chain assembly, counts - keeps working with the per-file shape it already
+    // understood. The alternative was teaching each of those readers about batches, and a chain that
+    // has to branch on record kind is a chain that will eventually forget one.
+    const expanded = [];
+    for (const r of records) {
+      if (r.kind === 'changeset_apply' || r.kind === 'changeset_rollback') {
+        const isRollback = r.kind === 'changeset_rollback';
+        // A changeset rollback record written before this version has no per-file candidateId. The
+        // apply record for the same batch does, so it is used as the fallback: a chain must link by
+        // candidate, and a batch written yesterday is not less readable today.
+        const boundCandidates = new Map();
+        if (isRollback) {
+          const applied = records.find((candidate) => candidate.kind === 'changeset_apply' && candidate.changesetId === r.changesetId);
+          for (const file of Array.isArray(applied?.files) ? applied.files : []) {
+            boundCandidates.set(file.relativePath, file.candidateId ?? null);
+          }
+        }
+        for (const file of Array.isArray(r.files) ? r.files : []) {
+          expanded.push({
+            kind: 'workshop_apply',
+            recordKind: r.kind,
+            at: r.at ?? null,
+            id: r.changesetId ?? null,
+            applyId: r.changesetId ?? null,
+            rollbackId: isRollback ? (r.changesetRollbackId ?? null) : null,
+            candidateId: file.candidateId ?? null,
+            relativePath: file.relativePath ?? null,
+            beforeSha256: isRollback ? (file.restoredSha256 ?? null) : (file.beforeSha256 ?? null),
+            appliedSha256: file.appliedSha256 ?? null,
+            restoredSha256: isRollback ? (file.restoredSha256 ?? null) : null,
+            existedBefore: file.existedBefore ?? null,
+            rolledBack: isRollback,
+            // The batch identity travels with every file, so a chain can say "file 1 of a 2-file
+            // changeset" rather than pretending the write was independent.
+            changesetId: r.changesetId ?? null,
+            changesetFileCount: r.fileCount ?? null,
+            changesetTitle: r.title ?? null,
+            record: r,
+          });
+        }
+        continue;
+      }
+      expanded.push({
+        kind: 'workshop_apply',
+        recordKind: r.kind ?? null,
+        at: r.at ?? null,
+        id: r.applyId ?? r.rollbackId ?? null,
+        applyId: r.kind === 'rollback' ? (r.applyId ?? null) : (r.applyId ?? null),
+        rollbackId: r.rollbackId ?? null,
+        candidateId: r.candidateId ?? null,
+        relativePath: r.relativePath ?? null,
+        beforeSha256: r.beforeSha256 ?? null,
+        appliedSha256: r.appliedSha256 ?? null,
+        restoredSha256: r.restoredSha256 ?? null,
+        existedBefore: r.existedBefore ?? null,
+        rolledBack: r.kind === 'rollback' ? true : false,
+        changesetId: null,
+        changesetFileCount: null,
+        changesetTitle: null,
+        record: r,
+      });
+    }
+    return {
+      present,
+      corrupt,
+      records: expanded,
+    };
 }
 
 function readWorkshopVerifications(dataDir) {
@@ -283,7 +333,7 @@ function searchableText(entry) {
     case 'council_session': return entry.objective;
     case 'task': return entry.goal;
     case 'workshop_verification': return `${entry.relativePath ?? ''} ${entry.rationale ?? ''} ${entry.candidateId ?? ''}`;
-    case 'workshop_apply': return `${entry.relativePath ?? ''} ${entry.candidateId ?? ''} ${entry.applyId ?? ''} ${entry.recordKind ?? ''}`;
+    case 'workshop_apply': return `${entry.relativePath ?? ''} ${entry.candidateId ?? ''} ${entry.applyId ?? ''} ${entry.recordKind ?? ''} ${entry.changesetId ?? ''} ${entry.changesetTitle ?? ''}`;
     case 'ecp_audit': return `${entry.capability ?? ''} ${JSON.stringify(entry.request ?? '')}`;
     default: return '';
   }
@@ -360,7 +410,7 @@ export class MemoryTraceService {
           : entry.kind === 'council_session' ? { sessionId: entry.sessionId }
             : entry.kind === 'task' ? { taskId: entry.taskId, eventId: entry.eventId, type: entry.type }
               : entry.kind === 'workshop_verification' ? { candidateId: entry.candidateId, verified: entry.verified }
-                : entry.kind === 'workshop_apply' ? { applyId: entry.applyId, rollbackId: entry.rollbackId, relativePath: entry.relativePath }
+                : entry.kind === 'workshop_apply' ? { applyId: entry.applyId, rollbackId: entry.rollbackId, relativePath: entry.relativePath, changesetId: entry.changesetId ?? null, changesetFileCount: entry.changesetFileCount ?? null }
                 : { operationId: entry.operationId, capability: entry.capability },
       traceable: entry.kind !== 'task' || entry.type === 'task_created',
     }));
@@ -455,6 +505,10 @@ export class MemoryTraceService {
       if (e.kind !== 'workshop_apply') return false;
       if (typeof e.candidateId === 'string' && chainText.includes(e.candidateId)) return true;
       if (typeof e.applyId === 'string' && [...keys].some((k) => k === e.applyId)) return true;
+      // T-40 Step 2: a changeset file is linked by its candidate id (which is how a chain that names a
+      // candidate reaches the batch it was written in) and by its changeset id, so a chain opened for
+      // any file of a batch shows the whole batch rather than one isolated write.
+      if (typeof e.changesetId === 'string' && [...keys].some((k) => k === e.changesetId)) return true;
       return false;
     });
     // The operations whose steps or result name one of these runs or tasks.
@@ -588,14 +642,22 @@ export class MemoryTraceService {
       });
     }
     for (const change of applies) {
-      const rolledBack = change.recordKind === 'rollback';
+      // T-40 Step 2: a changeset rollback is a rollback, and reading only the single-file record kind
+      // would have labelled every batch rollback as an apply - a chain that says the opposite of what
+      // happened, which is the one thing a causal trace cannot do.
+      const rolledBack = change.recordKind === 'rollback' || change.recordKind === 'changeset_rollback';
+      const isChangeset = change.recordKind === 'changeset_apply' || change.recordKind === 'changeset_rollback';
       steps.push({
         at: change.at,
         kind: 'workshop_apply',
         label: rolledBack
-          ? (change.record?.removedFile === true ? 'workspace rollback removed a created file' : 'workspace rollback restored the prior file')
+          ? ((isChangeset ? change.record?.files?.find((f) => f.relativePath === change.relativePath)?.removedFile === true : change.record?.removedFile === true)
+            ? 'workspace rollback removed a created file'
+            : 'workspace rollback restored the prior file')
           : 'workspace file applied',
-        linkedBy: 'the chain names this candidate or apply',
+        linkedBy: isChangeset
+          ? 'the chain names this candidate, or one file of the batch it was written in'
+          : 'the chain names this candidate or apply',
         detail: {
           applyId: change.applyId,
           rollbackId: change.rollbackId,
@@ -607,6 +669,11 @@ export class MemoryTraceService {
           restoredSha256: change.restoredSha256,
           existedBefore: change.existedBefore,
           rolledBack,
+          // The batch identity, so a reader can see that this file was one of several written together
+          // rather than an independent write that happened to land at the same second.
+          changesetId: change.changesetId ?? null,
+          changesetFileCount: change.changesetFileCount ?? null,
+          changesetTitle: change.changesetTitle ?? null,
           // Both of these are stated so a chain can never be read as permission for anything.
           mutatesLiveWorkspace: change.record?.mutatesLiveWorkspace === true,
           authorizesExecution: false,

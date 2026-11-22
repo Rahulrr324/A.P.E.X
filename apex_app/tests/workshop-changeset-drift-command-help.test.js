@@ -354,6 +354,53 @@ test('T-40 changeset: lockdown refuses both batch writes before the applier is r
   fs.rmSync(base, { recursive: true, force: true });
 });
 
+test('T-40 changeset: the causal trace expands a batch per file and reads it as apply then rollback', async () => {
+  // The fourth hosted walk failed here. The ledger was right; the trace reader was not. It assumed one
+  // record is one file - a changeset has no top-level candidateId or relativePath - so a two-file batch
+  // produced zero chain entries and a chain that existed in the ledger could not be opened at all.
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-t40-'));
+  const root = path.join(base, 'workspace');
+  const dataDir = path.join(base, 'data');
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'a.js'), OLD_A);
+  fs.writeFileSync(path.join(root, 'src', 'data.json'), OLD_B);
+  const app = createApp({ dataDir, filesystemRoot: root });
+  const ids = [];
+  for (const [relativePath, content] of [['src/a.js', NEW_A], ['src/data.json', NEW_B]]) {
+    const staged = await app.controller.workshopStageFile({ relativePath, proposedContent: content });
+    const candidateId = staged.operation.steps[0].result.data.candidateId;
+    await app.controller.workshopVerifyFile({ candidateId });
+    ids.push(candidateId);
+  }
+  const applied = await app.controller.workshopApplyChangeset({ candidateIds: ids, title: 'the pair', rationale: 'because' });
+  const changesetId = applied.operation.steps[0].result.data.changesetId;
+  await app.controller.workshopRollbackChangeset({ changesetId, reason: 'undo it' });
+
+  const trace = await app.memoryTrace.trace(ids[0]);
+  assert.equal(trace.ok, true, 'a batch must produce an openable chain');
+  assert.equal(trace.complete, true, `chain missing: ${JSON.stringify(trace.missing)}`);
+  const applies = trace.entries.filter((entry) => entry.kind === 'workshop_apply');
+  assert.equal(applies.length, 2, 'the chain holds the batch apply and the batch rollback, one entry each');
+  assert.deepEqual(applies.map((entry) => entry.label),
+    ['workspace file applied', 'workspace rollback restored the prior file']);
+  // In time order, both naming the batch they belong to.
+  assert.ok(applies[0].at <= applies[1].at, 'the apply precedes the rollback');
+  for (const entry of applies) {
+    assert.equal(entry.detail.changesetId, changesetId, 'each entry names the batch it belongs to');
+    assert.equal(entry.detail.changesetFileCount, 2);
+  }
+  // The digests travel with the chain, because a chain a reader cannot recompute is a story.
+  assert.equal(applies[0].detail.beforeSha256, sha256(OLD_A));
+  assert.equal(applies[0].detail.appliedSha256, sha256(NEW_A));
+  assert.equal(applies[1].detail.restoredSha256, sha256(OLD_A));
+  // And the batch is findable by path.
+  const found = await app.memoryTrace.search({ q: 'a.js' });
+  assert.equal(found.ok, true);
+  assert.ok(found.results.some((result) => result.kind === 'workshop_apply'), 'search must find the batch');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
 // ----------------------------------------------------- Step 3: the command catalogue and the client ---
 
 test('T-40 command help: the catalogue is derived from the router, and every row routes to its own kind', () => {
