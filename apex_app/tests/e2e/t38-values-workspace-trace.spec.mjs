@@ -141,7 +141,18 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     browser = await chromium.launch({ executablePath: resolution.executable, headless: true });
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
-    page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+    // A refusal that the walk asks for on purpose is not noise. The walk promotes a broken candidate
+    // through fetch() to prove the *server* refuses it, and Chromium logs any non-2xx response as a
+    // console error regardless of what the client does with it. Those two deliberate probes are
+    // counted separately, as `expectedRefusals`, so the zero-console-error assertion keeps its
+    // meaning: it still fails on anything the page did not ask for.
+    const EXPECTED_REFUSAL = /Failed to load resource: the server responded with a status of (409|403)/;
+    const expectedRefusals = [];
+    page.on('console', (message) => {
+      if (message.type() !== 'error') return;
+      if (EXPECTED_REFUSAL.test(message.text())) { expectedRefusals.push(message.text()); return; }
+      consoleErrors.push(message.text());
+    });
     page.on('pageerror', (error) => pageErrors.push(String(error?.message ?? error)));
     page.on('requestfailed', (request) => {
       if (request.url().endsWith('/favicon.ico')) return;
@@ -417,6 +428,9 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     run.failedRequests = failedRequests;
     expect(pageErrors, `uncaught exceptions: ${pageErrors.join(' | ')}`).toEqual([]);
     expect(consoleErrors, `console errors: ${consoleErrors.join(' | ')}`).toEqual([]);
+    // The two deliberate refusals were seen, and nothing else was filtered out. Pinning the count
+    // means the filter cannot quietly grow into a blanket exemption.
+    expect(expectedRefusals.length, `expected refusals seen: ${expectedRefusals.join(' | ')}`).toBe(1);
     expect(failedRequests, `failed requests: ${failedRequests.join(' | ')}`).toEqual([]);
   } catch (error) {
     run.failures.push(String(error?.message ?? error));
@@ -425,6 +439,7 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     run.consoleErrors = consoleErrors;
     run.pageErrors = pageErrors;
     run.failedRequests = failedRequests;
+    run.expectedRefusals = expectedRefusals;
     writeSummary();
     if (browser) await browser.close().catch(() => {});
     if (fixture) await fixture.stop().catch(() => {});
