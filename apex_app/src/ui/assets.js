@@ -729,9 +729,18 @@ export const UI_PAGE = `<!doctype html>
       <input id="evolution-title" maxlength="160" placeholder="Proposal title">
       <label for="evolution-hypothesis" class="visually-hidden">Hypothesis</label>
       <input id="evolution-hypothesis" maxlength="2000" placeholder="Hypothesis (optional)">
+      <!-- T-41 Step 3: a proposal may describe a file change. The target is checked against the
+           immutable governance boundary when the proposal is recorded, and a target on that boundary
+           is refused with IMMUTABLE_GOVERNANCE_BOUNDARY before anything is staged. -->
+      <label for="evolution-target" class="visually-hidden">Target path inside the workspace</label>
+      <input id="evolution-target" maxlength="400" placeholder="target path, e.g. src/greeting.js (optional)">
       <button id="evolution-propose" type="submit" class="small">Record proposal</button>
       <span id="evolution-form-status" class="meta" role="status" aria-live="polite"></span>
     </form>
+    <label for="evolution-content" class="visually-hidden">Proposed content for the target</label>
+    <textarea id="evolution-content" rows="4" placeholder="proposed content for the target (optional)"></textarea>
+    <label for="evolution-test" class="visually-hidden">Companion test for the proposal</label>
+    <textarea id="evolution-test" rows="3" placeholder="optional companion test (node:test) that runs in the sandbox"></textarea>
     <ul id="evolution-proposals" class="work"></ul>
     <h3>Immutable safety boundaries</h3>
     <p id="evolution-boundaries-status" class="meta" role="status" aria-live="polite"></p>
@@ -1448,6 +1457,9 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   evolutionHypothesis: document.getElementById('evolution-hypothesis'),
   evolutionProposeButton: document.getElementById('evolution-propose'),
   evolutionFormStatus: document.getElementById('evolution-form-status'),
+  evolutionTarget: document.getElementById('evolution-target'),
+  evolutionContent: document.getElementById('evolution-content'),
+  evolutionTest: document.getElementById('evolution-test'),
   systemStatus: document.getElementById('system-status'),
   integrationsStatus: document.getElementById('integrations-status'),
   planningForm: document.getElementById('planning-form'),
@@ -1623,7 +1635,10 @@ async function api(path, options = {}) {
         // everything needed to explain itself. The same three scalar fields are copied too, because a
         // caller that only wants the first offending file should not have to walk the list.
         'problems', 'refusedCandidateId', 'refusedRelativePath', 'filesChecked', 'filesRefused',
-        'undone']) {
+        'undone',
+        // T-41: a boundary refusal carries which boundary was hit and why it exists. Without this the
+        // 403 would reach the screen as a bare code.
+        'boundary']) {
         if (typeof data[key] !== 'undefined') error[key] = data[key];
       }
     }
@@ -5140,6 +5155,27 @@ function renderEvolution(result) {
     li.append(el('div', 'meta', 'Promotion: ' + (EVOLUTION_LABEL[promotion.state] || promotion.state || 'not recorded')
       + (promotion.reason ? ' — ' + promotion.reason : '')
       + (promotion.decisionReason ? ' · decision: ' + promotion.decisionReason : '')));
+    // T-41 Step 3: what the proposal would change, and the bridge control.
+    if (proposal.targetRelativePath) {
+      li.append(el('div', 'meta', 'Target: ' + proposal.targetRelativePath
+        + (proposal.staging && proposal.staging.count > 0
+          ? ' · staged as ' + proposal.staging.candidateId + ' at ' + proposal.staging.at
+          : ' · not staged into the workshop')));
+      const stage = el('button', 'small', proposal.staging && proposal.staging.count > 0
+        ? 'Stage to Workshop again' : 'Stage to Workshop');
+      stage.type = 'button';
+      if (sandbox.verified !== true) {
+        // The backend refuses this with 409; the button says why before it is pressed, so the refusal
+        // is never the first time the owner learns the rule.
+        stage.disabled = true;
+        stage.title = 'the proposal has no passing sandbox verification';
+      }
+      stage.addEventListener('click', () => stageToWorkshop(proposal.proposalId, stage));
+      li.append(stage);
+      if (sandbox.verified !== true) {
+        li.append(el('span', 'meta', ' staging needs a passing sandbox verification first'));
+      }
+    }
     if (proposal.promotionBlocked) li.append(el('div', 'meta', 'Blocked: ' + proposal.promotionBlocked));
     else if (promotion.state === 'not_requested' || promotion.state === 'rejected') {
       const request = el('button', 'small', 'Request promotion');
@@ -5171,11 +5207,19 @@ function renderEvolution(result) {
     (entry.locked === true ? 'locked · ' : 'unconfirmed · ') + entry.title,
     entry.evidence,
   ), 'The safety boundaries were not reported by this build.');
+  // T-41 Step 3: the protected-path row, rendered from the policy the refusal uses.
+  const protectedEntry = entries.find((entry) => entry.key === 'protected_paths');
   if (els.evolutionPolicy) {
     const policy = value.policy || {};
-    els.evolutionPolicy.textContent = 'States: ' + (policy.states || []).join(' → ')
+    const states = 'States: ' + (policy.states || []).join(' → ')
       + '. ' + (Array.isArray(policy.rules) ? policy.rules.join(' ') : '')
       + (policy.appliesChanges === false ? ' The lab applies no change to APEX.' : '');
+    // Both lines are shown: the state machine's rules, then the protected-path policy the refusal
+    // reads. Concatenating rather than assigning is what keeps the second from erasing the first.
+    els.evolutionPolicy.textContent = protectedEntry && protectedEntry.policy
+      ? states + ' Immutable boundary — ' + protectedEntry.policy.total + ' protected path(s), no override: '
+        + (protectedEntry.policy.entries ?? []).map((item) => item.path).join(', ') + '.'
+      : states;
   }
 }
 
@@ -5185,7 +5229,17 @@ async function submitEvolutionProposal(event) {
   if (title === '') { if (els.evolutionFormStatus) els.evolutionFormStatus.textContent = 'a title is required'; return; }
   const body = { title };
   const hypothesis = els.evolutionHypothesis?.value?.trim() ?? '';
+  const targetRelativePath = els.evolutionTarget?.value?.trim() ?? '';
+  const proposedContent = els.evolutionContent?.value ?? '';
+  const testContent = els.evolutionTest?.value ?? '';
   if (hypothesis !== '') body.hypothesis = hypothesis;
+  // T-41 Step 3: the target travels only when the owner named one. A refused target comes back as the
+  // boundary's own code, and the status line says which boundary it was rather than "refused".
+  if (targetRelativePath !== '') {
+    body.targetRelativePath = targetRelativePath;
+    if (proposedContent !== '') body.proposedContent = proposedContent;
+    if (testContent.trim() !== '') body.testContent = testContent;
+  }
   if (els.evolutionProposeButton) els.evolutionProposeButton.disabled = true;
   if (els.evolutionFormStatus) els.evolutionFormStatus.textContent = 'recording the proposal…';
   try {
@@ -5193,11 +5247,43 @@ async function submitEvolutionProposal(event) {
     if (els.evolutionFormStatus) els.evolutionFormStatus.textContent = 'recorded ' + result.proposalId + '; it authorizes nothing.';
     if (els.evolutionTitle) els.evolutionTitle.value = '';
     if (els.evolutionHypothesis) els.evolutionHypothesis.value = '';
+    if (els.evolutionTarget) els.evolutionTarget.value = '';
+    if (els.evolutionContent) els.evolutionContent.value = '';
+    if (els.evolutionTest) els.evolutionTest.value = '';
     scheduleEventRefresh();
   } catch (err) {
     if (els.evolutionFormStatus) els.evolutionFormStatus.textContent = 'the proposal was refused: ' + String(err.message || err);
   } finally {
     if (els.evolutionProposeButton) els.evolutionProposeButton.disabled = false;
+    armWatchdog();
+  }
+}
+
+// T-41 Step 3: stage a verified proposal into the Workshop. A boundary refusal arrives as a 403 whose
+// body names the boundary, and the status line repeats that name rather than paraphrasing it: the code
+// is the contract, and the owner should be able to search for it.
+async function stageToWorkshop(proposalId, button) {
+  button.disabled = true;
+  if (els.evolutionStatus) els.evolutionStatus.textContent = 'staging ' + proposalId + ' into the workshop…';
+  try {
+    const data = await api('/api/evolution/proposals/' + encodeURIComponent(proposalId) + '/stage-workshop', {
+      method: 'POST',
+      body: {},
+    });
+    if (els.evolutionStatus) {
+      els.evolutionStatus.textContent = 'staged ' + proposalId + ' as ' + data.candidateId
+        + '. The file is in the sandbox; it has not been verified or applied.';
+    }
+    scheduleEventRefresh();
+  } catch (err) {
+    const code = err && err.code ? err.code : null;
+    if (els.evolutionStatus) {
+      els.evolutionStatus.textContent = code === 'IMMUTABLE_GOVERNANCE_BOUNDARY'
+        ? 'REFUSED IMMUTABLE_GOVERNANCE_BOUNDARY: ' + String(err.message || err)
+        : (code ? 'refused ' + code + ': ' : 'the staging was refused: ') + String(err.message || err);
+    }
+  } finally {
+    button.disabled = false;
     armWatchdog();
   }
 }

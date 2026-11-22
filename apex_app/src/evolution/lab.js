@@ -21,6 +21,11 @@ import { JsonlStore } from '../memory/jsonl-store.js';
 import { ValidationError } from '../errors.js';
 
 export const EVOLUTION_LAB_SCHEMA = 'apex.evolution.lab/1';
+// T-41 Step 3 (2026-11-22): a proposal may now name the file it would change and carry the bytes it
+// would put there. That is a *description*, not a permission: staging it into the Workshop is a
+// separate governed act, the sandbox still has to verify it, and the boundary policy still refuses
+// the paths that decide what a change is allowed to be.
+import { classifyGovernancePath, governanceBoundaryPolicy, canonicalRelativePath } from './governance-boundary.js';
 const EVENT_SCHEMA = 'apex.evolution.event/1';
 
 export const LAB_LIMITS = Object.freeze({
@@ -28,7 +33,7 @@ export const LAB_LIMITS = Object.freeze({
 });
 
 const ID = /^evo-[a-z0-9]{1,32}$/;
-const EVENTS = new Set(['proposal_created', 'verification_recorded', 'promotion_requested', 'promotion_decided']);
+const EVENTS = new Set(['proposal_created', 'verification_recorded', 'promotion_requested', 'promotion_decided', 'staged_to_workshop']);
 const DECISIONS = new Set(['approved', 'rejected']);
 
 function text(value, label, max) {
@@ -50,6 +55,10 @@ function validateEvent(record) {
   if (record.type === 'verification_recorded' && typeof record.verified !== 'boolean') return 'a verification event records true or false';
   if (record.type === 'promotion_requested' && (typeof record.reason !== 'string' || record.reason.length === 0)) return 'a promotion request needs a reason';
   if (record.type === 'promotion_decided' && !DECISIONS.has(record.decision)) return 'a promotion decision is approved or rejected';
+  if (record.type === 'staged_to_workshop') {
+    if (typeof record.candidateId !== 'string' || !/^wsc-[0-9a-f]{12}$/.test(record.candidateId)) return 'a staging event names a workshop candidate';
+    if (typeof record.targetRelativePath !== 'string' || record.targetRelativePath.length === 0) return 'a staging event names the target path';
+  }
   return null;
 }
 
@@ -79,8 +88,10 @@ export function createEvolutionLab({ dataDir, now = () => new Date(), idFactory 
         entry = {
           proposalId: record.proposalId,
           title: null, hypothesis: null, evidence: [], createdAt: null,
+          targetRelativePath: null, proposedContent: null, testContent: null,
           sandbox: { verified: null, detail: null, at: null, events: 0 },
           promotion: { state: 'not_requested', requestedAt: null, reason: null, decidedAt: null, decision: null, decisionReason: null },
+          staging: { count: 0, candidateId: null, at: null },
         };
         proposals.set(record.proposalId, entry);
       }
@@ -89,6 +100,11 @@ export function createEvolutionLab({ dataDir, now = () => new Date(), idFactory 
         entry.hypothesis = record.hypothesis ?? null;
         entry.evidence = Array.isArray(record.evidence) ? [...record.evidence] : [];
         entry.createdAt = record.at;
+        entry.targetRelativePath = record.targetRelativePath ?? null;
+        entry.proposedContent = record.proposedContent ?? null;
+        entry.testContent = record.testContent ?? null;
+      } else if (record.type === 'staged_to_workshop') {
+        entry.staging = { count: entry.staging.count + 1, candidateId: record.candidateId, at: record.at };
       } else if (record.type === 'verification_recorded') {
         entry.sandbox = { verified: record.verified === true, detail: record.detail ?? null, at: record.at, events: entry.sandbox.events + 1 };
       } else if (record.type === 'promotion_requested') {
@@ -142,7 +158,7 @@ export function createEvolutionLab({ dataDir, now = () => new Date(), idFactory 
     return null;
   }
 
-  async function create({ title, hypothesis = null, evidence = [] } = {}) {
+  async function create({ title, hypothesis = null, evidence = [], targetRelativePath = null, proposedContent = null, testContent = null } = {}) {
     const { records } = await readEvents();
     if (new Set(records.map((record) => record.proposalId)).size >= LAB_LIMITS.proposals) {
       throw new ValidationError(`the evolution lab holds at most ${LAB_LIMITS.proposals} proposals`);
@@ -150,6 +166,28 @@ export function createEvolutionLab({ dataDir, now = () => new Date(), idFactory 
     if (!Array.isArray(evidence) || evidence.length > LAB_LIMITS.evidence) {
       throw new ValidationError(`evidence must be a list of at most ${LAB_LIMITS.evidence} items`);
     }
+    // A proposal that names a file is checked against the immutable boundary HERE, at the moment it is
+    // recorded, as well as when it is staged. Two checks is not redundancy: a refusal that only happens
+    // at staging would let a boundary-targeting proposal sit in the ledger looking legitimate.
+    let target = null;
+    if (targetRelativePath !== null) {
+      target = text(targetRelativePath, 'targetRelativePath', 512);
+      const refusal = classifyGovernancePath(target);
+      if (refusal) {
+        const error = new ValidationError(`this path is inside the immutable governance boundary: ${refusal.why}`);
+        error.code = refusal.code;
+        // The executor copies a plain `detail` object onto the step's error record, which is how the
+        // refusal reaches the route and the browser with the boundary's name on it rather than as a
+        // message a screen has to parse.
+        error.detail = { boundary: refusal };
+        throw error;
+      }
+    }
+    if (target === null && (proposedContent !== null || testContent !== null)) {
+      throw new ValidationError('proposedContent and testContent need a targetRelativePath');
+    }
+    if (proposedContent !== null && typeof proposedContent !== 'string') throw new ValidationError('proposedContent must be text');
+    if (testContent !== null && typeof testContent !== 'string') throw new ValidationError('testContent must be text');
     const proposalId = `evo-${idFactory().replace(/-/g, '').slice(0, 16)}`;
     const event = await append({
       type: 'proposal_created',
@@ -157,8 +195,11 @@ export function createEvolutionLab({ dataDir, now = () => new Date(), idFactory 
       title: text(title, 'title', LAB_LIMITS.title),
       hypothesis: hypothesis === null ? null : text(hypothesis, 'hypothesis', LAB_LIMITS.hypothesis),
       evidence: evidence.map((item) => text(String(item), 'an evidence item', 240)),
+      targetRelativePath: target,
+      proposedContent,
+      testContent,
     });
-    return { proposalId, createdAt: event.at };
+    return { proposalId, createdAt: event.at, targetRelativePath: target };
   }
 
   // `verified` is a measurement, not a claim: the caller has to have run something. The lab stores
@@ -210,6 +251,23 @@ export function createEvolutionLab({ dataDir, now = () => new Date(), idFactory 
     return { proposalId, decision: event.decision, at: event.at };
   }
 
+  // T-41 Step 3: record that this proposal was staged into the Workshop as a candidate. The lab does
+  // not stage anything itself - the action calls the sandbox and then writes this event - but the link
+  // is recorded here so the causal trace can follow proposal -> candidate without guessing.
+  async function recordStaging({ proposalId, candidateId, targetRelativePath } = {}) {
+    const { records } = await readEvents();
+    if (!records.some((record) => record.proposalId === proposalId)) {
+      throw new ValidationError(`no evolution proposal ${String(proposalId)} is recorded`);
+    }
+    const event = await append({
+      type: 'staged_to_workshop',
+      proposalId,
+      candidateId,
+      targetRelativePath: canonicalRelativePath(targetRelativePath) ?? String(targetRelativePath),
+    });
+    return { proposalId, candidateId, at: event.at };
+  }
+
   async function get(proposalId) {
     const { records } = await readEvents();
     const entry = reduce(records).get(proposalId);
@@ -234,7 +292,7 @@ export function createEvolutionLab({ dataDir, now = () => new Date(), idFactory 
 
   return Object.freeze({
     filePath: path.join(dataDir, 'evolution-proposals.jsonl'),
-    create, recordVerification, requestPromotion, decidePromotion, list, get, status,
+    create, recordVerification, requestPromotion, decidePromotion, recordStaging, list, get, status,
   });
 }
 
@@ -279,6 +337,15 @@ export function evolutionBoundaries({ registry = null, ecp = null, operations = 
     title: 'A proposal cannot change APEX\'s own code or policy',
     locked: true,
     evidence: 'the lab only appends records; promotion is a recorded decision, and no code or policy path reads the ledger',
+  });
+  // T-41 Step 3: the canonical protected-path policy, read from the same module the refusal uses.
+  const policy = governanceBoundaryPolicy();
+  entries.push({
+    key: 'protected_paths',
+    title: 'Governance, safety, autonomy, ledger and applier paths cannot be targeted',
+    locked: policy.total > 0 && policy.overridable === false,
+    evidence: `${policy.total} protected path(s) enforced with no override; a proposal that targets one is refused ${policy.code}`,
+    policy,
   });
   return Object.freeze({
     entries,

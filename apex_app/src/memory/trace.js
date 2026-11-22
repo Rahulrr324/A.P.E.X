@@ -200,6 +200,11 @@ function readWorkshopVerifications(dataDir) {
       stagedDigest: record.stagedDigest ?? null,
       baseDigest: record.baseDigest ?? null,
       parser: record.parser ?? null,
+      // T-41 Step 3: a candidate staged from an Evolution Lab proposal carries the proposal's id on its
+      // candidate record. Reading it here is what lets the causal trace follow proposal -> candidate
+      // -> verification -> apply without the owner having to match digests by eye.
+      sourceProposalId: candidate?.sourceProposalId ?? null,
+      sandboxTestResult: record.sandboxTestResult ?? null,
       checks: Array.isArray(record.checks) ? record.checks : [],
       promotion: readJson(path.join(sandboxDir, name, 'promotion.json')),
       ledgerPath: path.join('workshop-sandbox', name, 'verification.json'),
@@ -332,7 +337,7 @@ function searchableText(entry) {
     case 'cognition_run': return entry.intent;
     case 'council_session': return entry.objective;
     case 'task': return entry.goal;
-    case 'workshop_verification': return `${entry.relativePath ?? ''} ${entry.rationale ?? ''} ${entry.candidateId ?? ''}`;
+    case 'workshop_verification': return `${entry.relativePath ?? ''} ${entry.rationale ?? ''} ${entry.candidateId ?? ''} ${entry.sourceProposalId ?? ''}`;
     case 'workshop_apply': return `${entry.relativePath ?? ''} ${entry.candidateId ?? ''} ${entry.applyId ?? ''} ${entry.recordKind ?? ''} ${entry.changesetId ?? ''} ${entry.changesetTitle ?? ''}`;
     case 'ecp_audit': return `${entry.capability ?? ''} ${JSON.stringify(entry.request ?? '')}`;
     default: return '';
@@ -409,7 +414,7 @@ export class MemoryTraceService {
         : entry.kind === 'cognition_run' ? { runId: entry.runId, taskId: entry.taskId }
           : entry.kind === 'council_session' ? { sessionId: entry.sessionId }
             : entry.kind === 'task' ? { taskId: entry.taskId, eventId: entry.eventId, type: entry.type }
-              : entry.kind === 'workshop_verification' ? { candidateId: entry.candidateId, verified: entry.verified }
+              : entry.kind === 'workshop_verification' ? { candidateId: entry.candidateId, verified: entry.verified, sourceProposalId: entry.sourceProposalId ?? null }
                 : entry.kind === 'workshop_apply' ? { applyId: entry.applyId, rollbackId: entry.rollbackId, relativePath: entry.relativePath, changesetId: entry.changesetId ?? null, changesetFileCount: entry.changesetFileCount ?? null }
                 : { operationId: entry.operationId, capability: entry.capability },
       traceable: entry.kind !== 'task' || entry.type === 'task_created',
@@ -447,11 +452,35 @@ export class MemoryTraceService {
       if (!ids.includes(wanted)) continue;
       for (const id of ids) keys.add(id);
     }
+    // T-41 Step 3: a trace asked for by proposal id, candidate id or apply id has to include the whole
+    // chain that the staging link joins. Each hop is one field on one record, and following it here is
+    // what turns four separate ledgers into one readable causal story.
+    for (let pass = 0; pass < 4; pass += 1) {
+      const before = keys.size;
+      for (const entry of entries) {
+        if (entry.kind === 'workshop_verification') {
+          if (entry.candidateId && keys.has(entry.candidateId) && entry.sourceProposalId) keys.add(entry.sourceProposalId);
+          if (entry.sourceProposalId && keys.has(entry.sourceProposalId) && entry.candidateId) keys.add(entry.candidateId);
+        } else if (entry.kind === 'workshop_apply') {
+          if (entry.candidateId && keys.has(entry.candidateId) && entry.applyId) keys.add(entry.applyId);
+          if (entry.applyId && keys.has(entry.applyId) && entry.candidateId) keys.add(entry.candidateId);
+        }
+      }
+      if (keys.size === before) break;
+    }
     return keys;
   }
 
   #belongsTo(entry, keys) {
     if (entry.kind === 'cognition_run') return keys.has(entry.runId) || keys.has(entry.taskId);
+    if (entry.kind === 'workshop_verification') {
+      return (typeof entry.candidateId === 'string' && keys.has(entry.candidateId))
+        || (typeof entry.sourceProposalId === 'string' && keys.has(entry.sourceProposalId));
+    }
+    if (entry.kind === 'workshop_apply') {
+      return (typeof entry.candidateId === 'string' && keys.has(entry.candidateId))
+        || (typeof entry.applyId === 'string' && keys.has(entry.applyId));
+    }
     if (entry.kind === 'task') return keys.has(entry.taskId);
     if (entry.kind === 'council_session') {
       // A session belongs to the chain when its objective is a run's intent. That is a match of
@@ -632,6 +661,19 @@ export class MemoryTraceService {
           // Both digests, so the staged bytes and the base bytes can be compared by anyone.
           stagedDigest: verification.stagedDigest,
           baseDigest: verification.baseDigest,
+          // T-41 Step 3: the proposal this candidate came from, and what the sandbox test measured.
+          // Without them the chain would show a verification whose origin the reader has to infer.
+          sourceProposalId: verification.sourceProposalId ?? null,
+          sandboxTestResult: verification.sandboxTestResult === null || verification.sandboxTestResult === undefined
+            ? null
+            : {
+              exitCode: verification.sandboxTestResult.exitCode ?? null,
+              passedCount: verification.sandboxTestResult.passedCount ?? null,
+              failedCount: verification.sandboxTestResult.failedCount ?? null,
+              durationMs: verification.sandboxTestResult.durationMs ?? null,
+              timedOut: verification.sandboxTestResult.timedOut === true,
+              mutatedLiveWorkspace: verification.sandboxTestResult.mutatedLiveWorkspace === true,
+            },
           parser: verification.parser,
           promotion: verification.promotion === null ? null : {
             id: verification.promotion.id ?? null,

@@ -1648,7 +1648,7 @@ export class CognitiveController {
   // Four audited acts. Each one runs the registered capability through runAction, so the ECP
   // authorizes it, the verifier checks the ledger afterwards, and a refusal is recorded rather
   // than swallowed. Nothing here executes a proposal: the lab only appends records.
-  async evolutionPropose({ title, hypothesis = null, evidence = [] } = {}) {
+  async evolutionPropose({ title, hypothesis = null, evidence = [], targetRelativePath = null, proposedContent = null, testContent = null } = {}) {
     const safe = typeof title === 'string' ? title.trim() : '';
     const request = safe === ''
       ? 'evolution propose'
@@ -1659,7 +1659,16 @@ export class CognitiveController {
       capability: 'evolution.propose',
       request,
       action: 'evolution.propose',
-      input: { title: safe, hypothesis, evidence },
+      // T-41 Step 3: the target and the bytes travel with the proposal when they were given. They are
+      // omitted rather than sent as nulls otherwise, so an older shape of the request is unchanged.
+      input: {
+        title: safe,
+        hypothesis,
+        evidence,
+        ...(targetRelativePath === null ? {} : { targetRelativePath }),
+        ...(proposedContent === null ? {} : { proposedContent }),
+        ...(testContent === null ? {} : { testContent }),
+      },
       failMessage: 'The proposal may have been recorded, but its audit record could not be written.',
       status: Outcome.EVOLUTION_PROPOSAL_RECORDED,
     });
@@ -1696,6 +1705,20 @@ export class CognitiveController {
       input: stepUp === null ? { proposalId, decision, reason } : { proposalId, decision, reason, stepUp },
       failMessage: 'The decision may have been recorded, but its audit record could not be written.',
       status: decision === 'approved' ? Outcome.EVOLUTION_PROMOTION_APPROVED : Outcome.EVOLUTION_PROMOTION_REJECTED,
+    });
+  }
+
+  // T-41 Step 3 (2026-11-22): the bridge from an evolution proposal to a Workshop candidate. It runs
+  // through the same governed mutation path as every other evolution act, so the ECP authorizes it and
+  // the audit log holds the request even when the immutable boundary refuses it.
+  async evolutionStageToWorkshop({ proposalId } = {}) {
+    return this.#executiveMutation({
+      capability: 'evolution.stage_to_workshop',
+      request: `evolution stage to workshop [${truncate(String(proposalId ?? ''), 40)}]`,
+      action: 'evolution.stage_to_workshop',
+      input: { proposalId },
+      failMessage: 'The candidate may have been staged, but its audit record could not be written.',
+      status: Outcome.EVOLUTION_STAGED_TO_WORKSHOP,
     });
   }
 

@@ -20,6 +20,7 @@ import { AUTONOMY_LEVELS } from '../executive/control-plane.js';
 import { buildWorldState } from '../world/world-state.js';
 import { Outcome } from '../outcomes.js';
 import { evolutionBoundaries } from '../evolution/lab.js';
+import { IMMUTABLE_BOUNDARY_CODE, governanceBoundaryPolicy } from '../evolution/governance-boundary.js';
 import { hudStatus } from './hud.js';
 import { createDoctor } from '../system/doctor.js';
 
@@ -3305,6 +3306,50 @@ export function createUiServer({
       }
       return;
     }
+    // T-41 Step 3 (2026-11-22): the bridge. It has its own block because its refusal carries structure
+    // the owner needs and a status the other evolution acts do not use: a proposal that targets the
+    // immutable governance boundary is 403 with the boundary's own code, not a 400 "bad request".
+    const stageWorkshopMatch = method === 'POST' && url.pathname.match(/^\/api\/evolution\/proposals\/([^/]+)\/stage-workshop$/);
+    if (stageWorkshopMatch) {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => key !== 'reason');
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      const proposalId = decodeURIComponent(stageWorkshopMatch[1]);
+      try {
+        const result = await app.controller.evolutionStageToWorkshop({ proposalId });
+        const step = result.operation?.steps?.[0] ?? {};
+        const data = step.result?.data ?? null;
+        const failed = step.execution?.error ?? null;
+        if (!data) {
+          const denied = step.authorization?.decision === 'deny' ? (step.authorization.reason ?? null) : null;
+          const code = failed?.code ?? denied ?? null;
+          // 403 is the whole point of the boundary: the request was understood and is refused on
+          // policy, and no amount of retrying with different fields will change that.
+          const status = code === IMMUTABLE_BOUNDARY_CODE ? 403
+            : code === 'WORKSHOP_NOT_FOUND' ? 404
+              : code === 'STAGE_REFUSED_UNVERIFIED' || code === 'STAGE_REFUSED_NO_TARGET' || code === 'STAGE_REFUSED_NO_CONTENT' ? 409
+                : 400;
+          sendJson(res, status, {
+            status: result.status,
+            error: failed?.message ?? result.output ?? 'the bridge refused the request',
+            code,
+            // The boundary detail is carried through so the screen can name the path, the category and
+            // the reason the boundary exists rather than printing a code and stopping.
+            boundary: failed?.boundary ?? null,
+            display: result.display,
+          });
+          return;
+        }
+        const verified = step.verification?.outcome === 'success_verified';
+        sendJson(res, 200, { ...data, actVerified: verified, status: result.status, display: result.display });
+        broadcast('evolution', { proposalId, candidateId: data.candidateId ?? null });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
     if (method === 'POST' && (url.pathname === '/api/evolution/propose'
       || url.pathname === '/api/evolution/verify'
       || url.pathname === '/api/evolution/promote'
@@ -3312,7 +3357,7 @@ export function createUiServer({
       const body = await readJson(req, UI_LIMITS.maxBodyBytes);
       if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
       const allowed = {
-        '/api/evolution/propose': ['title', 'hypothesis', 'evidence'],
+        '/api/evolution/propose': ['title', 'hypothesis', 'evidence', 'targetRelativePath', 'proposedContent', 'testContent'],
         '/api/evolution/verify': ['proposalId', 'verified', 'detail'],
         '/api/evolution/promote': ['proposalId', 'reason'],
         '/api/evolution/decide': ['proposalId', 'decision', 'reason', 'stepUp'],
@@ -3320,7 +3365,16 @@ export function createUiServer({
       const extra = Object.keys(body).filter((key) => !allowed.includes(key));
       if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
       const call = {
-        '/api/evolution/propose': () => app.controller.evolutionPropose({ title: body.title, hypothesis: body.hypothesis ?? null, evidence: body.evidence ?? [] }),
+        '/api/evolution/propose': () => app.controller.evolutionPropose({
+          title: body.title,
+          hypothesis: body.hypothesis ?? null,
+          evidence: body.evidence ?? [],
+          // T-41 Step 3: a proposal may name the file it would change and carry the bytes. The lab
+          // checks the immutable boundary when the proposal is recorded, not only when it is staged.
+          targetRelativePath: body.targetRelativePath ?? null,
+          proposedContent: body.proposedContent ?? null,
+          testContent: body.testContent ?? null,
+        }),
         '/api/evolution/verify': () => app.controller.evolutionVerify({ proposalId: body.proposalId, verified: body.verified, detail: body.detail ?? null }),
         '/api/evolution/promote': () => app.controller.evolutionPromote({ proposalId: body.proposalId, reason: body.reason }),
         '/api/evolution/decide': () => app.controller.evolutionDecide({
@@ -3335,8 +3389,23 @@ export function createUiServer({
         const data = result.operation?.steps?.[0]?.result?.data ?? null;
         const verified = result.operation?.steps?.[0]?.verification?.outcome === 'success_verified';
         if (!data || verified !== true) {
-          const detail = result.operation?.steps?.[0]?.verification?.detail
-            ?? result.operation?.steps?.[0]?.summary
+          const step = result.operation?.steps?.[0] ?? {};
+          // T-41 Step 3: a proposal that targets the immutable governance boundary is refused with 403
+          // and its own code, here as well as at stage time. Recording the proposal is where the refusal
+          // is cheapest to understand, so the status has to match the seriousness of what was asked.
+          const executionError = step.execution?.error ?? null;
+          if (executionError?.code === IMMUTABLE_BOUNDARY_CODE) {
+            sendJson(res, 403, {
+              status: result.status,
+              error: executionError.message,
+              code: IMMUTABLE_BOUNDARY_CODE,
+              boundary: executionError.boundary ?? null,
+              display: result.display,
+            });
+            return;
+          }
+          const detail = step.verification?.detail
+            ?? step.summary
             ?? result.output ?? 'the act was not verified';
           sendJson(res, 400, { status: result.status, error: detail, display: result.display });
           return;

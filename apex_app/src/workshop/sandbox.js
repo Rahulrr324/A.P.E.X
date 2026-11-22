@@ -355,7 +355,7 @@ export class WorkshopSandbox {
   }
 
   // Stage a candidate. Nothing outside the sandbox directory is written.
-  stage({ relativePath, proposedContent, rationale = null, testContent = null } = {}) {
+  stage({ relativePath, proposedContent, rationale = null, testContent = null, sourceProposalId = null } = {}) {
     const relative = this.#relativePath(relativePath);
     if (typeof proposedContent !== 'string') throw new ValidationError('proposedContent must be text', 'INVALID_INPUT');
     const bytes = Buffer.byteLength(proposedContent, 'utf8');
@@ -446,6 +446,10 @@ export class WorkshopSandbox {
       // were staged rather than whatever is on disk when the test happens to run.
       testPath,
       testDigest,
+      // T-41 Step 3: the Evolution Lab proposal this candidate came from, when it came from one. The
+      // causal trace reads it from here, so the link is recorded on the candidate rather than only in
+      // the lab's own ledger.
+      sourceProposalId: typeof sourceProposalId === 'string' && /^evo-[a-z0-9]{1,32}$/.test(sourceProposalId) ? sourceProposalId : null,
       digest,
       bytes,
       lines: countLines(proposedContent),

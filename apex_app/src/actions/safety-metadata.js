@@ -208,6 +208,10 @@ const DECLARATIONS = Object.freeze({
   'evolution.verify': ['reversible', 'local_store'],
   'evolution.promote': ['reversible', 'local_store'],
   'evolution.decide': ['reversible', 'local_store'],
+  // T-41 Step 3: staging writes inside the sandbox and appends one ledger event. Neither the workspace
+  // nor any governance file is touched, which is why this is reversible + workspace_sandbox and not
+  // something stronger.
+  'evolution.stage_to_workshop': ['reversible', 'workspace_sandbox'],
   'perception.dismiss_alert': ['reversible', 'local_store'],
   'perception.revoke_suppression': ['reversible', 'local_store'],
   // The handoff family is registered with dots in its action name, so its declarations are spelled

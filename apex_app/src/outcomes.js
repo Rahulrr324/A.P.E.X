@@ -38,6 +38,9 @@ export const Outcome = Object.freeze({
   EVOLUTION_PROMOTION_REQUESTED: 'evolution_promotion_requested',
   EVOLUTION_PROMOTION_APPROVED: 'evolution_promotion_approved',
   EVOLUTION_PROMOTION_REJECTED: 'evolution_promotion_rejected',
+  // T-41 Step 3: a proposal was staged into the Workshop as a candidate. Staging is not verification
+  // and not an apply, and the name says so.
+  EVOLUTION_STAGED_TO_WORKSHOP: 'evolution_staged_to_workshop',
 });
 
 export const OUTCOME_VALUES = new Set(Object.values(Outcome));
