@@ -3774,7 +3774,9 @@ function renderCandidates() {
     const item = el('li', 'work-item');
     const head = el('div', 'row');
     head.append(el('strong', '', candidate.relativePath));
-    head.append(el('span', 'meta', candidate.candidateId));
+    const idNode = el('span', 'meta', candidate.candidateId);
+    idNode.dataset.candidateId = candidate.candidateId;
+    head.append(idNode);
     // The badge is the backend's verdict, not a local guess.
     const verified = candidate.verification && candidate.verification.verified === true;
     const failed = candidate.verification && candidate.verification.verified === false;

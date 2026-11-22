@@ -242,7 +242,16 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     run.workspace.excerpt = excerpt;
     expect(excerpt).toMatch(/^ {1,5}1 {2}export function greet\(name\) \{/m);
     expect(excerpt).toMatch(/^ {1,5}2 {2} {2}return `hello \$\{name\}`;/m);
-    expect(excerpt).toContain('sha256 ' + expectedDigest.slice(0, 12));
+    // The excerpt body is the numbered lines and nothing else. The path, the line range and the
+    // digest are in the panel title, which is where a reader looks to cite what they are reading.
+    expect(excerpt).not.toContain('sha256');
+    const excerptTitle = await page.locator('#ws-excerpt-title').textContent();
+    run.workspace.excerptTitle = excerptTitle;
+    expect(excerptTitle).toContain('src/greeting.js');
+    expect(excerptTitle).toContain('sha256 ' + expectedDigest.slice(0, 12));
+    // The range names the file's real lines, and after the phantom-line fix it ends at the real last
+    // line rather than one past it.
+    expect(excerptTitle).toContain('lines 1–3 of 3');
 
     checkpoint('workspace listed and read');
 
@@ -271,7 +280,7 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     await expect(brokenCandidate.locator('button', { hasText: 'Promote' })).toBeDisabled();
 
     // The refusal is enforced by the server, not only by the disabled button.
-    const candidateIdFromDom = await brokenCandidate.locator('span.meta').first().textContent();
+    const candidateIdFromDom = await brokenCandidate.locator('[data-candidate-id]').first().getAttribute('data-candidate-id');
     const refused = await page.evaluate(async (candidateId) => {
       const response = await fetch('/api/workshop/promote-file', {
         method: 'POST',
@@ -279,7 +288,7 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
         body: JSON.stringify({ candidateId, reason: 'the browser tried to promote a broken file' }),
       });
       return { status: response.status, body: await response.json().catch(() => null) };
-    }, candidateIdFromDom.trim());
+    }, candidateIdFromDom);
     run.sandbox = {
       refusedPromotionStatus: refused.status,
       refusedPromotionCode: refused.body?.code ?? null,
