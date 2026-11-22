@@ -2701,3 +2701,52 @@ counts {"runs":0,"councilSessions":0,"taskEvents":0,"verifications":2,"applies":
 ```
 
 which is the same shape T-39's chain has, for the same reason - and a unit test pins it.
+
+### Hosted evidence: run 45024216498 (`43c80fc`), all ten suites green
+
+**19 of 19 executed steps passed**, with `Report failing tests` skipped because nothing failed. All ten
+browser suites passed in Edge `157.0.4341.60`, and the T-40 annotation is the milestone's evidence:
+
+```
+browser 157.0.4341.60 | binary microsoft-edge | staged selectable=2 liveUnchanged=True
+preflight CHANGESET_PREFLIGHT_REFUSED refused=src/data.json bothUntouched=True
+    digestsShown=True ledgerChangesets=0
+apply wcs-fb1a81648f4f files=2 atomic=True everyVerified=True backupHoldsBoth=True ui=True
+disk intact=2 modified=1 path=src/greeting.js bothDigests=True
+rollbackRefused CHANGESET_ROLLBACK_DRIFT restoredNothing=True externalEditIntact=True ui=True
+rollback files=2 byteIdentical=True everyVerified=True uiConfirmed=True
+help rows=17 shortcuts=6 byKey=True byToggle=True filled=True escape=True lineSurvived=True
+trace applies=2 ordered=True complete=True
+    counts {"runs":0,"councilSessions":0,"taskEvents":0,"verifications":2,"applies":2,"operations":7}
+console 0 page 0 requests 0 scheduledRefusals 2 | screenshots 7
+```
+
+Read against the milestone's acceptance criteria, one line at a time:
+
+- `preflight ... bothUntouched=True ... ledgerChangesets=0` - the batch was refused and **neither** file
+  was written, including the one that had passed every check of its own.
+- `apply ... atomic=True everyVerified=True backupHoldsBoth=True` - both files landed, each re-read from
+  disk, with the prior bytes of both saved under one changeset id.
+- `disk intact=2 modified=1 ... bothDigests=True` - the re-check measured every applied file, and after an
+  external edit the row flipped with both digests.
+- `rollbackRefused ... restoredNothing=True externalEditIntact=True` - the batch rollback declined to
+  touch anything while one file did not match, and the owner's edit survived.
+- `rollback ... byteIdentical=True everyVerified=True` - and once restored, both files returned to their
+  exact pre-apply digests.
+- `help rows=17 shortcuts=6 byKey=True byToggle=True filled=True escape=True lineSurvived=True` - the
+  reference opened by key and by chip from the router's own tables, a template filled the bar, and Escape
+  closed it without discarding the line.
+- `trace applies=2 ordered=True complete=True` - the batch is one readable chain, apply then rollback,
+  carrying both digests.
+- `console 0 page 0 requests 0 scheduledRefusals 2` - no console error, no uncaught exception, no failed
+  request, and exactly the two refusals this walk asked for.
+
+The other nine suites' notices are unchanged from T-39 and are recorded in that section.
+
+**Five hosted cycles, five defects, and the shape of them is the finding.** Three were display faults
+(the notice overwritten by a `finally`, a whitelist in `api()` that dropped the per-file problems, a
+digest shortened to twelve characters); one was a reader that could not parse what the ledger had
+correctly recorded; one was a key press the binding correctly ignored because focus was still in a field.
+Not one of the five was reachable from `node --check`, from the unit suite, or from reading the client.
+A real browser against a real server and a real directory found every one of them, which is the whole
+argument for the walk existing.
