@@ -441,3 +441,41 @@ test('T-40 command help: the client bundle is real JavaScript, and installs the 
   assert.ok(UI_CLIENT.includes("event.key === '?'"), 'the question-mark binding is not installed');
   assert.ok(UI_CLIENT.includes('/api/command/catalog'), 'the client does not read the catalogue');
 });
+
+test('T-40 command help: a batch notice outranks the selection summary, and survives the finally block', () => {
+  // The first hosted run failed here and nowhere else, and this is the regression pin for it.
+  //
+  // A refusal was rendered correctly and then overwritten a tick later: the click handler's `catch`
+  // wrote the message, and the same handler's `finally` called `updateChangesetControls()`, which wrote
+  // the selection summary over the top. The assertion that ran in between passed while a human could
+  // never have read the refusal. The fix is a held notice, and this test pins its two properties -
+  // that the update function yields to a notice, and that the notice is cleared when the owner changes
+  // the selection - because neither is observable from a plain `node --check` and only one of them is
+  // reliably reachable from a browser walk.
+  assert.ok(UI_CLIENT.includes('function setChangesetNotice'), 'the notice is not held');
+  assert.ok(UI_CLIENT.includes('function clearChangesetNotice'), 'the notice is never cleared');
+  // The ordering that matters: the early return on a live notice comes BEFORE the summary is written.
+  const updateBody = UI_CLIENT.slice(UI_CLIENT.indexOf('function updateChangesetControls'));
+  const endOfUpdate = updateBody.indexOf('\n}');
+  const body = updateBody.slice(0, endOfUpdate === -1 ? updateBody.length : endOfUpdate);
+  const noticeGuard = body.indexOf('if (wsState.changesetNotice) return;');
+  const summaryWrite = body.indexOf('selected.length + \' selected: \'');
+  assert.ok(noticeGuard !== -1, 'updateChangesetControls does not yield to a notice');
+  assert.ok(summaryWrite !== -1, 'updateChangesetControls no longer writes a selection summary');
+  assert.ok(noticeGuard < summaryWrite, 'the notice guard must come before the summary is written');
+  // A selection change clears it, so a stale refusal cannot describe a different batch.
+  const pickHandler = UI_CLIENT.slice(UI_CLIENT.indexOf("pick.addEventListener('change'"));
+  assert.ok(pickHandler.slice(0, 400).includes('clearChangesetNotice()'),
+    'changing the selection must clear the previous notice');
+  // Every outcome path uses the notice rather than writing directly into the status line.
+  for (const phrase of ['Applied \' + data.fileCount + \' files atomically',
+    'refused before writing anything',
+    'Batch rollback refused: ',
+    'Rolled back \' + data.fileCount + \' files']) {
+    const index = UI_CLIENT.indexOf(phrase);
+    assert.ok(index !== -1, `missing outcome message: ${phrase}`);
+    const before = UI_CLIENT.slice(Math.max(0, index - 200), index);
+    assert.ok(!before.includes('setWorkspaceStatus(els.wsChangesetState'),
+      `an outcome message still writes directly into the status line and can be overwritten: ${phrase}`);
+  }
+});

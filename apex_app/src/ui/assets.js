@@ -3765,6 +3765,9 @@ const wsState = {
   changesets: [],
   changesetBusy: false,
   changesetRefusal: null,
+  // The current batch notice and the node that goes with it, so a stale one can be removed.
+  changesetNotice: null,
+  changesetNoticeNode: null,
 };
 
 function formatBytes(bytes) {
@@ -3911,6 +3914,9 @@ function renderCandidates() {
     pick.setAttribute('aria-label', 'select ' + candidate.relativePath + ' for the changeset');
     pick.addEventListener('change', () => {
       candidate.selected = pick.checked;
+      // A new selection makes any previous refusal or result stale, so it is dropped here rather than
+      // lingering over a batch that is no longer the one it described.
+      clearChangesetNotice();
       updateChangesetControls();
     });
     head.append(pick);
@@ -4114,11 +4120,39 @@ function selectedCandidates() {
   return wsState.candidates.filter((candidate) => candidate.selected === true);
 }
 
+// A refusal and a result both outrank the selection summary.
+//
+// This exists because the first hosted walk failed here: the batch was refused correctly and the
+// refusal was rendered correctly, and then the function below - which runs in the same finally block -
+// overwrote it with "2 selected: ..." before a human could read it. The same bug would have erased the
+// success message. So a notice is held until something the owner does clears it, which is exactly the
+// moment the notice stops being current.
+function clearChangesetNotice() {
+  if (wsState.changesetNoticeNode && wsState.changesetNoticeNode.parentNode) {
+    wsState.changesetNoticeNode.parentNode.removeChild(wsState.changesetNoticeNode);
+  }
+  wsState.changesetNoticeNode = null;
+  wsState.changesetNotice = null;
+}
+
+function setChangesetNotice(text, tone, node = null) {
+  clearChangesetNotice();
+  wsState.changesetNotice = { text, tone };
+  if (!els.wsChangesetState) return;
+  setWorkspaceStatus(els.wsChangesetState, text, tone);
+  if (node) {
+    els.wsChangesetState.after(node);
+    wsState.changesetNoticeNode = node;
+  }
+}
+
 function updateChangesetControls() {
   const selected = selectedCandidates();
   if (els.wsApplyChangeset) els.wsApplyChangeset.disabled = selected.length < 2 || Boolean(wsState.changesetBusy);
   if (!els.wsChangesetState) return;
   if (wsState.changesetBusy) return;
+  // A notice is still current until the owner changes the selection or starts another attempt.
+  if (wsState.changesetNotice) return;
   if (selected.length === 0) {
     setWorkspaceStatus(els.wsChangesetState, 'Select two or more verified candidates to apply them as one change.', 'idle');
     return;
@@ -4142,6 +4176,7 @@ async function applyChangeset(button) {
     return;
   }
   const title = (els.wsChangesetTitle?.value ?? '').trim() || 'changeset of ' + selected.length + ' files';
+  clearChangesetNotice();
   wsState.changesetBusy = true;
   if (button) button.disabled = true;
   if (els.wsChangesetState) setWorkspaceStatus(els.wsChangesetState, 'Applying ' + selected.length + ' files as one change…', 'loading');
@@ -4174,11 +4209,9 @@ async function applyChangeset(button) {
     }
     renderCandidates();
     renderChangesets();
-    if (els.wsChangesetState) {
-      setWorkspaceStatus(els.wsChangesetState,
-        'Applied ' + data.fileCount + ' files atomically as ' + data.changesetId + '. Each was read back from disk and matched.',
-        'available');
-    }
+    setChangesetNotice(
+      'Applied ' + data.fileCount + ' files atomically as ' + data.changesetId + '. Each was read back from disk and matched.',
+      'available');
     // The ledger is the source of truth for what is open; re-read it rather than trusting this page.
     void refreshApplyState();
   } catch (error) {
@@ -4196,12 +4229,11 @@ async function applyChangeset(button) {
     }
     box.append(el('p', 'meta', 'No file was written: the pre-flight runs before the first byte.'));
     wsState.changesetRefusal = { code: error.code ?? null, first, problems };
-    if (els.wsChangesetState) {
-      setWorkspaceStatus(els.wsChangesetState,
-        'Changeset refused before writing anything' + (first ? ': ' + (first.relativePath ?? first.candidateId) : '') + '.',
-        'error');
-      els.wsChangesetState.after(box);
-    }
+    // The refusal is held as a notice so the finally block below cannot paint over it, and the
+    // diagnostic box is kept beside it and removed when the notice is cleared.
+    setChangesetNotice(
+      'Changeset refused before writing anything' + (first ? ': ' + (first.relativePath ?? first.candidateId) : '') + '.',
+      'error', box);
   } finally {
     wsState.changesetBusy = false;
     if (button) button.disabled = false;
@@ -4218,6 +4250,7 @@ async function rollbackChangeset(changesetId, button) {
     return;
   }
   if (button) button.disabled = true;
+  clearChangesetNotice();
   wsState.changesetBusy = true;
   try {
     const data = await api('/api/workshop/changesets/' + encodeURIComponent(changesetId) + '/rollback', {
@@ -4236,21 +4269,17 @@ async function rollbackChangeset(changesetId, button) {
     // A candidate the changeset created no longer exists on disk; the row should not claim otherwise.
     renderCandidates();
     renderChangesets();
-    if (els.wsChangesetState) {
-      setWorkspaceStatus(els.wsChangesetState,
-        'Rolled back ' + data.fileCount + ' files. Each holds the bytes it had before the changeset, verified on disk.',
-        'available');
-    }
+    setChangesetNotice(
+      'Rolled back ' + data.fileCount + ' files. Each holds the bytes it had before the changeset, verified on disk.',
+      'available');
   } catch (error) {
-    if (els.wsChangesetState) {
-      const problems = Array.isArray(error.problems) ? error.problems : [];
-      const first = problems[0] ?? null;
-      setWorkspaceStatus(els.wsChangesetState,
-        'Batch rollback refused: ' + (error.code ?? 'CHANGESET_ROLLBACK_DRIFT')
-        + (first ? ' — ' + (first.relativePath ?? '') + ' is not what the changeset wrote' : '')
-        + '. No file was restored; your edit is intact.',
-        'error');
-    }
+    const problems = Array.isArray(error.problems) ? error.problems : [];
+    const first = problems[0] ?? null;
+    setChangesetNotice(
+      'Batch rollback refused: ' + (error.code ?? 'CHANGESET_ROLLBACK_DRIFT')
+      + (first ? ' — ' + (first.relativePath ?? '') + ' is not what the changeset wrote' : '')
+      + '. No file was restored; your edit is intact.',
+      'error');
   } finally {
     wsState.changesetBusy = false;
     if (button) button.disabled = false;

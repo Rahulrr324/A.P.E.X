@@ -2612,5 +2612,29 @@ is the one an owner would actually make of a code assistant. What remains honest
   offered and is not implied.
 - **No watcher.** Drift is detected when asked, not when it happens. A file edited at 03:00 is reported
   when the owner presses Check Disk Status, not before.
-- **The browser walk is unverified here.** It skips without a browser binary in this sandbox; only the
-  hosted Edge run can prove it, and that annotation - not this paragraph - is the evidence.
+- **The browser walk found a real defect on its first hosted run, and that is the argument for it.** The
+  batch was refused correctly, the refusal was rendered correctly, and the click handler's own `finally`
+  block then overwrote it with the selection summary before a human could read it. The unit suite could
+  not see it: the client is a template literal, so nothing static parses it, and the assertion that ran
+  in the browser sat between the write and the overwrite. The fix is a held notice that outranks the
+  summary and is cleared when the owner changes the selection - which also fixed the same bug on the
+  success path, where the "applied atomically" message had been erased the same way. Two pins came out
+  of it: the spec now asserts the notice after the page goes idle, and again that the summary is
+  absent; and a unit test pins the ordering inside `updateChangesetControls`.
+
+**Hosted evidence, first attempt (run 45019149483, `f5ed66c`).** The full unit suite passed. Nine of the
+ten browser suites passed - T-31 through T-39 all green in Edge `157.0.4341.60`. T-40 failed in phase
+`both candidates verified`, which is Step 2 and not Step 3, so the command reference is still
+**UNVERIFIED**. The annotation read:
+
+```
+browser 157.0.4341.60 | binary microsoft-edge | staged selectable=2 liveUnchanged=True |
+preflight None refused=None bothUntouched=None digestsShown=None ledgerChangesets=None |
+apply None files=None atomic=None everyVerified=None backupHoldsBoth=None ui=None |
+console 0 page 0 requests 0 scheduledRefusals 1 | screenshots 1 |
+failures: [both candidates verified] expect(locator).toContainText() failed
+```
+
+Every field after `staged` is `None` because the walk stopped before the step that fills it. The
+`scheduledRefusals 1` is the pre-flight refusal arriving, which is the proof the request was made and
+the server did answer; what failed was the sentence surviving on screen long enough to be asserted.

@@ -253,7 +253,16 @@ test('T-40: a two-file changeset is atomic, disk drift is measured and blocks th
     const refusalAnswer = await refusalDialog;
     expect(refusalAnswer.error, `the changeset prompt: ${refusalAnswer.error}`).toBeNull();
     expect(refusalAnswer.answered).toBe(true);
+    // The notice must SURVIVE the click handler's own finally block. Asserting it once, immediately,
+    // was the wrong test: the message was rendered and then overwritten a tick later by the selection
+    // summary, and an assertion that ran in between passed while a human could never read it. So the
+    // summary is asserted absent as well, which is the property that failed on the first hosted run.
     await expect(page.locator('#ws-changeset-state')).toContainText('refused before writing anything', { timeout: 25_000 });
+    await expect(page.locator('#ws-changeset-state')).not.toContainText('selected');
+    // And it is still there after the page has had time to go idle, which is when the overwrite landed.
+    await page.waitForTimeout(500);
+    await expect(page.locator('#ws-changeset-state')).toContainText('refused before writing anything');
+    await expect(page.locator('#ws-changeset-state')).not.toContainText('selected');
 
     // The claim is about disk: the file that passed its own checks was not written either.
     expect(fixture.readGreeting()).toBe(greetingBefore);
@@ -263,6 +272,7 @@ test('T-40: a two-file changeset is atomic, disk drift is measured and blocks th
     expect(fixture.ledger().filter((record) => record.kind === 'changeset_apply').length).toBe(0);
     // The refusal on screen names the offending file, with both digests.
     const refusalText = await page.locator('.diagnostic').last().textContent();
+    expect(refusalText).toContain('Changeset refused');
     expect(refusalText).toContain('src/data.json');
     expect(refusalText).toContain(dataBase);
     expect(refusalText).toContain(driftDigest);
@@ -290,6 +300,9 @@ test('T-40: a two-file changeset is atomic, disk drift is measured and blocks th
     expect(applyAnswer.answered).toBe(true);
     expect(applyAnswer.message).toContain('reason');
     await expect(page.locator('#ws-changeset-state')).toContainText('atomically', { timeout: 25_000 });
+    await page.waitForTimeout(500);
+    await expect(page.locator('#ws-changeset-state')).toContainText('atomically');
+    await expect(page.locator('#ws-changeset-state')).not.toContainText('selected');
 
     // Both files, read here and hashed here.
     expect(fixture.readGreeting()).toBe(T40_GREETING_NEXT);
@@ -375,6 +388,9 @@ test('T-40: a two-file changeset is atomic, disk drift is measured and blocks th
     expect(driftRollbackAnswer.error, `the rollback prompt: ${driftRollbackAnswer.error}`).toBeNull();
     expect(driftRollbackAnswer.answered).toBe(true);
     await expect(page.locator('#ws-changeset-state')).toContainText('Batch rollback refused', { timeout: 25_000 });
+    await page.waitForTimeout(500);
+    await expect(page.locator('#ws-changeset-state')).toContainText('Batch rollback refused');
+    await expect(page.locator('#ws-changeset-state')).not.toContainText('selected');
     // The file that still matched was NOT restored, and the external edit is intact.
     expect(fixture.readGreeting()).toBe(T40_GREETING_EXTERNAL);
     expect(fixture.readData()).toBe(T40_DATA_NEXT);
@@ -400,6 +416,9 @@ test('T-40: a two-file changeset is atomic, disk drift is measured and blocks th
     expect(rollbackAnswer.error, `the rollback prompt: ${rollbackAnswer.error}`).toBeNull();
     expect(rollbackAnswer.answered).toBe(true);
     await expect(page.locator('#ws-changeset-state')).toContainText('Rolled back', { timeout: 25_000 });
+    await page.waitForTimeout(500);
+    await expect(page.locator('#ws-changeset-state')).toContainText('Rolled back');
+    await expect(page.locator('#ws-changeset-state')).not.toContainText('selected');
 
     // Byte-for-byte, both files.
     expect(fixture.readGreeting()).toBe(T40_GREETING_LIVE);
