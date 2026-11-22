@@ -178,7 +178,11 @@ describe('T-31 browser suite wiring', () => {
     // T-37 Step 4 (2026-11-21): the neural/Council/router walk joins the same list. It is the only
     // suite that reads all eleven screen declarations and all eight substrate regions out of a live
     // DOM, so it is wired here like the rest rather than living as a spec nothing runs.
-    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs', '\*\*\/t36-cold-boot-unseeded\.spec\.mjs', '\*\*\/t37-neural-council-router\.spec\.mjs'\]/);
+    // T-38 Step 4 (2026-11-21): the values/workspace/trace walk joins too. It is the only suite that
+    // drives the file-backed Workshop from the browser and recomputes the digests it renders from
+    // the files on disk, so it is named here for the same reason as the rest: a spec that exists but
+    // is never wired is a red test, not a green one.
+    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs', '\*\*\/t36-cold-boot-unseeded\.spec\.mjs', '\*\*\/t37-neural-council-router\.spec\.mjs', '\*\*\/t38-values-workspace-trace\.spec\.mjs'\]/);
     assert.match(config, /testIgnore: \['\*\*\/apex-browser\.spec\.mjs'\]/);
     const spec = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't31-real-browser.spec.mjs'), 'utf8');
     assert.match(spec, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/);

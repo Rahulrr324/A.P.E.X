@@ -110,21 +110,26 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
   test.skip(!resolution.executable, noBrowserDiagnostic(resolution));
   fs.mkdirSync(reportDir, { recursive: true });
 
-  const fixture = await startT38Ui();
-  const browser = await chromium.launch({ executablePath: resolution.executable, headless: true });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const page = await context.newPage();
+  // The fixture and the browser are started inside the try, so a failure to start either one still
+  // writes a summary. A suite that fails before its own reporting step leaves the annotation step with
+  // nothing to read, which turns one failure into two.
+  let fixture = null;
+  let browser = null;
   const consoleErrors = [];
   const pageErrors = [];
   const failedRequests = [];
-  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
-  page.on('pageerror', (error) => pageErrors.push(String(error?.message ?? error)));
-  page.on('requestfailed', (request) => {
-    if (request.url().endsWith('/favicon.ico')) return;
-    failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText ?? 'failed'}`);
-  });
 
   try {
+    fixture = await startT38Ui();
+    browser = await chromium.launch({ executablePath: resolution.executable, headless: true });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await context.newPage();
+    page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+    page.on('pageerror', (error) => pageErrors.push(String(error?.message ?? error)));
+    page.on('requestfailed', (request) => {
+      if (request.url().endsWith('/favicon.ico')) return;
+      failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText ?? 'failed'}`);
+    });
     run.browserVersion = browser.version();
     await page.goto(`${fixture.base}/?token=${encodeURIComponent(fixture.token)}`, { waitUntil: 'domcontentloaded' });
     await expect(page.locator('body')).toHaveAttribute('data-view', 'deck', { timeout: 20_000 });
@@ -184,12 +189,16 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     await expect(page.locator('body')).toHaveAttribute('data-view', 'workshop');
     await page.click('#ws-refresh');
     await expect(page.locator('#ws-state')).not.toContainText('Inspecting', { timeout: 20_000 });
-    await expect(page.locator('#ws-entries li')).toHaveCount(3);
+    // Four entries: the three files the fixture wrote and the directory that holds two of them. The
+    // directory is listed because the inspector reports the tree it read, not a flattened file list.
+    await expect(page.locator('#ws-entries li')).toHaveCount(4);
 
-    // The listing names the fixture's real files.
+    // The listing names the fixture's real files and directories.
     const listedPaths = await page.locator('#ws-entries li strong').allTextContents();
-    run.workspace = { listed: listedPaths };
-    expect(listedPaths.sort()).toEqual(['README.md', 'src/data.json', 'src/greeting.js']);
+    const listedKinds = await page.locator('#ws-entries li .meta').allTextContents();
+    run.workspace = { listed: listedPaths.sort(), kinds: listedKinds.slice(0, 8) };
+    expect(listedPaths.sort()).toEqual(['README.md', 'src', 'src/data.json', 'src/greeting.js']);
+    expect(listedPaths).toContain('src');
 
     // Bytes, lines and a digest, all recomputed here from the file on disk.
     const greetingPath = path.join(fixture.workspace, 'src', 'greeting.js');
@@ -198,7 +207,7 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     const expectedDigest = createHash('sha256').update(greetingText).digest('hex');
     const greetingRow = page.locator('#ws-entries li', { hasText: 'src/greeting.js' });
     await expect(greetingRow).toContainText(`${greetingText.length} B`);
-    await expect(greetingRow).toContainText('4 lines');
+    await expect(greetingRow).toContainText('3 lines');
     await expect(greetingRow).toContainText(`sha256 ${expectedDigest.slice(0, 12)}`);
     run.workspace.digestMatchesDisk = true;
 
@@ -269,7 +278,10 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     // Six checks, a parser that ran, an exit code of zero, and a diff.
     await expect(validCandidate).toContainText('6/6 checks passed');
     await expect(validCandidate).toContainText('exit 0');
-    await expect(validCandidate).toContainText('diff +');
+    // The diff is line-based: one line changed and one was added, so +2/-1. The numbers are pinned
+    // rather than matched loosely, because a diff summary that drifts from the change is exactly the
+    // kind of quiet inaccuracy the panel exists to avoid.
+    await expect(validCandidate).toContainText('diff +2/-1');
     const validText = await validCandidate.textContent();
     run.sandbox.valid = { rendered: validText.slice(0, 600) };
     const stagedDigest = (validText.match(/sha256 ([0-9a-f]{12})/) ?? [])[1] ?? null;
@@ -278,8 +290,16 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     expect(stagedDigest).not.toBe(expectedDigest.slice(0, 12));
 
     // Promote: the browser is asked for a reason, which is recorded.
-    page.once('dialog', (dialog) => dialog.accept('the browser walk accepts this change'));
+    // window.prompt opens a dialog, so the handler is registered before the click and the click is
+    // awaited after the dialog is answered. A prompt with no handler stalls until the test times out.
+    const dialogAnswered = page.waitForEvent('dialog', { timeout: 20_000 }).then(async (dialog) => {
+      const answer = 'the browser walk accepts this change';
+      await dialog.accept(answer);
+      return answer;
+    });
     await validCandidate.locator('button', { hasText: 'Promote' }).click();
+    const acceptedReason = await dialogAnswered;
+    run.sandbox.promotionReason = acceptedReason;
     await expect(page.locator('#ws-stage-status')).toContainText('Promoted', { timeout: 25_000 });
     // A promotion records a decision; it still does not write the live tree.
     expect(fs.readFileSync(greetingPath, 'utf8')).toBe(liveBefore);
@@ -361,8 +381,11 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     run.failures.push(String(error?.message ?? error));
     throw error;
   } finally {
+    run.consoleErrors = consoleErrors;
+    run.pageErrors = pageErrors;
+    run.failedRequests = failedRequests;
     writeSummary();
-    await browser.close().catch(() => {});
-    await fixture.stop();
+    if (browser) await browser.close().catch(() => {});
+    if (fixture) await fixture.stop().catch(() => {});
   }
 });

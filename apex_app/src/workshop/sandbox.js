@@ -84,7 +84,11 @@ export function readExcerpt(absolutePath, { startLine = 1, lines = 80 } = {}) {
   const raw = fs.readFileSync(absolutePath);
   const truncatedBySize = raw.length > MAX_EXCERPT_BYTES;
   const text = raw.subarray(0, MAX_EXCERPT_BYTES).toString('utf8');
+  // A file ending in a newline splits into a trailing empty element that is not a line of the file.
+  // Dropping it keeps the excerpt's numbers and its count in agreement with `countLines`, so the
+  // panel never shows a phantom last line or a range that ends past the file.
   const all = text.split('\n');
+  if (all.length > 1 && all[all.length - 1] === '') all.pop();
   const from = Math.max(1, Math.min(Number.isInteger(startLine) ? startLine : 1, Math.max(1, all.length)));
   const take = Math.max(1, Math.min(Number.isInteger(lines) ? lines : 80, MAX_EXCERPT_LINES));
   const slice = all.slice(from - 1, from - 1 + take);

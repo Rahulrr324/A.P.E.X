@@ -3588,15 +3588,18 @@ async function runTraceSearch() {
   const q = (els.traceSearchQ?.value ?? '').trim();
   const kind = els.traceSearchKind?.value ?? '';
   const epistemicStatus = els.traceSearchStatus?.value ?? '';
-  const params = new URLSearchParams();
-  if (q) params.set('q', q);
-  if (kind) params.set('kind', kind);
-  if (epistemicStatus) params.set('epistemicStatus', epistemicStatus);
+  // The query string is built by hand here rather than by serialising a URLSearchParams object: the
+  // served client must not contain source-text serialisation, and a literal join is also easier to
+  // read in a test.
+  const parts = [];
+  if (q) parts.push('q=' + encodeURIComponent(q));
+  if (kind) parts.push('kind=' + encodeURIComponent(kind));
+  if (epistemicStatus) parts.push('epistemicStatus=' + encodeURIComponent(epistemicStatus));
   traceState.lastQuery = { q, kind, epistemicStatus };
   setWorkspaceStatus(els.traceSearchStatusLine, 'Searching every ledger…', 'loading');
   if (els.traceSearchButton) els.traceSearchButton.disabled = true;
   try {
-    const data = await api('/api/memory/search?' + params.toString());
+    const data = await api('/api/memory/search' + (parts.length ? '?' + parts.join('&') : ''));
     traceState.results = data.results ?? [];
     renderTraceResults(data);
     // The availability map is reported as it is: a ledger that is not there says it is not there,

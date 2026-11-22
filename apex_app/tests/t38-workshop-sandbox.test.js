@@ -469,3 +469,16 @@ test('T-38 spawn: the parser only ever reads a staged path inside the sandbox', 
     assert.ok(staged.stagedPath.startsWith(path.join(data, 'workshop-sandbox')));
   });
 });
+
+test('T-38 excerpt: a newline-terminated file has no phantom last line', () => {
+  withWorkspace(({ root }) => {
+    fs.writeFileSync(path.join(root, 'three.txt'), 'a\nb\nc\n');
+    const excerpt = readExcerpt(path.join(root, 'three.txt'), { startLine: 1, lines: 80 });
+    // Three lines, numbered one to three. A trailing newline is a terminator, not a fourth line, and
+    // the count and the range must agree with the listing's own count.
+    assert.equal(excerpt.totalLines, 3);
+    assert.equal(excerpt.lines, 3);
+    assert.doesNotMatch(excerpt.excerpt, /\n\s+4\s/);
+    assert.match(excerpt.excerpt, /^\s+3 {2}c$/m);
+  });
+});
