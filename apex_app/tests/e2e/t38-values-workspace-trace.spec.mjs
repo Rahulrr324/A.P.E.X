@@ -448,13 +448,18 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     expect(expectedRefusals.length, `expected refusals seen: ${expectedRefusals.join(' | ')}`).toBe(1);
     expect(failedRequests, `failed requests: ${failedRequests.join(' | ')}`).toEqual([]);
   } catch (error) {
-    run.failures.push(String(error?.message ?? error));
+    // The whole error, not only its message: a Playwright expectation carries the expected and
+    // received values in its message and the source location in its stack, and the annotation is the
+    // only channel this environment can read. Recording only the message is how a genuine failure
+    // reads as a clean run with a red step.
+    run.failures.push({ phase: run.lastPhase ?? null, message: String(error?.message ?? error), stack: String(error?.stack ?? '').slice(0, 2000) });
+    writeSummary();
     throw error;
   } finally {
     run.consoleErrors = consoleErrors;
     run.pageErrors = pageErrors;
     run.failedRequests = failedRequests;
-    run.expectedRefusals = expectedRefusals;
+    if (typeof expectedRefusals !== 'undefined') run.expectedRefusals = expectedRefusals;
     writeSummary();
     if (browser) await browser.close().catch(() => {});
     if (fixture) await fixture.stop().catch(() => {});

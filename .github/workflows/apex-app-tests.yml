@@ -460,8 +460,12 @@ jobs:
               # which is worse than a bad message: no annotation at all, and a second red step that
               # was only a symptom of the first.
               def failure_text(failure):
+                  # A failure may now carry the phase it happened in and the source location, because
+                  # the message alone is what made a real assertion failure look like a clean run.
                   if isinstance(failure, dict):
-                      return str(failure.get('message') or failure)
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
                   return str(failure)
               parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
           message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
