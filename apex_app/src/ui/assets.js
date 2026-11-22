@@ -4002,8 +4002,8 @@ function renderCandidates() {
         // Both digests, named, whenever the file is not intact. A "drifted" badge without the two
         // digests is a riddle rather than a diagnosis.
         if (live.state !== 'intact') {
-          item.append(el('p', 'meta', 'applied ' + (live.appliedSha256 ? shortDigest(live.appliedSha256) : 'n/a')
-            + ' · on disk ' + (live.currentDiskSha256 ? shortDigest(live.currentDiskSha256) : 'absent')));
+          item.append(el('p', 'meta', 'applied ' + (live.appliedSha256 ?? 'n/a')
+            + ' · on disk ' + (live.currentDiskSha256 ?? 'absent')));
         }
         if (live.state === 'modified_externally') {
           item.append(el('p', 'meta', 'A rollback would refuse with ROLLBACK_DRIFT while the file is in this state. Your edit is intact.'));
@@ -4114,9 +4114,11 @@ function renderDiskStatus(data) {
     head.append(el('span', 'meta', state.applyId));
     item.append(head);
     item.append(el('p', 'meta', state.detail ?? ''));
+    // Full digests, not shortened ones. This row exists to be compared with a file the owner hashed,
+    // and a 12-character prefix cannot be compared with anything.
     item.append(el('p', 'meta',
-      'applied ' + (state.appliedSha256 ? shortDigest(state.appliedSha256) : 'n/a')
-      + ' · on disk ' + (state.currentDiskSha256 ? shortDigest(state.currentDiskSha256) : 'absent')));
+      'applied ' + (state.appliedSha256 ?? 'n/a')
+      + ' · on disk ' + (state.currentDiskSha256 ?? 'absent')));
     els.wsDiskStatus.append(item);
   }
 }
@@ -4309,6 +4311,12 @@ function renderChangesets() {
     head.append(el('span', 'badge badge-ok', changeset.fileCount + ' files, atomic'));
     item.append(head);
     item.append(el('p', 'meta', changeset.files.map((file) => file.relativePath).join(' · ')));
+    // Each file with the digest the batch wrote, in full, so this panel can be checked against the
+    // ledger and against the disk rather than merely admired.
+    for (const file of Array.isArray(changeset.files) ? changeset.files : []) {
+      item.append(el('p', 'meta', file.relativePath + ' · applied ' + (file.appliedSha256 ?? 'n/a')
+        + (typeof file.beforeSha256 === 'string' ? ' · before ' + file.beforeSha256 : '')));
+    }
     item.append(el('p', 'meta', 'applied ' + changeset.at + ' · every file verified on disk: ' + (changeset.everyFileVerifiedOnDisk ? 'yes' : 'no')));
     const undo = el('button', 'small', 'Rollback Changeset');
     undo.type = 'button';

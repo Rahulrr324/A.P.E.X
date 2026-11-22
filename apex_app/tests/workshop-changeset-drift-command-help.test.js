@@ -438,6 +438,26 @@ test('T-40 command help: the client bundle is real JavaScript, and installs the 
   }
   assert.ok(UI_CLIENT.includes('dataset.rollbackChangeset'), 'the batch rollback control is not built');
   assert.ok(UI_CLIENT.includes('dataset.selectCandidate'), 'the selection checkbox is not built');
+});
+
+test('T-40 command help: the disk and changeset rows show whole digests, because they are compared', () => {
+  // The third hosted walk failed here, and it was the third instance of the same shape of mistake: the
+  // information was correct in the ledger and had been shortened before it reached the screen. Twelve
+  // characters of a SHA-256 identify a record; they cannot be compared with a file the owner hashed.
+  // Every panel that exists to be checked against the disk now shows the whole digest.
+  const diskRows = UI_CLIENT.slice(UI_CLIENT.indexOf('function renderDiskStatus'),
+    UI_CLIENT.indexOf('function selectedCandidates'));
+  assert.ok(diskRows.length > 200, 'renderDiskStatus was not found');
+  assert.ok(!diskRows.includes('shortDigest('), 'the disk status row shortens a digest it exists to compare');
+  assert.ok(diskRows.includes('state.appliedSha256'), 'the disk status row does not show the applied digest');
+  assert.ok(diskRows.includes('state.currentDiskSha256'), 'the disk status row does not show the current digest');
+
+  const changesetRows = UI_CLIENT.slice(UI_CLIENT.indexOf('function renderChangesets'),
+    UI_CLIENT.indexOf('async function stageCandidate'));
+  assert.ok(changesetRows.length > 200, 'renderChangesets was not found');
+  assert.ok(!changesetRows.includes('shortDigest('), 'the changeset row shortens a digest it exists to compare');
+  assert.ok(changesetRows.includes('file.appliedSha256'), 'the changeset row does not show what it wrote');
+  assert.ok(changesetRows.includes('file.beforeSha256'), 'the changeset row does not show what it replaced');
   // The error contract. `api()` copies a bounded set of refusal fields onto the thrown error, and a
   // field missing from that list is silently unavailable to every handler above it - which is exactly
   // how the T-40 walk reached the screen with an empty diagnostic while the server had sent the whole
