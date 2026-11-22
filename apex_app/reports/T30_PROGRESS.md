@@ -1960,3 +1960,128 @@ browser, so its five defects shipped into a walk that had only ever been reviewe
 what a real-browser step is for, and it is why this milestone kept the suite rather than replacing it
 with the fixture's server-side proof. The fixture proved the substrate, the routes and the ECP; only
 the browser could prove the panel was showing what the API had.
+
+## T-38: what the machine knows before it acts
+
+T-37 closed the Council's qualifier by giving every capability a declaration and giving a sentence a
+deterministic reading. T-38 is the three things that follow from it: the Workshop became a real tool
+that reads this machine's files and refuses the ones it may not read; the Memory Timeline became one
+view over six ledgers instead of six views over one each; and the constraint core's verdict now
+travels with the record of what it was verdicting.
+
+### Step 1: the declaration and the reading
+
+Every registered capability carries `reversibility` and `blastRadius` from closed vocabularies, and
+the registry refuses a definition that contradicts its own declaration - a `read_only` capability
+cannot claim a blast radius. 159 capabilities declared, 80 of them writes, and a test pins the totals
+so a new capability cannot arrive without someone answering the question.
+
+The reading is deterministic and ordered: an exact `capability_id`, then the controller's own router,
+then an exact registry name, then nothing. When nothing matches, the reason is the literal string
+`no_mapped_capability`, because the difference between "this rule passed" and "this rule had nothing
+to check" is the difference the core exists to preserve.
+
+Measured, through `council.deliberate({objective: 'run the neural step'})`:
+
+```
+verdict satisfied   satisfied 5  violated 0  unverifiable 0  not_applicable 1
+```
+
+The three `unverifiable` rows T-37 reported are gone, and the rule that checks reversibility now says
+"is declared reversible" rather than "declares no reversibility" - because the fact changed, not the
+rule. A test that pins the rule's behaviour was updated with that sentence in a comment, which is the
+only honest way to change an assertion about a fact.
+
+For a sentence that names nothing:
+
+```
+objective  make me a sandwich
+verdict    partly_unverifiable
+detail     no_mapped_capability - the objective names no registered capability, so there is no
+           declaration to read
+```
+
+### Step 2: the inspector and the sandbox
+
+`workspace.inspect` and `workspace.read_file` list and read the configured workspace root, excluding
+`.git`, `node_modules` and build trees, and reporting a binary file as binary rather than reading it.
+Every path is resolved through `realpathSync` before a byte is opened, so a traversal string, an
+absolute path, and a symbolic link pointing out of the root are all refused with `ACCESS_DENIED` -
+by measurement, not by inspecting the string. A link pointing *inside* the root is still readable,
+because the rule is containment and not a ban on links.
+
+`workshop.stage_file`, `workshop.verify_file` and `workshop.promote_file` are the sandbox loop. A
+candidate is written to `<dataDir>/workshop-sandbox/<candidate>/`, the live tree is read and never
+written, and `verified: true` requires a real parser's exit code of zero *and* all six workshop checks.
+Promotion is refused with `PROMOTION_REFUSED` unless the newest record for that candidate verified,
+and a promotion applies nothing to the workspace even when it accepts.
+
+One finding is worth recording because it nearly produced a lie. Node infers a file's module kind
+from the nearest `package.json`; a `.js` file with no manifest is a CommonJS script, and
+
+```
+export function b( { return 2; }
+```
+
+exits **0** under `node --check` when read as a script. The verifier would have reported `verified:
+true` for a file that cannot load. The sandbox now writes `{"type":"module"}` beside the candidates it
+stages, and a test pins both halves of the measurement - that the bytes pass as a script and fail as a
+module - so the fix cannot be quietly undone.
+
+The verifier spawns exactly one process: `process.execPath --check <staged>`, three fixed arguments,
+no shell, a five-second bound and a one-megabyte buffer. That is a third reviewed exception to the
+rule that the application links no process spawning, scoped to one file, and the argument vector and
+the `shell: false` setting are pinned by test so the exception cannot widen without failing.
+
+### Step 3: six ledgers, one chain
+
+A cognition run writes to `operations.jsonl`, `cognition-runs.jsonl`, `council.jsonl`, `tasks.jsonl`,
+and the workshop sandbox, and none of those could be read in time order together. The Memory Timeline
+now searches all six kinds at once and assembles a chronological chain for any run, task or operation
+id.
+
+The design rule is that every entry is a record that exists:
+
+* a ledger that has not been written reports `present: false` rather than contributing an empty step
+  to a chain that looks whole;
+* an unknown id is a 404, not an empty chain;
+* a corrupt line is counted and surfaced rather than skipped;
+* a link that is a match of text - the Council's objective equals a run's intent - says so in the
+  entry instead of posing as a foreign key.
+
+Two record changes were needed and they are the reason the chain is worth reading. The Council's
+canonical input now carries the resolved candidate's safety metadata, and the constraint position
+records the declaration it actually read. Before this the record said what was concluded but not what
+it was concluded against. Measured on a real session:
+
+```
+candidate    neural.step  reversible  local_store  declared
+declaration  memory.add   write  ["user"]  plannable  reversible  local_store  declared
+verdict      satisfied  {"satisfied":5,"violated":0,"unverifiable":0,"not_applicable":1}
+```
+
+The chain for a real run, read out of the records:
+
+```
+cognition_run  (intent, stages, the neural bridge's candidate associations)
+council_session (objective = the run's intent - a text match, and it says so)
+task_graph     (task_created, then each transition)
+workshop_verification (verified, both SHA-256 digests, the parser's exit code)
+ecp_audit      (the operation, its capability and the ECP's decision)
+```
+
+A search writes nothing. The tests prove it by hashing every file in the data directory before and
+after a search and comparing them.
+
+### Step 4: the walk
+
+`tests/e2e/t38-values-workspace-trace.spec.mjs` drives a real server against a temporary workspace it
+writes itself, so every byte, line count and digest the panel shows can be recomputed from disk in the
+test. It asserts the constraint verdict and the declared metadata, the parser catching a broken
+candidate with a 409 refusal from the server itself, a valid candidate verifying and promoting without
+writing the live tree, a search reaching every ledger, and a chain that reaches the run, the Council
+session and the task graph - with zero console errors, page errors or failed requests and no
+horizontal overflow on any view.
+
+The walk is CI-only. This sandbox has no Chromium and no Edge, so the spec was run here and skipped
+with its diagnostic; the browser evidence in the next section is from the hosted run.
