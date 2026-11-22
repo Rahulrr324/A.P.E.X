@@ -85,6 +85,31 @@ function checkpoint(phase, detail = null) {
   writeSummary();
 }
 
+// Answer the next dialog with `text`, and hand back a record rather than a bare promise.
+//
+// The promise is given a rejection handler immediately, at the moment it is created. A `waitForEvent`
+// promise that rejects while the caller is still awaiting something else becomes an unhandled
+// rejection, and Node treats that as fatal: the worker exits, the browser closes, and the operation
+// that was actually in flight is reported as "Target page, context or browser has been closed". That
+// is a symptom wearing a cause's clothes, and it cost a hosted cycle to see through.
+//
+// The timeout is deliberately longer than the click it accompanies, so a dialog that never appears is
+// reported as a missing dialog rather than as a dead browser.
+function acceptNextDialog(page, text) {
+  const record = { answered: false, text: null, error: null, message: null };
+  const promise = page.waitForEvent('dialog', { timeout: 45_000 }).then(async (dialog) => {
+    record.message = dialog.message();
+    record.text = text;
+    record.answered = true;
+    await dialog.accept(text);
+    return record;
+  }).catch((error) => {
+    record.error = String(error?.message ?? error);
+    return record;
+  });
+  return promise;
+}
+
 async function measureOverflow(page) {
   return page.evaluate(() => {
     const doc = document.documentElement;
@@ -119,12 +144,18 @@ async function stageAndVerify(page, { relativePath, content, rationale }) {
   await page.fill('#ws-stage-content', content);
   await page.click('#ws-stage-submit');
   await expect(page.locator('#ws-stage-status')).toContainText('Staged', { timeout: 20_000 });
-  const candidate = page.locator('#ws-candidates li').first();
-  await expect(candidate.locator('.badge')).toHaveText('not checked');
-  await candidate.locator('button', { hasText: 'Verify' }).click();
-  await expect(candidate.locator('.badge')).toHaveText('verified', { timeout: 25_000 });
-  const id = await candidate.locator('[data-candidate-id]').first().getAttribute('data-candidate-id');
+  // The newest candidate is first in the list, but `.first()` is a *lazy* locator: it re-resolves on
+  // every use, so staging a second candidate silently moves it to the other row. Every later
+  // assertion would then be about the wrong candidate - which is how the first hosted run failed, with
+  // a rollback control that could not be found because it was being looked for on the new row.
+  // The id is read once, and every locator after this is scoped by it.
+  const newest = page.locator('#ws-candidates li').first();
+  await expect(newest.locator('.badge')).toHaveText('not checked');
+  await newest.locator('button', { hasText: 'Verify' }).click();
+  await expect(newest.locator('.badge')).toHaveText('verified', { timeout: 25_000 });
+  const id = await newest.locator('[data-candidate-id]').first().getAttribute('data-candidate-id');
   expect(id).toBeTruthy();
+  const candidate = page.locator('#ws-candidates li', { has: page.locator(`[data-candidate-id="${id}"]`) });
   return { candidate, candidateId: id };
 }
 
@@ -198,12 +229,15 @@ test('T-39: a verified candidate is applied to the real workspace, a stale one i
     // ------------------------------------------------------------------------- 2. apply ---
     // window.prompt opens a dialog: the handler is registered before the click, and the click is
     // awaited after the dialog is answered.
-    const applyDialog = page.waitForEvent('dialog', { timeout: 20_000 }).then(async (dialog) => {
-      await dialog.accept('the walk applies this candidate');
-      return dialog.message();
-    });
+    const applyDialog = acceptNextDialog(page, 'the walk applies this candidate');
     await applyButton.click();
-    await applyDialog;
+    const applyAnswer = await applyDialog;
+    expect(applyAnswer.error, `the apply prompt: ${applyAnswer.error}`).toBeNull();
+    expect(applyAnswer.answered).toBe(true);
+    // The apply asks for a reason, and the prompt's own text is recorded rather than assumed.
+    expect(applyAnswer.message).toContain('reason');
+    run.apply.reasonPrompted = true;
+    run.apply.promptText = applyAnswer.message.slice(0, 200);
     await expect(page.locator('#ws-stage-status')).toContainText('Applied', { timeout: 25_000 });
 
     // The claim is about the disk. The bytes are read here and hashed in this process.
@@ -256,11 +290,11 @@ test('T-39: a verified candidate is applied to the real workspace, a stale one i
     expect(fixture.readLive()).toBe(T39_EXTERNAL_EDIT);
 
     // The refusal, driven through the page so the browser sees the 409 and the panel renders it.
-    const driftDialog = page.waitForEvent('dialog', { timeout: 20_000 }).then(async (dialog) => {
-      await dialog.accept('the walk tries to apply over an external edit');
-    });
+    const driftDialog = acceptNextDialog(page, 'the walk tries to apply over an external edit');
     await second.candidate.locator(`[data-apply-candidate="${second.candidateId}"]`).click();
-    await driftDialog;
+    const driftAnswer = await driftDialog;
+    expect(driftAnswer.error, `the apply prompt: ${driftAnswer.error}`).toBeNull();
+    expect(driftAnswer.answered).toBe(true);
     await expect(page.locator('#ws-stage-status')).toContainText('Apply refused', { timeout: 25_000 });
 
     // The external edit survived: a refused apply writes nothing at all.
@@ -297,11 +331,11 @@ test('T-39: a verified candidate is applied to the real workspace, a stale one i
     fs.writeFileSync(fixture.livePath, T39_CANDIDATE_SOURCE, 'utf8');
     expect(sha256(fixture.readLive())).toBe(appliedSha256);
 
-    const rollbackDialog = page.waitForEvent('dialog', { timeout: 20_000 }).then(async (dialog) => {
-      await dialog.accept('the walk restores the file');
-    });
-    await first.candidate.locator(`[data-rollback-apply="${applyRecord.applyId}"]`).click();
-    await rollbackDialog;
+    const rollbackDialog = acceptNextDialog(page, 'the walk restores the file');
+    await page.locator(`[data-rollback-apply="${applyRecord.applyId}"]`).click();
+    const rollbackAnswer = await rollbackDialog;
+    expect(rollbackAnswer.error, `the rollback prompt: ${rollbackAnswer.error}`).toBeNull();
+    expect(rollbackAnswer.answered).toBe(true);
     await expect(page.locator('#ws-stage-status')).toContainText('Rolled back', { timeout: 25_000 });
 
     // Byte-identical to what it held before the apply.
