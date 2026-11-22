@@ -122,8 +122,10 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
   // This walk does more than any other suite in one test: it starts a server, launches a browser,
   // deliberates twice, stages and verifies twice, and walks every view measuring overflow. Its own
   // budget is stated here rather than inherited, so a slow machine fails for being slow and not for
-  // being asked to do the whole milestone in ninety seconds.
-  test.setTimeout(300_000);
+  // being asked to do the whole milestone in ninety seconds - but it is also bounded, because the
+  // job that runs eight browser suites has a thirty-five minute ceiling and one suite may not take
+  // an unbounded share of it. Every phase writes a checkpoint, so a timeout here names the phase.
+  test.setTimeout(180_000);
   test.skip(!resolution.executable, noBrowserDiagnostic(resolution));
   fs.mkdirSync(reportDir, { recursive: true });
 

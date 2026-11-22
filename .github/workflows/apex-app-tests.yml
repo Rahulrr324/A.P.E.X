@@ -53,7 +53,14 @@ jobs:
         working-directory: apex_app
         run: |
           set -o pipefail
-          node node_modules/playwright/cli.js test --reporter=list 2>&1 | tee "$RUNNER_TEMP/t31-browser.log"
+          # The list reporter is for a human reading the log. The JSON reporter is for the
+          # annotation: it records every test's own status, so a red step can say which test was red
+          # instead of leaving it to be inferred from a truncated list. Its file is written to the
+          # runner's temp directory beside the log and never into the repository.
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$RUNNER_TEMP/t31-browser.json" \
+            node node_modules/playwright/cli.js test --reporter=list,json \
+            2>&1 | tee "$RUNNER_TEMP/t31-browser.log"
+          exit "${PIPESTATUS[0]}"
       # The browser result, the viewports and each screenshot's real dimensions, as one annotation
       # this environment can read without downloading the job log.
       - name: Publish the real-browser result
@@ -67,6 +74,7 @@ jobs:
           text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
           match = re.search(r'^T31_BROWSER_SUMMARY (\{.*\})$', text, re.M)
           parts = [f'step={outcome}']
+          level = 'notice'
           if not match:
               skipped = re.search(r'(\d+) skipped', text)
               parts.append('no browser summary was printed')
@@ -93,8 +101,29 @@ jobs:
               for shot in data['screenshots']:
                   parts.append(f"{shot['file']} {shot['width']}x{shot['height']} {shot['bytes']}B")
               parts.append('checks=' + json.dumps(data.get('checks', {}), sort_keys=True))
+          # The JSON reporter's own record of every test, so a red step names the red test rather
+          # than leaving it to be inferred from a list the annotation has room to truncate. Each line
+          # is "<file> :: <title> -> <status> (<duration>)", read from the runner's temp directory.
+          report = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.json')
+          if os.path.exists(report):
+              try:
+                  results = json.load(open(report, encoding='utf-8'))
+                  for suite_file in results.get('suites', []):
+                      for spec in suite_file.get('specs', []):
+                          for test_case in spec.get('tests', []):
+                              status = (test_case.get('results') or [{}])[-1].get('status', 'unknown')
+                              duration = sum(int((r.get('duration') or 0) / 1000) for r in (test_case.get('results') or []))
+                              parts.append(f"{os.path.basename(spec.get('file') or suite_file.get('file') or '?')} :: {spec.get('title')[:70]} -> {status} ({duration}s)")
+                              if status not in ('passed', 'skipped'):
+                                  level = 'error'
+              except Exception as error:  # a broken report must not hide the summary that did print
+                  parts.append(f'could not read the json report: {error}')
+          else:
+              parts.append('no json report was written')
           message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
-          level = 'notice' if outcome == 'success' else 'error'
+          # `level` was set above from the step outcome and again from any test that did not pass, so
+          # the annotation is red for either reason rather than the last assignment winning.
+          level = 'error' if level == 'error' or outcome != 'success' else 'notice'
           print(f'::{level} title=real-browser-verification::{message[:60000]}')
           PY
       # T-32 Step 2 (2026-11-19): the HUD experience result. Reticle posture per Core state, the
