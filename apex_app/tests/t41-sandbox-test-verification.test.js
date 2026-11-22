@@ -24,6 +24,24 @@ import { ModelGateway, NoBackend } from '../src/model/gateway.js';
 import {
   WorkshopSandbox, SANDBOX_TEST_TIMEOUT_MS, sandboxTestCounts,
 } from '../src/workshop/sandbox.js';
+import { UI_CLIENT } from '../src/ui/assets.js';
+
+// Pull one function out of the served client by its signature, so an assertion about the client reads
+// the code the browser actually receives rather than a copy of it.
+function clientFunction(signature) {
+  const start = UI_CLIENT.indexOf(signature);
+  assert.notEqual(start, -1, `the served client includes ${signature}`);
+  const open = UI_CLIENT.indexOf('{', start);
+  let depth = 0;
+  for (let index = open; index < UI_CLIENT.length; index += 1) {
+    if (UI_CLIENT[index] === '{') depth += 1;
+    else if (UI_CLIENT[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return UI_CLIENT.slice(start, index + 1);
+    }
+  }
+  throw new Error(`unterminated function at ${signature}`);
+}
 
 const TOKEN = 't41-sandbox-test-token-0123456789';
 const roots = [];
@@ -271,5 +289,38 @@ describe('T-41 an unverified candidate cannot be applied', () => {
     // 413: the body limit refuses it before the action ever sees it, which is the earlier and better
     // refusal. What matters is that a 256 KiB test is not accepted.
     assert.equal(oversized.status, 413, JSON.stringify(oversized.body));
+  });
+});
+
+// T-41 Step 5 (2026-11-22): the wiring, which the backend tests cannot see.
+//
+// The first hosted T-41 browser run failed at its own staging step with every backend test green: the
+// client computed the companion test from the textarea and then never put it in the request body, so
+// the sandbox received nothing, `hasSandboxTest` came back false, and the status line said "verify to
+// run the parser". The field existed; the wire did not.
+//
+// These tests assert the wire, by reading the served client's own source. They are not a substitute
+// for the browser walk - they pin exactly the two lines whose absence the walk found.
+describe('T-41 the client actually sends the companion test and names the refusal', () => {
+  test('the stage body carries testContent when one was typed', () => {
+    const submit = clientFunction('async function stageCandidate(');
+    assert.match(submit, /const testContent = /, 'the client reads the companion test from the field');
+    assert.match(submit, /testContent/, 'the local is named');
+    // The request body must include it. Computing the value and dropping it is the exact defect.
+    const body = submit.slice(submit.indexOf('body: {'));
+    assert.match(body.slice(0, 400), /testContent/,
+      'the stage request body must carry testContent, not only compute it');
+  });
+
+  test('the stage status line reports whether a test was staged', () => {
+    const submit = clientFunction('async function stageCandidate(');
+    assert.match(submit, /hasSandboxTest/, 'the status line reads the backend flag');
+    assert.match(submit, /sandbox test/i, 'and says so in words the owner can read');
+  });
+
+  test('a boundary refusal is shown with its code', () => {
+    const propose = clientFunction('async function submitEvolutionProposal(');
+    assert.match(propose, /IMMUTABLE_GOVERNANCE_BOUNDARY|err\.code/,
+      'the proposal form surfaces the refusal code rather than a bare "refused"');
   });
 });

@@ -4397,7 +4397,11 @@ async function stageCandidate() {
   try {
     const data = await api('/api/workshop/stage', {
       method: 'POST',
-      body: { relativePath, proposedContent, ...(rationale ? { rationale } : {}) },
+      // T-41 Step 2: the companion test is sent when there is one. It was computed and then dropped
+      // from this body in the first version, so the sandbox never received a test, hasSandboxTest
+      // came back false, and the T-41 walk failed at its own staging step while every backend test
+      // passed - the field existed, the wiring did not.
+      body: { relativePath, proposedContent, ...(rationale ? { rationale } : {}), ...(testContent ? { testContent } : {}) },
     });
     wsState.candidates.unshift({
       candidateId: data.candidateId,
