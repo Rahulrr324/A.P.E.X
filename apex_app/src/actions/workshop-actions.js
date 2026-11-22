@@ -609,19 +609,28 @@ function fileBackedActions() {
     {
       name: 'workshop.stage_file',
       description: 'Stage a proposed new or modified file into an isolated sandbox under the APEX data directory, recording its SHA-256 digest, a line diff against the current workspace file when one exists, and the rationale. The live workspace tree is never written to. A staged file is not verified; verifying it is a separate, measured step.',
-      inputHint: '{"relativePath": "src/thing.js", "proposedContent": "text", "rationale": "why"}',
+      inputHint: '{"relativePath": "src/thing.js", "proposedContent": "text", "rationale": "why", "testContent": "optional node:test source"}',
       permission: 'write',
       origins: [ORIGIN_USER],
       plannable: false,
       validate(input) {
         if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new ValidationError('input must be an object');
         for (const key of Object.keys(input)) {
-          if (!['relativePath', 'proposedContent', 'rationale'].includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
+          if (!['relativePath', 'proposedContent', 'rationale', 'testContent'].includes(key)) throw new ValidationError(`unexpected input field "${key}"`);
         }
         const relativePath = textInput(input.relativePath, 'relativePath', { max: 512 });
         if (typeof input.proposedContent !== 'string') throw new ValidationError('proposedContent must be text');
         const rationale = input.rationale === undefined || input.rationale === null ? null : textInput(input.rationale, 'rationale', { max: 2000 });
-        return { relativePath, proposedContent: input.proposedContent, rationale };
+        // T-41 Step 2: an optional companion test. It is bounded here as well as in the sandbox so a
+        // request that is too large is refused before it reaches the staging write.
+        let testContent = null;
+        if (input.testContent !== undefined && input.testContent !== null) {
+          if (typeof input.testContent !== 'string') throw new ValidationError('testContent must be text');
+          if (Buffer.byteLength(input.testContent, 'utf8') > 256 * 1024) throw new ValidationError('testContent exceeds 262144 bytes');
+          if (input.testContent.trim().length === 0) throw new ValidationError('testContent must not be empty');
+          testContent = input.testContent;
+        }
+        return { relativePath, proposedContent: input.proposedContent, rationale, testContent };
       },
       async execute(ctx, input) {
         const sandbox = requireSandbox(ctx);
@@ -637,6 +646,9 @@ function fileBackedActions() {
             base: record.base,
             diff: record.diff,
             verified: false,
+            // T-41: staging with a companion test is not verification. The flag says a test travelled
+            // with the candidate; `verified` stays false until `workshop.verify_file` runs it.
+            hasSandboxTest: typeof record.testPath === 'string',
             sandboxDir: record.sandboxDir,
             mutatesLiveWorkspace: false,
             authorizesExecution: false,
@@ -661,7 +673,7 @@ function fileBackedActions() {
     },
     {
       name: 'workshop.verify_file',
-      description: 'Verify a staged file by running the real parser against the staged bytes in the sandbox: node --check for .js/.mjs/.cjs, strict JSON.parse for .json. Records the exact exit code and stderr, the staged and base SHA-256 digests, and the diff. verified is true only when every check passed; a syntax error makes it false and keeps the parser message.',
+      description: 'Verify a staged file by running the real parser against the staged bytes in the sandbox: node --check for .js/.mjs/.cjs, strict JSON.parse for .json. When the candidate carried a companion test, the real test runner executes it inside the sandbox with a fixed argument vector and a 5000 ms timeout, and its exit code, pass/fail counts and output excerpt are recorded as sandboxTestResult. A failed assertion, a non-zero exit, or a change to the live workspace measured across the run makes verified false. Records the staged and base SHA-256 digests and the diff. verified is true only when every check passed.',
       inputHint: '{"candidateId": "wsc-..."}',
       permission: 'write',
       origins: [ORIGIN_USER],
@@ -688,7 +700,14 @@ function fileBackedActions() {
             + verification.checks.map((check) => `  ${check.passed ? 'pass' : 'FAIL'}  ${check.id} — ${check.detail}`).join('\n')
             + (verification.parser.ran ? `\n\n${verification.parser.kind} exited ${verification.parser.exitCode} as ${verification.parser.moduleKind}` : '')
             + (verification.parser.stderr ? `\n${verification.parser.stderr}` : '')
-            + '\nThe file was parsed in the sandbox. The live workspace was not written and nothing was authorized.',
+            + (verification.sandboxTestResult
+              ? `\n\nnode --test exited ${verification.sandboxTestResult.exitCode} in ${verification.sandboxTestResult.durationMs} ms: `
+                + `${verification.sandboxTestResult.passedCount} passed, ${verification.sandboxTestResult.failedCount} failed`
+                + (verification.sandboxTestResult.timedOut ? ' (timed out)' : '')
+                + `\n${verification.sandboxTestResult.outputExcerpt}`
+              : '\n\nNo companion test was staged, so behaviour was not exercised; only parsing was measured.')
+            + '\nThe file was parsed and its test, when one was staged, ran in the sandbox. '
+            + 'The live workspace was not written and nothing was authorized.',
         );
       },
       async verify(ctx, input, result) {

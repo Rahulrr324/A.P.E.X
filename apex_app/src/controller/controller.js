@@ -1582,10 +1582,10 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
-  async workshopStageFile({ relativePath, proposedContent, rationale = null } = {}) {
+  async workshopStageFile({ relativePath, proposedContent, rationale = null, testContent = null } = {}) {
     const shown = typeof relativePath === 'string' ? truncate(relativePath, 60) : '[missing path]';
     const op = this.#newOp({ capability: 'workshop.stage_file', origin: 'user', request: `workshop stage [${shown}]` });
-    const step = await this.runAction('workshop.stage_file', { relativePath, proposedContent, rationale }, 'user', op.id);
+    const step = await this.runAction('workshop.stage_file', { relativePath, proposedContent, rationale, testContent }, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 

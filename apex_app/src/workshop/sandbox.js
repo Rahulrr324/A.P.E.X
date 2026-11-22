@@ -52,6 +52,14 @@ export const MAX_EXCERPT_LINES = 200;
 export const MAX_EXCERPT_BYTES = 64 * 1024;
 export const MAX_STAGED_BYTES = 256 * 1024;
 export const SYNTAX_CHECK_TIMEOUT_MS = 5_000;
+// T-41 Step 2 (2026-11-22): a staged candidate may carry a companion test, and a test is code that
+// runs - inside the sandbox, with a fixed argument vector, a short timeout and a working directory the
+// process cannot leave. It runs even though nothing else in this module does, because "the file parses"
+// and "the file behaves" are different claims and the second is the one worth making before writing
+// into the owner's tree.
+export const SANDBOX_TEST_TIMEOUT_MS = 5_000;
+export const MAX_SANDBOX_TEST_BYTES = 256 * 1024;
+export const SANDBOX_TEST_FILES = Object.freeze(['.test.js', '.test.mjs', '.spec.js', '.spec.mjs']);
 
 // The extensions `node --check` can actually parse. Anything else is verified by the other checks
 // only, and the record says so rather than implying a parse happened.
@@ -155,6 +163,26 @@ export function diffSummary(before, after, { previewLines = 12 } = {}) {
 
 // The workspace inspector. `root` is the configured target workspace; when there is none the
 // inspector is unavailable and says so, which is a different answer from an empty directory.
+// The counts the test runner prints, read from its summary rather than guessed.
+//
+// `node --test` ends a passing run with `# pass 3` / `# fail 0`, and a failing one the same way, so the
+// numbers are the runner's own. A run that crashed before printing a summary yields zeros, which is
+// reported as zero passed and one failed by the caller - never as a pass.
+export function sandboxTestCounts(text) {
+  const body = String(text ?? '');
+  const read = (label) => {
+    const match = new RegExp(`^#\\s*${label}\\s+(\\d+)\\s*$`, 'm').exec(body)
+      ?? new RegExp(`^#\\s*${label}\\s+(\\d+)\\b`, 'm').exec(body);
+    return match ? Number.parseInt(match[1], 10) : null;
+  };
+  const passed = read('pass');
+  const failed = read('fail');
+  return {
+    passed: passed ?? 0,
+    failed: failed ?? (/\.test\.(?:m?js)\b/.test(body) || body.trim().length > 0 ? 1 : 0),
+  };
+}
+
 export class WorkspaceInspector {
   constructor({ root = null, dataDir } = {}) {
     this.root = root && typeof root === 'string' ? root : null;
@@ -327,7 +355,7 @@ export class WorkshopSandbox {
   }
 
   // Stage a candidate. Nothing outside the sandbox directory is written.
-  stage({ relativePath, proposedContent, rationale = null } = {}) {
+  stage({ relativePath, proposedContent, rationale = null, testContent = null } = {}) {
     const relative = this.#relativePath(relativePath);
     if (typeof proposedContent !== 'string') throw new ValidationError('proposedContent must be text', 'INVALID_INPUT');
     const bytes = Buffer.byteLength(proposedContent, 'utf8');
@@ -336,6 +364,16 @@ export class WorkshopSandbox {
     }
     if (rationale !== null && (typeof rationale !== 'string' || rationale.length > 2000)) {
       throw new ValidationError('rationale must be text of at most 2000 characters', 'INVALID_INPUT');
+    }
+    // T-41 Step 2: a companion test is optional. When present it is text of the same bounded size, and
+    // it is written INTO the sandbox only - it is never a workspace path and never applied.
+    if (testContent !== null) {
+      if (typeof testContent !== 'string') throw new ValidationError('testContent must be text', 'INVALID_INPUT');
+      const testBytes = Buffer.byteLength(testContent, 'utf8');
+      if (testBytes > MAX_SANDBOX_TEST_BYTES) {
+        throw new ValidationError(`testContent exceeds ${MAX_SANDBOX_TEST_BYTES} bytes`, 'INPUT_TOO_LARGE');
+      }
+      if (testContent.trim().length === 0) throw new ValidationError('testContent must not be empty', 'INVALID_INPUT');
     }
 
     // The base file, when the workspace has one, is read through the inspector's gate - so staging
@@ -381,6 +419,17 @@ export class WorkshopSandbox {
     fs.writeFileSync(stagedPath, proposedContent, 'utf8');
     const digest = sha256(proposedContent);
 
+    // The companion test, when one was given. It is written inside the candidate's own directory and
+    // imports the staged file by its relative name, so the test that runs during verification is the
+    // test that will be recorded - not a copy made later from somewhere else.
+    let testPath = null;
+    let testDigest = null;
+    if (typeof testContent === 'string') {
+      testPath = path.join(dir, `${path.basename(stagedName, path.extname(stagedName))}.test.mjs`);
+      fs.writeFileSync(testPath, testContent, 'utf8');
+      testDigest = sha256(testContent);
+    }
+
     const diff = base.exists ? diffSummary(base.content, proposedContent)
       : { addedLines: countLines(proposedContent), removedLines: 0, preview: [] };
 
@@ -393,6 +442,10 @@ export class WorkshopSandbox {
       at: this.now().toISOString(),
       stagedPath,
       sandboxDir: dir,
+      // T-41: the companion test, and its digest so a later verification can prove it is the bytes that
+      // were staged rather than whatever is on disk when the test happens to run.
+      testPath,
+      testDigest,
       digest,
       bytes,
       lines: countLines(proposedContent),
@@ -467,6 +520,121 @@ export class WorkshopSandbox {
     }
   }
 
+  // A cheap, order-independent fingerprint of the live workspace tree: how many files it holds and a
+  // digest over their paths, sizes and mtimes. It is taken before and after a sandbox test runs.
+  //
+  // It is deliberately *not* a full content hash of every file - that would read the whole tree twice
+  // for every verification. Path/size/mtime catches the thing worth catching (a test wrote, appended,
+  // or deleted a file) without turning verification into a tree scan. When no root is configured the
+  // fingerprint is `null` and the check is reported as vacuous rather than passed-by-accident.
+  #workspaceFingerprint() {
+    if (!this.inspector.available) return null;
+    const root = this.inspector.root;
+    const entries = [];
+    let files = 0;
+    const walk = (dir, depth) => {
+      if (depth > 12) return;
+      let dirents;
+      try {
+        dirents = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const dirent of dirents) {
+        const full = path.join(dir, dirent.name);
+        if (dirent.isDirectory()) {
+          // The data directory can live inside the workspace in tests; skip the sandbox itself so a
+          // verification does not count its own writes as a workspace mutation.
+          if (comparablePath(full) === comparablePath(this.dataDir)) continue;
+          walk(full, depth + 1);
+        } else if (dirent.isFile()) {
+          files += 1;
+          try {
+            const stat = fs.statSync(full);
+            entries.push(`${comparablePath(full)}:${stat.size}:${stat.mtimeMs}`);
+          } catch {
+            entries.push(`${comparablePath(full)}:gone`);
+          }
+        }
+        if (files > 20_000) return;
+      }
+    };
+    walk(root, 0);
+    entries.sort();
+    return {
+      entries: files,
+      digest: createHash('sha256').update(entries.join('\n')).digest('hex'),
+      at: this.now().toISOString(),
+    };
+  }
+
+  // Run a staged test file with the real test runner, in the sandbox, and report what it measured.
+  //
+  // Three properties this has to have, and each is a way it could be wrong:
+  //
+  //   1. **No shell.** The argument vector is a literal array and `shell` is false, so a candidate's
+  //      content is never parsed by a shell. A test named `x; rm -rf ~` is a filename that does not
+  //      resolve, not a command.
+  //   2. **Bounded.** A fixed timeout, a bounded stdout buffer, and `cwd` set to the candidate's own
+  //      sandbox directory, so a relative write lands where the sandbox already tolerates writes.
+  //   3. **Truthful.** A non-zero exit is a failed verification, not a warning; the counts come from
+  //      the runner's own summary lines rather than from counting characters.
+  runSandboxTest(testPath) {
+    const started = Date.now();
+    const dir = path.dirname(testPath);
+    try {
+      const stdout = execFileSync(process.execPath, ['--test', testPath], {
+        // The argument vector above is the whole command - no shell, no interpolation.
+        shell: false,
+        timeout: SANDBOX_TEST_TIMEOUT_MS,
+        // The test runs inside the candidate's sandbox directory. It is the only place this module
+        // lets code run, and it is not the workspace.
+        cwd: dir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        maxBuffer: 4 * 1024 * 1024,
+        env: {
+          // A deliberately small environment: no APEX credentials, no provider keys, no paths to the
+          // real data directory. A sandbox test that needs a secret is a sandbox test that must fail.
+          PATH: process.env.PATH ?? '',
+          HOME: dir,
+          NODE_OPTIONS: '',
+          APEX_SANDBOX_TEST: '1',
+        },
+      });
+      const text = String(stdout ?? '');
+      const counts = sandboxTestCounts(text);
+      return {
+        ran: true, passed: true, exitCode: 0, durationMs: Date.now() - started,
+        passedCount: counts.passed, failedCount: counts.failed,
+        outputExcerpt: truncate(text, 1200),
+        timedOut: false,
+        command: `${path.basename(process.execPath)} --test <staged test>`,
+      };
+    } catch (err) {
+      const exitCode = typeof err?.status === 'number' ? err.status : null;
+      const timedOut = err?.signal === 'SIGTERM' || err?.signal === 'SIGKILL' || /timed? ?out/i.test(String(err?.message ?? ''));
+      // Both streams: a failing assertion is usually on stdout, a load error on stderr, and a report
+      // that shows only one of them is a report the owner cannot act on.
+      const combined = `${String(err?.stdout ?? '')}\n${String(err?.stderr ?? '')}`.trim();
+      const counts = sandboxTestCounts(combined);
+      return {
+        ran: true,
+        // A timeout is a failure: a test that did not finish has not passed.
+        passed: false,
+        exitCode,
+        durationMs: Date.now() - started,
+        passedCount: counts.passed,
+        failedCount: counts.failed === 0 && timedOut ? 1 : counts.failed,
+        outputExcerpt: truncate(timedOut
+          ? `the sandbox test did not finish within ${SANDBOX_TEST_TIMEOUT_MS} ms\n${combined}`
+          : combined || String(err?.message ?? err), 1200),
+        timedOut,
+        command: `${path.basename(process.execPath)} --test <staged test>`,
+      };
+    }
+  }
+
   // Strict JSON parse for a `.json` candidate. `JSON.parse` is the parser Node itself uses, so this is
   // the same strictness the runtime would apply when it loads the file.
   checkJson(stagedPath) {
@@ -498,6 +666,44 @@ export class WorkshopSandbox {
       : extension === '.json' ? this.checkJson(stagedPath)
         : { kind: 'none', ran: false, passed: true, detail: `no parser is defined for ${extension || 'this file type'}` };
 
+    // T-41 Step 2: the behavioural check. It runs only when a companion test was staged, and it runs
+    // AFTER the cheap checks are computed but BEFORE they are assembled, because its result has to be
+    // able to set `verified: false` - a sandbox test that fails must block promotion and apply, not
+    // decorate the report.
+    //
+    // The workspace digest is taken around the run. A test executes arbitrary code in a directory this
+    // module controls, and "the live tree is unchanged" is a claim that has to be measured rather than
+    // assumed - a test could try to write through an absolute path, and this is the check that says
+    // whether it managed.
+    let sandboxTest = null;
+    let workspaceBeforeTest = null;
+    let workspaceAfterTest = null;
+    if (typeof record.testPath === 'string' && fs.existsSync(record.testPath)) {
+      workspaceBeforeTest = this.#workspaceFingerprint();
+      const result = this.runSandboxTest(record.testPath);
+      workspaceAfterTest = this.#workspaceFingerprint();
+      sandboxTest = {
+        ran: true,
+        exitCode: result.exitCode,
+        passed: result.passed,
+        passedCount: result.passedCount,
+        failedCount: result.failedCount,
+        durationMs: result.durationMs,
+        outputExcerpt: result.outputExcerpt,
+        timedOut: result.timedOut,
+        command: result.command,
+        // The test bytes are re-hashed so the record names what actually ran.
+        testDigest: createHash('sha256').update(fs.readFileSync(record.testPath)).digest('hex'),
+        testUnchangedSinceStaging: createHash('sha256').update(fs.readFileSync(record.testPath)).digest('hex') === record.testDigest,
+      };
+    }
+
+    // Objects compare by identity, so the mutation check reads the digest out of each fingerprint. When
+    // no workspace root is configured both are null and the check is vacuous - reported as such below.
+    const testMutatedWorkspace = sandboxTest === null ? false
+      : workspaceBeforeTest === null || workspaceAfterTest === null ? null
+        : workspaceBeforeTest.digest !== workspaceAfterTest.digest;
+
     const checks = [
       {
         id: 'sandbox_contained',
@@ -528,6 +734,41 @@ export class WorkshopSandbox {
         asserts: 'the proposed path is inside the configured workspace root',
         passed: record.base.digest !== undefined && this.inspector.available,
         detail: this.inspector.available ? `resolved against ${record.base.path}` : 'no workspace root is configured',
+      },
+      {
+        id: 'sandbox_test_passed',
+        asserts: sandboxTest === null
+          ? 'no behavioural test was staged, so parsing is the only evidence recorded'
+          : 'the staged test ran with the real test runner and every assertion passed',
+        // No test is not a failure and not evidence either: the check states which of the two it is.
+        passed: sandboxTest === null ? true : sandboxTest.passed === true && sandboxTest.testUnchangedSinceStaging === true,
+        detail: sandboxTest === null
+          ? 'no companion test was staged; this candidate was checked for syntax only'
+          : sandboxTest.passed
+            ? `node --test passed ${sandboxTest.passedCount} assertion(s) in ${sandboxTest.durationMs} ms`
+            : truncate(sandboxTest.outputExcerpt, 600),
+        measured: sandboxTest === null ? null : {
+          ran: true,
+          exitCode: sandboxTest.exitCode,
+          passedCount: sandboxTest.passedCount,
+          failedCount: sandboxTest.failedCount,
+          durationMs: sandboxTest.durationMs,
+          timedOut: sandboxTest.timedOut,
+        },
+      },
+      {
+        id: 'workspace_untouched_by_test',
+        asserts: sandboxTest === null
+          ? 'no code ran, so the workspace cannot have been touched'
+          : 'the live workspace is byte-identical before and after the sandbox test ran',
+        passed: testMutatedWorkspace === false,
+        detail: sandboxTest === null
+          ? 'no test was run'
+          : testMutatedWorkspace === null
+            ? 'no workspace root is configured, so there was nothing to measure'
+            : testMutatedWorkspace
+              ? 'a file under the workspace root changed while the sandbox test ran'
+              : `measured over ${workspaceBeforeTest.entries} file(s) before and after the run`,
       },
       {
         id: 'diff_recorded',
@@ -569,9 +810,26 @@ export class WorkshopSandbox {
         // The module kind matters: a `.js` file checked as a script is not the file that will load.
         moduleKind: extension === '.mjs' ? 'module' : extension === '.cjs' ? 'commonjs' : (syntax.kind === 'node_check' ? 'module (sandbox manifest)' : 'n/a'),
       },
+      // T-41 Step 2: what the behavioural check measured. `null` when no companion test was staged -
+      // which is honest about the difference between "behaviour was checked" and "it parses".
+      sandboxTestResult: sandboxTest === null ? null : {
+        ran: true,
+        exitCode: sandboxTest.exitCode,
+        passedCount: sandboxTest.passedCount,
+        failedCount: sandboxTest.failedCount,
+        durationMs: sandboxTest.durationMs,
+        outputExcerpt: sandboxTest.outputExcerpt,
+        timedOut: sandboxTest.timedOut,
+        command: sandboxTest.command,
+        testDigest: sandboxTest.testDigest,
+        testUnchangedSinceStaging: sandboxTest.testUnchangedSinceStaging,
+        mutatedLiveWorkspace: testMutatedWorkspace,
+      },
       // A verification is an account of a check. It authorizes nothing and applies nothing.
       authorizesExecution: false,
-      executedCode: false,
+      // The one thing in this module that runs code. Saying so is what makes the flag useful: it is
+      // true exactly when a staged test was executed, and false otherwise.
+      executedCode: sandboxTest !== null,
       mutatesLiveWorkspace: false,
     };
 

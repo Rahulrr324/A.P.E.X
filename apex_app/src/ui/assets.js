@@ -669,6 +669,11 @@ export const UI_PAGE = `<!doctype html>
     </form>
     <label for="ws-stage-content" class="visually-hidden">Proposed content</label>
     <textarea id="ws-stage-content" rows="6" placeholder="the proposed content of the file"></textarea>
+    <!-- T-41 Step 2: an optional companion test. It runs under the real node:test runner inside the
+         candidate's sandbox during verification; it is never applied to the workspace. Leaving it
+         empty is honest - verification then measures parsing only, and says so. -->
+    <label for="ws-stage-test" class="visually-hidden">Companion test (optional)</label>
+    <textarea id="ws-stage-test" rows="4" placeholder="optional companion test (node:test) — runs in the sandbox, never applied"></textarea>
     <ul id="ws-candidates" class="work"></ul>
     <!-- T-40 Step 1 and 2: the live disk check, the all-or-nothing changeset controls, and the list of
          applied changesets. A checkbox selects a verified candidate for the batch; the Apply Changeset
@@ -1375,6 +1380,7 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   wsStagePath: document.getElementById('ws-stage-path'),
   wsStageRationale: document.getElementById('ws-stage-rationale'),
   wsStageContent: document.getElementById('ws-stage-content'),
+  wsStageTest: document.getElementById('ws-stage-test'),
   wsStageSubmit: document.getElementById('ws-stage-submit'),
   wsStageStatus: document.getElementById('ws-stage-status'),
   wsCandidates: document.getElementById('ws-candidates'),
@@ -4055,6 +4061,25 @@ function renderCandidates() {
       if (failure) item.append(el('pre', 'code', failure.id + ': ' + failure.detail));
       // The parser's own words, verbatim - this is the message that names the broken line.
       if (parser.stderr) item.append(el('pre', 'code', parser.stderr));
+
+      // T-41 Step 2: what the sandbox test measured. A verification without one says so rather than
+      // showing a green line that implies behaviour was checked when it was not.
+      const sandboxTest = candidate.verification.sandboxTestResult;
+      if (sandboxTest) {
+        item.append(el('p', 'meta',
+          'sandbox test · exit ' + (sandboxTest.exitCode === null ? 'n/a' : sandboxTest.exitCode)
+          + ' · ' + sandboxTest.passedCount + ' passed, ' + sandboxTest.failedCount + ' failed'
+          + ' · ' + sandboxTest.durationMs + ' ms'
+          + (sandboxTest.timedOut ? ' · timed out' : '')
+          + (sandboxTest.mutatedLiveWorkspace === true ? ' · WROTE TO THE WORKSPACE' : '')));
+        // The failing output, verbatim, because the reason an assertion failed is the only thing the
+        // owner can act on. Truncated by the backend, never by this renderer.
+        if (sandboxTest.outputExcerpt) item.append(el('pre', 'code', sandboxTest.outputExcerpt));
+      } else if (candidate.hasSandboxTest) {
+        item.append(el('p', 'meta', 'a companion test was staged but has not been run yet'));
+      } else {
+        item.append(el('p', 'meta', 'no companion test was staged: behaviour was not exercised'));
+      }
     }
     els.wsCandidates.append(item);
   }
@@ -4344,6 +4369,10 @@ async function stageCandidate() {
   const relativePath = (els.wsStagePath?.value ?? '').trim();
   const proposedContent = els.wsStageContent?.value ?? '';
   const rationale = (els.wsStageRationale?.value ?? '').trim();
+  // T-41 Step 2: the companion test travels with the candidate into the sandbox. An empty box is
+  // null, not an empty string - the difference is "no behavioural check was staged" versus "a check
+  // that asserts nothing", and only the first is honest.
+  const testContent = (els.wsStageTest?.value ?? '').trim().length > 0 ? els.wsStageTest.value : null;
   if (!relativePath) {
     setWorkspaceStatus(els.wsStageStatus, 'A relative path is required.', 'error');
     return;
@@ -4362,6 +4391,7 @@ async function stageCandidate() {
       bytes: data.bytes,
       lines: data.lines,
       diff: data.diff,
+      hasSandboxTest: data.hasSandboxTest === true,
       // The base digest the apply gate will compare against; null when the file does not exist yet.
       baseDigest: data.base?.exists === true ? (data.base.digest ?? null) : null,
       verification: null,
@@ -4370,7 +4400,8 @@ async function stageCandidate() {
     });
     renderCandidates();
     setWorkspaceStatus(els.wsStageStatus,
-      'Staged ' + data.candidateId + '. The live file is unchanged; verify to run the parser.', 'available');
+      'Staged ' + data.candidateId + '. The live file is unchanged; verify to run '
+      + (data.hasSandboxTest === true ? 'the parser and the sandbox test.' : 'the parser.'), 'available');
   } catch (error) {
     setWorkspaceStatus(els.wsStageStatus, 'Refused: ' + error.message, 'error');
   } finally {

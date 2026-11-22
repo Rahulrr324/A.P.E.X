@@ -3076,7 +3076,7 @@ export function createUiServer({
       if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
       const staging = url.pathname === '/api/workshop/stage';
       const verifying = url.pathname === '/api/workshop/verify-file';
-      const allowed = staging ? ['relativePath', 'proposedContent', 'rationale'] : verifying ? ['candidateId'] : ['candidateId', 'reason'];
+      const allowed = staging ? ['relativePath', 'proposedContent', 'rationale', 'testContent'] : verifying ? ['candidateId'] : ['candidateId', 'reason'];
       const extra = Object.keys(body).filter((key) => !allowed.includes(key));
       if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
       try {
@@ -3085,6 +3085,9 @@ export function createUiServer({
             relativePath: body.relativePath,
             proposedContent: body.proposedContent,
             rationale: body.rationale ?? null,
+            // T-41 Step 2: the optional companion test travels with the candidate into the sandbox.
+            // It is never applied to the workspace - only the candidate file is.
+            testContent: body.testContent ?? null,
           })
           : verifying
             ? await app.controller.workshopVerifyFile({ candidateId: body.candidateId })
