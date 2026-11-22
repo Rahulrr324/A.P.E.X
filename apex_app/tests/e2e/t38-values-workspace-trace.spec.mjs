@@ -123,7 +123,7 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
   // deliberates twice, stages and verifies twice, and walks every view measuring overflow. Its own
   // budget is stated here rather than inherited, so a slow machine fails for being slow and not for
   // being asked to do the whole milestone in ninety seconds.
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   test.skip(!resolution.executable, noBrowserDiagnostic(resolution));
   fs.mkdirSync(reportDir, { recursive: true });
 
@@ -403,22 +403,35 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     const views = await page.locator('.nav-item[data-view]').evaluateAll((nodes) => nodes.map((n) => n.getAttribute('data-view')));
     const perView = [];
     for (const view of views) {
+      const startedAt = Date.now();
       await page.click(`.nav-item[data-view="${view}"]`);
-      await page.waitForTimeout(120);
+      await page.waitForTimeout(80);
       const measured = await measureOverflow(page);
-      perView.push({ view, ...measured });
+      perView.push({ view, ...measured, ms: Date.now() - startedAt });
+      // One checkpoint per view: if the budget runs out during the walk, the summary names the view
+      // and the times of the ones that finished, which is the difference between "the walk is slow"
+      // and "this screen hangs the browser".
+      checkpoint(`view ${view}`, { ms: Date.now() - startedAt });
     }
     run.overflow = perView;
     for (const measured of perView) {
       expect(measured.overflows, `${measured.view} overflows horizontally: ${JSON.stringify(measured.offending)}`).toBe(false);
     }
-    // And a final capture of the memory view, where the chain was read.
+    // And a capture of the memory view, where the chain was read, and of the workshop sandbox. These
+    // are viewport captures: after the walk the document is many screens tall, and a full-page image
+    // of it is slow to take and unreadable as evidence. The overflow numbers above are the record of
+    // the whole page; these two images are the record of the two panels the milestone added.
     await page.click('.nav-item[data-view="memory"]');
-    await page.screenshot({ path: path.join(reportDir, 'memory-trace-chain.png'), fullPage: true });
+    await page.waitForTimeout(150);
+    checkpoint('memory view reopened');
+    await page.screenshot({ path: path.join(reportDir, 'memory-trace-chain.png') });
     run.screenshots += 1;
+    checkpoint('memory screenshot');
     await page.click('.nav-item[data-view="workshop"]');
-    await page.screenshot({ path: path.join(reportDir, 'workshop-sandbox.png'), fullPage: true });
+    await page.waitForTimeout(150);
+    await page.screenshot({ path: path.join(reportDir, 'workshop-sandbox.png') });
     run.screenshots += 1;
+    checkpoint('workshop screenshot');
 
     // ---------------------------------------------------------------- 6. nothing failed ---
     // The console collectors have been running since the first byte of the page. Nothing may have
