@@ -67,6 +67,18 @@ function writeSummary() {
   fs.writeFileSync(summaryPath, `${JSON.stringify(run, null, 2)}\n`);
 }
 
+// The summary is written after every phase, not only at the end. A test that is killed by the
+// Playwright timeout never reaches its own `finally`, and a suite that leaves no summary behind
+// turns one failure into two: the annotation step then has nothing to read and reports a second
+// problem that is only a symptom. With a checkpoint the record always names the last phase that
+// finished, so a timeout is diagnosable from the artifact alone.
+function checkpoint(phase, detail = null) {
+  run.lastPhase = phase;
+  run.phases = Array.isArray(run.phases) ? run.phases : [];
+  run.phases.push({ phase, at: new Date().toISOString(), detail });
+  writeSummary();
+}
+
 // Every element that declares a screen, read from the live DOM so the audit is of what the browser
 // parsed rather than of the source that produced it.
 async function readScreenDeclarations(page) {
@@ -107,6 +119,11 @@ async function measureOverflow(page) {
 test.describe.configure({ mode: 'serial' });
 
 test('T-38: safety metadata, the real workspace sandbox, and the causal chain in a real browser', async () => {
+  // This walk does more than any other suite in one test: it starts a server, launches a browser,
+  // deliberates twice, stages and verifies twice, and walks every view measuring overflow. Its own
+  // budget is stated here rather than inherited, so a slow machine fails for being slow and not for
+  // being asked to do the whole milestone in ninety seconds.
+  test.setTimeout(240_000);
   test.skip(!resolution.executable, noBrowserDiagnostic(resolution));
   fs.mkdirSync(reportDir, { recursive: true });
 
@@ -131,8 +148,11 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
       failedRequests.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText ?? 'failed'}`);
     });
     run.browserVersion = browser.version();
+    checkpoint('browser launched');
     await page.goto(`${fixture.base}/?token=${encodeURIComponent(fixture.token)}`, { waitUntil: 'domcontentloaded' });
     await expect(page.locator('body')).toHaveAttribute('data-view', 'deck', { timeout: 20_000 });
+
+    checkpoint('page loaded');
 
     // ------------------------------------------------------------- 1. the constraints core ---
     // A natural-language objective naming a capability. The backend resolves it, evaluates the core
@@ -172,6 +192,8 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
       expect(['satisfied', 'violated', 'unverifiable', 'not_applicable']).toContain(rule.verdict);
     }
 
+    checkpoint('constraints core');
+
     // The honesty rule, in the same breath: an objective that names nothing still says why.
     await fixture.post('/api/council/deliberate', { objective: 'make me a sandwich' });
     const after = fs.readFileSync(sessionFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
@@ -183,6 +205,8 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     expect(unmapped.position.verdict).toBe('partly_unverifiable');
     // The reason is the verbatim string the brief requires.
     expect(unmapped.evaluation.evaluations.some((rule) => rule.detail.includes('no_mapped_capability'))).toBe(true);
+
+    checkpoint('unmapped objective');
 
     // ------------------------------------------------------------------- 2. the real workspace ---
     await page.click('[data-view="workshop"]');
@@ -219,6 +243,8 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     expect(excerpt).toMatch(/^ {1,5}1 {2}export function greet\(name\) \{/m);
     expect(excerpt).toMatch(/^ {1,5}2 {2} {2}return `hello \$\{name\}`;/m);
     expect(excerpt).toContain('sha256 ' + expectedDigest.slice(0, 12));
+
+    checkpoint('workspace listed and read');
 
     // --------------------------------------------------------------------- 3. the sandbox ---
     // A candidate with broken syntax, staged and then verified in the browser. The backend runs a real
@@ -264,6 +290,8 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     // And the live workspace was never written.
     expect(fs.readFileSync(greetingPath, 'utf8')).toBe(liveBefore);
 
+    checkpoint('broken candidate caught and refused');
+
     // A valid candidate. It must verify, show a diff and both digests, and promote through the ECP.
     await page.fill('#ws-stage-path', 'src/greeting.js');
     await page.fill('#ws-stage-rationale', 'the valid version, which should be accepted');
@@ -305,6 +333,8 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     expect(fs.readFileSync(greetingPath, 'utf8')).toBe(liveBefore);
     run.sandbox.promotedWithoutWritingLiveTree = true;
 
+    checkpoint('valid candidate verified and promoted');
+
     // ------------------------------------------------------------------------ 4. the trace ---
     await page.click('[data-view="memory"]');
     await expect(page.locator('body')).toHaveAttribute('data-view', 'memory');
@@ -337,6 +367,8 @@ test('T-38: safety metadata, the real workspace sandbox, and the causal chain in
     expect(chainText).toContain('local_store');
     // Every step names what linked it.
     expect(chainText).toContain('linked by:');
+
+    checkpoint('trace chain open');
 
     // ------------------------------------------------------- 5. every screen, and no overflow ---
     const screens = await readScreenDeclarations(page);
