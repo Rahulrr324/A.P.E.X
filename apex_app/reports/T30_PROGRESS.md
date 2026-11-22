@@ -2883,10 +2883,12 @@ applier reads.
 | | |
 |---|---|
 | `node --check` over `apex_app/src` + `apex_app/bin` | **264 files, 0 failures** |
-| local `npm test` | **4231 tests · 4229 pass · 0 fail · 2 skipped** (654 suites) |
-| new tests | `t41-sandbox-test-verification` **12/12**, `t41-evolution-bridge` **9/9**, `pilot-loopback-check` **17/17**, `t16-pilot-reporting` **2/2** |
+| final commit | **`f7737e4`** (`f7737e4265b4b18adf2829afc699681bdfdb1055`) from `58792b1` |
+| local `npm test` | **4234 tests · 4232 pass · 0 fail · 2 skipped** (655 suites) |
+| hosted `npm test` | green on run `45074025598` — step 7 succeeded |
+| new tests | `t41-sandbox-test-verification` **15/15**, `t41-evolution-bridge` **9/9**, `pilot-loopback-check` **17/17**, `t16-pilot-reporting` **2/2** |
 | Playwright wiring | 10 → **11** suites in `testMatch`, pinned in `real-browser-harness` |
-| CI | t41 annotation added beside t31–t40; evidence paths uploaded |
+| hosted browser step | **19 of 19 executed steps succeeded**, 11 of 11 suites green, `Report failing tests` skipped |
 
 ### What is proven, and what is not
 
@@ -2895,10 +2897,32 @@ proposal is refused at both ends with the code and the reason; the trace joins t
 non-browser assertions from the Edge spec were replayed headlessly against a live fixture before the
 spec was committed.
 
-**Not proven here: the browser walk itself, on this machine.** There is no Chromium or Edge in this
-sandbox, so the suite skips with its diagnostic and the hosted run is the only place it can pass. Every
-statement about t41 in a browser is **UNVERIFIED** until a hosted run says otherwise, and this section
-will be amended rather than quietly left standing.
+**Now proven, by the hosted run.** There is no Chromium or Edge in this sandbox, so the browser suite
+skips locally and the hosted runner is the only place it can pass. It took four cycles, and the shape
+of the four failures is the finding:
+
+1. **Run 45040852428 (`d88ecff`) — failed.** Three defects, all mine: the evolution form dropped the
+   refusal code, t38 asserted `6/6 checks passed` when Step 2 had made every verification eight checks,
+   and the t40 spec carried the same stale two-entry trace count corrected in the unit suite. t34 also
+   failed here (one DAG node, stable for 30 s) and did **not** recur on any later run; it is recorded
+   as a flake rather than as fixed.
+2. **Run 45069378817 (`2df1b7d`) — failed.** t38, t40 and t34 all passed, which confirmed those fixes.
+   t41 got further — the whole governance-boundary phase passed — then failed at its own staging step:
+   the client computed the companion test and never put it in the request body.
+3. **Run 45072837102 (`d4f4d9d`) — failed.** The boundary phase, the failing sandbox test (409
+   `APPLY_REFUSED_UNVERIFIED`, file untouched) and the passing one (`verified: true`, 2 passed, 90 bytes
+   applied) all passed. The trace assertion failed on a line left in from the draft that contradicted
+   the line four below it.
+4. **Run 45074025598 (`f7737e4`) — succeeded.** 19 of 19 executed steps, `Report failing tests` skipped
+   because nothing failed, and all eleven browser suites green.
+
+Every one of the four failures was a defect a backend test could not see: a dropped field, two stale
+counts, a contradictory assertion. Each is now pinned by something that would have caught it — including
+three new tests that read the served client's own source and assert the wire, one of which was verified
+to fail when the defect is reintroduced.
+
+The corrected statement, then: the t41 walk is **verified in a real Edge browser** on run
+`45074025598`, not merely asserted here.
 
 ### Three-axis assessment
 
@@ -2917,9 +2941,30 @@ now explicit, governed, audited, and blocked by a canonical policy with no overr
 readable from the same module the refusal uses. `src/workshop/applier.js` sits inside it: the write path
 is part of the constitution.
 
-**(C) Real-World Capability Validation — the honest limit.** The local evidence is strong and the
-browser evidence does not exist yet on this machine. The sandbox test is validated against the real
-runner; the boundary against real files; the trace against real ledgers. But the walk that proves it in
-a browser — the only place the panel, the refusals and the rendering are exercised together — has not
-run here. Until the hosted run reports, the UI half of T-41 is **UNVERIFIED**, and it is written down
-that way on purpose.
+**(C) Real-World Capability Validation — validated, and by iteration rather than assertion.** The
+sandbox test is validated against the real runner, the boundary against real files, the trace against
+real ledgers, and the whole walk against a real Edge browser on the hosted runner. What makes the result
+credible is not the green light but the four red ones before it: each found something the local suite
+could not — a dropped field, two stale counts, a self-contradicting assertion — and each is now pinned
+by a test that fails when the defect is put back. The first hosted run of this milestone produced three
+defects; the last produced none. That difference is what the walk is for.
+
+### The two annotations, verbatim
+
+From **run 45074025598** on **`f7737e4`** (`browser 157.0.4341.60 | binary microsoft-edge`):
+
+**`t40-changeset-drift-command-help`** — NOTICE
+
+> browser 157.0.4341.60 | binary microsoft-edge | staged selectable=2 liveUnchanged=True | preflight CHANGESET_PREFLIGHT_REFUSED refused=src/data.json bothUntouched=True digestsShown=True ledgerChangesets=0 | apply wcs-d2ed35aceea1 files=2 atomic=True everyVerified=True backupHoldsBoth=True ui=True | disk intact=2 modified=1 path=src/greeting.js bothDigests=True | rollbackRefused CHANGESET_ROLLBACK_DRIFT restoredNothing=True externalEditIntact=True ui=True | rollback files=2 byteIdentical=True everyVerified=True uiConfirmed=True | help rows=17 shortcuts=6 byKey=True byToggle=True filled=True escape=True lineSurvived=True | trace applies=4 ordered=True complete=True counts {"runs": 0, "councilSessions": 0, "taskEvents": 0, "verifications": 2, "applies": 4, "operations": 10} | console 0 page 0 requests 0 scheduledRefusals 2 | screenshots 7
+
+**`t41-sandbox-test-and-evolution-bridge`** — NOTICE
+
+> browser 157.0.4341.60 | binary microsoft-edge | boundary IMMUTABLE_GOVERNANCE_BOUNDARY refusedServer=5 allFive=True intact=True proposals=0 uiRefused=True | failingTest wsc-72f5732a49ae verified=False applyDisabled=True server 409 APPLY_REFUSED_UNVERIFIED outputShown=True workspaceUnchanged=True | passingTest wsc-a1241e94a2e3 verified=True passed=2 failed=0 applied=True bytes=90 | trace entries=4 kinds=ecp_audit,workshop_verification verifications=1 applies=0 operations=3 sourceProposalId=False sandboxTest=True complete=True | console 0 page 0 requests 0 scheduledRefusals 1 | screenshots 4
+
+Read the t41 line the way it is written. `allFive=True` and `intact=True`: every protected path was
+refused and every protected file was byte-identical afterwards. `server 409 APPLY_REFUSED_UNVERIFIED`
+with `workspaceUnchanged=True`: the failing test's candidate could not be written. `verified=True
+passed=2 failed=0 applied=True bytes=90`: the corrected candidate was written, and the byte count is the
+file's real size. And `applies=0` on that trace is not a gap — it is the failing candidate's chain, which
+correctly has no apply because the apply was refused. The applied candidate's own chain holds its
+verification and its apply, and `complete=True`.
