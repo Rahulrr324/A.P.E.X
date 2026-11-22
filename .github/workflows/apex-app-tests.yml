@@ -580,6 +580,55 @@ jobs:
               sys.exit(1)
           PY
 
+      # T-41 Step 4 (2026-11-22): the sandbox-test and evolution-bridge walk. Its annotation states
+      # the four claims by name - that the governance boundary refused every protected path with
+      # IMMUTABLE_GOVERNANCE_BOUNDARY and left all five files byte-identical, that a FAILING sandbox
+      # test made verified false and the apply was refused 409 APPLY_REFUSED_UNVERIFIED with the file
+      # untouched, that a PASSING one verified with the runner's own pass count and applied the file,
+      # and that the causal trace holds the whole chain with sourceProposalId on the verification.
+      - name: Publish the T-41 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't41-sandbox-test-and-evolution-bridge.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t41-sandbox-test-and-evolution-bridge::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          boundary = run.get('boundary') or {}
+          failing = run.get('failingTest') or {}
+          passing = run.get('passingTest') or {}
+          trace = run.get('trace') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"boundary {boundary.get('code')} refusedServer={boundary.get('refusedOnServer')} allFive={boundary.get('allFiveRefused')} intact={boundary.get('allFiveIntact')} proposals={boundary.get('proposalRecorded')} uiRefused={boundary.get('refusedInBrowser')}",
+              f"failingTest {failing.get('candidateId')} verified={failing.get('verified')} applyDisabled={failing.get('applyButtonDisabled')} server {failing.get('serverApplyStatus')} {failing.get('serverApplyCode')} outputShown={failing.get('failingOutputShown')} workspaceUnchanged={failing.get('workspaceUnchanged')}",
+              f"passingTest {passing.get('candidateId')} verified={passing.get('verified')} passed={passing.get('passedCount')} failed={passing.get('failedCount')} applied={passing.get('applied')} bytes={passing.get('bytesWritten')}",
+              f"trace entries={trace.get('entries')} kinds={','.join(trace.get('kinds') or [])} verifications={trace.get('verifications')} applies={trace.get('applies')} operations={trace.get('operations')} sourceProposalId={trace.get('sourceProposalIdOnTrace')} sandboxTest={trace.get('sandboxTestResultOnTrace')} complete={trace.get('complete')}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} scheduledRefusals {len(run.get('scheduledRefusals') or [])}",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t41-sandbox-test-and-evolution-bridge::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       - name: Keep the browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -605,6 +654,8 @@ jobs:
             apex_app/reports/t39-workshop-apply-rollback.json
             apex_app/reports/screenshots/t40
             apex_app/reports/t40-changeset-drift-command-help.json
+            apex_app/reports/screenshots/t41
+            apex_app/reports/t41-sandbox-test-and-evolution-bridge.json
           if-no-files-found: warn
           retention-days: 14
 

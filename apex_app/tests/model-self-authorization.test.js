@@ -218,6 +218,10 @@ const MODEL_WRITE_ATTEMPTS = [
   ['evolution.verify', { proposalId: 'evo-modelattempt', verified: true, detail: 'the model said it passed' }],
   ['evolution.promote', { proposalId: 'evo-modelattempt', reason: 'the model asked for it' }],
   ['evolution.decide', { proposalId: 'evo-modelattempt', decision: 'approved', reason: 'the model approved it' }],
+  // T-41 Step 3 (2026-11-22): the bridge to the Workshop. A model that could stage a proposal could
+  // put its own bytes where the applier reads, leaving the immutable boundary as the only thing
+  // between it and the owner's tree - so it is swept here like every other write.
+  ['evolution.stage_to_workshop', { proposalId: 'evo-modelattempt' }],
   // T-32 Step 3: perception. A reading of the host, a dismissal of a notice class, and the revocation
   // of a suppression rule are all owner acts; a model may read the ledger (`perception.state`) and
   // may not take any of these three.

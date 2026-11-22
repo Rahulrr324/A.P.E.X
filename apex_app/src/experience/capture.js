@@ -360,6 +360,10 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // experience log answers what APEX did. The apply ledger and the causal trace already record the
   // digests; copying the file's content here would turn the owner's source into behavioural evidence.
   'workshop.apply_file': 'workspace-write',
+  // T-41 Step 3: staging a proposal writes inside the sandbox and appends one lab event. It is
+  // classified `workshop` like the other sandbox writes: what it carries is the owner's own proposed
+  // content, and copying that into the experience log would turn a proposal into behavioural evidence.
+  'evolution.stage_to_workshop': 'workshop',
   'workshop.rollback_file': 'workspace-write',
   // T-40: the check is a read of those same files, so it is excluded as a read - its result is
   // re-derivable at any moment and copying it into the experience log would say less than a fresh

@@ -522,10 +522,16 @@ export class MemoryTraceService {
       intents: [...intents],
       taskIds: [...taskIds],
     });
+    // T-41 Step 3: this used to test `chainText.includes(k)` where `chainText` was built FROM `keys`,
+    // so the first clause was true for every verification ever recorded - a trace naming one candidate
+    // returned every candidate's verification in the sandbox. It went unnoticed because every earlier
+    // walk had exactly one candidate. The link is now the explicit one: this chain's keys name the
+    // candidate, and the staging hop joins a proposal id to the candidate it produced.
     const verifications = all.entries.filter((e) => {
       if (e.kind !== 'workshop_verification') return false;
-      return [...keys].some((k) => chainText.includes(k))
-        || (typeof e.candidateId === 'string' && chainText.includes(e.candidateId));
+      if (typeof e.candidateId === 'string' && keys.has(e.candidateId)) return true;
+      if (typeof e.sourceProposalId === 'string' && keys.has(e.sourceProposalId)) return true;
+      return false;
     });
     // T-39 Step 1: the applies and rollbacks whose candidate this chain names. They are linked by the
     // candidate id the verifications already carry, which is what makes "verified, then applied, then

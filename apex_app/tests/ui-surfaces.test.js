@@ -177,7 +177,11 @@ describe('T-31 Evolution Lab', () => {
     assert.equal(body.status.proposals, 0);
     assert.equal(body.policy.appliesChanges, false);
     const keys = body.boundaries.entries.map((entry) => entry.key);
-    assert.deepEqual(keys, ['ecp_sole_authority', 'kill_switch', 'permission_scopes', 'audit_log', 'self_modification']);
+    // T-41 Step 3 (2026-11-22) adds `protected_paths`: the canonical policy that refuses a proposal
+    // targeting governance, safety, autonomy, ledger or applier code. It is a read of the policy module
+    // itself, so it is locked exactly when that module reports no override.
+    assert.deepEqual(keys, ['ecp_sole_authority', 'kill_switch', 'permission_scopes', 'audit_log',
+      'self_modification', 'protected_paths']);
     // The first four are reads of the live system; against this app they all succeed.
     for (const entry of body.boundaries.entries) {
       assert.equal(entry.locked, true, `${entry.key} was confirmed by a read`);

@@ -138,9 +138,12 @@ describe('AF-19: the registry is the inventory', () => {
     // an apply wrote), and `workshop.apply_changeset` / `workshop.rollback_changeset` (two owner-only
     // writes for the all-or-nothing batch). All three are registered with or without a root and refuse
     // there with WORKSPACE_UNAVAILABLE, so both totals move by three.
-    assert.equal(plain.registry.list().length, 169, 'the default registry has 169 actions');
+    // T-41 Step 3 (2026-11-22) adds one owner-only write, `evolution.stage_to_workshop`. It is
+    // registered whether or not a workspace root is configured (without one it refuses with
+    // WORKSPACE_UNAVAILABLE), so both totals move by one.
+    assert.equal(plain.registry.list().length, 170, 'the default registry has 170 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 184, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 185, 'a configured workspace root adds fifteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -193,7 +196,11 @@ describe('AF-19: the registry is the inventory', () => {
     // ninety-third and ninety-fourth. Both are owner-only for the same reason the single-file writes
     // are, and more so: a model that could assemble a batch could write many files in one authorized-
     // looking act.
-    assert.equal(writes.length, 94, 'the inventory counts ninety-four write actions with a root configured');
+    // T-41 Step 3 (2026-11-22): `evolution.stage_to_workshop` is the ninety-fifth. It is owner-only for
+    // the same reason as the other evolution acts and one sharper one: a model that could stage a
+    // proposal into the Workshop could put its own bytes where the applier reads, and the boundary
+    // policy would be the only thing between it and the tree.
+    assert.equal(writes.length, 95, 'the inventory counts ninety-five write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);

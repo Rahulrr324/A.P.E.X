@@ -380,12 +380,24 @@ test('T-40 changeset: the causal trace expands a batch per file and reads it as 
   const trace = await app.memoryTrace.trace(ids[0]);
   assert.equal(trace.ok, true, 'a batch must produce an openable chain');
   assert.equal(trace.complete, true, `chain missing: ${JSON.stringify(trace.missing)}`);
+  // T-41 (2026-11-22): this assertion was stale from the day T-40 Step 2 landed. The trace reader
+  // expands a changeset per FILE (that is what the surrounding comments describe, and what makes a
+  // two-file batch openable at all), so a two-file batch apply followed by a two-file rollback is four
+  // entries - two per file per act - not two. The reader was right and the count was wrong; it went
+  // unnoticed because this file's own summary test did not cover the batch case until now.
   const applies = trace.entries.filter((entry) => entry.kind === 'workshop_apply');
-  assert.equal(applies.length, 2, 'the chain holds the batch apply and the batch rollback, one entry each');
-  assert.deepEqual(applies.map((entry) => entry.label),
-    ['workspace file applied', 'workspace rollback restored the prior file']);
+  assert.equal(applies.length, 4, 'two files, applied then rolled back: four per-file entries');
+  assert.deepEqual(applies.map((entry) => entry.label), [
+    'workspace file applied',
+    'workspace file applied',
+    'workspace rollback restored the prior file',
+    'workspace rollback restored the prior file',
+  ]);
+  // One entry per (act, file): the two applies name different files and the two rollbacks mirror them.
+  assert.deepEqual(applies.slice(0, 2).map((entry) => entry.detail.relativePath), ['src/a.js', 'src/data.json']);
+  assert.deepEqual(applies.slice(2).map((entry) => entry.detail.relativePath), ['src/a.js', 'src/data.json']);
   // In time order, both naming the batch they belong to.
-  assert.ok(applies[0].at <= applies[1].at, 'the apply precedes the rollback');
+  assert.ok(applies[0].at <= applies[2].at, 'the apply precedes the rollback');
   for (const entry of applies) {
     assert.equal(entry.detail.changesetId, changesetId, 'each entry names the batch it belongs to');
     assert.equal(entry.detail.changesetFileCount, 2);
@@ -393,7 +405,9 @@ test('T-40 changeset: the causal trace expands a batch per file and reads it as 
   // The digests travel with the chain, because a chain a reader cannot recompute is a story.
   assert.equal(applies[0].detail.beforeSha256, sha256(OLD_A));
   assert.equal(applies[0].detail.appliedSha256, sha256(NEW_A));
-  assert.equal(applies[1].detail.restoredSha256, sha256(OLD_A));
+  assert.equal(applies[2].detail.restoredSha256, sha256(OLD_A));
+  assert.equal(applies[1].detail.appliedSha256, sha256(NEW_B));
+  assert.equal(applies[3].detail.restoredSha256, sha256(OLD_B));
   // And the batch is findable by path.
   const found = await app.memoryTrace.search({ q: 'a.js' });
   assert.equal(found.ok, true);

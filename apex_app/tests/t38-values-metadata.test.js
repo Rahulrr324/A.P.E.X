@@ -104,7 +104,9 @@ test('T-38 metadata: every write declares a blast radius that is not none', () =
     // `workshop.rollback_changeset`, both declaring `workspace_fs`, so it is 87. The number is pinned
     // rather than bounded so that a new write cannot arrive without someone deciding this question -
     // which is exactly what happened here.
-    assert.equal(writes.length, 87, `expected 87 writes after T-40 Step 2, got ${writes.length}`);
+    // T-41 Step 3 (2026-11-22) adds one, `evolution.stage_to_workshop`, which declares
+    // `workspace_sandbox`: it writes inside the sandbox and appends one lab event, never the live tree.
+    assert.equal(writes.length, 88, `expected 88 writes after T-41 Step 3, got ${writes.length}`);
     for (const definition of writes) {
       assert.notEqual(definition.blastRadius, 'none',
         `${definition.name} is a write that claims to change nothing`);
