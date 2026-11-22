@@ -336,7 +336,6 @@ test('T-41: the governance boundary refuses, a failing sandbox test blocks the a
     const entries = Array.isArray(trace.body.entries) ? trace.body.entries : [];
     const kinds = entries.map((entry) => entry.kind);
     expect(kinds).toContain('workshop_verification');
-    expect(kinds).toContain('workshop_apply');
     expect(kinds.filter((kind) => kind === 'ecp_audit').length).toBeGreaterThanOrEqual(2);
     // The FAILING candidate's trace holds its verification - and correctly NO apply, because the
     // apply was refused. A chain that showed an apply here would be the one thing a causal trace
