@@ -486,8 +486,11 @@ test('T-40: a two-file changeset is atomic, disk drift is measured and blocks th
     // ------------------------------------------- 8. the command reference, by key ---
     await page.click('.nav-item[data-view="deck"]');
     await expect(page.locator('body')).toHaveAttribute('data-view', 'deck');
-    // Click the body first so no field has focus: the binding is deliberately suppressed while typing.
-    await page.locator('h1').first().click();
+    // Blur whatever holds focus first. The binding is deliberately suppressed while typing, and after
+    // the trace phase the focus is still in the search field - so a key press here would be correctly
+    // ignored and the test would look like a broken binding. Blurring is deterministic; clicking an
+    // element to move focus is not, because an h1 can live inside a view that is currently hidden.
+    await page.evaluate(() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); });
     await page.keyboard.press('?');
     await expect(page.locator('#hud-command-help')).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('#hud-command-help-rows tr').first()).toBeVisible();

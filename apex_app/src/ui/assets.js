@@ -812,6 +812,18 @@ body::before {
 /* Narrow viewports: a command bar and a perception reading hold long unbroken tokens (a path, a
    subject name), and an item that cannot wrap is what pushes a 390px page sideways. */
 .command-bar, .command-bar form, .command-bar .row { min-width: 0; max-width: 100%; }
+/* T-40 Step 3: the command reference. It is a flex child of the command bar, so it takes a full row
+   rather than being squeezed beside the input, and every cell wraps so a long route name cannot widen
+   the page. */
+.hud-help { flex: 1 1 100%; max-width: 100%; min-width: 0; }
+.hud-help h3, .hud-help h4 { margin: 0 0 .4rem 0; }
+.hud-help-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.hud-help-table th, .hud-help-table td {
+  text-align: left; vertical-align: top; padding: .3rem .45rem;
+  border-bottom: 1px solid var(--line); overflow-wrap: anywhere; word-break: break-word;
+}
+.hud-help-table th { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.hud-help-table th:first-child, .hud-help-table td:first-child { width: 30%; }
 .item .title, .item .meta, .workspace-status, #perception-budget, #perception-summary .title,
 #perception-observations .title, #briefing-perception { overflow-wrap: anywhere; }
 .skip-link { position: absolute; left: -999px; top: 0; }
