@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { createApp } from '../../src/app.js';
 import { createUiServer } from '../../src/ui/server.js';
 import { ModelGateway, NoBackend } from '../../src/model/gateway.js';
+import { createHostWorkspaceSensor } from '../../src/perception/host-workspace-sensor.js';
 
 export const T33_TOKEN = 'T33-executive-loop-token-0123456789';
 export const T33_SCHEMA = 'apex.t33.executive-loop/1';
@@ -62,10 +63,30 @@ export async function startT33Ui({ token = T33_TOKEN, port = 0 } = {}) {
   const dataDir = path.join(root, 'data');
   await fsp.mkdir(dataDir, { recursive: true });
   const workspace = createDirtyWorkspace(root);
+  // T-42 Step 2: the host half of the reading is pinned; the workspace half stays real. This is the
+  // fix for the walk's real flake. On a busy CI runner the sensor honestly derives `load_pressure` and
+  // `storage_pressure` alongside `workspace_dirty`; three non-critical advisories exhaust the
+  // governor's 3/hour cap at the *first* sense, so the second sense - a genuinely new signature, after
+  // the fixture adds an untracked file - is refused as capped and the row reads `held` instead of
+  // `delivered`. The walk is about suppression, not about the runner's load, so the host numbers are
+  // held still and the workspace is still read with git.
+  const sensor = createHostWorkspaceSensor({
+    now: () => new Date(),
+    workspaceDir: workspace,
+    cpus: () => new Array(4).fill({ model: 'T-33 fixture core' }),
+    loadAverage: () => [0.1, 0.1, 0.1],
+    totalMemory: () => 8 * 1024 * 1024 * 1024,
+    freeMemory: () => 8 * 1024 * 1024 * 1024 * 0.5,
+    processUptime: () => 1,
+    processMemory: () => ({ rss: 1024, heapUsed: 512, heapTotal: 1024 }),
+    statfsSync: () => ({ bsize: 4096, blocks: 1000, bfree: 500, bavail: 500 }),
+    storagePaths: [],
+  });
   const app = createApp({
     dataDir,
     filesystemRoot: workspace,
     gateway: new ModelGateway({ backend: new NoBackend() }),
+    perceptionSensor: sensor,
   });
   const ui = createUiServer({ app, token, host: '127.0.0.1', port });
   let started;

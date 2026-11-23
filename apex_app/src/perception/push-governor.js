@@ -13,6 +13,12 @@
 // The governor never decides that something *is* critical; the caller says so explicitly and the
 // record keeps that classification. Nothing here writes a file: persistence belongs to the service
 // that owns the ledger.
+//
+// T-42 Step 2: quiet hours live here, because "may this be surfaced" is already this module's
+// question and a second answer elsewhere would be a second policy. The window is off by default and
+// the clock is the injected one, so the behaviour is reproducible rather than wall-clock dependent.
+import { resolveQuietHours, isQuietAt, quietHoursStatus } from './quiet-hours.js';
+
 export const PUSH_GOVERNOR_SCHEMA = 'apex.push-governor/1';
 export const PUSH_LIMIT_PER_HOUR = 3;
 export const PUSH_WINDOW_MS = 60 * 60 * 1000;
@@ -30,13 +36,15 @@ function text(value, label, max = 120) {
 
 export class PushGovernor {
   constructor({ now = () => new Date(), limit = PUSH_LIMIT_PER_HOUR, windowMs = PUSH_WINDOW_MS,
-    suppressionTtlMs = SUPPRESSION_TTL_MS, dismissalsToSuppress = DISMISSALS_TO_SUPPRESS } = {}) {
+    suppressionTtlMs = SUPPRESSION_TTL_MS, dismissalsToSuppress = DISMISSALS_TO_SUPPRESS,
+    quietHours = null } = {}) {
     if (!Number.isInteger(limit) || limit < 0) throw new TypeError('push limit must be a non-negative integer');
     this.now = now;
     this.limit = limit;
     this.windowMs = windowMs;
     this.suppressionTtlMs = suppressionTtlMs;
     this.dismissalsToSuppress = dismissalsToSuppress;
+    this.quietHours = resolveQuietHours(quietHours === null ? { enabled: false } : quietHours);
     this.admissions = [];
     this.dismissals = [];
     this.rules = new Map();
@@ -82,6 +90,7 @@ export class PushGovernor {
       windowEndsAt: used === 0
         ? null
         : new Date(Math.min(...this.#recent(moment).map((entry) => Date.parse(entry.at))) + this.windowMs).toISOString(),
+      quietHours: quietHoursStatus(this.quietHours, moment),
     });
   }
 
@@ -99,7 +108,11 @@ export class PushGovernor {
       const entry = Object.freeze({
         id: `push-${this.sequence}`, at: stamp, watch: watchName, signature: signatureText,
         alertClass: cls, critical: isCritical, summary: summary === null ? null : String(summary).slice(0, 240),
-        admitted, reason, ...extra,
+        admitted, reason,
+        // Every decision carries the window it was made in, so a reader never has to infer why a
+        // notice was held or guess whether quiet hours were even on.
+        quietHours: quietHoursStatus(this.quietHours, moment),
+        ...extra,
       });
       this.admissions.push(entry);
       return Object.freeze({ ...entry, budget: this.budget(moment) });
@@ -110,6 +123,12 @@ export class PushGovernor {
       if (suppression && !isCritical) {
         return record(false, `alert class ${cls} is suppressed by the owner's rule until ${suppression.suppressedUntil}`);
       }
+    }
+    // Quiet hours hold a non-critical notice; they never hold an alarm. The record says which rule
+    // held it, so the screen can name the window instead of implying the machine is healthy. That
+    // the condition was derived and recorded is unaffected - only the surfacing is.
+    if (!isCritical && isQuietAt(this.quietHours, moment)) {
+      return record(false, 'quiet_hours');
     }
     if (!isCritical) {
       const recent = this.#recent(moment);
@@ -214,6 +233,7 @@ export class PushGovernor {
       schema: PUSH_GOVERNOR_SCHEMA,
       at: new Date(moment).toISOString(),
       budget: this.budget(moment),
+      quietHours: quietHoursStatus(this.quietHours, moment),
       suppressions: this.activeSuppressions(moment),
       rules: [...this.rules.values()].map((rule) => ({ ...rule })),
       recent: this.admissions.slice(-20).map((entry) => ({ ...entry })),

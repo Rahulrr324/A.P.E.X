@@ -183,7 +183,22 @@ test.describe('T-33 executive loop, in a real browser', () => {
     await page.locator('#perception-sense').click();
     await expect(page.locator('#perception-alerts li[data-alert-class="workspace_dirty"]'))
       .toHaveAttribute('data-delivery', 'delivered', { timeout: 30_000 });
-    step('revoke', { ruleRevoked: true, delivery: 'delivered' });
+    // T-42 Step 2: this is the assertion that used to flake, and the cause was never a clock. On a
+    // busy runner the host half of the reading honestly derives load_pressure and storage_pressure
+    // beside workspace_dirty; three non-critical advisories exhaust the governor's 3/hour cap at the
+    // first sense, so this second and genuinely new signature is refused as capped and the row reads
+    // 'held'. The fixture now pins the host half and leaves the workspace half real, so the budget
+    // belongs to the walk. Assert the budget too: a delivered row on an exhausted budget would mean
+    // the cap had been bypassed rather than the flake fixed.
+    const budget = await page.evaluate(async () => {
+      const response = await fetch('/api/perception?limit=20', { headers: { 'x-apex-ui': '1' } });
+      return response.ok ? (await response.json()).governor.budget : null;
+    });
+    expect(budget, 'the governor budget is readable').not.toBeNull();
+    expect(budget.limit, 'the documented cap is still three').toBe(3);
+    expect(budget.used, 'two surfaces were admitted, so the cap was never exhausted').toBe(2);
+    expect(budget.quietHours.enabled, 'quiet hours are off by default and the walk does not enable them').toBe(false);
+    step('revoke', { ruleRevoked: true, delivery: 'delivered', budgetUsed: budget.used, budgetLimit: budget.limit, quietHours: budget.quietHours.enabled });
 
     // ---- 4. the TaskGraph DAG: state, verification, checkpoint approve then resume -------------
     await nav('missions');

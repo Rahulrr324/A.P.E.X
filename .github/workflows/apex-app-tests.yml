@@ -222,6 +222,17 @@ jobs:
           if not os.path.exists(path):
               print(f'::notice title=t33-executive-loop::no summary was written; the suite did not run (browser step: {outcome})')
               sys.exit(0)
+          def _t33_budget(run):
+              for step in run.get('steps', []):
+                  if step.get('id') == 'revoke':
+                      detail = step.get('detail') or {}
+                      used = detail.get('budgetUsed')
+                      limit = detail.get('budgetLimit')
+                      quiet = detail.get('quietHours')
+                      if used is None or limit is None:
+                          return 'not reported'
+                      return f"{used}/{limit} used | quietHours={quiet}"
+              return 'revoke leg did not run'
           run = json.load(open(path, encoding='utf-8'))
           steps = [step.get('id') for step in run.get('steps', [])]
           shots = len(run.get('screenshots', []))
@@ -234,6 +245,9 @@ jobs:
               f"checkpoints {len(steps)}: {','.join(str(name) for name in steps) or 'none'}",
               f"screenshots {shots}",
               f"core at end {core or 'not read'}",
+              # T-42 Step 2: the push budget the revoke leg measured. A delivered row on an exhausted
+              # budget would mean the cap had been bypassed, so the annotation states the number.
+              f"budget {_t33_budget(run)}",
           ]
           level = 'error' if failures else 'notice'
           if failures:

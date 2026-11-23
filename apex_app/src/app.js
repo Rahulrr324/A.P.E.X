@@ -108,6 +108,11 @@ export function createApp({
   // T-37 Step 1: the Track 2 substrate seed. It is an option so a test can pin a substrate that is
   // reproducible across processes; the default is the declared constant in substrate.js.
   neuralSeed = null,
+  // T-42 Step 2: the owner's quiet-hours window. Off unless set, so nothing changes by default.
+  quietHours = undefined,
+  // T-42 Step 2: an injectable perception sensor. A test pins the host half so the reading is the
+  // same on a busy CI runner as on an idle laptop; the product always uses the real sensor.
+  perceptionSensor = null,
   integrationProviders = null,
   autonomyByDomain = {},
 } = {}) {
@@ -324,6 +329,8 @@ export function createApp({
     now: clock,
     ...(idFactory ? { idFactory } : {}),
     workspaceDir: rootForContext,
+    ...(quietHours === undefined || quietHours === null ? {} : { quietHours }),
+    ...(perceptionSensor === null ? {} : { sensor: perceptionSensor }),
   });
 
   // T-37 Step 1: Track 2. One deterministic spiking substrate per data directory, its versioned

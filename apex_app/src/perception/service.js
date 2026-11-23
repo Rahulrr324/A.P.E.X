@@ -14,6 +14,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHostWorkspaceSensor, HOST_SENSOR_SCHEMA, HOST_SENSOR_SOURCE } from './host-workspace-sensor.js';
 import { PushGovernor, PUSH_GOVERNOR_SCHEMA } from './push-governor.js';
+import { quietHoursFromEnv, quietHoursStatus } from './quiet-hours.js';
 import { ADVISORY_RULES, deriveAdvisories, deliverAdvisories } from './advisories.js';
 
 export const PERCEPTION_SCHEMA = 'apex.perception.view/1';
@@ -44,6 +45,10 @@ export function createPerceptionService({
   sensor = null,
   governor = null,
   storagePaths = null,
+  // T-42 Step 2: the owner's quiet window. `undefined` means "read APEX_QUIET_HOURS, else stay off",
+  // so an existing deployment that sets neither keeps the exact behaviour it had. An explicit object
+  // wins over the environment, which is how a test pins a window it can prove.
+  quietHours = undefined,
 } = {}) {
   if (typeof dataDir !== 'string' || dataDir.length === 0) throw new TypeError('the perception service needs a data directory');
   const directory = path.join(dataDir, PERCEPTION_LEDGER_DIR);
@@ -55,7 +60,11 @@ export function createPerceptionService({
     workspaceDir,
     storagePaths: storagePaths ?? (workspaceDir ? [workspaceDir, dataDir] : [dataDir]),
   });
-  const pushGovernor = governor ?? new PushGovernor({ now });
+  // An explicit policy beats the environment; the environment beats the default, which is off.
+  const quietPolicy = quietHours !== undefined
+    ? quietHours
+    : (quietHoursFromEnv(typeof process.env.APEX_QUIET_HOURS === 'string' ? process.env.APEX_QUIET_HOURS : undefined) ?? { enabled: false });
+  const pushGovernor = governor ?? new PushGovernor({ now, quietHours: quietPolicy });
   const loadedGovernor = readJsonFile(governorPath);
   if (loadedGovernor) pushGovernor.load(loadedGovernor);
 
@@ -190,8 +199,12 @@ export function createPerceptionService({
           dismissalsToSuppress: pushGovernor.dismissalsToSuppress,
           suppressionTtlMs: pushGovernor.suppressionTtlMs,
           criticalBypassesCap: true,
+          quietHours: quietHoursStatus(pushGovernor.quietHours, now()),
         }),
       }),
+      // T-42 Step 2: the quiet window on its own, so a surface that cares only about interruption can
+      // read it without walking into the alert policy.
+      quietHours: quietHoursStatus(pushGovernor.quietHours, now()),
     });
   }
 

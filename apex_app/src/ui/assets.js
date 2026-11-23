@@ -4959,6 +4959,21 @@ const EVOLUTION_LABEL = {
 // An advisory is a condition the reading implied. Whether it was *delivered* is the governor's
 // decision, and the record here is the governor's own answer - admitted, deduplicated, capped or
 // suppressed - so the owner can see the rule doing its work instead of wondering why a notice did
+// T-42 Step 2: quiet hours are a delivery rule the owner can see. The sentence names the window and
+// says whether it is open now, because 'held' without the window beside it is indistinguishable from
+// a machine that is fine.
+function quietHoursSentence(value) {
+  const q = value && value.quietHours && typeof value.quietHours === 'object' ? value.quietHours : null;
+  if (!q) return ' Quiet hours: not reported.';
+  if (q.enabled !== true) return ' Quiet hours: off, so every notice inside the cap is surfaced.';
+  const w = q.window || {};
+  const pad = (h) => (h < 10 ? '0' + h : String(h));
+  return ' Quiet hours ' + pad(w.startHour) + ':00-' + pad(w.endHour) + ':00 UTC'
+    + (w.utcOffsetHours ? ' (offset ' + w.utcOffsetHours + 'h)' : '')
+    + (q.activeNow === true
+      ? ': open now, so a non-critical notice is held and an alarm still delivers.'
+      : ': closed now.');
+}
 // not arrive. Dismissing twice records a revocable rule with an expiry; revoking restores delivery.
 function renderPerceptionAlerts(value) {
   if (!els.perceptionAlerts) return;
@@ -4972,7 +4987,7 @@ function renderPerceptionAlerts(value) {
       ? 'Push policy: at most ' + policy.limitPerHour + ' non-critical notices an hour; '
         + policy.dismissalsToSuppress + ' dismissals of one alert class suppress it for '
         + Math.round((policy.suppressionTtlMs || 0) / 3600000) + ' hours; a safety, lockdown or degraded '
-        + 'notice bypasses the cap.'
+        + 'notice bypasses the cap.' + quietHoursSentence(value)
       : 'Push policy: unavailable until the perception service answers.';
   }
   if (els.perceptionAlertStatus) {
@@ -4994,11 +5009,21 @@ function renderPerceptionAlerts(value) {
     item.dataset.alertClass = row.entry.alertClass;
     item.dataset.delivery = row.state;
     item.dataset.alertSignature = row.entry.signature;
+    // T-42 Step 2: a held row says *why* it was held. Without this, a quiet window and a cap read the
+    // same as a fault, which is the opposite of what a diagnostic surface is for.
+    if (row.state === 'held' && row.delivery && row.delivery.reason === 'quiet_hours') item.dataset.heldBy = 'quiet_hours';
     item.append(el('div', 'meta', row.state === 'suppressed'
       ? 'Delivery: suppressed by rule ' + row.rule.id + ' until ' + row.rule.suppressedUntil + ' (revocable above)'
       : row.state === 'delivered'
         ? 'Delivery: delivered at ' + (row.delivery.at || 'time not recorded') + ' · push ' + (row.delivery.pushId || 'not recorded')
-        : 'Delivery: not delivered — ' + String(row.delivery ? row.delivery.reason : 'the governor has not been asked yet')));
+        : (row.delivery && row.delivery.reason === 'quiet_hours'
+          ? 'Delivery: held by quiet hours ('
+            + (row.delivery.quietHours && row.delivery.quietHours.window
+              ? String(row.delivery.quietHours.window.startHour) + ':00-'
+                + String(row.delivery.quietHours.window.endHour) + ':00 UTC'
+              : 'window not reported')
+            + '), not by a fault; a critical notice delivers through it'
+          : 'Delivery: not delivered — ' + String(row.delivery ? row.delivery.reason : 'the governor has not been asked yet'))));
     item.append(el('div', 'meta', 'Signature: ' + row.entry.signature + ' · basis: ' + row.entry.basis));
     if (row.state !== 'suppressed') {
       const button = el('button', 'small', 'Dismiss notice');
