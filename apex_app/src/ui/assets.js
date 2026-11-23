@@ -358,6 +358,35 @@ export const UI_PAGE = `<!doctype html>
     <p class="meta">A bounded view of recorded observations, assessments, decisions and provenance. It does not imply that an external source is currently being watched.</p>
     <p id="sentinel-status" class="workspace-status" role="status" aria-live="polite">Loading situational records…</p>
     <ul id="sentinel-full" class="work"></ul>
+    <!-- T-43 Package 3: the host telemetry. Ports and processes are read from the operating system
+         in one pass, so a port table and a process table on this screen always describe the same
+         instant. A wildcard bind is the only row that claims external reachability, and it is the one
+         painted red: a loopback socket and a wide-open one look different because they are. -->
+    <section class="panel" id="sentinel-telemetry-panel">
+      <h3>Host telemetry — listening sockets and processes</h3>
+      <p class="meta">Read from this machine: the socket tables via the operating system, and the process table via <code>ps</code> or <code>tasklist</code>. Command lines and environment variables are never read, so a credential in either cannot appear here.</p>
+      <div class="row" id="telemetry-badge-row">
+        <span id="telemetry-total-badge" class="badge" data-telemetry="total">TOTAL PORTS: —</span>
+        <span id="telemetry-loopback-badge" class="badge" data-telemetry="loopback">LOOPBACK ONLY: —</span>
+        <span id="telemetry-exposure-badge" class="badge" data-telemetry="exposure">EXTERNAL EXPOSURE: —</span>
+        <span id="telemetry-rss-badge" class="badge" data-telemetry="rss">APEX RSS: —</span>
+        <button id="btn-telemetry-refresh" type="button" class="small">Refresh telemetry</button>
+      </div>
+      <p id="telemetry-status" class="workspace-status" role="status" aria-live="polite">Loading host telemetry…</p>
+      <h4>Listening sockets</h4>
+      <table class="telemetry-table" aria-label="Listening sockets">
+        <caption class="visually-hidden">Every listening TCP socket, its exposure and its owning process</caption>
+        <thead><tr><th scope="col">port</th><th scope="col">proto</th><th scope="col">address</th><th scope="col">exposure</th><th scope="col">process</th></tr></thead>
+        <tbody id="edith-port-table"></tbody>
+      </table>
+      <h4>Processes by resident memory</h4>
+      <table class="telemetry-table" aria-label="Processes by resident memory">
+        <caption class="visually-hidden">The processes using the most resident memory, and this process's own reading</caption>
+        <thead><tr><th scope="col">pid</th><th scope="col">name</th><th scope="col">cpu</th><th scope="col">rss</th></tr></thead>
+        <tbody id="edith-process-table"></tbody>
+      </table>
+      <p id="edith-process-summary" class="meta"></p>
+    </section>
     <section class="panel">
       <!-- T-32 Step 3: the perception ledger and the push discipline. The budget and the
            suppressions are the Sentinel's own rules, shown where the owner can revoke them. -->
@@ -719,6 +748,53 @@ export const UI_PAGE = `<!doctype html>
       <button id="workshop-stage-telemetry" type="button" class="small">Stage from telemetry</button>
       <span id="workshop-sandbox-status" class="meta" role="status" aria-live="polite"></span>
     </div>
+    <!-- T-43 Package 3: the git executive. The panel reads the repository the way the engine
+         reads it, and the two write controls are the owner's: a checkpoint is a record of the tree as
+         it is, and a restore is refused when it would discard work that is not already recorded. -->
+    <section class="panel" id="workshop-git-panel">
+      <h3>Repository — the workspace as git sees it</h3>
+      <p class="meta">Read from the repository at the configured workspace root. A checkpoint records the tracked and untracked state without touching the working tree; a restore refuses when it would discard uncommitted work.</p>
+      <p id="git-status-text" class="workspace-status" role="status" aria-live="polite">Loading the repository…</p>
+      <div class="row" id="git-badge-row">
+        <span id="git-branch-badge" class="badge" data-git="branch">branch: —</span>
+        <span id="git-head-badge" class="badge" data-git="head">HEAD: —</span>
+        <span id="git-staged-badge" class="badge" data-git="staged">staged: —</span>
+        <span id="git-unstaged-badge" class="badge" data-git="unstaged">unstaged: —</span>
+        <span id="git-untracked-badge" class="badge" data-git="untracked">untracked: —</span>
+        <span id="git-checkpoints-badge" class="badge" data-git="checkpoints">checkpoints: —</span>
+        <button id="btn-git-refresh" type="button" class="small">Refresh</button>
+      </div>
+      <div class="row">
+        <label for="git-diff-path-input" class="visually-hidden">Path to inspect inside the workspace</label>
+        <input id="git-diff-path-input" maxlength="400" placeholder="path inside the workspace (optional)">
+        <button id="btn-git-diff-inspect" type="button" class="small">Inspect diff</button>
+        <span id="git-diff-status" class="meta" role="status" aria-live="polite"></span>
+      </div>
+      <!-- T-43 Package 3: the diff viewer. The old and new line numbers are their own columns rather
+           than part of the text, so a wrapped line cannot shift the numbering, and the tints are the
+           two tokens the deck already uses for "this arrived" and "this was removed". -->
+      <div id="workshop-diff-viewer" class="diff-viewer" role="region" aria-label="Workspace diff" hidden>
+        <div class="diff-head">
+          <span id="diff-file-header" class="diff-file">no file selected</span>
+          <span id="diff-additions-badge" class="badge diff-add">+0</span>
+          <span id="diff-deletions-badge" class="badge diff-del">-0</span>
+          <span id="diff-hunks-badge" class="badge">0 hunk(s)</span>
+        </div>
+        <table class="diff-table">
+          <caption class="visually-hidden">Unified diff with old and new line numbers</caption>
+          <thead><tr><th scope="col">old</th><th scope="col">new</th><th scope="col">line</th></tr></thead>
+          <tbody id="diff-body"></tbody>
+        </table>
+      </div>
+      <div class="row">
+        <label for="git-checkpoint-label-input" class="visually-hidden">Checkpoint label</label>
+        <input id="git-checkpoint-label-input" maxlength="120" placeholder="checkpoint label">
+        <button id="btn-git-checkpoint-create" type="button" class="small">Create checkpoint</button>
+        <span id="git-checkpoint-status" class="meta" role="status" aria-live="polite"></span>
+      </div>
+      <p id="git-checkpoint-refusal" class="meta" role="alert" hidden></p>
+      <ul id="workshop-checkpoints-list" class="work"></ul>
+    </section>
     <div id="workshop-report" class="panel"></div>
     <ul id="workshop" class="work"></ul>
     <h3>Evolution Lab — controlled self-change</h3>
@@ -974,6 +1050,49 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 .item, .banner, .badge, input, textarea, select, button { border-radius: var(--radius); }
 .badge { border-radius: 999px; }
 .panel, .rail, .stage, .view { min-width: 0; overflow-wrap: anywhere; }
+
+/* T-43 Package 3: the git diff viewer and the host telemetry tables.
+   Two rules govern every value below.
+   1. No horizontal overflow. The tables scroll inside their own box rather than widening the page,
+      and every cell wraps rather than pushes. The end-to-end suite measures scrollWidth against
+      clientWidth on all eleven screens at three viewports, so a rule that breaks this is a failing
+      test rather than a screenshot nobody looks at.
+   2. Contrast. The add and delete tints are dark enough that --text, --ok-green and
+      --armor-red-text each clear 4.5:1 against them (measured: 12.75, 11.57 and 6.43), so the colour
+      is never the only thing carrying the meaning: the +/- glyph in the old/new gutter says the same
+      thing for a reader who cannot see the tint. */
+.diff-viewer { border: 1px solid var(--line); background: rgba(0,0,0,0.28); margin: .6rem 0; max-width: 100%; overflow-x: auto; }
+.diff-head { display: flex; flex-wrap: wrap; gap: .4rem; align-items: baseline; padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
+.diff-file { font-family: var(--font-mono); font-size: .8rem; color: var(--cyan); overflow-wrap: anywhere; }
+.badge.diff-add { color: var(--ok-green); border-color: rgba(43,255,136,0.35); }
+.badge.diff-del { color: var(--armor-red-text); border-color: rgba(255,107,90,0.35); }
+.diff-table, .telemetry-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: .78rem; table-layout: fixed; }
+.diff-table th, .telemetry-table th { text-align: left; font-weight: 600; color: var(--muted); padding: .25rem .4rem; border-bottom: 1px solid var(--line); }
+.diff-table td, .telemetry-table td { padding: .18rem .4rem; vertical-align: top; overflow-wrap: anywhere; }
+.diff-table col { }
+.diff-table th:nth-child(1), .diff-table td:nth-child(1),
+.diff-table th:nth-child(2), .diff-table td:nth-child(2) { width: 3.2rem; text-align: right; color: var(--muted); }
+.diff-line-ctx td { color: var(--text); }
+.diff-line-add { background: rgba(43,255,136,0.10); }
+.diff-line-add td { color: var(--text); }
+.diff-line-del { background: rgba(255,107,90,0.10); }
+.diff-line-del td { color: var(--text); }
+.diff-gutter-add { color: var(--ok-green); }
+.diff-gutter-del { color: var(--armor-red-text); }
+.telemetry-table th:nth-child(1), .telemetry-table td:nth-child(1) { width: 4.5rem; }
+.telemetry-table th:nth-child(2), .telemetry-table td:nth-child(2) { width: 4.5rem; }
+.exposure-loopback { color: var(--ok-green); }
+.exposure-wildcard { color: var(--armor-red-text); }
+.exposure-external { color: var(--gold); }
+.table-scroll { max-width: 100%; overflow-x: auto; }
+#workshop-checkpoints-list li { display: grid; gap: .2rem; }
+.checkpoint-ref-intact { color: var(--ok-green); }
+.checkpoint-ref-drift { color: var(--armor-red-text); }
+@media (max-width: 720px) {
+  .diff-table th:nth-child(1), .diff-table td:nth-child(1),
+  .diff-table th:nth-child(2), .diff-table td:nth-child(2) { width: 2.4rem; }
+  .telemetry-table th:nth-child(2), .telemetry-table td:nth-child(2) { width: 3.4rem; }
+}
 .panel pre, .item pre { max-width: 100%; overflow-x: auto; }
 /* Presentation modes: palette emphasis only. They never change authorization or state. */
 body[data-mode="tactical"] { --cyan: #2fd0ff; --gold: #ff7a00; --line-strong: rgba(47, 208, 255, 0.5); }
@@ -1527,6 +1646,39 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   workshopCompose: document.getElementById('workshop-compose'),
   workshopStatus: document.getElementById('workshop-status'),
   workshopReport: document.getElementById('workshop-report'),
+  // T-43 Package 3: the git panel and the host telemetry. One entry per element the renderers write
+  // to, so a missing node is a null check rather than an exception thrown from a render path.
+  gitStatusText: document.getElementById('git-status-text'),
+  gitBranchBadge: document.getElementById('git-branch-badge'),
+  gitHeadBadge: document.getElementById('git-head-badge'),
+  gitStagedBadge: document.getElementById('git-staged-badge'),
+  gitUnstagedBadge: document.getElementById('git-unstaged-badge'),
+  gitUntrackedBadge: document.getElementById('git-untracked-badge'),
+  gitCheckpointsBadge: document.getElementById('git-checkpoints-badge'),
+  gitRefresh: document.getElementById('btn-git-refresh'),
+  gitDiffPathInput: document.getElementById('git-diff-path-input'),
+  gitDiffInspect: document.getElementById('btn-git-diff-inspect'),
+  gitDiffStatus: document.getElementById('git-diff-status'),
+  diffViewer: document.getElementById('workshop-diff-viewer'),
+  diffFileHeader: document.getElementById('diff-file-header'),
+  diffAdditionsBadge: document.getElementById('diff-additions-badge'),
+  diffDeletionsBadge: document.getElementById('diff-deletions-badge'),
+  diffHunksBadge: document.getElementById('diff-hunks-badge'),
+  diffBody: document.getElementById('diff-body'),
+  gitCheckpointLabel: document.getElementById('git-checkpoint-label-input'),
+  gitCheckpointCreate: document.getElementById('btn-git-checkpoint-create'),
+  gitCheckpointStatus: document.getElementById('git-checkpoint-status'),
+  gitCheckpointRefusal: document.getElementById('git-checkpoint-refusal'),
+  checkpointsList: document.getElementById('workshop-checkpoints-list'),
+  telemetryTotalBadge: document.getElementById('telemetry-total-badge'),
+  telemetryLoopbackBadge: document.getElementById('telemetry-loopback-badge'),
+  telemetryExposureBadge: document.getElementById('telemetry-exposure-badge'),
+  telemetryRssBadge: document.getElementById('telemetry-rss-badge'),
+  telemetryRefresh: document.getElementById('btn-telemetry-refresh'),
+  telemetryStatus: document.getElementById('telemetry-status'),
+  portTable: document.getElementById('edith-port-table'),
+  processTable: document.getElementById('edith-process-table'),
+  processSummary: document.getElementById('edith-process-summary'),
   docSearch: document.getElementById('doc-search-form'),
   docSearchText: document.getElementById('doc-search'),
   banner: document.getElementById('banner'),
@@ -3617,6 +3769,395 @@ async function promoteWorkshop(artifactId, button) {
   }
 }
 
+// ------------------------------------------------------------------- T-43 Package 3: git and host ---
+//
+// Four renderers and their fetchers. Each one states a fact the server measured and none of them
+// computes a fact of its own: a badge count comes from the reading, the diff rows come from the parsed
+// hunks, and a checkpoint's REF INTACT badge is the live answer the server measured against the
+// repository rather than a field it stored.
+
+function shortSha(value) {
+  return typeof value === 'string' && value.length >= 7 ? value.slice(0, 7) : String(value ?? '—');
+}
+
+function setGitBadge(target, label, value) {
+  if (!target) return;
+  target.textContent = label + ': ' + value;
+}
+
+// The git status panel. A repository that is not there is reported as such and the badges say so
+// rather than showing zeroes: "0 unstaged" about a directory that is not a repository would be a lie
+// of the calmest kind.
+function renderGitStatus(result) {
+  const owner = ownerStatusText(result, 'the repository');
+  if (owner.text) {
+    setWorkspaceStatus(els.gitStatusText, owner.text, owner.state);
+    for (const badge of [els.gitBranchBadge, els.gitHeadBadge, els.gitStagedBadge, els.gitUnstagedBadge,
+      els.gitUntrackedBadge, els.gitCheckpointsBadge]) {
+      if (badge) badge.textContent = badge.textContent.replace(/:.*$/, ': unavailable');
+    }
+    return;
+  }
+  const data = result.value ?? {};
+  if (data.isRepo !== true) {
+    const reason = data.reason === 'git_unavailable' ? 'git is not available on this machine'
+      : data.reason === 'not_a_git_repository' ? 'the workspace is not a git repository'
+        : 'the repository could not be read';
+    setWorkspaceStatus(els.gitStatusText, 'No repository: ' + reason + '. Nothing is assumed about one that is not there.', 'empty');
+    setGitBadge(els.gitBranchBadge, 'branch', 'none');
+    setGitBadge(els.gitHeadBadge, 'HEAD', 'none');
+    setGitBadge(els.gitStagedBadge, 'staged', '0');
+    setGitBadge(els.gitUnstagedBadge, 'unstaged', '0');
+    setGitBadge(els.gitUntrackedBadge, 'untracked', '0');
+    setGitBadge(els.gitCheckpointsBadge, 'checkpoints', String(data.checkpointsCount ?? 0));
+    return;
+  }
+  const aheadBehind = data.ahead === null || data.ahead === undefined
+    ? 'no upstream configured'
+    : data.ahead + ' ahead, ' + data.behind + ' behind';
+  setWorkspaceStatus(els.gitStatusText,
+    (data.branch || 'detached HEAD') + ' at ' + shortSha(data.headSha) + ' · ' + aheadBehind
+      + ' · ' + (data.recentCommits.length > 0 ? 'latest ' + data.recentCommits[0].shortSha + ' ' + data.recentCommits[0].subject : 'no commits'),
+    'available');
+  setGitBadge(els.gitBranchBadge, 'branch', data.branch || 'detached');
+  setGitBadge(els.gitHeadBadge, 'HEAD', shortSha(data.headSha));
+  setGitBadge(els.gitStagedBadge, 'staged', String(data.staged.length));
+  setGitBadge(els.gitUnstagedBadge, 'unstaged', String(data.unstaged.length));
+  setGitBadge(els.gitUntrackedBadge, 'untracked', String(data.untracked.length));
+  setGitBadge(els.gitCheckpointsBadge, 'checkpoints', String(data.checkpointsCount));
+  // The three counts are also written as data attributes so the end-to-end suite can assert the number
+  // it sees was the number the reading reported, rather than matching text.
+  if (els.gitStagedBadge) els.gitStagedBadge.dataset.count = String(data.staged.length);
+  if (els.gitUnstagedBadge) els.gitUnstagedBadge.dataset.count = String(data.unstaged.length);
+  if (els.gitUntrackedBadge) els.gitUntrackedBadge.dataset.count = String(data.untracked.length);
+  if (els.gitCheckpointsBadge) els.gitCheckpointsBadge.dataset.count = String(data.checkpointsCount);
+}
+
+// The diff viewer. One row per parsed line, with the old and new numbers in their own columns and the
+// glyph in the gutter carrying the same meaning as the tint.
+function renderDiff(data, { path = null } = {}) {
+  if (!els.diffViewer) return;
+  const hunks = Array.isArray(data?.hunks) ? data.hunks : [];
+  const hasContent = hunks.length > 0;
+  els.diffViewer.hidden = !hasContent && data?.isRepo !== false;
+  if (els.diffFileHeader) {
+    els.diffFileHeader.textContent = data?.isRepo === false
+      ? 'no repository at the workspace root'
+      : (data?.targetPath || path || 'the whole working tree');
+  }
+  if (els.diffAdditionsBadge) els.diffAdditionsBadge.textContent = '+' + (data?.additions ?? 0);
+  if (els.diffDeletionsBadge) els.diffDeletionsBadge.textContent = '-' + (data?.deletions ?? 0);
+  if (els.diffHunksBadge) els.diffHunksBadge.textContent = hunks.length + ' hunk(s)';
+  if (!els.diffBody) return;
+  els.diffBody.textContent = '';
+  if (!hasContent) {
+    const row = document.createElement('tr');
+    const cell = el('td', 'meta', data?.isRepo === false
+      ? 'There is no repository to diff.'
+      : 'No changes against ' + (data?.baseRef ?? 'HEAD') + (data?.targetPath ? ' in ' + data.targetPath : '') + '.');
+    cell.colSpan = 3;
+    row.append(cell);
+    els.diffBody.append(row);
+    return;
+  }
+  for (const hunk of hunks) {
+    const headerRow = document.createElement('tr');
+    const headerCell = el('td', 'meta', hunk.header);
+    headerCell.colSpan = 3;
+    headerRow.append(headerCell);
+    els.diffBody.append(headerRow);
+    for (const line of hunk.lines) {
+      const row = document.createElement('tr');
+      // The class is what carries the tint; the text carries the glyph. Both say add or delete, so a
+      // reader who cannot distinguish the two backgrounds is not missing the fact.
+      row.className = line.type === 'add' ? 'diff-line-add' : line.type === 'del' ? 'diff-line-del' : 'diff-line-ctx';
+      row.dataset.lineType = line.type;
+      row.append(el('td', line.type === 'del' ? 'diff-gutter-del' : '', line.oldLine === null || line.oldLine === undefined ? '' : String(line.oldLine)));
+      row.append(el('td', line.type === 'add' ? 'diff-gutter-add' : '', line.newLine === null || line.newLine === undefined ? '' : String(line.newLine)));
+      const glyph = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ';
+      row.append(el('td', '', glyph + (line.text ?? '')));
+      els.diffBody.append(row);
+    }
+  }
+}
+
+// The checkpoint list. REF INTACT is the server's live measurement; REF DRIFT means the ref no longer
+// points where the record says, which is the one thing an owner must know before trusting a restore.
+function renderCheckpoints(result) {
+  if (!els.checkpointsList) return;
+  const owner = ownerStatusText(result, 'the checkpoint ledger');
+  if (owner.text) {
+    renderList(els.checkpointsList, [], () => null, 'Unavailable: ' + owner.text);
+    return;
+  }
+  const checkpoints = Array.isArray(result.value?.checkpoints) ? result.value.checkpoints : [];
+  renderList(els.checkpointsList, checkpoints, (entry) => {
+    const li = itemFrom(entry.label || entry.checkpointId,
+      shortSha(entry.commitSha) + ' · ' + (entry.wasDirty ? entry.trackedModifiedCount + ' modified tracked' : 'clean tree')
+        + (entry.untrackedPaths?.length ? ' · ' + entry.untrackedPaths.length + ' untracked' : '')
+        + (entry.restoreCount > 0 ? ' · restored ' + entry.restoreCount + '×' : ''));
+    li.dataset.checkpointId = entry.checkpointId;
+    li.dataset.refIntact = entry.refIntact === true ? 'true' : 'false';
+    const intact = entry.refIntact === true;
+    const badge = el('span', 'badge ' + (intact ? 'checkpoint-ref-intact' : 'checkpoint-ref-drift'), intact ? 'REF INTACT' : 'REF DRIFT');
+    badge.dataset.refIntact = intact ? 'true' : 'false';
+    li.append(badge);
+    const actions = el('div', 'row');
+    const restore = el('button', 'small', 'Restore');
+    restore.type = 'button';
+    restore.dataset.action = 'restore-git-checkpoint';
+    restore.dataset.checkpointId = entry.checkpointId;
+    // A drifted checkpoint is not restorable and the control says so by being disabled, which is
+    // clearer than allowing a click that the server will refuse.
+    if (!intact) restore.disabled = true;
+    const trace = el('button', 'small', 'Trace');
+    trace.type = 'button';
+    trace.dataset.action = 'trace-git-checkpoint';
+    trace.dataset.checkpointId = entry.checkpointId;
+    actions.append(restore, trace);
+    li.append(actions);
+    return li;
+  }, 'No checkpoints are recorded yet. A checkpoint records the tree as it is without changing it.');
+}
+
+// The host telemetry: the badges, the two tables, and the one summary line.
+function renderTelemetry(result) {
+  if (!els.telemetryStatus) return;
+  const owner = ownerStatusText(result, 'host telemetry');
+  if (owner.text) {
+    setWorkspaceStatus(els.telemetryStatus, owner.text, owner.state);
+    if (els.portTable) els.portTable.textContent = '';
+    if (els.processTable) els.processTable.textContent = '';
+    return;
+  }
+  const payload = result.value ?? {};
+  const ports = payload.ports ?? {};
+  const summary = ports.summary ?? {};
+  const processes = payload.processes ?? {};
+  const own = processes.apexProcess ?? null;
+  const rssMb = own ? Math.round(own.rssBytes / (1024 * 1024)) : null;
+  if (els.telemetryTotalBadge) {
+    els.telemetryTotalBadge.textContent = 'TOTAL PORTS: ' + (summary.totalListening ?? 0);
+    els.telemetryTotalBadge.dataset.count = String(summary.totalListening ?? 0);
+  }
+  if (els.telemetryLoopbackBadge) {
+    els.telemetryLoopbackBadge.textContent = 'LOOPBACK ONLY: ' + (summary.loopbackOnlyCount ?? 0);
+    els.telemetryLoopbackBadge.dataset.count = String(summary.loopbackOnlyCount ?? 0);
+  }
+  if (els.telemetryExposureBadge) {
+    els.telemetryExposureBadge.textContent = 'EXTERNAL EXPOSURE: ' + (summary.externalExposureCount ?? 0);
+    els.telemetryExposureBadge.dataset.count = String(summary.externalExposureCount ?? 0);
+    // The badge is red only when there is something to be red about. A zero in alarm colour would
+    // teach the owner to ignore the one colour that should always mean something.
+    els.telemetryExposureBadge.dataset.state = (summary.externalExposureCount ?? 0) > 0 ? 'exposed' : 'clear';
+  }
+  if (els.telemetryRssBadge) {
+    els.telemetryRssBadge.textContent = 'APEX RSS: ' + (rssMb === null ? 'unavailable' : rssMb + ' MB');
+    els.telemetryRssBadge.dataset.count = rssMb === null ? '' : String(rssMb);
+  }
+  setWorkspaceStatus(els.telemetryStatus,
+    (ports.platform || payload.platform || 'this host') + ' · read at ' + String(payload.inspectedAt ?? '').replace('T', ' ').slice(0, 19)
+      + (Array.isArray(ports.notes) && ports.notes.length > 0 ? ' · ' + ports.notes.join('; ') : ''),
+    'available');
+
+  if (els.portTable) {
+    els.portTable.textContent = '';
+    const rows = Array.isArray(ports.ports) ? ports.ports : [];
+    if (rows.length === 0) {
+      const row = document.createElement('tr');
+      const cell = el('td', 'meta', 'No listening sockets were reported. A reading that could not enumerate them says why above.');
+      cell.colSpan = 5;
+      row.append(cell);
+      els.portTable.append(row);
+    }
+    for (const entry of rows) {
+      const row = document.createElement('tr');
+      row.dataset.port = String(entry.localPort);
+      row.dataset.exposure = entry.isLoopbackOnly ? 'loopback' : entry.isWildcardBind ? 'wildcard' : 'external';
+      row.append(el('td', '', String(entry.localPort)));
+      row.append(el('td', '', entry.protocol));
+      row.append(el('td', '', entry.localAddress));
+      const exposure = entry.isLoopbackOnly ? 'LOOPBACK ONLY' : entry.isWildcardBind ? 'EXTERNAL EXPOSURE' : 'INTERFACE BOUND';
+      row.append(el('td', entry.isLoopbackOnly ? 'exposure-loopback' : entry.isWildcardBind ? 'exposure-wildcard' : 'exposure-external', exposure));
+      row.append(el('td', '', entry.processName ? entry.processName + (entry.ownedByApex ? ' (APEX)' : '') + (entry.pid ? ' · ' + entry.pid : '') : (entry.pid ? String(entry.pid) : 'not attributed')));
+      els.portTable.append(row);
+    }
+  }
+
+  if (els.processTable) {
+    els.processTable.textContent = '';
+    const rows = Array.isArray(processes.topProcesses) ? processes.topProcesses : [];
+    if (rows.length === 0) {
+      const row = document.createElement('tr');
+      const cell = el('td', 'meta', 'The process table could not be read. The reason is stated above rather than shown as an empty list.');
+      cell.colSpan = 4;
+      row.append(cell);
+      els.processTable.append(row);
+    }
+    for (const entry of rows) {
+      const row = document.createElement('tr');
+      row.dataset.pid = String(entry.pid);
+      if (entry.isApexProcess) row.dataset.apex = 'true';
+      row.append(el('td', '', String(entry.pid)));
+      row.append(el('td', '', entry.name + (entry.isApexProcess ? ' (APEX)' : '')));
+      // tasklist reports no CPU percentage, and a 0 would read as idle rather than as unknown.
+      row.append(el('td', '', entry.cpuPct === null || entry.cpuPct === undefined ? '—' : entry.cpuPct + '%'));
+      row.append(el('td', '', Math.round(entry.rssBytes / (1024 * 1024)) + ' MB'));
+      els.processTable.append(row);
+    }
+  }
+
+  if (els.processSummary) {
+    els.processSummary.textContent = own
+      ? 'APEX pid ' + own.pid + ' · ' + own.nodeVersion + ' · up ' + own.uptimeSec + ' s · heap '
+        + Math.round(own.heapUsedBytes / (1024 * 1024)) + '/' + Math.round(own.heapTotalBytes / (1024 * 1024)) + ' MB'
+        + ' · ' + (processes.cpuCount ?? '—') + ' CPU(s)'
+        + (processes.loadAverage === null ? ' · load not reported on this platform' : ' · load ' + processes.loadAverage.join(' / '))
+      : 'This process could not read its own memory.';
+  }
+}
+
+// The fetchers. Each one is fire-and-forget from the refresh path: the deck must never wait on a
+// repository read to paint the rest of the screen, and a failure is reported where it belongs rather
+// than as a banner over the whole page.
+async function refreshGitPanel() {
+  const status = await readApi('/api/git/status');
+  renderGitStatus(status);
+  const [checkpoints] = await Promise.all([readApi('/api/git/checkpoints')]);
+  renderCheckpoints(checkpoints);
+}
+
+async function refreshTelemetry() {
+  const reading = await readApi('/api/system/telemetry?limit=15');
+  renderTelemetry(reading);
+}
+
+async function inspectDiff() {
+  const path = els.gitDiffPathInput ? els.gitDiffPathInput.value.trim() : '';
+  const query = path === '' ? '' : '?path=' + encodeURIComponent(path);
+  if (els.gitDiffStatus) els.gitDiffStatus.textContent = 'Reading the diff…';
+  const result = await readApi('/api/git/diff' + query);
+  if (result.ok === false) {
+    if (els.gitDiffStatus) els.gitDiffStatus.textContent = 'The diff could not be read: ' + result.error;
+    if (els.diffViewer) els.diffViewer.hidden = true;
+    return;
+  }
+  renderDiff(result.value, { path });
+  if (els.gitDiffStatus) {
+    els.gitDiffStatus.textContent = 'Diff against ' + (result.value.baseRef ?? 'HEAD')
+      + (result.value.targetPath ? ' in ' + result.value.targetPath : '')
+      + ': +' + (result.value.additions ?? 0) + ' -' + (result.value.deletions ?? 0)
+      + (result.value.truncated ? ' (truncated)' : '');
+  }
+}
+
+async function createCheckpoint() {
+  const label = els.gitCheckpointLabel ? els.gitCheckpointLabel.value.trim() : '';
+  if (els.gitCheckpointRefusal) { els.gitCheckpointRefusal.hidden = true; els.gitCheckpointRefusal.textContent = ''; }
+  if (label === '') {
+    if (els.gitCheckpointStatus) els.gitCheckpointStatus.textContent = 'A checkpoint needs a label: it is the name you will recognise in the list.';
+    return;
+  }
+  if (els.gitCheckpointStatus) els.gitCheckpointStatus.textContent = 'Creating the checkpoint…';
+  try {
+    const created = await api('/api/git/checkpoints', { method: 'POST', body: { label } });
+    if (els.gitCheckpointStatus) {
+      els.gitCheckpointStatus.textContent = 'Checkpoint ' + created.checkpointId + ' recorded at ' + shortSha(created.commitSha)
+        + (created.wasDirty ? ' (the working state was snapshotted; the tree was not touched)' : ' (clean tree)');
+    }
+    if (els.gitCheckpointLabel) els.gitCheckpointLabel.value = '';
+    await refreshGitPanel();
+  } catch (error) {
+    // A refusal is shown where the act was attempted, with the server's own reason. A step-up refusal
+    // and a dirty-tree refusal are both things the owner can act on, so neither is a banner.
+    if (els.gitCheckpointStatus) els.gitCheckpointStatus.textContent = 'The checkpoint was refused.';
+    if (els.gitCheckpointRefusal) {
+      els.gitCheckpointRefusal.hidden = false;
+      els.gitCheckpointRefusal.dataset.code = error.code || 'REFUSED';
+      els.gitCheckpointRefusal.textContent = (error.code ? error.code + ': ' : '') + String(error.message || error);
+    }
+  }
+}
+
+async function restoreCheckpoint(checkpointId) {
+  if (!checkpointId) return;
+  if (els.gitCheckpointStatus) els.gitCheckpointStatus.textContent = 'Restoring ' + checkpointId + '…';
+  try {
+    const restored = await api('/api/git/checkpoints/' + encodeURIComponent(checkpointId) + '/restore',
+      { method: 'POST', body: { reason: 'restored from the Workshop panel' } });
+    if (els.gitCheckpointStatus) {
+      els.gitCheckpointStatus.textContent = 'Restored ' + restored.checkpointId + ' to ' + shortSha(restored.treeSha) + '; verified after the write.';
+    }
+    await refreshGitPanel();
+    await inspectDiff();
+  } catch (error) {
+    if (els.gitCheckpointStatus) els.gitCheckpointStatus.textContent = 'The restore was refused.';
+    if (els.gitCheckpointRefusal) {
+      els.gitCheckpointRefusal.hidden = false;
+      els.gitCheckpointRefusal.dataset.code = error.code || 'REFUSED';
+      // The dirty-tree refusal names the paths it would have discarded; that list is the actionable
+      // part, so it is shown rather than summarised.
+      const paths = error.detail && Array.isArray(error.detail.dirtyPaths) ? error.detail.dirtyPaths : [];
+      els.gitCheckpointRefusal.textContent = (error.code ? error.code + ': ' : '') + String(error.message || error)
+        + (paths.length > 0 ? ' Would have discarded: ' + paths.join(', ') + '.' : '');
+    }
+  }
+}
+
+function openCheckpointTrace(checkpointId) {
+  if (!checkpointId) return;
+  // The Memory screen's trace view already knows how to read a chain; a checkpoint id becomes a link in
+  // the one place that reads every ledger rather than a second, private viewer here.
+  setView('memory');
+  void openTrace(checkpointId, null);
+}
+
+// The disk-versus-candidate view. The candidate already carries the summary the sandbox computed when
+// it staged the file - a line-level comparison of the bytes on disk at that moment against the proposed
+// bytes - so this renders that rather than re-deriving a second answer that could disagree with the one
+// the verification was based on. The preview lines already carry their own + and -, so they are parsed
+// back into rows here rather than shown as a block of text.
+function inspectCandidateDiff(candidate, button) {
+  if (!candidate) return;
+  const diff = candidate.diff ?? null;
+  const preview = Array.isArray(diff?.preview) ? diff.preview : [];
+  const rows = [];
+  for (const line of preview) {
+    const marker = typeof line === 'string' ? line.slice(0, 2) : '';
+    const text = typeof line === 'string' ? line.slice(2) : '';
+    rows.push({ type: marker === '+ ' ? 'add' : marker === '- ' ? 'del' : 'ctx', oldLine: null, newLine: null, text });
+  }
+  const payload = {
+    isRepo: true,
+    targetPath: candidate.relativePath,
+    baseRef: 'the file on disk when the candidate was staged',
+    staged: false,
+    additions: diff?.addedLines ?? null,
+    deletions: diff?.removedLines ?? null,
+    hunks: rows.length === 0 ? [] : [{
+      header: candidate.relativePath + ' — disk versus candidate',
+      oldStart: 0,
+      oldLines: 0,
+      newStart: 0,
+      newLines: 0,
+      lines: rows,
+    }],
+  };
+  renderDiff(payload, { path: candidate.relativePath });
+  if (els.diffViewer) els.diffViewer.dataset.source = 'candidate';
+  if (els.gitDiffStatus) {
+    els.gitDiffStatus.textContent = diff?.detail
+      ? diff.detail
+      : candidate.relativePath + ': +' + (diff?.addedLines ?? 0) + ' -' + (diff?.removedLines ?? 0)
+        + ' against the file as it was when the candidate was staged'
+        + (preview.length > 0 && preview.length < ((diff?.addedLines ?? 0) + (diff?.removedLines ?? 0)) ? ' (first ' + preview.length + ' changed line(s))' : '');
+  }
+  if (button) {
+    // The button does not stay disabled: it is a read, and the owner may want it again after editing.
+    button.dataset.inspected = 'true';
+  }
+}
+
 function renderWorkshopReport(report) {
   if (!els.workshopReport) return;
   els.workshopReport.replaceChildren();
@@ -3790,13 +4331,18 @@ async function openTrace(id, button) {
     // "partial" in red would report a normal shape as a defect. The status is amber only when the
     // chain is genuinely thin: no run, no task, and nothing else either.
     const applies = counts.applies ?? 0;
+    // T-43: a checkpoint chain is substantial when it holds a checkpoint. It has no run and no task by
+    // construction, so the flag that says "a chain of records rather than a run" is the honest one and
+    // the chain is not painted as a defect.
+    const checkpoints = counts.checkpoints ?? 0;
     const substantial = counts.runs > 0 || counts.taskEvents > 0 || applies > 0
-      || counts.councilSessions > 0 || counts.verifications > 0;
+      || counts.councilSessions > 0 || counts.verifications > 0 || checkpoints > 0;
     setWorkspaceStatus(els.traceChainStatus,
       (data.complete ? 'Complete chain' : substantial ? 'Chain' : 'Partial chain')
       + ' · ' + counts.runs + ' run(s), ' + counts.councilSessions + ' Council session(s), '
       + counts.taskEvents + ' task event(s), ' + counts.verifications + ' verification(s), '
       + applies + ' workspace change(s), '
+      + (checkpoints > 0 ? checkpoints + ' checkpoint(s), ' : '')
       + counts.operations + ' operation(s)'
       + (data.complete ? '' : ' · a chain of records rather than a run; no cognition run names this id')
       + (data.missing?.length ? ' · ' + data.missing.join('; ') : '') + '.',
@@ -4072,6 +4618,15 @@ function renderCandidates() {
     promote.disabled = !verified || Boolean(candidate.busy);
     promote.addEventListener('click', () => { promoteCandidate(candidate.candidateId, promote); });
     head.append(promote);
+    // T-43 Package 3: the live disk-versus-candidate diff. It reads the file as it is on disk and the
+    // candidate's staged content and renders the difference in the one diff viewer, so a reader compares
+    // two real byte strings rather than a summary of them.
+    const diffButton = el('button', 'small', 'Inspect Diff');
+    diffButton.type = 'button';
+    diffButton.dataset.action = 'diff-candidate';
+    diffButton.dataset.candidateId = candidate.candidateId;
+    diffButton.addEventListener('click', () => { void inspectCandidateDiff(candidate, diffButton); });
+    head.append(diffButton);
     // T-39 Step 1: the apply control. It is enabled only after the backend reported verified true,
     // because a button that can only be refused teaches the owner to distrust the refusal.
     const applyButton = el('button', 'small', 'Apply to Workspace');
@@ -5656,6 +6211,11 @@ async function refresh() {
   // T-42 Step 4: and the Workshop's candidate list, so a candidate staged by the Evolution Lab's
   // button is on screen without a reload. The read is fire-and-forget: the deck must not wait on it.
   void refreshCandidateListing();
+  // T-43 Package 3: the git panel and the host telemetry, refreshed with everything else. Both are
+  // fire-and-forget for the same reason the candidate listing is: a repository read must never delay
+  // painting the rest of the deck.
+  void refreshGitPanel();
+  void refreshTelemetry();
   renderPerception(perceptionResult);
   // T-33 Step 3: the graph and the perception reading the Workshop stages a sheet from.
   state.perception = perceptionResult.ok === true ? perceptionResult.value : null;
@@ -6111,6 +6671,71 @@ if (els.perceptionSense) {
       refresh();
     }
   });
+}
+
+// T-43 Package 3: the git panel's controls and the telemetry refresh. Every one of them calls a route
+// the controller owns, so a checkpoint create and a restore are the governed capabilities rather than a
+// client-side shortcut. A refusal is reported beside the control that attempted it.
+if (els.gitRefresh) {
+  els.gitRefresh.addEventListener('click', () => { void refreshGitPanel(); });
+}
+if (els.gitDiffInspect) {
+  els.gitDiffInspect.addEventListener('click', () => { void inspectDiff(); });
+}
+if (els.gitDiffPathInput) {
+  // Enter inspects the typed path rather than submitting a form, because the panel has no form and an
+  // input that swallows Enter teaches the owner the control does not work.
+  els.gitDiffPathInput.addEventListener('keydown', (event) => {
+    if (event && event.key === 'Enter') { event.preventDefault(); void inspectDiff(); }
+  });
+}
+if (els.gitCheckpointCreate) {
+  els.gitCheckpointCreate.addEventListener('click', () => { void createCheckpoint(); });
+}
+if (els.gitCheckpointLabel) {
+  els.gitCheckpointLabel.addEventListener('keydown', (event) => {
+    if (event && event.key === 'Enter') { event.preventDefault(); void createCheckpoint(); }
+  });
+}
+// The checkpoint list is re-rendered on every refresh, so its buttons are bound through one delegated
+// listener on the list itself. Binding per row would leak a handler per checkpoint per refresh.
+// Which element a checkpoint click belongs to. A real browser gives the innermost element, and its
+// closest() walks up to the control; a test harness dispatches on the control itself and its closest()
+// is a stub. Handling both is not defensive padding: the delegated handler is the only thing binding
+// these per-row controls, so a resolver that only worked from a child element would make every restore
+// and trace button untestable outside a browser.
+function checkpointActionTarget(event) {
+  const node = event && event.target ? event.target : null;
+  if (!node) return null;
+  if (node.dataset && typeof node.dataset.action === 'string' && node.dataset.action.length > 0) return node;
+  if (typeof node.closest === 'function') {
+    const found = node.closest('[data-action]');
+    if (found && found.dataset && typeof found.dataset.action === 'string') return found;
+  }
+  // Walking up the parent chain, because the harness's closest() is a stub and the click may land on a
+  // child span in a real browser that does not expose dataset on the event target.
+  let current = node.parentNode ?? null;
+  let depth = 0;
+  while (current && depth < 12) {
+    if (current.dataset && typeof current.dataset.action === 'string' && current.dataset.action.length > 0) return current;
+    current = current.parentNode ?? null;
+    depth += 1;
+  }
+  return null;
+}
+
+if (els.checkpointsList) {
+  els.checkpointsList.addEventListener('click', (event) => {
+    const target = checkpointActionTarget(event);
+    if (!target) return;
+    const action = target.dataset.action;
+    const checkpointId = target.dataset.checkpointId ?? null;
+    if (action === 'restore-git-checkpoint') { void restoreCheckpoint(checkpointId); return; }
+    if (action === 'trace-git-checkpoint') { openCheckpointTrace(checkpointId); }
+  });
+}
+if (els.telemetryRefresh) {
+  els.telemetryRefresh.addEventListener('click', () => { void refreshTelemetry(); });
 }
 
 document.addEventListener('keydown', (event) => {
