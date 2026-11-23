@@ -3063,7 +3063,7 @@ CI, never asserted from source.
 
 ## T-43 — The workstation, the git executive, and EDITH's process and port telemetry
 
-**Branch `arena/c4691a2f-a-p-e-x`, head `b771b55`, from `fb09e73`; `main` untouched at `fb09e73`.**
+**Branch `arena/c4691a2f-a-p-e-x`, head `96f4823`, from `fb09e73`; `main` untouched at `fb09e73`.**
 This section is additive. Everything above it is kept as written.
 
 Phase 2, Stage 1: the HUD stops describing the machine and starts measuring it. Four packages, in
@@ -3189,11 +3189,34 @@ extracted `UI_CLIENT` passes `new Function` with zero backticks — the T-42 les
 **Registry.** 172 default / 191 rooted capabilities, 94 reads and 97 writes; the inventory suite and
 the README agree.
 
-**Browser.** No system Edge or Chromium exists in this environment, so the T-43 walk skips loudly with
-the diagnostic rather than reporting a green it did not earn. Every assumption it makes was verified
-against the real product instead: 83 of 83 — the selectors on the page, the route kinds and their
-target views, the ledger shapes, the refusal codes, the trace entry kinds, and the server's own
-loopback port appearing among the host's listening ports.
+**Browser.** `t43-workstation-git-telemetry` passes on CI run `45254641477` against
+`microsoft-edge 157.0.4341.60`, in 19 s, on the twelfth suite of a fully green browser step:
+
+> browser 157.0.4341.60 | status branch=main head=96f4823 staged=0 unstaged=2 untracked=1 checkpoints=0 |
+> diff +1/-1 hunks=1 truncated=False contrast 5.84-14.47:1 over 14 samples | checkpoint
+> chk_0cfef9344114c61f refResolves=True worktreeUnchanged=True | restore count=1 staged 1->2
+> untrackedUntouched=True refusal=GIT_CHECKPOINT_DIRTY_TREE | drift refIntact=False
+> restoreDisabled=True traceEnabled=True | trace entries=7 kinds=ecp_audit,git_checkpoint complete=True |
+> telemetry linux total=5 loopback=3 exposure=2 ownPort=46321 rss=324505600 excluded=3 | router
+> git=git/workshop diff=git ports=inspect processes=inspect | viewports 27 screens measured |
+> console 0 page 0 requests 0 | screenshots 11 | lastPhase complete
+
+All twelve suites `t31`–`t43` green in one run, every step of the job passed, and the only annotations
+are notices.
+
+**What it took to get there, and why it is worth recording.** The walk went red six times before it
+went green, and not one of those was a product defect — every one was the walk measuring something
+other than what it claimed. That is the failure mode an unverified E2E hides: it was green here on the
+first try. In order: a 503 that was really a stated absence (this one *was* the product, and it broke
+t31 and t37 as well); a restore asserted against HEAD's bytes when a checkpoint captures the dirty
+tree; a fixed tick count standing in for a fire-and-forget paint; an `async json()` in a stub that
+never settled; a badge count that asserted a repository state the repository was not in; `tbody tr`
+selectors against elements that ARE tbodies; contrast measured on a hidden view, then with a backdrop
+walk that fell back to white because the page paints a gradient, then on the dimmed number column
+instead of the text; and a router wait that resolved against the previous command's receipt.
+
+Each was found by reading the annotation the run wrote — which is what the publishers are for — and
+each is now either a test or a comment explaining the trap.
 
 ### Four guardrails extended deliberately, not routed around
 
