@@ -152,18 +152,34 @@ async function measureContrast(page, selectors) {
       };
       return 0.2126 * channel(colour.r) + 0.7152 * channel(colour.g) + 0.0722 * channel(colour.b);
     };
-    // Walk up for the first opaque backdrop: a tinted line sits on a panel that sits on the page.
+    // Walk up compositing every translucent layer until the accumulated colour is opaque. The
+    // accumulation is a proper source-over stack, which is why it cannot start from the element and
+    // use its alpha alone: a transparent layer contributes nothing and must not mark the stack opaque.
+    //
+    // The page's own background is a GRADIENT with a background-color behind it, so the walk ends at
+    // html/body rather than at any element that paints a flat colour. The fallback is the page's
+    // background-color where it resolves, and only then a neutral - falling straight back to white
+    // turned a dark panel into a light one and reported 1.98:1 for text that measures 12.44:1.
     const backdrop = (node) => {
+      const layers = [];
       let current = node;
-      let colour = { r: 0, g: 0, b: 0, a: 0 };
       while (current) {
-        const style = getComputedStyle(current);
-        const parsed = parse(style.backgroundColor);
-        if (parsed && parsed.a > 0) colour = over(colour, parsed);
-        if (colour.a >= 0.999) return colour;
+        const parsed = parse(getComputedStyle(current).backgroundColor);
+        if (parsed && parsed.a > 0) layers.push(parsed);
         current = current.parentElement;
       }
-      return over(colour, { r: 255, g: 255, b: 255, a: 1 });
+      // Bottom-most first, then composite each layer over the accumulated result.
+      let colour = { r: 5, g: 8, b: 15, a: 1 };
+      for (let index = layers.length - 1; index >= 0; index -= 1) {
+        const layer = layers[index];
+        colour = {
+          r: layer.r * layer.a + colour.r * (1 - layer.a),
+          g: layer.g * layer.a + colour.g * (1 - layer.a),
+          b: layer.b * layer.a + colour.b * (1 - layer.a),
+          a: colour.a * (1 - layer.a) + layer.a,
+        };
+      }
+      return colour;
     };
     const ratio = (node) => {
       const style = getComputedStyle(node);
@@ -555,8 +571,14 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     // measureContrast's sampling is reused by handing the selector list in, so there is one
     // implementation of the colour arithmetic and one of what counts as on screen.
     const workshopSamples = await sampleOn('workshop', [
-      '#diff-body .diff-line-add td:not(.diff-gutter-add):not(.diff-gutter-del)',
-      '#diff-body .diff-line-del td:not(.diff-gutter-add):not(.diff-gutter-del)',
+      // The third column is the text; the first two are the number gutters and are deliberately
+      // dimmed, so sampling them would measure a caption and call it body text.
+      '#diff-body .diff-line-add td:nth-child(3)',
+      '#diff-body .diff-line-del td:nth-child(3)',
+      // The number columns are dimmed on purpose and are still text a reader reads, so they are
+      // measured rather than skipped: 5.73:1 and 6.32:1 against their own tints.
+      '#diff-body .diff-line-add td:nth-child(2)',
+      '#diff-body .diff-line-del td:nth-child(1)',
       '#diff-body .diff-gutter-add',
       '#diff-body .diff-gutter-del',
       '#workshop-checkpoints-list .checkpoint-ref-intact',
@@ -582,7 +604,7 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     expect(contrastMissing, `surfaces not measured: ${JSON.stringify(contrastMissing)}`).toEqual([]);
     // Both views must have contributed, so a view that failed to render cannot shrink the measurement
     // into a clean pass over a handful of elements.
-    expect(workshopSamples.samples.length, 'the Workshop contributed its surfaces').toBeGreaterThanOrEqual(8);
+    expect(workshopSamples.samples.length, 'the Workshop contributed its surfaces').toBeGreaterThanOrEqual(10);
     expect(sentinelSamples.samples.length, 'Sentinel contributed its surfaces').toBeGreaterThanOrEqual(4);
     for (const entry of contrastSamples) {
       expect(entry.ratio, `${entry.label} (${entry.colour} on ${entry.background}) measures ${entry.ratio?.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
