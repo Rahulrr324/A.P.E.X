@@ -173,10 +173,21 @@ test.describe('T-34 mission DAG, in a real browser', () => {
     step('selector', { tasks: options.length, switchedTo: seeded.singleTaskId, nodes: 1 });
     await shot('03-selector-other-task');
 
+    // T-42 Step 3: the same five nodes, and *this* mission's five nodes. A count alone would pass on
+    // a coincidental task; the selected value and the node identities are what make the assertion
+    // about the mission the owner pinned. The render is monotonic now, so an older in-flight refresh
+    // cannot repaint a one-node task over this one between the click and the count.
     await page.locator('#taskgraph-select').selectOption(seeded.missionTaskId);
+    await expect(page.locator('#taskgraph-select')).toHaveValue(seeded.missionTaskId, { timeout: 30_000 });
     await expect(page.locator('#dag-nodes li[data-node-id]')).toHaveCount(5, { timeout: 30_000 });
+    const pinned = await page.locator('#dag-nodes li[data-node-id]').evaluateAll((nodes) => nodes.map((entry) => entry.dataset.nodeId).sort());
+    expect(pinned, 'the five nodes are the mission\'s own, not another task\'s').toEqual(['n1', 'n2a', 'n2b', 'n3', 'n4']);
+    // And it stays that way across a further render cycle: the pin survives a refresh.
+    await page.waitForTimeout(1200);
+    await expect(page.locator('#dag-nodes li[data-node-id]')).toHaveCount(5, { timeout: 30_000 });
+    await expect(page.locator('#taskgraph-select')).toHaveValue(seeded.missionTaskId, { timeout: 30_000 });
     await expect(node('n3')).toHaveAttribute('data-blocked-by', 'n2a');
-    step('selector-back', { selected: seeded.missionTaskId, nodes: 5 });
+    step('selector-back', { selected: seeded.missionTaskId, nodes: 5, pinnedNodes: pinned });
 
     // ---- 4. approve the gated branch: the join's block clears, the sibling is untouched --------
     const siblingBefore = (await handle.task(seeded.missionTaskId)).steps.find((entry) => entry.id === 'n2b');

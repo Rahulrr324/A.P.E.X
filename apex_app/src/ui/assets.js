@@ -3309,9 +3309,32 @@ function renderWorkshop(result) {
 // verification outcome is verified. The three controls post to controller routes that already
 // existed (/api/tasks/:id/approve|retry|cancel), so this view offers an existing transition and
 // never invents one. Lockdown refuses them at the ECP, which is where that decision belongs.
-function renderTaskGraph(result) {
+// T-42 Step 3: the graph render is monotonic. Two readers can be in flight at once - the periodic
+// refresh and the owner choosing a recorded task - and the slower one is not necessarily the older
+// one. Without a sequence the refresh, which asked for "the newest unfinished task" before the owner
+// chose a five-node mission, could land afterwards and repaint the deck with a one-node task. The
+// counter is per-renderer and the requested task is remembered, so an older read can never overwrite
+// a graph the owner explicitly asked for.
+let taskGraphRenderSequence = 0;
+let taskGraphRequestedTaskId = null;
+let taskGraphRenderedSequence = 0;
+function renderTaskGraph(result, request = null) {
   if (!els.dagNodes) return;
   const graph = result?.ok === true ? result.value : null;
+  // A read that started before the last render is stale whatever it contains. Dropping it is not the
+  // same as failing it: the deck already shows a graph, and the read that is dropped was answering a
+  // question the owner has moved on from.
+  const sequence = request && Number.isSafeInteger(request.sequence) ? request.sequence : ++taskGraphRenderSequence;
+  if (sequence < taskGraphRenderedSequence) return;
+  // A read that is not stale by sequence can still be answering the wrong question: the owner pinned
+  // a task, and this read asked for "the newest unfinished task". Rendering it would silently undo
+  // the pin. It is dropped, and only for a read that did not ask for the pinned task.
+  if (request && request.taskId === null && graph && taskGraphRequestedTaskId !== null
+    && graph.taskId !== taskGraphRequestedTaskId) return;
+  taskGraphRenderedSequence = sequence;
+  // The pin is cleared only when the graph that arrived *is* the pinned one, so the deck never ends
+  // up pinned to a task whose log has been read and rejected.
+  if (request && request.taskId !== null && graph && graph.taskId === request.taskId) taskGraphRequestedTaskId = request.taskId;
   state.taskGraph = graph;
   if (!graph) {
     const reason = result?.error || 'the task graph could not be read';
@@ -5430,6 +5453,9 @@ function renderStepUp(result) {
 }
 
 async function refresh() {
+  // T-42 Step 3: the sequence is taken before the await, so it orders the *request*, not the answer.
+  const graphSequence = ++taskGraphRenderSequence;
+  const graphRequestedTask = els.dagSelect && els.dagSelect.value ? els.dagSelect.value : null;
   const [stateResult, healthResult, missionResult, approvalResult, timelineResult,
     situationResult, briefingResult, runtimeResult, sourcesResult, documentsResult,
     reasoningResult, councilResult, workshopResult, resourcesResult, cognitionResult,
@@ -5563,7 +5589,7 @@ async function refresh() {
   renderPerception(perceptionResult);
   // T-33 Step 3: the graph and the perception reading the Workshop stages a sheet from.
   state.perception = perceptionResult.ok === true ? perceptionResult.value : null;
-  renderTaskGraph(taskGraphResult);
+  renderTaskGraph(taskGraphResult, { sequence: graphSequence, taskId: graphRequestedTask });
   renderAssociations(associationResult);
   renderStepUp(stepUpResult);
 
@@ -5834,10 +5860,14 @@ if (els.dagApprove) {
 // same route the deck already reads; the response carries that task's full graph, and the renderer
 // fills the select back from it, so a task that has gone away is not left showing.
 async function loadSelectedTaskGraph(taskId) {
+  // T-42 Step 3: an explicit choice takes the newest sequence, so a refresh that started earlier can
+  // no longer repaint the deck with a task the owner did not ask for.
+  const sequence = ++taskGraphRenderSequence;
+  taskGraphRequestedTaskId = taskId || null;
   setWorkspaceStatus(els.dagStatus, 'Reading the recorded graph…', 'loading');
   try {
     const result = await readApi('/api/taskgraph' + (taskId ? '?taskId=' + encodeURIComponent(taskId) : ''));
-    renderTaskGraph(result);
+    renderTaskGraph(result, { sequence, taskId: taskId || null });
     if (result?.ok !== true) setWorkspaceStatus(els.dagStatus, 'Read error: ' + String(result?.error || 'the graph could not be read'), 'error');
   } catch (error) {
     setWorkspaceStatus(els.dagStatus, 'Read error: ' + String(error?.message || error), 'error');
