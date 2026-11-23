@@ -127,8 +127,12 @@ async function measureOverflow(page) {
 
 // WCAG relative luminance and contrast, computed in the page from the colours the browser actually
 // resolved - not from the stylesheet text. A token redefined for a dark panel is measured as it renders.
-async function measureContrast(page) {
-  return page.evaluate(() => {
+//
+// The selector list is an argument because contrast is a property of what is ON SCREEN: a panel that is
+// display:none has no rendered colour, and asking for one would measure a question the page cannot
+// answer. The caller measures each view on its own, and a surface it did not ask for is not reported.
+async function measureContrast(page, selectors) {
+  return page.evaluate((list) => {
     const parse = (value) => {
       const match = String(value).match(/rgba?\(([^)]+)\)/);
       if (!match) return null;
@@ -171,37 +175,22 @@ async function measureContrast(page) {
       const low = Math.min(luminance(fg), luminance(background));
       return (high + 0.05) / (low + 0.05);
     };
-    const sample = (selector, label) => {
+    const sample = (selector) => {
       const node = document.querySelector(selector);
-      if (!node) return { label, selector, ratio: null, missing: 'absent' };
-      // A surface that is not rendered has no colour to measure; calling that a low ratio would be a
-      // false alarm and calling it a pass would be a false comfort. It is reported as not-on-screen,
-      // and the phase that reads it decides whether that is acceptable.
+      if (!node) return { selector, ratio: null, missing: 'absent' };
+      // A node with no box is not rendered - display:none, or a hidden ancestor. It has no colour to
+      // measure; calling that a low ratio would be a false alarm and calling it a pass a false comfort.
       const rect = node.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return { label, selector, ratio: null, missing: 'not-on-screen' };
-      return { label, selector, ratio: ratio(node), colour: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor };
+      if (rect.width === 0 || rect.height === 0) return { selector, ratio: null, missing: 'not-on-screen' };
+      const style = getComputedStyle(node);
+      return { selector, label: selector, ratio: ratio(node), colour: style.color, background: style.backgroundColor };
     };
-    // Each sample names an element whose own text is what a reader reads. The diff samples are the
-    // TEXT CELLS rather than the row: a row's computed colour is whatever it inherits, while the cells
-    // carry the rule, and measuring the element that carries the rule is measuring what renders.
-    const samples = [
-      sample('#diff-body .diff-line-add td:not(.diff-gutter-add):not(.diff-gutter-del)', 'added line text'),
-      sample('#diff-body .diff-line-del td:not(.diff-gutter-add):not(.diff-gutter-del)', 'deleted line text'),
-      sample('#diff-body .diff-gutter-add', 'added line number'),
-      sample('#diff-body .diff-gutter-del', 'deleted line number'),
-      sample('#workshop-checkpoints-list .checkpoint-ref-intact', 'REF INTACT badge'),
-      sample('#workshop-checkpoints-list .checkpoint-ref-drift', 'REF DRIFT badge'),
-      sample('#edith-port-table .exposure-loopback', 'loopback row'),
-      sample('#git-branch-badge', 'branch badge'),
-      sample('#git-unstaged-badge', 'unstaged badge'),
-      sample('#telemetry-total-badge', 'TOTAL PORTS badge'),
-      sample('#telemetry-rss-badge', 'APEX RSS badge'),
-    ];
+    const samples = list.map(sample);
     return {
       samples: samples.filter((entry) => !entry.missing),
       missing: samples.filter((entry) => entry.missing).map((entry) => ({ selector: entry.selector, why: entry.missing })),
     };
-  });
+  }, selectors);
 }
 
 // Type a command into the command bar and send it. The bar is the product's own route in, so the walk
@@ -553,34 +542,52 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     checkpoint('telemetry-painted', run.telemetry);
 
     // ------------------------------------------------- 8. Every colour, measured where it renders ---
-    // All three surfaces the milestone added are rendered at this point: the diff rows in the Workshop,
-    // the checkpoint cards beside them, and the port table in Sentinel. Contrast is measured in the
-    // browser from the colours it actually resolved, not from the stylesheet text, so a token redefined
-    // for a dark panel is measured as it renders.
-    await page.locator('button.nav-item[data-view="workshop"]').click();
-    await expect(page.locator('#workshop-diff-viewer')).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('#workshop-checkpoints-list li')).toHaveCount(2);
-    await expect(page.locator('#workshop-checkpoints-list .checkpoint-ref-drift')).toHaveCount(1);
-    const workshopContrast = await measureContrast(page);
-    await page.locator('button.nav-item[data-view="sentinel"]').click();
-    await expect(page.locator('#edith-port-table')).toBeVisible({ timeout: 15_000 });
-    const sentinelContrast = await measureContrast(page);
+    // Contrast is measured in the browser from the colours it actually resolved, not from the stylesheet
+    // text, so a token redefined for a dark panel is measured as it renders. It is measured ONE VIEW AT A
+    // TIME and only on the surfaces that view is showing: a hidden panel has no rendered colour, and
+    // asking for one measured while it was display:none would be asking the page a question it cannot
+    // answer. The counts below make sure each view contributed what it was supposed to.
+    const sampleOn = async (view, selectors) => {
+      await page.locator(`button.nav-item[data-view="${view}"]`).click();
+      await page.waitForTimeout(150);
+      return measureContrast(page, selectors);
+    };
+    // measureContrast's sampling is reused by handing the selector list in, so there is one
+    // implementation of the colour arithmetic and one of what counts as on screen.
+    const workshopSamples = await sampleOn('workshop', [
+      '#diff-body .diff-line-add td:not(.diff-gutter-add):not(.diff-gutter-del)',
+      '#diff-body .diff-line-del td:not(.diff-gutter-add):not(.diff-gutter-del)',
+      '#diff-body .diff-gutter-add',
+      '#diff-body .diff-gutter-del',
+      '#workshop-checkpoints-list .checkpoint-ref-intact',
+      '#workshop-checkpoints-list .checkpoint-ref-drift',
+      '#git-branch-badge',
+      '#git-unstaged-badge',
+    ]);
+    const sentinelSamples = await sampleOn('sentinel', [
+      '#edith-port-table .exposure-loopback',
+      '#edith-port-table .exposure-wildcard',
+      '#telemetry-total-badge',
+      '#telemetry-rss-badge',
+    ]);
 
-    const contrastSamples = [...workshopContrast.samples, ...sentinelContrast.samples];
-    const contrastMissing = [...workshopContrast.missing, ...sentinelContrast.missing];
+    const contrastSamples = [...workshopSamples.samples, ...sentinelSamples.samples];
+    const contrastMissing = [...workshopSamples.missing, ...sentinelSamples.missing];
     run.contrast = {
       samples: contrastSamples.map((entry) => ({ label: entry.label, ratio: Number(entry.ratio?.toFixed(2)), colour: entry.colour, background: entry.background })),
       missing: contrastMissing,
       checked: contrastSamples.length,
+      perView: { workshop: workshopSamples.samples.length, sentinel: sentinelSamples.samples.length },
     };
-    // Every foreground on screen clears the floor. A surface that was not on screen is reported, but it
-    // is not a pass and it is not a failure - the counts below make sure enough of them were measured.
     expect(contrastMissing, `surfaces not measured: ${JSON.stringify(contrastMissing)}`).toEqual([]);
-    expect(contrastSamples.length, `enough surfaces were measured to mean something: ${JSON.stringify(run.contrast.samples)}`).toBeGreaterThanOrEqual(9);
+    // Both views must have contributed, so a view that failed to render cannot shrink the measurement
+    // into a clean pass over a handful of elements.
+    expect(workshopSamples.samples.length, 'the Workshop contributed its surfaces').toBeGreaterThanOrEqual(8);
+    expect(sentinelSamples.samples.length, 'Sentinel contributed its surfaces').toBeGreaterThanOrEqual(4);
     for (const entry of contrastSamples) {
       expect(entry.ratio, `${entry.label} (${entry.colour} on ${entry.background}) measures ${entry.ratio?.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
     }
-    checkpoint('contrast', { checked: contrastSamples.length });
+    checkpoint('contrast', { checked: contrastSamples.length, perView: run.contrast.perView });
 
     // ---------------------------------------------------- 9. Ctrl+K routes to both surfaces ---
     // Ctrl+K is the keyboard route into the command bar; the router then decides the screen. This is the
