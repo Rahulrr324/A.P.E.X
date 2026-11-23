@@ -215,9 +215,19 @@ async function measureContrast(page, selectors) {
 // would be one route behind.
 async function dispatch(page, line) {
   await page.locator('button.nav-item[data-view="deck"]').click();
+  // The receipt from the previous command is already visible, so a bare visibility wait resolves against
+  // it and every read comes back one command behind - the defect the T-37 walk was fixed for. The wait
+  // is therefore on the receipt CHANGING. The five lines this walk sends are all distinct in capability
+  // and summary (verified: status_detailed, inspect_ports, inspect_processes, two diff_inspect
+  // summaries with different counts), so a text comparison distinguishes them.
+  const before = await page.evaluate(() => document.getElementById('dispatch-receipt')?.textContent ?? null);
   await page.locator('#chat-text').fill(line);
   await page.locator('#send').click();
-  await expect(page.locator('#dispatch-receipt')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(async () => page.evaluate((previous) => {
+    const node = document.getElementById('dispatch-receipt');
+    if (!node || node.hidden) return false;
+    return (node.textContent ?? '') !== previous;
+  }, before), { timeout: 30_000, message: `no new receipt for "${line}"` }).toBe(true);
   // The receipt is a definition list of term/value pairs, so the route is read from its own row rather
   // than from an attribute the markup does not carry. Reading it by term name also means a reordered
   // list cannot silently report the wrong field.
