@@ -503,8 +503,11 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     await page.locator('button.nav-item[data-view="sentinel"]').click();
     await expect(page.locator('#sentinel-telemetry-panel')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('#telemetry-total-badge')).toContainText('TOTAL PORTS: ', { timeout: 25_000 });
-    await expect(page.locator('#edith-port-table tbody tr')).not.toHaveCount(0, { timeout: 25_000 });
-    await expect(page.locator('#edith-process-table tbody tr')).not.toHaveCount(0);
+    // #edith-port-table and #edith-process-table ARE the tbodies, not the tables that contain them:
+    // the client appends rows to them directly. A descendant selector here matches nothing and reads as
+    // an empty table, which is how this looked like a product failure on CI.
+    await expect(page.locator('#edith-port-table tr')).not.toHaveCount(0, { timeout: 25_000 });
+    await expect(page.locator('#edith-process-table tr')).not.toHaveCount(0);
 
     const telemetry = await fixture.get('/api/system/telemetry?limit=15');
     const serverPort = Number(new URL(fixture.base).port);
@@ -521,7 +524,7 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     const portRow = (telemetry.body.ports.ports ?? []).find((entry) => entry.localPort === serverPort);
     expect(portRow, `the inspection classified port ${serverPort}`).toBeTruthy();
     expect(portRow.isLoopbackOnly, `port ${serverPort} is bound to loopback: ${portRow.localAddress}`).toBe(true);
-    const apexRow = page.locator('#edith-port-table tbody tr[data-port="' + serverPort + '"]');
+    const apexRow = page.locator('#edith-port-table tr[data-port="' + serverPort + '"]');
     await expect(apexRow.first()).toBeVisible({ timeout: 10_000 });
     await expect(apexRow.first()).toContainText('LOOPBACK ONLY');
 
