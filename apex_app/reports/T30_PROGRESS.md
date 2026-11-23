@@ -3154,11 +3154,32 @@ that would have produced a confident green against a wrong story:
   host-realm promise the vm's `await` cannot resolve: the POST is issued, the caller waits forever, and
   it looks exactly like a server that never answered. The stub now returns a thenable.
 
+### The defect CI found, which the walk could not
+
+Run `45199263255` went red on **t31 and t37** — two suites this milestone never touched — with eight
+console errors on a screen that had been green the run before. The cause was mine, and the milestone's
+own premise named it: the three git reads answered **503** when the build had no workspace root, and
+the client asks for all three on boot. A 503 is a statement about the *server*; "this build has no
+repository" is a statement about the *workspace*, and `git.status_detailed` already answers it with
+`isRepo: false` and a reason rather than by throwing. The three routes now answer `200` with
+`{ isRepo: false, reason: 'no_workspace_root' }`, and the panel renders that as a stated absence rather
+than as a failure.
+
+Two smaller corrections came with it. `available` stays **true** in that payload — the read *was*
+available and it answered; setting it false sent the panel down its generic branch and printed "the
+repository owner is not configured", which is a different and untrue sentence. And the deployment's
+own t31 fixture has no workspace root, so this path is every build the browser suites exercise, which
+is why the regression was three suites wide.
+
+The regression test boots the **whole client** against a no-root app and asserts what CI measures:
+zero 5xx among the 56 routes the boot asks for, zero console errors, zero uncaught exceptions, and the
+panel stating the absence it found.
+
 ### Evidence
 
-**Unit and integration.** `npm test`: **4,320 tests, 4,318 pass, 0 fail, 2 skipped, 674 suites** —
-60 more tests and 12 more suites than the T-42 baseline of 4,260 / 662. The milestone's own: 31
-git-executive, 19 process-port-inspector, 10 HUD, and the invariant tests the packages required.
+**Unit and integration.** `npm test`: **4,322 tests, 4,320 pass, 0 fail, 2 skipped, 675 suites** —
+62 more tests and 13 more suites than the T-42 baseline of 4,260 / 662. The milestone's own: 31
+git-executive, 19 process-port-inspector, 12 HUD, and the invariant tests the packages required.
 
 **Syntax.** All 267 files under `apex_app/src` and `apex_app/bin` pass `node --check`, and the
 extracted `UI_CLIENT` passes `new Function` with zero backticks — the T-42 lesson, kept.

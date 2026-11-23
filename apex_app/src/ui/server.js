@@ -790,6 +790,31 @@ function gitRefusalStatus(step) {
 // and message - not nested under a `detail` key. They are collected back into one object here so the
 // response has a stable shape: `{ error, code, detail: {...} }`, never a refusal whose reason is only
 // the word "refused".
+// T-43 Package 3 (2026-11-19): what the three git reads answer when the build has no workspace root.
+// There is no repository to inspect, which is a fact about the workspace rather than a failure of the
+// server, so it is reported the way statusDetailed already reports a non-repository: isRepo false with
+// a reason, and nothing else invented. All three reads share the shape, and the panel renders each from
+// it without a special case.
+// `available` stays TRUE: the read was available and it answered. What it answered is that there is no
+// repository, which is `isRepo: false` with a reason - the same shape statusDetailed returns for a
+// workspace that is simply not a git repository. Setting `available: false` would send the panel down
+// its generic unavailable branch and print "the repository owner is not configured", which is a
+// different and untrue sentence.
+const NOT_A_REPOSITORY = Object.freeze({
+  verified: true,
+  available: true,
+  isRepo: false,
+  reason: 'no_workspace_root',
+  workspaceRoot: null,
+  branch: null,
+  headSha: null,
+  staged: Object.freeze([]),
+  unstaged: Object.freeze([]),
+  untracked: Object.freeze([]),
+  recentCommits: Object.freeze([]),
+  checkpointsCount: 0,
+});
+
 function gitRefusalBody(result, step) {
   const failed = step?.execution?.error ?? null;
   const code = failed?.code ?? (step?.authorization?.decision === 'deny' ? step.authorization.reason : null);
@@ -3365,7 +3390,11 @@ export function createUiServer({
     // Workshop apply - a git act is not a shortcut around the authority.
     if (method === 'GET' && url.pathname === '/api/git/status') {
       try {
-        if (!app.gitExecutive) { sendJson(res, 503, { unavailable: true, error: 'the git executive is not configured' }); return; }
+        // No git executive means this build has no workspace root, so there is no repository to read.
+        // That is a reading - "not a git repository" - and not a server fault, for the reason stated
+        // beside NOT_A_REPOSITORY: a 503 on boot is a console error on every screen that refreshes
+        // beside this one, and the panel already knows how to render a stated absence.
+        if (!app.gitExecutive) { sendJson(res, 200, NOT_A_REPOSITORY); return; }
         sendJson(res, 200, app.gitExecutive.statusDetailed());
       } catch (err) {
         sendJson(res, 500, { error: `the repository could not be read: ${err.message}` });
@@ -3374,7 +3403,11 @@ export function createUiServer({
     }
     if (method === 'GET' && url.pathname === '/api/git/diff') {
       try {
-        if (!app.gitExecutive) { sendJson(res, 503, { unavailable: true, error: 'the git executive is not configured' }); return; }
+        // No git executive means this build has no workspace root, so there is no repository to read.
+        // That is a reading - "not a git repository" - and not a server fault, for the reason stated
+        // beside NOT_A_REPOSITORY: a 503 on boot is a console error on every screen that refreshes
+        // beside this one, and the panel already knows how to render a stated absence.
+        if (!app.gitExecutive) { sendJson(res, 200, NOT_A_REPOSITORY); return; }
         const targetPath = url.searchParams.get('path');
         const baseRef = url.searchParams.get('baseRef') ?? 'HEAD';
         const staged = url.searchParams.get('staged') === '1' || url.searchParams.get('staged') === 'true';
@@ -3401,7 +3434,11 @@ export function createUiServer({
     }
     if (method === 'GET' && url.pathname === '/api/git/checkpoints') {
       try {
-        if (!app.gitExecutive) { sendJson(res, 503, { unavailable: true, error: 'the git executive is not configured' }); return; }
+        // No git executive means this build has no workspace root, so there is no repository to read.
+        // That is a reading - "not a git repository" - and not a server fault, for the reason stated
+        // beside NOT_A_REPOSITORY: a 503 on boot is a console error on every screen that refreshes
+        // beside this one, and the panel already knows how to render a stated absence.
+        if (!app.gitExecutive) { sendJson(res, 200, NOT_A_REPOSITORY); return; }
         // `listCheckpoints` measures `refIntact` against the repository now, so a panel that refreshes
         // sees a ref that drifted rather than a stored claim that it had not.
         const checkpoints = app.gitExecutive.listCheckpoints();

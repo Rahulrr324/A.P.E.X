@@ -3802,7 +3802,11 @@ function renderGitStatus(result) {
   if (data.isRepo !== true) {
     const reason = data.reason === 'git_unavailable' ? 'git is not available on this machine'
       : data.reason === 'not_a_git_repository' ? 'the workspace is not a git repository'
-        : 'the repository could not be read';
+        // T-43 Package 3: a build with no workspace root is a build with no repository to read. That is
+        // a stated absence rather than a read that failed, and saying so is more useful than a generic
+        // failure on a screen where nothing is wrong.
+        : data.reason === 'no_workspace_root' ? 'this build has no target workspace, so there is no repository to read'
+          : 'the repository could not be read';
     setWorkspaceStatus(els.gitStatusText, 'No repository: ' + reason + '. Nothing is assumed about one that is not there.', 'empty');
     setGitBadge(els.gitBranchBadge, 'branch', 'none');
     setGitBadge(els.gitHeadBadge, 'HEAD', 'none');

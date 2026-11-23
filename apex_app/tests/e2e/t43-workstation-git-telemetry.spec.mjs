@@ -240,7 +240,10 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     page.on('pageerror', (error) => pageErrors.push(String(error?.message ?? error)));
     page.on('requestfailed', (request) => failedRequests.push({ url: request.url(), error: request.failure()?.errorText ?? null }));
 
-    await page.goto(fixture.base, { waitUntil: 'domcontentloaded' });
+    // The token is a query parameter on the page URL: the server hands the bearer to the client that
+    // way, and a bare base URL gets a 401 and an empty body. Every other suite in this tree opens the
+    // page the same way.
+    await page.goto(`${fixture.base}/?token=${encodeURIComponent(fixture.token)}`, { waitUntil: 'domcontentloaded' });
     await expect(page.locator('body')).toHaveAttribute('data-view', /.+/, { timeout: 20_000 });
     checkpoint('booted', { url: fixture.base });
 

@@ -417,3 +417,86 @@ describe('T-43 Package 3: the client paints real readings', () => {
     assert.equal(refusalText, '', 'no refusal was recorded for a restore that succeeded');
   });
 });
+
+describe('T-43 Package 3: a build with no workspace root', () => {
+  // The defect CI found on run 45199263255. The three git reads answered 503 when the build had no
+  // workspace root, and the client asks for them on boot - so every screen navigation logged a console
+  // error, and t31 and t37 went red on a change that never touched them. A 503 is a statement about
+  // the server; "this build has no repository" is a statement about the workspace, and it is a reading.
+  let root;
+  let server;
+
+  before(async () => {
+    const { createApp } = await import('../src/app.js');
+    const { createUiServer } = await import('../src/ui/server.js');
+    const { ModelGateway, NoBackend } = await import('../src/model/gateway.js');
+    root = tempDir('apex-hud-noroot-');
+    const app = createApp({ dataDir: root, modelGateway: new ModelGateway({ backend: new NoBackend() }) });
+    server = createUiServer({ app, token: 'T43-noroot-token-0123456789' });
+    const started = await server.start();
+    server.base = `http://127.0.0.1:${started.port}`;
+  });
+
+  after(async () => {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('the three git reads report an absence rather than a server fault', async () => {
+    const headers = { authorization: 'Bearer T43-noroot-token-0123456789', 'x-apex-ui': '1' };
+    for (const route of ['/api/git/status', '/api/git/diff', '/api/git/checkpoints']) {
+      const response = await fetch(server.base + route, { headers });
+      assert.equal(response.status, 200, `${route} must answer a reading, not 503`);
+      const body = await response.json();
+      assert.equal(body.isRepo, false, `${route} must say there is no repository`);
+      assert.equal(body.reason, 'no_workspace_root', `${route} must say why`);
+      // The read was available; what it found is that there is no repository. `available: false` would
+      // mean the read itself could not be taken, which is the opposite of what happened.
+      assert.equal(body.available, true);
+      // Nothing is invented about a repository that is not there.
+      assert.equal(body.branch, null);
+      assert.equal(body.headSha, null);
+    }
+  });
+
+  test('the whole client boots on such a build with no console error and no page error', async () => {
+    // The regression proper: it is the boot, not the route, that CI measured.
+    const headers = { authorization: 'Bearer T43-noroot-token-0123456789', 'x-apex-ui': '1' };
+    const browser = createFakeBrowser();
+    const failures = [];
+    browser.sandbox.fetch = async (url, options = {}) => {
+      const route = String(url);
+      const response = await fetch(server.base + route, {
+        method: options.method ?? 'GET',
+        headers,
+        body: options.method === 'POST' ? options.body : undefined,
+      });
+      const text = await response.text();
+      if (response.status >= 500) failures.push({ route, status: response.status });
+      // A thenable, not a host promise, so the vm's await adopts it on its own queue.
+      return {
+        ok: response.ok,
+        status: response.status,
+        json() { return { then(resolve, reject) { try { resolve(JSON.parse(text)); } catch (error) { reject(error); } } }; },
+        text() { return { then(resolve) { resolve(text); } }; },
+      };
+    };
+    for (const match of UI_PAGE.matchAll(/id="([^"]+)"/g)) browser.document.getElementById(match[1]);
+    vm.createContext(browser.sandbox);
+    vm.runInContext(UI_CLIENT, browser.sandbox, { filename: 'apex-client.js' });
+    await flushMicrotasks();
+    for (let step = 0; step < 40; step += 1) {
+      browser.clock.advance(100);
+      await flushMicrotasks();
+    }
+    assert.deepEqual(failures, [], 'no route the boot asks for may answer 5xx');
+    assert.deepEqual(browser.events.consoleErrors, [], 'the boot must log no console error');
+    assert.deepEqual(browser.events.pageErrors, [], 'the boot must raise no uncaught exception');
+    // And the panel states the absence rather than showing a blank or an error.
+    const statusText = String(browser.document.getElementById('git-status-text').textContent);
+    assert.match(statusText, /no target workspace|not a git repository|No repository/i);
+    assert.equal(browser.document.getElementById('git-status-text').dataset.state, 'empty');
+    // The telemetry panel is unaffected: a host reading needs no workspace root.
+    assert.match(String(browser.document.getElementById('telemetry-total-badge').textContent), /TOTAL PORTS: \d+/);
+  });
+});
