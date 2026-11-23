@@ -22,15 +22,20 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'apex-t38-values-'));
 }
 
-function withApp(fn) {
+function withApp(fn, { workspace = false } = {}) {
   const dir = tempDir();
+  // T-43 Package 1: some capabilities are conditional on the build having a workspace root - the git
+  // executive's four, and the filesystem actions. A check that asks whether a declaration matches a
+  // registration has to say which build it means, so the root is opt-in rather than implied: a test
+  // that does not ask for one keeps the narrower registry it was written against.
+  const root = workspace ? path.join(dir, 'workspace') : null;
+  if (root) fs.mkdirSync(root, { recursive: true });
   try {
-    return fn(createApp({ dataDir: dir }), dir);
+    return fn(createApp(root ? { dataDir: dir, filesystemRoot: root } : { dataDir: dir }), dir);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
-
 // ------------------------------------------------------------------------------------ vocabulary ---
 
 test('T-38 metadata: the two vocabularies are closed and every kind is explained', () => {
@@ -39,7 +44,14 @@ test('T-38 metadata: the two vocabularies are closed and every kind is explained
   // the system-wide latch. It is a separate word because `workspace_sandbox` means "never the live
   // workspace tree", and a T-39 apply is exactly that tree. The list stays closed and pinned; it is
   // this test's job to make a new member a deliberate act rather than a side effect.
-  assert.deepEqual([...BLAST_RADIUS_KINDS], ['none', 'session', 'local_store', 'workspace_sandbox', 'workspace_fs', 'system_latch']);
+  // T-43 Package 1 adds `local_state` in the position it belongs in: after `local_store` and before
+  // the workspace kinds. It is a separate word because `local_store` means APEX's own data directory
+  // and `workspace_fs` means the owner's tracked files, while a git status read, a diff read or a
+  // checkpoint create touches neither: the first two change nothing at all, and the third writes a ref
+  // and a ledger record without modifying the working tree or the index. Naming it `local_store` would
+  // understate where the ref lives; naming it `workspace_fs` would overstate what it changes. The list
+  // stays closed and pinned, and adding a member here is a deliberate act.
+  assert.deepEqual([...BLAST_RADIUS_KINDS], ['none', 'session', 'local_store', 'local_state', 'workspace_sandbox', 'workspace_fs', 'system_latch']);
   // A vocabulary whose words are not defined is a vocabulary a reader has to guess at.
   for (const kind of REVERSIBILITY_KINDS) {
     assert.equal(typeof REVERSIBILITY_MEANING[kind], 'string', `${kind} has no stated meaning`);
@@ -115,13 +127,16 @@ test('T-38 metadata: every write declares a blast radius that is not none', () =
 });
 
 test('T-38 metadata: every declaration names a capability the registry actually holds', () => {
+  // T-43 Package 1: the four git capabilities register only when the build has a workspace root, so the
+  // app checked here is built the way every deployment is built - with a workspace. Checking an app with
+  // no root would report those four declarations as stale when in fact they are registered wherever a
+  // repository can exist. The check itself is unchanged, and it is still the one that catches a
+  // declaration for a name nobody registered.
   withApp((app) => {
     const names = new Set(app.registry.list().map((d) => d.name));
     const stale = safetyDeclarations().filter((entry) => !names.has(entry.name)).map((entry) => entry.name);
-    // A declaration for a name nobody registered is dead weight that reads as coverage. This is the
-    // check that caught twenty-five misspelled entries while the table was being written.
     assert.deepEqual(stale, [], `declarations naming no registered capability: ${stale.join(', ')}`);
-  });
+  }, { workspace: true });
 });
 
 test('T-38 metadata: the capabilities the brief names declare accurate facts', () => {

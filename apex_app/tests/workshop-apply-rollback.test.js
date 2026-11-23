@@ -346,9 +346,14 @@ test('T-39 apply: the step-up status names both capabilities, and the secret is 
     // T-40 extended this list with the two batch capabilities. The assertion still pins the exact
     // list - an addition has to be made deliberately here - and it still requires the two T-39
     // entries, which a T-40 change must not quietly drop.
+    // T-43 Package 1 extends it with the two git checkpoint writes. They are L2 Confirm writes with a
+    // workspace_fs blast radius, so they are step-up governed for the same reason the apply and
+    // rollback capabilities are: they change files the owner has not read in this session. The list is
+    // still exact, and the T-39 and T-40 entries are still required.
     assert.deepEqual([...status.appliesTo],
       ['safety.release', 'evolution.decide', 'workshop.apply_file', 'workshop.rollback_file',
-        'workshop.apply_changeset', 'workshop.rollback_changeset']);
+        'workshop.apply_changeset', 'workshop.rollback_changeset',
+        'git.checkpoint_create', 'git.checkpoint_restore']);
     assert.equal(status.appliesTo.includes('workshop.apply_file'), true);
     assert.equal(status.appliesTo.includes('workshop.rollback_file'), true);
     assert.equal(JSON.stringify(status).includes(secret), false);

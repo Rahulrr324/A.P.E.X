@@ -99,6 +99,13 @@ describe('T-43 Package 3: the markup, the stylesheet and the client', () => {
     for (const action of ["'restore-git-checkpoint'", "'trace-git-checkpoint'", "'diff-candidate'"]) {
       assert.ok(UI_CLIENT.includes(action), `the client must emit data-action ${action}`);
     }
+    // The candidate control is inside the candidate renderer, so a reader finds it beside Promote and
+    // Rollback rather than somewhere else on the screen. This is the Workshop invariant the brief names.
+    const candidates = UI_CLIENT.slice(UI_CLIENT.indexOf('function renderCandidates('));
+    const body = candidates.slice(0, candidates.indexOf('\nfunction ', 10));
+    assert.ok(body.includes("'diff-candidate'"), 'renderCandidates must emit the diff-candidate control');
+    assert.ok(body.indexOf("'diff-candidate'") > body.indexOf("'promote-candidate'"),
+      'the diff control sits after Promote, where a reader looks for it');
   });
 
   test('the stylesheet defines the diff, telemetry and checkpoint classes', () => {

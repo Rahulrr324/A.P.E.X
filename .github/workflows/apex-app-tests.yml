@@ -645,6 +645,68 @@ jobs:
               sys.exit(1)
           PY
 
+      # T-43 Package 4: the workstation / git executive / telemetry walk. Its summary is written after
+      # every phase, so a walk killed by its own timeout still says which phase it died in. The
+      # annotation states the measured facts - the counts git reported, the +N/-N the hunks produced,
+      # the restore the ledger recorded, the host port the inspection found - because a red run has to
+      # say what disagreed, not only that something did.
+      - name: Publish the T-43 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't43-workstation-git-telemetry.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t43-workstation-git-telemetry::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          status = run.get('status') or {}
+          diff = run.get('diff') or {}
+          checkpoint_data = run.get('checkpoint') or {}
+          restore = run.get('restore') or {}
+          drift = run.get('drift') or {}
+          trace = run.get('trace') or {}
+          telemetry = run.get('telemetry') or {}
+          router = run.get('router') or {}
+          repo = run.get('repo') or {}
+          contrast = run.get('contrast') or {}
+          ratios = [entry.get('ratio') for entry in (contrast.get('samples') or []) if entry.get('ratio') is not None]
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"platform {run.get('platform')}",
+              f"repo {str(repo.get('headSha') or '')[:7]} branch={repo.get('branch')}",
+              f"status branch={status.get('branch')} head={str(status.get('headSha') or '')[:7]} staged={status.get('staged')} unstaged={status.get('unstaged')} untracked={status.get('untracked')} checkpoints={status.get('checkpointsCount')}",
+              f"diff +{diff.get('additions')}/-{diff.get('deletions')} hunks={diff.get('hunks')} truncated={diff.get('truncated')} contrast {min(ratios):.2f}-{max(ratios):.2f}:1 over {len(ratios)} samples" if ratios else "diff contrast not measured",
+              f"checkpoint {checkpoint_data.get('checkpointId')} refResolves={checkpoint_data.get('refResolves')} worktreeUnchanged={checkpoint_data.get('worktreeUnchanged')}",
+              f"restore count={restore.get('restoreCount')} staged {restore.get('stagedBefore')}->{restore.get('stagedAfter')} untrackedUntouched={restore.get('untrackedUntouched')} refusal={(restore.get('refusal') or {}).get('code')}",
+              f"drift refIntact={drift.get('refIntact')} restoreDisabled={drift.get('restoreDisabled')} traceEnabled={drift.get('traceEnabled')}",
+              f"trace entries={trace.get('entries')} kinds={','.join(trace.get('kinds') or [])} complete={trace.get('complete')}",
+              f"telemetry {telemetry.get('platform')} total={telemetry.get('totalListening')} loopback={telemetry.get('loopbackOnly')} exposure={telemetry.get('externalExposure')} ownPort={telemetry.get('apexPort')} rss={telemetry.get('apexRssBytes')} excluded={len(telemetry.get('excluded') or [])}",
+              f"router git={'/'.join(filter(None, [str(router.get('gitStatus')), str(router.get('gitStatusTarget'))]))} diff={router.get('gitDiff')} ports={router.get('inspectPorts')} processes={router.get('inspectProcesses')}",
+              f"viewports {len(run.get('viewports') or [])} screens measured",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])}",
+              f"screenshots {run.get('screenshots')}",
+              f"lastPhase {run.get('lastPhase')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t43-workstation-git-telemetry::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       # T-42 Step 4: the publisher above is not allowed to be the only witness. If it throws before
       # printing (as it did on run 45099159487, where a missing binding raised NameError and the
       # annotation that would have named the failing assertion was never written), this step still
@@ -705,6 +767,8 @@ jobs:
             apex_app/reports/t40-changeset-drift-command-help.json
             apex_app/reports/screenshots/t41
             apex_app/reports/t41-sandbox-test-and-evolution-bridge.json
+            apex_app/reports/screenshots/t43
+            apex_app/reports/t43-workstation-git-telemetry.json
           if-no-files-found: warn
           retention-days: 14
 

@@ -384,10 +384,25 @@ describe('074: Batch F integrated acceptance', () => {
     // timeout and a capped buffer. It takes no caller-supplied command, it parses a file the owner
     // staged inside the APEX data directory, and it executes nothing: a parse check only reads. The
     // argument vector and the no-shell setting are pinned in tests/t38-workshop-sandbox.test.js.
+    // [T-43 Package 1, 2026-11-19] A fourth reviewed exception, and only for one file: the git
+    // executive runs the owner's own git binary - `execFileSync('git', [...])` - with an explicit
+    // argument vector, `shell: false`, a 3-second timeout and a path containment check. It takes no
+    // caller-supplied command: every subcommand is a literal in that file, every branch/ref is
+    // validated against a strict pattern, any argument beginning with '-' is refused as
+    // INVALID_GIT_ARGUMENT, and every path is resolved inside the workspace root first. The argument
+    // vectors, the shell setting and the refusals are pinned in tests/git-executive.test.js.
+    // [T-43 Package 2, 2026-11-19] A fifth reviewed exception, and only for one file: the process and
+    // port inspector reads the machine the owner already sits at - `/proc/net/tcp` and `/proc/<pid>/…`
+    // on Linux, `netstat` and `tasklist` on Windows, `ps` on macOS - with fixed argument vectors, no
+    // shell and a 2-second timeout. It runs no caller-supplied command and it deliberately returns no
+    // environment variable and no raw command line. Its parsers and its exclusions are pinned in
+    // tests/process-port-inspector.test.js.
     const processSpawnAllowlist = new Set([
       path.join(APP_ROOT, 'src', 'ui', 'desktop-shell.js'),
       path.join(APP_ROOT, 'src', 'perception', 'host-workspace-sensor.js'),
       path.join(APP_ROOT, 'src', 'workshop', 'sandbox.js'),
+      path.join(APP_ROOT, 'src', 'capabilities', 'git-executive.js'),
+      path.join(APP_ROOT, 'src', 'perception', 'process-port-inspector.js'),
     ]);
     for (const file of appSources) {
       const text = fs.readFileSync(file, 'utf8');
