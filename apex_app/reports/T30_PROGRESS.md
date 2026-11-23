@@ -3060,3 +3060,151 @@ not exist, now implemented, tested and surfaced.
 `t31`–`t41` green on `microsoft-edge 157.0.4341.60`. Every refusal the milestone relies on — the
 governance boundary, the unverified apply, the hourly cap — was observed as a refusal in a probe or on
 CI, never asserted from source.
+
+## T-43 — The workstation, the git executive, and EDITH's process and port telemetry
+
+**Branch `arena/c4691a2f-a-p-e-x`, head `b771b55`, from `fb09e73`; `main` untouched at `fb09e73`.**
+This section is additive. Everything above it is kept as written.
+
+Phase 2, Stage 1: the HUD stops describing the machine and starts measuring it. Four packages, in
+order. The rule that governs all four is the one the brief sets and the earlier milestones had already
+made structural: a claim on screen is a reading, and a reading that cannot be taken says so rather
+than showing a plausible zero.
+
+### Package 1 — the git executive, and the checkpoint that does not touch the tree
+
+`src/capabilities/git-executive.js` is a zero-dependency engine over the owner's own git binary. Every
+call is `execFileSync('git', [...], { cwd, shell: false, timeout: 3000 })` with a fixed argument
+vector; any argument beginning with `-` is refused as `INVALID_GIT_ARGUMENT` before git sees it, every
+ref must match `/^[A-Za-z0-9._\/~^-]{1,120}$/`, and every path is resolved with `realpathSync` and
+checked for containment inside the workspace root, so a symlink out of the tree is `403
+WORKSPACE_PATH_ESCAPE` rather than a diff of the owner's home directory.
+
+Four capabilities, registered through the same registry and authorised by the same ECP as everything
+else: `git.status_detailed` and `git.diff_inspect` at L0 (reversible, `local_state`), and
+`git.checkpoint_create` / `git.checkpoint_restore` at L2 Confirm with `blastRadius: 'workspace_fs'`,
+owner step-up when `APEX_STEP_UP_TOKEN` is set, and `423` under Lockdown.
+
+The interesting design is the checkpoint. `git stash create` builds a commit object from the dirty
+worktree **without** writing to the index or altering the tree, and `update-ref` pins it at
+`refs/apex-checkpoints/<id>`. Nothing an owner has typed is disturbed by taking a checkpoint — proven
+in the walk by asserting the porcelain output is unchanged immediately afterwards. Restore is the one
+operation in the module that changes files, which is why it has both a preflight and a verification:
+a checkpoint ref that no longer names its commit is `409 CHECKPOINT_REF_DRIFT`, and a worktree edit
+made *after* the checkpoint would be discarded, so that is `409 GIT_CHECKPOINT_DIRTY_TREE`. The
+refusal names the paths it would have discarded and the files survive.
+
+### Package 2 — the host, read rather than assumed
+
+`src/perception/process-port-inspector.js` reads `/proc/net/tcp`, `/proc/net/tcp6` and `/proc/<pid>/*`
+on Linux, `netstat -ano` and `tasklist /FO CSV` on Windows, `ps` on macOS — four exported parsers,
+each pinned against a real-format fixture rather than a hand-written one. The classification is the
+substance: `127.0.0.1`/`127.x`/`::1`/`::ffff:127.0.0.1` are loopback, `0.0.0.0`/`::` are wildcard,
+anything else is interface-bound, and the summary counts each separately because *exposure* is the
+number the owner actually needs.
+
+It returns no environment variable and no raw command line. That is not a filter applied at the edge:
+a verifier re-reads the response and refuses it if the words `env`, `cmdline`, `commandLine` or
+`environment` appear anywhere, and the tests run four separate leaks through it to prove the refusal
+fires.
+
+### Package 3 — the surfaces
+
+The Workshop gains a git panel, a diff viewer and a checkpoint list; Sentinel gains a telemetry panel
+with two tables. Three decisions are worth recording.
+
+**Meaning is never carried by colour alone.** Every diff row carries a `+` or `-` glyph *and* a tint
+*and* a per-side gutter class, so a reader who cannot distinguish the two backgrounds still reads the
+change. Contrast is measured in the browser against the colour each row actually renders, from the
+tokens the deck already uses: 13.95:1 and 15.05:1 for body text on the tinted rows, 12.66:1 and
+6.50:1 for the two gutters — all well past 4.5:1.
+
+**A drifted checkpoint cannot be restored by accident.** The card renders `REF INTACT` or `REF
+DRIFT` from the server's live measurement of the ref, and the restore control is *disabled* when the
+ref has drifted rather than being left to be refused after the press.
+
+**Nothing new can widen the page.** The diff table and both telemetry tables fix their layout and
+scroll inside their own boxes, and the walk measures nine views at 1600x900, 1280x720 and 390x844 with
+the tables populated — an empty table that fits proves nothing.
+
+### Package 4 — the walk, and what it found
+
+`tests/e2e/t43-workstation-git-telemetry.spec.mjs` runs a workspace that is a **real git repository**,
+initialised with the system binary, and checks the panel's numbers against `git status --porcelain`
+rather than against the API that produced them. Twelve suites now run by default, pinned in the
+harness test so a spec that exists but is never wired stays red.
+
+The walk found four defects before CI could, all in the fixture and the test, and each is the kind
+that would have produced a confident green against a wrong story:
+
+- **A fixture that lied about its own baseline.** `git()` trimmed its output, and porcelain begins each
+  line with a two-character XY field — so ` M` became `M`, which reads as *staged*. The fixture now
+  returns raw text, trims only the single-value reads, and throws if the baseline is not clean after
+  the commit.
+- **A restore story that was the wrong story.** A checkpoint captures the *dirty* worktree, so
+  restoring it returns the edited bytes, not HEAD's. Written the way it first was, the assertion would
+  have failed for the right reason and been "fixed" by weakening it. It now proves what a restore
+  actually does: staging a file and restoring rebuilds the index from the snapshot (1 staged → 2
+  staged, 2 unstaged → 0).
+- **A refusal the walk had to walk into on purpose.** Editing a file after the checkpoint makes the
+  restore `409 GIT_CHECKPOINT_DIRTY_TREE` — correct, and the opposite of what the first draft asserted.
+  The phase now proves both halves: the refusal fires, the edit survives, and the ledger does not
+  count a refused restore as one that happened.
+- **An `async json()` in a fetch stub that never settles.** In the fake browser it creates a
+  host-realm promise the vm's `await` cannot resolve: the POST is issued, the caller waits forever, and
+  it looks exactly like a server that never answered. The stub now returns a thenable.
+
+### Evidence
+
+**Unit and integration.** `npm test`: **4,320 tests, 4,318 pass, 0 fail, 2 skipped, 674 suites** —
+60 more tests and 12 more suites than the T-42 baseline of 4,260 / 662. The milestone's own: 31
+git-executive, 19 process-port-inspector, 10 HUD, and the invariant tests the packages required.
+
+**Syntax.** All 267 files under `apex_app/src` and `apex_app/bin` pass `node --check`, and the
+extracted `UI_CLIENT` passes `new Function` with zero backticks — the T-42 lesson, kept.
+
+**Registry.** 172 default / 191 rooted capabilities, 94 reads and 97 writes; the inventory suite and
+the README agree.
+
+**Browser.** No system Edge or Chromium exists in this environment, so the T-43 walk skips loudly with
+the diagnostic rather than reporting a green it did not earn. Every assumption it makes was verified
+against the real product instead: 83 of 83 — the selectors on the page, the route kinds and their
+target views, the ledger shapes, the refusal codes, the trace entry kinds, and the server's own
+loopback port appearing among the host's listening ports.
+
+### Four guardrails extended deliberately, not routed around
+
+Each of these is a list that exists to make an addition a considered act. All four were extended with
+the reasoning written where the list is pinned:
+
+1. **The reviewed process-spawn allowlist** (`tests/acceptance-batch-f.test.js`) — a fourth and fifth
+   reviewed exception, for `git-executive.js` and `process-port-inspector.js`: fixed argument vectors,
+   no shell, short timeouts, no caller-supplied command.
+2. **The closed blast-radius vocabulary** — `local_state`, for a change bounded to the repository and
+   the ledgers that touches no tracked file. `local_store` would understate where a ref lives;
+   `workspace_fs` would overstate what a read changes.
+3. **The declaration/registration check** — now built with a workspace root, because the git
+   capabilities register only where a repository can exist. The check itself is unchanged.
+4. **The step-up `appliesTo` list** — both checkpoint writes, which are L2 with a `workspace_fs`
+   blast radius and therefore step-up governed for exactly the reason apply and rollback are.
+
+### Three-axis assessment at T-43
+
+**(A) Engineering rigour — strong, and earned in the fixture before it was earned in the product.**
+Four defects were found by the walk's own verification, and every one of them was a way the suite
+could have passed against a false story: a count that read staged as unstaged, a restore asserted
+against the wrong bytes, a refusal mistaken for success, a promise that never settled. The 83-assumption
+probe exists because no browser could run here, and it is the honest substitute for the green CI would
+have given.
+
+**(B) Product completeness — every claim in the brief has a control, and every control has a test.**
+Status, diff, checkpoint create and restore are all reachable from the panel *and* from the router
+with four lines; Sentinel's two tables are the same readings as the API; the privacy indicator still
+says `audio/mic: disabled`, so nothing in a milestone about perception quietly turned a microphone on.
+
+**(C) Real-World Capability Validation — real git, real kernel, real refusal.** The counts came from
+the system binary and were cross-checked against it. The listening ports came from the operating
+system, and the one fact no fixture can fake was asserted: the server under test found its own
+ephemeral loopback port in the host's socket table. The dirty-tree preflight was observed refusing,
+and the file it protected was read back afterwards. The visual claim rests on measured contrast and
+measured overflow rather than on a screenshot.
