@@ -3923,6 +3923,70 @@ async function inspectWorkspace() {
   }
 }
 
+// T-42 Step 4: the candidate list is the server's, not this tab's.
+//
+// Until this existed, wsState.candidates only held what *this page* had staged in its own form. A
+// candidate staged on the server - by the Evolution Lab's "Stage to Workshop" button, by another tab,
+// or by anything else - was invisible until a reload, so its provenance badge could not render and the
+// t41 walk waited 30 s for a [data-source-proposal] element that was never going to be appended.
+// The failure was real and the product was wrong, not the walk: the Workshop's own list has to show
+// what the Workshop actually holds.
+//
+// The merge is careful about three things. A candidate the page already holds keeps its own bookkeeping
+// (selection, verification, drift, applied) because those are answers this tab received and the listing
+// does not repeat them. sourceProposalId is taken from the record when the page has none, so a
+// server-staged candidate carries its provenance. Order is the server's - newest first - with any
+// page-only candidate it does not know about kept at the front, where it was unshifted.
+function hydrateCandidates(listing) {
+  if (!Array.isArray(listing)) return false;
+  const known = new Map(wsState.candidates.map((candidate) => [candidate.candidateId, candidate]));
+  const merged = listing.map((record) => {
+    const existing = known.get(record.candidateId) ?? null;
+    if (existing) {
+      // The listing is authoritative about what the record says; the page is authoritative about
+      // what the page was told. Neither overwrites the other's field.
+      if (!existing.sourceProposalId && record.sourceProposalId) existing.sourceProposalId = record.sourceProposalId;
+      if (existing.hasSandboxTest !== true && record.hasSandboxTest === true) existing.hasSandboxTest = true;
+      return existing;
+    }
+    return {
+      candidateId: record.candidateId,
+      relativePath: record.relativePath,
+      digest: record.digest,
+      bytes: record.bytes,
+      lines: record.lines,
+      diff: record.diff ?? null,
+      hasSandboxTest: record.hasSandboxTest === true,
+      sourceProposalId: typeof record.sourceProposalId === 'string' ? record.sourceProposalId : null,
+      baseDigest: record.baseDigest ?? null,
+      verification: record.verified === true ? { passed: true, fromListing: true } : null,
+      applied: null,
+      drift: null,
+      fromListing: true,
+    };
+  });
+  // Anything this page staged that the listing has not caught up with is kept, not dropped.
+  const listedIds = new Set(merged.map((candidate) => candidate.candidateId));
+  const pageOnly = wsState.candidates.filter((candidate) => !listedIds.has(candidate.candidateId));
+  const next = [...pageOnly, ...merged];
+  const changed = next.length !== wsState.candidates.length
+    || next.some((candidate, index) => candidate !== wsState.candidates[index]);
+  wsState.candidates = next;
+  return changed;
+}
+
+// Read the candidate ledger the Workshop holds and fold it into the page's own list. Read-only.
+async function refreshCandidateListing() {
+  if (!els.wsCandidates) return;
+  try {
+    const listing = await api('/api/workshop');
+    if (hydrateCandidates(Array.isArray(listing && listing.candidates) ? listing.candidates : [])) renderCandidates();
+    void refreshApplyState();
+  } catch {
+    // The listing is an enhancement; the stage form works without it.
+  }
+}
+
 // Read what the apply ledger says and attach it to the candidates this page holds. Nothing is
 // written and no digest is invented: a candidate with no record simply has no applied badge.
 async function refreshApplyState() {
@@ -5586,6 +5650,9 @@ async function refresh() {
   renderPresence(presenceResult, autonomyMatrixResult);
   renderWorldClaims(worldResult);
   renderEvolution(evolutionResult);
+  // T-42 Step 4: and the Workshop's candidate list, so a candidate staged by the Evolution Lab's
+  // button is on screen without a reload. The read is fire-and-forget: the deck must not wait on it.
+  void refreshCandidateListing();
   renderPerception(perceptionResult);
   // T-33 Step 3: the graph and the perception reading the Workshop stages a sheet from.
   state.perception = perceptionResult.ok === true ? perceptionResult.value : null;
@@ -6909,8 +6976,25 @@ function connectEvents(forceReconcile = false) {
   });
   source.addEventListener('council', () => { scheduleEventRefresh(); armWatchdog(); });
   source.addEventListener('cognition', () => { scheduleEventRefresh(); armWatchdog(); });
-  source.addEventListener('workshop', () => { scheduleEventRefresh(); armWatchdog(); });
-  source.addEventListener('evolution', () => { scheduleEventRefresh(); armWatchdog(); });
+  source.addEventListener('workshop', (event) => {
+    scheduleEventRefresh();
+    // T-42 Step 4: a candidate staged anywhere in the system - the Workshop form, the Evolution Lab's
+    // bridge, or another tab - is announced on this channel. The candidate list is re-read from the
+    // record, so the card, its verify control and its provenance badge exist without a reload.
+    let payload = null;
+    try { payload = event && event.data ? JSON.parse(event.data) : null; } catch { payload = null; }
+    if (payload && payload.candidateId) void refreshCandidateListing();
+    armWatchdog();
+  });
+  source.addEventListener('evolution', (event) => {
+    scheduleEventRefresh();
+    // T-42 Step 4: a candidate staged from the Evolution Lab arrives through the candidate listing,
+    // which is not part of the state snapshot. Re-read it on the event that says a proposal moved.
+    let payload = null;
+    try { payload = event && event.data ? JSON.parse(event.data) : null; } catch { payload = null; }
+    if (payload && (payload.candidateId || payload.fromProposal === true)) void refreshCandidateListing();
+    armWatchdog();
+  });
   source.onerror = () => {
     if (source !== eventSource) return;
     markEventDegraded('Event stream error.');

@@ -1,4 +1,6 @@
-// T-42 Step 3 (2026-11-19): the task-graph render is monotonic.
+// T-42 Steps 3 and 4 (2026-11-19): the two surfaces that must not lie about what they hold.
+//
+// Step 3: the task-graph render is monotonic.
 //
 // The t34 race, stated exactly. The deck has two readers of /api/taskgraph: the periodic refresh,
 // which asks for "the newest unfinished task", and the owner choosing a recorded task. Both render,
@@ -179,5 +181,94 @@ describe('T-42 the task graph cannot be repainted by an older read', () => {
     initial.resolve(missionGraph(SMALL, 1));
     await flushMicrotasks();
     assert.equal(browser.document.getElementById('dag-nodes').children.length, 5);
+  });
+});
+
+describe('T-42 the Workshop shows the candidates the Workshop holds', () => {
+  // The CI failure this closes, from run 45106183361: the Evolution Lab staged a candidate on the
+  // server, the record and /api/workshop both carried its sourceProposalId, and the browser waited
+  // 30 s for a [data-source-proposal] badge that was never appended. The cause was that the page's
+  // candidate list only ever held what *this tab's own stage form* had created; a candidate staged
+  // anywhere else was invisible until a reload.
+  const CANDIDATE = {
+    candidateId: 'wsc-00f1e6a16f54',
+    relativePath: 'src/greeting.js',
+    digest: 'a'.repeat(64),
+    bytes: 90,
+    lines: 4,
+    hasSandboxTest: true,
+    sourceProposalId: 'evo-07432cb1ba8c420c',
+    verified: null,
+    sandboxTestResult: null,
+  };
+
+  function boot(initial) {
+    const server = { candidates: initial };
+    const fetchImpl = async (url) => {
+      const path = String(url).split('?')[0];
+      if (path === '/api/workshop') {
+        return { ok: true, status: 200, async json() { return JSON.parse(JSON.stringify({ candidates: server.candidates })); } };
+      }
+      if (path === '/api/state') {
+        return { ok: true, status: 200, async json() { return { session: { id: 's' }, turns: [], tasks: [], plans: [] }; } };
+      }
+      return { ok: false, status: 404, async json() { return { error: `no route for ${path}` }; } };
+    };
+    return { server, fetchImpl };
+  }
+
+  const provenanceBadges = (browser) => {
+    const found = [];
+    const walk = (node) => {
+      for (const child of node.children || []) {
+        if (child.dataset && child.dataset.sourceProposal) found.push(child.dataset.sourceProposal);
+        walk(child);
+      }
+    };
+    walk(browser.document.getElementById('ws-candidates'));
+    return found;
+  };
+
+  it('renders the provenance of a candidate staged after the page loaded', async () => {
+    const control = boot([]);
+    const browser = createFakeBrowser({ fetchImpl: control.fetchImpl });
+    const context = vm.createContext(browser.sandbox, { name: 'apex-ui-client-t42-workshop' });
+    vm.runInContext(UI_CLIENT, context, { filename: 'ui-client.js', displayErrors: true });
+    await flushMicrotasks();
+    await flushMicrotasks();
+    assert.deepEqual(provenanceBadges(browser), [], 'nothing is staged when the page opens');
+
+    // The Evolution Lab stages a candidate server-side. The server announces it on the workshop channel.
+    control.server.candidates = [CANDIDATE];
+    const source = browser.events.sources.at(-1);
+    source.emit('workshop', { candidateId: CANDIDATE.candidateId }, { lastEventId: 'x:1' });
+    for (let tick = 0; tick < 6; tick += 1) {
+      browser.clock.advance(60);
+      await flushMicrotasks();
+    }
+
+    assert.deepEqual(provenanceBadges(browser), [CANDIDATE.sourceProposalId],
+      'the card carries the proposal that produced it, without a reload');
+  });
+
+  it('keeps a page-staged candidate the listing has not caught up with', async () => {
+    // The merge must not throw away work this tab did. A page-only candidate stays at the front.
+    const control = boot([]);
+    const browser = createFakeBrowser({ fetchImpl: control.fetchImpl });
+    const context = vm.createContext(browser.sandbox, { name: 'apex-ui-client-t42-merge' });
+    vm.runInContext(UI_CLIENT, context, { filename: 'ui-client.js', displayErrors: true });
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    // The listing now answers with a different, server-known candidate.
+    control.server.candidates = [CANDIDATE];
+    const source = browser.events.sources.at(-1);
+    source.emit('workshop', { candidateId: CANDIDATE.candidateId }, { lastEventId: 'x:2' });
+    for (let tick = 0; tick < 6; tick += 1) {
+      browser.clock.advance(60);
+      await flushMicrotasks();
+    }
+    // The server-known candidate is rendered with its provenance, and the list is not empty.
+    assert.deepEqual(provenanceBadges(browser), [CANDIDATE.sourceProposalId]);
   });
 });
