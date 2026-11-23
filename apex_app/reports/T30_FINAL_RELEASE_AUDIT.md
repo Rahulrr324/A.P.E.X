@@ -4,7 +4,7 @@
 **Branch:** `arena/c4691a2f-a-p-e-x`
 **Baseline:** `main` at `fb09e73f2d875fe8697d731c9b9845dd054a0465` — untouched by this branch, never
 checked out, never pushed to
-**Branch head at audit time:** `add43040b5e649d02a812d50022489f8cb760eae`
+**Branch head at audit time:** `2991246`
 **Commits since baseline:** 116
 
 This document is the last check before merge. It is not a summary of what the milestones claimed; it is
@@ -22,7 +22,7 @@ T-42 was four ordered steps on one branch. Three are code; the fourth is this au
 | 1 | Evolution Lab "Stage to Workshop" control; `sourceProposalId` on every surface; the t41 walk upgraded to prove proposal → stage → verify → **apply** → trace | `550caf0` | Complete |
 | 2 | Quiet hours that exist and are configurable, *and* the t33 flake they were wrongly blamed for | `455cf9c` | Complete |
 | 3 | The t34 task-graph race: a monotonically ordered render | `add4304` | Complete |
-| 4 | This audit, the full suite, hosted CI, and the release report | this commit | Complete |
+| 4 | This audit, the full suite, hosted CI, and the release report | `23b5ccd`, `c62b099`, `2991246` | Complete |
 
 ### Step 1, stated precisely
 
@@ -110,18 +110,18 @@ node --check: checked=265 failures=0
 
 ```
 npm test
-# tests 4257
-# suites 660
-# pass 4255
+# tests 4260
+# suites 662
+# pass 4258
 # fail 0
 # cancelled 0
 # skipped 2
 # todo 0
 ```
 
-**4257 tests, 4255 pass, 0 fail, 2 skipped, 660 suites.** The two skips are pre-existing environment
+**4260 tests, 4258 pass, 0 fail, 2 skipped, 662 suites.** The two skips are pre-existing environment
 skips, unchanged since T-41; they are not T-42's. The growth from the T-41 baseline of
-4234/4232 is 23 tests: 16 in `tests/t42-quiet-hours.test.js`, 3 in
+4234/4232 is 26 tests: 16 in `tests/t42-quiet-hours.test.js`, 6 in
 `tests/t42-taskgraph-monotonic.test.js`, and 4 in the T-42 provenance suite added to
 `tests/t41-evolution-bridge.test.js`.
 
@@ -132,7 +132,7 @@ disabled fix:
 
 | Suite | With the fix | With the guards/behaviour removed |
 |---|---|---|
-| `tests/t42-taskgraph-monotonic.test.js` | 3 / 3 pass | **3 / 3 fail** |
+| `tests/t42-taskgraph-monotonic.test.js` | 6 / 6 pass | **3 / 6 fail** |
 | `tests/t42-quiet-hours.test.js` | 16 / 16 pass | (the quiet branch did not exist to remove) |
 
 And the flake was proved fixed by reproducing it first:
@@ -152,7 +152,41 @@ The browser suites run against real Microsoft Edge on a GitHub Hosted runner; th
 browser, so the hosted run is the only evidence for them. Suites `t31`–`t41`, eleven in total, plus the
 Node suite, must all be green on the branch head.
 
-ANNOTATIONS_PLACEHOLDER
+All green on **run 45112668555** at head **`2991246`** — `Node.js test suite` in 9m, then
+`Real-browser verification` on `microsoft-edge 157.0.4341.60`, every publish step success, and
+`Report failing tests` **skipped** (it runs only on failure, so its absence is itself the answer).
+All eleven suites `t31`–`t41` passed.
+
+### 3.1 `t33-executive-loop` — the flake this milestone closed
+
+> browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: open,dispatch,intent,suppression,revoke,graph,idle,idle-clear,workshop,console | screenshots 9 | core at end idle | budget 2/3 used | quietHours=False
+
+`budget 2/3 used` is the number that matters. The walk's two senses spent two of the three
+non-critical slots; the cap was never exhausted, so the revoke leg's genuinely-new signature was
+delivered rather than capped. Before the fix this same leg read `held` with
+`3 non-critical pushes were already surfaced in the last 60 minutes`. `quietHours=False` records that
+the walk does not enable the window — the flake was never the clock.
+
+### 3.2 `t34-mission-dag` — the race this milestone closed
+
+> browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: mission-shape,join-held,selector,selector-back,branch-unblocked,mission-verified,candidate-association,briefing-acknowledged,briefing-click-through,console | screenshots 10 | mission completed verified True
+
+`selector-back` is the checkpoint the fix protects, and the report's own step detail records
+`pinnedNodes:["n1","n2a","n2b","n3","n4"]` — the mission's own five nodes, asserted by identity now
+rather than by a count that a one-node task could coincidentally satisfy.
+
+### 3.3 `t41-sandbox-test-and-evolution-bridge` — the chain the milestone is named for
+
+> browser 157.0.4341.60 | binary microsoft-edge | boundary IMMUTABLE_GOVERNANCE_BOUNDARY refusedServer=5 allFive=True intact=True proposals=0 uiRefused=True | failingTest wsc-4eec355c1a51 verified=False applyDisabled=True server 409 APPLY_REFUSED_UNVERIFIED outputShown=True workspaceUnchanged=True | passingTest wsc-d4e0a6920c06 verified=True passed=2 failed=0 applied=True bytes=90 | trace(failing) entries=4 kinds=ecp_audit,workshop_verification verifications=1 applies=0 operations=3 complete=True | bridge evo-ca34ee2185be4efc candidate=wsc-cb617776a505 viaUiButton=True sourceProposalId record=evo-ca34ee2185be4efc api=evo-ca34ee2185be4efc badge=True appliedTrace=True sandboxTest=True verifications=1 applies=1 operations=5 applied=True bytes=90 complete=True | console 0 page 0 requests 0 scheduledRefusals 1 | screenshots 4
+
+Read the `bridge` segment field by field. `viaUiButton=True`: the candidate was staged by pressing
+the rendered control, not by calling the route. `sourceProposalId record=… api=… badge=True
+appliedTrace=True`: the same proposal id is on the candidate record, in the `/api/workshop`
+listing, on the DOM badge, and on the causal trace of the **applied** candidate. `sandboxTest=True
+verifications=1 applies=1 applied=True complete=True`: the chain ends in a real write of 90 bytes,
+and that is the applied candidate's chain, not the refused one's. The refused candidate still reads
+`applies=0`, `workspaceUnchanged=True`, `409 APPLY_REFUSED_UNVERIFIED` — and `allFive=True`,
+`intact=True`: every protected path refused and every protected file byte-identical afterwards.
 
 ---
 
@@ -208,7 +242,7 @@ an optional `quietHours` and the existing `sensor` seam. `createApp` gained `qui
 `perceptionSensor`, both optional. `/api/workshop` gained fields beside the ones it had.
 `sourceProposalId` is added to records that already existed. `renderTaskGraph` gained an optional
 second argument; every existing caller still works. The registry is unchanged at **170 default /
-185 rooted** actions. The full suite — 4257 tests, including every pre-T-42 test — passes. **Holds.**
+185 rooted** actions. The full suite — 4260 tests, including every pre-T-42 test — passes. **Holds.**
 
 ---
 
@@ -234,7 +268,7 @@ second argument; every existing caller still works. The registry is unchanged at
 
 ## 6. What is proven, and what is not
 
-**Proven here.** The shipped source compiles (265/265). The full suite passes (4255/4257, 0 failures).
+**Proven here.** The shipped source compiles (265/265). The full suite passes (4258/4260, 0 failures).
 The t33 flake is reproduced, explained and closed, and the explanation replaces a published diagnosis
 that was wrong. The t34 race is reproduced, closed, and the closing test fails when the fix is
 removed. The evolution-to-apply bridge is proved end to end at the server (`/tmp/p_bridge.mjs`,

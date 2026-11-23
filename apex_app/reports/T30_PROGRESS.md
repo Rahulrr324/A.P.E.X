@@ -2968,3 +2968,95 @@ passed=2 failed=0 applied=True bytes=90`: the corrected candidate was written, a
 file's real size. And `applies=0` on that trace is not a gap — it is the failing candidate's chain, which
 correctly has no apply because the apply was refused. The applied candidate's own chain holds its
 verification and its apply, and `complete=True`.
+
+---
+
+## T-42 — Zero-flake hardening, the evolution-to-apply trace, and the pre-merge audit
+
+**Branch `arena/c4691a2f-a-p-e-x`, head `2991246`, from `be3a3f5`; `main` untouched at `fb09e73`.**
+This section is additive. Everything above it is kept as written.
+
+Four ordered steps, and the audit is the fourth. The full record is
+`reports/T30_FINAL_RELEASE_AUDIT.md`; what follows is what the milestone learned.
+
+### Step 1 — the positive bridge, proven where it was only asserted
+
+The T-41 walk staged its positive candidate through the Workshop form and then asserted the
+**failing** candidate's trace, which correctly had `applies=0` and no proposal. The chain the
+milestone is named for was never actually proven. T-42 rewrote that leg to walk it: create a
+proposal, press the rendered `[data-stage-proposal]` control, scrape the staged candidate id,
+verify, **apply**, then read the applied candidate's trace. `sourceProposalId` now travels into the
+candidate record, `/api/workshop`, the card badge (`data-source-proposal`) and
+`/api/memory/trace/:id`. A protected target disables the control and prints
+`IMMUTABLE_GOVERNANCE_BOUNDARY`, read from the same policy module the server refuses with.
+
+### Step 2 — a published diagnosis that was wrong, and the flake that was real
+
+The T-41 report attributed the t33 failure to "UTC wall-clock quiet hours". **No quiet-hours code
+existed in `src/perception` at all.** The real cause was the governor's 3/hour cap: on a busy runner
+the sensor honestly derives `load_pressure` and `storage_pressure` beside `workspace_dirty`, three
+non-critical advisories exhaust the budget at the first sense, and the walk's second — genuinely new
+— signature is refused as capped. Reproduced with `/tmp/p_t33neg.mjs` (`3 of 3` used, then
+`admitted: false | 3 non-critical pushes were already surfaced`), fixed by pinning the fixture's host
+half while leaving the workspace half real, and confirmed on CI by `budget 2/3 used`.
+
+The feature the report claimed already existed was then built: `src/perception/quiet-hours.js`, off by
+default, wrapping midnight, offset-aware, settable by `APEX_QUIET_HOURS`. It holds a non-critical
+notice with `reason: 'quiet_hours'` and never holds an alarm, and `/api/perception` reports
+`quietHours: { enabled, activeNow, window }`.
+
+### Step 3 — the graph cannot be repainted by an older read
+
+The deck's two `/api/taskgraph` readers — the periodic refresh and the owner's selection — had no
+ordering. A refresh that asked for "the newest unfinished task" before the owner pinned a five-node
+mission could land afterwards and repaint one node under the cursor. The render is now monotonic: a
+request sequence taken before the await, plus the pinned task id. With the guards disabled 3 of 6
+tests fail; restored, 6 of 6 pass.
+
+### Step 4 — the audit, and two defects the audit found in its own evidence
+
+`node --check` 265/265. `npm test` 4260 tests, 4258 pass, 0 fail, 2 skipped, 662 suites. All eleven
+hosted suites green on run `45112668555` at `2991246`.
+
+Two of the milestone's own defects were found in the evidence path, and both are worth recording:
+
+1. **The t41 annotation could not be published.** Step 1's edit added a `bridge` line to the t41
+   publisher but the `bridge = run.get('bridge') or {}` binding landed in the *T-38* publisher by a
+   mis-targeted line insert. The step raised `NameError` before its first print, so the run reported
+   "the suite failed without a 'not ok' line" — true of the Node log and useless as a diagnosis. Every
+   `<<'PY'` block in the workflow is now compiled and executed against a synthetic report locally.
+2. **The Workshop could not show a candidate the Workshop held.** The real failure that had been
+   hidden: `wsState.candidates` only ever held what *this tab's own form* had staged, so a candidate
+   staged by the Evolution Lab's button was invisible until a reload and its provenance badge could
+   never render. `refreshCandidateListing()` now hydrates the page's list from `/api/workshop`, on
+   every refresh and on the workshop/evolution SSE events, merging rather than replacing.
+
+### The three annotations, verbatim from run 45112668555
+
+**`t33-executive-loop`**
+
+> browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: open,dispatch,intent,suppression,revoke,graph,idle,idle-clear,workshop,console | screenshots 9 | core at end idle | budget 2/3 used | quietHours=False
+
+**`t34-mission-dag`**
+
+> browser 157.0.4341.60 | binary microsoft-edge | checkpoints 10: mission-shape,join-held,selector,selector-back,branch-unblocked,mission-verified,candidate-association,briefing-acknowledged,briefing-click-through,console | screenshots 10 | mission completed verified True
+
+**`t41-sandbox-test-and-evolution-bridge`**
+
+> browser 157.0.4341.60 | binary microsoft-edge | boundary IMMUTABLE_GOVERNANCE_BOUNDARY refusedServer=5 allFive=True intact=True proposals=0 uiRefused=True | failingTest wsc-4eec355c1a51 verified=False applyDisabled=True server 409 APPLY_REFUSED_UNVERIFIED outputShown=True workspaceUnchanged=True | passingTest wsc-d4e0a6920c06 verified=True passed=2 failed=0 applied=True bytes=90 | trace(failing) entries=4 kinds=ecp_audit,workshop_verification verifications=1 applies=0 operations=3 complete=True | bridge evo-ca34ee2185be4efc candidate=wsc-cb617776a505 viaUiButton=True sourceProposalId record=evo-ca34ee2185be4efc api=evo-ca34ee2185be4efc badge=True appliedTrace=True sandboxTest=True verifications=1 applies=1 operations=5 applied=True bytes=90 complete=True | console 0 page 0 requests 0 scheduledRefusals 1 | screenshots 4
+
+### Three-axis assessment at T-42
+
+**(A) Engineering rigour — strong, and stronger for having been corrected in public.** Both flake
+classes were found by CI and closed with tests that fail when the fix is removed. The published t33
+diagnosis was wrong; the correction is in this report and in the commit message. The cost is real:
+two of the milestone's commits were spent repairing its own evidence path rather than the product.
+
+**(B) Product completeness — the branch does what it says.** The audit found no control claimed but
+absent. The one gap it found was the reverse: a feature described as the *cause* of a failure that did
+not exist, now implemented, tested and surfaced.
+
+**(C) Real-World Capability Validation — validated on a real Edge build, by iteration.** Eleven suites
+`t31`–`t41` green on `microsoft-edge 157.0.4341.60`. Every refusal the milestone relies on — the
+governance boundary, the unverified apply, the hourly cap — was observed as a refusal in a probe or on
+CI, never asserted from source.
