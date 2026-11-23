@@ -615,6 +615,7 @@ jobs:
           failing = run.get('failingTest') or {}
           passing = run.get('passingTest') or {}
           trace = run.get('trace') or {}
+          bridge = run.get('bridge') or {}
           parts = [
               f"browser {run.get('browserVersion') or 'unresolved'}",
               f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
@@ -643,6 +644,39 @@ jobs:
           if failures:
               sys.exit(1)
           PY
+
+      # T-42 Step 4: the publisher above is not allowed to be the only witness. If it throws before
+      # printing (as it did on run 45099159487, where a missing binding raised NameError and the
+      # annotation that would have named the failing assertion was never written), this step still
+      # states what the suite recorded. A red t41 must always say why.
+      - name: Publish the raw T-41 report if the publisher failed
+        if: always()
+        run: |
+          path=apex_app/reports/t41-sandbox-test-and-evolution-bridge.json
+          if [ ! -f "$path" ]; then
+            echo '::notice title=t41-raw::no report file was written at all'
+            exit 0
+          fi
+          python3 - "$path" <<'RAWPY'
+          import json, sys
+          run = json.load(open(sys.argv[1], encoding='utf-8'))
+          failures = run.get('failures') or []
+          if not failures and not run.get('consoleErrors') and not run.get('pageErrors'):
+              print('::notice title=t41-raw::the report records no failure')
+              sys.exit(0)
+          parts = []
+          for failure in failures[:10]:
+              if isinstance(failure, dict):
+                  phase = failure.get('phase')
+                  message = str(failure.get('message') or failure)
+                  parts.append((f'[{phase}] {message}' if phase else message)[:600])
+              else:
+                  parts.append(str(failure)[:600])
+          parts += [f'console: {m}'[:400] for m in (run.get('consoleErrors') or [])[:5]]
+          parts += [f'page: {m}'[:400] for m in (run.get('pageErrors') or [])[:5]]
+          text = ' ~ '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::error title=t41-raw::{text[:20000]}')
+          RAWPY
 
       - name: Keep the browser evidence
         if: always()
