@@ -3969,8 +3969,9 @@ function hydrateCandidates(listing) {
   const listedIds = new Set(merged.map((candidate) => candidate.candidateId));
   const pageOnly = wsState.candidates.filter((candidate) => !listedIds.has(candidate.candidateId));
   const next = [...pageOnly, ...merged];
-  const changed = next.length !== wsState.candidates.length
-    || next.some((candidate, index) => candidate !== wsState.candidates[index]);
+  const previous = wsState.candidates;
+  const changed = next.length !== previous.length
+    || next.some((candidate, index) => candidate !== previous[index]);
   wsState.candidates = next;
   return changed;
 }
@@ -3982,8 +3983,10 @@ async function refreshCandidateListing() {
     const listing = await api('/api/workshop');
     if (hydrateCandidates(Array.isArray(listing && listing.candidates) ? listing.candidates : [])) renderCandidates();
     void refreshApplyState();
-  } catch {
-    // The listing is an enhancement; the stage form works without it.
+  } catch (error) {
+    // The listing is an enhancement; the stage form works without it. But a silent catch here once
+    // hid a real defect for a whole hosted run, so the failure is reported where a reader can see it.
+    if (typeof console !== 'undefined' && console.warn) console.warn('candidate listing unavailable: ' + String(error && error.message ? error.message : error));
   }
 }
 

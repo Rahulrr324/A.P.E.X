@@ -21,7 +21,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { UI_CLIENT } from '../src/ui/assets.js';
+import { UI_CLIENT, UI_PAGE } from '../src/ui/assets.js';
 import { createFakeBrowser, flushMicrotasks } from './helpers/fake-browser.js';
 
 const MISSION = 'task-aaaaaaaaaaaaaaaaaaaa';
@@ -270,5 +270,57 @@ describe('T-42 the Workshop shows the candidates the Workshop holds', () => {
     }
     // The server-known candidate is rendered with its provenance, and the list is not empty.
     assert.deepEqual(provenanceBadges(browser), [CANDIDATE.sourceProposalId]);
+  });
+});
+
+describe('T-42 the Workshop hydration runs against the real page markup', () => {
+  // The two hosted failures before this were chased through a harness that never installed the
+  // page's own elements and never advanced the virtual clock past the first microtask turn. Both
+  // were harness defects: the client was fine and the fix was fine, but nothing could be seen.
+  // This test installs every id in UI_PAGE and steps the clock, which is the shape of a real page.
+  const PAGE_IDS = [...UI_PAGE.matchAll(/id="([a-zA-Z0-9_-]+)"/g)].map((match) => match[1]);
+
+  it('renders a server-staged candidate after the timers the client actually uses', async () => {
+    assert.ok(PAGE_IDS.includes('ws-candidates'), 'the served page really has the candidate list');
+    const record = {
+      candidateId: 'wsc-00f1e6a16f54',
+      relativePath: 'src/greeting.js',
+      digest: 'a'.repeat(64),
+      bytes: 90,
+      lines: 4,
+      hasSandboxTest: true,
+      sourceProposalId: 'evo-07432cb1ba8c420c',
+      base: { exists: true, digest: 'b'.repeat(64) },
+      verified: null,
+    };
+    const fetchImpl = async (url) => {
+      const path = String(url).split('?')[0];
+      if (path === '/api/workshop') {
+        return { ok: true, status: 200, async json() { return JSON.parse(JSON.stringify({ candidates: [record] })); } };
+      }
+      if (path === '/api/state') {
+        return { ok: true, status: 200, async json() { return { session: { id: 's' }, turns: [], tasks: [], plans: [] }; } };
+      }
+      return { ok: false, status: 404, async json() { return { error: `no route for ${path}` }; } };
+    };
+    const browser = createFakeBrowser({ fetchImpl });
+    for (const id of PAGE_IDS) browser.document.getElementById(id);
+    const context = vm.createContext(browser.sandbox, { name: 'apex-ui-client-t42-page' });
+    vm.runInContext(UI_CLIENT, context, { filename: 'ui-client.js', displayErrors: true });
+    for (let round = 0; round < 40; round += 1) {
+      browser.clock.advance(100);
+      await flushMicrotasks();
+    }
+
+    const badges = [];
+    const walk = (node) => {
+      for (const child of node.children || []) {
+        if (child.dataset && child.dataset.sourceProposal) badges.push(child.dataset.sourceProposal);
+        walk(child);
+      }
+    };
+    walk(browser.document.getElementById('ws-candidates'));
+    assert.deepEqual(badges, [record.sourceProposalId],
+      'on a real page, with real timers, the staged candidate carries its provenance');
   });
 });
