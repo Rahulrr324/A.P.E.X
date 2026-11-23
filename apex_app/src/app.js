@@ -8,6 +8,7 @@ import { OperationLog } from './operations/operation-log.js';
 import { ActionRegistry } from './actions/registry.js';
 import { builtinActions } from './actions/builtin.js';
 import { GitExecutive, gitExecutiveActions } from './capabilities/git-executive.js';
+import { ProcessPortInspector, processPortActions } from './perception/process-port-inspector.js';
 import { knowledgeActions } from './actions/knowledge-actions.js';
 import { worldActions } from './actions/world-actions.js';
 import { worldModelActions } from './actions/world-model-actions.js';
@@ -315,6 +316,11 @@ export function createApp({
     });
   }
 
+  // T-43 Package 2: the process and port inspector. It is constructed unconditionally because it reads
+  // the host rather than the workspace, and it is injected rather than reached for from the route so a
+  // test can hold the machine still.
+  const processInspector = new ProcessPortInspector({ now: clock });
+
   // Council is constructed before action registration so its read-oriented actions are
   // registered exactly once, through the same registry/ECP path as every other capability.
   // T-37 Step 2: the Council also reads the safety latch, so its Values & Constraints Core can
@@ -380,6 +386,9 @@ export function createApp({
   if (gitExecutive !== null) {
     for (const def of gitExecutiveActions(gitExecutive)) registry.register(def);
   }
+  // T-43 Package 2: the two host readings. Registered unconditionally, because a host reading needs no
+  // workspace root - the processes and sockets are the machine APEX is running on.
+  for (const def of processPortActions(processInspector)) registry.register(def);
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -589,6 +598,8 @@ export function createApp({
     workshopApplier,
     // T-43 Package 1: the git executive, so the git routes reach the one engine and its ledger.
     gitExecutive,
+    // T-43 Package 2: the process and port inspector, for the telemetry route and the receipt.
+    processInspector,
     // T-38 Step 3: the cross-ledger trace and search, for the Memory Timeline.
     memoryTrace,
     filesystemWorkspaces: workspaces,

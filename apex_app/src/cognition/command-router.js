@@ -34,6 +34,11 @@ export const ROUTE_KIND = Object.freeze({
   MODE: 'mode',
   SAFETY: 'safety',
   MISSION: 'mission',
+  // T-43 Package 2: the deeper readings. `GIT` names the repository acts and `INSPECT` the host ones;
+  // both are separate kinds rather than more `SENSE` because the target view differs - a git reading
+  // belongs on the Workshop and a host reading on the Sentinel.
+  GIT: 'git',
+  INSPECT: 'inspect',
   UNMATCHED: 'unmatched',
 });
 
@@ -48,11 +53,23 @@ const PHRASES = Object.freeze([
   { kind: ROUTE_KIND.BRIEFING, phrases: ['acknowledge briefing'], action: 'briefing.acknowledge', targetView: 'tasks', summary: 'record a briefing checkpoint' },
   { kind: ROUTE_KIND.BRIEFING, phrases: ['briefing delta', 'show briefing', 'briefing'], route: '/api/briefing', targetView: 'tasks', summary: 'read the current briefing and its delta' },
   { kind: ROUTE_KIND.WORKSHOP, phrases: ['verify workshop'], action: 'workshop.verify', targetView: 'workshop', summary: 'verify the workshop sheets' },
+  // T-43 Package 2. `git status` and `inspect ports` are whole-line phrases with no argument; the
+  // Sentinel view is named because that is where the port and process tables live.
+  { kind: ROUTE_KIND.GIT, phrases: ['git status'], action: 'git.status_detailed', targetView: 'workshop', summary: 'read the workspace repository in detail' },
+  { kind: ROUTE_KIND.INSPECT, phrases: ['inspect ports', 'inspect listening ports'], action: 'system.inspect_ports', targetView: 'sentinel', summary: 'read the listening sockets from the operating system' },
+  { kind: ROUTE_KIND.INSPECT, phrases: ['inspect processes', 'inspect process'], action: 'system.inspect_processes', targetView: 'sentinel', summary: 'read the running processes and own memory' },
 ]);
 
 // Patterns that carry an argument. The prefix is literal; the rest is the argument, kept as the owner
 // wrote it rather than re-worded.
+// T-43 Package 2: `create checkpoint <label>` is the one prefix whose argument is a label rather than a
+// question. It is listed first because its prefix is the longest of the ones that could collide, and a
+// router that matched `create` first would route `create checkpoint x` as a mission.
+const CHECKPOINT_PREFIX = 'create checkpoint';
+
 const PREFIXES = Object.freeze([
+  { kind: ROUTE_KIND.GIT, prefix: CHECKPOINT_PREFIX, action: 'git.checkpoint_create', targetView: 'workshop', summary: 'create a git checkpoint of the workspace', argumentLabel: 'label' },
+  { kind: ROUTE_KIND.GIT, prefix: 'git diff', action: 'git.diff_inspect', targetView: 'workshop', summary: 'inspect a workspace diff', argumentLabel: 'path' },
   { kind: ROUTE_KIND.COUNCIL, prefix: 'council:', action: 'council.deliberate', targetView: 'council', summary: 'deliberate in the Council' },
   { kind: ROUTE_KIND.COUNCIL, prefix: 'deliberate', action: 'council.deliberate', targetView: 'council', summary: 'deliberate in the Council' },
   { kind: ROUTE_KIND.MODE, prefix: 'mode', targetView: null, summary: 'change the deck presentation' },
@@ -262,6 +279,72 @@ export function createCommandRouter({ controller, app = null, now = () => new Da
           detail: outcome.step?.display ?? null, input: {},
         });
       }
+      case ROUTE_KIND.GIT: {
+        // `create checkpoint <label>` is a governance question as well as a routing one: the label is
+        // the owner's words, and a line with no label is refused rather than given a generated one. The
+        // act itself still runs through `controller.runAction`, so the ECP decides it, Lockdown refuses
+        // it, and step-up applies exactly as it does from the panel.
+        if (route.action === 'git.checkpoint_create') {
+          const label = (route.argument ?? '').trim();
+          if (label.length === 0) {
+            return receipt({
+              routeKind: route.kind, actionInvoked: null, targetView: route.targetView,
+              summary: 'Name the checkpoint after the command',
+              detail: 'For example: create checkpoint before the refactor. The label is what the checkpoint list will show.',
+            });
+          }
+          // The label travels into a git ref, so it is cleaned here as well as in the action: a label of
+          // "a/b c" is fine and a label of "${x}" is refused by the action, but a label containing a newline
+          // would produce an audit line no reader can parse.
+          const safeLabel = label.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+          const outcome = await dispatchAction(route.action, { label: safeLabel, reason: 'created from the command line' }, id);
+          return receipt({
+            routeKind: route.kind, actionInvoked: route.action, targetView: route.targetView,
+            ecpDecision: outcome.ecpDecision, verified: outcome.verified,
+            summary: outcome.verified ? `Checkpoint created: ${outcome.summary}` : `The checkpoint was refused: ${outcome.summary}`,
+            detail: outcome.step?.display ?? null, input: { label: safeLabel },
+          });
+        }
+        if (route.action === 'git.diff_inspect') {
+          // `git diff` with no argument inspects the whole working tree; `git diff <path>` narrows to a
+          // path, and the path is passed through unchanged so the engine's containment check is what
+          // decides whether it is inside the workspace. A router that pre-validated the path would be a
+          // second, weaker copy of that check.
+          const path = (route.argument ?? '').trim();
+          const input = path.length === 0 ? {} : { targetPath: path };
+          const outcome = await dispatchAction(route.action, input, id);
+          const data = outcome.step?.result?.data ?? null;
+          return receipt({
+            routeKind: route.kind, actionInvoked: route.action, targetView: route.targetView,
+            ecpDecision: outcome.ecpDecision, verified: outcome.verified,
+            summary: outcome.verified
+              ? `Diff${path.length > 0 ? ` ${truncate(path, 60)}` : ''}: +${data?.additions ?? 0} -${data?.deletions ?? 0}`
+              : `The diff could not be read: ${outcome.summary}`,
+            detail: outcome.step?.display ?? null, input,
+          });
+        }
+        // `git status`.
+        const outcome = await dispatchAction(route.action, {}, id);
+        return receipt({
+          routeKind: route.kind, actionInvoked: route.action, targetView: route.targetView,
+          ecpDecision: outcome.ecpDecision, verified: outcome.verified,
+          summary: outcome.verified ? `Repository read: ${outcome.summary}` : `The repository could not be read: ${outcome.summary}`,
+          detail: outcome.step?.display ?? null, input: {},
+        });
+      }
+      case ROUTE_KIND.INSPECT: {
+        const outcome = await dispatchAction(route.action, {}, id);
+        const data = outcome.step?.result?.data ?? null;
+        const summary = route.action === 'system.inspect_ports'
+          ? (data ? `${data.summary.totalListening} listening, ${data.summary.loopbackOnlyCount} loopback-only, ${data.summary.externalExposureCount} wildcard` : outcome.summary)
+          : (data ? `${data.topProcesses?.length ?? 0} process(es), own RSS ${Math.round((data.apexProcess?.rssBytes ?? 0) / (1024 * 1024))} MB` : outcome.summary);
+        return receipt({
+          routeKind: route.kind, actionInvoked: route.action, targetView: route.targetView,
+          ecpDecision: outcome.ecpDecision, verified: outcome.verified,
+          summary: outcome.verified ? `Inspection taken: ${summary}` : `The inspection did not verify: ${outcome.summary}`,
+          detail: outcome.step?.display ?? null, input: {},
+        });
+      }
       case ROUTE_KIND.MODE: {
         const requested = (route.argument ?? '').toLowerCase();
         if (!PRESENTATION_MODES.includes(requested)) {
@@ -374,7 +457,10 @@ export function createCommandRouter({ controller, app = null, now = () => new Da
     for (const entry of PREFIXES) {
       rows.push({
         // A prefix is shown with its argument slot, because the slot is the part the owner fills in.
-        syntax: `${entry.prefix} ${entry.kind === ROUTE_KIND.MODE ? '<mode>' : '<text>'}`,
+        // A prefix is shown with its argument slot. The slot's name comes from the table where the
+        // table knows it (`<label>` for a checkpoint, `<path>` for a diff), because a help panel that
+        // says `<text>` for every prefix teaches the owner to guess what the argument is for.
+        syntax: `${entry.prefix} ${entry.argumentLabel ? `<${entry.argumentLabel}>` : entry.kind === ROUTE_KIND.MODE ? '<mode>' : '<text>'}`,
         routeKind: entry.kind,
         summary: entry.summary,
         targetView: entry.targetView ?? null,

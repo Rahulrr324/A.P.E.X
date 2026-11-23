@@ -144,9 +144,11 @@ describe('AF-19: the registry is the inventory', () => {
     // T-43 Package 1 (2026-11-19) adds four git capabilities: two reads and two owner-only writes.
     // All four are registered only with a root, because without one there is no repository this build
     // is authorized to read - so the default total moves by zero and the rooted total by four.
-    assert.equal(plain.registry.list().length, 170, 'the default registry has 170 actions');
+    // T-43 Package 2 adds two host reads, `system.inspect_ports` and `system.inspect_processes`. They
+    // need no workspace root - they read the machine - so both totals move by two.
+    assert.equal(plain.registry.list().length, 172, 'the default registry has 172 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 189, 'a configured workspace root adds nineteen actions');
+    assert.equal(rooted.registry.list().length, 191, 'a configured workspace root adds nineteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -306,8 +308,9 @@ describe('AF-19: the registry is the inventory', () => {
     // T-38 Step 2 (2026-11-21): `workspace.inspect` and `workspace.read_file` are the eighty-eighth and
     // eighty-ninth reads. Both are offered to the model origin, because reading a workspace is not
     // authoring one - and both are refused outside the configured root.
-    // T-43 Package 1 adds two reads, `git.status_detailed` and `git.diff_inspect`.
-    assert.equal(reads.length, 92, 'the inventory counts ninety-two read actions with a root configured');
+    // T-43 Package 1 adds two reads, `git.status_detailed` and `git.diff_inspect`; Package 2 adds two
+    // more, `system.inspect_ports` and `system.inspect_processes`.
+    assert.equal(reads.length, 94, 'the inventory counts ninety-four read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },

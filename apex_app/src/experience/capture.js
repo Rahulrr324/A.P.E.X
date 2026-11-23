@@ -382,6 +382,8 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // already holds the richer record: the label, the reason, the snapshot commit, the tree, the
   // manifest and the restore history. A second copy in the experience log would be a summary of a
   // record that is already complete.
+  'system.inspect_ports': 'read',
+  'system.inspect_processes': 'read',
   'git.status_detailed': 'read',
   'git.diff_inspect': 'read',
   'git.checkpoint_create': 'git',

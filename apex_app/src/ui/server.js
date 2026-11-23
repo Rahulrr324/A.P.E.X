@@ -2209,6 +2209,26 @@ export function createUiServer({
       }
       return;
     }
+    // T-43 Package 2: the host telemetry. One read that answers both questions - what is listening and
+    // what is running - because they are read at the same instant and a panel that showed a port table
+    // from one moment beside a process table from another would be inviting a false correlation.
+    if (method === 'GET' && url.pathname === '/api/system/telemetry') {
+      try {
+        if (!app.processInspector) { sendJson(res, 503, { ok: false, unavailable: true, error: 'the process inspector is not configured' }); return; }
+        const limitText = url.searchParams.get('limit');
+        let limit = 15;
+        if (limitText !== null) {
+          const parsed = Number(limitText);
+          if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) { sendJson(res, 400, { ok: false, error: 'limit must be an integer from 1 to 50' }); return; }
+          limit = parsed;
+        }
+        const reading = app.processInspector.inspect({ limit });
+        sendJson(res, 200, { ok: true, ports: reading.ports, processes: reading.processes, platform: reading.platform, inspectedAt: reading.inspectedAt, schema: reading.schema });
+      } catch (err) {
+        sendJson(res, 500, { ok: false, error: `the telemetry could not be read: ${err.message}` });
+      }
+      return;
+    }
     // T-36 Step 1: the cold-start bootstrap. It is a governed write: the route asks the controller
     // to run `system.bootstrap`, the registry authorizes it, the control plane refuses it under
     // lockdown, and the answer is reported from what the action verified - never from the click.
