@@ -3121,7 +3121,9 @@ tokens the deck already uses: 13.95:1 and 15.05:1 for body text on the tinted ro
 
 **A drifted checkpoint cannot be restored by accident.** The card renders `REF INTACT` or `REF
 DRIFT` from the server's live measurement of the ref, and the restore control is *disabled* when the
-ref has drifted rather than being left to be refused after the press.
+ref has drifted rather than being left to be refused after the press. The walk holds two checkpoints at
+once and drifts only one, so the panel shows a disabled control beside an enabled one — the disable is
+a per-ref measurement rather than a state the panel fell into.
 
 **Nothing new can widen the page.** The diff table and both telemetry tables fix their layout and
 scroll inside their own boxes, and the walk measures nine views at 1600x900, 1280x720 and 390x844 with

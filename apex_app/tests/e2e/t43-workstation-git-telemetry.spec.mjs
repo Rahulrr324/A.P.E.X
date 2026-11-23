@@ -173,21 +173,34 @@ async function measureContrast(page) {
     };
     const sample = (selector, label) => {
       const node = document.querySelector(selector);
-      if (!node) return { label, selector, ratio: null, missing: true };
+      if (!node) return { label, selector, ratio: null, missing: 'absent' };
+      // A surface that is not rendered has no colour to measure; calling that a low ratio would be a
+      // false alarm and calling it a pass would be a false comfort. It is reported as not-on-screen,
+      // and the phase that reads it decides whether that is acceptable.
+      const rect = node.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return { label, selector, ratio: null, missing: 'not-on-screen' };
       return { label, selector, ratio: ratio(node), colour: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor };
     };
+    // Each sample names an element whose own text is what a reader reads. The diff samples are the
+    // TEXT CELLS rather than the row: a row's computed colour is whatever it inherits, while the cells
+    // carry the rule, and measuring the element that carries the rule is measuring what renders.
     const samples = [
-      sample('.diff-line-add', 'added line text'),
-      sample('.diff-line-del', 'deleted line text'),
-      sample('.diff-gutter-add', 'added line number'),
-      sample('.diff-gutter-del', 'deleted line number'),
-      sample('.checkpoint-ref-intact', 'REF INTACT badge'),
-      sample('.checkpoint-ref-drift', 'REF DRIFT badge'),
-      sample('.exposure-loopback', 'loopback row'),
+      sample('#diff-body .diff-line-add td:not(.diff-gutter-add):not(.diff-gutter-del)', 'added line text'),
+      sample('#diff-body .diff-line-del td:not(.diff-gutter-add):not(.diff-gutter-del)', 'deleted line text'),
+      sample('#diff-body .diff-gutter-add', 'added line number'),
+      sample('#diff-body .diff-gutter-del', 'deleted line number'),
+      sample('#workshop-checkpoints-list .checkpoint-ref-intact', 'REF INTACT badge'),
+      sample('#workshop-checkpoints-list .checkpoint-ref-drift', 'REF DRIFT badge'),
+      sample('#edith-port-table .exposure-loopback', 'loopback row'),
       sample('#git-branch-badge', 'branch badge'),
+      sample('#git-unstaged-badge', 'unstaged badge'),
       sample('#telemetry-total-badge', 'TOTAL PORTS badge'),
+      sample('#telemetry-rss-badge', 'APEX RSS badge'),
     ];
-    return { samples: samples.filter((entry) => !entry.missing), missing: samples.filter((entry) => entry.missing).map((entry) => entry.selector) };
+    return {
+      samples: samples.filter((entry) => !entry.missing),
+      missing: samples.filter((entry) => entry.missing).map((entry) => ({ selector: entry.selector, why: entry.missing })),
+    };
   });
 }
 
@@ -304,14 +317,6 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     expect(delGutters[1].trim(), 'a deleted line has no new number').toBe('');
     await expect(delRows.first().locator('td').nth(0)).toHaveClass(/diff-gutter-del/);
 
-    // The colour is measured, not assumed: the two gutters are the ok-green and armor-red tokens, and
-    // both clear the floor against the tint their row actually renders.
-    const contrast = await measureContrast(page);
-    run.contrast = { samples: contrast.samples.map((entry) => ({ label: entry.label, ratio: Number(entry.ratio?.toFixed(2)) })), missing: contrast.missing };
-    expect(contrast.missing, 'every sampled surface exists').toEqual([]);
-    for (const entry of contrast.samples) {
-      expect(entry.ratio, `${entry.label} measures ${entry.ratio?.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
-    }
     // And the two glyphs are present, so the meaning of a line is not carried by colour alone. The glyph
     // is the first character of the text cell rather than an element of its own.
     await expect(addRows.first().locator('td').nth(2)).toHaveText(/^\+/);
@@ -422,23 +427,37 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     await page.click('#btn-git-refresh');
     await expect(page.locator('#git-unstaged-badge')).toHaveAttribute('data-count', '2', { timeout: 20_000 });
 
-    // ----------------------------------------------- 5. Drift the ref, and the card notices ---
+    // ----------------------------------------------- 5. Two cards, two verdicts, side by side ---
+    // A second checkpoint is taken before the first is drifted, so the panel holds one card saying REF
+    // INTACT and one saying REF DRIFT at the same moment. A card that changed its mind would prove the
+    // badge re-reads; two cards disagreeing proves it reads per-checkpoint.
+    await page.fill('#git-checkpoint-label-input', 'second, left intact');
+    await page.click('#btn-git-checkpoint-create');
+    await expect(page.locator('#workshop-checkpoints-list li')).toHaveCount(2, { timeout: 25_000 });
+    await expect(page.locator('#workshop-checkpoints-list .checkpoint-ref-intact')).toHaveCount(2);
+
+    // ----------------------------------------------- 5b. Drift the ref, and the card notices ---
     // The ref is moved out from under the panel by hand. This is the failure the badge exists for, and it
     // must be discovered by the next read rather than cached from the one that said INTACT.
     fixture.driftRef(record.refName, fixture.headSha);
     expect(fixture.refResolves(record.refName, record.commitSha), 'the ref no longer names its commit').toBe(false);
     await page.click('#btn-git-refresh');
-    await expect(page.locator('#workshop-checkpoints-list li .checkpoint-ref-drift').first()).toHaveText('REF DRIFT', { timeout: 20_000 });
-    const driftedCard = page.locator('#workshop-checkpoints-list li').first();
+    await expect(page.locator('#workshop-checkpoints-list .checkpoint-ref-drift')).toHaveCount(1, { timeout: 20_000 });
+    await expect(page.locator('#workshop-checkpoints-list .checkpoint-ref-intact')).toHaveCount(1);
+    const driftedCard = page.locator('#workshop-checkpoints-list li', { has: page.locator('.checkpoint-ref-drift') });
+    const intactCard = page.locator('#workshop-checkpoints-list li', { has: page.locator('.checkpoint-ref-intact') });
     await expect(driftedCard.locator('button[data-action="restore-git-checkpoint"]')).toBeDisabled();
     await expect(driftedCard.locator('button[data-action="trace-git-checkpoint"]')).toBeEnabled();
-    run.drift = { refIntact: false, restoreDisabled: true, traceEnabled: true };
+    // The card that did NOT drift is still restorable, so the disable is a measurement of one ref rather
+    // than a state the panel fell into.
+    await expect(intactCard.locator('button[data-action="restore-git-checkpoint"]')).toBeEnabled();
+    run.drift = { refIntact: false, intactCards: 1, driftedCards: 1, restoreDisabled: true, untouchedRestoreEnabled: true, traceEnabled: true };
     await page.screenshot({ path: path.join(reportDir, '05-checkpoint-drift.png'), fullPage: true });
     run.screenshots += 1;
     checkpoint('checkpoint-drifted', run.drift);
 
     // ------------------------------------------------------------ 6. The causal trace resolves ---
-    await page.locator('#workshop-checkpoints-list li').first().locator('button[data-action="trace-git-checkpoint"]').click();
+    await driftedCard.locator('button[data-action="trace-git-checkpoint"]').click();
     await expect(page.locator('body')).toHaveAttribute('data-view', 'memory', { timeout: 15_000 });
     await expect(page.locator('#trace-chain li')).not.toHaveCount(0, { timeout: 20_000 });
     await expect(page.locator('#trace-chain')).toContainText(record.checkpointId.slice(0, 12));
@@ -504,7 +523,37 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     run.screenshots += 1;
     checkpoint('telemetry-painted', run.telemetry);
 
-    // ---------------------------------------------------- 8. Ctrl+K routes to both surfaces ---
+    // ------------------------------------------------- 8. Every colour, measured where it renders ---
+    // All three surfaces the milestone added are rendered at this point: the diff rows in the Workshop,
+    // the checkpoint cards beside them, and the port table in Sentinel. Contrast is measured in the
+    // browser from the colours it actually resolved, not from the stylesheet text, so a token redefined
+    // for a dark panel is measured as it renders.
+    await page.locator('button.nav-item[data-view="workshop"]').click();
+    await expect(page.locator('#workshop-diff-viewer')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('#workshop-checkpoints-list li')).toHaveCount(2);
+    await expect(page.locator('#workshop-checkpoints-list .checkpoint-ref-drift')).toHaveCount(1);
+    const workshopContrast = await measureContrast(page);
+    await page.locator('button.nav-item[data-view="sentinel"]').click();
+    await expect(page.locator('#edith-port-table')).toBeVisible({ timeout: 15_000 });
+    const sentinelContrast = await measureContrast(page);
+
+    const contrastSamples = [...workshopContrast.samples, ...sentinelContrast.samples];
+    const contrastMissing = [...workshopContrast.missing, ...sentinelContrast.missing];
+    run.contrast = {
+      samples: contrastSamples.map((entry) => ({ label: entry.label, ratio: Number(entry.ratio?.toFixed(2)), colour: entry.colour, background: entry.background })),
+      missing: contrastMissing,
+      checked: contrastSamples.length,
+    };
+    // Every foreground on screen clears the floor. A surface that was not on screen is reported, but it
+    // is not a pass and it is not a failure - the counts below make sure enough of them were measured.
+    expect(contrastMissing, `surfaces not measured: ${JSON.stringify(contrastMissing)}`).toEqual([]);
+    expect(contrastSamples.length, `enough surfaces were measured to mean something: ${JSON.stringify(run.contrast.samples)}`).toBeGreaterThanOrEqual(9);
+    for (const entry of contrastSamples) {
+      expect(entry.ratio, `${entry.label} (${entry.colour} on ${entry.background}) measures ${entry.ratio?.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+    }
+    checkpoint('contrast', { checked: contrastSamples.length });
+
+    // ---------------------------------------------------- 9. Ctrl+K routes to both surfaces ---
     // Ctrl+K is the keyboard route into the command bar; the router then decides the screen. This is the
     // brief's own line: the commands must go where the panels are, not merely be recognised.
     // The key opens the bar: pressing it must focus the command text, which is the whole point of a
@@ -561,7 +610,7 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     run.screenshots += 1;
     checkpoint('router', run.router);
 
-    // ------------------------------------ 9. Three viewports, every screen, no overflow ---
+    // ----------------------------------- 10. Three viewports, every screen, no overflow ---
     // Every screen is opened at each viewport and measured. The surfaces this milestone added are the
     // widest things in the product - a diff table and two telemetry tables - so this is where a fixed
     // column would show up.
@@ -599,7 +648,7 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     expect(privacy, 'the privacy indicator states audio/mic is disabled').toMatch(/audio[^\n]*mic[^\n]*disabled/i);
     run.voice = { privacyIndicator: privacy.trim().slice(0, 120) };
 
-    // ------------------------------------------------------------- 10. Nothing broke ---
+    // ------------------------------------------------------------- 11. Nothing broke ---
     // Refusals are not errors: this walk schedules none, so any console error is a failure.
     expect(consoleErrors, `console errors: ${consoleErrors.join(' | ')}`).toEqual([]);
     expect(pageErrors, `uncaught exceptions: ${pageErrors.join(' | ')}`).toEqual([]);

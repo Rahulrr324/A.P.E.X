@@ -485,10 +485,19 @@ describe('T-43 Package 3: a build with no workspace root', () => {
     vm.createContext(browser.sandbox);
     vm.runInContext(UI_CLIENT, browser.sandbox, { filename: 'apex-client.js' });
     await flushMicrotasks();
-    for (let step = 0; step < 40; step += 1) {
+    // The git panel is refreshed fire-and-forget, so the panel paints on a turn the test drives rather
+    // than within a fixed number of them. Waiting on a count is how this passed here and failed on a
+    // slower runner: the reads had not landed yet. The wait is on the paint itself.
+    const panelPainted = () => String(browser.document.getElementById('git-status-text').textContent).length > 0;
+    for (let step = 0; step < 200 && !panelPainted(); step += 1) {
       browser.clock.advance(100);
       await flushMicrotasks();
     }
+    for (let step = 0; step < 10; step += 1) {
+      browser.clock.advance(100);
+      await flushMicrotasks();
+    }
+    assert.ok(panelPainted(), 'the git panel must paint before the boot is called settled');
     assert.deepEqual(failures, [], 'no route the boot asks for may answer 5xx');
     assert.deepEqual(browser.events.consoleErrors, [], 'the boot must log no console error');
     assert.deepEqual(browser.events.pageErrors, [], 'the boot must raise no uncaught exception');
