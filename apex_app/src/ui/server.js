@@ -786,14 +786,23 @@ function gitRefusalStatus(step) {
 // The refusal body. A git refusal names the code and whatever structured detail the engine attached -
 // the recorded and found commit on a drift, the paths a dirty-tree refusal would have destroyed - so
 // the owner can act without opening the repository by hand.
+// The structured facts a refusal carries are spread onto the error by the executor, alongside its code
+// and message - not nested under a `detail` key. They are collected back into one object here so the
+// response has a stable shape: `{ error, code, detail: {...} }`, never a refusal whose reason is only
+// the word "refused".
 function gitRefusalBody(result, step) {
   const failed = step?.execution?.error ?? null;
   const code = failed?.code ?? (step?.authorization?.decision === 'deny' ? step.authorization.reason : null);
+  const structured = {};
+  for (const [key, value] of Object.entries(failed ?? {})) {
+    if (key === 'code' || key === 'message' || key === 'detail') continue;
+    structured[key] = value;
+  }
   return {
     status: result?.status ?? null,
     error: result?.output ?? 'the git executive refused the request',
     code,
-    ...(failed && typeof failed.detail === 'object' && failed.detail !== null ? { detail: failed.detail } : {}),
+    ...(Object.keys(structured).length > 0 ? { detail: structured } : {}),
     display: result?.display ?? null,
   };
 }

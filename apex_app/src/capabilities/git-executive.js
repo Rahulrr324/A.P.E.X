@@ -502,19 +502,47 @@ export class GitExecutive {
     });
   }
 
-  // Whether the worktree and the index both hold a given commit's tree. Two independent reads, so a
-  // caller can see which half failed rather than only that something did.
+  // Whether the worktree and the index both hold a given commit's content.
+  //
+  // The comparison is restricted to the paths the snapshot CONTAINS, and that restriction is the
+  // correctness of the check rather than a convenience. `git checkout <sha> -- .` writes every path the
+  // snapshot has; it does not delete a file created after the checkpoint, because a restore that
+  // silently removed files would be a far larger act than the one the owner confirmed. So a file
+  // added after the checkpoint is present and is *not* a failure - while a snapshot path whose content
+  // differs IS. Files outside the snapshot are reported as `extraPaths` so the owner can see what the
+  // restore left alone instead of having to infer it.
   #restoredState(commitSha) {
-    const worktree = this.#run(['diff', '--quiet', commitSha, '--', '.']);
-    const indexTree = this.#run(['write-tree']);
     const snapshotTree = this.#run(['rev-parse', `${commitSha}^{tree}`]);
-    const worktreeMatches = worktree.ok;
-    const indexMatches = indexTree.ok && snapshotTree.ok && indexTree.stdout.trim() === snapshotTree.stdout.trim();
+    const listing = this.#run(['ls-tree', '-r', '--name-only', commitSha]);
+    if (!snapshotTree.ok || !listing.ok) {
+      return { verified: false, worktreeMatches: false, indexMatches: false, treeSha: null, differingPaths: [], extraPaths: [], inspected: false };
+    }
+    const owned = new Set(listing.stdout.split('\n').map((line) => line.trim()).filter((line) => line.length > 0));
+    const changed = (args) => {
+      const run = this.#run(args);
+      // A failed `diff --name-only` is a failed read, not "no difference". Saying the tree matches when
+      // the comparison never ran would be the one verdict this method must never give.
+      if (!run.ok) return { read: false, paths: [] };
+      return { read: true, paths: run.stdout.split('\n').map((line) => line.trim()).filter((line) => owned.has(line)) };
+    };
+    const worktree = changed(['diff', '--name-only', commitSha, '--', '.']);
+    const index = changed(['diff', '--cached', '--name-only', commitSha, '--', '.']);
+    const worktreeMatches = worktree.read && worktree.paths.length === 0;
+    const indexMatches = index.read && index.paths.length === 0;
+    // Everything the worktree holds that the snapshot does not, so "what the restore did not touch" is a
+    // list rather than an omission.
+    const present = this.#run(['ls-files', '--cached', '--others', '--exclude-standard']);
+    const extraPaths = present.ok
+      ? [...new Set(present.stdout.split('\n').map((line) => line.trim()).filter((line) => line.length > 0 && !owned.has(line)))]
+      : [];
     return {
       verified: worktreeMatches && indexMatches,
       worktreeMatches,
       indexMatches,
-      treeSha: snapshotTree.ok ? snapshotTree.stdout.trim() : null,
+      treeSha: snapshotTree.stdout.trim(),
+      differingPaths: [...new Set([...worktree.paths, ...index.paths])],
+      extraPaths,
+      inspected: true,
     };
   }
 

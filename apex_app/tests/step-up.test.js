@@ -76,11 +76,14 @@ describe('T-31 step-up configuration', () => {
     assert.equal(body.configured, false);
     // T-39 Step 1 adds the two Workshop writes that reach the live workspace tree; T-40 Step 2 adds
     // the two batch writes, for the same reason and more strongly - one stolen session could otherwise
-    // write eight files in a single authorized-looking act. The list is pinned because it is a promise
-    // about which acts a stolen session cannot perform without the secret.
+    // write eight files in a single authorized-looking act. T-43 Package 1 adds the two git writes: a
+    // checkpoint create writes a ref into the owner's repository and a restore overwrites tracked files
+    // in it. The list is pinned because it is a promise about which acts a stolen session cannot
+    // perform without the secret.
     assert.deepEqual(body.appliesTo,
       ['safety.release', 'evolution.decide', 'workshop.apply_file', 'workshop.rollback_file',
-        'workshop.apply_changeset', 'workshop.rollback_changeset']);
+        'workshop.apply_changeset', 'workshop.rollback_changeset',
+        'git.checkpoint_create', 'git.checkpoint_restore']);
     assert.match(body.note, /not required/i);
     // Off means "no proof needed": the existing release path is unchanged.
     assert.equal(app.ecp.verifyStepUp(null, { capability: 'safety.release' }).ok, true);

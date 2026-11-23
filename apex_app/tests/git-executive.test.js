@@ -29,6 +29,12 @@ function git(cwd, args) {
   }).trim();
 }
 
+// The same isolated invocation, under a name the second describe block uses. Two names rather than
+// one because the first is shadowed by the `git` variable inside the tests and clarity beats reuse here.
+function gitt(cwd, args) {
+  return git(cwd, args);
+}
+
 function tempDir(prefix = 'apex-git-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -359,6 +365,27 @@ describe('T-43 Package 1: checkpoints are non-destructive and verify their own r
     git(root, ['checkout', '--', '.']);
   });
 
+  test('a restore leaves files created after the checkpoint alone and says which', () => {
+    // `git checkout <sha> -- .` writes the snapshot's paths; it does not delete what was added later.
+    // That is the smaller act, and it must not be reported as a failed verification - so the
+    // post-condition compares only the paths the snapshot contains and lists the rest as untouched.
+    fs.writeFileSync(path.join(root, 'greeting.js'), 'export const greeting = "the checkpointed bytes";\n');
+    const record = exec.checkpointCreate({ label: 'extra-path base' });
+    gitt(root, ['add', '-A']);
+    gitt(root, ['commit', '--quiet', '-m', 'the checkpointed bytes become HEAD']);
+    fs.writeFileSync(path.join(root, 'added-later.txt'), 'created after the checkpoint\n');
+    gitt(root, ['add', '-A']);
+    gitt(root, ['commit', '--quiet', '-m', 'a file the checkpoint never saw']);
+
+    const restored = exec.checkpointRestore({ checkpointId: record.checkpointId });
+    assert.equal(restored.verified, true);
+    assert.equal(fs.existsSync(path.join(root, 'added-later.txt')), true, 'the later file survives the restore');
+    const state = exec.restoredState(record.checkpointId);
+    assert.equal(state.verified, true);
+    assert.ok(state.extraPaths.includes('added-later.txt'), 'and it is reported as a path the restore did not own');
+    assert.deepEqual(state.differingPaths, []);
+  });
+
   test('the write capabilities refuse to run without the step-up proof when one is configured', async () => {
     const defs = gitExecutiveActions(exec);
     const create = defs.find((def) => def.name === 'git.checkpoint_create');
@@ -508,5 +535,140 @@ describe('T-43 Package 1: a checkpoint id resolves across the ledgers', () => {
       fs.rmSync(root, { recursive: true, force: true });
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('T-43 Package 1: the routes are governed like every other write', () => {
+  // A real app, a real UI server and a real repository. The point of these tests is the boundary, not
+  // the engine: the engine is exercised above, and what is checked here is that no route can reach it
+  // without the ECP's decision, the step-up proof and the Lockdown latch.
+  let root;
+  let dataDir;
+  let server;
+  let base;
+  let headers;
+  const token = 'T43-git-routes-token-0123456789abcdef';
+  const stepUp = 'T43-git-step-up-secret';
+
+  before(async () => {
+    root = makeRepo();
+    dataDir = tempDir('apex-git-routes-data-');
+    const { createApp } = await import('../src/app.js');
+    const { createUiServer } = await import('../src/ui/server.js');
+    const { ModelGateway, NoBackend } = await import('../src/model/gateway.js');
+    const app = createApp({ dataDir, filesystemRoot: root, stepUpToken: stepUp, modelGateway: new ModelGateway({ backend: new NoBackend() }) });
+    server = createUiServer({ app, token });
+    const started = await server.start();
+    base = `http://127.0.0.1:${started.port}`;
+    headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'x-apex-ui': '1' };
+  });
+
+  after(async () => {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  async function call(method, pathname, body = null) {
+    const response = await fetch(base + pathname, {
+      method,
+      headers,
+      ...(body === null ? {} : { body: JSON.stringify(body) }),
+    });
+    let payload = null;
+    try { payload = await response.json(); } catch { /* a non-JSON body is a finding, not a crash */ }
+    return { status: response.status, payload };
+  }
+
+  test('the three reads answer and the escape is a 403', async () => {
+    fs.writeFileSync(path.join(root, 'greeting.js'), 'export const greeting = "route probe";\n');
+    const status = await call('GET', '/api/git/status');
+    assert.equal(status.status, 200);
+    assert.equal(status.payload.isRepo, true);
+    assert.equal(status.payload.branch, 'main');
+
+    const diff = await call('GET', '/api/git/diff?path=greeting.js');
+    assert.equal(diff.status, 200);
+    assert.equal(diff.payload.hunks.length, 1);
+
+    const escape = await call('GET', '/api/git/diff?path=../outside.js');
+    assert.equal(escape.status, 403);
+    assert.equal(escape.payload.code, 'WORKSPACE_PATH_ESCAPE');
+
+    const injection = await call('GET', `/api/git/diff?baseRef=${encodeURIComponent('--output=/tmp/pwn-route')}`);
+    assert.equal(injection.status, 400);
+    assert.equal(injection.payload.code, 'INVALID_GIT_ARGUMENT');
+
+    const list = await call('GET', '/api/git/checkpoints');
+    assert.equal(list.status, 200);
+    assert.equal(list.payload.count, 0);
+    git(root, ['checkout', '--', 'greeting.js']);
+  });
+
+  test('a create without the step-up proof is refused, and the tree is untouched', async () => {
+    fs.writeFileSync(path.join(root, 'greeting.js'), 'export const greeting = "needs a proof";\n');
+    const before = fs.readFileSync(path.join(root, 'greeting.js'));
+    const refused = await call('POST', '/api/git/checkpoints', { label: 'no proof' });
+    assert.equal(refused.status, 400);
+    assert.equal(refused.payload.code, 'STEP_UP_REQUIRED');
+    assert.deepEqual(fs.readFileSync(path.join(root, 'greeting.js')), before, 'a refused create changes no bytes');
+    assert.equal((await call('GET', '/api/git/checkpoints')).payload.count, 0, 'and records nothing');
+  });
+
+  test('a create with the proof persists a checkpoint whose ref resolves', async () => {
+    const created = await call('POST', '/api/git/checkpoints', { label: 'route checkpoint', stepUp });
+    assert.equal(created.status, 200);
+    assert.equal(created.payload.verified, true);
+    assert.equal(created.payload.refIntact, true);
+    const listed = await call('GET', '/api/git/checkpoints');
+    assert.equal(listed.payload.count, 1);
+    assert.equal(listed.payload.checkpoints[0].refIntact, true);
+    assert.equal(listed.payload.checkpoints[0].label, 'route checkpoint');
+  });
+
+  test('a restore over unrelated dirt is a 409 that names the paths, and Lockdown is a 423', async () => {
+    const list = await call('GET', '/api/git/checkpoints');
+    const id = list.payload.checkpoints[0].checkpointId;
+    git(root, ['add', '-A']);
+    git(root, ['commit', '--quiet', '-m', 'the change the checkpoint predates']);
+    fs.writeFileSync(path.join(root, 'greeting.js'), 'export const greeting = "work in progress";\n');
+    const dirty = await call('POST', `/api/git/checkpoints/${id}/restore`, { stepUp });
+    assert.equal(dirty.status, 409);
+    assert.equal(dirty.payload.code, 'GIT_CHECKPOINT_DIRTY_TREE');
+    assert.deepEqual(dirty.payload.detail.dirtyPaths, ['greeting.js']);
+    git(root, ['checkout', '--', 'greeting.js']);
+
+    // The latch. A stopped system is a 423, not a bad request: the request was well formed and the
+    // act was not permitted.
+    const locked = await call('POST', '/api/safety/lockdown', { reason: 'prove the git refusal' });
+    assert.equal(locked.status, 200);
+    const refused = await call('POST', `/api/git/checkpoints/${id}/restore`, { stepUp });
+    assert.equal(refused.status, 423);
+    assert.equal(refused.payload.code, 'KILL_SWITCH_ACTIVE');
+    const released = await call('POST', '/api/safety/release', { reason: 'restore the system', stepUp, confirm: true });
+    assert.equal(released.status, 200);
+  });
+
+  test('a clean restore verifies through the route and the trace resolves the checkpoint', async () => {
+    const list = await call('GET', '/api/git/checkpoints');
+    const id = list.payload.checkpoints[0].checkpointId;
+    const restored = await call('POST', `/api/git/checkpoints/${id}/restore`, { stepUp, reason: 'route round trip' });
+    assert.equal(restored.status, 200);
+    assert.equal(restored.payload.verified, true);
+    assert.equal(restored.payload.restoreCount, 1);
+
+    const trace = await call('GET', `/api/memory/trace/${encodeURIComponent(id)}`);
+    assert.equal(trace.status, 200);
+    assert.equal(trace.payload.ok, true);
+    const kinds = trace.payload.entries.map((entry) => entry.kind);
+    assert.ok(kinds.includes('git_checkpoint'), 'the checkpoint is a step in its own chain');
+    assert.ok(kinds.includes('ecp_audit'), 'and the operation that created it is linked');
+    assert.equal(trace.payload.counts.checkpoints, 1);
+  });
+
+  test('a checkpoint id that is not in the ledger is a 404 rather than an empty success', async () => {
+    const missing = await call('POST', '/api/git/checkpoints/chk_00000000deadbeef/restore', { stepUp });
+    assert.equal(missing.status, 404);
+    assert.equal(missing.payload.code, 'CHECKPOINT_NOT_FOUND');
   });
 });
