@@ -405,7 +405,8 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     expect(declared.autonomyLevel, 'the restore is declared L2').toBe('L2');
     expect(declared.blastRadius, 'and it reaches the workspace filesystem').toBe('workspace_fs');
     expect(declared.reversibility, 'and it is declared reversible').toBe('reversible');
-    // The panel re-read the repository after the restore rather than leaving the stale counts up.
+    // The panel re-read the repository after the restore rather than leaving the stale counts up: the
+    // index now holds both files and nothing is outside it, which is exactly what the snapshot describes.
     await expect(page.locator('#git-staged-badge')).toHaveAttribute('data-count', '2', { timeout: 20_000 });
     await expect(page.locator('#git-unstaged-badge')).toHaveAttribute('data-count', '0');
     run.restore = {
@@ -425,7 +426,12 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     // the same claim, and it is checked against the file on disk rather than against the response.
     fs.writeFileSync(fixture.greetingPath, T43_GREETING_POST_CHECKPOINT, 'utf8');
     await page.click('#btn-git-refresh');
-    await expect(page.locator('#git-unstaged-badge')).toHaveAttribute('data-count', '2', { timeout: 20_000 });
+    // One file is now outside the index: the restore left both staged, and only the one edited since is
+    // unstaged again. Asserting 2 here would have asserted a state the repository is not in.
+    await expect(page.locator('#git-unstaged-badge')).toHaveAttribute('data-count', '1', { timeout: 20_000 });
+    // The staged count does NOT drop: the edit is a worktree change and the index still holds both
+    // files from the restore. A badge that fell to 1 here would mean the edit had also unstaged a file.
+    await expect(page.locator('#git-staged-badge')).toHaveAttribute('data-count', '2');
     const refusal = await fixture.post(`/api/git/checkpoints/${record.checkpointId}/restore`, { reason: 'the walk probes the refusal' });
     expect(refusal.status, 'a restore that would discard a worktree edit is refused').toBe(409);
     expect(refusal.body.code).toBe('GIT_CHECKPOINT_DIRTY_TREE');
@@ -437,7 +443,8 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     // Put the checkpointed bytes back so the drift phase starts from a known tree.
     fs.writeFileSync(fixture.greetingPath, T43_GREETING_EDITED, 'utf8');
     await page.click('#btn-git-refresh');
-    await expect(page.locator('#git-unstaged-badge')).toHaveAttribute('data-count', '2', { timeout: 20_000 });
+    await expect(page.locator('#git-unstaged-badge')).toHaveAttribute('data-count', '0', { timeout: 20_000 });
+    await expect(page.locator('#git-staged-badge')).toHaveAttribute('data-count', '2');
 
     // ----------------------------------------------- 5. Two cards, two verdicts, side by side ---
     // A second checkpoint is taken before the first is drifted, so the panel holds one card saying REF
@@ -507,7 +514,14 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     const apexPort = (telemetry.body.ports.summary.apexListeningPorts ?? []).find((entry) => Number(entry.localPort ?? entry) === serverPort)
       ?? null;
     expect(apexPort, `the server's own port ${serverPort} is among the inspected apex ports`).toBeTruthy();
-    const apexRow = page.locator('#edith-port-table tbody tr', { hasText: String(serverPort) });
+    // The server binds 127.0.0.1, so its own row must be classified loopback. The classification is read
+    // from the row the table rendered for THAT port rather than from "some row saying LOOPBACK ONLY":
+    // the inspection also finds the runner's own sockets, and asserting the word somewhere in the table
+    // would pass on a row that has nothing to do with this server.
+    const portRow = (telemetry.body.ports.ports ?? []).find((entry) => entry.localPort === serverPort);
+    expect(portRow, `the inspection classified port ${serverPort}`).toBeTruthy();
+    expect(portRow.isLoopbackOnly, `port ${serverPort} is bound to loopback: ${portRow.localAddress}`).toBe(true);
+    const apexRow = page.locator('#edith-port-table tbody tr[data-port="' + serverPort + '"]');
     await expect(apexRow.first()).toBeVisible({ timeout: 10_000 });
     await expect(apexRow.first()).toContainText('LOOPBACK ONLY');
 
