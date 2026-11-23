@@ -845,6 +845,48 @@ export class WorkshopSandbox {
   }
 
   // The newest verification for a candidate, read from disk.
+  // T-42 Step 1: every staged candidate, newest first, with the fields a card shows. It is a plain
+  // read: nothing is verified, nothing is written, and a candidate whose record is unreadable is
+  // reported as corrupt rather than skipped, so the count on screen matches the directory.
+  list({ limit = 50 } = {}) {
+    // Deliberately NOT `#ensureBase()`: a read must leave the data directory as cold as it found it,
+    // which is the same rule the read-only commands follow.
+    let names;
+    try {
+      names = fs.readdirSync(this.baseDir);
+    } catch {
+      return { present: false, candidates: [], corrupt: 0 };
+    }
+    const candidates = [];
+    let corrupt = 0;
+    for (const name of names) {
+      if (!name.startsWith('wsc-')) continue;
+      const record = this.load(name);
+      if (!record) { corrupt += 1; continue; }
+      const verification = this.latestVerification(name);
+      candidates.push({
+        candidateId: record.candidateId,
+        relativePath: record.relativePath,
+        digest: record.digest,
+        bytes: record.bytes,
+        lines: record.lines,
+        rationale: record.rationale ?? null,
+        at: record.at ?? null,
+        // The provenance link. Null for a candidate staged through the panel, which is the honest
+        // answer rather than an absent field the reader has to interpret.
+        sourceProposalId: record.sourceProposalId ?? null,
+        hasSandboxTest: typeof record.testPath === 'string',
+        base: record.base?.exists === true ? { exists: true, digest: record.base.digest ?? null } : { exists: false, digest: null },
+        diff: record.diff ?? null,
+        verified: verification ? verification.verified === true : null,
+        verificationId: verification?.id ?? null,
+        sandboxTestResult: verification?.sandboxTestResult ?? null,
+      });
+    }
+    candidates.sort((a, b) => String(b.at ?? '').localeCompare(String(a.at ?? '')));
+    return { present: true, candidates: candidates.slice(0, Math.max(1, Math.min(200, limit))), corrupt };
+  }
+
   latestVerification(candidateId) {
     const dir = this.#candidateDir(candidateId);
     const file = path.join(dir, 'verification.json');

@@ -374,49 +374,136 @@ test('T-41: the governance boundary refuses, a failing sandbox test blocks the a
       applies: kinds.filter((kind) => kind === 'workshop_apply').length,
       operations: kinds.filter((kind) => kind === 'ecp_audit').length,
       sandboxTestResultOnTrace: true,
+      // The panel-staged candidate has no proposal, so this is honestly false here; the bridge leg
+      // below proves the true case on a candidate that really came from a proposal.
       sourceProposalIdOnTrace: Boolean(passVerification.detail.sourceProposalId),
       complete: trace.body.complete === true,
       appliedCandidateComplete: passTrace.body.complete === true,
+      appliedKinds: [...new Set(passKinds)],
+      appliedApplies: passKinds.filter((kind) => kind === 'workshop_apply').length,
     };
     checkpoint('causal trace verified');
     await page.screenshot({ path: path.join(reportDir, 'causal-trace.png') });
     run.screenshots += 1;
 
-    // --------------------- 5. the bridge: a proposal's candidate carries sourceProposalId ---
-    // The panel path above proves the sandbox test. This leg proves the OTHER half of the milestone:
-    // a candidate staged from an Evolution Lab proposal records where it came from, on disk and in the
-    // trace, so the chain `proposal -> stage -> verify` is readable from either end.
-    const proposal = await fixture.post('/api/evolution/propose', {
-      title: 'the bridge records its source',
-      hypothesis: 'a staged candidate should name the proposal that produced it',
-      targetRelativePath: 'src/greeting.js',
-      proposedContent: T41_GREETING_NEXT,
-      testContent: T41_TEST_PASSING,
-    });
-    expect(proposal.status, JSON.stringify(proposal.body)).toBe(200);
-    const proposalId = proposal.body.proposalId;
-    await fixture.post('/api/evolution/verify', { proposalId, verified: true, detail: 'the sandbox run passed' });
-    const bridged = await fixture.post(`/api/evolution/proposals/${proposalId}/stage-workshop`, {});
-    expect(bridged.status, JSON.stringify(bridged.body)).toBe(200);
-    expect(bridged.body.sourceProposalId).toBe(proposalId);
-    // Read from the sandbox record, not the response: the link has to be on disk.
-    const record = fixture.candidateRecord(bridged.body.candidateId);
+    // ------- 5. the bridge, through the UI, ending in an APPLIED candidate with a full chain ---
+    // Step 1 of T-42 closed the gap this leg used to have. The old version staged through the HTTP
+    // route and then stopped at verification: the applied candidate's chain was never proven, and the
+    // assertion that looked like it proved it was reading the FAILING candidate instead. This leg now
+    // walks the chain the milestone is named for, in the browser, and ends by applying the file:
+    //
+    //   Evolution proposal -> Stage to Workshop (UI button) -> sandbox test -> apply -> causal trace
+    //
+    // and the trace asked for by the applied candidate must carry sourceProposalId and exactly one apply.
+    const proposalId = await page.evaluate(async (contents) => {
+      // Created through the page's own token, so the proposal the UI later renders is this one.
+      const headers = { 'content-type': 'application/json', 'x-apex-ui': '1' };
+      const proposed = await fetch('/api/evolution/propose', {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          title: 'the bridge records its source',
+          hypothesis: 'a staged candidate should name the proposal that produced it',
+          targetRelativePath: 'src/greeting.js',
+          proposedContent: contents.next,
+          testContent: contents.test,
+        }),
+      });
+      const body = await proposed.json();
+      if (!body.proposalId) throw new Error(`the proposal was refused: ${JSON.stringify(body).slice(0, 300)}`);
+      const verification = await fetch('/api/evolution/verify', {
+        method: 'POST', headers,
+        body: JSON.stringify({ proposalId: body.proposalId, verified: true, detail: 'the sandbox run passed' }),
+      });
+      if (!verification.ok) throw new Error('the proposal verification was refused');
+      return body.proposalId;
+    }, { next: T41_GREETING_NEXT, test: T41_TEST_PASSING });
+    expect(proposalId).toMatch(/^evo-[a-z0-9]+$/);
+    checkpoint('evolution proposal recorded and verified', { proposalId });
+
+    // Return to the Evolution Lab so the proposal list is re-read and the button is rendered.
+    await page.click('.nav-item[data-view="workshop"]');
+    await expect(page.locator('body')).toHaveAttribute('data-view', 'workshop');
+    const stageButton = page.locator(`[data-stage-proposal="${proposalId}"]`);
+    await expect(stageButton).toBeVisible({ timeout: 30_000 });
+    await expect(stageButton).toBeEnabled();
+    // The provenance is not on the card until the candidate exists, so the button is pressed first.
+    await stageButton.click();
+    await expect(page.locator('#evolution-status')).toContainText('staged ' + proposalId, { timeout: 30_000 });
+    const evolutionStatus = await page.locator('#evolution-status').innerText();
+    const bridgedCandidateId = (/staged evo-[a-z0-9]+ as (wsc-[0-9a-f]{12})/.exec(evolutionStatus) ?? [])[1] ?? null;
+    expect(bridgedCandidateId, `the status line names the candidate: ${evolutionStatus.slice(0, 200)}`).toBeTruthy();
+    checkpoint('staged through the UI button', { candidateId: bridgedCandidateId });
+
+    // The link is on disk, in the sandbox candidate record.
+    const record = fixture.candidateRecord(bridgedCandidateId);
+    expect(record, 'the candidate record exists').toBeTruthy();
     expect(record.sourceProposalId, 'candidate.json carries the proposal id').toBe(proposalId);
-    const bridgedVerify = await fixture.post('/api/workshop/verify-file', { candidateId: bridged.body.candidateId });
-    expect(bridgedVerify.body.verified, JSON.stringify(bridgedVerify.body.failed)).toBe(true);
-    // The trace, asked for by the PROPOSAL id, reaches the verification and names the candidate.
+
+    // And in /api/workshop, which is what a reloaded page reads.
+    const workshopListing = await fixture.get('/api/workshop');
+    expect(workshopListing.status).toBe(200);
+    const listedCandidate = (workshopListing.body.candidates ?? []).find((entry) => entry.candidateId === bridgedCandidateId);
+    expect(listedCandidate, '/api/workshop lists the staged candidate').toBeTruthy();
+    expect(listedCandidate.sourceProposalId, '/api/workshop carries sourceProposalId').toBe(proposalId);
+
+    // The card badge renders the provenance, in the browser.
+    const bridgedCard = page.locator('#ws-candidates li', { has: page.locator(`[data-candidate-id="${bridgedCandidateId}"]`) });
+    await expect(bridgedCard.locator(`[data-source-proposal="${proposalId}"]`)).toBeVisible({ timeout: 30_000 });
+
+    // Verify in the Workshop: the sandbox runs the companion test that travelled with the proposal.
+    await bridgedCard.locator('button', { hasText: 'Verify' }).click();
+    await expect(bridgedCard.locator('.badge').first()).toHaveText('verified', { timeout: 30_000 });
+    const bridgedRowText = await bridgedCard.innerText();
+    const bridgedCounts = /(\d+) passed, (\d+) failed/.exec(bridgedRowText);
+    expect(bridgedCounts, `the row states the runner's counts: ${bridgedRowText.slice(0, 200)}`).toBeTruthy();
+    expect(Number(bridgedCounts[1])).toBeGreaterThanOrEqual(1);
+    expect(Number(bridgedCounts[2])).toBe(0);
+    checkpoint('bridge candidate verified in the workshop');
+
+    // Apply it. This is the missing half of the old leg: the applied candidate, not a verified one.
+    const bridgedApply = bridgedCard.locator(`[data-apply-candidate="${bridgedCandidateId}"]`);
+    await expect(bridgedApply).toBeEnabled();
+    const bridgedDialog = acceptNextDialog(page, 'T-42 walk: the chain ends in a real apply');
+    await bridgedApply.click();
+    const bridgedAnswer = await bridgedDialog;
+    expect(bridgedAnswer.error, `the apply dialog never appeared: ${bridgedAnswer.error}`).toBeNull();
+    await expect(bridgedCard).toContainText(/applied/i, { timeout: 30_000 });
+    // Read back from disk: the file really holds the proposal's bytes.
+    expect(fixture.readGreeting()).toBe(T41_GREETING_NEXT);
+    checkpoint('bridge candidate applied');
+
+    // THE ASSERTION THIS STEP EXISTS FOR: the applied candidate's trace holds the whole chain, with
+    // sourceProposalId set and exactly one apply.
+    const appliedTrace = await fixture.get(`/api/memory/trace/${bridgedCandidateId}`);
+    expect(appliedTrace.status).toBe(200);
+    const appliedEntries = Array.isArray(appliedTrace.body.entries) ? appliedTrace.body.entries : [];
+    const appliedKinds = appliedEntries.map((entry) => entry.kind);
+    const appliedVerification = appliedEntries.find((entry) => entry.kind === 'workshop_verification');
+    const appliedApplies = appliedEntries.filter((entry) => entry.kind === 'workshop_apply');
+    expect(appliedVerification, 'the applied chain holds its verification').toBeTruthy();
+    expect(appliedVerification.detail.sourceProposalId, 'sourceProposalId on the applied trace').toBe(proposalId);
+    expect(appliedVerification.detail.candidateId).toBe(bridgedCandidateId);
+    expect(appliedVerification.detail.sandboxTestResult, 'sandboxTest on the applied trace').toBeTruthy();
+    expect(appliedVerification.detail.sandboxTestResult.passedCount).toBeGreaterThanOrEqual(1);
+    expect(appliedVerification.detail.sandboxTestResult.failedCount).toBe(0);
+    expect(appliedApplies.length, `the applied chain holds exactly one apply: ${JSON.stringify(appliedKinds)}`).toBe(1);
+    expect(appliedApplies[0].detail.candidateId).toBe(bridgedCandidateId);
+    expect(appliedKinds.filter((kind) => kind === 'ecp_audit').length).toBeGreaterThanOrEqual(2);
+    expect(appliedTrace.body.complete, JSON.stringify(appliedTrace.body.missing)).toBe(true);
+
+    // And the trace by PROPOSAL id reaches the same candidate.
     const proposalTrace = await fixture.get(`/api/memory/trace/${proposalId}`);
     expect(proposalTrace.status).toBe(200);
     const proposalVerification = (proposalTrace.body.entries ?? []).find((entry) => entry.kind === 'workshop_verification');
     expect(proposalVerification, 'a trace by proposal id reaches the verification').toBeTruthy();
     expect(proposalVerification.detail.sourceProposalId).toBe(proposalId);
-    expect(proposalVerification.detail.candidateId).toBe(bridged.body.candidateId);
+    expect(proposalVerification.detail.candidateId).toBe(bridgedCandidateId);
     expect(proposalTrace.body.complete, JSON.stringify(proposalTrace.body.missing)).toBe(true);
 
     // The staging is recorded on the lab side too, and the proposal is listed with its candidate.
     const evolution = await fixture.get('/api/evolution');
     const listed = (evolution.body.proposals ?? []).find((entry) => entry.proposalId === proposalId);
-    expect(listed.staging.candidateId).toBe(bridged.body.candidateId);
+    expect(listed.staging.candidateId).toBe(bridgedCandidateId);
     expect(listed.staging.count).toBe(1);
     const protectedRow = (evolution.body.boundaries?.entries ?? []).find((entry) => entry.key === 'protected_paths');
     expect(protectedRow.locked).toBe(true);
@@ -424,13 +511,24 @@ test('T-41: the governance boundary refuses, a failing sandbox test blocks the a
 
     run.bridge = {
       proposalId,
-      candidateId: bridged.body.candidateId,
+      candidateId: bridgedCandidateId,
+      stagedThroughUiButton: true,
       sourceProposalIdOnRecord: record.sourceProposalId,
+      sourceProposalIdInApi: listedCandidate.sourceProposalId,
+      sourceProposalIdBadgeVisible: true,
+      sourceProposalIdOnTrace: appliedVerification.detail.sourceProposalId === proposalId,
+      sandboxTestOnTrace: Boolean(appliedVerification.detail.sandboxTestResult),
+      verificationsOnAppliedTrace: appliedKinds.filter((kind) => kind === 'workshop_verification').length,
+      applies: appliedApplies.length,
+      operations: appliedKinds.filter((kind) => kind === 'ecp_audit').length,
+      applied: true,
+      bytesWritten: fixture.readGreeting().length,
       verificationReachedFromProposal: true,
       labRecordsStaging: true,
       boundaryLocked: true,
+      complete: appliedTrace.body.complete === true,
     };
-    checkpoint('bridge and source proposal verified');
+    checkpoint('bridge and full applied chain verified');
 
     // ---------------------------------------------- 5. every view, and no overflow ---
     const views = await page.locator('.nav-item[data-view]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-view')));

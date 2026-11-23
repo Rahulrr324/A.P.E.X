@@ -2926,7 +2926,20 @@ export function createUiServer({
         if (app.workshopApplier && typeof app.workshopApplier.status === 'function') {
           try { applyStatus = app.workshopApplier.status(); } catch { applyStatus = null; }
         }
-        sendJson(res, 200, { ...page, status, verificationSummary, applyStatus, authorizesExecution: false });
+        // T-42 Step 1: the staged candidates, with the proposal each came from. A candidate card has to
+        // be able to show its provenance, and a reader of this route should not have to join the sandbox
+        // directory to the evolution ledger by eye.
+        let staged = null;
+        if (app.workshopSandbox && typeof app.workshopSandbox.list === 'function') {
+          try { staged = app.workshopSandbox.list({ limit: 50 }); } catch { staged = null; }
+        }
+        sendJson(res, 200, {
+          ...page, status, verificationSummary, applyStatus,
+          candidates: staged ? staged.candidates : [],
+          candidatesPresent: staged ? staged.present : false,
+          candidatesCorrupt: staged ? staged.corrupt : 0,
+          authorizesExecution: false,
+        });
       } catch (err) {
         sendJson(res, 503, { unavailable: true, error: `the Workshop is unavailable: ${err.message}` });
       }

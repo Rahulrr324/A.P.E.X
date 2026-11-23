@@ -649,6 +649,10 @@ function fileBackedActions() {
             // T-41: staging with a companion test is not verification. The flag says a test travelled
             // with the candidate; `verified` stays false until `workshop.verify_file` runs it.
             hasSandboxTest: typeof record.testPath === 'string',
+            // T-42 Step 1: the Evolution Lab proposal this candidate came from, when it came from one.
+            // It is on the candidate record already; without it here the card could not show the link
+            // and the browser would have to guess the provenance from the rationale text.
+            sourceProposalId: record.sourceProposalId ?? null,
             sandboxDir: record.sandboxDir,
             mutatesLiveWorkspace: false,
             authorizesExecution: false,

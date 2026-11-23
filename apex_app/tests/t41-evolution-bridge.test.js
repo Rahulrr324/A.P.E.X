@@ -24,6 +24,8 @@ import {
   classifyGovernancePath, governanceBoundaryPolicy, canonicalRelativePath,
   IMMUTABLE_BOUNDARY_CODE,
 } from '../src/evolution/governance-boundary.js';
+import { WorkshopSandbox } from '../src/workshop/sandbox.js';
+import { UI_CLIENT } from '../src/ui/assets.js';
 
 const TOKEN = 't41-bridge-token-0123456789';
 const roots = [];
@@ -250,5 +252,90 @@ describe('T-41 a proposal cannot stage itself around the boundary', () => {
     assert.equal(proposal.staging.count, 1);
     assert.match(proposal.staging.candidateId, /^wsc-[0-9a-f]{12}$/);
     assert.equal(proposal.targetRelativePath, 'greeting.js');
+  });
+});
+
+// T-42 Step 1 (2026-11-22): the surfaces the browser walk reads.
+//
+// The T-41 walk could only prove that a candidate carried `sourceProposalId` on disk. A card cannot read
+// the disk, so the link has to reach the API and the client as well - and the client's copy of the
+// protected-path list has to agree with the server's policy, or the screen would describe a boundary
+// stricter or looser than the one enforced.
+describe('T-42 the provenance link reaches every surface, and the UI policy cannot drift', () => {
+  test('sandbox.list() reports provenance, the test flag and the verification', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-t42-list-'));
+    try {
+      const workspace = path.join(root, 'ws');
+      fs.mkdirSync(workspace, { recursive: true });
+      fs.writeFileSync(path.join(workspace, 'a.js'), 'export const v = 1;\n', 'utf8');
+      const sandbox = new WorkshopSandbox({ dataDir: path.join(root, 'data'), workspaceRoot: workspace });
+
+      const fromProposal = sandbox.stage({
+        relativePath: 'a.js', proposedContent: 'export const v = 2;\n',
+        sourceProposalId: 'evo-abc123',
+        testContent: "import test from 'node:test';\ntest('x', () => {});\n",
+      });
+      const fromPanel = sandbox.stage({ relativePath: 'a.js', proposedContent: 'export const v = 3;\n' });
+
+      const before = sandbox.list();
+      assert.equal(before.present, true);
+      assert.equal(before.candidates.length, 2);
+      const linked = before.candidates.find((c) => c.candidateId === fromProposal.candidateId);
+      const unlinked = before.candidates.find((c) => c.candidateId === fromPanel.candidateId);
+      assert.equal(linked.sourceProposalId, 'evo-abc123');
+      assert.equal(linked.hasSandboxTest, true);
+      assert.equal(linked.verified, null, 'not verified yet is null, not false');
+      assert.equal(unlinked.sourceProposalId, null, 'a panel-staged candidate has no proposal');
+      assert.equal(unlinked.hasSandboxTest, false);
+
+      sandbox.verify(fromProposal.candidateId);
+      const verified = sandbox.list().candidates.find((c) => c.candidateId === fromProposal.candidateId);
+      assert.equal(verified.verified, true);
+      assert.ok(verified.sandboxTestResult.passedCount >= 1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a read of the sandbox list creates nothing', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-t42-cold-'));
+    try {
+      const dataDir = path.join(root, 'data');
+      fs.mkdirSync(dataDir, { recursive: true });
+      const sandbox = new WorkshopSandbox({ dataDir });
+      const result = sandbox.list();
+      assert.equal(result.present, false, 'no sandbox directory yet');
+      assert.deepEqual(result.candidates, []);
+      // The read must not have created the directory: a read-only command leaves the tree as cold as
+      // it found it, which is the T-37 regression rule.
+      assert.equal(fs.existsSync(path.join(dataDir, 'workshop-sandbox')), false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the client's protected-path list matches the server policy", () => {
+    const policy = governanceBoundaryPolicy();
+    const start = UI_CLIENT.indexOf('const EVOLUTION_PROTECTED = [');
+    assert.ok(start > -1, 'the client declares the protected list');
+    const end = UI_CLIENT.indexOf('];', start);
+    const block = UI_CLIENT.slice(start, end);
+    // Every directory and file prefix the policy enforces must appear in the client's copy, and the
+    // client must not invent one the policy does not have.
+    const clientPaths = [...block.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort();
+    const policyPaths = policy.entries
+      .filter((entry) => entry.kind !== 'pattern')
+      .map((entry) => entry.path)
+      .sort();
+    assert.deepEqual(clientPaths, policyPaths);
+  });
+
+  test('the stage response and the card both carry the link', () => {
+    // The client reads sourceProposalId from the stage response and renders a badge from it.
+    assert.ok(UI_CLIENT.includes('sourceProposalId: typeof data.sourceProposalId'));
+    assert.ok(UI_CLIENT.includes('from.dataset.sourceProposal = candidate.sourceProposalId'),
+      'the card badge carries the proposal id as a data attribute the walk can address');
+    // And the button the walk presses carries its proposal id.
+    assert.ok(UI_CLIENT.includes('stage.dataset.stageProposal = proposal.proposalId'));
   });
 });

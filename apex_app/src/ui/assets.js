@@ -4062,6 +4062,17 @@ function renderCandidates() {
       item.append(box);
     }
 
+    // T-42 Step 1: the provenance badge. A candidate that came from an Evolution Lab proposal says so,
+    // and one that did not says nothing - an "unknown source" line on every panel-staged card would be
+    // noise pretending to be information.
+    if (candidate.sourceProposalId) {
+      const from = el('span', 'badge badge-ok', 'from proposal ' + candidate.sourceProposalId);
+      from.dataset.sourceProposal = candidate.sourceProposalId;
+      item.append(from);
+      // And the trace link the milestone is built on: the chain can be opened from the card.
+      item.append(el('p', 'meta', 'provenance: Evolution Lab proposal ' + candidate.sourceProposalId
+        + ' → this candidate → sandbox verification → apply'));
+    }
     item.append(el('p', 'meta',
       'sha256 ' + shortDigest(candidate.digest) + ' · staged ' + formatBytes(candidate.bytes)
       + ' · ' + candidate.lines + ' lines · diff +' + (candidate.diff?.addedLines ?? '?')
@@ -4411,6 +4422,8 @@ async function stageCandidate() {
       lines: data.lines,
       diff: data.diff,
       hasSandboxTest: data.hasSandboxTest === true,
+      // T-42 Step 1: provenance from the Evolution Lab, when the candidate was staged by the bridge.
+      sourceProposalId: typeof data.sourceProposalId === 'string' ? data.sourceProposalId : null,
       // The base digest the apply gate will compare against; null when the file does not exist yet.
       baseDigest: data.base?.exists === true ? (data.base.digest ?? null) : null,
       verification: null,
@@ -4925,6 +4938,12 @@ function renderWorldClaims(worldResult) {
   }, 'No belief is recorded, so there is nothing to label.');
 }
 
+// T-42 Step 1: the protected-path prefixes, as the UI's own copy. It is used only to explain a refusal
+// BEFORE the request; the server's policy is still the thing that decides, and this list is asserted
+// against it in the unit suite so the two cannot drift.
+const EVOLUTION_PROTECTED = ['src/executive/', 'src/security/', 'src/governance/', 'src/autonomy/',
+  'src/workshop/applier.js', 'data/safety-latch.json', 'data/autonomy-matrix.json'];
+
 const EVOLUTION_LABEL = {
   not_requested: 'no promotion requested',
   requested: 'promotion requested — awaiting your decision',
@@ -5165,19 +5184,41 @@ function renderEvolution(result) {
         + (proposal.staging && proposal.staging.count > 0
           ? ' · staged as ' + proposal.staging.candidateId + ' at ' + proposal.staging.at
           : ' · not staged into the workshop')));
+      // T-42 Step 1: the control carries its target id, so the walk can address one proposal's button
+      // rather than "the first button on the page" - which is how selectors silently retarget.
       const stage = el('button', 'small', proposal.staging && proposal.staging.count > 0
         ? 'Stage to Workshop again' : 'Stage to Workshop');
       stage.type = 'button';
-      if (sandbox.verified !== true) {
-        // The backend refuses this with 409; the button says why before it is pressed, so the refusal
-        // is never the first time the owner learns the rule.
+      stage.dataset.stageProposal = proposal.proposalId;
+      // A protected path is refused by the backend at proposal time, so a protected proposal should not
+      // exist. If one does (an older ledger, a hand-written record), the control says what it is rather
+      // than offering a button that can only be refused.
+      // The client is a template literal, so a backslash in a regex costs two characters in the
+      // source and arrives as a different regex in the browser. A split/join is one layer fewer
+      // to get wrong, and it reads identically in the file and in the served client.
+      const targetPath = String(proposal.targetRelativePath).split(String.fromCharCode(92)).join('/').toLowerCase();
+      const protectedTarget = EVOLUTION_PROTECTED.some((prefix) => (prefix.endsWith('/')
+        ? targetPath.startsWith(prefix)
+        : targetPath === prefix));
+      if (protectedTarget) {
         stage.disabled = true;
-        stage.title = 'the proposal has no passing sandbox verification';
-      }
-      stage.addEventListener('click', () => stageToWorkshop(proposal.proposalId, stage));
-      li.append(stage);
-      if (sandbox.verified !== true) {
-        li.append(el('span', 'meta', ' staging needs a passing sandbox verification first'));
+        stage.title = 'IMMUTABLE_GOVERNANCE_BOUNDARY';
+        li.append(stage);
+        li.append(el('div', 'meta diagnostic-boundary',
+          'IMMUTABLE_GOVERNANCE_BOUNDARY: ' + proposal.targetRelativePath
+          + ' is inside the immutable governance boundary and cannot be staged.'));
+      } else {
+        if (sandbox.verified !== true) {
+          // The backend refuses this with 409; the button says why before it is pressed, so the refusal
+          // is never the first time the owner learns the rule.
+          stage.disabled = true;
+          stage.title = 'the proposal has no passing sandbox verification';
+        }
+        stage.addEventListener('click', () => stageToWorkshop(proposal.proposalId, stage));
+        li.append(stage);
+        if (sandbox.verified !== true) {
+          li.append(el('span', 'meta', ' staging needs a passing sandbox verification first'));
+        }
       }
     }
     if (proposal.promotionBlocked) li.append(el('div', 'meta', 'Blocked: ' + proposal.promotionBlocked));
