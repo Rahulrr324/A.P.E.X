@@ -7,6 +7,7 @@ import { ConversationStore } from './memory/conversation-store.js';
 import { OperationLog } from './operations/operation-log.js';
 import { ActionRegistry } from './actions/registry.js';
 import { builtinActions } from './actions/builtin.js';
+import { GitExecutive, gitExecutiveActions } from './capabilities/git-executive.js';
 import { knowledgeActions } from './actions/knowledge-actions.js';
 import { worldActions } from './actions/world-actions.js';
 import { worldModelActions } from './actions/world-model-actions.js';
@@ -287,6 +288,33 @@ export function createApp({
     );
   }
 
+  // T-43 Package 1: the git executive. It is constructed only when a workspace root is configured,
+  // because a git engine without a repository is a surface that can only ever report "no repository".
+  // Its checkpoints land in the APEX data directory, not in the workspace: the record of what the tree
+  // looked like belongs with the other ledgers, not in the tree it describes.
+  //
+  // The operation writer is the same `operations.jsonl` the audit path appends to, so a checkpoint
+  // create or restore produces one readable line in the ledger the trace already walks. The promise is
+  // not awaited here because the git call itself is synchronous and must not be made to wait on the
+  // audit; the record's own verification never depends on the append having succeeded.
+  let gitExecutive = null;
+  if (rootForContext !== null && rootForContext !== undefined) {
+    gitExecutive = new GitExecutive({
+      workspaceRoot: rootForContext,
+      dataDir,
+      now: clock,
+      operations: (entry) => { operations.append({
+        id: `${entry.capability}-${entry.checkpointId}`,
+        requestedAt: entry.at,
+        capability: entry.capability,
+        origin: 'user',
+        status: 'success_verified',
+        request: `${entry.capability} ${entry.checkpointId}`,
+        steps: [{ action: entry.capability, checkpointId: entry.checkpointId, verified: entry.verified === true }],
+      }).catch(() => {}); },
+    });
+  }
+
   // Council is constructed before action registration so its read-oriented actions are
   // registered exactly once, through the same registry/ECP path as every other capability.
   // T-37 Step 2: the Council also reads the safety latch, so its Values & Constraints Core can
@@ -345,6 +373,13 @@ export function createApp({
   for (const def of [...builtinActions(), ...safetyActions(registry.controlPlane), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
     }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...workshopActions(workshop), ...evolutionActions(evolution), ...perceptionActions(perception, { controlPlane: registry.controlPlane }), ...neuralActions(neural), ...extraActions, ...fsActions]) registry.register(def);
+
+  // T-43 Package 1: the four git capabilities, registered through the same registry and gated by the
+  // same ECP as everything else. They are conditional on a workspace root for the same reason the
+  // filesystem actions are: without a root there is no repository this build is authorized to read.
+  if (gitExecutive !== null) {
+    for (const def of gitExecutiveActions(gitExecutive)) registry.register(def);
+  }
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -552,6 +587,8 @@ export function createApp({
     workshopSandbox,
     // T-39 Step 1: and its applier, so the apply and rollback routes reach the one ledger.
     workshopApplier,
+    // T-43 Package 1: the git executive, so the git routes reach the one engine and its ledger.
+    gitExecutive,
     // T-38 Step 3: the cross-ledger trace and search, for the Memory Timeline.
     memoryTrace,
     filesystemWorkspaces: workspaces,

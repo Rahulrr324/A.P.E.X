@@ -32,6 +32,9 @@ export const SEARCH_SCHEMA = 'apex.memory.search/1';
 // The kinds a caller may name explicitly. Each one is a ledger this module can read.
 export const SEARCH_KINDS = Object.freeze([
   'memory', 'cognition_run', 'council_session', 'task', 'workshop_verification', 'workshop_apply', 'ecp_audit',
+  // T-43: a git checkpoint is a record with an id of its own and a place in a chain, so it is a ledger
+  // here rather than a private file only the git panel can read.
+  'git_checkpoint',
 ]);
 
 // The epistemic statuses a memory record can carry. The filter is offered on the search surface
@@ -300,6 +303,7 @@ function ledgers(dataDir) {
     },
     workshop_verification: () => readWorkshopVerifications(dataDir),
     workshop_apply: () => readWorkshopApplies(dataDir),
+    git_checkpoint: () => readGitCheckpoints(dataDir),
     ecp_audit: () => {
       const { present, records, corrupt } = readJsonl(path.join(dataDir, 'operations.jsonl'));
       return {
@@ -326,6 +330,51 @@ function ledgers(dataDir) {
   };
 }
 
+// T-43: the git checkpoint ledger, read in place. A checkpoint is written by the git executive and
+// never by this module; this is a reading of it. `restored` is derived from the restore count rather
+// than from a separate record, because a checkpoint is one row that changes, not a stream of events.
+function readGitCheckpoints(dataDir) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(dataDir, 'git-checkpoints.json'), 'utf8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') return { present: false, records: [], corrupt: 0 };
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // One unreadable file is one corrupt ledger, counted rather than silently treated as empty.
+    return { present: true, records: [], corrupt: 1 };
+  }
+  const list = Array.isArray(parsed?.checkpoints) ? parsed.checkpoints : [];
+  const records = [];
+  let corrupt = 0;
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object' || typeof entry.checkpointId !== 'string') { corrupt += 1; continue; }
+    records.push({
+      kind: 'git_checkpoint',
+      at: entry.createdAt ?? null,
+      id: entry.checkpointId,
+      checkpointId: entry.checkpointId,
+      label: entry.label ?? null,
+      reason: entry.reason ?? null,
+      refName: entry.refName ?? null,
+      commitSha: entry.commitSha ?? null,
+      headShaAtCreation: entry.headShaAtCreation ?? null,
+      treeSha: entry.treeSha ?? null,
+      wasDirty: entry.wasDirty === true,
+      trackedModifiedCount: Number.isInteger(entry.trackedModifiedCount) ? entry.trackedModifiedCount : null,
+      untrackedPaths: Array.isArray(entry.untrackedPaths) ? entry.untrackedPaths : [],
+      restoreCount: Number.isInteger(entry.restoreCount) ? entry.restoreCount : 0,
+      lastRestoredAt: entry.lastRestoredAt ?? null,
+      record: entry,
+    });
+  }
+  return { present: true, records, corrupt };
+}
+
 // --------------------------------------------------------------------------------- searching ---
 
 // The text a record is matched against. Each kind says what it means by "its text" rather than
@@ -339,6 +388,7 @@ function searchableText(entry) {
     case 'task': return entry.goal;
     case 'workshop_verification': return `${entry.relativePath ?? ''} ${entry.rationale ?? ''} ${entry.candidateId ?? ''} ${entry.sourceProposalId ?? ''}`;
     case 'workshop_apply': return `${entry.relativePath ?? ''} ${entry.candidateId ?? ''} ${entry.applyId ?? ''} ${entry.recordKind ?? ''} ${entry.changesetId ?? ''} ${entry.changesetTitle ?? ''}`;
+    case 'git_checkpoint': return `${entry.checkpointId ?? ''} ${entry.label ?? ''} ${entry.reason ?? ''} ${entry.commitSha ?? ''}`;
     case 'ecp_audit': return `${entry.capability ?? ''} ${JSON.stringify(entry.request ?? '')}`;
     default: return '';
   }
@@ -416,7 +466,8 @@ export class MemoryTraceService {
             : entry.kind === 'task' ? { taskId: entry.taskId, eventId: entry.eventId, type: entry.type }
               : entry.kind === 'workshop_verification' ? { candidateId: entry.candidateId, verified: entry.verified, sourceProposalId: entry.sourceProposalId ?? null }
                 : entry.kind === 'workshop_apply' ? { applyId: entry.applyId, rollbackId: entry.rollbackId, relativePath: entry.relativePath, changesetId: entry.changesetId ?? null, changesetFileCount: entry.changesetFileCount ?? null }
-                : { operationId: entry.operationId, capability: entry.capability },
+                  : entry.kind === 'git_checkpoint' ? { checkpointId: entry.checkpointId, commitSha: entry.commitSha, restoreCount: entry.restoreCount }
+                  : { operationId: entry.operationId, capability: entry.capability },
       traceable: entry.kind !== 'task' || entry.type === 'task_created',
     }));
 
@@ -482,6 +533,7 @@ export class MemoryTraceService {
         || (typeof entry.applyId === 'string' && keys.has(entry.applyId));
     }
     if (entry.kind === 'task') return keys.has(entry.taskId);
+    if (entry.kind === 'git_checkpoint') return keys.has(entry.checkpointId);
     if (entry.kind === 'council_session') {
       // A session belongs to the chain when its objective is a run's intent. That is a match of
       // text, not a foreign key, and the trace says so where it relies on it.
@@ -546,6 +598,15 @@ export class MemoryTraceService {
       if (typeof e.changesetId === 'string' && [...keys].some((k) => k === e.changesetId)) return true;
       return false;
     });
+    // T-43: the git checkpoints this chain names, by checkpoint id. A checkpoint is a record with its
+    // own id, so the link is exact - there is no text match to fall back on and none is invented.
+    const checkpoints = all.entries.filter((e) => e.kind === 'git_checkpoint' && keys.has(e.checkpointId));
+    // A chain opened for a checkpoint also names the operation that created or restored it, because the
+    // operation's step input carries the same checkpoint id.
+    for (const checkpoint of checkpoints) {
+      if (typeof checkpoint.checkpointId === 'string') keys.add(checkpoint.checkpointId);
+      if (typeof checkpoint.commitSha === 'string' && checkpoint.commitSha.length >= 7) keys.add(checkpoint.commitSha);
+    }
     // The operations whose steps or result name one of these runs or tasks.
     const operations = all.entries.filter((e) => {
       if (e.kind !== 'ecp_audit') return false;
@@ -554,7 +615,7 @@ export class MemoryTraceService {
     });
 
     if (runs.length === 0 && tasks.length === 0 && operations.length === 0 && councils.length === 0
-      && verifications.length === 0 && applies.length === 0) {
+      && verifications.length === 0 && applies.length === 0 && checkpoints.length === 0) {
       return {
         ok: false,
         code: 'NOT_FOUND',
@@ -728,6 +789,44 @@ export class MemoryTraceService {
         },
       });
     }
+    for (const checkpoint of checkpoints) {
+      steps.push({
+        at: checkpoint.at,
+        kind: 'git_checkpoint',
+        label: 'git checkpoint recorded',
+        linkedBy: 'the id names this checkpoint',
+        detail: {
+          checkpointId: checkpoint.checkpointId,
+          label: checkpoint.label,
+          reason: checkpoint.reason,
+          refName: checkpoint.refName,
+          commitSha: checkpoint.commitSha,
+          treeSha: checkpoint.treeSha,
+          wasDirty: checkpoint.wasDirty,
+          trackedModifiedCount: checkpoint.trackedModifiedCount,
+          untrackedPaths: checkpoint.untrackedPaths,
+          restoreCount: checkpoint.restoreCount,
+          lastRestoredAt: checkpoint.lastRestoredAt,
+        },
+      });
+      // A checkpoint with a restore history has a second, later event in its chain. It is derived from
+      // the restore count the record carries rather than from an event ledger that does not exist, and
+      // it is labelled as derived so a reader knows the timestamp is the last restore, not each one.
+      if (checkpoint.restoreCount > 0 && checkpoint.lastRestoredAt) {
+        steps.push({
+          at: checkpoint.lastRestoredAt,
+          kind: 'git_checkpoint',
+          label: 'git checkpoint restored',
+          linkedBy: 'the restore count on the checkpoint record',
+          detail: {
+            checkpointId: checkpoint.checkpointId,
+            commitSha: checkpoint.commitSha,
+            restoreCount: checkpoint.restoreCount,
+            derivedFromRecord: true,
+          },
+        });
+      }
+    }
     for (const operation of operations) {
       steps.push({
         at: operation.at,
@@ -774,13 +873,20 @@ export class MemoryTraceService {
       // Before T-39 the second case reported `complete: false`, which said "a run is missing" about a
       // chain that was never about a run. That is the kind of false negative that teaches a reader to
       // ignore the flag.
-      complete: runs.length > 0 ? tasks.length > 0 : (applies.length > 0 || verifications.length > 0),
+      // T-43: a checkpoint chain is complete when the checkpoint record itself was found. It holds no
+      // run and no task graph by construction, and calling that incomplete would be the same false
+      // negative T-39 removed for candidate chains.
+      complete: runs.length > 0 ? tasks.length > 0 : (applies.length > 0 || verifications.length > 0 || checkpoints.length > 0),
       // An incomplete chain says what it could not find rather than omitting the gap.
       missing: [
         runs.length === 0 && (applies.length > 0 || verifications.length > 0)
           ? 'this is a Workshop change chain: a candidate id is never a cognition run id, so no run is expected'
           : null,
-        runs.length === 0 && applies.length === 0 && verifications.length === 0 ? 'no cognition run names this id' : null,
+        runs.length === 0 && applies.length === 0 && verifications.length === 0
+          ? (checkpoints.length > 0
+            ? 'this is a git checkpoint chain: a checkpoint id is never a cognition run id, so no run is expected'
+            : 'no cognition run names this id')
+          : null,
         runs.length > 0 && tasks.length === 0 ? 'no task graph event names this id' : null,
         councils.length === 0 && runs.length > 0 ? 'no Council session evaluated this objective' : null,
       ].filter(Boolean),
@@ -792,6 +898,8 @@ export class MemoryTraceService {
         // T-39 Step 1: the applies and rollbacks linked to this chain, so a count of what the chain
         // did to the workspace is available without walking the entries.
         applies: applies.length,
+        // T-43: the checkpoints this chain names.
+        checkpoints: checkpoints.length,
         operations: operations.length,
       },
       sameInstant,

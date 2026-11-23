@@ -141,16 +141,20 @@ describe('AF-19: the registry is the inventory', () => {
     // T-41 Step 3 (2026-11-22) adds one owner-only write, `evolution.stage_to_workshop`. It is
     // registered whether or not a workspace root is configured (without one it refuses with
     // WORKSPACE_UNAVAILABLE), so both totals move by one.
+    // T-43 Package 1 (2026-11-19) adds four git capabilities: two reads and two owner-only writes.
+    // All four are registered only with a root, because without one there is no repository this build
+    // is authorized to read - so the default total moves by zero and the rooted total by four.
     assert.equal(plain.registry.list().length, 170, 'the default registry has 170 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 185, 'a configured workspace root adds fifteen actions');
+    assert.equal(rooted.registry.list().length, 189, 'a configured workspace root adds nineteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
         'filesystem.summarize', 'filesystem.extract', 'filesystem.compare', 'filesystem.report', 'filesystem.write',
         'filesystem.mkdir', 'filesystem.move', 'filesystem.delete', 'filesystem.restore',
-        'filesystem.trash', 'filesystem.batch', 'deadline.import'].sort(),
-      'a configured root adds exactly the two inspection actions, the eleven workspace capabilities, and the deadline import',
+        'filesystem.trash', 'filesystem.batch', 'deadline.import',
+        'git.status_detailed', 'git.diff_inspect', 'git.checkpoint_create', 'git.checkpoint_restore'].sort(),
+      'a configured root adds exactly the two inspection actions, the eleven workspace capabilities, the deadline import, and the four git capabilities',
     );
     const documented = inventoryRows().flatMap((row) => row.names);
     for (const name of rooted.registry.names()) {
@@ -200,7 +204,11 @@ describe('AF-19: the registry is the inventory', () => {
     // the same reason as the other evolution acts and one sharper one: a model that could stage a
     // proposal into the Workshop could put its own bytes where the applier reads, and the boundary
     // policy would be the only thing between it and the tree.
-    assert.equal(writes.length, 95, 'the inventory counts ninety-five write actions with a root configured');
+    // T-43 Package 1 (2026-11-19): `git.checkpoint_create` and `git.checkpoint_restore` are the
+    // ninety-sixth and ninety-seventh. Both are owner-only for the same reason the Workshop applies
+    // are: the first writes a ref into the owner's repository, and the second overwrites tracked files
+    // in the owner's working tree. A model that could do either could move the ground an apply lands on.
+    assert.equal(writes.length, 97, 'the inventory counts ninety-seven write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -298,7 +306,8 @@ describe('AF-19: the registry is the inventory', () => {
     // T-38 Step 2 (2026-11-21): `workspace.inspect` and `workspace.read_file` are the eighty-eighth and
     // eighty-ninth reads. Both are offered to the model origin, because reading a workspace is not
     // authoring one - and both are refused outside the configured root.
-    assert.equal(reads.length, 90, 'the inventory counts ninety read actions with a root configured');
+    // T-43 Package 1 adds two reads, `git.status_detailed` and `git.diff_inspect`.
+    assert.equal(reads.length, 92, 'the inventory counts ninety-two read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -502,6 +511,11 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         assert.equal(row.belief, name === 'workshop.apply_file'
           ? 'no (writing a file is not a belief)'
           : 'no (undoing a write is not a belief)', `${name}: README belief-state`);
+      } else if (name.startsWith('git.')) {
+        // [T-43 Package 1, 2026-11-19] A git read reports the repository as it is, and a checkpoint
+        // records a snapshot of the owner's tracked files. Neither says what APEX holds to be true
+        // about the world: a commit SHA is an identifier, not a proposition.
+        assert.equal(row.belief, 'no', `${name}: README belief-state`);
       } else if (name.startsWith('evolution.')) {
         // [T-31 Step 2, 2026-11-19] The lab appends proposals, measured sandbox results and the
         // owner's promotion decisions to its own ledger. A candidate self-change is not a belief

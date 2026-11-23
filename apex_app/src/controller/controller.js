@@ -1644,6 +1644,40 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // T-43 Package 1: the two governed git writes and the two reads. The writes go through runAction
+  // like every other write in APEX, so the ECP authorizes them, Lockdown refuses them with
+  // KILL_SWITCH_ACTIVE, and the verifier re-reads the repository afterwards. Nothing in the route
+  // reaches the git engine before that.
+  async gitCheckpointCreate({ label, reason = null, stepUp = null } = {}) {
+    // The label travels into the request line; a label with control characters in it would produce an
+    // audit line no reader can parse, so it is truncated here exactly as a candidate id is.
+    const shown = typeof label === 'string' ? truncate(label, 60) : '[missing label]';
+    const op = this.#newOp({ capability: 'git.checkpoint_create', origin: 'user', request: `git checkpoint create [${shown}]` });
+    const step = await this.runAction('git.checkpoint_create', { label, reason, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async gitCheckpointRestore({ checkpointId, reason = null, stepUp = null } = {}) {
+    const shown = typeof checkpointId === 'string' ? truncate(checkpointId, 40) : '[missing checkpoint]';
+    const op = this.#newOp({ capability: 'git.checkpoint_restore', origin: 'user', request: `git checkpoint restore [${shown}]` });
+    const step = await this.runAction('git.checkpoint_restore', { checkpointId, reason, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async gitStatusDetailed() {
+    const op = this.#newOp({ capability: 'git.status_detailed', origin: 'user', request: 'git status detailed' });
+    const step = await this.runAction('git.status_detailed', {}, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async gitDiffInspect({ targetPath = null, baseRef = 'HEAD', staged = false, maxBytes = null } = {}) {
+    const op = this.#newOp({ capability: 'git.diff_inspect', origin: 'user', request: 'git diff inspect' });
+    const input = { targetPath, baseRef, staged };
+    if (maxBytes !== null) input.maxBytes = maxBytes;
+    const step = await this.runAction('git.diff_inspect', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   // ---- T-31 evolution lab -------------------------------------------------------
   // Four audited acts. Each one runs the registered capability through runAction, so the ECP
   // authorizes it, the verifier checks the ledger afterwards, and a refusal is recorded rather

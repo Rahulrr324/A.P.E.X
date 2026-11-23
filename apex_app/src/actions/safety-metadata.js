@@ -26,7 +26,12 @@ export const REVERSIBILITY_KINDS = Object.freeze(['read_only', 'reversible', 'co
 // `workspace_sandbox` because that kind's stated meaning is "never the live workspace tree", and a
 // T-39 apply is precisely the live tree. Declaring an apply as sandbox-bounded would have read as
 // reassured while being false, which is worse than having no vocabulary at all.
-export const BLAST_RADIUS_KINDS = Object.freeze(['none', 'session', 'local_store', 'workspace_sandbox', 'workspace_fs', 'system_latch']);
+// T-43 adds `local_state`: state that lives in the repository and in APEX's own ledgers rather than in
+// a single append-only store (`local_store`) or in the owner's tracked files (`workspace_fs`). A git
+// checkpoint create is the case that forced the distinction: it writes a ref in the repository and a
+// row in git-checkpoints.json, and it touches no working-tree file at all, so neither of the existing
+// kinds describes it honestly.
+export const BLAST_RADIUS_KINDS = Object.freeze(['none', 'session', 'local_store', 'local_state', 'workspace_sandbox', 'workspace_fs', 'system_latch']);
 
 // What each kind means, stated once so a rule or a UI can show the owner the claim rather than the
 // word. These are the definitions the Values Core cites.
@@ -46,6 +51,7 @@ export const BLAST_RADIUS_MEANING = Object.freeze({
   none: 'no persisted state changes',
   session: 'the change is bounded to this conversation or run',
   local_store: 'the change is bounded to one append-only store under the APEX data directory',
+  local_state: 'the change is bounded to the repository and the APEX ledgers, and no tracked working-tree file is modified',
   workspace_sandbox: 'the change is bounded to the staged sandbox, never the live workspace tree',
   workspace_fs: 'the change lands in one file of the owner\'s live workspace tree, with the previous bytes saved before the write',
   system_latch: 'the change takes effect across the whole system until it is released',
@@ -249,6 +255,20 @@ const DECLARATIONS = Object.freeze({
   // it is exactly as reversible as its least reversible file.
   'workshop.apply_changeset': ['compensatable', 'workspace_fs'],
   'workshop.rollback_changeset': ['reversible', 'workspace_fs'],
+
+  // T-43 Package 1: the git executive. The two reads change nothing, and they are declared anyway so a
+  // reader never has to infer that "inspect the repository" means "opens it and writes none of it".
+  //
+  // The two writes are the interesting pair. A checkpoint create writes a ref and a ledger record: it
+  // does not touch the working tree or the index at all, so its blast radius is `local_state` rather
+  // than `workspace_fs`, and it is `reversible` because `git update-ref -d` is a supported undo. A
+  // restore overwrites tracked files in the owner's live tree, so it is `workspace_fs`; it stays
+  // `reversible` rather than `compensatable` because the checkpoint it restores FROM is itself a
+  // checkpoint - the state before a restore can be captured by the same operation that undoes it.
+  'git.status_detailed': ['read_only', 'none'],
+  'git.diff_inspect': ['read_only', 'none'],
+  'git.checkpoint_create': ['reversible', 'local_state'],
+  'git.checkpoint_restore': ['reversible', 'workspace_fs'],
 
   // ----------------------------------------------------------------------- safety ---
   // The latch is system-wide and stays engaged until released. It is *reversible* - release is a

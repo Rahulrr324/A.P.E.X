@@ -466,8 +466,13 @@ export class ExecutiveControlPlane {
       // T-39: the two Workshop writes take the step-up too. These are the only capabilities in the
       // system whose refusal costs nothing if the proof is absent and everything if it is not: an
       // unproven apply writes into the owner's real tree.
+      // T-43 Package 1 adds the two git writes. A checkpoint create writes a ref into the owner's
+      // repository and a checkpoint restore overwrites tracked files in it, so both are exactly the
+      // class of act the list exists for: refused without proof costs nothing, unproven it can cost the
+      // owner their working tree.
       appliesTo: Object.freeze(['safety.release', 'evolution.decide', 'workshop.apply_file',
-        'workshop.rollback_file', 'workshop.apply_changeset', 'workshop.rollback_changeset']),
+        'workshop.rollback_file', 'workshop.apply_changeset', 'workshop.rollback_changeset',
+        'git.checkpoint_create', 'git.checkpoint_restore']),
       method: 'shared secret, hashed and compared in constant time',
       note: this.#stepUp === null
         ? 'No step-up secret is configured, so step-up is not required. The reason and the explicit confirmation are still required.'

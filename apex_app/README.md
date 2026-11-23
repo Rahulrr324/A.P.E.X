@@ -4064,6 +4064,12 @@ across the whole set, so they are stated once instead of per row:
 > with 56 plannable (the pipeline capability is unplannable; the steps it plans are authorized
 > separately). The 139/154 figures above are retained as the state before T-29.
 
+> **T-43 Package 1 count correction (2026-11-19).** The git executive adds four capabilities - two
+> reads (`git.status_detailed`, `git.diff_inspect`) and two owner-only writes (`git.checkpoint_create`,
+> `git.checkpoint_restore`). All four are registered only when a workspace root is configured, because
+> without one there is no repository this build is authorized to read. The verified registry is
+> therefore **174 actions by default and 189 with a root: 89 reads and 89 writes**.
+
 > **T-34 Step 3 count correction (2026-11-19).** `briefing.acknowledge` adds one owner-only write, so
 > the verified registry is **151 actions by default and 166 with a root: 85 reads and 81 writes**.
 > The earlier figures are retained as the state before T-34.
@@ -4216,6 +4222,10 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `task.plan` | user | not a registered action | - | `tasks.jsonl` + `operations.jsonl` | no (task) | no |
 | `task.run` | user | not a registered action | - | `tasks.jsonl` per step, each step's own store, a conversation summary, `operations.jsonl` | no (task) | through its steps only |
 | `task.approve` | user | not a registered action | - | `tasks.jsonl` (one transition) | no (task) | no |
+| `git.status_detailed` | user + model | read | never in a plan | reads the repository at the configured workspace root; writes nothing | no (read) | no |
+| `git.diff_inspect` | user + model | read | never in a plan | reads a unified diff from the repository at the configured workspace root; writes nothing | no (read) | no |
+| `git.checkpoint_create` | user | write | never in a plan | `git-checkpoints.json` (one record per checkpoint: the id, label, ref name, snapshot commit, the HEAD it was taken at, the tree SHA, the untracked paths and a SHA-256 manifest of every modified tracked file) and `operations.jsonl`; the repository gains one `refs/apex-checkpoints/<id>` ref. **The working tree and the index are not modified**: the snapshot is built with `git stash create`, which writes an object and prints its SHA | no (git) | no |
+| `git.checkpoint_restore` | user | write | never in a plan | the tracked files and index of the owner's workspace tree, restored to a recorded checkpoint's tree; `git-checkpoints.json` gains a restore count and a last-restored timestamp, and `operations.jsonl` gains one line | no (git) | no |
 | `task.retry`, `task.cancel` | user | not a registered action | - | `tasks.jsonl` | no (task) | no |
 | `task.explain` | user | not a registered action | - | `operations.jsonl` + a conversation turn | no (task) | no |
 | `task.step` | the origin the step runs under | audit label, not an action | - | one audit line per step | no (task) | no |

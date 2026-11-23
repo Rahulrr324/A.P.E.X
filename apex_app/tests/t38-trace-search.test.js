@@ -56,8 +56,11 @@ async function withRun(fn) {
 test('T-38 trace: the searchable kinds and statuses are closed lists', () => {
   // T-39 Step 3 adds `workshop_apply`: the applies and rollbacks that changed the live workspace.
   // The list stays closed and pinned, so a new ledger has to be added here deliberately.
+  // T-43 Package 1 adds `git_checkpoint`: a checkpoint has an id of its own and a place in a chain,
+  // so it is a ledger a reader can search rather than a file only the git panel reads.
   assert.deepEqual([...SEARCH_KINDS], [
     'memory', 'cognition_run', 'council_session', 'task', 'workshop_verification', 'workshop_apply', 'ecp_audit',
+    'git_checkpoint',
   ]);
   assert.ok(EPISTEMIC_STATUSES.includes('candidate_association'),
     'a candidate association is a status a reader can filter on');

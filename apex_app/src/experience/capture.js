@@ -62,6 +62,11 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // and the causal trace already carry the digests, and an experience of the operation would put the
   // file's content into the log the pattern and adaptation reads draw from.
   'workspace-write': 'it writes a file into the owner\'s live workspace tree, whose content is the owner\'s own and is already recorded by digest in the apply ledger and the causal trace',
+  // T-43 Package 1: a checkpoint create or restore is recorded in `git-checkpoints.json` with the
+  // label, reason, snapshot commit, tree SHA, a per-file digest manifest and a restore history. That is
+  // a more complete account of the act than an experience record could be, and the causal trace reads
+  // it directly. A second summary in the experience log would be a lossy copy of a complete record.
+  git: 'it writes or restores a git checkpoint, whose full account — ref, snapshot commit, tree, per-file digests and restore history — is the checkpoint ledger the causal trace already reads',
   'no-action': 'the request ran no action, so there is no postcondition that could have been verified',
   // The prediction ledger's own operations. This is a separate category from `self-bookkeeping`
   // because the reason is not about filling a log with its own traffic: an experience answers "what
@@ -371,6 +376,16 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'workshop.check_applied': 'read',
   'workshop.apply_changeset': 'workspace-write',
   'workshop.rollback_changeset': 'workspace-write',
+  // T-43 Package 1: the git executive. The status and the diff are reads - a status re-read a second
+  // later is the truth about a second later, and copying either into the experience log would record a
+  // stale answer as though it were a lesson. The two writes are excluded because the checkpoint ledger
+  // already holds the richer record: the label, the reason, the snapshot commit, the tree, the
+  // manifest and the restore history. A second copy in the experience log would be a summary of a
+  // record that is already complete.
+  'git.status_detailed': 'read',
+  'git.diff_inspect': 'read',
+  'git.checkpoint_create': 'git',
+  'git.checkpoint_restore': 'git',
   none: 'no-action',
 });
 

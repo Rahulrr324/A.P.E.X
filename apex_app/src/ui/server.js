@@ -761,6 +761,43 @@ function changesetRefusalStatus(step) {
   return 400;
 }
 
+// T-43 Package 1: the status a git refusal is answered with.
+//
+//   - 423 when the latch is engaged: the system is stopped, and a stopped system is not a bad request.
+//   - 404 when the checkpoint the caller named is not in the ledger: the id is well formed and does not
+//     exist, which is a different fact from a malformed one.
+//   - 409 when the repository disagrees with the record (ref drift, a dirty tree a restore would
+//     discard, a restore that did not verify, a workspace that is not a repository at all). Each of
+//     these is something the owner can act on by looking at the tree.
+//   - 403 when the caller pointed outside the workspace.
+//   - 400 for everything else: an argument or input the engine never accepted.
+function gitRefusalStatus(step) {
+  const code = step?.execution?.error?.code ?? step?.authorization?.reason ?? null;
+  if (code === 'KILL_SWITCH_ACTIVE') return 423;
+  if (code === 'CHECKPOINT_NOT_FOUND') return 404;
+  if (code === 'WORKSPACE_PATH_ESCAPE') return 403;
+  if (code === 'CHECKPOINT_REF_DRIFT' || code === 'GIT_CHECKPOINT_DIRTY_TREE'
+    || code === 'GIT_CHECKPOINT_RESTORE_UNVERIFIED' || code === 'GIT_CHECKPOINT_FAILED'
+    || code === 'GIT_CHECKPOINT_LEDGER_CORRUPT' || code === 'GIT_NOT_A_REPOSITORY'
+    || code === 'GIT_NO_COMMITS' || code === 'GIT_CHECKPOINT_RESTORE_FAILED') return 409;
+  return 400;
+}
+
+// The refusal body. A git refusal names the code and whatever structured detail the engine attached -
+// the recorded and found commit on a drift, the paths a dirty-tree refusal would have destroyed - so
+// the owner can act without opening the repository by hand.
+function gitRefusalBody(result, step) {
+  const failed = step?.execution?.error ?? null;
+  const code = failed?.code ?? (step?.authorization?.decision === 'deny' ? step.authorization.reason : null);
+  return {
+    status: result?.status ?? null,
+    error: result?.output ?? 'the git executive refused the request',
+    code,
+    ...(failed && typeof failed.detail === 'object' && failed.detail !== null ? { detail: failed.detail } : {}),
+    display: result?.display ?? null,
+  };
+}
+
 // The refusal body. It carries the per-file problems the executor preserved, the first offending
 // candidate, and both digests where a digest question was the reason - never a bare "refused", because
 // a batch refusal is only actionable if it says which file failed and why.
@@ -3291,6 +3328,105 @@ export function createUiServer({
       }
       return;
     }
+    // ---- T-43 Package 1: the git executive and its checkpoints --------------------------------
+    //
+    // Five routes. The three GETs are reads and go straight to the engine: a status, a diff, and the
+    // checkpoint list. The two POSTs are writes and go through the controller, so the ECP's L2
+    // Confirm, the step-up requirement and the Lockdown refusal all apply exactly as they do to a
+    // Workshop apply - a git act is not a shortcut around the authority.
+    if (method === 'GET' && url.pathname === '/api/git/status') {
+      try {
+        if (!app.gitExecutive) { sendJson(res, 503, { unavailable: true, error: 'the git executive is not configured' }); return; }
+        sendJson(res, 200, app.gitExecutive.statusDetailed());
+      } catch (err) {
+        sendJson(res, 500, { error: `the repository could not be read: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/git/diff') {
+      try {
+        if (!app.gitExecutive) { sendJson(res, 503, { unavailable: true, error: 'the git executive is not configured' }); return; }
+        const targetPath = url.searchParams.get('path');
+        const baseRef = url.searchParams.get('baseRef') ?? 'HEAD';
+        const staged = url.searchParams.get('staged') === '1' || url.searchParams.get('staged') === 'true';
+        const maxBytesText = url.searchParams.get('maxBytes');
+        const input = { targetPath, baseRef, staged };
+        if (maxBytesText !== null) {
+          const parsed = Number(maxBytesText);
+          if (!Number.isInteger(parsed)) { sendJson(res, 400, { error: 'maxBytes must be an integer' }); return; }
+          input.maxBytes = parsed;
+        }
+        // The engine validates the ref and the path and refuses with its own code; the mapping below
+        // is the same 403/400 split the workshop routes use, so a caller can tell "you left the
+        // workspace" from "you typed an option".
+        try {
+          sendJson(res, 200, app.gitExecutive.diffInspect(input));
+        } catch (err) {
+          const code = err?.code ?? 'INVALID_INPUT';
+          sendJson(res, code === 'WORKSPACE_PATH_ESCAPE' ? 403 : 400, { error: err.message, code });
+        }
+      } catch (err) {
+        sendJson(res, 500, { error: `the diff could not be read: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/git/checkpoints') {
+      try {
+        if (!app.gitExecutive) { sendJson(res, 503, { unavailable: true, error: 'the git executive is not configured' }); return; }
+        // `listCheckpoints` measures `refIntact` against the repository now, so a panel that refreshes
+        // sees a ref that drifted rather than a stored claim that it had not.
+        const checkpoints = app.gitExecutive.listCheckpoints();
+        sendJson(res, 200, { checkpoints, count: checkpoints.length, workspaceRoot: app.gitExecutive.workspaceRoot });
+      } catch (err) {
+        sendJson(res, 500, { error: `the checkpoint ledger could not be read: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/git/checkpoints') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['label', 'reason', 'stepUp'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = await app.controller.gitCheckpointCreate({ label: body.label, reason: body.reason ?? null, stepUp: body.stepUp ?? null });
+        const step = result.operation?.steps?.[0] ?? {};
+        const data = step.result?.data ?? null;
+        if (!data) { sendJson(res, gitRefusalStatus(step), gitRefusalBody(result, step)); return; }
+        sendJson(res, 200, { ...data, status: result.status, display: result.display });
+        broadcast('git', { checkpointId: data.checkpointId ?? null });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+    const restoreMatch = method === 'POST' && url.pathname.match(/^\/api\/git\/checkpoints\/([^/]+)\/restore$/);
+    if (restoreMatch) {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['reason', 'stepUp'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      let id;
+      try {
+        id = decodeURIComponent(restoreMatch[1]);
+      } catch {
+        sendJson(res, 400, { error: 'the checkpoint id is not valid percent-encoding' });
+        return;
+      }
+      try {
+        const result = await app.controller.gitCheckpointRestore({ checkpointId: id, reason: body.reason ?? null, stepUp: body.stepUp ?? null });
+        const step = result.operation?.steps?.[0] ?? {};
+        const data = step.result?.data ?? null;
+        if (!data) { sendJson(res, gitRefusalStatus(step), gitRefusalBody(result, step)); return; }
+        sendJson(res, 200, { ...data, status: result.status, display: result.display });
+        broadcast('git', { restored: data.checkpointId ?? null });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, 400, { error: err.message });
+      }
+      return;
+    }
+
     // T-31 Step 2: the controlled Evolution Lab. The GET is a read of the ledger plus the live
     // safety boundaries. The POSTs are the four audited capabilities; each one runs through the
     // controller, so the ECP authorizes it and the verifier checks the ledger afterwards.
