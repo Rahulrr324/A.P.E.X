@@ -383,12 +383,24 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
     // capability by name and the verification in the step that performed it; the L2 classification is a
     // property of the capability, and it is read from where capabilities declare it.
     const operations = fixture.operationLedger();
-    const restoreOperation = operations.find((entry) => entry.capability === 'git.checkpoint_restore');
-    expect(restoreOperation, 'the restore is in the operations ledger').toBeTruthy();
+    const restoreOperations = operations.filter((entry) => entry.capability === 'git.checkpoint_restore'
+      && entry.steps?.[0]?.input?.checkpointId === record.checkpointId
+      && /from the Workshop panel/.test(String(entry.steps?.[0]?.input?.reason)));
+    // The ledger records the act twice - once for the capability call and once for the governed route
+    // that carried it - so the record is chosen by the reason the panel actually sent, not by position.
+    // `.find()` over "any restore" picked the wrong one and read a field the route record does not carry.
+    expect(restoreOperations.length, 'the restore the panel performed is in the ledger').toBeGreaterThanOrEqual(1);
+    const restoreOperation = restoreOperations.at(-1);
     expect(restoreOperation.status, 'the ledger calls a verified write what it is').toBe('success_verified');
     expect(restoreOperation.origin, 'the write is attributed to the owner').toBe('user');
-    expect(restoreOperation.steps?.[0]?.verified, 'the step that performed it verified it').toBe(true);
-    expect(restoreOperation.steps?.[0]?.checkpointId).toBe(record.checkpointId);
+    const step = restoreOperation.steps[0];
+    // The route record states the verification in `verification.outcome` and mirrors it in `outcome`;
+    // the capability record states it in `verified`. Both are read, so neither shape is assumed.
+    const stepVerified = step.verified === true || step.verification?.outcome === 'success_verified' || step.outcome === 'success_verified';
+    expect(stepVerified, `the step that performed it verified it: ${JSON.stringify(step.verification ?? step.outcome)}`).toBe(true);
+    expect(step.input?.checkpointId, 'and it names the checkpoint it restored').toBe(record.checkpointId);
+    // The restore is a governed write: the authorization on the record says so rather than being implied.
+    expect(step.authorization?.decision, 'the ECP allowed a write it authorised').toBe('allow');
     const declared = fixture.app.registry.get('git.checkpoint_restore');
     expect(declared.autonomyLevel, 'the restore is declared L2').toBe('L2');
     expect(declared.blastRadius, 'and it reaches the workspace filesystem').toBe('workspace_fs');
@@ -401,7 +413,7 @@ test('T-43: the git panel measures a real repository, a checkpoint restores from
       stagedBefore: stagedBefore.body.staged.length,
       stagedAfter: afterRestoreStatus.body.staged.length,
       untrackedUntouched: true,
-      operation: { capability: restoreOperation.capability, status: restoreOperation.status, verified: restoreOperation.steps?.[0]?.verified === true },
+      operation: { capability: restoreOperation.capability, status: restoreOperation.status, verified: true, authorization: step.authorization?.decision },
       declared: { autonomyLevel: declared.autonomyLevel, blastRadius: declared.blastRadius, reversibility: declared.reversibility },
     };
     await page.screenshot({ path: path.join(reportDir, '04-checkpoint-restored.png'), fullPage: true });
