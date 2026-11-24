@@ -3388,3 +3388,42 @@ the registry, the run executes through the controller and leaves a receipt in `o
 walk reads back and matches to the card, and the latch is moved through the same route an owner would use.
 The visual claim rests on measured contrast and measured overflow at three viewports rather than on a
 screenshot.
+
+### The green run
+
+Run **45346273070** on `ded8cc8`, Edge 157.0.4341.60. All thirteen Edge suites pass, T-44 among them at
+18 seconds, and the publisher's line is the milestone stated as measurements rather than as claims:
+
+```
+order so_9940dc0a3d294b61 caps=7 status=ENABLED runs=0
+run 3d67c4b5-3ff1-484e-92c9-31346dd98692 outcome=verified inLedger=True
+refusal 403 STANDING_ORDER_CAPABILITY_FORBIDDEN ledger=1
+toggle PAUSED->ENABLED
+lockdown invoke=423 LOCKDOWN_ACTIVE create=423 runsAfterRelease=1 outcome=verified
+trace entries=6 kinds=standing_order,ecp_audit,standing_order_run reachesRun=True namesOperation=True
+agenda ag_7657059c97c94d19 horizon=unscheduled linked=so_9940dc0a3d294b61  derived standingOrderRows=1
+complete completed at=2026-11-24T07:23:14.861Z
+contrast worst=6.77:1 over 54 samples | viewports 3 | console 0 page 0 requests 0 reloadAborts 2 | screenshots 9
+```
+
+Seven capabilities on offer and no forbidden name among them; a run whose receipt was found in
+`operations.jsonl` and matched back to the card; a delegation refused at registration with the ledger
+still holding one order; both Lockdown refusals and a release that ran nothing; a trace that reaches the
+run and names its operation; an unscheduled commitment linked to its order with the order present as a
+derived reading; and a completed item with a timestamp. The worst contrast measured on either panel is
+6.77:1 across 54 samples at three viewports.
+
+### Three defects the walk found in itself, and one in the layout
+
+None of them were in the engine. The first run burned its timeout waiting for a connectivity chip to read
+"Online" when it says "Connected" — a wrong word, reported as an unmeasured phase. The second found the
+real defect: **neither panel was inside a view.** The standing orders had been inserted after the wrong
+"Capabilities in the matrix" panel, because that heading text occurs twice and the one that matched was
+in `presence`; and the agenda panel had landed in the deck's right rail, outside every view, because the
+Briefings panel it was told to sit beside is itself a rail panel. `setView` hides the deck whenever a nav
+view is active, so the agenda existed only on the command deck and the standing orders only on presence.
+
+The third was the SSE stream: the walk reloads twice to see the latch engage and release, and each
+reload cancels the page's own `/api/events` request mid-flight. The fix counts it rather than waving it
+through — `ERR_ABORTED` on that path only, in its own list, ceiling of one per reload, and every other
+failed request still fails the walk.
