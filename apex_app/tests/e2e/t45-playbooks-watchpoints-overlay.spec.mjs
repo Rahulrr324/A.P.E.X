@@ -340,15 +340,23 @@ test('T-45: three routines run through the ECP, watchpoints judge live readings,
     const steps = await runCard.locator('.playbook-steps li').evaluateAll((nodes) => nodes.map((node) => ({
       status: node.querySelector('[data-step-status]')?.getAttribute('data-step-status') ?? null,
       badge: node.querySelector('[data-step-status]')?.textContent?.trim() ?? null,
-      // The operation id is the ledger's own - a bare UUID. The pattern is deliberately narrow so the run
-      // id, which is also hex, cannot be mistaken for one.
-      operationId: node.textContent?.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/)?.[0] ?? null,
+      // The operation id is read from the element that renders it, not scraped out of the row's text. Row
+      // text is a concatenation with no separators, so "VERIFIED" runs straight into the id and a `\b`
+      // anchor before the first hex digit finds no boundary at all - which is exactly how this assertion
+      // failed on CI run 45415020272 with the id plainly on screen. Querying the span cannot have that bug.
+      operationId: node.querySelector('.playbook-step-op')?.textContent?.trim() ?? null,
+      operationText: node.querySelector('.playbook-step-op')?.textContent?.trim() ?? null,
     })));
     expect(steps.length).toBe(3);
     expect(steps.map((step) => step.status)).toEqual(['verified', 'verified', 'verified']);
     expect(steps.map((step) => step.badge)).toEqual(['VERIFIED', 'VERIFIED', 'VERIFIED']);
     const operationIds = steps.map((step) => step.operationId);
-    expect(operationIds.every((id) => typeof id === 'string' && /^[0-9a-f-]{36}$/.test(id))).toBe(true);
+    for (const operationId of operationIds) {
+      // A bare UUID, which is what every operation in this product has always been. The pattern is
+      // deliberately narrow so a step's summary, which is also rendered in that span when there is no
+      // operation, cannot be mistaken for one.
+      expect(operationId, 'every verified step must render the operation it recorded').toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    }
     // The ids on the card are lines in the one ledger - a receipt the panel printed, not one it invented.
     const ledger = fixture.operationLedger();
     for (const operationId of operationIds) {

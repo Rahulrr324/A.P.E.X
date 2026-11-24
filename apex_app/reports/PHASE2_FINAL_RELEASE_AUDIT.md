@@ -235,7 +235,9 @@ indistinguishable from a regression:
 
 ## 4. Defects this milestone found, and what each one was
 
-Six, in the order they were found. None was in an engine's design; five were in the code around it.
+Eight, in the order they were found. None was in an engine's design; seven were in the code around it.
+The last two were found by hosted CI and by a local DOM harness after the Node suite was already green,
+which is the reason both are recorded here rather than folded into the totals above.
 
 1. **A launch could not be refused correctly.** The ECP denied before the engine's own gate, so a lockdown
    launch surfaced as `403 KILL_SWITCH_ACTIVE` and an unknown id as `400 execution_failed`. Fixed with
@@ -256,6 +258,21 @@ Six, in the order they were found. None was in an engine's design; five were in 
    standing orders.
 6. **The trace contradicted itself on a playbook chain.** `complete: true` beside "no cognition run names
    this id". Fixed, and the same sentence now names the chains that legitimately have no cognition run.
+7. **One inline event handler failed eight browser suites.** The watchpoint form carried
+   `onsubmit="return false"`. This deck's policy is `script-src 'self'` with no nonce and no hash, so the
+   browser blocked it and wrote a CSP violation to the console; every walk that treats a console error as a
+   failure then went red, and none of the eight annotations could name the attribute because what the
+   browser reports is a policy violation rather than a failed assertion. The attribute was unnecessary as
+   well as blocked — `form-action 'none'` is in the same policy, so a native submit cannot navigate
+   anywhere. Removed, and `tests/ui-server.test.js` now asserts the page carries no inline handler at all
+   and names any it finds. The Node suite was green throughout: the defect existed only in a real browser.
+8. **A browser assertion scraped an id out of concatenated text.** The step-operation check matched a UUID
+   with a `\b` anchor against `element.textContent`, and row text is a concatenation with no separators, so
+   `VERIFIED` ran straight into the first hex digit and the boundary never existed — the failure CI reported
+   as `Expected: true Received: false` with the id plainly on screen. The spec now reads the id from the
+   `<span>` that renders it rather than from the row's text. A local harness that executes the real
+   `UI_CLIENT` against the real page and a real server found this in one run and is why the remaining
+   assertions were re-checked the same way before pushing.
 
 ---
 

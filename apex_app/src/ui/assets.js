@@ -7228,6 +7228,11 @@ function renderPlaybooks(view) {
   if (els.pbTemplateList) {
     els.pbTemplateList.replaceChildren();
     for (const template of templates) {
+      // The step list is read once, guarded, and used everywhere below. A template whose steps could not be
+      // read still renders its card with its title and its launch control disabled: a renderer that threw
+      // here would leave the panel blank and the console holding an uncaught exception, which reads to an
+      // owner as a broken deck rather than as one unreadable row.
+      const templateSteps = Array.isArray(template?.steps) ? template.steps : [];
       const item = document.createElement('li');
       item.className = 'playbook-card';
       item.dataset.playbookId = template.playbookId;
@@ -7243,7 +7248,7 @@ function renderPlaybooks(view) {
       id.textContent = template.playbookId;
       const rule = document.createElement('span');
       rule.className = 'playbook-badge playbook-badge--rule';
-      rule.textContent = template.steps.length + ' STEPS';
+      rule.textContent = templateSteps.length + ' STEPS';
       head.append(title, id, rule);
 
       const dag = document.createElement('div');
@@ -7255,7 +7260,7 @@ function renderPlaybooks(view) {
 
       const steps = document.createElement('ul');
       steps.className = 'playbook-steps';
-      for (const step of Array.isArray(template.steps) ? template.steps : []) {
+      for (const step of templateSteps) {
         const row = document.createElement('li');
         const label = document.createElement('span');
         label.className = 'playbook-step-label';
@@ -7265,7 +7270,8 @@ function renderPlaybooks(view) {
         capability.textContent = step.capabilityId;
         const tier = document.createElement('span');
         tier.className = 'playbook-step-op';
-        tier.textContent = step.dependsOn.length === 0 ? 'root' : 'after ' + step.dependsOn.join(', ');
+        const dependsOn = Array.isArray(step.dependsOn) ? step.dependsOn : [];
+        tier.textContent = dependsOn.length === 0 ? 'root' : 'after ' + dependsOn.join(', ');
         row.append(label, capability, tier);
         steps.append(row);
       }
@@ -7314,15 +7320,16 @@ function renderPlaybooks(view) {
     status.className = 'playbook-badge ' + playbookStatusClass(run.status);
     status.dataset.runBadge = run.status;
     status.textContent = String(run.status).toUpperCase();
-    const verifiedCount = (Array.isArray(run.steps) ? run.steps : []).filter((step) => step.verified === true).length;
+    const runSteps = Array.isArray(run.steps) ? run.steps : [];
+    const verifiedCount = runSteps.filter((step) => step.verified === true).length;
     const steps = document.createElement('span');
     steps.className = 'playbook-badge';
-    steps.textContent = verifiedCount + '/' + (Array.isArray(run.steps) ? run.steps.length : 0) + ' STEPS';
+    steps.textContent = verifiedCount + '/' + runSteps.length + ' STEPS';
     head.append(title, id, status, steps);
 
     const list = document.createElement('ul');
     list.className = 'playbook-steps';
-    for (const step of Array.isArray(run.steps) ? run.steps : []) {
+    for (const step of runSteps) {
       const row = document.createElement('li');
       const label = document.createElement('span');
       label.className = 'playbook-step-label';
@@ -7461,7 +7468,7 @@ function renderWatchpoints(view) {
     }
     const breaches = document.createElement('span');
     breaches.className = 'watchpoint-badge';
-    breaches.textContent = 'BREACHES ' + wp.breachCount + '/' + wp.evaluationCount;
+    breaches.textContent = 'BREACHES ' + (wp.breachCount ?? 0) + '/' + (wp.evaluationCount ?? 0);
     breaches.dataset.wpBreaches = String(wp.breachCount);
     row.append(breaches);
 

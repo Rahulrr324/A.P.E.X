@@ -819,7 +819,10 @@ jobs:
                       message = str(failure.get('message') or failure)
                       return (f'[{phase}] {message}' if phase else message)
                   return str(failure)
-              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+              # The annotation is what this environment can read without the job log, so the failure is
+              # given room rather than 200 characters: an assertion's whole message can be the phrase
+              # "Expected: true Received: false", and truncating it names the phase while hiding the cause.
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:1200] for failure in failures[:6]))
           message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
           print(f'::{level} title=t45-playbooks-watchpoints-overlay::{message[:20000]}')
           if failures:

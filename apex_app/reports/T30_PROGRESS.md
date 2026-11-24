@@ -3507,9 +3507,15 @@ that measures contrast in two postures of the same deck.
 skip loudly without a binary). Suite growth from T-44: +33 tests, no existing test removed or made
 conditional.
 
-Six defects were found and closed in the course of the work. Two are worth naming here because they were
-rules that read correctly in a comment and did not hold in the code — the kind a suite built only from the
-brief's acceptance criteria would have missed:
+Eight defects were found and closed in the course of the work. The last two were found by hosted CI and by
+a local DOM harness after the Node suite was already green — one inline `onsubmit` handler that the deck's
+own content policy blocks (and that `form-action 'none'` made unnecessary), and a browser assertion that
+scraped a UUID out of concatenated text with a `\b` anchor, so the boundary it relied on did not exist. A
+rendering crash was found the same way: a template with an unreadable step list made `renderPlaybooks`
+throw, which blanks the panel and leaves an uncaught exception the walks treat as a failure.
+
+Two of the other six are worth naming here because they were rules that read correctly in a comment and did
+not hold in the code — the kind a suite built only from the brief's acceptance criteria would have missed:
 
 - **A threshold of `-1` or `0.5` was accepted.** All four metrics are whole-number counts, so such a rule
   can never mean what its author intended: `-1` on `dirty_files_count` is breached by a clean tree, and
