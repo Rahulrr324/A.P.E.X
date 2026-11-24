@@ -45,6 +45,12 @@ export const ROUTE_KIND = Object.freeze({
   // commitment is an `action` route on the same kind, because that one writes.
   AGENDA: 'agenda',
   STANDING_ORDER: 'standing_order',
+  // T-45: the playbooks and the watchpoints, and the HUD posture. `HUD` carries no capability at all - a
+  // posture is presentation, and the deck applies it - so it is its own kind rather than a mode, because a
+  // mode changes palette and this changes what is on screen.
+  PLAYBOOK: 'playbook',
+  WATCHPOINT: 'watchpoint',
+  HUD: 'hud',
   UNMATCHED: 'unmatched',
 });
 
@@ -73,6 +79,16 @@ const PHRASES = Object.freeze([
   // panel is what the receipt points at.
   { kind: ROUTE_KIND.AGENDA, phrases: ['show agenda', 'agenda'], route: '/api/agenda', targetView: 'approvals', targetPanel: '#briefing-agenda-panel', summary: 'read the unified executive agenda' },
   { kind: ROUTE_KIND.STANDING_ORDER, phrases: ['standing orders', 'show standing orders'], route: '/api/standing-orders', targetView: 'system', targetPanel: '#standing-orders-panel', summary: 'read the standing orders and their policy' },
+  // T-45. `show playbooks` is a read; `evaluate watchpoints` runs the evaluation, so it is a prefix-free
+  // action phrase and not a refresh. The two are different kinds for the same reason `show agenda` and
+  // `schedule x` are: one names a route the panel was going to read anyway, the other runs a capability.
+  { kind: ROUTE_KIND.PLAYBOOK, phrases: ['show playbooks', 'playbooks'], route: '/api/playbooks', targetView: 'tasks', targetPanel: '#playbooks-panel', summary: 'read the playbook catalog and its runs' },
+  { kind: ROUTE_KIND.WATCHPOINT, phrases: ['evaluate watchpoints', 'check watchpoints'], action: 'watchpoint.evaluate', targetView: 'sentinel', targetPanel: '#sentinel-watchpoints-panel', summary: 'evaluate every enabled watchpoint against the live machine' },
+  // T-45 Package 3. The posture is applied by the deck, so this route names a target and no capability.
+  // `toggle overlay` is not a mode: a mode changes palette and motion, and this changes what the deck puts
+  // on screen. Keeping them apart is what stops `toggle overlay` being refused by the lockdown mode gate,
+  // which guards a thing that does not apply here.
+  { kind: ROUTE_KIND.HUD, phrases: ['toggle overlay', 'overlay mode', 'full hud'], targetView: null, summary: 'switch the deck between the full HUD and the compact tactical overlay' },
 ]);
 
 // Patterns that carry an argument. The prefix is literal; the rest is the argument, kept as the owner
@@ -95,6 +111,11 @@ const PREFIXES = Object.freeze([
   { kind: ROUTE_KIND.COUNCIL, prefix: 'deliberate', action: 'council.deliberate', targetView: 'council', summary: 'deliberate in the Council' },
   { kind: ROUTE_KIND.MODE, prefix: 'mode', targetView: null, summary: 'change the deck presentation' },
   { kind: ROUTE_KIND.SAFETY, prefix: 'lockdown', action: 'safety.lockdown', targetView: 'system', summary: 'latch the executive lockdown' },
+  // T-45. The two ways an owner launches a routine. Listed after `lockdown` and before nothing, because the
+  // matching rule takes the longest prefix that fits and neither collides with a shorter one today; they are
+  // here rather than among the action phrases because the argument is a playbook id the owner types.
+  { kind: ROUTE_KIND.PLAYBOOK, prefix: 'run playbook', action: 'playbook.launch', targetView: 'tasks', targetPanel: '#playbooks-panel', summary: 'launch an executive playbook', argumentLabel: 'playbook id' },
+  { kind: ROUTE_KIND.PLAYBOOK, prefix: 'launch playbook', action: 'playbook.launch', targetView: 'tasks', targetPanel: '#playbooks-panel', summary: 'launch an executive playbook', argumentLabel: 'playbook id' },
 ]);
 
 // Normalise without losing the argument: collapse runs of whitespace and trim, but keep case so the
@@ -421,6 +442,90 @@ export function createCommandRouter({ controller, app = null, now = () => new Da
           target: '#standing-orders-panel',
           summary: 'Reading the standing orders',
           detail: 'The policy-autonomy standing-orders panel is refreshing; the policy and the orders come from GET /api/standing-orders.',
+        });
+      }
+      case ROUTE_KIND.PLAYBOOK: {
+        // The ids come from the engine's own catalog, read through the composed app, rather than from an
+        // import: this module's import graph is deliberately one string helper, because a router that can
+        // reach a store is not a router. A build without the engine offers an empty list, and every launch
+        // is then refused by name rather than attempted.
+        const knownPlaybooks = (() => {
+          try {
+            const templates = app?.playbooks?.catalog?.()?.templates;
+            return Array.isArray(templates) ? templates.map((template) => template.playbookId) : [];
+          } catch {
+            return [];
+          }
+        })();
+        // `run playbook <id>` and `launch playbook <id>` run the routine; `show playbooks` reads the
+        // catalog. The launch goes through the controller like every other write, so Lockdown refuses it
+        // here exactly as it would from the panel.
+        if (route.action === 'playbook.launch') {
+          const wanted = (route.argument ?? '').trim();
+          if (wanted.length === 0) {
+            return receipt({
+              routeKind: route.kind, actionInvoked: null, targetView: route.targetView,
+              summary: 'Say which playbook to run',
+              detail: knownPlaybooks.length
+                ? `Playbooks are ${knownPlaybooks.join(', ')}. For example: run playbook morning_briefing.`
+                : 'No playbook engine is composed in this build, so there is nothing to run.',
+            });
+          }
+          const playbookId = wanted.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+          if (!knownPlaybooks.includes(playbookId)) {
+            // Refused before an authorization is spent, with the ids named: a misremembered id should cost
+            // a receipt, not a run.
+            return receipt({
+              routeKind: route.kind, actionInvoked: null, targetView: route.targetView,
+              summary: `"${playbookId}" is not a playbook`,
+              detail: knownPlaybooks.length
+                ? `Playbooks are ${knownPlaybooks.join(', ')}.`
+                : 'No playbook engine is composed in this build, so there is nothing to run.',
+            });
+          }
+          const outcome = await dispatchAction(route.action, { playbookId }, id);
+          const run = outcome.step?.result?.data ?? null;
+          return receipt({
+            routeKind: route.kind, actionInvoked: route.action, targetView: route.targetView,
+            target: '#playbooks-panel',
+            ecpDecision: outcome.ecpDecision, verified: outcome.verified,
+            // The operation verified because a routine that ran and did not hold is exactly what this
+            // reports. `run.status` is the routine's answer, and it leads the line: a reader must not have
+            // to reach the word "failed" at the end of a sentence that opened with "verified".
+            summary: run
+              ? `Playbook ${run.playbookId} ${run.status}: ${run.steps.filter((step) => step.verified).length}/${run.steps.length} steps (${run.runId})`
+              : `The playbook did not run: ${outcome.summary}`,
+            detail: outcome.step?.display ?? null, input: { playbookId },
+          });
+        }
+        // `show playbooks`: a read. The receipt names the route rather than a capability.
+        return receipt({
+          routeKind: route.kind, route: route.route, targetView: route.targetView,
+          target: '#playbooks-panel',
+          summary: 'Reading the playbooks',
+          detail: 'The tasks-view playbook panel is refreshing; the templates and the runs come from GET /api/playbooks.',
+        });
+      }
+      case ROUTE_KIND.WATCHPOINT: {
+        const outcome = await dispatchAction(route.action, {}, id);
+        const result = outcome.step?.result?.data ?? null;
+        return receipt({
+          routeKind: route.kind, actionInvoked: route.action, targetView: route.targetView,
+          target: '#sentinel-watchpoints-panel',
+          ecpDecision: outcome.ecpDecision, verified: outcome.verified,
+          summary: outcome.verified && result
+            ? `Watchpoints evaluated: ${result.summary.evaluatedCount} evaluated, ${result.breachedCount} breached`
+            : `The watchpoints were not evaluated: ${outcome.summary}`,
+          detail: outcome.step?.display ?? null, input: {},
+        });
+      }
+      case ROUTE_KIND.HUD: {
+        // A posture is presentation, and the deck applies it. The receipt says which, so the command line
+        // reports what the owner will see; it authorizes nothing and calls no API.
+        return receipt({
+          routeKind: route.kind, target: 'toggle', targetView: null,
+          summary: 'Switching the HUD posture',
+          detail: 'The deck toggles between the full HUD and the compact tactical overlay. A posture changes what is on screen and nothing else.',
         });
       }
       case ROUTE_KIND.MODE: {

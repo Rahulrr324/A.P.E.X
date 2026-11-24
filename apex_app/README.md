@@ -4047,7 +4047,7 @@ across the whole set, so they are stated once instead of per row:
   outcome - `finalizeOperation` is called on success, on a denial, on an input rejection, and on an
   unrouted request. Measured in this batch: a request that ran nothing and a request whose model was
   unavailable each still produced their audit line and their conversation turn.
-- **Verification.** All 139 registered actions declare both `validate()` and `verify()` - 154 with a
+- **Verification.** All 191 registered actions declare both `validate()` and `verify()` - 210 with a
   filesystem root - so the independent verifier runs on every one, including the reads, which are
   verified against a fresh re-read rather than trusted from the first result. Registration refuses an
   action that omits either. The three T-40 capabilities join that set: `workshop.check_applied` is
@@ -4258,6 +4258,11 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `system.inspect_processes` | user + model | read | never in a plan | reads the process table (`ps` or `tasklist`) and this process's own memory; writes nothing. Command lines and environment variables are never read | no (read) | no |
 | `git.status_detailed` | user + model | read | never in a plan | reads the repository at the configured workspace root; writes nothing | no (read) | no |
 | `git.diff_inspect` | user + model | read | never in a plan | reads a unified diff from the repository at the configured workspace root; writes nothing | no (read) | no |
+| `playbook.catalog`, `playbook.read` | user | read | never in a plan | reads the playbook ledger; writes nothing. The three templates are constants in the module, so a build with no workspace root still answers with all three | no (read) | no |
+| `playbook.launch` | user | write | never in a plan | `playbook-runs.json` (the run ledger): one row per launch with its three steps, each step's own `operationId` and its status. Each step runs through the ECP and is finalized into `operations.jsonl` separately, so a routine is three receipts and one record rather than one receipt for three acts | no (playbooks) | no (a routine is an intention, not a belief) |
+| `watchpoint.list` | user | read | never in a plan | reads the watchpoint ledger; writes nothing | no (read) | no |
+| `watchpoint.create`, `watchpoint.toggle`, `watchpoint.delete` | user | write | never in a plan | `sentinel-watchpoints.json` (the rule ledger) and one audit line each. A metric outside the closed four is refused `400 INVALID_WATCHPOINT_METRIC`, so no rule on an unmeasurable name is ever written | no (watchpoints) | no (a threshold is an intention, not a belief) |
+| `watchpoint.evaluate` | user | write | never in a plan | writes back the readings it took: `sentinel-watchpoints.json` gains an evaluation per enabled watchpoint, plus one audit line. Declared a write rather than a read because it records what it saw, so Lockdown halts it - a read declaration would let the act that records a measurement bypass a latch that stops writes | no (watchpoints) | no (a threshold is an intention, not a belief) |
 | `git.checkpoint_create` | user | write | never in a plan | `git-checkpoints.json` (one record per checkpoint: the id, label, ref name, snapshot commit, the HEAD it was taken at, the tree SHA, the untracked paths and a SHA-256 manifest of every modified tracked file) and `operations.jsonl`; the repository gains one `refs/apex-checkpoints/<id>` ref. **The working tree and the index are not modified**: the snapshot is built with `git stash create`, which writes an object and prints its SHA | no (git) | no |
 | `git.checkpoint_restore` | user | write | never in a plan | the tracked files and index of the owner's workspace tree, restored to a recorded checkpoint's tree; `git-checkpoints.json` gains a restore count and a last-restored timestamp, and `operations.jsonl` gains one line | no (git) | no |
 | `task.retry`, `task.cancel` | user | not a registered action | - | `tasks.jsonl` | no (task) | no |

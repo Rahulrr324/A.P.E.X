@@ -1682,6 +1682,24 @@ export class CognitiveController {
     return { ...finished, step };
   }
 
+  // T-45 Package 1: one step of a playbook. It is the same three lines as a standing-order run - make an
+  // operation, run the capability inside it, finalize it - and it exists separately because a playbook has
+  // three steps and each one deserves its own receipt. A run recorded as one operation for three
+  // capability calls would put a receipt in the ledger for work that was three separate acts.
+  async playbookStep({ runId = null, stepId, capabilityId, input = {}, autonomyTier = 'L2' } = {}) {
+    const run = typeof runId === 'string' ? truncate(runId, 40) : '[missing run]';
+    const step = typeof stepId === 'string' ? truncate(stepId, 40) : '[missing step]';
+    const capability = typeof capabilityId === 'string' ? truncate(capabilityId, 80) : '[missing capability]';
+    const op = this.#newOp({
+      capability,
+      origin: 'user',
+      request: `playbook ${run} ${step} -> ${capability} (${autonomyTier})`.replace(/\s+/g, ' ').trim(),
+    });
+    const finished = await this.runAction(capability, input, 'user', op.id);
+    const record = await this.#finishCommandOp(op, finished, null);
+    return { ...record, step: finished, operationId: op.id };
+  }
+
   // The four order-ledger writes get the same treatment, so creating or revoking an order is a record in
   // the same ledger as the runs it will perform.
   async standingOrderLedgerAct({ action, input = {} } = {}) {

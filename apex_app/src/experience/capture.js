@@ -43,6 +43,13 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // of a row that already exists, and of a run whose real receipt is in operations.jsonl.
   agenda: 'the agenda ledger already holds the commitment, its kind and priority, its due date and its status with the date it was completed, so an experience would be a thinner copy of a row that already exists',
   orders: 'the standing-order ledger already holds the order, its trigger and every run with the operation each one recorded, and the run itself writes a full operation to operations.jsonl',
+  // T-45 Package 1: a playbook run's ledger is the richer record. It holds the routine, its three steps,
+  // each step's dependency and outcome, and the operation id each step recorded - so an experience of one
+  // launch would be a thinner copy of a row that already exists, and of three receipts already in the log.
+  playbooks: 'the playbook ledger already holds the run with each step, its dependency and the operation it recorded, and every step writes its own full operation to operations.jsonl',
+  // T-45 Package 2: a watchpoint is a rule plus a history of readings. The ledger holds the rule, the
+  // threshold, every evaluation with the number that caused it; an experience would be a thinner copy.
+  watchpoints: 'the watchpoint ledger already holds the rule, the threshold and every evaluation with the value measured against it, so an experience would be a thinner copy of a row that already exists',
   'model-words': 'what it stores or produces is a model conclusion, which is evidence only that a model said it',
   'self-bookkeeping': 'the experience log must not fill itself with records about its own bookkeeping, which would make the counts meaningless',
   task: 'one task operation covers several steps with separate outcomes, so a single experience would say less than the task log already says',
@@ -414,6 +421,16 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'agenda.create': 'agenda',
   'agenda.complete': 'agenda',
   'agenda.dismiss': 'agenda',
+  // T-45 Packages 1 and 2. The two catalog reads are `read` for the usual reason. The launch and the four
+  // watchpoint writes are excluded because their ledgers already hold the full record.
+  'playbook.catalog': 'read',
+  'playbook.read': 'read',
+  'playbook.launch': 'playbooks',
+  'watchpoint.list': 'read',
+  'watchpoint.create': 'watchpoints',
+  'watchpoint.toggle': 'watchpoints',
+  'watchpoint.delete': 'watchpoints',
+  'watchpoint.evaluate': 'watchpoints',
   none: 'no-action',
 });
 

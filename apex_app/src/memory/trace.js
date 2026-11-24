@@ -41,6 +41,12 @@ export const SEARCH_KINDS = Object.freeze([
   // T-44 Package 2: an agenda commitment is a row the owner wrote with an id of its own, so a trace can
   // be opened on one - and, when it names a standing order or a mission, follows that link too.
   'agenda_item',
+  // T-45 Package 1: a playbook run is a record with an id of its own whose steps each name an operation,
+  // so a chain opened on a run id has to be able to find the run before it can follow the steps.
+  'playbook_run',
+  // T-45 Package 2: a watchpoint is a rule that changes (its state and its history) and each evaluation is
+  // a separate event, so both are ledgers here rather than a private file only the Sentinel panel reads.
+  'watchpoint', 'watchpoint_eval',
 ]);
 
 // The epistemic statuses a memory record can carry. The filter is offered on the search surface
@@ -313,6 +319,9 @@ function ledgers(dataDir) {
     standing_order: () => filterKind(readStandingOrders(dataDir), 'standing_order'),
     standing_order_run: () => filterKind(readStandingOrders(dataDir), 'standing_order_run'),
     agenda_item: () => readAgendaItems(dataDir),
+    playbook_run: () => readPlaybookRuns(dataDir),
+    watchpoint: () => filterKind(readWatchpoints(dataDir), 'watchpoint'),
+    watchpoint_eval: () => filterKind(readWatchpoints(dataDir), 'watchpoint_eval'),
     ecp_audit: () => {
       const { present, records, corrupt } = readJsonl(path.join(dataDir, 'operations.jsonl'));
       return {
@@ -487,6 +496,119 @@ function readAgendaItems(dataDir) {
       notes: entry.notes ?? '',
       record: entry,
     });
+  }
+  return { present: true, records, corrupt };
+}
+
+// T-45 Package 1: the playbook runs. One record per run, with its three steps inlined, so a chain opened
+// on a `pbr_` id finds the run and can follow each step's `operationId` into the operations ledger.
+function readPlaybookRuns(dataDir) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(dataDir, 'playbook-runs.json'), 'utf8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') return { present: false, records: [], corrupt: 0 };
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { present: true, records: [], corrupt: 1 };
+  }
+  const list = Array.isArray(parsed?.runs) ? parsed.runs : [];
+  const records = [];
+  let corrupt = 0;
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object' || typeof entry.runId !== 'string') { corrupt += 1; continue; }
+    const steps = Array.isArray(entry.steps) ? entry.steps : [];
+    records.push({
+      kind: 'playbook_run',
+      at: entry.launchedAt ?? null,
+      id: entry.runId,
+      runId: entry.runId,
+      playbookId: entry.playbookId ?? null,
+      title: entry.title ?? '',
+      status: entry.status ?? null,
+      verified: entry.verified === true,
+      launchedAt: entry.launchedAt ?? null,
+      completedAt: entry.completedAt ?? null,
+      stepIds: steps.map((step) => step?.stepId).filter((id) => typeof id === 'string'),
+      operationIds: steps.map((step) => step?.operationId).filter((id) => typeof id === 'string'),
+      steps: steps.map((step) => ({
+        stepId: step?.stepId ?? null,
+        capabilityId: step?.capabilityId ?? null,
+        dependsOn: Array.isArray(step?.dependsOn) ? step.dependsOn : [],
+        status: step?.status ?? null,
+        operationId: typeof step?.operationId === 'string' ? step.operationId : null,
+        verified: step?.verified === true,
+      })),
+      record: entry,
+    });
+  }
+  return { present: true, records, corrupt };
+}
+
+// T-45 Package 2: the watchpoints and their evaluations. One file, two kinds, for the same reason the
+// standing orders have two: the rule is a row that changes, and each evaluation of it is an event. A chain
+// opened on a `wp_` id finds the rule; a chain opened on a `wpe_` id finds the evaluation and the rule it
+// was taken against.
+function readWatchpoints(dataDir) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(dataDir, 'sentinel-watchpoints.json'), 'utf8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') return { present: false, records: [], corrupt: 0 };
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { present: true, records: [], corrupt: 1 };
+  }
+  const list = Array.isArray(parsed?.watchpoints) ? parsed.watchpoints : [];
+  const records = [];
+  let corrupt = 0;
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object' || typeof entry.watchpointId !== 'string') { corrupt += 1; continue; }
+    records.push({
+      kind: 'watchpoint',
+      at: entry.createdAt ?? null,
+      id: entry.watchpointId,
+      watchpointId: entry.watchpointId,
+      title: entry.title ?? '',
+      metric: entry.metric ?? null,
+      operator: entry.operator ?? null,
+      threshold: Number.isFinite(entry.threshold) ? entry.threshold : null,
+      severity: entry.severity ?? null,
+      enabled: entry.enabled === true,
+      lastState: entry.lastState ?? 'unmeasured',
+      lastMeasuredValue: Number.isFinite(entry.lastMeasuredValue) ? entry.lastMeasuredValue : null,
+      evaluationCount: Number.isInteger(entry.evaluationCount) ? entry.evaluationCount : 0,
+      breachCount: Number.isInteger(entry.breachCount) ? entry.breachCount : 0,
+      evalIds: Array.isArray(entry.history) ? entry.history.map((record) => record?.evalId).filter((id) => typeof id === 'string') : [],
+      operationIds: Array.isArray(entry.history) ? entry.history.map((record) => record?.operationId).filter((id) => typeof id === 'string') : [],
+      record: entry,
+    });
+    for (const history of Array.isArray(entry.history) ? entry.history : []) {
+      if (!history || typeof history !== 'object' || typeof history.evalId !== 'string') { corrupt += 1; continue; }
+      records.push({
+        kind: 'watchpoint_eval',
+        at: history.evaluatedAt ?? null,
+        id: history.evalId,
+        evalId: history.evalId,
+        watchpointId: entry.watchpointId,
+        title: entry.title ?? '',
+        metric: entry.metric ?? null,
+        operator: entry.operator ?? null,
+        threshold: Number.isFinite(history.threshold) ? history.threshold : null,
+        measuredValue: Number.isFinite(history.measuredValue) ? history.measuredValue : null,
+        breached: history.breached === true,
+        operationId: typeof history.operationId === 'string' ? history.operationId : null,
+        record: history,
+      });
+    }
   }
   return { present: true, records, corrupt };
 }
@@ -790,6 +912,40 @@ export class MemoryTraceService {
       if (typeof order.capabilityId === 'string') keys.add(order.capabilityId);
     }
 
+    // T-45 Package 1: the playbook runs this chain names. A chain opened on a `pbr_` id finds the run; every
+    // step's `operationId` is then added to the key set, which is what makes each of the three executions
+    // appear in the chain as its own receipt rather than as one opaque "a routine ran".
+    // Both directions, as the standing orders have: a chain opened on a `pbr_` id finds the run, and a
+    // chain opened on one of the operations a step recorded finds the run that caused it. The second
+    // direction is what makes a receipt answer "why did this happen" rather than only "what happened".
+    const playbookRuns = all.entries.filter((e) => e.kind === 'playbook_run'
+      && ([...keys].some((k) => k === e.runId) || (e.operationIds ?? []).some((id) => keys.has(id))));
+    for (const run of playbookRuns) {
+      if (typeof run.runId === 'string') keys.add(run.runId);
+      for (const operationId of run.operationIds ?? []) keys.add(operationId);
+      // A template id is not an id this record owns, but naming it lets a chain opened on the run also
+      // find the catalog row, which is what a reader asking "which routine was this" wants.
+      if (typeof run.playbookId === 'string') keys.add(run.playbookId);
+    }
+
+    // T-45 Package 2: the watchpoints and their evaluations. A chain opened on a `wp_` id reaches every
+    // evaluation of that rule; a chain opened on a `wpe_` id reaches the rule and its siblings. Both
+    // directions are the same question, as they are for standing orders.
+    const watchpointEvals = all.entries.filter((e) => e.kind === 'watchpoint_eval'
+      && ([...keys].some((k) => k === e.evalId || k === e.watchpointId) || (typeof e.operationId === 'string' && [...keys].some((k) => k === e.operationId))));
+    for (const evaluation of watchpointEvals) {
+      if (typeof evaluation.evalId === 'string') keys.add(evaluation.evalId);
+      if (typeof evaluation.watchpointId === 'string') keys.add(evaluation.watchpointId);
+      if (typeof evaluation.operationId === 'string') keys.add(evaluation.operationId);
+    }
+    const watchpointRecords = all.entries.filter((e) => e.kind === 'watchpoint'
+      && ([...keys].some((k) => k === e.watchpointId || e.evalIds?.includes(k) || e.operationIds?.includes(k))));
+    for (const watchpoint of watchpointRecords) {
+      if (typeof watchpoint.watchpointId === 'string') keys.add(watchpoint.watchpointId);
+      for (const evalId of watchpoint.evalIds ?? []) keys.add(evalId);
+      for (const operationId of watchpoint.operationIds ?? []) keys.add(operationId);
+    }
+
     // The operations whose steps or result name one of these runs or tasks.
     const operations = all.entries.filter((e) => {
       if (e.kind !== 'ecp_audit') return false;
@@ -799,7 +955,8 @@ export class MemoryTraceService {
 
     if (runs.length === 0 && tasks.length === 0 && operations.length === 0 && councils.length === 0
       && verifications.length === 0 && applies.length === 0 && checkpoints.length === 0
-      && orderRuns.length === 0 && orderRecords.length === 0 && agendaItems.length === 0) {
+      && orderRuns.length === 0 && orderRecords.length === 0 && agendaItems.length === 0
+      && playbookRuns.length === 0 && watchpointRecords.length === 0 && watchpointEvals.length === 0) {
       return {
         ok: false,
         code: 'NOT_FOUND',
@@ -994,6 +1151,72 @@ export class MemoryTraceService {
         },
       });
     }
+    // T-45 Package 1: a playbook run as one chain step, with its three steps named inside it. The run is
+    // the record that says a routine happened; the individual executions appear on their own lines below,
+    // from the operations ledger, because each of them is a real operation rather than a field on the run.
+    for (const run of playbookRuns) {
+      steps.push({
+        at: run.at,
+        kind: 'playbook_run',
+        label: `playbook ${run.playbookId ?? 'run'} ${run.status ?? ''}`.trim(),
+        linkedBy: run.runId === wanted ? 'the id names this run' : 'the run names this id as one of its steps',
+        detail: {
+          runId: run.runId,
+          playbookId: run.playbookId,
+          title: run.title,
+          status: run.status,
+          verified: run.verified,
+          launchedAt: run.launchedAt,
+          completedAt: run.completedAt,
+          steps: run.steps,
+          authorizesExecution: false,
+        },
+      });
+    }
+    // T-45 Package 2: the watchpoint and each evaluation of it, as separate chain steps, for the reason the
+    // standing orders have two kinds: the rule is a row that changes, and an evaluation is an event.
+    for (const watchpoint of watchpointRecords) {
+      steps.push({
+        at: watchpoint.at,
+        kind: 'watchpoint',
+        label: `watchpoint ${watchpoint.metric ?? ''} ${watchpoint.operator ?? ''} ${watchpoint.threshold ?? ''}`.trim(),
+        linkedBy: 'the id names this watchpoint',
+        detail: {
+          watchpointId: watchpoint.watchpointId,
+          title: watchpoint.title,
+          metric: watchpoint.metric,
+          operator: watchpoint.operator,
+          threshold: watchpoint.threshold,
+          severity: watchpoint.severity,
+          enabled: watchpoint.enabled,
+          lastState: watchpoint.lastState,
+          lastMeasuredValue: watchpoint.lastMeasuredValue,
+          evaluationCount: watchpoint.evaluationCount,
+          breachCount: watchpoint.breachCount,
+          triggersNothing: true,
+        },
+      });
+    }
+    for (const evaluation of watchpointEvals) {
+      steps.push({
+        at: evaluation.at,
+        kind: 'watchpoint_eval',
+        label: evaluation.breached ? 'watchpoint breached' : 'watchpoint evaluated',
+        linkedBy: evaluation.evalId === wanted ? 'the id names this evaluation'
+          : 'the evaluation belongs to this watchpoint',
+        detail: {
+          evalId: evaluation.evalId,
+          watchpointId: evaluation.watchpointId,
+          metric: evaluation.metric,
+          operator: evaluation.operator,
+          threshold: evaluation.threshold,
+          measuredValue: evaluation.measuredValue,
+          breached: evaluation.breached,
+          operationId: evaluation.operationId,
+          triggeredNothing: true,
+        },
+      });
+    }
     // T-44 Package 1: the order rows and the run rows, as chain steps. The order is one step and each run
     // is its own, so a chain reads as "this order was created, then it ran here, then it ran here" rather
     // than as one row whose run count happens to be three.
@@ -1123,7 +1346,13 @@ export class MemoryTraceService {
       // T-43: a checkpoint chain is complete when the checkpoint record itself was found. It holds no
       // run and no task graph by construction, and calling that incomplete would be the same false
       // negative T-39 removed for candidate chains.
-      complete: runs.length > 0 ? tasks.length > 0 : (applies.length > 0 || verifications.length > 0 || checkpoints.length > 0),
+      complete: runs.length > 0 ? tasks.length > 0
+        : (applies.length > 0 || verifications.length > 0 || checkpoints.length > 0
+          // T-45: a playbook chain is complete when the run was found and every step it recorded names an
+          // operation - a run whose steps cannot be traced is exactly the half-recorded chain this flag is
+          // for. A watchpoint chain is complete when the rule was found; an evaluation is complete on its own.
+          || (playbookRuns.length > 0 && playbookRuns.every((run) => (run.operationIds ?? []).length === (run.steps ?? []).length))
+          || watchpointRecords.length > 0 || watchpointEvals.length > 0),
       // An incomplete chain says what it could not find rather than omitting the gap.
       missing: [
         runs.length === 0 && (applies.length > 0 || verifications.length > 0)
@@ -1132,7 +1361,15 @@ export class MemoryTraceService {
         runs.length === 0 && applies.length === 0 && verifications.length === 0
           ? (checkpoints.length > 0
             ? 'this is a git checkpoint chain: a checkpoint id is never a cognition run id, so no run is expected'
-            : 'no cognition run names this id')
+            // T-45: a playbook run and a watchpoint rule are ledgers of their own, for the same reason a
+            // checkpoint is. Their ids are never cognition run ids, so reporting a missing run would be the
+            // false negative T-39 removed for candidate chains - and it would contradict the `complete`
+            // flag directly above, which already says the chain is whole.
+            : playbookRuns.length > 0
+              ? 'this is a playbook run chain: a run id is never a cognition run id, so no run is expected'
+              : watchpointRecords.length > 0 || watchpointEvals.length > 0
+                ? 'this is a watchpoint chain: a rule id is never a cognition run id, so no run is expected'
+                : 'no cognition run names this id')
           : null,
         runs.length > 0 && tasks.length === 0 ? 'no task graph event names this id' : null,
         councils.length === 0 && runs.length > 0 ? 'no Council session evaluated this objective' : null,
@@ -1147,6 +1384,10 @@ export class MemoryTraceService {
         applies: applies.length,
         // T-43: the checkpoints this chain names.
         checkpoints: checkpoints.length,
+        // T-45: the playbook runs, watchpoints and watchpoint evaluations this chain names.
+        playbookRuns: playbookRuns.length,
+        watchpoints: watchpointRecords.length,
+        watchpointEvaluations: watchpointEvals.length,
         operations: operations.length,
       },
       sameInstant,

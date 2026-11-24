@@ -769,6 +769,63 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Publish the T-45 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't45-playbooks-watchpoints-overlay.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t45-playbooks-watchpoints-overlay::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          templates = run.get('templates') or {}
+          one = run.get('runOne') or {}
+          trace = run.get('trace') or {}
+          wps = run.get('watchpoints') or {}
+          breached = wps.get('breached') or {}
+          nominal = wps.get('nominal') or {}
+          lockdown = run.get('lockdown') or {}
+          overlay = run.get('overlay') or {}
+          router = run.get('router') or {}
+          contrast = run.get('contrast') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"platform {run.get('platform')}",
+              f"templates {templates.get('count')} ids={','.join(templates.get('ids') or [])}",
+              f"dag {templates.get('dag')}",
+              f"run {one.get('runId')} status={one.get('status')} steps={len(one.get('steps') or [])} receipts={one.get('ledgerFound')}",
+              f"trace complete={trace.get('resolved')} namesEveryOperation={trace.get('namesEveryOperation')}",
+              f"watchpoint breached={breached.get('watchpointId')} value={breached.get('measured')} state={breached.get('state')}",
+              f"watchpoint nominal={nominal.get('watchpointId')} state={nominal.get('state')}",
+              f"lockdown launch={lockdown.get('launchStatus')} {lockdown.get('launchCode')} evaluate={lockdown.get('evaluateStatus')} {lockdown.get('evaluateCode')} create={lockdown.get('createStatus')} runsUnchanged={lockdown.get('runsUnchanged')}",
+              f"overlay initial={((overlay.get('initial') or {}).get('button'))} on={((overlay.get('on') or {}).get('button'))} persisted={overlay.get('persistedAcrossReload')} off={((overlay.get('off') or {}).get('button'))}",
+              f"router playbook={((router.get('playbook') or {}).get('capability'))} watchpoint={((router.get('watchpoint') or {}).get('capability'))} overlay={((router.get('overlay') or {}).get('route'))}",
+              f"contrast worst={contrast.get('minimum')}:1 over {contrast.get('samples')} samples" if contrast.get('minimum') is not None else 'contrast not measured',
+              f"viewports {len(run.get('viewports') or [])} measured (both postures)",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {len(run.get('abortedStreams') or [])}",
+              f"screenshots {run.get('screenshots')}",
+              f"lastPhase {run.get('lastPhase')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t45-playbooks-watchpoints-overlay::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       # T-42 Step 4: the publisher above is not allowed to be the only witness. If it throws before
       # printing (as it did on run 45099159487, where a missing binding raised NameError and the
       # annotation that would have named the failing assertion was never written), this step still
@@ -833,6 +890,8 @@ jobs:
             apex_app/reports/t43-workstation-git-telemetry.json
             apex_app/reports/screenshots/t44
             apex_app/reports/t44-standing-orders-agenda.json
+            apex_app/reports/screenshots/t45
+            apex_app/reports/t45-playbooks-watchpoints-overlay.json
           if-no-files-found: warn
           retention-days: 14
 

@@ -124,7 +124,10 @@ test('T-38 metadata: every write declares a blast radius that is not none', () =
     // claims it has to be looked at by a person rather than absorbed by a bound.
     // T-44 Package 2 adds three more: `agenda.create`, `.complete` and `.dismiss`, all `local_state`.
     // `agenda.list` is a read and does not count here.
-    assert.equal(writes.length, 95, `expected 95 writes after T-44 Package 2, got ${writes.length}`);
+    // T-45 Packages 1 and 2 add five writes: `playbook.launch`, and `watchpoint.create`, `.toggle`,
+  // `.delete` and `.evaluate`. Every one of them declares a blast radius; `.evaluate` is a write because
+  // it records the readings it took, and its radius is the watchpoint ledger.
+  assert.equal(writes.length, 100, `expected 100 writes after T-45 Packages 1 and 2, got ${writes.length}`);
     for (const definition of writes) {
       assert.notEqual(definition.blastRadius, 'none',
         `${definition.name} is a write that claims to change nothing`);

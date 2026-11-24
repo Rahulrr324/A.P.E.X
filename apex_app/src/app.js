@@ -17,6 +17,15 @@ import { StandingOrdersEngine, standingOrderActions, standingOrderReadActions } 
 // T-44 Package 2 (2026-11-19): the unified executive agenda. One ledger of the owner's own commitments,
 // plus a reading of four stores that already hold what else is owed. It writes only its own ledger.
 import { ExecutiveAgenda, agendaActions } from './executive/agenda.js';
+// T-45 Package 1 (2026-11-19): the Executive Playbooks engine. A playbook is a curated multi-step routine
+// whose steps form a DAG: two roots that do not depend on each other, then a fan-in step that runs only if
+// both verified. Every step goes through the controller, so a routine composes real capabilities rather
+// than adding a second way to execute.
+import { ExecutivePlaybooks, playbookActions, playbookReadActions } from './executive/playbooks.js';
+// T-45 Package 2 (2026-11-19): Sentinel Watchpoints. Owner-set thresholds on numbers the machine already
+// measures. The engine reads the measuring capability through the registry, so a threshold can never
+// disagree with the panel showing the same number.
+import { SentinelWatchpoints, watchpointActions } from './perception/watchpoints.js';
 import { knowledgeActions } from './actions/knowledge-actions.js';
 import { worldActions } from './actions/world-actions.js';
 import { worldModelActions } from './actions/world-model-actions.js';
@@ -340,6 +349,27 @@ export function createApp({
     operations: (entry) => operations.append(entry),
   });
 
+  // T-45 Package 1: the Playbooks engine. Built before registration because it checks each template step
+  // against the registry's declarations at launch time, and registered with the rest so a launch is
+  // authorized like any other act. The controller is attached below, once it exists.
+  const playbooks = new ExecutivePlaybooks({
+    dataDir,
+    registry,
+    now: clock,
+    operations: (entry) => operations.append(entry),
+  });
+
+  // T-45 Package 2: the Sentinel Watchpoints engine. It reads metrics through the registry, so it needs
+  // the registry and nothing else; the latch it honours is the Standing Orders engine's own reading, which
+  // is the control plane's latch.
+  const watchpoints = new SentinelWatchpoints({
+    dataDir,
+    registry,
+    now: clock,
+    operations: (entry) => operations.append(entry),
+    lockdown: () => standingOrders.lockdownActive(),
+  });
+
   // T-44 Package 2: the executive agenda. Its four readers are closures, not snapshots: each one is
   // called when the agenda is built, so the agenda can never report a mission that finished an hour ago
   // as still running. Every reader is failure-safe at the agenda's boundary - a store that will not read
@@ -451,6 +481,13 @@ export function createApp({
   // one is an L0 read that evaluates the triggers; none of them is a capability a standing order could
   // itself carry, so the policy cannot be bootstrapped into delegating something forbidden.
   for (const def of standingOrderActions(standingOrders)) registry.register(def);
+  // T-45 Packages 1 and 2: the playbook and watchpoint capabilities. They are registered here, with the
+  // other executive capabilities, because both engines check the registry's declarations to decide what
+  // they may do - a playbook step is checked against its capability's reversibility, and a watchpoint
+  // reads its metric by running the capability that owns it. Registering them late would mean an engine
+  // that could not see the very declarations it is governed by.
+  for (const def of playbookActions(playbooks)) registry.register(def);
+  for (const def of watchpointActions(watchpoints)) registry.register(def);
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -563,6 +600,11 @@ export function createApp({
   // before the runtime is built, means every standing-order run from this point on goes through the
   // same authorization, validation, execution and verification path as a route or a router line.
   standingOrders.attachController(controller);
+  // T-45: the same executor, for the same reason. A playbook step that reached the control plane directly
+  // would produce an authorization with no execution behind it; a watchpoint that did would read a number
+  // that never appeared in a ledger.
+  playbooks.attachController(controller);
+  watchpoints.attachController(controller);
 
   const runtime = new ExecutiveRuntime({
     controller,
@@ -646,6 +688,9 @@ export function createApp({
   for (const def of presenceHandoffActions(handoffs)) registry.register(def);
   const app = {
     controller,
+    // T-45: the two new engines, so the routes reach them without a second construction.
+    playbooks,
+    watchpoints,
     memory,
     conversation,
     session,
@@ -717,6 +762,9 @@ export function createApp({
   // as well, because "what is owed today" is a question a reply may legitimately ask about the stores.
   // The three writes are owner-only: a commitment is the owner's own statement of intent.
   for (const def of agendaActions(agenda)) registry.register(def);
+  // T-45 Package 1: the catalog as a plain read, so `show playbooks` goes through a declaration rather
+  // than a second path into the engine.
+  for (const def of playbookReadActions(playbooks)) registry.register(def);
   const bootstrap = createWorkstationBootstrap({ app, dataDir, now: clock, doctor });
   for (const def of systemBootstrapActions(bootstrap)) registry.register(def);
   app.doctor = doctor;

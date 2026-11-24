@@ -67,6 +67,13 @@ test('T-38 trace: the searchable kinds and statuses are closed lists', () => {
     // T-44 Package 2 adds `agenda_item`: a commitment is a row the owner wrote, with an id of its own and
     // a `linkedArtifactId` a chain can follow.
     'agenda_item',
+    // T-45 Package 1 adds `playbook_run`: a routine's execution is a record with an id of its own whose
+    // steps each name an operation, so a chain opened on a `pbr_` id has to find the run before it can
+    // follow them.
+    'playbook_run',
+    // T-45 Package 2 adds two, for the same reason the standing orders have two: `watchpoint` is a rule
+    // that changes (its state and its counts) and `watchpoint_eval` is one event per evaluation.
+    'watchpoint', 'watchpoint_eval',
   ]);
   assert.ok(EPISTEMIC_STATUSES.includes('candidate_association'),
     'a candidate association is a status a reader can filter on');

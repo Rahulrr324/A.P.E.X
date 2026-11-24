@@ -195,7 +195,13 @@ describe('T-31 browser suite wiring', () => {
     // out of the ledger, the only one that moves the Lockdown latch and proves release fires nothing,
     // and the only one that reads a commitment's horizon beside the derived rows the stores already
     // hold. Thirteen specs.
-    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs', '\*\*\/t36-cold-boot-unseeded\.spec\.mjs', '\*\*\/t37-neural-council-router\.spec\.mjs', '\*\*\/t38-values-workspace-trace\.spec\.mjs', '\*\*\/t39-workshop-apply-rollback\.spec\.mjs', '\*\*\/t40-changeset-drift-command-help\.spec\.mjs', '\*\*\/t41-sandbox-test-and-evolution-bridge\.spec\.mjs', '\*\*\/t43-workstation-git-telemetry\.spec\.mjs', '\*\*\/t44-standing-orders-agenda\.spec\.mjs'\]/);
+    // T-45 Step 4 (2026-11-19): the playbook / watchpoint / overlay walk joins the list. It is the only
+    // suite that launches a three-step routine from a card and checks all three receipts against the one
+    // operations ledger, the only one that judges a threshold against a number the running process really
+    // reports (`apex_rss_mb`), and the only one that measures contrast and overflow in TWO postures of the
+    // same deck, because the compact posture hides elements and a hidden element cannot be measured.
+    // Fourteen specs.
+    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs', '\*\*\/t36-cold-boot-unseeded\.spec\.mjs', '\*\*\/t37-neural-council-router\.spec\.mjs', '\*\*\/t38-values-workspace-trace\.spec\.mjs', '\*\*\/t39-workshop-apply-rollback\.spec\.mjs', '\*\*\/t40-changeset-drift-command-help\.spec\.mjs', '\*\*\/t41-sandbox-test-and-evolution-bridge\.spec\.mjs', '\*\*\/t43-workstation-git-telemetry\.spec\.mjs', '\*\*\/t44-standing-orders-agenda\.spec\.mjs', '\*\*\/t45-playbooks-watchpoints-overlay\.spec\.mjs'\]/);
     assert.match(config, /testIgnore: \['\*\*\/apex-browser\.spec\.mjs'\]/);
     const spec = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't31-real-browser.spec.mjs'), 'utf8');
     assert.match(spec, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/);

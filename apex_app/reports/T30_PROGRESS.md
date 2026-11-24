@@ -3427,3 +3427,99 @@ The third was the SSE stream: the walk reloads twice to see the latch engage and
 reload cancels the page's own `/api/events` request mid-flight. The fix counts it rather than waving it
 through — `ERR_ABORTED` on that path only, in its own list, ceiling of one per reload, and every other
 failed request still fails the walk.
+
+---
+
+## T-45 — Executive Playbooks, Sentinel Watchpoints, and the tactical overlay
+
+**2026-11-19.** Four packages, in order: the routine engine, the monitor engine, the surfaces, and this
+record. The milestone's own claim is narrow and worth stating exactly, because it is the claim the tests
+are built around: *a routine is three receipts and one record, a threshold is a judgement and a history,
+and the compact deck is a posture rather than a mode.*
+
+### Package 1 — `src/executive/playbooks.js`
+
+Three curated routines, each compiled to a fan-out/fan-in DAG and each step run through the same
+`controller.playbookStep` path a single act takes:
+
+| Routine | The graph |
+|---|---|
+| `morning_briefing` | `system.doctor` ‖ `git.status_detailed` → `agenda.list` |
+| `workspace_security_audit` | `system.inspect_ports` ‖ `system.inspect_processes` → `git.status_detailed` |
+| `pre_release_readiness` | `system.doctor` ‖ `standing_order.evaluate` → `git.diff_inspect` |
+
+A template is **verified** when every step is a registered capability the ECP will allow, declares
+`reversibility` of `reversible` or `read_only`, a `blastRadius` of `local_state` or `none`, and no higher
+than L2. A template is not trusted; it is checked on every read.
+
+The fan-in rule is the engine's reason to exist: the third step runs only if **both** roots verified.
+Otherwise it is recorded `skipped` with the name of the step it was waiting for, and the run is `failed`.
+A routine that ran on half a reading would be a routine whose `verified` flag meant "I finished", which is
+not a sentence an owner can act on.
+
+Launch is `playbook.launch` at L2, owner-origin only, and is itself an audited act: the run's own record
+is written after its steps, so a routine is never the one write in the product with no receipt.
+
+### Package 2 — `src/perception/watchpoints.js`
+
+Four metrics, each measured by running the capability that already owns the reading, so a metric is never
+a second implementation of a number the product already takes:
+
+| Metric | Measured from |
+|---|---|
+| `dirty_files_count` | `git.status_detailed` (staged + unstaged + untracked; `0` with no repository) |
+| `external_ports_count` | `system.inspect_ports` → `summary.externalExposureCount` |
+| `apex_rss_mb` | `system.inspect_processes` → `Math.round(apexProcess.rssBytes / 1048576)` |
+| `overdue_commitments_count` | `agenda.list` → `summary.overdueCount` |
+
+Three operators (`gt`, `gte`, `eq`), three severities, four states. `unmeasured` is its own state and not
+a synonym for `nominal`: a rule nothing has read has not passed, and recording it as a pass is an invented
+answer. A breach **fires nothing** — a monitor that acted would be a standing order wearing a monitor's
+name, and the product would then have two ways to say "do Y when X", one of which nobody had authorised as
+a delegation.
+
+One evaluation is one audited write, with one operation id stamped onto every history row it judged, so a
+batch of four rules is one act with four readings rather than four acts a reader has to assemble.
+
+### Package 3 — the surfaces
+
+- **`#playbooks-panel`** inside `section.view[data-view="tasks"]`: the three summary badges, a template
+  card per routine drawing its DAG as `a || b -> c` with a Launch button, and a run card per launch with
+  its status badge, its three step badges and each step's `operationId`, plus a Trace button.
+- **`#sentinel-watchpoints-panel`** inside `section.view[data-view="sentinel"]`: four summary badges, the
+  create form (title, metric, operator, threshold, severity), Evaluate and the rule cards with their state
+  badge, their measured value against their threshold, their breach count and Pause / Delete / Trace.
+- **The tactical overlay**: `#btn-hud-overlay-toggle` in the top bar, `body[data-hud-posture]`
+  (`full` | `overlay`) hydrated from `localStorage 'apex.hudPosture'`, and `#tactical-overlay-strip` above
+  every view with the five readings an owner watching a live system needs. It is a **posture, not a
+  mode**: the nav, the reticle, the mode controls, Ctrl+K and the active view all stay where they were, so
+  the compact deck cannot strand anyone on a screen with no way off it. The strip never fetches — every
+  number in it is a reading the deck already holds.
+
+### Package 4 — the tests, and what they found
+
+`tests/executive-playbooks.test.js` (13 tests) and `tests/sentinel-watchpoints.test.js` (20 tests) pin the
+engines against the real composed application and a real git repository;
+`tests/e2e/t45-playbooks-watchpoints-overlay.spec.mjs` is the fourteenth wired browser suite and the first
+that measures contrast in two postures of the same deck.
+
+**Full suite: 4,393 tests / 4,391 pass / 0 fail / 2 skipped** (the two conditional browser checks that
+skip loudly without a binary). Suite growth from T-44: +33 tests, no existing test removed or made
+conditional.
+
+Six defects were found and closed in the course of the work. Two are worth naming here because they were
+rules that read correctly in a comment and did not hold in the code — the kind a suite built only from the
+brief's acceptance criteria would have missed:
+
+- **A threshold of `-1` or `0.5` was accepted.** All four metrics are whole-number counts, so such a rule
+  can never mean what its author intended: `-1` on `dirty_files_count` is breached by a clean tree, and
+  `0.5` is breached by nothing. `INVALID_WATCHPOINT_THRESHOLD` now covers the case.
+- **Pausing and resuming a breached rule turned it nominal.** The resume read the state, which pausing had
+  overwritten with `paused`, and fell back to `nominal`. It now re-judges the stored value against the
+  stored threshold — which is the whole point of keeping both on the record.
+
+The other four: the ECP denying before the engine's own gate (fixed with a grantless `precheck`), a routine
+that could not launch at all without a workspace root (an unregistered step is now `skipped` with its
+reason rather than fatal to the template), a step's operation that could not be traced back to its run
+(both directions now resolve), and a trace that reported `complete: true` beside "no cognition run names
+this id" (the same false negative T-39 removed for candidate chains).

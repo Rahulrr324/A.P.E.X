@@ -251,6 +251,16 @@ const MODEL_WRITE_ATTEMPTS = [
   ['agenda.create', { title: 'the model scheduled something' }],
   ['agenda.complete', { itemId: 'ag_probe' }],
   ['agenda.dismiss', { itemId: 'ag_probe' }],
+  // [T-45 Packages 1 and 2, 2026-11-19] A routine and a threshold are the owner's own standing
+  // instructions. A reply that could launch a playbook could run three capabilities without anyone
+  // asking, and one that could set a threshold could decide what counts as a problem. All five writes
+  // are refused at model origin. The three reads (`playbook.catalog`, `playbook.read`, `watchpoint.list`)
+  // are deliberately not here: they are reads.
+  ['playbook.launch', { playbookId: 'morning_briefing' }],
+  ['watchpoint.create', { title: 'the model set a threshold', metric: 'apex_rss_mb', threshold: 1 }],
+  ['watchpoint.toggle', { watchpointId: 'wp_probe', enabled: false }],
+  ['watchpoint.delete', { watchpointId: 'wp_probe' }],
+  ['watchpoint.evaluate', {}],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.

@@ -837,6 +837,17 @@ function standingOrderRefusalBody(err) {
   };
 }
 
+// T-45: the same shape for the two new ledgers. A refusal names the code and the structured detail, so a
+// caller is never left with a message it has to parse to find out which rule it broke.
+function watchpointRefusalBody(err) {
+  return {
+    verified: false,
+    error: err?.message ?? 'the watchpoint act was refused',
+    code: err?.code ?? null,
+    ...(err?.detail && typeof err.detail === 'object' ? { detail: err.detail } : {}),
+  };
+}
+
 function gitRefusalBody(result, step) {
   const failed = step?.execution?.error ?? null;
   const code = failed?.code ?? (step?.authorization?.decision === 'deny' ? step.authorization.reason : null);
@@ -3626,6 +3637,166 @@ export function createUiServer({
         scheduleOwnerRefresh();
       } catch (err) {
         sendJson(res, err.status ?? 400, standingOrderRefusalBody(err));
+      }
+      return;
+    }
+
+    // ---- T-45 Package 1: the Executive Playbooks -----------------------------------------------
+    //
+    // Two routes. The GET answers 200 on every configuration, including a build with no workspace root
+    // and one whose ledger does not exist yet: the templates are constants, and the panel is on the tasks
+    // view, so a 503 there would be a console error on a view the owner uses to plan work. The launch is a
+    // write and goes through the controller, which is the one path that authorizes, validates, executes,
+    // verifies and finalizes - so an L2 launch with a step-up token configured is gated by the ECP and
+    // not by a second copy of that rule living in a route.
+    if (method === 'GET' && url.pathname === '/api/playbooks') {
+      try {
+        const engine = app.playbooks;
+        if (!engine || typeof engine.catalog !== 'function') {
+          sendJson(res, 200, {
+            verified: true, available: false, lockdownActive: false,
+            templates: [], runs: [],
+            summary: { templateCount: 0, totalRuns: 0, verifiedRuns: 0, failedRuns: 0 },
+          });
+          return;
+        }
+        sendJson(res, 200, engine.catalog());
+      } catch (err) {
+        sendJson(res, 500, { error: `the playbook ledger could not be read: ${err.message}` });
+      }
+      return;
+    }
+    const playbookLaunchMatch = method === 'POST' && url.pathname.match(/^\/api\/playbooks\/([^/]+)\/launch$/);
+    if (playbookLaunchMatch) {
+      let playbookId;
+      try {
+        playbookId = decodeURIComponent(playbookLaunchMatch[1]);
+      } catch {
+        sendJson(res, 400, { error: 'the playbook id is not valid percent-encoding' });
+        return;
+      }
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      const payload = body === null ? {} : body;
+      if (typeof payload !== 'object' || Array.isArray(payload)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(payload).filter((key) => !['reason', 'stepUp'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        // The two refusals whose codes are specified are settled here, by the engine's own gate, before an
+        // authorization is spent. This validates and grants nothing - the launch re-checks both - but it is
+        // what makes an unknown id a 404 PLAYBOOK_NOT_FOUND and a stopped system a 423 LOCKDOWN_ACTIVE
+        // rather than whichever of the ECP's own refusals would have arrived first.
+        if (app.playbooks && typeof app.playbooks.precheck === 'function') app.playbooks.precheck(playbookId);
+        const step = await app.controller.runAction('playbook.launch', {
+          playbookId,
+          ...(typeof payload.reason === 'string' && payload.reason.trim() !== '' ? { reason: payload.reason } : {}),
+          ...(typeof payload.stepUp === 'string' && payload.stepUp !== '' ? { stepUp: payload.stepUp } : {}),
+        }, 'user', `ui-playbook-launch-${randomUUID()}`, null);
+        const run = step?.result?.data ?? null;
+        const verified = step?.verification?.outcome === 'success_verified';
+        if (!run) {
+          sendJson(res, step?.authorization?.decision === 'deny' ? 403 : 400, {
+            status: step?.outcome ?? 'failed',
+            error: step?.summary || step?.execution?.error?.message || 'the playbook launch returned no run',
+            display: step?.display ?? null,
+            decision: step?.authorization?.decision ?? null,
+          });
+          return;
+        }
+        // The engine's own refusals travel as values with a status on them, so a locked launch is a 423
+        // and an unknown id a 404 even when the ECP allowed the request through.
+        sendJson(res, verified ? 200 : (run.status === 'failed' ? 409 : 200), run);
+        broadcast('playbook', { runId: run.runId, playbookId: run.playbookId, status: run.status });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        if (err?.status) {
+          sendJson(res, err.status, { error: err.message, code: err.code ?? null, detail: err.detail ?? null });
+          return;
+        }
+        // An unknown playbook is refused inside the action, which turns the engine's 404 into a failed
+        // step rather than a thrown error. This branch is the last resort for anything else.
+        sendJson(res, 500, { error: `the playbook could not be launched: ${String(err?.message ?? err).slice(0, 200)}` });
+      }
+      return;
+    }
+
+    // ---- T-45 Package 2: Sentinel Watchpoints --------------------------------------------------
+    //
+    // Five routes. The GET answers 200 on every configuration for the same reason the playbook GET does.
+    // The four writes go through the engine, which refuses bad metrics and thresholds with a named 400,
+    // an unknown id with 404, and every one of them with 423 while Lockdown is engaged. The evaluation is
+    // a write because it records the readings it took.
+    if (method === 'GET' && url.pathname === '/api/watchpoints') {
+      try {
+        const engine = app.watchpoints;
+        if (!engine || typeof engine.list !== 'function') {
+          sendJson(res, 200, {
+            verified: true, available: false, lockdownActive: false,
+            metrics: [], operators: [], severities: [], watchpoints: [],
+            summary: { totalCount: 0, enabledCount: 0, breachedCount: 0, nominalCount: 0 },
+          });
+          return;
+        }
+        sendJson(res, 200, engine.list());
+      } catch (err) {
+        sendJson(res, 500, { error: `the watchpoint ledger could not be read: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/watchpoints') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['title', 'metric', 'operator', 'threshold', 'severity', 'enabled'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const watchpoint = app.watchpoints.create(body);
+        sendJson(res, 200, watchpoint);
+        broadcast('watchpoint', { watchpointId: watchpoint.watchpointId, created: true });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, err.status ?? 400, watchpointRefusalBody(err));
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/watchpoints/evaluate') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['metricOverrides'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = await app.watchpoints.evaluate({ metricOverrides: body.metricOverrides ?? null });
+        sendJson(res, 200, result);
+        broadcast('watchpoint', { evalId: result.evalId, breachedCount: result.breachedCount });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, err.status ?? 400, watchpointRefusalBody(err));
+      }
+      return;
+    }
+    const watchpointActionMatch = method === 'POST' && url.pathname.match(/^\/api\/watchpoints\/([^/]+)\/(toggle|delete)$/);
+    if (watchpointActionMatch) {
+      let watchpointId;
+      try {
+        watchpointId = decodeURIComponent(watchpointActionMatch[1]);
+      } catch {
+        sendJson(res, 400, { error: 'the watchpoint id is not valid percent-encoding' });
+        return;
+      }
+      const verb = watchpointActionMatch[2];
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      const payload = body === null ? {} : body;
+      if (typeof payload !== 'object' || Array.isArray(payload)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      try {
+        if (verb === 'toggle') {
+          const watchpoint = app.watchpoints.toggle(watchpointId, { enabled: typeof payload.enabled === 'boolean' ? payload.enabled : null });
+          sendJson(res, 200, watchpoint);
+          broadcast('watchpoint', { watchpointId, enabled: watchpoint.enabled });
+        } else {
+          sendJson(res, 200, app.watchpoints.remove(watchpointId));
+          broadcast('watchpoint', { watchpointId, deleted: true });
+        }
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, err.status ?? 400, watchpointRefusalBody(err));
       }
       return;
     }

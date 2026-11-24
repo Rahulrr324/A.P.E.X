@@ -101,8 +101,25 @@ export const UI_PAGE = `<!doctype html>
     <!-- T-36 Step 2: the owner can replay the cold-start sequence on a machine that is already
          set up. It is the same governed bootstrap, so it refreshes rather than re-creates. -->
     <button id="boot-sequence-run" type="button" class="quiet small">Run Boot Sequence</button>
+    <!-- T-45 Package 3: the compact tactical overlay. A posture, not a mode: a mode changes palette, motion
+         and contrast; this changes what the deck puts on screen, and the strip it reveals is the five
+         numbers an owner watching a live system needs without the full chrome. -->
+    <button id="btn-hud-overlay-toggle" type="button" class="quiet small" aria-pressed="false"
+            aria-controls="tactical-overlay-strip" title="Compact tactical overlay: the live core state, mode, latch and counts on one strip">OVERLAY: OFF</button>
   </div>
 </header>
+
+<!-- T-45 Package 3: the compact tactical overlay strip. It is outside every view on purpose - it is the one
+     surface that must be visible whichever workspace the owner is looking at, and a strip inside a view
+     would disappear the moment they navigated. Every number in it is a reading the deck already holds, so
+     the strip adds no request and cannot disagree with the panel the number came from. -->
+<div id="tactical-overlay-strip" class="tactical-overlay-strip" role="group" aria-label="Tactical overlay" hidden>
+  <span class="overlay-item"><span class="overlay-key">CORE</span> <span id="overlay-core-state" class="overlay-value">—</span></span>
+  <span class="overlay-item"><span class="overlay-key">MODE</span> <span id="overlay-mode" class="overlay-value">—</span></span>
+  <span class="overlay-item"><span class="overlay-key">LATCH</span> <span id="overlay-lockdown" class="overlay-value">—</span></span>
+  <span class="overlay-item"><span class="overlay-key">BREACHED</span> <span id="overlay-watchpoint-breaches" class="overlay-value">0</span></span>
+  <span class="overlay-item"><span class="overlay-key">PENDING</span> <span id="overlay-approvals" class="overlay-value">0</span></span>
+</div>
 <!-- T-32 Step 1: the command dispatch lives in its own bar between the top bar and the workspace
      tabs. One input, one place, and Tab reaches it before the tabs because that is where it is in
      the document rather than because a tabindex was raised above its neighbours. -->
@@ -344,6 +361,26 @@ export const UI_PAGE = `<!doctype html>
       <span id="planning-status" class="meta" role="status"></span>
     </form>
     <ul id="planning" class="work"></ul>
+    <!-- T-45 Package 3: the executive playbooks. Three curated multi-step routines, each a DAG: two roots
+         that do not depend on each other, then a fan-in step that runs only if both verified. The template
+         cards are drawn from the template's own step list, so the panel cannot disagree with the engine
+         about what the routine is. -->
+    <section class="panel" id="playbooks-panel" data-depth-plane="z4" aria-labelledby="playbooks-heading"
+             aria-describedby="playbooks-description">
+      <h3 id="playbooks-heading">Executive playbooks</h3>
+      <p id="playbooks-description" class="meta">A curated routine of three steps, run through the ECP in dependency order. A fan-in step runs only if every step it depends on verified; otherwise it is recorded as skipped and the run as failed.</p>
+      <p id="playbooks-status" class="workspace-status" role="status" aria-live="polite">Loading the playbooks…</p>
+      <div id="playbooks-summary-badges" class="badge-row" role="group" aria-label="Playbook summary">
+        <span class="badge" data-playbook-badge="templates">TEMPLATES <span id="playbooks-template-count">0</span></span>
+        <span class="badge" data-playbook-badge="runs">TOTAL RUNS <span id="playbooks-runs-count">0</span></span>
+        <span class="badge" data-playbook-badge="verified">VERIFIED RUNS <span id="playbooks-verified-count">0</span></span>
+      </div>
+      <h4>Templates</h4>
+      <ul id="playbooks-template-list" class="work playbooks-list"></ul>
+      <h4>Runs</h4>
+      <p id="playbooks-runs-status" class="workspace-status" role="status" aria-live="polite"></p>
+      <ul id="playbooks-runs-list" class="work playbooks-list playbooks-runs"></ul>
+    </section>
   </section>
   <section class="view" data-view="approvals" data-depth-plane="z3">
     <h2>Approval Centre</h2>
@@ -451,6 +488,52 @@ export const UI_PAGE = `<!doctype html>
       <ul id="perception-alerts" class="work"></ul>
       <ul id="perception-observations" class="work"></ul>
       <ul id="perception-suppressions" class="work"></ul>
+    </section>
+    <!-- T-45 Package 3: the configurable Sentinel watchpoints. A rule is a metric, an operator and a
+         threshold; an evaluation measures the metric by running the capability that owns it and records
+         the number it saw. Nothing fires when a threshold is crossed - a breach is a recorded fact, not a
+         trigger, because a monitor that acted would be a standing order wearing a monitor's name. -->
+    <section class="panel" id="sentinel-watchpoints-panel" data-depth-plane="z4" aria-labelledby="watchpoints-heading"
+             aria-describedby="watchpoints-description">
+      <h3 id="watchpoints-heading">Watchpoints — thresholds on live readings</h3>
+      <p id="watchpoints-description" class="meta">A threshold you set on a number the machine already measures. An evaluation reads the live metric and records what it saw; a paused rule keeps its history and is skipped.</p>
+      <p id="watchpoints-status" class="workspace-status" role="status" aria-live="polite">Loading the watchpoints…</p>
+      <div id="watchpoints-summary-badges" class="badge-row" role="group" aria-label="Watchpoint summary">
+        <span class="badge" data-watchpoint-badge="total">TOTAL WATCHPOINTS <span id="watchpoints-total-count">0</span></span>
+        <span class="badge" data-watchpoint-badge="enabled">ENABLED <span id="watchpoints-enabled-count">0</span></span>
+        <span class="badge" data-watchpoint-badge="breached">BREACHED <span id="watchpoints-breached-count">0</span></span>
+        <span class="badge" data-watchpoint-badge="nominal">NOMINAL <span id="watchpoints-nominal-count">0</span></span>
+      </div>
+      <form id="watchpoint-form" class="watchpoint-form" onsubmit="return false">
+        <label for="wp-title-input" class="visually-hidden">Watchpoint title</label>
+        <input id="wp-title-input" type="text" maxlength="120" placeholder="what this rule watches for" autocomplete="off">
+        <label for="wp-metric-select" class="visually-hidden">Metric</label>
+        <select id="wp-metric-select">
+          <option value="dirty_files_count">dirty files</option>
+          <option value="external_ports_count">external ports</option>
+          <option value="apex_rss_mb">APEX memory (MB)</option>
+          <option value="overdue_commitments_count">overdue commitments</option>
+        </select>
+        <label for="wp-operator-select" class="visually-hidden">Operator</label>
+        <select id="wp-operator-select">
+          <option value="gt">greater than</option>
+          <option value="gte">at least</option>
+          <option value="eq">exactly</option>
+        </select>
+        <label for="wp-threshold-input" class="visually-hidden">Threshold</label>
+        <input id="wp-threshold-input" type="number" step="1" min="0" value="0" inputmode="numeric">
+        <label for="wp-severity-select" class="visually-hidden">Severity</label>
+        <select id="wp-severity-select">
+          <option value="advisory">advisory</option>
+          <option value="warning">warning</option>
+          <option value="critical">critical</option>
+        </select>
+        <button id="btn-wp-create" type="button" class="small">Create watchpoint</button>
+        <button id="btn-wp-evaluate" type="button" class="small">Evaluate all</button>
+      </form>
+      <p id="wp-refusal" class="meta" role="alert" hidden></p>
+      <p id="wp-eval-status" class="workspace-status" role="status" aria-live="polite"></p>
+      <ul id="sentinel-watchpoints-list" class="work watchpoints-list"></ul>
     </section>
   </section>
   <section class="view" data-view="memory" data-depth-plane="z3"
@@ -1563,6 +1646,75 @@ body[data-hud-flat="true"] .panel, body[data-hud-flat="true"] .rail, body[data-h
 #sensor-privacy-indicator[data-audio="disabled"][data-camera="disabled"] { color: var(--hud-text, #d7e3f4); }
 #sensor-privacy-indicator[data-capture-possible="true"] { color: var(--armor-red-text, #ff6b5a); }
 #stepdown-state[data-stage="5"] { border-color: var(--gold); }
+
+/* T-45 Package 3: the tactical overlay, the playbook cards and the watchpoint cards.
+   Every colour is a token that already existed. Every red *label* uses --armor-red-text rather than
+   --armor-red: the solid red is a fill for a bar and measures 4.03:1 against the void, under the 4.5 the
+   deck holds itself to, while the text variant measures 5.94:1. The green, gold and cyan labels are the
+   same three the T-44 cards use, and they were measured at the same time. */
+#btn-hud-overlay-toggle[aria-pressed="true"] {
+  color: var(--arc-cyan); border-color: var(--arc-cyan); background: rgba(0, 229, 255, .08);
+}
+.tactical-overlay-strip {
+  display: flex; flex-wrap: wrap; gap: .2rem 1rem; align-items: center;
+  margin: 0; padding: .35rem .75rem; min-width: 0;
+  border-bottom: 1px solid var(--line-strong); background: rgba(0, 0, 0, .45);
+  font-family: var(--font-mono); font-size: .76rem; letter-spacing: .06em;
+}
+.tactical-overlay-strip[hidden] { display: none; }
+.overlay-item { display: inline-flex; gap: .35rem; align-items: baseline; min-width: 0; max-width: 100%; }
+.overlay-key { color: var(--text-dim); }
+.overlay-value { color: var(--text); overflow-wrap: anywhere; }
+#overlay-lockdown[data-latch="active"] { color: var(--armor-red-text); }
+#overlay-watchpoint-breaches[data-breaches="some"] { color: var(--armor-red-text); }
+/* The posture hides what it says it hides, and nothing else: the nav, the reticle, the mode controls and
+   the view the owner chose all stay where they were. A compact posture that stranded someone on a screen
+   with no way off it would be a worse deck, not a smaller one. */
+body[data-hud-posture="overlay"] [data-overlay-collapsible="true"] { display: none !important; }
+body[data-hud-posture="overlay"] .panel { padding: .7rem; }
+body[data-hud-posture="overlay"] .view h2 { margin-bottom: .35rem; }
+body[data-hud-posture="overlay"] .work { gap: .4rem; }
+/* The two new panels reuse the T-44 card shape so a reader learns it once. The only additions are the
+   DAG line and the step list, both of which wrap because a capability name has no spaces to break at. */
+.playbooks-list li, .watchpoints-list li { min-width: 0; }
+.playbooks-list, .watchpoints-list { min-width: 0; max-width: 100%; }
+.playbooks-list li, .watchpoints-list li { display: grid; gap: .25rem; border-left: 2px solid var(--line); padding-left: .55rem; }
+.playbook-card, .watchpoint-card { border-left-color: var(--line-strong); }
+.playbook-card[data-run-status="failed"], .watchpoint-card[data-wp-state="breached"] { border-left-color: var(--armor-red-text); }
+.playbook-card[data-run-status="verified"] { border-left-color: var(--ok-green); }
+.watchpoint-card[data-wp-state="paused"] { border-left-color: var(--armor-gold); }
+.watchpoint-card[data-wp-state="unmeasured"] { border-left-color: var(--arc-cyan); }
+.playbook-head, .watchpoint-head { display: flex; flex-wrap: wrap; gap: .4rem; align-items: baseline; }
+.playbook-title, .watchpoint-title { color: var(--text); font-weight: 600; }
+.playbook-id, .watchpoint-id { color: var(--text-dim); font-size: .78rem; letter-spacing: .04em; }
+.playbook-badge, .watchpoint-badge {
+  color: var(--text); background: rgba(0, 0, 0, .25); border: 1px solid var(--line); padding: .1rem .4rem;
+}
+.playbook-badge--verified, .watchpoint-badge--nominal { color: var(--ok-green); border-color: var(--ok-green); }
+.playbook-badge--failed, .watchpoint-badge--breached { color: var(--armor-red-text); border-color: var(--armor-red-text); }
+.playbook-badge--skipped, .watchpoint-badge--paused { color: var(--armor-gold); border-color: var(--armor-gold); }
+.playbook-badge--rule, .watchpoint-badge--unmeasured { color: var(--arc-cyan); border-color: var(--arc-cyan); }
+.playbook-dag, .watchpoint-row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.playbook-dag-arrow, .playbook-dag-label { color: var(--text-dim); font-size: .78rem; }
+.playbook-steps { list-style: none; margin: .15rem 0 0; padding: 0; display: grid; gap: .15rem; }
+.playbook-steps li { display: flex; flex-wrap: wrap; gap: .4rem; align-items: baseline; border: 0; padding-left: 0; }
+.playbook-step-label, .playbook-step-capability, .playbook-step-op, .watchpoint-value { overflow-wrap: anywhere; }
+.playbook-step-op { color: var(--text-dim); font-size: .78rem; }
+.watchpoint-value { color: var(--text); }
+.playbook-card button, .watchpoint-card button {
+  color: var(--text); background: rgba(0, 0, 0, .3); border: 1px solid var(--line-strong); padding: .15rem .45rem;
+}
+.playbook-card button:disabled, .watchpoint-card button:disabled { color: var(--text-dim); border-color: var(--line); cursor: not-allowed; }
+.watchpoint-form { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin: .4rem 0; }
+.watchpoint-form input, .watchpoint-form select { min-width: 0; max-width: 100%; }
+#wp-title-input { min-width: 12rem; }
+#wp-threshold-input { width: 6rem; }
+@media (max-width: 720px) {
+  .watchpoint-form input, .watchpoint-form select { width: 100%; }
+  #wp-title-input, #wp-threshold-input { width: 100%; min-width: 0; }
+  .tactical-overlay-strip { font-size: .72rem; gap: .15rem .6rem; }
+  .badge-row { gap: .3rem; }
+}
 `;
 
 
@@ -1850,6 +2002,38 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   agendaAddStatus: document.getElementById('agenda-add-status'),
   agendaList: document.getElementById('briefing-agenda-list'),
   derivedAgendaList: document.getElementById('briefing-derived-agenda-list'),
+  // T-45 Package 3: the playbooks panel, the watchpoints panel and the tactical overlay strip.
+  playbooksPanel: document.getElementById('playbooks-panel'),
+  pbStatus: document.getElementById('playbooks-status'),
+  pbTemplateCount: document.getElementById('playbooks-template-count'),
+  pbRunsCount: document.getElementById('playbooks-runs-count'),
+  pbVerifiedCount: document.getElementById('playbooks-verified-count'),
+  pbTemplateList: document.getElementById('playbooks-template-list'),
+  pbRunsStatus: document.getElementById('playbooks-runs-status'),
+  pbRunsList: document.getElementById('playbooks-runs-list'),
+  watchpointsPanel: document.getElementById('sentinel-watchpoints-panel'),
+  wpStatus: document.getElementById('watchpoints-status'),
+  wpTotalCount: document.getElementById('watchpoints-total-count'),
+  wpEnabledCount: document.getElementById('watchpoints-enabled-count'),
+  wpBreachedCount: document.getElementById('watchpoints-breached-count'),
+  wpNominalCount: document.getElementById('watchpoints-nominal-count'),
+  wpTitleInput: document.getElementById('wp-title-input'),
+  wpMetricSelect: document.getElementById('wp-metric-select'),
+  wpOperatorSelect: document.getElementById('wp-operator-select'),
+  wpThresholdInput: document.getElementById('wp-threshold-input'),
+  wpSeveritySelect: document.getElementById('wp-severity-select'),
+  btnWpCreate: document.getElementById('btn-wp-create'),
+  btnWpEvaluate: document.getElementById('btn-wp-evaluate'),
+  wpRefusal: document.getElementById('wp-refusal'),
+  wpEvalStatus: document.getElementById('wp-eval-status'),
+  watchpointsList: document.getElementById('sentinel-watchpoints-list'),
+  btnHudOverlay: document.getElementById('btn-hud-overlay-toggle'),
+  tacticalOverlayStrip: document.getElementById('tactical-overlay-strip'),
+  overlayCoreState: document.getElementById('overlay-core-state'),
+  overlayMode: document.getElementById('overlay-mode'),
+  overlayLockdown: document.getElementById('overlay-lockdown'),
+  overlayWatchpointBreaches: document.getElementById('overlay-watchpoint-breaches'),
+  overlayApprovals: document.getElementById('overlay-approvals'),
   docSearch: document.getElementById('doc-search-form'),
   docSearchText: document.getElementById('doc-search'),
   banner: document.getElementById('banner'),
@@ -1901,6 +2085,12 @@ const state = {
   // policy list the capability select is built from without a second fetch.
   standingOrders: null,
   agenda: null,
+  // T-45 Package 3: the two new ledgers' last reads, and the approval total the strip quotes. An
+  // undefined value means "not read yet"; null means "the read was partial". The strip tells them apart so
+  // an unavailable owner store shows a dash rather than a zero the owner would read as an all-clear.
+  playbooks: null,
+  watchpoints: null,
+  pendingApprovalCount: undefined,
   eventCursor: { streamId: null, seq: 0, versions: {} },
   ownerSnapshots: Object.create(null),
   eventReconciled: false,
@@ -2599,6 +2789,11 @@ function renderApprovalCentre(result) {
   const missing = Object.entries(sources).filter(([, source]) => source?.available !== true).map(([name]) => name);
   const total = Number.isInteger(value.total) ? value.total : (Array.isArray(value.items) ? value.items.length : 0);
   const shown = Array.isArray(value.items) ? value.items.length : 0;
+  // T-45 Package 3: the tactical strip quotes this number, so it is taken from the read that rendered the
+  // centre rather than from a second read that could disagree with it. An unreadable owner store reports
+  // nothing rather than zero: a strip that showed 0 while the read was failing would be a false all-clear.
+  state.pendingApprovalCount = value.status === 'partial' || missing.length > 0 ? null : total;
+  if (typeof syncOverlayStrip === 'function') syncOverlayStrip();
   if (value.status === 'partial' || missing.length > 0) {
     setWorkspaceStatus(els.approvalState, 'Partial owner read; unavailable: ' + (missing.join(', ') || 'one or more stores')
       + '. Showing ' + shown + ' of ' + total + ' known request(s).', 'partial');
@@ -3566,7 +3761,15 @@ async function dispatchCommand(line) {
     focusPanel(receipt.target);
     if (receipt.target === '#briefing-agenda-panel') void refreshAgenda();
     if (receipt.target === '#standing-orders-panel') void refreshStandingOrders();
+    // T-45 Package 3: a command that names one of the new panels re-reads it for the same reason.
+    if (receipt.target === '#playbooks-panel') void refreshPlaybooks();
+    if (receipt.target === '#sentinel-watchpoints-panel') void refreshWatchpoints();
   }
+  // T-45 Package 3: the posture commands. They carry no capability, so the receipt names no view and
+  // authorizes nothing - the router is stateless and does not know which posture is on screen, so it
+  // answers "toggle" and the deck, which does know, performs the toggle. That keeps the router free of
+  // browser state and keeps the button and the command line from disagreeing: both call this one function.
+  if (receipt.routeKind === 'hud') toggleHudPosture();
   return receipt;
 }
 
@@ -6421,6 +6624,9 @@ async function refresh() {
   // T-44 Packages 1 and 2: the two new panels, on the same fire-and-forget discipline.
   void refreshStandingOrders();
   void refreshAgenda();
+  // T-45 Package 3: the playbooks and the watchpoints, and the strip that quotes both.
+  void refreshPlaybooks();
+  void refreshWatchpoints();
   renderPerception(perceptionResult);
   // T-33 Step 3: the graph and the perception reading the Workshop stages a sheet from.
   state.perception = perceptionResult.ok === true ? perceptionResult.value : null;
@@ -6976,6 +7182,397 @@ async function refreshStandingOrders() {
   }
 }
 
+// ------------------------------------------------------------------------------------------------
+// T-45 Package 3: the executive playbooks, the watchpoints and the tactical overlay.
+//
+// Three surfaces, one discipline: every number rendered here was returned by the server, and every
+// button posts and then re-reads. Nothing is optimistically updated, because a deck that shows a
+// threshold as breached before the evaluation that measured it has answered is a deck that has decided
+// something the engine has not.
+// ------------------------------------------------------------------------------------------------
+
+function playbookStatusClass(status) {
+  if (status === 'verified') return 'playbook-badge--verified';
+  if (status === 'failed') return 'playbook-badge--failed';
+  return 'playbook-badge--skipped';
+}
+
+// The template's DAG as one line: the roots that run in parallel, then the fan-in they feed. Read from
+// the template's own step list so the line cannot drift from what launching it will actually do.
+function playbookDagLine(template) {
+  const steps = Array.isArray(template?.steps) ? template.steps : [];
+  const roots = steps.filter((step) => Array.isArray(step.dependsOn) && step.dependsOn.length === 0);
+  const joins = steps.filter((step) => Array.isArray(step.dependsOn) && step.dependsOn.length > 0);
+  if (roots.length === 0 || joins.length === 0) return steps.map((step) => step.capabilityId).join(' then ');
+  return roots.map((step) => step.capabilityId).join(' || ') + ' -> ' + joins.map((step) => step.capabilityId).join(', ');
+}
+
+function renderPlaybooks(view) {
+  const templates = Array.isArray(view?.templates) ? view.templates : [];
+  const runs = Array.isArray(view?.runs) ? view.runs : [];
+  const summary = view?.summary ?? {};
+  if (els.pbTemplateCount) els.pbTemplateCount.textContent = String(summary.templateCount ?? templates.length);
+  if (els.pbRunsCount) els.pbRunsCount.textContent = String(summary.totalRuns ?? runs.length);
+  if (els.pbVerifiedCount) els.pbVerifiedCount.textContent = String(summary.verifiedRuns ?? 0);
+  if (els.pbStatus) {
+    els.pbStatus.textContent = view?.lockdownActive === true
+      ? templates.length + ' template(s). Lockdown is engaged, so nothing may be launched.'
+      : templates.length + ' template(s), ' + (summary.totalRuns ?? runs.length) + ' run(s) recorded, '
+        + (summary.verifiedRuns ?? 0) + ' verified, ' + (summary.failedRuns ?? 0) + ' failed.';
+  }
+
+  if (els.pbTemplateList) {
+    els.pbTemplateList.replaceChildren();
+    for (const template of templates) {
+      const item = document.createElement('li');
+      item.className = 'playbook-card';
+      item.dataset.playbookId = template.playbookId;
+      item.dataset.playbookStatus = String(template.verified === true);
+
+      const head = document.createElement('div');
+      head.className = 'playbook-head';
+      const title = document.createElement('span');
+      title.className = 'playbook-title';
+      title.textContent = template.title;
+      const id = document.createElement('span');
+      id.className = 'playbook-id';
+      id.textContent = template.playbookId;
+      const rule = document.createElement('span');
+      rule.className = 'playbook-badge playbook-badge--rule';
+      rule.textContent = template.steps.length + ' STEPS';
+      head.append(title, id, rule);
+
+      const dag = document.createElement('div');
+      dag.className = 'playbook-dag';
+      const dagText = document.createElement('span');
+      dagText.className = 'playbook-dag-label';
+      dagText.textContent = playbookDagLine(template);
+      dag.append(dagText);
+
+      const steps = document.createElement('ul');
+      steps.className = 'playbook-steps';
+      for (const step of Array.isArray(template.steps) ? template.steps : []) {
+        const row = document.createElement('li');
+        const label = document.createElement('span');
+        label.className = 'playbook-step-label';
+        label.textContent = step.label;
+        const capability = document.createElement('span');
+        capability.className = 'playbook-step-capability meta';
+        capability.textContent = step.capabilityId;
+        const tier = document.createElement('span');
+        tier.className = 'playbook-step-op';
+        tier.textContent = step.dependsOn.length === 0 ? 'root' : 'after ' + step.dependsOn.join(', ');
+        row.append(label, capability, tier);
+        steps.append(row);
+      }
+
+      const buttons = document.createElement('div');
+      buttons.className = 'playbook-row';
+      const launch = document.createElement('button');
+      launch.type = 'button';
+      launch.className = 'small';
+      launch.dataset.action = 'launch-playbook';
+      launch.dataset.playbookId = template.playbookId;
+      launch.textContent = 'Launch';
+      // A locked deck offers the button disabled rather than hiding it: the owner can see that the routine
+      // exists and why it will not run, which a missing button would not tell them.
+      launch.disabled = view?.lockdownActive === true || template.verified !== true;
+      if (view?.lockdownActive === true) launch.title = 'Lockdown is engaged; a launch is refused.';
+      buttons.append(launch);
+
+      item.append(head, dag, steps, buttons);
+      els.pbTemplateList.append(item);
+    }
+  }
+
+  if (!els.pbRunsList) return;
+  els.pbRunsList.replaceChildren();
+  if (runs.length === 0) {
+    if (els.pbRunsStatus) els.pbRunsStatus.textContent = 'No routine has been launched yet.';
+    return;
+  }
+  if (els.pbRunsStatus) els.pbRunsStatus.textContent = 'Newest first. A run is verified only if all three steps did.';
+  for (const run of runs) {
+    const item = document.createElement('li');
+    item.className = 'playbook-card';
+    item.dataset.playbookRunId = run.runId;
+    item.dataset.runStatus = run.status;
+
+    const head = document.createElement('div');
+    head.className = 'playbook-head';
+    const title = document.createElement('span');
+    title.className = 'playbook-title';
+    title.textContent = run.title;
+    const id = document.createElement('span');
+    id.className = 'playbook-id';
+    id.textContent = run.runId;
+    const status = document.createElement('span');
+    status.className = 'playbook-badge ' + playbookStatusClass(run.status);
+    status.dataset.runBadge = run.status;
+    status.textContent = String(run.status).toUpperCase();
+    const verifiedCount = (Array.isArray(run.steps) ? run.steps : []).filter((step) => step.verified === true).length;
+    const steps = document.createElement('span');
+    steps.className = 'playbook-badge';
+    steps.textContent = verifiedCount + '/' + (Array.isArray(run.steps) ? run.steps.length : 0) + ' STEPS';
+    head.append(title, id, status, steps);
+
+    const list = document.createElement('ul');
+    list.className = 'playbook-steps';
+    for (const step of Array.isArray(run.steps) ? run.steps : []) {
+      const row = document.createElement('li');
+      const label = document.createElement('span');
+      label.className = 'playbook-step-label';
+      label.textContent = step.label;
+      const capability = document.createElement('span');
+      capability.className = 'playbook-step-capability meta';
+      capability.textContent = step.capabilityId;
+      const badge = document.createElement('span');
+      badge.className = 'playbook-badge ' + playbookStatusClass(step.status);
+      badge.dataset.stepStatus = step.status;
+      badge.textContent = String(step.status).toUpperCase();
+      row.append(label, capability, badge);
+      if (step.operationId) {
+        // The operation id is the receipt. It is rendered as text, not as a second control: the trace
+        // button below opens the chain, and two ways to open the same chain would be one too many.
+        const op = document.createElement('span');
+        op.className = 'playbook-step-op';
+        op.textContent = step.operationId;
+        row.append(op);
+      } else if (step.summary) {
+        const why = document.createElement('span');
+        why.className = 'playbook-step-op';
+        why.textContent = step.summary;
+        row.append(why);
+      }
+      list.append(row);
+    }
+
+    const buttons = document.createElement('div');
+    buttons.className = 'playbook-row';
+    const trace = document.createElement('button');
+    trace.type = 'button';
+    trace.className = 'small';
+    trace.dataset.action = 'trace-playbook-run';
+    trace.dataset.runId = run.runId;
+    trace.textContent = 'Trace';
+    buttons.append(trace);
+
+    item.append(head, list, buttons);
+    els.pbRunsList.append(item);
+  }
+}
+
+async function refreshPlaybooks() {
+  try {
+    const view = await api('/api/playbooks');
+    state.playbooks = view;
+    renderPlaybooks(view);
+    syncOverlayStrip();
+  } catch (error) {
+    if (els.pbStatus) els.pbStatus.textContent = 'The playbooks could not be read: ' + String(error?.message || error);
+  }
+}
+
+function watchpointStateClass(wpState) {
+  if (wpState === 'breached') return 'watchpoint-badge--breached';
+  if (wpState === 'nominal') return 'watchpoint-badge--nominal';
+  if (wpState === 'paused') return 'watchpoint-badge--paused';
+  return 'watchpoint-badge--unmeasured';
+}
+
+function metricLabel(metric) {
+  if (metric === 'dirty_files_count') return 'dirty files';
+  if (metric === 'external_ports_count') return 'external ports';
+  if (metric === 'apex_rss_mb') return 'APEX memory (MB)';
+  if (metric === 'overdue_commitments_count') return 'overdue commitments';
+  return String(metric);
+}
+
+function operatorLabel(operator) {
+  if (operator === 'gte') return '>=';
+  if (operator === 'eq') return '=';
+  return '>';
+}
+
+function renderWatchpoints(view) {
+  const watchpoints = Array.isArray(view?.watchpoints) ? view.watchpoints : [];
+  const summary = view?.summary ?? {};
+  if (els.wpTotalCount) els.wpTotalCount.textContent = String(summary.totalCount ?? watchpoints.length);
+  if (els.wpEnabledCount) els.wpEnabledCount.textContent = String(summary.enabledCount ?? 0);
+  if (els.wpBreachedCount) els.wpBreachedCount.textContent = String(summary.breachedCount ?? 0);
+  if (els.wpNominalCount) els.wpNominalCount.textContent = String(summary.nominalCount ?? 0);
+  if (els.wpStatus) {
+    els.wpStatus.textContent = view?.lockdownActive === true
+      ? watchpoints.length + ' rule(s). Lockdown is engaged, so a rule may be read but not written or evaluated.'
+      : watchpoints.length + ' rule(s): ' + (summary.enabledCount ?? 0) + ' enabled, '
+        + (summary.breachedCount ?? 0) + ' breached, ' + (summary.nominalCount ?? 0) + ' nominal.';
+  }
+  if (!els.watchpointsList) return;
+  els.watchpointsList.replaceChildren();
+  if (watchpoints.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'meta';
+    empty.textContent = 'No watchpoint has been created yet. A rule is a metric, an operator and a threshold.';
+    els.watchpointsList.append(empty);
+    return;
+  }
+  for (const wp of watchpoints) {
+    const item = document.createElement('li');
+    item.className = 'watchpoint-card';
+    item.dataset.watchpointId = wp.watchpointId;
+    item.dataset.wpState = wp.lastState;
+
+    const head = document.createElement('div');
+    head.className = 'watchpoint-head';
+    const title = document.createElement('span');
+    title.className = 'watchpoint-title';
+    title.textContent = wp.title;
+    const id = document.createElement('span');
+    id.className = 'watchpoint-id';
+    id.textContent = wp.watchpointId;
+    const state = document.createElement('span');
+    state.className = 'watchpoint-badge ' + watchpointStateClass(wp.lastState);
+    state.dataset.wpBadge = wp.lastState;
+    state.textContent = String(wp.lastState).toUpperCase();
+    head.append(title, id, state);
+
+    const row = document.createElement('div');
+    row.className = 'watchpoint-row';
+    const rule = document.createElement('span');
+    rule.className = 'watchpoint-badge watchpoint-badge--rule';
+    rule.textContent = metricLabel(wp.metric) + ' ' + operatorLabel(wp.operator) + ' ' + wp.threshold;
+    const severity = document.createElement('span');
+    severity.className = 'watchpoint-badge';
+    severity.textContent = String(wp.severity).toUpperCase();
+    severity.dataset.wpSeverity = wp.severity;
+    row.append(rule, severity);
+    if (wp.lastMeasuredValue !== null && wp.lastMeasuredValue !== undefined) {
+      // The measured value is shown against the threshold that judged it, so a reader never has to hold
+      // one number in their head while looking at the other.
+      const value = document.createElement('span');
+      value.className = 'watchpoint-value';
+      value.textContent = 'last measured ' + wp.lastMeasuredValue;
+      value.dataset.wpMeasured = String(wp.lastMeasuredValue);
+      row.append(value);
+    }
+    const breaches = document.createElement('span');
+    breaches.className = 'watchpoint-badge';
+    breaches.textContent = 'BREACHES ' + wp.breachCount + '/' + wp.evaluationCount;
+    breaches.dataset.wpBreaches = String(wp.breachCount);
+    row.append(breaches);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'watchpoint-row';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'small';
+    toggle.dataset.action = 'toggle-watchpoint';
+    toggle.dataset.watchpointId = wp.watchpointId;
+    toggle.textContent = wp.enabled ? 'Pause' : 'Enable';
+    toggle.disabled = view?.lockdownActive === true;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'small';
+    remove.dataset.action = 'delete-watchpoint';
+    remove.dataset.watchpointId = wp.watchpointId;
+    remove.textContent = 'Delete';
+    remove.disabled = view?.lockdownActive === true;
+    const trace = document.createElement('button');
+    trace.type = 'button';
+    trace.className = 'small';
+    trace.dataset.action = 'trace-watchpoint';
+    trace.dataset.watchpointId = wp.watchpointId;
+    trace.textContent = 'Trace';
+    buttons.append(toggle, remove, trace);
+
+    item.append(head, row, buttons);
+    els.watchpointsList.append(item);
+  }
+}
+
+async function refreshWatchpoints() {
+  try {
+    const view = await api('/api/watchpoints');
+    state.watchpoints = view;
+    renderWatchpoints(view);
+    syncOverlayStrip();
+  } catch (error) {
+    if (els.wpStatus) els.wpStatus.textContent = 'The watchpoints could not be read: ' + String(error?.message || error);
+  }
+}
+
+// --------------------------------------------------------------------------------------------
+// The tactical overlay. It is a posture on the body, not a route: switching view must not turn it off,
+// and reloading must not turn it on. The choice is remembered in localStorage, which is the one place
+// the deck keeps something the owner said about themselves rather than something the machine measured.
+// --------------------------------------------------------------------------------------------
+
+function hudPosture() {
+  return document.body.dataset.hudPosture === 'overlay' ? 'overlay' : 'full';
+}
+
+function applyHudPosture(posture, options) {
+  const next = posture === 'overlay' ? 'overlay' : 'full';
+  document.body.dataset.hudPosture = next;
+  if (els.btnHudOverlay) {
+    els.btnHudOverlay.setAttribute('aria-pressed', next === 'overlay' ? 'true' : 'false');
+    els.btnHudOverlay.textContent = next === 'overlay' ? 'OVERLAY: TACTICAL' : 'OVERLAY: OFF';
+  }
+  if (els.tacticalOverlayStrip) els.tacticalOverlayStrip.hidden = next !== 'overlay';
+  if (options?.announce !== false) {
+    if (els.connectivity) els.connectivity.dataset.hudPosture = next;
+  }
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem('apex.hudPosture', next);
+  } catch {
+    // A browser with storage disabled keeps the posture for this page and loses it on reload. That is a
+    // smaller failure than refusing the toggle.
+  }
+  return next;
+}
+
+function toggleHudPosture() {
+  return applyHudPosture(hudPosture() === 'overlay' ? 'full' : 'overlay');
+}
+
+// Every number on the strip is a reading the deck already holds: state.core is the projected Core the
+// top bar shows, state.mode is the presentation mode, state.watchpoints and state.standingOrders are
+// the last reads of those two ledgers, and the approval total is the one the Approval Centre rendered. The
+// strip never fetches. A surface visible on every screen that added a request to every screen would make
+// the compact posture cost more than the full one, which is the opposite of what it is for.
+function syncOverlayStrip() {
+  if (!els.tacticalOverlayStrip) return;
+  if (els.overlayCoreState) {
+    const core = state.core ?? 'degraded';
+    els.overlayCoreState.textContent = String(core).toUpperCase();
+    els.overlayCoreState.dataset.core = String(core);
+  }
+  if (els.overlayMode) {
+    const mode = document.body.dataset.mode ?? state.mode ?? 'classic';
+    els.overlayMode.textContent = String(mode).toUpperCase();
+  }
+  if (els.overlayLockdown) {
+    // Three independent readers agree before the strip says OPEN. Any one of them naming an engaged latch
+    // is enough to say ENGAGED, because "OPEN" is the claim that could cost something if it were wrong.
+    const latched = state.core === 'lockdown'
+      || state.standingOrders?.lockdownActive === true
+      || state.playbooks?.lockdownActive === true
+      || state.watchpoints?.lockdownActive === true;
+    els.overlayLockdown.textContent = latched ? 'ENGAGED' : 'OPEN';
+    els.overlayLockdown.dataset.latch = latched ? 'active' : 'open';
+  }
+  if (els.overlayWatchpointBreaches) {
+    const breached = state.watchpoints?.summary?.breachedCount ?? 0;
+    els.overlayWatchpointBreaches.textContent = String(breached);
+    els.overlayWatchpointBreaches.dataset.breaches = Number(breached) > 0 ? 'some' : 'none';
+  }
+  if (els.overlayApprovals) {
+    const pending = state.pendingApprovalCount;
+    els.overlayApprovals.textContent = pending === null || pending === undefined ? '—' : String(pending);
+    els.overlayApprovals.dataset.approvals = pending === null || pending === undefined ? 'unknown' : 'known';
+  }
+}
+
 // T-44 Package 2: the agenda panel. The horizon badge is the colour the brief names, and a completed card
 // has its Complete button disabled rather than removed, so the card does not change shape under the
 // pointer that just pressed it.
@@ -7120,6 +7717,134 @@ async function refreshAgenda() {
   } catch (error) {
     if (els.agendaStatus) els.agendaStatus.textContent = 'The agenda could not be read: ' + String(error?.message || error);
   }
+}
+
+// ------------------------------------------------------------------------------------------------
+// T-45 Package 3: the handling for the two new panels and the overlay toggle.
+//
+// The same discipline as the standing orders above: post, then re-read. A launch takes as long as three
+// capabilities take, so the button says what it is doing and the run list is read again when it answers.
+// ------------------------------------------------------------------------------------------------
+
+if (els.pbTemplateList) {
+  els.pbTemplateList.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-action="launch-playbook"]');
+    if (!button) return;
+    const playbookId = button.dataset.playbookId;
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = 'Launching…';
+    if (els.pbStatus) els.pbStatus.textContent = 'Launching ' + playbookId + ' — three steps, in dependency order…';
+    try {
+      const run = await api('/api/playbooks/' + encodeURIComponent(playbookId) + '/launch', { method: 'POST', body: {} });
+      if (els.pbStatus) {
+        // The run's own status is quoted, and so is the count: a routine that ran three steps and verified
+        // two must not read as a success anywhere on the card or in this line.
+        els.pbStatus.textContent = 'Playbook ' + run.playbookId + ' ' + run.status + ': '
+          + (Array.isArray(run.steps) ? run.steps.filter((step) => step.verified === true).length : 0)
+          + '/' + (Array.isArray(run.steps) ? run.steps.length : 0) + ' steps verified (' + run.runId + ').';
+      }
+    } catch (error) {
+      if (els.pbStatus) els.pbStatus.textContent = 'Launch refused: ' + String(error?.message || error);
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+      await refreshPlaybooks();
+    }
+  });
+}
+
+if (els.pbRunsList) {
+  els.pbRunsList.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-action="trace-playbook-run"]');
+    if (!button) return;
+    await openTrace(button.dataset.runId, button).catch(() => {});
+  });
+}
+
+if (els.btnWpCreate) {
+  els.btnWpCreate.addEventListener('click', async () => {
+    const title = (els.wpTitleInput?.value ?? '').trim();
+    els.btnWpCreate.disabled = true;
+    if (els.wpRefusal) els.wpRefusal.hidden = true;
+    try {
+      const wpHolder = await api('/api/watchpoints', {
+        method: 'POST',
+        body: {
+          title,
+          metric: els.wpMetricSelect?.value ?? 'dirty_files_count',
+          operator: els.wpOperatorSelect?.value ?? 'gt',
+          threshold: Number(els.wpThresholdInput?.value ?? 0),
+          severity: els.wpSeveritySelect?.value ?? 'advisory',
+        },
+      });
+      if (els.wpTitleInput) els.wpTitleInput.value = '';
+      if (els.wpEvalStatus) els.wpEvalStatus.textContent = 'Created ' + wpHolder.watchpointId + '. It is unmeasured until an evaluation runs.';
+    } catch (error) {
+      // A refusal is the engine's words, not a generic failure: the metric and threshold refusals name what
+      // is wrong, and quoting them is the only way the owner can fix the rule without guessing.
+      if (els.wpRefusal) {
+        els.wpRefusal.hidden = false;
+        els.wpRefusal.textContent = 'Refused: ' + String(error?.message || error);
+      }
+    } finally {
+      els.btnWpCreate.disabled = false;
+      await refreshWatchpoints();
+    }
+  });
+}
+
+if (els.btnWpEvaluate) {
+  els.btnWpEvaluate.addEventListener('click', async () => {
+    els.btnWpEvaluate.disabled = true;
+    if (els.wpEvalStatus) els.wpEvalStatus.textContent = 'Evaluating every enabled watchpoint…';
+    try {
+      const result = await api('/api/watchpoints/evaluate', { method: 'POST', body: {} });
+      if (els.wpEvalStatus) {
+        els.wpEvalStatus.textContent = 'Evaluated ' + (result.evaluatedCount ?? 0) + ' rule(s): '
+          + (result.breachedCount ?? 0) + ' breached, ' + (result.nominalCount ?? 0) + ' nominal, '
+          + (result.unmeasuredCount ?? 0) + ' unmeasured'
+          + ((result.skippedCount ?? 0) > 0 ? ', ' + result.skippedCount + ' paused' : '') + '.';
+      }
+    } catch (error) {
+      if (els.wpEvalStatus) els.wpEvalStatus.textContent = 'Evaluation refused: ' + String(error?.message || error);
+    } finally {
+      els.btnWpEvaluate.disabled = false;
+      await refreshWatchpoints();
+    }
+  });
+}
+
+if (els.watchpointsList) {
+  els.watchpointsList.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    const watchpointId = button.dataset.watchpointId;
+    const action = button.dataset.action;
+    if (action === 'trace-watchpoint') {
+      await openTrace(watchpointId, button).catch(() => {});
+      return;
+    }
+    button.disabled = true;
+    try {
+      if (action === 'toggle-watchpoint') {
+        await api('/api/watchpoints/' + encodeURIComponent(watchpointId) + '/toggle', { method: 'POST', body: {} });
+      } else if (action === 'delete-watchpoint') {
+        await api('/api/watchpoints/' + encodeURIComponent(watchpointId) + '/delete', { method: 'POST', body: {} });
+      }
+    } catch (error) {
+      if (els.wpRefusal) {
+        els.wpRefusal.hidden = false;
+        els.wpRefusal.textContent = 'Refused: ' + String(error?.message || error);
+      }
+    } finally {
+      await refreshWatchpoints();
+    }
+  });
+}
+
+if (els.btnHudOverlay) {
+  els.btnHudOverlay.addEventListener('click', () => { toggleHudPosture(); });
 }
 
 // The four standing-order buttons on a card, and the evaluation bar. Each one posts to the route and
@@ -8243,9 +8968,26 @@ function connectEvents(forceReconcile = false) {
   };
 }
 
+// T-45 Package 3: the overlay posture is the owner's choice, so it is restored before the first paint of
+// a view rather than after it. A browser that refuses storage starts in the full posture, which is the
+// posture that hides nothing.
+let storedPosture = 'full';
+try {
+  if (typeof localStorage !== 'undefined') {
+    const saved = localStorage.getItem('apex.hudPosture');
+    if (saved === 'overlay') storedPosture = 'overlay';
+  }
+} catch {
+  storedPosture = 'full';
+}
+applyHudPosture(storedPosture, { announce: false });
+
 setView('deck');
 connectEvents();
 refresh();
+// The strip quotes the first read, so it is filled as soon as that read answers rather than on the next
+// fifteen-second tick.
+void Promise.resolve().then(syncOverlayStrip);
 boot();
 // T-36 Step 2: the boot overlay starts away. It is shown by the sequence and hidden again when the
 // sequence ends; nothing else may leave it on the page.

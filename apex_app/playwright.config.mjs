@@ -29,11 +29,14 @@ export default defineConfig({
   // T-40 Step 4 (2026-11-22): the changeset / disk-drift / command-help walk joins them. It is the
   // only suite that applies more than one file in a single governed act and then measures the disk
   // afterwards, and the only one that opens the command reference with a key.
+  // T-45 Step 4 (2026-11-19): the playbook / watchpoint / overlay walk joins them. It is the only suite
+  // that measures the same panels in two HUD postures, because one of them hides elements and a hidden
+  // element has no contrast to measure.
   // T-43 Step 4 (2026-11-19): the workstation / git executive / telemetry walk joins them. It is the
   // only suite whose workspace is a real git repository, so the counts it asserts are checked against
   // the system git binary as well as against the product, and the only one that measures the host's
   // listening ports and finds its own server among them.
-  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs', '**/t34-mission-dag-and-briefing.spec.mjs', '**/t35-stepdown-handoff-doctor.spec.mjs', '**/t36-cold-boot-unseeded.spec.mjs', '**/t37-neural-council-router.spec.mjs', '**/t38-values-workspace-trace.spec.mjs', '**/t39-workshop-apply-rollback.spec.mjs', '**/t40-changeset-drift-command-help.spec.mjs', '**/t41-sandbox-test-and-evolution-bridge.spec.mjs', '**/t43-workstation-git-telemetry.spec.mjs', '**/t44-standing-orders-agenda.spec.mjs'],
+  testMatch: ['**/t31-real-browser.spec.mjs', '**/t32-hud-experience.spec.mjs', '**/t33-executive-loop.spec.mjs', '**/t34-mission-dag-and-briefing.spec.mjs', '**/t35-stepdown-handoff-doctor.spec.mjs', '**/t36-cold-boot-unseeded.spec.mjs', '**/t37-neural-council-router.spec.mjs', '**/t38-values-workspace-trace.spec.mjs', '**/t39-workshop-apply-rollback.spec.mjs', '**/t40-changeset-drift-command-help.spec.mjs', '**/t41-sandbox-test-and-evolution-bridge.spec.mjs', '**/t43-workstation-git-telemetry.spec.mjs', '**/t44-standing-orders-agenda.spec.mjs', '**/t45-playbooks-watchpoints-overlay.spec.mjs'],
   testIgnore: ['**/apex-browser.spec.mjs'],
   // Generated traces/screenshots from a failing run must not be committed.
   outputDir: './test-results/playwright',

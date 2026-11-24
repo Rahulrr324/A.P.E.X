@@ -154,9 +154,15 @@ describe('AF-19: the registry is the inventory', () => {
     // T-44 Package 2 adds four agenda capabilities: the read `agenda.list` and three owner-only writes -
     // `agenda.create`, `.complete` and `.dismiss`. All four need no workspace root, so both totals move
     // by four and the read/write split with them.
-    assert.equal(plain.registry.list().length, 183, 'the default registry has 183 actions');
+    // T-45 Packages 1 and 2 (2026-11-19) add eight capabilities to both totals: two playbook reads
+    // (`playbook.catalog` and the plain `playbook.read` the router uses), the L2 write `playbook.launch`,
+    // the read `watchpoint.list`, the three owner-only watchpoint writes (`create`, `toggle`, `delete`)
+    // and the L1 `watchpoint.evaluate`. All eight register without a workspace root, because a watchpoint's
+    // measurements and a playbook's steps each handle the absent-repository case themselves rather than
+    // being un-registered - so both totals move by eight.
+    assert.equal(plain.registry.list().length, 191, 'the default registry has 191 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 202, 'a configured workspace root adds nineteen actions');
+    assert.equal(rooted.registry.list().length, 210, 'a configured workspace root adds nineteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -223,7 +229,10 @@ describe('AF-19: the registry is the inventory', () => {
     // permission, and only the owner may write one, change one, or ask for one to run now.
     // T-44 Package 2: `agenda.create`, `.complete` and `.dismiss` are the hundred and second through
     // hundred and fourth. All three are owner-only: a commitment is the owner's own statement of intent.
-    assert.equal(writes.length, 104, 'the inventory counts one hundred and four write actions with a root configured');
+    // T-45 Packages 1 and 2 add five writes: `playbook.launch` (L2), and `watchpoint.create`, `.toggle`,
+    // `.delete` (L2) and `.evaluate` (L1). All five are owner-only - a routine and a threshold are the
+    // owner's own standing instructions, and a model may not write either.
+    assert.equal(writes.length, 109, 'the inventory counts one hundred and nine write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -323,7 +332,9 @@ describe('AF-19: the registry is the inventory', () => {
     // authoring one - and both are refused outside the configured root.
     // T-43 Package 1 adds two reads, `git.status_detailed` and `git.diff_inspect`; Package 2 adds two
     // more, `system.inspect_ports` and `system.inspect_processes`.
-    assert.equal(reads.length, 98, 'the inventory counts ninety-eight read actions with a root configured');
+    // T-45 adds three reads: `playbook.catalog`, `playbook.read` and `watchpoint.list`. All three are
+    // owner-only, for the same reason the writes are.
+    assert.equal(reads.length, 101, 'the inventory counts one hundred and one read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -579,6 +590,18 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         // intention exactly as a goal or a plan is, not a belief about the world, and the run count is
         // a count of acts rather than a claim about anything.
         assert.equal(row.belief, def.permission === 'write' ? 'no (an order is an intention, not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('playbook.')) {
+        // [T-45 Package 1, 2026-11-19] The run ledger records which routine was launched, its three steps,
+        // each step's dependency and the operation it recorded. That is an account of what was asked for
+        // and what happened, not a proposition about the world - and the run authorizes nothing: every
+        // step inside it was separately authorized by the ECP.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a routine is an intention, not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('watchpoint.')) {
+        // [T-45 Package 2, 2026-11-19] A watchpoint records a threshold the owner set, and an evaluation
+        // records the number it measured against it. That number is an observation about this machine,
+        // not a belief about the world, and a breach triggers nothing: a monitor that acted would be a
+        // standing order wearing a monitor's name, and that is governed by a much stricter rule.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a threshold is an intention, not a belief)' : 'no', `${name}: README belief-state`);
       } else if (def.permission === 'write' && !name.startsWith('filesystem.') && !name.startsWith('note.')) {
         assert.equal(row.belief, 'yes', `${name}: README belief-state`);
       } else if (def.permission === 'read') {
