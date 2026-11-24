@@ -230,9 +230,10 @@ async function dispatch(page, line) {
     }
     return {
       route: pairs.Route, capability: pairs.Capability, targetView: pairs['Target view'],
-      // The field is titled "Action"; the Capability row is the one a governed act fills and the Action row
-      // is the one a presentation command fills. Both are read so a test names the right one per route.
-      action: pairs.Action, verified: pairs.Verified, text: dl.textContent ?? '', values: Object.values(pairs),
+      // The receipt has six rows and no "Action" row: `Capability` carries `actionInvoked` for a governed
+      // act and the route path (`/api/playbooks`) for a read, which is why the two command families are
+      // told apart by `route` first and by this row second.
+      verified: pairs.Verified, result: pairs.Result, text: dl.textContent ?? '', values: Object.values(pairs),
     };
   });
 }
@@ -599,9 +600,10 @@ test('T-45: three routines run through the ECP, watchpoints judge live readings,
 
     const watchpointReceipt = await dispatch(page, T45_ROUTER_WATCHPOINT_LINE);
     expect(watchpointReceipt.route).toBe('watchpoint');
-    // The evaluation act is spelled out: an evaluation is a write, so it is named with the capability
-    // rather than left to a generic "evaluated" line.
-    expect(watchpointReceipt.action).toBe('watchpoint.evaluate');
+    // The evaluation act is spelled out in the Capability row: an evaluation is a write, so it is named by
+    // the capability it invoked rather than left to a generic "evaluated" line.
+    expect(watchpointReceipt.capability).toBe('watchpoint.evaluate');
+    expect(watchpointReceipt.verified).toBe('yes');
     // The command waits for the receipt, so the evaluation it reports has already been recorded.
     expect(fixture.watchpointLedger().watchpoints.every((entry) => entry.evaluationCount >= 2)).toBe(true);
     await expect(page.locator('section.view[data-view="sentinel"]')).toHaveClass(/active/);

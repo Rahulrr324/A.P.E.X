@@ -329,3 +329,55 @@ test('T-37 router: a release is not reachable through the command router', async
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// [T-45 Packages 1 to 3, 2026-11-19] The three command families this milestone added. Pinned here rather
+// than only in the browser walk, because a browser walk is the slowest place to learn that a receipt row
+// is missing: the walk's assertion on CI run 45423110724 read an "Action" row that the receipt has never
+// had, and the failure cost a whole hosted round to find. These are the same three lines the walk sends,
+// and they assert the exact fields the deck's `renderDispatchReceipt` renders.
+test('T-37 router: the playbook, watchpoint and posture lines answer with the fields the deck renders', async () => {
+  const dir = tempDir();
+  try {
+    const app = createApp({ dataDir: dir });
+    // The deck renders six rows: Route, Capability, Target view, ECP decision, Verified, Result. There is
+    // no "Action" row, and `Capability` carries `actionInvoked` for a governed act and the route path for a
+    // read - which is why the two kinds are told apart by `routeKind` first.
+    const rows = (receipt) => ({
+      route: String(receipt.routeKind || 'unknown'),
+      capability: receipt.actionInvoked ? String(receipt.actionInvoked) : (receipt.route ? String(receipt.route) : 'none'),
+      targetView: receipt.targetView ? String(receipt.targetView) : 'none',
+      verified: receipt.verified === true ? 'yes' : 'no',
+    });
+
+    const launched = rows(await app.commandRouter.dispatch('run playbook workspace_security_audit'));
+    assert.deepEqual(launched, { route: 'playbook', capability: 'playbook.launch', targetView: 'tasks', verified: 'yes' });
+    // A misremembered id is refused before an authorization is spent, and the receipt names the ids.
+    const unknown = await app.commandRouter.dispatch('run playbook not_a_playbook');
+    assert.equal(unknown.actionInvoked, null);
+    assert.match(unknown.detail, /morning_briefing/);
+    // And a launch with no argument asks which one rather than guessing.
+    const empty = await app.commandRouter.dispatch('run playbook');
+    assert.equal(empty.actionInvoked, null);
+    assert.match(empty.summary, /which playbook/i);
+
+    const evaluated = rows(await app.commandRouter.dispatch('evaluate watchpoints'));
+    assert.deepEqual(evaluated, { route: 'watchpoint', capability: 'watchpoint.evaluate', targetView: 'sentinel', verified: 'yes' });
+    assert.deepEqual(rows(await app.commandRouter.dispatch('check watchpoints')), evaluated,
+      'both phrasings must reach the same act');
+
+    // A posture names no capability at all: it is presentation, and the deck performs it.
+    const posture = rows(await app.commandRouter.dispatch('toggle overlay'));
+    assert.deepEqual(posture, { route: 'hud', capability: 'none', targetView: 'none', verified: 'no' });
+    for (const line of ['overlay mode', 'full hud']) {
+      assert.equal((await app.commandRouter.dispatch(line)).routeKind, 'hud', `"${line}" must reach the posture`);
+    }
+
+    // The read command names its route rather than a capability, and points at the panel it refreshes.
+    const read = await app.commandRouter.dispatch('show playbooks');
+    assert.equal(read.routeKind, 'playbook');
+    assert.equal(read.actionInvoked, null);
+    assert.equal(read.target, '#playbooks-panel');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
