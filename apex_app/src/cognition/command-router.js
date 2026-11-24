@@ -39,6 +39,12 @@ export const ROUTE_KIND = Object.freeze({
   // belongs on the Workshop and a host reading on the Sentinel.
   GIT: 'git',
   INSPECT: 'inspect',
+  // T-44 Package 2: the agenda and the standing orders. These are `refresh` routes rather than `action`
+  // routes because the two GETs are reads the panel performs anyway: the line means "show me this", and
+  // the receipt names the route that was refreshed rather than a capability that was run. Creating a
+  // commitment is an `action` route on the same kind, because that one writes.
+  AGENDA: 'agenda',
+  STANDING_ORDER: 'standing_order',
   UNMATCHED: 'unmatched',
 });
 
@@ -58,6 +64,11 @@ const PHRASES = Object.freeze([
   { kind: ROUTE_KIND.GIT, phrases: ['git status'], action: 'git.status_detailed', targetView: 'workshop', summary: 'read the workspace repository in detail' },
   { kind: ROUTE_KIND.INSPECT, phrases: ['inspect ports', 'inspect listening ports'], action: 'system.inspect_ports', targetView: 'sentinel', summary: 'read the listening sockets from the operating system' },
   { kind: ROUTE_KIND.INSPECT, phrases: ['inspect processes', 'inspect process'], action: 'system.inspect_processes', targetView: 'sentinel', summary: 'read the running processes and own memory' },
+  // T-44 Package 2. `show agenda` and `standing orders` are reads: they refresh a GET and focus the panel
+  // that renders it. `show briefing` already exists above and still means the briefing report; these are
+  // the two panels this batch puts on that view.
+  { kind: ROUTE_KIND.AGENDA, phrases: ['show agenda', 'agenda'], route: '/api/agenda', targetView: 'briefing', targetPanel: 'briefing-agenda-panel', summary: 'read the unified executive agenda' },
+  { kind: ROUTE_KIND.STANDING_ORDER, phrases: ['standing orders', 'show standing orders'], route: '/api/standing-orders', targetView: 'policy-autonomy', targetPanel: 'standing-orders-panel', summary: 'read the standing orders and their policy' },
 ]);
 
 // Patterns that carry an argument. The prefix is literal; the rest is the argument, kept as the owner
@@ -68,6 +79,12 @@ const PHRASES = Object.freeze([
 const CHECKPOINT_PREFIX = 'create checkpoint';
 
 const PREFIXES = Object.freeze([
+  // T-44 Package 2: the two ways an owner writes a commitment down. Both are listed before the shorter
+  // prefixes for the same reason `create checkpoint` is: `remind me to` cannot collide today, but
+  // `schedule` could with a future `schedule <mission>`, and the longest-first rule is the one that keeps
+  // that from becoming a silent misroute.
+  { kind: ROUTE_KIND.AGENDA, prefix: 'remind me to', action: 'agenda.create', targetView: 'briefing', targetPanel: 'briefing-agenda-panel', summary: 'add a commitment to the agenda', argumentLabel: 'title' },
+  { kind: ROUTE_KIND.AGENDA, prefix: 'schedule', action: 'agenda.create', targetView: 'briefing', targetPanel: 'briefing-agenda-panel', summary: 'add a commitment to the agenda', argumentLabel: 'title' },
   { kind: ROUTE_KIND.GIT, prefix: CHECKPOINT_PREFIX, action: 'git.checkpoint_create', targetView: 'workshop', summary: 'create a git checkpoint of the workspace', argumentLabel: 'label' },
   { kind: ROUTE_KIND.GIT, prefix: 'git diff', action: 'git.diff_inspect', targetView: 'workshop', summary: 'inspect a workspace diff', argumentLabel: 'path' },
   { kind: ROUTE_KIND.COUNCIL, prefix: 'council:', action: 'council.deliberate', targetView: 'council', summary: 'deliberate in the Council' },
@@ -343,6 +360,56 @@ export function createCommandRouter({ controller, app = null, now = () => new Da
           ecpDecision: outcome.ecpDecision, verified: outcome.verified,
           summary: outcome.verified ? `Inspection taken: ${summary}` : `The inspection did not verify: ${outcome.summary}`,
           detail: outcome.step?.display ?? null, input: {},
+        });
+      }
+      case ROUTE_KIND.AGENDA: {
+        // `schedule <title>` and `remind me to <title>` write a commitment; `show agenda` reads one back.
+        // The write goes through the controller like every other write, so Lockdown refuses it here as it
+        // would from the panel - a command line is not a way around the latch.
+        if (route.action === 'agenda.create') {
+          const title = (route.argument ?? '').trim();
+          if (title.length === 0) {
+            return receipt({
+              routeKind: route.kind, actionInvoked: null, targetView: route.targetView,
+              summary: 'Say what to schedule',
+              detail: 'For example: schedule review phase 2 telemetry. The words after the command become the commitment title.',
+            });
+          }
+          // Cleaned here as well as in the action, for the reason the checkpoint label is: the title
+          // travels into an audit line, and a newline in it would produce a line no reader can parse.
+          const safeTitle = title.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+          const outcome = await dispatchAction(route.action, { title: safeTitle }, id);
+          const data = outcome.step?.result?.data ?? null;
+          return receipt({
+            routeKind: route.kind, actionInvoked: route.action, targetView: route.targetView,
+            target: '#briefing-agenda-panel',
+            ecpDecision: outcome.ecpDecision, verified: outcome.verified,
+            summary: outcome.verified
+              ? `Scheduled: ${data?.title ?? safeTitle} (${data?.itemId ?? 'agenda'})`
+              : `The commitment was not written: ${outcome.summary}`,
+            detail: outcome.step?.display ?? null,
+            input: { title: safeTitle },
+            result: data ? { itemId: data.itemId, horizonBucket: data.horizonBucket ?? null } : null,
+          });
+        }
+        // `show agenda`: a read. The receipt names the route rather than a capability, because nothing
+        // was authorized and nothing was run.
+        return receipt({
+          routeKind: route.kind, route: route.route, targetView: route.targetView,
+          target: '#briefing-agenda-panel',
+          summary: 'Reading the executive agenda',
+          detail: 'The Briefing agenda panel is refreshing; the counts it shows come from GET /api/agenda.',
+        });
+      }
+      case ROUTE_KIND.STANDING_ORDER: {
+        // `standing orders`: a read of the engine's own policy and ledger. The panel is on the
+        // policy-autonomy view, which is where the latch and the autonomy ceiling are already shown - an
+        // owner reading what is armed and what is stopped should see both in one place.
+        return receipt({
+          routeKind: route.kind, route: route.route, targetView: route.targetView,
+          target: '#standing-orders-panel',
+          summary: 'Reading the standing orders',
+          detail: 'The policy-autonomy standing-orders panel is refreshing; the policy and the orders come from GET /api/standing-orders.',
         });
       }
       case ROUTE_KIND.MODE: {

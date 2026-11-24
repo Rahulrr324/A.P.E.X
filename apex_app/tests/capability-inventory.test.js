@@ -151,9 +151,12 @@ describe('AF-19: the registry is the inventory', () => {
     // evaluation read `standing_order.evaluate`, and two reads that already had a service behind them
     // but no capability name - `system.doctor` and `briefing.compile`, which exist so a standing order
     // can delegate them through the one execution path rather than a second, unaudited one.
-    assert.equal(plain.registry.list().length, 179, 'the default registry has 179 actions');
+    // T-44 Package 2 adds four agenda capabilities: the read `agenda.list` and three owner-only writes -
+    // `agenda.create`, `.complete` and `.dismiss`. All four need no workspace root, so both totals move
+    // by four and the read/write split with them.
+    assert.equal(plain.registry.list().length, 183, 'the default registry has 183 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 198, 'a configured workspace root adds nineteen actions');
+    assert.equal(rooted.registry.list().length, 202, 'a configured workspace root adds nineteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -218,7 +221,9 @@ describe('AF-19: the registry is the inventory', () => {
     // T-44 Package 1: the four standing-order writes (`create`, `toggle`, `revoke`, `invoke`) are the
     // ninety-eighth through a hundred and first. All four are owner-only: an order is a standing
     // permission, and only the owner may write one, change one, or ask for one to run now.
-    assert.equal(writes.length, 101, 'the inventory counts one hundred and one write actions with a root configured');
+    // T-44 Package 2: `agenda.create`, `.complete` and `.dismiss` are the hundred and second through
+    // hundred and fourth. All three are owner-only: a commitment is the owner's own statement of intent.
+    assert.equal(writes.length, 104, 'the inventory counts one hundred and four write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -318,7 +323,7 @@ describe('AF-19: the registry is the inventory', () => {
     // authoring one - and both are refused outside the configured root.
     // T-43 Package 1 adds two reads, `git.status_detailed` and `git.diff_inspect`; Package 2 adds two
     // more, `system.inspect_ports` and `system.inspect_processes`.
-    assert.equal(reads.length, 97, 'the inventory counts ninety-seven read actions with a root configured');
+    assert.equal(reads.length, 98, 'the inventory counts ninety-eight read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -564,6 +569,10 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         // machine, not a belief about the world, and the governor's rules are bookkeeping about
         // notices; neither may be read as a stored belief.
         assert.equal(row.belief, def.permission === 'write' ? 'no (a reading is not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('agenda.')) {
+        // [T-44 Package 2, 2026-11-19] A commitment records what the owner intends to do and when they
+        // mean to do it. That is an intention, exactly as a goal is, not a belief about the world.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a commitment is an intention, not a belief)' : 'no', `${name}: README belief-state`);
       } else if (name.startsWith('standing_order.')) {
         // [T-44 Package 1, 2026-11-19] The order ledger records what the owner delegated: which
         // capability may run, on which event, within which cooldown and rate limit. That is an

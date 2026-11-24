@@ -4064,6 +4064,14 @@ across the whole set, so they are stated once instead of per row:
 > with 56 plannable (the pipeline capability is unplannable; the steps it plans are authorized
 > separately). The 139/154 figures above are retained as the state before T-29.
 
+> **T-44 Package 2 count correction (2026-11-19).** The unified executive agenda adds four
+> capabilities: the read `agenda.list` and the three owner-only writes `agenda.create`,
+> `agenda.complete` and `agenda.dismiss`. All four are unconditional - an agenda needs no workspace
+> root - so both totals move by four: **183 actions by default and 202 with a root: 98 reads and 104
+> writes**. `agenda.list` is the one capability of the four offered to the model origin, because "what
+> is owed today" is a question a reply may legitimately ask about the stores; the three writes are the
+> owner's own statement of intent and are refused at model origin like every other write.
+
 > **T-44 Package 1 count correction (2026-11-19).** The governed Standing Orders engine adds seven
 > capabilities. Three are the order-ledger writes (`standing_order.create`, `.toggle`, `.revoke`), two
 > are the run and its preview (`standing_order.invoke` written as a run, `standing_order.evaluate` as an
@@ -4244,6 +4252,8 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `briefing.compile` | user | read | never in a plan | composes the briefing and its delta from the stores that already exist; writes nothing | no (read) | no |
 | `standing_order.create`, `standing_order.toggle`, `standing_order.revoke` | user | write | never in a plan | `standing-orders.json` (the order ledger) and one audit line each; a forbidden capability is refused at registration, so no such order is ever written | no (orders) | no (an order is an intention, not a belief) |
 | `standing_order.invoke` | user | write | never in a plan | no ledger of its own: it runs the order's capability through the ECP and records the run in `standing-orders.json` plus that capability's own operation in `operations.jsonl` | no (orders) | no (an order is an intention, not a belief) |
+| `agenda.list` | user + model | read | never in a plan | reads the agenda ledger and four other stores in place; writes nothing | no (read) | no |
+| `agenda.create`, `agenda.complete`, `agenda.dismiss` | user | write | never in a plan | `executive-agenda.json` (the commitment ledger): one row per commitment, with its status and, on a completion, the completion date | no (agenda) | no (a commitment is an intention, not a belief) |
 | `standing_order.evaluate` | user | read | never in a plan | nothing when `dryRun` is true (and a call with no event named is a dry run); otherwise the runs it performs, each through the ECP and each on its own capability's terms | no (read) | no |
 | `system.inspect_processes` | user + model | read | never in a plan | reads the process table (`ps` or `tasklist`) and this process's own memory; writes nothing. Command lines and environment variables are never read | no (read) | no |
 | `git.status_detailed` | user + model | read | never in a plan | reads the repository at the configured workspace root; writes nothing | no (read) | no |

@@ -41,6 +41,7 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // T-44 Package 1: a standing order's ledger is the richer record. It holds the trigger, the cooldown,
   // the rate limit and every run with its operation id; an experience of one act would be a thinner copy
   // of a row that already exists, and of a run whose real receipt is in operations.jsonl.
+  agenda: 'the agenda ledger already holds the commitment, its kind and priority, its due date and its status with the date it was completed, so an experience would be a thinner copy of a row that already exists',
   orders: 'the standing-order ledger already holds the order, its trigger and every run with the operation each one recorded, and the run itself writes a full operation to operations.jsonl',
   'model-words': 'what it stores or produces is a model conclusion, which is evidence only that a model said it',
   'self-bookkeeping': 'the experience log must not fill itself with records about its own bookkeeping, which would make the counts meaningless',
@@ -405,6 +406,14 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'standing_order.revoke': 'orders',
   'standing_order.invoke': 'orders',
   'standing_order.evaluate': 'read',
+  // T-44 Package 2: the agenda. The read is `read` for the usual reason. The three writes are `agenda`
+  // because `executive-agenda.json` is the richer record: it holds the title, the category, the priority,
+  // the due date, the status and the completion date, and a second copy in the experience log would be a
+  // thinner version of a row that already exists.
+  'agenda.list': 'read',
+  'agenda.create': 'agenda',
+  'agenda.complete': 'agenda',
+  'agenda.dismiss': 'agenda',
   none: 'no-action',
 });
 

@@ -818,6 +818,16 @@ const NOT_A_REPOSITORY = Object.freeze({
 // T-44 Package 1: a standing-order refusal, as a body. The same discipline as gitRefusalBody - the
 // code is the product's own name for the refusal, and the message explains it - but the engine throws,
 // so the mapping happens on the caught error rather than on a step.
+// T-44 Package 2: an agenda refusal, in the same shape as the standing-order one.
+function agendaRefusalBody(err) {
+  return {
+    verified: false,
+    error: err?.message ?? 'the agenda act was refused',
+    code: err?.code ?? null,
+    ...(err?.detail && typeof err.detail === 'object' ? { detail: err.detail } : {}),
+  };
+}
+
 function standingOrderRefusalBody(err) {
   return {
     verified: false,
@@ -3534,6 +3544,62 @@ export function createUiServer({
       }
       return;
     }
+    // ---- T-44 Package 2: the unified executive agenda -------------------------------------------
+    //
+    // Four routes. The GET answers 200 on every configuration - including a build with no workspace
+    // root, and including a ledger that does not exist yet - because the panel is on the Briefing and a
+    // 503 there would paint a console error on the view an owner opens first. The three POSTs answer
+    // 423 while Lockdown is engaged and 404 for an id the ledger does not hold.
+    if (method === 'GET' && url.pathname === '/api/agenda') {
+      try {
+        if (!app.agenda || typeof app.agenda.build !== 'function') {
+          sendJson(res, 200, {
+            verified: true, available: false, evaluatedAt: new Date().toISOString(),
+            lockdownActive: false, items: [], derivedItems: [],
+            summary: {
+              totalCommitments: 0, overdueCount: 0, todayCount: 0, upcomingCount: 0, unscheduledCount: 0,
+              completedCount: 0, dismissedCount: 0, derivedActionCount: 0, derivedCount: 0,
+            },
+          });
+          return;
+        }
+        const nowParam = url.searchParams.get('now');
+        sendJson(res, 200, await app.agenda.build({ now: nowParam ?? null }));
+      } catch (err) {
+        sendJson(res, err?.status ?? 500, agendaRefusalBody(err));
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/agenda') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['title', 'category', 'priority', 'dueAt', 'linkedArtifactId', 'notes'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const item = app.agenda.create(body);
+        sendJson(res, 200, item);
+        broadcast('agenda', { itemId: item.itemId, created: true });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, err.status ?? 400, agendaRefusalBody(err));
+      }
+      return;
+    }
+    const agendaSettleMatch = method === 'POST' && url.pathname.match(/^\/api\/agenda\/([^/]+)\/(complete|dismiss)$/);
+    if (agendaSettleMatch) {
+      const itemId = decodeURIComponent(agendaSettleMatch[1]);
+      const verb = agendaSettleMatch[2];
+      try {
+        const item = verb === 'complete' ? app.agenda.complete(itemId) : app.agenda.dismiss(itemId);
+        sendJson(res, 200, item);
+        broadcast('agenda', { itemId, status: item.status });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, err.status ?? 400, agendaRefusalBody(err));
+      }
+      return;
+    }
+
     const soActionMatch = method === 'POST' && url.pathname.match(/^\/api\/standing-orders\/([^/]+)\/(toggle|revoke|invoke)$/);
     if (soActionMatch) {
       const orderId = decodeURIComponent(soActionMatch[1]);

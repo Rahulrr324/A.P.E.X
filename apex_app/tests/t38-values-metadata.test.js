@@ -122,7 +122,9 @@ test('T-38 metadata: every write declares a blast radius that is not none', () =
     // `revoke`, and the run `invoke`, all declaring `local_state`. Each one is pinned here on purpose -
     // `local_state` is the declaration that lets a capability be delegated at all, so a new write that
     // claims it has to be looked at by a person rather than absorbed by a bound.
-    assert.equal(writes.length, 92, `expected 92 writes after T-44 Package 1, got ${writes.length}`);
+    // T-44 Package 2 adds three more: `agenda.create`, `.complete` and `.dismiss`, all `local_state`.
+    // `agenda.list` is a read and does not count here.
+    assert.equal(writes.length, 95, `expected 95 writes after T-44 Package 2, got ${writes.length}`);
     for (const definition of writes) {
       assert.notEqual(definition.blastRadius, 'none',
         `${definition.name} is a write that claims to change nothing`);

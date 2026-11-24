@@ -64,6 +64,9 @@ test('T-38 trace: the searchable kinds and statuses are closed lists', () => {
   assert.deepEqual([...SEARCH_KINDS], [
     'memory', 'cognition_run', 'council_session', 'task', 'workshop_verification', 'workshop_apply', 'ecp_audit',
     'git_checkpoint', 'standing_order', 'standing_order_run',
+    // T-44 Package 2 adds `agenda_item`: a commitment is a row the owner wrote, with an id of its own and
+    // a `linkedArtifactId` a chain can follow.
+    'agenda_item',
   ]);
   assert.ok(EPISTEMIC_STATUSES.includes('candidate_association'),
     'a candidate association is a status a reader can filter on');

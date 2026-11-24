@@ -38,6 +38,9 @@ export const SEARCH_KINDS = Object.freeze([
   // T-44 Package 1: a standing order is a row that changes (its run count and last outcome) and each of
   // its runs is a separate event, so both are ledgers here rather than a private file only the panel reads.
   'standing_order', 'standing_order_run',
+  // T-44 Package 2: an agenda commitment is a row the owner wrote with an id of its own, so a trace can
+  // be opened on one - and, when it names a standing order or a mission, follows that link too.
+  'agenda_item',
 ]);
 
 // The epistemic statuses a memory record can carry. The filter is offered on the search surface
@@ -309,6 +312,7 @@ function ledgers(dataDir) {
     git_checkpoint: () => readGitCheckpoints(dataDir),
     standing_order: () => filterKind(readStandingOrders(dataDir), 'standing_order'),
     standing_order_run: () => filterKind(readStandingOrders(dataDir), 'standing_order_run'),
+    agenda_item: () => readAgendaItems(dataDir),
     ecp_audit: () => {
       const { present, records, corrupt } = readJsonl(path.join(dataDir, 'operations.jsonl'));
       return {
@@ -446,6 +450,47 @@ function readStandingOrders(dataDir) {
   return { present: true, records, corrupt };
 }
 
+// T-44 Package 2: the agenda ledger, read in place. A commitment is one row that changes status, and its
+// `linkedArtifactId` is the link a chain follows: a commitment written about a standing order, a mission
+// or an advisory names that record, so a trace opened on the commitment reaches the thing it is about.
+function readAgendaItems(dataDir) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(dataDir, 'executive-agenda.json'), 'utf8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') return { present: false, records: [], corrupt: 0 };
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { present: true, records: [], corrupt: 1 };
+  }
+  const list = Array.isArray(parsed?.items) ? parsed.items : [];
+  const records = [];
+  let corrupt = 0;
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object' || typeof entry.itemId !== 'string') { corrupt += 1; continue; }
+    records.push({
+      kind: 'agenda_item',
+      at: entry.createdAt ?? null,
+      id: entry.itemId,
+      itemId: entry.itemId,
+      title: entry.title ?? '',
+      category: entry.category ?? null,
+      priority: entry.priority ?? null,
+      dueAt: entry.dueAt ?? null,
+      status: entry.status ?? null,
+      linkedArtifactId: entry.linkedArtifactId ?? null,
+      completedAt: entry.completedAt ?? null,
+      notes: entry.notes ?? '',
+      record: entry,
+    });
+  }
+  return { present: true, records, corrupt };
+}
+
 // One file, two kinds: the order rows and the run rows come from the same read, and each reader returns
 // only its own kind so a caller asking for orders does not get a hundred run rows back.
 function filterKind({ present, records, corrupt }, kind) {
@@ -466,6 +511,7 @@ function searchableText(entry) {
     case 'git_checkpoint': return `${entry.checkpointId ?? ''} ${entry.label ?? ''} ${entry.reason ?? ''} ${entry.commitSha ?? ''}`;
     case 'standing_order': return `${entry.orderId ?? ''} ${entry.title ?? ''} ${entry.eventType ?? ''} ${entry.capabilityId ?? ''} ${entry.lastOutcome ?? ''}`;
     case 'standing_order_run': return `${entry.runId ?? ''} ${entry.orderId ?? ''} ${entry.title ?? ''} ${entry.capabilityId ?? ''} ${entry.outcome ?? ''} ${entry.summary ?? ''}`;
+    case 'agenda_item': return `${entry.itemId ?? ''} ${entry.title ?? ''} ${entry.category ?? ''} ${entry.priority ?? ''} ${entry.status ?? ''} ${entry.notes ?? ''}`;
     case 'ecp_audit': return `${entry.capability ?? ''} ${JSON.stringify(entry.request ?? '')}`;
     default: return '';
   }
@@ -546,6 +592,7 @@ export class MemoryTraceService {
                   : entry.kind === 'git_checkpoint' ? { checkpointId: entry.checkpointId, commitSha: entry.commitSha, restoreCount: entry.restoreCount }
                   : entry.kind === 'standing_order' ? { orderId: entry.orderId, capabilityId: entry.capabilityId, runCount: entry.runCount, lastOutcome: entry.lastOutcome }
                   : entry.kind === 'standing_order_run' ? { runId: entry.runId, orderId: entry.orderId, operationId: entry.operationId, outcome: entry.outcome }
+                  : entry.kind === 'agenda_item' ? { itemId: entry.itemId, status: entry.status, linkedArtifactId: entry.linkedArtifactId, dueAt: entry.dueAt }
                   : { operationId: entry.operationId, capability: entry.capability },
       traceable: entry.kind !== 'task' || entry.type === 'task_created',
     }));
@@ -615,6 +662,7 @@ export class MemoryTraceService {
     if (entry.kind === 'git_checkpoint') return keys.has(entry.checkpointId);
     if (entry.kind === 'standing_order') return keys.has(entry.orderId);
     if (entry.kind === 'standing_order_run') return keys.has(entry.runId) || keys.has(entry.orderId);
+    if (entry.kind === 'agenda_item') return keys.has(entry.itemId);
     if (entry.kind === 'council_session') {
       // A session belongs to the chain when its objective is a run's intent. That is a match of
       // text, not a foreign key, and the trace says so where it relies on it.
@@ -707,6 +755,41 @@ export class MemoryTraceService {
       if (typeof order.capabilityId === 'string') keys.add(order.capabilityId);
     }
 
+    // T-44 Package 2: the agenda commitments this chain names. A commitment reached here also adds its
+    // `linkedArtifactId` to the key set, which is what makes "this commitment is about that standing
+    // order" a link a chain can follow rather than a string on a card. The reverse direction works too:
+    // a chain opened on a standing order reaches the commitments written about it.
+    // The link runs in two passes on purpose. The first finds the commitments the chain already names and
+    // adds what they are about; the second then finds the records that *those* names identify. One pass
+    // would be a link that only works in the direction the query happened to come from.
+    const agendaItems = all.entries.filter((e) => e.kind === 'agenda_item'
+      && ([...keys].some((k) => k === e.itemId) || (typeof e.linkedArtifactId === 'string' && [...keys].some((k) => k === e.linkedArtifactId))));
+    for (const item of agendaItems) {
+      if (typeof item.itemId === 'string') keys.add(item.itemId);
+      if (typeof item.linkedArtifactId === 'string' && item.linkedArtifactId !== '') keys.add(item.linkedArtifactId);
+    }
+
+    // The agenda pass can add ids that the standing-order pass ran before. Re-resolving here is what makes
+    // a chain opened on a commitment reach the order it is about, as well as the other way round.
+    for (const run of all.entries) {
+      if (run.kind !== 'standing_order_run') continue;
+      if (![...keys].some((k) => k === run.runId || k === run.orderId)) continue;
+      if (!orderRuns.includes(run)) orderRuns.push(run);
+      if (typeof run.runId === 'string') keys.add(run.runId);
+      if (typeof run.orderId === 'string') keys.add(run.orderId);
+      if (typeof run.operationId === 'string') keys.add(run.operationId);
+    }
+    for (const order of all.entries) {
+      if (order.kind !== 'standing_order') continue;
+      const named = [...keys].some((k) => k === order.orderId || order.runIds?.includes(k));
+      if (!named) continue;
+      if (!orderRecords.includes(order)) orderRecords.push(order);
+      if (typeof order.orderId === 'string') keys.add(order.orderId);
+      for (const runId of order.runIds ?? []) keys.add(runId);
+      for (const operationId of order.operationIds ?? []) keys.add(operationId);
+      if (typeof order.capabilityId === 'string') keys.add(order.capabilityId);
+    }
+
     // The operations whose steps or result name one of these runs or tasks.
     const operations = all.entries.filter((e) => {
       if (e.kind !== 'ecp_audit') return false;
@@ -716,7 +799,7 @@ export class MemoryTraceService {
 
     if (runs.length === 0 && tasks.length === 0 && operations.length === 0 && councils.length === 0
       && verifications.length === 0 && applies.length === 0 && checkpoints.length === 0
-      && orderRuns.length === 0 && orderRecords.length === 0) {
+      && orderRuns.length === 0 && orderRecords.length === 0 && agendaItems.length === 0) {
       return {
         ok: false,
         code: 'NOT_FOUND',
@@ -887,6 +970,27 @@ export class MemoryTraceService {
           // Both of these are stated so a chain can never be read as permission for anything.
           mutatesLiveWorkspace: change.record?.mutatesLiveWorkspace === true,
           authorizesExecution: false,
+        },
+      });
+    }
+    for (const item of agendaItems) {
+      steps.push({
+        at: item.completedAt ?? item.at,
+        kind: 'agenda_item',
+        label: item.status === 'completed' ? 'agenda commitment completed'
+          : item.status === 'dismissed' ? 'agenda commitment dismissed'
+            : 'agenda commitment written',
+        linkedBy: item.itemId === wanted ? 'the id names this commitment'
+          : 'the commitment names this record as the thing it is about',
+        detail: {
+          itemId: item.itemId,
+          title: item.title,
+          category: item.category,
+          priority: item.priority,
+          dueAt: item.dueAt,
+          status: item.status,
+          linkedArtifactId: item.linkedArtifactId,
+          completedAt: item.completedAt,
         },
       });
     }

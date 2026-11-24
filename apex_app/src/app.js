@@ -14,6 +14,9 @@ import { ProcessPortInspector, processPortActions } from './perception/process-p
 // above L2 Confirm. Its capabilities are registered like every other capability; its runs go through
 // the controller, which is attached once the controller exists.
 import { StandingOrdersEngine, standingOrderActions, standingOrderReadActions } from './executive/standing-orders.js';
+// T-44 Package 2 (2026-11-19): the unified executive agenda. One ledger of the owner's own commitments,
+// plus a reading of four stores that already hold what else is owed. It writes only its own ledger.
+import { ExecutiveAgenda, agendaActions } from './executive/agenda.js';
 import { knowledgeActions } from './actions/knowledge-actions.js';
 import { worldActions } from './actions/world-actions.js';
 import { worldModelActions } from './actions/world-model-actions.js';
@@ -337,6 +340,45 @@ export function createApp({
     operations: (entry) => operations.append(entry),
   });
 
+  // T-44 Package 2: the executive agenda. Its four readers are closures, not snapshots: each one is
+  // called when the agenda is built, so the agenda can never report a mission that finished an hour ago
+  // as still running. Every reader is failure-safe at the agenda's boundary - a store that will not read
+  // is reported as failed rather than rendered as "nothing pending".
+  const agenda = new ExecutiveAgenda({
+    dataDir,
+    now: clock,
+    lockdown: () => standingOrders.lockdownActive(),
+    tasks: async () => {
+      if (!taskStore) return [];
+      const all = await taskStore.list();
+      // Only the missions that are live: a completed or cancelled task is not owed work, and a failed
+      // one is reported by the task panel rather than counted here as outstanding.
+      return all.filter((task) => ['running', 'paused', 'pending', 'proposed'].includes(task.status))
+        .map((task) => ({
+          id: task.id, goal: task.goal, status: task.status,
+          createdAt: task.createdAt ?? null, updatedAt: task.updatedAt ?? task.createdAt ?? null,
+        }));
+    },
+    approvals: async () => {
+      const all = await proposals.list();
+      return all.filter((proposal) => proposal.status === 'pending')
+        .map((proposal) => ({
+          id: proposal.id, kind: proposal.kind ?? null,
+          summary: proposal.summary ?? proposal.title ?? proposal.rationale ?? null,
+          createdAt: proposal.createdAt ?? null,
+        }));
+    },
+    advisories: async () => {
+      const readings = perception.advisories();
+      return Array.isArray(readings) ? readings : [];
+    },
+    standingOrders: async () => standingOrders.list().orders,
+    workshopCandidates: async () => {
+      const staged = workshopSandbox.list({ limit: 50 });
+      return Array.isArray(staged?.candidates) ? staged.candidates : [];
+    },
+  });
+
   // Council is constructed before action registration so its read-oriented actions are
   // registered exactly once, through the same registry/ECP path as every other capability.
   // T-37 Step 2: the Council also reads the safety latch, so its Values & Constraints Core can
@@ -627,6 +669,8 @@ export function createApp({
     processInspector,
     // T-44 Package 1: the standing-orders engine, so the routes reach the one ledger and the one latch.
     standingOrders,
+    // T-44 Package 2: the agenda, so the routes and the briefing panel reach one ledger.
+    agenda,
     // T-38 Step 3: the cross-ledger trace and search, for the Memory Timeline.
     memoryTrace,
     filesystemWorkspaces: workspaces,
@@ -669,6 +713,10 @@ export function createApp({
   // two services the read routes call - but a Standing Order may only carry a capability, and the brief
   // names both in the safe set. Registering them keeps every delegation on the one execution path.
   for (const def of standingOrderReadActions({ doctor, briefing })) registry.register(def);
+  // T-44 Package 2: four agenda capabilities. `agenda.list` is the one read and is offered to the model
+  // as well, because "what is owed today" is a question a reply may legitimately ask about the stores.
+  // The three writes are owner-only: a commitment is the owner's own statement of intent.
+  for (const def of agendaActions(agenda)) registry.register(def);
   const bootstrap = createWorkstationBootstrap({ app, dataDir, now: clock, doctor });
   for (const def of systemBootstrapActions(bootstrap)) registry.register(def);
   app.doctor = doctor;

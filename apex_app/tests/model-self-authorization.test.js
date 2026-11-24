@@ -245,6 +245,12 @@ const MODEL_WRITE_ATTEMPTS = [
   ['standing_order.toggle', { orderId: 'so_probe' }],
   ['standing_order.revoke', { orderId: 'so_probe' }],
   ['standing_order.invoke', { orderId: 'so_probe' }],
+  // [T-44 Package 2, 2026-11-19] A commitment is the owner's own statement of intent. A reply that could
+  // write one could put words in the owner's mouth about what they have undertaken to do, so all three
+  // agenda writes are refused at model origin. `agenda.list` is deliberately not here: it is a read.
+  ['agenda.create', { title: 'the model scheduled something' }],
+  ['agenda.complete', { itemId: 'ag_probe' }],
+  ['agenda.dismiss', { itemId: 'ag_probe' }],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.
