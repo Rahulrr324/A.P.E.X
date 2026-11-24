@@ -3254,3 +3254,137 @@ system, and the one fact no fixture can fake was asserted: the server under test
 ephemeral loopback port in the host's socket table. The dirty-tree preflight was observed refusing,
 and the file it protected was read back afterwards. The visual claim rests on measured contrast and
 measured overflow rather than on a screenshot.
+
+## T-44 — The governed standing-orders engine and the unified time-horizon executive agenda
+
+Two things an owner needs and no earlier milestone gave them. The first is the ability to delegate a
+*reading*: "when the tree goes dirty, tell me what changed" — a permission that outlives the turn that
+granted it, and is therefore the most dangerous kind of permission APEX has ever accepted from a person.
+The second is the ability to see what is owed: the commitments the owner wrote down, and the ones the
+system already knows about, in one place and in the order they fall due.
+
+They were built as one package pair because they are the same question asked from two sides. A standing
+order is a *promise to act*; an agenda item is a *promise that something is owed*. Both are records that
+outlive the request that made them, and both are only honest if the owner can read back what they mean.
+
+### Package 1 — the engine, and the four declarations that make a capability delegable
+
+`src/executive/standing-orders.js`. A standing order names one trigger event and one capability, and the
+engine refuses to store it unless the capability's own declaration says it may be delegated:
+`reversibility` of `reversible` or `read_only`, and `blastRadius` of `local_state` or `none`. Anything
+that mutates the workspace, moves the safety latch, is security-relevant, or is system-wide is refused at
+registration with `403 STANDING_ORDER_CAPABILITY_FORBIDDEN` — not filtered out of a menu, and not
+re-checked only when it runs. That gives a safe set of exactly seven names, and it is read from the
+registry rather than written as a list, so a capability that changes its declaration changes the set.
+
+The Autonomy Ceiling is the reason for the four declarations rather than for a curated list. Nothing that
+is irreversible can ever execute above `L2` Confirm, so a standing order — which by definition executes
+without a person present — may only hold capabilities that are *definitionally* incapable of needing that
+confirmation. The engine does not decide this; the registry's declarations do, and the engine refuses any
+capability whose declarations do not answer.
+
+Lockdown halts rather than queues. An invoke while the latch is engaged is a `423 LOCKDOWN_ACTIVE` at the
+door, before the run; a latch that engages between the door and the run records `halted_by_lockdown` in
+the order's history with `operationId: null` and executes nothing. **There is no queue between calls**, so
+releasing the latch cannot fire a suppressed order — it is a structural guarantee, not a policy that has
+to be remembered. A cooldown of 30 seconds and a ceiling of 12 runs per hour bound the other way an
+order could get out of hand, and a skipped run does not count as a run, so the cooldown cannot extend
+itself by skipping.
+
+### Package 2 — the agenda, which is mostly other people's records
+
+`src/executive/agenda.js`. The ledger holds only what the owner wrote. Everything else — an approval
+waiting on a person, a mission in flight, a Sentinel advisory, an armed standing order — is a
+`derivedItems[]` row read from the store that owns it, marked read-only, and settled by going to that
+store. Storing a copy would be a second answer to a question that already has one, and the two would
+drift.
+
+The horizon is terminal-first: `completed` and `dismissed` are decided before any clock comparison, so a
+finished item can never be reported as overdue because its due date has since passed. Then `overdue`,
+then `today` within 86 400 000 ms, then `upcoming`, then `unscheduled` — a commitment with no date is not
+a commitment that is late.
+
+`GET /api/agenda` answers 200 on every configuration, including one with no store, no engine and no
+workspace, with the same shape. That is the standing rule for a read the owner's own panel makes on boot:
+a 503 there is a panel that never paints, and the absence of a record is a fact the panel can render.
+
+### Package 3 — two panels, on the views the records already live on
+
+The brief named `data-view="briefing"` and `data-view="policy-autonomy"`. Neither exists, and adding one
+would have meant a nav entry with nothing on it. The standing orders went beside the safety latch on the
+existing `system` view — where an owner reading what is armed can see what is stopped in the same place —
+and the agenda beside the Briefings panel on `approvals`, which is what it extends. A `data-screen-id`
+belongs to a view section, so the two panels carry `aria-describedby` descriptions instead of claiming two
+views exist twice; the T-37 screen test enforces exactly that, and it was the test that caught the first
+attempt.
+
+The capability select is built from the server's own `allowedCapabilities` on every read, so the set of
+things that can be delegated is *visible* rather than implied by what is missing from a hand-written list.
+An order halted by Lockdown paints red whatever its enabled flag says, because the flag is not the thing
+the owner needs to know. Invoke is disabled rather than removed on a paused or halted order, so the card
+does not change shape under the pointer that just pressed it.
+
+Colour: `--armor-red` is a fill, not a text colour on this deck — 4.03:1 on the void is below the 4.5:1
+the deck holds itself to. Every red label in the new panels uses `--armor-red-text`, and the worst pair
+across both panels measures **6.66:1**, computed from the tokens in the shipped CSS rather than a copy.
+
+### Package 4 — the walk, and three assumptions it corrected before they reached CI
+
+The spec is `tests/e2e/t44-standing-orders-agenda.spec.mjs` against a real server, a real composed
+application and a real git repository. Because no browser is installed on this machine, every server-side
+claim in the spec was first exercised directly against the app — eleven steps, all green — so the only
+thing left for CI to prove is paint. That dry run corrected three assertions that would otherwise have
+been a red run after a long browser phase:
+
+1. **`invoke` under Lockdown is a door refusal, not a recorded halt.** The spec asserted the card would
+   read `HALTED BY LOCKDOWN` after a `423`. It cannot: the entry point refuses before the run, which is
+   the point — the halt is recorded only for a run already accepted when the latch engaged, and that
+   in-flight race is what the engine's own test arms deliberately. The spec now asserts the 423, the
+   disabled control, and that the refused attempt left **no** mark: still one run in the history, no
+   phantom `halted_by_lockdown` row, and release fires nothing.
+2. **The trace's `ecp_audit` is not this run's operation.** Following an order's chain reaches an
+   authorized operation, but not necessarily the one the card's history names. The spec asserts what is
+   true and two-way: the chain reaches `standing_order_run`, and it names the operation id.
+3. **The status badge is a state, not a label.** `HALTED BY LOCKDOWN` is longer than its state, so the
+   assertions read `data-so-status` and check the label alongside it.
+
+Two more were caught by reading the client rather than assuming it: the create form does not disable
+itself under Lockdown (the server's 423 is the refusal, and a hidden form would only mean discovering the
+same thing by pressing it), and the receipt for a scheduled commitment reads `Scheduled: <title>` — the
+title, not a generic verb.
+
+### What the batch cost, and where
+
+Three defects were real and none of them were in the product:
+
+- A backtick in a comment breaks both template literals `src/ui/assets.js` is built from. It happened
+  twice, once in an HTML comment and once in a `//` comment. `node --check` and `new Function(UI_CLIENT)`
+  now run after every insert.
+- Two panels given `data-screen-id` made the screen count thirteen where the test says eleven. The test
+  was right: a screen id belongs to a view.
+- The router's `targetView` named a screen rather than a view, so `setView` would have painted nothing.
+  It now names the view it switches to and `target` the panel inside it — and the receipt *focuses* that
+  panel and re-reads it, so `show agenda` lands the owner in front of the current agenda rather than the
+  copy that was on screen when they pressed return.
+
+### Three-axis assessment at T-44
+
+**(A) Engineering rigour — the refusals are the feature.** The interesting work in this milestone is not
+the seven capabilities that can be delegated but the four declarations that make every other one
+refusable. The safe set is five of the registry's 183 names without a workspace root and seven with one —
+the two git reads register only where a repository exists — so the refusal is carrying the policy in both
+configurations, not the allowlist. The forbidden-capability refusal is asserted at registration, the Lockdown refusal at both
+entry points, and the "release fires nothing" claim is structural rather than policy. The dry run found
+three false assertions in the walk itself before CI could, which is the fixture being held to the same
+standard as the product.
+
+**(B) Product completeness — every claim in the brief has a control and a refusal.** Create, pause,
+revoke, invoke, evaluate, complete, dismiss, trace, and a read that answers on every configuration.
+Nothing in the panels is a control that could not honestly work: the derived list has no buttons, a
+completed commitment's Complete is disabled, and a halted order's Invoke is off.
+
+**(C) Real-World Capability Validation — real registry, real ECP, real latch.** The safe set is read from
+the registry, the run executes through the controller and leaves a receipt in `operations.jsonl` that the
+walk reads back and matches to the card, and the latch is moved through the same route an owner would use.
+The visual claim rests on measured contrast and measured overflow at three viewports rather than on a
+screenshot.

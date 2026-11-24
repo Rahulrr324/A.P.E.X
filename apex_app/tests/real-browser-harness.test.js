@@ -190,7 +190,12 @@ describe('T-31 browser suite wiring', () => {
     // system git binary as well as against the product - and the only one that measures the host's
     // listening ports and finds its own server among them. Twelve specs; the list is pinned here so a
     // suite that is written but never wired stays a red test.
-    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs', '\*\*\/t36-cold-boot-unseeded\.spec\.mjs', '\*\*\/t37-neural-council-router\.spec\.mjs', '\*\*\/t38-values-workspace-trace\.spec\.mjs', '\*\*\/t39-workshop-apply-rollback\.spec\.mjs', '\*\*\/t40-changeset-drift-command-help\.spec\.mjs', '\*\*\/t41-sandbox-test-and-evolution-bridge\.spec\.mjs', '\*\*\/t43-workstation-git-telemetry\.spec\.mjs'\]/);
+    // T-44 Step 4 (2026-11-19): the standing-orders and agenda walk joins the list. It is the only
+    // suite that drives a governed delegation from the panel through the ECP and reads the receipt back
+    // out of the ledger, the only one that moves the Lockdown latch and proves release fires nothing,
+    // and the only one that reads a commitment's horizon beside the derived rows the stores already
+    // hold. Thirteen specs.
+    assert.match(config, /testMatch: \['\*\*\/t31-real-browser\.spec\.mjs', '\*\*\/t32-hud-experience\.spec\.mjs', '\*\*\/t33-executive-loop\.spec\.mjs', '\*\*\/t34-mission-dag-and-briefing\.spec\.mjs', '\*\*\/t35-stepdown-handoff-doctor\.spec\.mjs', '\*\*\/t36-cold-boot-unseeded\.spec\.mjs', '\*\*\/t37-neural-council-router\.spec\.mjs', '\*\*\/t38-values-workspace-trace\.spec\.mjs', '\*\*\/t39-workshop-apply-rollback\.spec\.mjs', '\*\*\/t40-changeset-drift-command-help\.spec\.mjs', '\*\*\/t41-sandbox-test-and-evolution-bridge\.spec\.mjs', '\*\*\/t43-workstation-git-telemetry\.spec\.mjs', '\*\*\/t44-standing-orders-agenda\.spec\.mjs'\]/);
     assert.match(config, /testIgnore: \['\*\*\/apex-browser\.spec\.mjs'\]/);
     const spec = fs.readFileSync(path.join(appRoot, 'tests', 'e2e', 't31-real-browser.spec.mjs'), 'utf8');
     assert.match(spec, /chromium\.launch\(\{ executablePath: resolution\.executable, headless: true \}\)/);

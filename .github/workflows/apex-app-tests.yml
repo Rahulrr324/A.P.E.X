@@ -707,6 +707,68 @@ jobs:
               sys.exit(1)
           PY
 
+      # T-44 Package 4: the standing-orders and agenda walk. The annotation states the measured facts -
+      # which capability was delegated, what the run produced, what the latch refused, which horizon the
+      # commitment landed in, and the contrast range the two panels actually rendered - because a red run
+      # has to say what disagreed, not only that something did.
+      - name: Publish the T-44 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't44-standing-orders-agenda.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t44-standing-orders-agenda::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          order = run.get('order') or {}
+          one = run.get('runOne') or {}
+          refusal = run.get('refusal') or {}
+          toggle = run.get('toggle') or {}
+          lockdown = run.get('lockdown') or {}
+          trace = run.get('trace') or {}
+          agenda = run.get('agenda') or {}
+          derived = run.get('derived') or {}
+          complete = run.get('complete') or {}
+          contrast = run.get('contrast') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"platform {run.get('platform')}",
+              f"order {order.get('orderId')} caps={len(order.get('capabilities') or [])} status={order.get('status')} runs={order.get('runs')}",
+              f"run {one.get('operationId')} outcome={one.get('outcome')} inLedger={one.get('ledgerFound')}",
+              f"refusal {refusal.get('status')} {refusal.get('code')} ledger={refusal.get('ledgerCount')}",
+              f"toggle {toggle.get('paused')}->{toggle.get('resumed')}",
+              f"lockdown invoke={lockdown.get('invokeStatus')} {lockdown.get('invokeCode')} create={lockdown.get('createStatus')} runsAfterRelease={lockdown.get('runCountAfterRelease')} outcome={lockdown.get('lastOutcomeAfterRelease')}",
+              f"trace entries={trace.get('entries')} kinds={','.join(trace.get('kinds') or [])} reachesRun={trace.get('reachesRun')} namesOperation={trace.get('namesOperation')}",
+              f"agenda {agenda.get('itemId')} horizon={agenda.get('horizon')} linked={agenda.get('linkedTo')}",
+              f"derived standingOrderRows={derived.get('standingOrderRows')}",
+              f"complete {complete.get('status')} at={complete.get('completedAt')}",
+              f"router {str((run.get('router') or {}).get('schedule') or '')[:80]}",
+              f"contrast worst={contrast.get('minimum')}:1 over {contrast.get('samples')} samples" if contrast.get('minimum') is not None else 'contrast not measured',
+              f"viewports {len(run.get('viewports') or [])} measured",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])}",
+              f"screenshots {run.get('screenshots')}",
+              f"lastPhase {run.get('lastPhase')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t44-standing-orders-agenda::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       # T-42 Step 4: the publisher above is not allowed to be the only witness. If it throws before
       # printing (as it did on run 45099159487, where a missing binding raised NameError and the
       # annotation that would have named the failing assertion was never written), this step still
@@ -769,6 +831,8 @@ jobs:
             apex_app/reports/t41-sandbox-test-and-evolution-bridge.json
             apex_app/reports/screenshots/t43
             apex_app/reports/t43-workstation-git-telemetry.json
+            apex_app/reports/screenshots/t44
+            apex_app/reports/t44-standing-orders-agenda.json
           if-no-files-found: warn
           retention-days: 14
 
