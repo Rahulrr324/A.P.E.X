@@ -264,48 +264,7 @@ export const UI_PAGE = `<!doctype html>
       </div>
       <p class="meta">Acknowledging writes a checkpoint of what the stores hold now; it authorizes nothing and changes no other record.</p>
     </section>
-    <!-- T-44 Package 2: the unified executive agenda. The commitments are the owner's own words; the
-         derived list is a reading of four other stores, so it carries no action buttons - the way to
-         resolve one is to go and resolve the thing it names, which is why every card links to it. -->
-    <section class="panel" id="briefing-agenda-panel" data-depth-plane="z3" aria-labelledby="agenda-heading"
-             aria-describedby="agenda-description">
-      <h3 id="agenda-heading">Executive agenda</h3>
-      <p id="agenda-description" class="meta">The owner's commitments by horizon, and readings from the approval gate, the task graph, the Sentinel and the armed standing orders. A derived item is read from its own store and cannot be settled here.</p>
-      <p id="agenda-status" class="workspace-status" role="status" aria-live="polite">Loading the agenda…</p>
-      <div id="agenda-summary-badges" class="badge-row" role="group" aria-label="Agenda summary">
-        <span class="badge" data-agenda-badge="overdue">OVERDUE <span id="agenda-overdue-count">0</span></span>
-        <span class="badge" data-agenda-badge="today">TODAY <span id="agenda-today-count">0</span></span>
-        <span class="badge" data-agenda-badge="upcoming">UPCOMING / UNSCHEDULED <span id="agenda-upcoming-count">0</span></span>
-        <span class="badge" data-agenda-badge="completed">COMPLETED <span id="agenda-completed-count">0</span></span>
-        <span class="badge" data-agenda-badge="derived">DERIVED GATES <span id="agenda-derived-count">0</span></span>
-      </div>
-      <div class="agenda-add">
-        <label for="agenda-title-input" class="visually-hidden">Commitment title</label>
-        <input id="agenda-title-input" type="text" maxlength="160" placeholder="what needs doing">
-        <label for="agenda-priority-select" class="visually-hidden">Priority</label>
-        <select id="agenda-priority-select">
-          <option value="critical">critical</option>
-          <option value="high">high</option>
-          <option value="normal" selected>normal</option>
-          <option value="low">low</option>
-        </select>
-        <label for="agenda-category-select" class="visually-hidden">Category</label>
-        <select id="agenda-category-select">
-          <option value="commitment" selected>commitment</option>
-          <option value="focus_block">focus block</option>
-          <option value="follow_up">follow up</option>
-          <option value="milestone">milestone</option>
-        </select>
-        <label for="agenda-link-input" class="visually-hidden">Linked artifact id</label>
-        <input id="agenda-link-input" type="text" maxlength="120" placeholder="linked id (optional)">
-        <button id="btn-agenda-create" type="button" class="small">Add commitment</button>
-        <span id="agenda-add-status" class="meta" role="status" aria-live="polite"></span>
-      </div>
-      <ul id="briefing-agenda-list" class="work agenda-list"></ul>
-      <h4 class="agenda-derived-heading">Readings from other stores</h4>
-      <p class="meta">Each one is read from the store that holds it and is not written here. Resolve it at its source.</p>
-      <ul id="briefing-derived-agenda-list" class="work agenda-derived-list"></ul>
-    </section>
+    
   </aside>
 </main>
 <section class="workspace" id="workspace">
@@ -392,6 +351,48 @@ export const UI_PAGE = `<!doctype html>
     <p id="approval-state" class="workspace-status" role="status" aria-live="polite">Loading pending owner requests…</p>
     <p id="approval-action-status" class="workspace-status" role="status" aria-live="polite"></p>
     <ul id="approval-items" class="work"></ul>
+    <!-- T-44 Package 2: the unified executive agenda. The commitments are the owner's own words; the
+         derived list is a reading of four other stores, so it carries no action buttons - the way to
+         resolve one is to go and resolve the thing it names, which is why every card links to it. -->
+    <section class="panel" id="briefing-agenda-panel" data-depth-plane="z3" aria-labelledby="agenda-heading"
+             aria-describedby="agenda-description">
+      <h3 id="agenda-heading">Executive agenda</h3>
+      <p id="agenda-description" class="meta">The owner's commitments by horizon, and readings from the approval gate, the task graph, the Sentinel and the armed standing orders. A derived item is read from its own store and cannot be settled here.</p>
+      <p id="agenda-status" class="workspace-status" role="status" aria-live="polite">Loading the agenda…</p>
+      <div id="agenda-summary-badges" class="badge-row" role="group" aria-label="Agenda summary">
+        <span class="badge" data-agenda-badge="overdue">OVERDUE <span id="agenda-overdue-count">0</span></span>
+        <span class="badge" data-agenda-badge="today">TODAY <span id="agenda-today-count">0</span></span>
+        <span class="badge" data-agenda-badge="upcoming">UPCOMING / UNSCHEDULED <span id="agenda-upcoming-count">0</span></span>
+        <span class="badge" data-agenda-badge="completed">COMPLETED <span id="agenda-completed-count">0</span></span>
+        <span class="badge" data-agenda-badge="derived">DERIVED GATES <span id="agenda-derived-count">0</span></span>
+      </div>
+      <div class="agenda-add">
+        <label for="agenda-title-input" class="visually-hidden">Commitment title</label>
+        <input id="agenda-title-input" type="text" maxlength="160" placeholder="what needs doing">
+        <label for="agenda-priority-select" class="visually-hidden">Priority</label>
+        <select id="agenda-priority-select">
+          <option value="critical">critical</option>
+          <option value="high">high</option>
+          <option value="normal" selected>normal</option>
+          <option value="low">low</option>
+        </select>
+        <label for="agenda-category-select" class="visually-hidden">Category</label>
+        <select id="agenda-category-select">
+          <option value="commitment" selected>commitment</option>
+          <option value="focus_block">focus block</option>
+          <option value="follow_up">follow up</option>
+          <option value="milestone">milestone</option>
+        </select>
+        <label for="agenda-link-input" class="visually-hidden">Linked artifact id</label>
+        <input id="agenda-link-input" type="text" maxlength="120" placeholder="linked id (optional)">
+        <button id="btn-agenda-create" type="button" class="small">Add commitment</button>
+        <span id="agenda-add-status" class="meta" role="status" aria-live="polite"></span>
+      </div>
+      <ul id="briefing-agenda-list" class="work agenda-list"></ul>
+      <h4 class="agenda-derived-heading">Readings from other stores</h4>
+      <p class="meta">Each one is read from the store that holds it and is not written here. Resolve it at its source.</p>
+      <ul id="briefing-derived-agenda-list" class="work agenda-derived-list"></ul>
+    </section>
   </section>
   <section class="view" data-view="sentinel" data-depth-plane="z3"
          data-screen-id="sentinel"
@@ -653,6 +654,46 @@ export const UI_PAGE = `<!doctype html>
     </table>
     <h3>Capabilities in the matrix</h3>
     <ul id="autonomy-capabilities" class="work"></ul>
+    
+  </section>
+  <section class="view" data-view="system" data-depth-plane="z3"
+         data-screen-id="policy-autonomy"
+         data-screen-message="System health, the doctor and the safety latch: six read-only checks, the ECP authority, and the lockdown form that requires a typed reason and an explicit confirmation.">
+    <h2>System diagnostics and Resource Fabric</h2>
+    <p class="meta">Read-only diagnostics from the health, runtime, ECP and resource owners. Unknown or unavailable readings are not treated as healthy.</p>
+    <p id="system-status" class="workspace-status" role="status" aria-live="polite">Loading system diagnostics…</p>
+    <!-- T-35 Step 3: the doctor. Six read-only checks, each reporting the state it can defend. -->
+    <section class="panel" aria-labelledby="doctor-heading">
+      <h3 id="doctor-heading">Doctor</h3>
+      <p class="meta">Six read-only checks inside a 500 ms budget: the safety latch, ECP authority, store readability, the capability inventory, a browser binary, and the workspace sensor. A check that cannot be made says so; nothing here is repaired by running it.</p>
+      <p id="doctor-status" class="workspace-status" role="status" aria-live="polite">The doctor has not run yet.</p>
+      <button id="doctor-run" type="button" class="small">Run doctor</button>
+      <ul id="doctor-checks" class="work"></ul>
+    </section>
+    <section class="panel safety" data-depth-plane="z4" aria-labelledby="safety-heading"
+             data-screen-id="lockdown"
+             data-screen-message="The execution safety latch: activating it requires a typed reason, releasing it requires the reason, an explicit confirmation and the step-up secret when one is configured.">
+      <h3 id="safety-heading">Execution safety</h3>
+      <p id="safety-status" class="meta" role="status" aria-live="polite">Reading the ECP safety latch…</p>
+      <form id="safety-lock-form" class="safety-form">
+        <label for="safety-lock-reason">Lockdown reason</label>
+        <textarea id="safety-lock-reason" rows="2" maxlength="240" required></textarea>
+        <button id="safety-lock" type="submit" class="small">Activate lockdown</button>
+        <span id="safety-lock-result" class="meta" role="status" aria-live="polite"></span>
+      </form>
+      <form id="safety-release-form" class="safety-form">
+        <label for="safety-release-reason">Release reason</label>
+        <textarea id="safety-release-reason" rows="2" maxlength="240" required></textarea>
+        <label class="safety-confirm"><input id="safety-release-confirm" type="checkbox" required> I have reviewed the latch and explicitly confirm release</label>
+        <div id="safety-step-up-wrap" hidden>
+          <label for="safety-step-up">Step-up proof</label>
+          <input id="safety-step-up" type="password" autocomplete="off" maxlength="200" placeholder="the configured step-up secret">
+          <p id="safety-step-up-note" class="meta">A step-up secret is configured, so the release is refused without it.</p>
+        </div>
+        <button id="safety-release" type="submit" class="small" disabled>Release lockdown</button>
+        <span id="safety-release-result" class="meta" role="status" aria-live="polite"></span>
+      </form>
+    </section>
     <!-- T-44 Package 1: the governed standing orders. The policy select is built from the server's own
          allowedCapabilities list, so the set of things that CAN be delegated is visible rather than
          implied by what is missing from a list someone typed here. Every button on a card goes through
@@ -702,45 +743,6 @@ export const UI_PAGE = `<!doctype html>
         <button id="btn-so-evaluate-dirty" type="button" class="small">Evaluate workspace_dirty</button>
         <span id="so-eval-status" class="meta" role="status" aria-live="polite"></span>
       </div>
-    </section>
-  </section>
-  <section class="view" data-view="system" data-depth-plane="z3"
-         data-screen-id="policy-autonomy"
-         data-screen-message="System health, the doctor and the safety latch: six read-only checks, the ECP authority, and the lockdown form that requires a typed reason and an explicit confirmation.">
-    <h2>System diagnostics and Resource Fabric</h2>
-    <p class="meta">Read-only diagnostics from the health, runtime, ECP and resource owners. Unknown or unavailable readings are not treated as healthy.</p>
-    <p id="system-status" class="workspace-status" role="status" aria-live="polite">Loading system diagnostics…</p>
-    <!-- T-35 Step 3: the doctor. Six read-only checks, each reporting the state it can defend. -->
-    <section class="panel" aria-labelledby="doctor-heading">
-      <h3 id="doctor-heading">Doctor</h3>
-      <p class="meta">Six read-only checks inside a 500 ms budget: the safety latch, ECP authority, store readability, the capability inventory, a browser binary, and the workspace sensor. A check that cannot be made says so; nothing here is repaired by running it.</p>
-      <p id="doctor-status" class="workspace-status" role="status" aria-live="polite">The doctor has not run yet.</p>
-      <button id="doctor-run" type="button" class="small">Run doctor</button>
-      <ul id="doctor-checks" class="work"></ul>
-    </section>
-    <section class="panel safety" data-depth-plane="z4" aria-labelledby="safety-heading"
-             data-screen-id="lockdown"
-             data-screen-message="The execution safety latch: activating it requires a typed reason, releasing it requires the reason, an explicit confirmation and the step-up secret when one is configured.">
-      <h3 id="safety-heading">Execution safety</h3>
-      <p id="safety-status" class="meta" role="status" aria-live="polite">Reading the ECP safety latch…</p>
-      <form id="safety-lock-form" class="safety-form">
-        <label for="safety-lock-reason">Lockdown reason</label>
-        <textarea id="safety-lock-reason" rows="2" maxlength="240" required></textarea>
-        <button id="safety-lock" type="submit" class="small">Activate lockdown</button>
-        <span id="safety-lock-result" class="meta" role="status" aria-live="polite"></span>
-      </form>
-      <form id="safety-release-form" class="safety-form">
-        <label for="safety-release-reason">Release reason</label>
-        <textarea id="safety-release-reason" rows="2" maxlength="240" required></textarea>
-        <label class="safety-confirm"><input id="safety-release-confirm" type="checkbox" required> I have reviewed the latch and explicitly confirm release</label>
-        <div id="safety-step-up-wrap" hidden>
-          <label for="safety-step-up">Step-up proof</label>
-          <input id="safety-step-up" type="password" autocomplete="off" maxlength="200" placeholder="the configured step-up secret">
-          <p id="safety-step-up-note" class="meta">A step-up secret is configured, so the release is refused without it.</p>
-        </div>
-        <button id="safety-release" type="submit" class="small" disabled>Release lockdown</button>
-        <span id="safety-release-result" class="meta" role="status" aria-live="polite"></span>
-      </form>
     </section>
     <div id="health-overall" class="row"></div>
     <ul id="health" class="work"></ul>

@@ -248,6 +248,7 @@ test('T-44: a governed standing order runs through the ECP, Lockdown halts it, a
 
   const fixture = await startT44Ui();
   const browser = await chromium.launch({ executablePath: resolution.executable, headless: true });
+  run.browserVersion = browser.version();
   const context = await browser.newContext({ viewport: { width: 1600, height: 900 } });
   const page = await context.newPage();
   const consoleErrors = [];
@@ -267,9 +268,12 @@ test('T-44: a governed standing order runs through the ECP, Lockdown halts it, a
   try {
     run.repo = fixture.repo ? { branch: fixture.repo.branch, headSha: fixture.repo.headSha } : null;
     checkpoint('boot');
-    await page.goto(`${fixture.base}/?token=${fixture.token}`);
-    await expect(page.locator('#core-state')).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('#connectivity')).toHaveText(/Online|Local/i, { timeout: 30_000 });
+    // The token is a query parameter: the server hands the bearer to the client that way, and a bare base
+    // URL gets a 401 and a blank page. Boot is read from the deck's own attribute rather than from a chip
+    // whose vocabulary changes with the connection state - the first version of this walk waited for
+    // "Online" or "Local" and burned its whole timeout on a chip that says "Connected".
+    await page.goto(`${fixture.base}/?token=${encodeURIComponent(fixture.token)}`, { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('body')).toHaveAttribute('data-view', /.+/, { timeout: 20_000 });
 
     // ---- 1. create a standing order from the panel -------------------------------------------------
     checkpoint('standing-orders-open');
@@ -352,7 +356,8 @@ test('T-44: a governed standing order runs through the ECP, Lockdown halts it, a
     const locked = await fixture.lock();
     expect(locked.status, JSON.stringify(locked.body)).toBe(200);
     expect(fixture.latchActive()).toBe(true);
-    await page.reload();
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.locator('body')).toHaveAttribute('data-view', /.+/, { timeout: 20_000 });
     await openView(page, 'system');
     await expect(page.locator('#so-lockdown-status')).toHaveText('ENGAGED', { timeout: 20_000 });
     // The panel disables Invoke while the latch is up rather than letting a click discover the refusal;
@@ -397,7 +402,8 @@ test('T-44: a governed standing order runs through the ECP, Lockdown halts it, a
     };
     checkpoint('lockdown-verified', run.lockdown);
 
-    await page.reload();
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.locator('body')).toHaveAttribute('data-view', /.+/, { timeout: 20_000 });
     await openView(page, 'system');
     await expect(page.locator('#so-lockdown-status')).toHaveText('OPEN', { timeout: 20_000 });
 
