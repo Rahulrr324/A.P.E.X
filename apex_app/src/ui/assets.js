@@ -504,7 +504,11 @@ export const UI_PAGE = `<!doctype html>
         <span class="badge" data-watchpoint-badge="breached">BREACHED <span id="watchpoints-breached-count">0</span></span>
         <span class="badge" data-watchpoint-badge="nominal">NOMINAL <span id="watchpoints-nominal-count">0</span></span>
       </div>
-      <form id="watchpoint-form" class="watchpoint-form" onsubmit="return false">
+      <!-- No inline handler here: this deck's content policy allows scripts from this origin only, and
+           form-action none already refuses a native submit. The Create button is type="button" and posts
+           through the client, so pressing Return in a field cannot navigate anywhere and the form never
+           needs to be suppressed. An onsubmit attribute would be blocked by the policy AND unnecessary. -->
+      <form id="watchpoint-form" class="watchpoint-form">
         <label for="wp-title-input" class="visually-hidden">Watchpoint title</label>
         <input id="wp-title-input" type="text" maxlength="120" placeholder="what this rule watches for" autocomplete="off">
         <label for="wp-metric-select" class="visually-hidden">Metric</label>

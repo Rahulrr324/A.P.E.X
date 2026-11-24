@@ -204,6 +204,24 @@ describe('startup and authentication', () => {
     assert.match(UI_CLIENT, /textContent/);
   });
 
+  // [T-45 Package 4, 2026-11-19] The page declares `script-src 'self'` with no nonce and no hash, so an
+  // inline handler is not merely untidy - the browser blocks it, the console records a violation, and every
+  // browser walk that treats a console error as a failure goes red. That is exactly what a stray
+  // `onsubmit="return false"` on one form did on CI run 45408045249: eight suites failed on one attribute,
+  // and none of them could say so, because the browser's message is a policy violation rather than a test
+  // assertion. This is the assertion that would have named it.
+  //
+  // `form-action 'none'` is in the same policy, so a form needs no suppression to be safe: a native submit
+  // cannot navigate anywhere. A handler here would be both blocked and unnecessary.
+  test('the page carries no inline event handler, because the policy blocks every one of them', () => {
+    const handlers = [...UI_PAGE.matchAll(/\son[a-z]+\s*=/gi)].map((match) => match[0].trim());
+    assert.deepEqual(handlers, [],
+      `the content policy allows scripts from this origin only, so these would be blocked: ${handlers.join(', ')}`);
+    // The same rule stated positively: every control that changes anything is wired in UI_CLIENT, which is
+    // served as this origin's own script and is therefore what the policy does permit.
+    assert.match(UI_CLIENT, /addEventListener\('click'/);
+  });
+
   test('the API refuses a missing or wrong token and every request the page would not send', async () => {
     const dir = tempDir();
     const { base } = await uiOn(dir);
