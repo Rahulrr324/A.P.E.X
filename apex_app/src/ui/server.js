@@ -815,6 +815,18 @@ const NOT_A_REPOSITORY = Object.freeze({
   checkpointsCount: 0,
 });
 
+// T-44 Package 1: a standing-order refusal, as a body. The same discipline as gitRefusalBody - the
+// code is the product's own name for the refusal, and the message explains it - but the engine throws,
+// so the mapping happens on the caught error rather than on a step.
+function standingOrderRefusalBody(err) {
+  return {
+    verified: false,
+    error: err?.message ?? 'the standing-order act was refused',
+    code: err?.code ?? null,
+    ...(err?.detail && typeof err.detail === 'object' ? { detail: err.detail } : {}),
+  };
+}
+
 function gitRefusalBody(result, step) {
   const failed = step?.execution?.error ?? null;
   const code = failed?.code ?? (step?.authorization?.decision === 'deny' ? step.authorization.reason : null);
@@ -3466,6 +3478,92 @@ export function createUiServer({
       }
       return;
     }
+    // ---- T-44 Package 1: the governed Standing Orders engine -----------------------------------
+    //
+    // Six routes. The GET is a read and answers 200 on every configuration, including a build with no
+    // workspace root: the panel renders a stated absence rather than a console error, for the same
+    // reason the git GETs do. The five POSTs are writes on the order ledger and go through the engine,
+    // which refuses a forbidden capability with 403 and anything at all with 423 while Lockdown is
+    // engaged. The engine's refusals are values with a status on them, so the mapping is exact.
+    if (method === 'GET' && url.pathname === '/api/standing-orders') {
+      try {
+        const engine = app.standingOrders;
+        if (!engine || typeof engine.list !== 'function') {
+          // No engine means no registry to read the policy from. The shape is the same as a successful
+          // read with nothing in it, so a client parses one schema rather than two.
+          sendJson(res, 200, {
+            verified: true, available: false, lockdownActive: false,
+            allowedCapabilities: [], orders: [],
+            summary: { totalCount: 0, enabledCount: 0, pausedCount: 0, totalRuns: 0, haltedByLockdownCount: 0 },
+          });
+          return;
+        }
+        sendJson(res, 200, engine.list());
+      } catch (err) {
+        sendJson(res, 500, { error: `the standing-order ledger could not be read: ${err.message}` });
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/standing-orders') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['title', 'eventType', 'capabilityId', 'input', 'autonomyTier', 'cooldownSec', 'maxRunsPerHour', 'enabled'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const order = app.standingOrders.create(body);
+        sendJson(res, 200, order);
+        broadcast('standing-order', { orderId: order.orderId, created: true });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, err.status ?? 400, standingOrderRefusalBody(err));
+      }
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/standing-orders/evaluate') {
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      const extra = Object.keys(body).filter((key) => !['eventType', 'dryRun'].includes(key));
+      if (extra.length) { sendJson(res, 400, { error: `unknown field: ${extra[0]}` }); return; }
+      try {
+        const result = await app.standingOrders.evaluate({ eventType: body.eventType, dryRun: body.dryRun === true });
+        sendJson(res, 200, result);
+        broadcast('standing-order', { eventType: body.eventType, runs: result.runs?.length ?? 0 });
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, err.status ?? 400, standingOrderRefusalBody(err));
+      }
+      return;
+    }
+    const soActionMatch = method === 'POST' && url.pathname.match(/^\/api\/standing-orders\/([^/]+)\/(toggle|revoke|invoke)$/);
+    if (soActionMatch) {
+      const orderId = decodeURIComponent(soActionMatch[1]);
+      const verb = soActionMatch[2];
+      const body = await readJson(req, UI_LIMITS.maxBodyBytes);
+      const payload = body === null ? {} : body;
+      if (typeof payload !== 'object' || Array.isArray(payload)) { sendJson(res, 400, { error: 'the body must be a JSON object' }); return; }
+      try {
+        if (verb === 'toggle') {
+          const order = app.standingOrders.toggle(orderId, { enabled: typeof payload.enabled === 'boolean' ? payload.enabled : null });
+          sendJson(res, 200, order);
+          broadcast('standing-order', { orderId, enabled: order.enabled });
+        } else if (verb === 'revoke') {
+          sendJson(res, 200, app.standingOrders.revoke(orderId));
+          broadcast('standing-order', { orderId, revoked: true });
+        } else {
+          const result = await app.standingOrders.invoke(orderId, { reason: payload.reason });
+          // A run that was withheld or halted is a 200 with the outcome named: the request was answered,
+          // the answer is that the capability did not run. A run the ECP refused is a 403, because the
+          // act was attempted and denied.
+          sendJson(res, result.outcome === 'refused' ? 403 : 200, result);
+          broadcast('standing-order', { orderId, runId: result.runId, outcome: result.outcome });
+        }
+        scheduleOwnerRefresh();
+      } catch (err) {
+        sendJson(res, err.status ?? 400, standingOrderRefusalBody(err));
+      }
+      return;
+    }
+
     const restoreMatch = method === 'POST' && url.pathname.match(/^\/api\/git\/checkpoints\/([^/]+)\/restore$/);
     if (restoreMatch) {
       const body = await readJson(req, UI_LIMITS.maxBodyBytes);

@@ -38,6 +38,10 @@ export const AUTO_CAPTURE_CAPABILITIES = Object.freeze([
 
 export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   read: 'its result is re-derivable from the stores at any time, so an experience of it would say less than a fresh read while making every later read slower',
+  // T-44 Package 1: a standing order's ledger is the richer record. It holds the trigger, the cooldown,
+  // the rate limit and every run with its operation id; an experience of one act would be a thinner copy
+  // of a row that already exists, and of a run whose real receipt is in operations.jsonl.
+  orders: 'the standing-order ledger already holds the order, its trigger and every run with the operation each one recorded, and the run itself writes a full operation to operations.jsonl',
   'model-words': 'what it stores or produces is a model conclusion, which is evidence only that a model said it',
   'self-bookkeeping': 'the experience log must not fill itself with records about its own bookkeeping, which would make the counts meaningless',
   task: 'one task operation covers several steps with separate outcomes, so a single experience would say less than the task log already says',
@@ -388,6 +392,19 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'git.diff_inspect': 'read',
   'git.checkpoint_create': 'git',
   'git.checkpoint_restore': 'git',
+  // T-44 Package 1: the two reads that exist so a Standing Order can delegate them through the one
+  // execution path. Both re-derive their whole answer from stores that already exist, so an experience
+  // would say less than a fresh read and make every later read slower. The three ledger acts are
+  // `standing_order` for the same reason a checkpoint is `git`: `standing-orders.json` is the richer
+  // record - the title, the trigger, the cooldown, every run with its operation id - and a second copy in
+  // the experience log would be a summary of a record that is already complete.
+  'system.doctor': 'read',
+  'briefing.compile': 'read',
+  'standing_order.create': 'orders',
+  'standing_order.toggle': 'orders',
+  'standing_order.revoke': 'orders',
+  'standing_order.invoke': 'orders',
+  'standing_order.evaluate': 'read',
   none: 'no-action',
 });
 

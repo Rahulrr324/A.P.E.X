@@ -1664,6 +1664,36 @@ export class CognitiveController {
     return this.#finishCommandOp(op, step, null);
   }
 
+  // T-44 Package 1: a standing-order run as a real operation. The engine asks for this rather than
+  // calling runAction directly, so every run leaves a full record in `operations.jsonl` - the
+  // authorization decision, the capability's own validation, its execution and its verification - which
+  // is what makes an automatic act as auditable as a pressed button. The order and run ids travel into
+  // the request line so the trace can reach this record from either id.
+  async standingOrderRun({ orderId, runId = null, capabilityId, input = {}, autonomyTier = 'L3', triggeredBy = 'manual_invoke' } = {}) {
+    const order = typeof orderId === 'string' ? truncate(orderId, 40) : '[missing order]';
+    const capability = typeof capabilityId === 'string' ? truncate(capabilityId, 80) : '[missing capability]';
+    const op = this.#newOp({
+      capability,
+      origin: 'user',
+      request: `standing order ${order} ${runId ? truncate(runId, 40) : ''} -> ${capability} (${autonomyTier}, ${triggeredBy})`.replace(/\s+/g, ' ').trim(),
+    });
+    const step = await this.runAction(capability, input, 'user', op.id);
+    const finished = await this.#finishCommandOp(op, step, null);
+    return { ...finished, step };
+  }
+
+  // The four order-ledger writes get the same treatment, so creating or revoking an order is a record in
+  // the same ledger as the runs it will perform.
+  async standingOrderLedgerAct({ action, input = {} } = {}) {
+    const op = this.#newOp({
+      capability: action,
+      origin: 'user',
+      request: `${action} ${typeof input.orderId === 'string' ? truncate(input.orderId, 40) : (typeof input.title === 'string' ? truncate(input.title, 60) : '')}`.trim(),
+    });
+    const step = await this.runAction(action, input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
   async gitStatusDetailed() {
     const op = this.#newOp({ capability: 'git.status_detailed', origin: 'user', request: 'git status detailed' });
     const step = await this.runAction('git.status_detailed', {}, 'user', op.id);

@@ -118,7 +118,11 @@ test('T-38 metadata: every write declares a blast radius that is not none', () =
     // which is exactly what happened here.
     // T-41 Step 3 (2026-11-22) adds one, `evolution.stage_to_workshop`, which declares
     // `workspace_sandbox`: it writes inside the sandbox and appends one lab event, never the live tree.
-    assert.equal(writes.length, 88, `expected 88 writes after T-41 Step 3, got ${writes.length}`);
+    // T-44 Package 1 (2026-11-19) adds four: the standing-order ledger writes `create`, `toggle` and
+    // `revoke`, and the run `invoke`, all declaring `local_state`. Each one is pinned here on purpose -
+    // `local_state` is the declaration that lets a capability be delegated at all, so a new write that
+    // claims it has to be looked at by a person rather than absorbed by a bound.
+    assert.equal(writes.length, 92, `expected 92 writes after T-44 Package 1, got ${writes.length}`);
     for (const definition of writes) {
       assert.notEqual(definition.blastRadius, 'none',
         `${definition.name} is a write that claims to change nothing`);

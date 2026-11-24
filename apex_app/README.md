@@ -4064,6 +4064,17 @@ across the whole set, so they are stated once instead of per row:
 > with 56 plannable (the pipeline capability is unplannable; the steps it plans are authorized
 > separately). The 139/154 figures above are retained as the state before T-29.
 
+> **T-44 Package 1 count correction (2026-11-19).** The governed Standing Orders engine adds seven
+> capabilities. Three are the order-ledger writes (`standing_order.create`, `.toggle`, `.revoke`), two
+> are the run and its preview (`standing_order.invoke` written as a run, `standing_order.evaluate` as an
+> L0 read), and two are capabilities that already had a service behind them but no name in the registry:
+> `system.doctor` and `briefing.compile`. Those two exist because a Standing Order may only carry a
+> *capability* - the engine reads the registry's declarations, and the ECP authorizes the execution - so
+> registering them is what keeps every delegated run on the one audited path instead of giving the
+> engine a second, unaudited one. The verified registry is therefore **179 actions by default and 198
+> with a root: 97 reads and 101 writes**. The five standing-order capabilities are all owner-only: an
+> order is a standing permission, and only the owner may write, pause, revoke or invoke one.
+
 > **T-43 Package 2 count correction (2026-11-19).** The process and port inspector adds two host reads,
 > `system.inspect_ports` and `system.inspect_processes`. Neither needs a workspace root - they read the
 > machine APEX is running on - so both totals move by two: **176 actions by default and 191 with a
@@ -4229,6 +4240,11 @@ the action ran to `success_verified` in an isolated data directory and no store 
 | `task.run` | user | not a registered action | - | `tasks.jsonl` per step, each step's own store, a conversation summary, `operations.jsonl` | no (task) | through its steps only |
 | `task.approve` | user | not a registered action | - | `tasks.jsonl` (one transition) | no (task) | no |
 | `system.inspect_ports` | user + model | read | never in a plan | reads the operating system's socket tables (`/proc/net/tcp{,6}` on linux, `netstat` on darwin and win32); writes nothing, makes no network call | no (read) | no |
+| `system.doctor` | user | read | never in a plan | runs the six read-only doctor checks over the stores, the latch and the browser; writes nothing | no (read) | no |
+| `briefing.compile` | user | read | never in a plan | composes the briefing and its delta from the stores that already exist; writes nothing | no (read) | no |
+| `standing_order.create`, `standing_order.toggle`, `standing_order.revoke` | user | write | never in a plan | `standing-orders.json` (the order ledger) and one audit line each; a forbidden capability is refused at registration, so no such order is ever written | no (orders) | no (an order is an intention, not a belief) |
+| `standing_order.invoke` | user | write | never in a plan | no ledger of its own: it runs the order's capability through the ECP and records the run in `standing-orders.json` plus that capability's own operation in `operations.jsonl` | no (orders) | no (an order is an intention, not a belief) |
+| `standing_order.evaluate` | user | read | never in a plan | nothing when `dryRun` is true (and a call with no event named is a dry run); otherwise the runs it performs, each through the ECP and each on its own capability's terms | no (read) | no |
 | `system.inspect_processes` | user + model | read | never in a plan | reads the process table (`ps` or `tasklist`) and this process's own memory; writes nothing. Command lines and environment variables are never read | no (read) | no |
 | `git.status_detailed` | user + model | read | never in a plan | reads the repository at the configured workspace root; writes nothing | no (read) | no |
 | `git.diff_inspect` | user + model | read | never in a plan | reads a unified diff from the repository at the configured workspace root; writes nothing | no (read) | no |

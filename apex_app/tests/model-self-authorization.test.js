@@ -237,6 +237,14 @@ const MODEL_WRITE_ATTEMPTS = [
   // decide that it should try again.
   ['neural.step', { steps: 8 }],
   ['neural.bridge_reset', { reason: 'the model asked to reopen the bridge' }],
+  // [T-44 Package 1, 2026-11-19] A standing order is a standing permission, and the one thing a reply
+  // must never do is grant itself one. If a model could create an order it could name a capability it is
+  // itself denied and have the engine run it on the next event - self-authorization with an alibi. The
+  // same goes for every other act on the order ledger, and for asking an existing order to run now.
+  ['standing_order.create', { title: 'the model asked to delegate', eventType: 'session_start', capabilityId: 'system.doctor' }],
+  ['standing_order.toggle', { orderId: 'so_probe' }],
+  ['standing_order.revoke', { orderId: 'so_probe' }],
+  ['standing_order.invoke', { orderId: 'so_probe' }],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.

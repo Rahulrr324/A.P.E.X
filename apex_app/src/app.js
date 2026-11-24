@@ -9,6 +9,11 @@ import { ActionRegistry } from './actions/registry.js';
 import { builtinActions } from './actions/builtin.js';
 import { GitExecutive, gitExecutiveActions } from './capabilities/git-executive.js';
 import { ProcessPortInspector, processPortActions } from './perception/process-port-inspector.js';
+// T-44 Package 1 (2026-11-19): the governed Standing Orders engine. A standing order is a bounded
+// delegation, so the engine constructs against the registry and refuses anything the ECP may not run
+// above L2 Confirm. Its capabilities are registered like every other capability; its runs go through
+// the controller, which is attached once the controller exists.
+import { StandingOrdersEngine, standingOrderActions, standingOrderReadActions } from './executive/standing-orders.js';
 import { knowledgeActions } from './actions/knowledge-actions.js';
 import { worldActions } from './actions/world-actions.js';
 import { worldModelActions } from './actions/world-model-actions.js';
@@ -321,6 +326,17 @@ export function createApp({
   // test can hold the machine still.
   const processInspector = new ProcessPortInspector({ now: clock });
 
+  // T-44 Package 1: the Standing Orders engine. It reads the registry's own declarations to decide what
+  // a standing order may carry, so it is constructed before registration and its five capabilities are
+  // registered with the rest. The operations writer is the same `operations.jsonl` the audit path uses,
+  // so an order's creation, toggling and every run are readable in the one ledger the trace walks.
+  const standingOrders = new StandingOrdersEngine({
+    dataDir,
+    registry,
+    now: clock,
+    operations: (entry) => operations.append(entry),
+  });
+
   // Council is constructed before action registration so its read-oriented actions are
   // registered exactly once, through the same registry/ECP path as every other capability.
   // T-37 Step 2: the Council also reads the safety latch, so its Values & Constraints Core can
@@ -389,6 +405,10 @@ export function createApp({
   // T-43 Package 2: the two host readings. Registered unconditionally, because a host reading needs no
   // workspace root - the processes and sockets are the machine APEX is running on.
   for (const def of processPortActions(processInspector)) registry.register(def);
+  // T-44 Package 1: five standing-order capabilities. Four are L2 writes on the order ledger itself and
+  // one is an L0 read that evaluates the triggers; none of them is a capability a standing order could
+  // itself carry, so the policy cannot be bootstrapped into delegating something forbidden.
+  for (const def of standingOrderActions(standingOrders)) registry.register(def);
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -497,6 +517,11 @@ export function createApp({
     workshopApplier,
     evolution,
   });
+  // T-44 Package 1: the controller is the one executor. Attaching it here, after construction and
+  // before the runtime is built, means every standing-order run from this point on goes through the
+  // same authorization, validation, execution and verification path as a route or a router line.
+  standingOrders.attachController(controller);
+
   const runtime = new ExecutiveRuntime({
     controller,
     situation,
@@ -600,6 +625,8 @@ export function createApp({
     gitExecutive,
     // T-43 Package 2: the process and port inspector, for the telemetry route and the receipt.
     processInspector,
+    // T-44 Package 1: the standing-orders engine, so the routes reach the one ledger and the one latch.
+    standingOrders,
     // T-38 Step 3: the cross-ledger trace and search, for the Memory Timeline.
     memoryTrace,
     filesystemWorkspaces: workspaces,
@@ -638,6 +665,10 @@ export function createApp({
   // are attached to the application so the CLI, the desktop shell and the UI server share one
   // instance of each rather than three readings of the same thing.
   const doctor = createDoctor({ app, dataDir });
+  // T-44 Package 1: the doctor and the briefing as capabilities. They are not new behaviour - the same
+  // two services the read routes call - but a Standing Order may only carry a capability, and the brief
+  // names both in the safe set. Registering them keeps every delegation on the one execution path.
+  for (const def of standingOrderReadActions({ doctor, briefing })) registry.register(def);
   const bootstrap = createWorkstationBootstrap({ app, dataDir, now: clock, doctor });
   for (const def of systemBootstrapActions(bootstrap)) registry.register(def);
   app.doctor = doctor;

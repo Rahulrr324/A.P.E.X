@@ -146,9 +146,14 @@ describe('AF-19: the registry is the inventory', () => {
     // is authorized to read - so the default total moves by zero and the rooted total by four.
     // T-43 Package 2 adds two host reads, `system.inspect_ports` and `system.inspect_processes`. They
     // need no workspace root - they read the machine - so both totals move by two.
-    assert.equal(plain.registry.list().length, 172, 'the default registry has 172 actions');
+    // T-44 Package 1 (2026-11-19) adds seven capabilities to both totals: the three ledger writes
+    // (`standing_order.create`, `.toggle`, `.revoke`), the run write `standing_order.invoke`, the L0
+    // evaluation read `standing_order.evaluate`, and two reads that already had a service behind them
+    // but no capability name - `system.doctor` and `briefing.compile`, which exist so a standing order
+    // can delegate them through the one execution path rather than a second, unaudited one.
+    assert.equal(plain.registry.list().length, 179, 'the default registry has 179 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
-    assert.equal(rooted.registry.list().length, 191, 'a configured workspace root adds nineteen actions');
+    assert.equal(rooted.registry.list().length, 198, 'a configured workspace root adds nineteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
@@ -210,7 +215,10 @@ describe('AF-19: the registry is the inventory', () => {
     // ninety-sixth and ninety-seventh. Both are owner-only for the same reason the Workshop applies
     // are: the first writes a ref into the owner's repository, and the second overwrites tracked files
     // in the owner's working tree. A model that could do either could move the ground an apply lands on.
-    assert.equal(writes.length, 97, 'the inventory counts ninety-seven write actions with a root configured');
+    // T-44 Package 1: the four standing-order writes (`create`, `toggle`, `revoke`, `invoke`) are the
+    // ninety-eighth through a hundred and first. All four are owner-only: an order is a standing
+    // permission, and only the owner may write one, change one, or ask for one to run now.
+    assert.equal(writes.length, 101, 'the inventory counts one hundred and one write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -310,7 +318,7 @@ describe('AF-19: the registry is the inventory', () => {
     // authoring one - and both are refused outside the configured root.
     // T-43 Package 1 adds two reads, `git.status_detailed` and `git.diff_inspect`; Package 2 adds two
     // more, `system.inspect_ports` and `system.inspect_processes`.
-    assert.equal(reads.length, 94, 'the inventory counts ninety-four read actions with a root configured');
+    assert.equal(reads.length, 97, 'the inventory counts ninety-seven read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -556,6 +564,12 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
         // machine, not a belief about the world, and the governor's rules are bookkeeping about
         // notices; neither may be read as a stored belief.
         assert.equal(row.belief, def.permission === 'write' ? 'no (a reading is not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('standing_order.')) {
+        // [T-44 Package 1, 2026-11-19] The order ledger records what the owner delegated: which
+        // capability may run, on which event, within which cooldown and rate limit. That is an
+        // intention exactly as a goal or a plan is, not a belief about the world, and the run count is
+        // a count of acts rather than a claim about anything.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (an order is an intention, not a belief)' : 'no', `${name}: README belief-state`);
       } else if (def.permission === 'write' && !name.startsWith('filesystem.') && !name.startsWith('note.')) {
         assert.equal(row.belief, 'yes', `${name}: README belief-state`);
       } else if (def.permission === 'read') {

@@ -58,9 +58,12 @@ test('T-38 trace: the searchable kinds and statuses are closed lists', () => {
   // The list stays closed and pinned, so a new ledger has to be added here deliberately.
   // T-43 Package 1 adds `git_checkpoint`: a checkpoint has an id of its own and a place in a chain,
   // so it is a ledger a reader can search rather than a file only the git panel reads.
+  // T-44 Package 1 adds two: `standing_order` is a row that changes (its run count and last outcome),
+  // and `standing_order_run` is one event per run. They are separate kinds because they answer different
+  // questions - "what is armed" and "what did it do" - and a reader searching one should not get the other.
   assert.deepEqual([...SEARCH_KINDS], [
     'memory', 'cognition_run', 'council_session', 'task', 'workshop_verification', 'workshop_apply', 'ecp_audit',
-    'git_checkpoint',
+    'git_checkpoint', 'standing_order', 'standing_order_run',
   ]);
   assert.ok(EPISTEMIC_STATUSES.includes('candidate_association'),
     'a candidate association is a status a reader can filter on');

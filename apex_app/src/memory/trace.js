@@ -35,6 +35,9 @@ export const SEARCH_KINDS = Object.freeze([
   // T-43: a git checkpoint is a record with an id of its own and a place in a chain, so it is a ledger
   // here rather than a private file only the git panel can read.
   'git_checkpoint',
+  // T-44 Package 1: a standing order is a row that changes (its run count and last outcome) and each of
+  // its runs is a separate event, so both are ledgers here rather than a private file only the panel reads.
+  'standing_order', 'standing_order_run',
 ]);
 
 // The epistemic statuses a memory record can carry. The filter is offered on the search surface
@@ -304,6 +307,8 @@ function ledgers(dataDir) {
     workshop_verification: () => readWorkshopVerifications(dataDir),
     workshop_apply: () => readWorkshopApplies(dataDir),
     git_checkpoint: () => readGitCheckpoints(dataDir),
+    standing_order: () => filterKind(readStandingOrders(dataDir), 'standing_order'),
+    standing_order_run: () => filterKind(readStandingOrders(dataDir), 'standing_order_run'),
     ecp_audit: () => {
       const { present, records, corrupt } = readJsonl(path.join(dataDir, 'operations.jsonl'));
       return {
@@ -377,6 +382,76 @@ function readGitCheckpoints(dataDir) {
 
 // --------------------------------------------------------------------------------- searching ---
 
+// T-44 Package 1: the standing-order ledger, read in place. One order yields two kinds of record - the
+// order itself, which is a row that changes, and one record per run it has performed, which is the chain
+// an owner actually wants to follow when they ask "what did this thing do". The runs are not a second
+// file: they are the order's own history, read as events here so a trace can name a `sor_*` id directly.
+function readStandingOrders(dataDir) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(dataDir, 'standing-orders.json'), 'utf8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') return { present: false, records: [], corrupt: 0 };
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { present: true, records: [], corrupt: 1 };
+  }
+  const list = Array.isArray(parsed?.orders) ? parsed.orders : [];
+  const records = [];
+  let corrupt = 0;
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object' || typeof entry.orderId !== 'string') { corrupt += 1; continue; }
+    const order = {
+      kind: 'standing_order',
+      at: entry.createdAt ?? null,
+      id: entry.orderId,
+      orderId: entry.orderId,
+      title: entry.title ?? '',
+      eventType: entry.trigger?.eventType ?? null,
+      capabilityId: entry.action?.capabilityId ?? null,
+      autonomyTier: entry.action?.autonomyTier ?? null,
+      enabled: entry.enabled === true,
+      runCount: Number.isInteger(entry.runCount) ? entry.runCount : 0,
+      lastOutcome: entry.lastOutcome ?? 'never_run',
+      lastRunAt: entry.lastRunAt ?? null,
+      lastRunId: entry.lastRunId ?? null,
+      runIds: Array.isArray(entry.history) ? entry.history.map((run) => run.runId).filter((id) => typeof id === 'string') : [],
+      operationIds: Array.isArray(entry.history) ? entry.history.map((run) => run.operationId).filter((id) => typeof id === 'string') : [],
+      record: entry,
+    };
+    records.push(order);
+    for (const run of Array.isArray(entry.history) ? entry.history : []) {
+      if (!run || typeof run !== 'object' || typeof run.runId !== 'string') { corrupt += 1; continue; }
+      records.push({
+        kind: 'standing_order_run',
+        at: run.executedAt ?? null,
+        id: run.runId,
+        runId: run.runId,
+        orderId: entry.orderId,
+        title: entry.title ?? '',
+        capabilityId: entry.action?.capabilityId ?? null,
+        triggeredBy: run.triggeredBy ?? null,
+        outcome: run.outcome ?? null,
+        operationId: run.operationId ?? null,
+        summary: run.summary ?? '',
+        verified: run.verified === true,
+        record: run,
+      });
+    }
+  }
+  return { present: true, records, corrupt };
+}
+
+// One file, two kinds: the order rows and the run rows come from the same read, and each reader returns
+// only its own kind so a caller asking for orders does not get a hundred run rows back.
+function filterKind({ present, records, corrupt }, kind) {
+  return { present, records: records.filter((record) => record.kind === kind), corrupt };
+}
+
 // The text a record is matched against. Each kind says what it means by "its text" rather than
 // sharing one heuristic: a memory record's text is its content, a run's is its intent, a task's is
 // its goal.
@@ -389,6 +464,8 @@ function searchableText(entry) {
     case 'workshop_verification': return `${entry.relativePath ?? ''} ${entry.rationale ?? ''} ${entry.candidateId ?? ''} ${entry.sourceProposalId ?? ''}`;
     case 'workshop_apply': return `${entry.relativePath ?? ''} ${entry.candidateId ?? ''} ${entry.applyId ?? ''} ${entry.recordKind ?? ''} ${entry.changesetId ?? ''} ${entry.changesetTitle ?? ''}`;
     case 'git_checkpoint': return `${entry.checkpointId ?? ''} ${entry.label ?? ''} ${entry.reason ?? ''} ${entry.commitSha ?? ''}`;
+    case 'standing_order': return `${entry.orderId ?? ''} ${entry.title ?? ''} ${entry.eventType ?? ''} ${entry.capabilityId ?? ''} ${entry.lastOutcome ?? ''}`;
+    case 'standing_order_run': return `${entry.runId ?? ''} ${entry.orderId ?? ''} ${entry.title ?? ''} ${entry.capabilityId ?? ''} ${entry.outcome ?? ''} ${entry.summary ?? ''}`;
     case 'ecp_audit': return `${entry.capability ?? ''} ${JSON.stringify(entry.request ?? '')}`;
     default: return '';
   }
@@ -467,6 +544,8 @@ export class MemoryTraceService {
               : entry.kind === 'workshop_verification' ? { candidateId: entry.candidateId, verified: entry.verified, sourceProposalId: entry.sourceProposalId ?? null }
                 : entry.kind === 'workshop_apply' ? { applyId: entry.applyId, rollbackId: entry.rollbackId, relativePath: entry.relativePath, changesetId: entry.changesetId ?? null, changesetFileCount: entry.changesetFileCount ?? null }
                   : entry.kind === 'git_checkpoint' ? { checkpointId: entry.checkpointId, commitSha: entry.commitSha, restoreCount: entry.restoreCount }
+                  : entry.kind === 'standing_order' ? { orderId: entry.orderId, capabilityId: entry.capabilityId, runCount: entry.runCount, lastOutcome: entry.lastOutcome }
+                  : entry.kind === 'standing_order_run' ? { runId: entry.runId, orderId: entry.orderId, operationId: entry.operationId, outcome: entry.outcome }
                   : { operationId: entry.operationId, capability: entry.capability },
       traceable: entry.kind !== 'task' || entry.type === 'task_created',
     }));
@@ -534,6 +613,8 @@ export class MemoryTraceService {
     }
     if (entry.kind === 'task') return keys.has(entry.taskId);
     if (entry.kind === 'git_checkpoint') return keys.has(entry.checkpointId);
+    if (entry.kind === 'standing_order') return keys.has(entry.orderId);
+    if (entry.kind === 'standing_order_run') return keys.has(entry.runId) || keys.has(entry.orderId);
     if (entry.kind === 'council_session') {
       // A session belongs to the chain when its objective is a run's intent. That is a match of
       // text, not a foreign key, and the trace says so where it relies on it.
@@ -607,6 +688,25 @@ export class MemoryTraceService {
       if (typeof checkpoint.checkpointId === 'string') keys.add(checkpoint.checkpointId);
       if (typeof checkpoint.commitSha === 'string' && checkpoint.commitSha.length >= 7) keys.add(checkpoint.commitSha);
     }
+    // T-44 Package 1: the standing orders and runs this chain names. A chain opened for an order id
+    // pulls in every run of that order; a chain opened for a run id pulls in the order that owns it. The
+    // two are one family because either direction is the same question - "what has this thing done".
+    const orderRuns = all.entries.filter((e) => e.kind === 'standing_order_run' && [...keys].some((k) => k === e.runId || k === e.orderId));
+    const orderRecords = all.entries.filter((e) => e.kind === 'standing_order' && [...keys].some((k) => k === e.orderId || e.runIds?.includes(k)));
+    for (const run of orderRuns) {
+      if (typeof run.runId === 'string') keys.add(run.runId);
+      if (typeof run.orderId === 'string') keys.add(run.orderId);
+      // The operation a run recorded is the receipt for the capability it executed, so the chain reaches
+      // the real operation - authorization, validation, execution and verification - not just the order.
+      if (typeof run.operationId === 'string') keys.add(run.operationId);
+    }
+    for (const order of orderRecords) {
+      if (typeof order.orderId === 'string') keys.add(order.orderId);
+      for (const runId of order.runIds ?? []) keys.add(runId);
+      for (const operationId of order.operationIds ?? []) keys.add(operationId);
+      if (typeof order.capabilityId === 'string') keys.add(order.capabilityId);
+    }
+
     // The operations whose steps or result name one of these runs or tasks.
     const operations = all.entries.filter((e) => {
       if (e.kind !== 'ecp_audit') return false;
@@ -615,7 +715,8 @@ export class MemoryTraceService {
     });
 
     if (runs.length === 0 && tasks.length === 0 && operations.length === 0 && councils.length === 0
-      && verifications.length === 0 && applies.length === 0 && checkpoints.length === 0) {
+      && verifications.length === 0 && applies.length === 0 && checkpoints.length === 0
+      && orderRuns.length === 0 && orderRecords.length === 0) {
       return {
         ok: false,
         code: 'NOT_FOUND',
@@ -786,6 +887,48 @@ export class MemoryTraceService {
           // Both of these are stated so a chain can never be read as permission for anything.
           mutatesLiveWorkspace: change.record?.mutatesLiveWorkspace === true,
           authorizesExecution: false,
+        },
+      });
+    }
+    // T-44 Package 1: the order rows and the run rows, as chain steps. The order is one step and each run
+    // is its own, so a chain reads as "this order was created, then it ran here, then it ran here" rather
+    // than as one row whose run count happens to be three.
+    for (const order of orderRecords) {
+      steps.push({
+        at: order.at,
+        kind: 'standing_order',
+        label: 'standing order registered',
+        linkedBy: 'the id names this order',
+        detail: {
+          orderId: order.orderId,
+          title: order.title,
+          eventType: order.eventType,
+          capabilityId: order.capabilityId,
+          autonomyTier: order.autonomyTier,
+          enabled: order.enabled,
+          runCount: order.runCount,
+          lastOutcome: order.lastOutcome,
+          lastRunAt: order.lastRunAt,
+        },
+      });
+    }
+    for (const run of orderRuns) {
+      steps.push({
+        at: run.at,
+        kind: 'standing_order_run',
+        label: `standing order ran: ${run.outcome ?? 'unknown'}`,
+        // A run reached from its order is found by the order id on the run record; a run reached from its
+        // own id is the id itself. The label says which, because the two are different strengths of link.
+        linkedBy: typeof wanted === 'string' && run.runId === wanted ? 'the id names this run' : 'the run belongs to the named order',
+        detail: {
+          runId: run.runId,
+          orderId: run.orderId,
+          capabilityId: run.capabilityId,
+          triggeredBy: run.triggeredBy,
+          outcome: run.outcome,
+          operationId: run.operationId,
+          verified: run.verified,
+          summary: run.summary,
         },
       });
     }
