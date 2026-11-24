@@ -80,6 +80,7 @@ const run = {
   consoleErrors: [],
   pageErrors: [],
   failedRequests: [],
+  abortedStreams: [],
   screenshots: 0,
   failures: [],
   skip: null,
@@ -256,7 +257,19 @@ test('T-44: a governed standing order runs through the ECP, Lockdown halts it, a
   const failedRequests = [];
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
   page.on('pageerror', (error) => pageErrors.push(String(error?.message ?? error)));
-  page.on('requestfailed', (request) => failedRequests.push(`${request.method()} ${request.url()}`));
+  // A reload aborts whatever the previous document had in flight, and the page holds a long-lived SSE
+  // stream on /api/events for the whole time it is open. The browser reports that cancellation as a
+  // failed request, which it technically is and which is exactly what a reload is supposed to do. It is
+  // counted separately rather than filtered out, so the summary still says it happened: what this walk
+  // refuses to accept is a request that failed while a document was asking for it.
+  const abortedStreams = [];
+  page.on('requestfailed', (request) => {
+    const error = request.failure()?.errorText ?? null;
+    const entry = { method: request.method(), url: request.url(), error };
+    const reloadCancelled = /ERR_ABORTED/.test(String(error)) && /\/api\/events/.test(request.url());
+    if (reloadCancelled) abortedStreams.push(entry);
+    else failedRequests.push(entry);
+  });
 
   let shot = 0;
   const screenshot = async (name) => {
@@ -555,7 +568,11 @@ test('T-44: a governed standing order runs through the ECP, Lockdown halts it, a
     run.screens = VIEWPORTS.map((viewport) => `${viewport.name} ${viewport.width}x${viewport.height}`);
     expect(pageErrors, `uncaught exceptions: ${pageErrors.join(' | ')}`).toEqual([]);
     expect(consoleErrors, `console errors: ${consoleErrors.join(' | ')}`).toEqual([]);
-    expect(failedRequests, `failed requests: ${failedRequests.join(' | ')}`).toEqual([]);
+    expect(failedRequests, `failed requests: ${JSON.stringify(failedRequests)}`).toEqual([]);
+    run.abortedStreams = abortedStreams;
+    // Two reloads, so at most one cancellation each - a stream that died without a reload would be a
+    // real defect and would not be in this list.
+    expect(abortedStreams.length).toBeLessThanOrEqual(2);
     // Voice stays reserved and the indicator says so, on the view this batch changed.
     const privacy = await page.evaluate(() => document.getElementById('sensor-privacy-indicator')?.textContent ?? '');
     expect(privacy).toMatch(/audio\/mic: disabled/);

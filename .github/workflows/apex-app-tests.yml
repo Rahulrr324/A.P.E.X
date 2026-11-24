@@ -414,7 +414,7 @@ jobs:
               f"receipts {len(receipts)}: {';'.join(str(receipt.get('line')) + '=>' + str(receipt.get('route')) + '/' + str(receipt.get('verified')) for receipt in receipts) or 'none'}",
               f"screens {len(screens)}: {','.join(str(screen.get('id')) for screen in screens) or 'none'}",
               f"overflow {overflow.get('scrollWidth')}<={overflow.get('clientWidth')}",
-              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {len(run.get('abortedStreams') or [])}",
               f"screenshots {run.get('screenshots')}",
           ]
           failures = list(run.get('failures') or [])
@@ -461,7 +461,7 @@ jobs:
               f"workspace listed {','.join(str(p) for p in (workspace.get('listed') or [])) or 'none'} digestMatchesDisk={workspace.get('digestMatchesDisk')}",
               f"sandbox refusedPromotion {sandbox.get('refusedPromotionStatus')}/{sandbox.get('refusedPromotionCode')} liveUnchanged={sandbox.get('liveFileUnchangedAfterRefusal')} verified={('verified' in str(sandbox_valid.get('rendered') or ''))} promotedWithoutWriting={sandbox.get('promotedWithoutWritingLiveTree')}",
               f"trace results {trace.get('resultCount')} kinds {','.join(str(k) for k in (trace.get('kinds') or []))} chain {trace.get('chainLength')} complete={trace.get('complete')}",
-              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {len(run.get('abortedStreams') or [])}",
               f"screenshots {run.get('screenshots')}",
           ]
           failures = list(run.get('failures') or [])
@@ -685,7 +685,7 @@ jobs:
               f"telemetry {telemetry.get('platform')} total={telemetry.get('totalListening')} loopback={telemetry.get('loopbackOnly')} exposure={telemetry.get('externalExposure')} ownPort={telemetry.get('apexPort')} rss={telemetry.get('apexRssBytes')} excluded={len(telemetry.get('excluded') or [])}",
               f"router git={'/'.join(filter(None, [str(router.get('gitStatus')), str(router.get('gitStatusTarget'))]))} diff={router.get('gitDiff')} ports={router.get('inspectPorts')} processes={router.get('inspectProcesses')}",
               f"viewports {len(run.get('viewports') or [])} screens measured",
-              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {len(run.get('abortedStreams') or [])}",
               f"screenshots {run.get('screenshots')}",
               f"lastPhase {run.get('lastPhase')}",
           ]
@@ -747,7 +747,7 @@ jobs:
               f"router {str((run.get('router') or {}).get('schedule') or '')[:80]}",
               f"contrast worst={contrast.get('minimum')}:1 over {contrast.get('samples')} samples" if contrast.get('minimum') is not None else 'contrast not measured',
               f"viewports {len(run.get('viewports') or [])} measured",
-              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {len(run.get('abortedStreams') or [])}",
               f"screenshots {run.get('screenshots')}",
               f"lastPhase {run.get('lastPhase')}",
           ]
