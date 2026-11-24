@@ -67,8 +67,12 @@ const PHRASES = Object.freeze([
   // T-44 Package 2. `show agenda` and `standing orders` are reads: they refresh a GET and focus the panel
   // that renders it. `show briefing` already exists above and still means the briefing report; these are
   // the two panels this batch puts on that view.
-  { kind: ROUTE_KIND.AGENDA, phrases: ['show agenda', 'agenda'], route: '/api/agenda', targetView: 'briefing', targetPanel: 'briefing-agenda-panel', summary: 'read the unified executive agenda' },
-  { kind: ROUTE_KIND.STANDING_ORDER, phrases: ['standing orders', 'show standing orders'], route: '/api/standing-orders', targetView: 'policy-autonomy', targetPanel: 'standing-orders-panel', summary: 'read the standing orders and their policy' },
+  // The two panels live inside existing views: the agenda beside the Briefings panel on the approvals
+  // view, and the standing orders beside the safety latch on the system view. `targetView` names the view
+  // the deck switches to and `target` the panel inside it, because a view is what `setView` can paint and a
+  // panel is what the receipt points at.
+  { kind: ROUTE_KIND.AGENDA, phrases: ['show agenda', 'agenda'], route: '/api/agenda', targetView: 'approvals', targetPanel: '#briefing-agenda-panel', summary: 'read the unified executive agenda' },
+  { kind: ROUTE_KIND.STANDING_ORDER, phrases: ['standing orders', 'show standing orders'], route: '/api/standing-orders', targetView: 'system', targetPanel: '#standing-orders-panel', summary: 'read the standing orders and their policy' },
 ]);
 
 // Patterns that carry an argument. The prefix is literal; the rest is the argument, kept as the owner
@@ -83,8 +87,8 @@ const PREFIXES = Object.freeze([
   // prefixes for the same reason `create checkpoint` is: `remind me to` cannot collide today, but
   // `schedule` could with a future `schedule <mission>`, and the longest-first rule is the one that keeps
   // that from becoming a silent misroute.
-  { kind: ROUTE_KIND.AGENDA, prefix: 'remind me to', action: 'agenda.create', targetView: 'briefing', targetPanel: 'briefing-agenda-panel', summary: 'add a commitment to the agenda', argumentLabel: 'title' },
-  { kind: ROUTE_KIND.AGENDA, prefix: 'schedule', action: 'agenda.create', targetView: 'briefing', targetPanel: 'briefing-agenda-panel', summary: 'add a commitment to the agenda', argumentLabel: 'title' },
+  { kind: ROUTE_KIND.AGENDA, prefix: 'remind me to', action: 'agenda.create', targetView: 'approvals', targetPanel: '#briefing-agenda-panel', summary: 'add a commitment to the agenda', argumentLabel: 'title' },
+  { kind: ROUTE_KIND.AGENDA, prefix: 'schedule', action: 'agenda.create', targetView: 'approvals', targetPanel: '#briefing-agenda-panel', summary: 'add a commitment to the agenda', argumentLabel: 'title' },
   { kind: ROUTE_KIND.GIT, prefix: CHECKPOINT_PREFIX, action: 'git.checkpoint_create', targetView: 'workshop', summary: 'create a git checkpoint of the workspace', argumentLabel: 'label' },
   { kind: ROUTE_KIND.GIT, prefix: 'git diff', action: 'git.diff_inspect', targetView: 'workshop', summary: 'inspect a workspace diff', argumentLabel: 'path' },
   { kind: ROUTE_KIND.COUNCIL, prefix: 'council:', action: 'council.deliberate', targetView: 'council', summary: 'deliberate in the Council' },
@@ -154,7 +158,11 @@ export function routeLine(rawLine) {
   for (const entry of PHRASES) {
     for (const phrase of entry.phrases) {
       if (matchesPhrase(folded, phrase)) {
-        return { kind: entry.kind, action: entry.action ?? null, route: entry.route ?? null, targetView: entry.targetView, summary: entry.summary, argument: null, matched: phrase };
+        return {
+          kind: entry.kind, action: entry.action ?? null, route: entry.route ?? null,
+          targetView: entry.targetView, targetPanel: entry.targetPanel ?? null,
+          summary: entry.summary, argument: null, matched: phrase,
+        };
       }
     }
   }
@@ -167,6 +175,9 @@ export function routeLine(rawLine) {
         kind: entry.kind,
         action: entry.action ?? null,
         targetView: entry.targetView,
+        // The panel inside the view, when the route names one. A prefix route to the agenda names the
+        // panel its receipt will focus, so the pure `routeLine` decision can be checked against it.
+        targetPanel: entry.targetPanel ?? null,
         summary: entry.summary,
         argument,
         matched: entry.prefix,

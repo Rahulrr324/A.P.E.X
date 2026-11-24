@@ -264,6 +264,48 @@ export const UI_PAGE = `<!doctype html>
       </div>
       <p class="meta">Acknowledging writes a checkpoint of what the stores hold now; it authorizes nothing and changes no other record.</p>
     </section>
+    <!-- T-44 Package 2: the unified executive agenda. The commitments are the owner's own words; the
+         derived list is a reading of four other stores, so it carries no action buttons - the way to
+         resolve one is to go and resolve the thing it names, which is why every card links to it. -->
+    <section class="panel" id="briefing-agenda-panel" data-depth-plane="z3" aria-labelledby="agenda-heading"
+             aria-describedby="agenda-description">
+      <h3 id="agenda-heading">Executive agenda</h3>
+      <p id="agenda-description" class="meta">The owner's commitments by horizon, and readings from the approval gate, the task graph, the Sentinel and the armed standing orders. A derived item is read from its own store and cannot be settled here.</p>
+      <p id="agenda-status" class="workspace-status" role="status" aria-live="polite">Loading the agenda…</p>
+      <div id="agenda-summary-badges" class="badge-row" role="group" aria-label="Agenda summary">
+        <span class="badge" data-agenda-badge="overdue">OVERDUE <span id="agenda-overdue-count">0</span></span>
+        <span class="badge" data-agenda-badge="today">TODAY <span id="agenda-today-count">0</span></span>
+        <span class="badge" data-agenda-badge="upcoming">UPCOMING / UNSCHEDULED <span id="agenda-upcoming-count">0</span></span>
+        <span class="badge" data-agenda-badge="completed">COMPLETED <span id="agenda-completed-count">0</span></span>
+        <span class="badge" data-agenda-badge="derived">DERIVED GATES <span id="agenda-derived-count">0</span></span>
+      </div>
+      <div class="agenda-add">
+        <label for="agenda-title-input" class="visually-hidden">Commitment title</label>
+        <input id="agenda-title-input" type="text" maxlength="160" placeholder="what needs doing">
+        <label for="agenda-priority-select" class="visually-hidden">Priority</label>
+        <select id="agenda-priority-select">
+          <option value="critical">critical</option>
+          <option value="high">high</option>
+          <option value="normal" selected>normal</option>
+          <option value="low">low</option>
+        </select>
+        <label for="agenda-category-select" class="visually-hidden">Category</label>
+        <select id="agenda-category-select">
+          <option value="commitment" selected>commitment</option>
+          <option value="focus_block">focus block</option>
+          <option value="follow_up">follow up</option>
+          <option value="milestone">milestone</option>
+        </select>
+        <label for="agenda-link-input" class="visually-hidden">Linked artifact id</label>
+        <input id="agenda-link-input" type="text" maxlength="120" placeholder="linked id (optional)">
+        <button id="btn-agenda-create" type="button" class="small">Add commitment</button>
+        <span id="agenda-add-status" class="meta" role="status" aria-live="polite"></span>
+      </div>
+      <ul id="briefing-agenda-list" class="work agenda-list"></ul>
+      <h4 class="agenda-derived-heading">Readings from other stores</h4>
+      <p class="meta">Each one is read from the store that holds it and is not written here. Resolve it at its source.</p>
+      <ul id="briefing-derived-agenda-list" class="work agenda-derived-list"></ul>
+    </section>
   </aside>
 </main>
 <section class="workspace" id="workspace">
@@ -611,6 +653,56 @@ export const UI_PAGE = `<!doctype html>
     </table>
     <h3>Capabilities in the matrix</h3>
     <ul id="autonomy-capabilities" class="work"></ul>
+    <!-- T-44 Package 1: the governed standing orders. The policy select is built from the server's own
+         allowedCapabilities list, so the set of things that CAN be delegated is visible rather than
+         implied by what is missing from a list someone typed here. Every button on a card goes through
+         the ECP. -->
+    <section class="panel" id="standing-orders-panel" data-depth-plane="z4" aria-labelledby="standing-orders-heading"
+             aria-describedby="standing-orders-description">
+      <h3 id="standing-orders-heading">Standing orders</h3>
+      <p id="standing-orders-description" class="meta">A bounded delegation of one reversible local_state capability to one event. Nothing workspace-mutating, irreversible, security-relevant or system-wide can be delegated, and Lockdown halts every order.</p>
+      <p id="so-status" class="workspace-status" role="status" aria-live="polite">Loading the standing orders…</p>
+      <div id="so-summary-badges" class="badge-row" role="group" aria-label="Standing order summary">
+        <span class="badge" data-so-badge="total">TOTAL ORDERS <span id="so-total-count">0</span></span>
+        <span class="badge" data-so-badge="enabled">ENABLED <span id="so-enabled-count">0</span></span>
+        <span class="badge" data-so-badge="runs">TOTAL RUNS <span id="so-runs-count">0</span></span>
+        <span class="badge" data-so-badge="lockdown">LOCKDOWN STATUS <span id="so-lockdown-status">—</span></span>
+      </div>
+      <p class="meta">A standing order may only carry a capability that declares itself reversible with a local_state blast radius. It runs with nobody present, so nothing that writes the workspace, moves the safety latch or cannot be undone may ever be delegated.</p>
+      <div class="so-add">
+        <label for="so-title-input" class="visually-hidden">Standing order title</label>
+        <input id="so-title-input" type="text" maxlength="120" placeholder="what this order is for">
+        <label for="so-trigger-select" class="visually-hidden">Trigger event</label>
+        <select id="so-trigger-select">
+          <option value="workspace_dirty">workspace_dirty</option>
+          <option value="load_pressure">load_pressure</option>
+          <option value="storage_pressure">storage_pressure</option>
+          <option value="drift_detected">drift_detected</option>
+          <option value="session_start">session_start</option>
+          <option value="manual_invoke" selected>manual_invoke</option>
+        </select>
+        <label for="so-capability-select" class="visually-hidden">Delegated capability</label>
+        <select id="so-capability-select"></select>
+        <button id="btn-so-create" type="button" class="small">Create standing order</button>
+        <span id="so-create-status" class="meta" role="status" aria-live="polite"></span>
+      </div>
+      <p id="so-create-refusal" class="meta" role="alert" hidden></p>
+      <ul id="standing-orders-list" class="work so-list"></ul>
+      <div class="so-eval">
+        <label for="so-eval-trigger-select" class="visually-hidden">Event to evaluate</label>
+        <select id="so-eval-trigger-select">
+          <option value="workspace_dirty">workspace_dirty</option>
+          <option value="load_pressure">load_pressure</option>
+          <option value="storage_pressure">storage_pressure</option>
+          <option value="drift_detected">drift_detected</option>
+          <option value="session_start">session_start</option>
+          <option value="manual_invoke">manual_invoke</option>
+        </select>
+        <button id="btn-so-evaluate" type="button" class="small">Evaluate this event</button>
+        <button id="btn-so-evaluate-dirty" type="button" class="small">Evaluate workspace_dirty</button>
+        <span id="so-eval-status" class="meta" role="status" aria-live="polite"></span>
+      </div>
+    </section>
   </section>
   <section class="view" data-view="system" data-depth-plane="z3"
          data-screen-id="policy-autonomy"
@@ -1366,6 +1458,49 @@ body[data-motion="reduced"] .core, body[data-motion="reduced"] .core-halo { anim
   animation: particle-drift 42s linear infinite;
 }
 @keyframes particle-drift { to { background-position: 320px 0, -420px 0, 260px 0, -380px 0; } }
+/* T-44 Packages 1 and 2: the standing-orders panel and the executive agenda.
+   Every colour here is a token that already existed, and every red label uses --armor-red-text rather
+   than --armor-red: the solid red is a fill for a bar, and as text on the void it measures 4.03:1, which
+   is below the 4.5 the deck holds itself to. The text variant measures 5.94:1. */
+/* A command that lands on a panel already on screen has to show that something answered. An outline
+   rather than a transform, so the pulse cannot shift a single pixel of layout. */
+[data-focus-pulse="on"] { outline: 2px solid var(--arc-cyan); outline-offset: 2px; }
+.badge-row { display: flex; flex-wrap: wrap; gap: .4rem; margin: .5rem 0 .7rem; }
+.badge-row .badge { border: 1px solid var(--line); padding: .15rem .45rem; }
+.so-add, .so-eval, .agenda-add { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin: .4rem 0; }
+.so-add input, .agenda-add input { min-width: 12rem; }
+/* A card in a grid track wider than its content is the one way a card can push the page sideways: an
+   order id or a capability name has no spaces to break at, so it is allowed to break anywhere rather
+   than overflow. min-width:0 on the grid children is what lets the wrap actually take effect. */
+.so-list li, .agenda-list li, .agenda-derived-list li { min-width: 0; }
+.so-list, .agenda-list, .agenda-derived-list { min-width: 0; max-width: 100%; }
+.so-id, .so-title, .so-badge, .agenda-id, .agenda-title, .agenda-badge, .agenda-link {
+  overflow-wrap: anywhere; word-break: break-word; max-width: 100%;
+}
+.so-list li, .agenda-list li { display: grid; gap: .25rem; border-left: 2px solid var(--line); padding-left: .55rem; }
+.so-card { border-left-color: var(--line-strong); }
+.so-list .so-card[data-enabled="false"] { border-left-color: var(--armor-gold); }
+.so-halted { border-left-color: var(--armor-red-text) !important; }
+.so-head, .agenda-head { display: flex; flex-wrap: wrap; gap: .4rem; align-items: baseline; }
+.so-title, .agenda-title { color: var(--text); font-weight: 600; }
+.so-row, .agenda-row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.so-id, .agenda-id { color: var(--text-dim); font-size: .78rem; letter-spacing: .04em; }
+.so-badge, .agenda-badge { color: var(--text); background: rgba(0, 0, 0, .25); border: 1px solid var(--line); padding: .1rem .4rem; }
+.so-badge--enabled, .agenda-badge--completed { color: var(--ok-green); border-color: var(--ok-green); }
+.so-badge--paused { color: var(--armor-gold); border-color: var(--armor-gold); }
+.so-badge--halted, .agenda-badge--overdue { color: var(--armor-red-text); border-color: var(--armor-red-text); }
+.agenda-badge--today { color: var(--armor-gold); border-color: var(--armor-gold); }
+.agenda-badge--upcoming, .agenda-badge--unscheduled, .so-badge--outcome { color: var(--arc-cyan); border-color: var(--arc-cyan); }
+.agenda-badge--dismissed { color: var(--text-dim); }
+.so-card button, .agenda-card button { color: var(--text); background: rgba(0, 0, 0, .3); border: 1px solid var(--line-strong); padding: .15rem .45rem; }
+.so-card button:disabled, .agenda-card button:disabled { color: var(--text-dim); border-color: var(--line); cursor: not-allowed; }
+.agenda-derived-list li { display: grid; gap: .2rem; border-left: 2px dashed var(--line); padding-left: .55rem; }
+.agenda-derived-heading { margin-top: .9rem; }
+.agenda-link { color: var(--text-dim); font-size: .78rem; }
+@media (max-width: 720px) {
+  .so-add input, .agenda-add input { min-width: 0; width: 100%; }
+  .badge-row { gap: .3rem; }
+}
 /* Stage 3's landing: the container planes read the factors, and the client writes the pointer
    offset that makes them visible. At stage 3 the factor is 0 and every plane is back to identity. */
 [data-depth-plane="z1"] { transform: translate3d(calc(var(--parallax-z1) * var(--parallax-x)), calc(var(--parallax-z1) * var(--parallax-y)), 0); }
@@ -1679,6 +1814,40 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   portTable: document.getElementById('edith-port-table'),
   processTable: document.getElementById('edith-process-table'),
   processSummary: document.getElementById('edith-process-summary'),
+  // T-44 Packages 1 and 2: the standing-orders panel and the executive agenda.
+  standingOrdersPanel: document.getElementById('standing-orders-panel'),
+  soStatus: document.getElementById('so-status'),
+  soSummaryBadges: document.getElementById('so-summary-badges'),
+  soTotalCount: document.getElementById('so-total-count'),
+  soEnabledCount: document.getElementById('so-enabled-count'),
+  soRunsCount: document.getElementById('so-runs-count'),
+  soLockdownStatus: document.getElementById('so-lockdown-status'),
+  soTitleInput: document.getElementById('so-title-input'),
+  soTriggerSelect: document.getElementById('so-trigger-select'),
+  soCapabilitySelect: document.getElementById('so-capability-select'),
+  btnSoCreate: document.getElementById('btn-so-create'),
+  soCreateStatus: document.getElementById('so-create-status'),
+  soCreateRefusal: document.getElementById('so-create-refusal'),
+  standingOrdersList: document.getElementById('standing-orders-list'),
+  soEvalTriggerSelect: document.getElementById('so-eval-trigger-select'),
+  btnSoEvaluate: document.getElementById('btn-so-evaluate'),
+  btnSoEvaluateDirty: document.getElementById('btn-so-evaluate-dirty'),
+  soEvalStatus: document.getElementById('so-eval-status'),
+  agendaPanel: document.getElementById('briefing-agenda-panel'),
+  agendaStatus: document.getElementById('agenda-status'),
+  agendaOverdueCount: document.getElementById('agenda-overdue-count'),
+  agendaTodayCount: document.getElementById('agenda-today-count'),
+  agendaUpcomingCount: document.getElementById('agenda-upcoming-count'),
+  agendaCompletedCount: document.getElementById('agenda-completed-count'),
+  agendaDerivedCount: document.getElementById('agenda-derived-count'),
+  agendaTitleInput: document.getElementById('agenda-title-input'),
+  agendaPrioritySelect: document.getElementById('agenda-priority-select'),
+  agendaCategorySelect: document.getElementById('agenda-category-select'),
+  agendaLinkInput: document.getElementById('agenda-link-input'),
+  btnAgendaCreate: document.getElementById('btn-agenda-create'),
+  agendaAddStatus: document.getElementById('agenda-add-status'),
+  agendaList: document.getElementById('briefing-agenda-list'),
+  derivedAgendaList: document.getElementById('briefing-derived-agenda-list'),
   docSearch: document.getElementById('doc-search-form'),
   docSearchText: document.getElementById('doc-search'),
   banner: document.getElementById('banner'),
@@ -1726,6 +1895,10 @@ const state = {
   core: 'degraded',
   view: 'deck',
   last: null,
+  // T-44 Packages 1 and 2: the two panels' most recent readings. Held so a later render can reuse the
+  // policy list the capability select is built from without a second fetch.
+  standingOrders: null,
+  agenda: null,
   eventCursor: { streamId: null, seq: 0, versions: {} },
   ownerSnapshots: Object.create(null),
   eventReconciled: false,
@@ -3383,7 +3556,30 @@ async function dispatchCommand(line) {
     applyMode(receipt.target);
   }
   if (receipt.targetView) setView(receipt.targetView);
+  // T-44 Packages 1 and 2: a receipt may name the panel inside the view it wants looked at. The view
+  // switch is what paints the screen; this is what puts the owner in front of the thing the command was
+  // about, and it re-reads that panel so what they see is the current state rather than the one that was
+  // on screen when they pressed return.
+  if (typeof receipt.target === 'string' && receipt.target.length > 0) {
+    focusPanel(receipt.target);
+    if (receipt.target === '#briefing-agenda-panel') void refreshAgenda();
+    if (receipt.target === '#standing-orders-panel') void refreshStandingOrders();
+  }
   return receipt;
+}
+
+// Scroll the named panel into view and mark it briefly, so a command that lands on a panel already on
+// screen still shows the owner that something answered. A selector that matches nothing is ignored: a
+// receipt must never be able to throw.
+function focusPanel(selector) {
+  let panel = null;
+  try { panel = document.querySelector(selector); } catch { panel = null; }
+  if (!panel) return;
+  if (typeof panel.scrollIntoView === 'function') {
+    try { panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { /* older engines */ }
+  }
+  panel.dataset.focusPulse = 'on';
+  window.setTimeout(() => { delete panel.dataset.focusPulse; }, 1200);
 }
 
 function renderWorkshop(result) {
@@ -6220,6 +6416,9 @@ async function refresh() {
   // painting the rest of the deck.
   void refreshGitPanel();
   void refreshTelemetry();
+  // T-44 Packages 1 and 2: the two new panels, on the same fire-and-forget discipline.
+  void refreshStandingOrders();
+  void refreshAgenda();
   renderPerception(perceptionResult);
   // T-33 Step 3: the graph and the perception reading the Workshop stages a sheet from.
   state.perception = perceptionResult.ok === true ? perceptionResult.value : null;
@@ -6644,6 +6843,414 @@ function focusCommandDispatch() {
     }
   }
   if (els.activity) els.activity.textContent = 'Command dispatch focused. Type a request; Escape dismisses.';
+}
+
+// T-44 Package 1: the standing-orders panel. Every string is written with textContent, and every id on a
+// card is the record's own id, so a click can name the thing it means without parsing a label.
+// A storage key is not a label. Every badge that shows one of the engine's own vocabulary words goes
+// through here, so a halted_by_lockdown outcome reads as HALTED BY LOCKDOWN on the card while the value
+// stays the key the route compares against.
+function badgeLabel(value) {
+  return String(value ?? '').replace(/_/g, ' ').toUpperCase();
+}
+
+function soOutcomeClass(outcome) {
+  if (outcome === 'verified') return 'so-badge--enabled';
+  if (outcome === 'halted_by_lockdown') return 'so-badge--halted';
+  if (outcome === 'cooldown_skipped' || outcome === 'refused') return 'so-badge--paused';
+  return 'so-badge--outcome';
+}
+
+function renderStandingOrders(view) {
+  const orders = Array.isArray(view?.orders) ? view.orders : [];
+  const summary = view?.summary ?? {};
+  if (els.soTotalCount) els.soTotalCount.textContent = String(summary.totalCount ?? 0);
+  if (els.soEnabledCount) els.soEnabledCount.textContent = String(summary.enabledCount ?? 0);
+  if (els.soRunsCount) els.soRunsCount.textContent = String(summary.totalRuns ?? 0);
+  if (els.soLockdownStatus) {
+    els.soLockdownStatus.textContent = view?.lockdownActive === true ? 'ENGAGED' : 'OPEN';
+    els.soLockdownStatus.dataset.lockdown = view?.lockdownActive === true ? 'engaged' : 'open';
+  }
+  const allowed = Array.isArray(view?.allowedCapabilities) ? view.allowedCapabilities : [];
+  if (els.soCapabilitySelect) {
+    const previous = els.soCapabilitySelect.value;
+    els.soCapabilitySelect.replaceChildren();
+    for (const name of allowed) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      els.soCapabilitySelect.append(option);
+    }
+    if (allowed.includes(previous)) els.soCapabilitySelect.value = previous;
+  }
+  if (els.soStatus) {
+    els.soStatus.textContent = view?.available === false
+      ? 'This build holds no capability registry, so no standing order can be written.'
+      : (view?.lockdownActive === true
+        ? summary.totalCount + ' order(s); Lockdown is engaged, so nothing may be created, changed or invoked.'
+        : summary.totalCount + ' order(s), ' + summary.enabledCount + ' enabled, ' + summary.totalRuns + ' run(s) recorded.');
+  }
+  if (!els.standingOrdersList) return;
+  els.standingOrdersList.replaceChildren();
+  if (!Array.isArray(view?.orders)) return;
+  for (const order of orders) {
+    const item = document.createElement('li');
+    item.className = 'so-card';
+    item.dataset.orderId = order.orderId;
+    item.dataset.enabled = String(order.enabled === true);
+    item.dataset.runnable = String(order.runnable === true);
+    if (order.lastOutcome === 'halted_by_lockdown') item.classList.add('so-halted');
+
+    const head = document.createElement('div');
+    head.className = 'so-head';
+    const title = document.createElement('span');
+    title.className = 'so-title';
+    title.textContent = order.title;
+    const id = document.createElement('span');
+    id.className = 'so-id';
+    id.textContent = order.orderId;
+    head.append(title, id);
+
+    const row = document.createElement('div');
+    row.className = 'so-row';
+    const trigger = document.createElement('span');
+    trigger.className = 'so-badge';
+    trigger.textContent = 'ON ' + badgeLabel(order.trigger.eventType);
+    const capability = document.createElement('span');
+    capability.className = 'so-badge';
+    capability.textContent = order.action.capabilityId;
+    const tier = document.createElement('span');
+    tier.className = 'so-badge';
+    tier.textContent = order.action.autonomyTier;
+    const status = document.createElement('span');
+    const halted = order.lastOutcome === 'halted_by_lockdown';
+    status.className = 'so-badge ' + (halted ? 'so-badge--halted' : (order.enabled ? 'so-badge--enabled' : 'so-badge--paused'));
+    status.dataset.soStatus = halted ? 'halted' : (order.enabled ? 'enabled' : 'paused');
+    status.textContent = halted ? 'HALTED BY LOCKDOWN' : (order.enabled ? 'ENABLED' : 'PAUSED');
+    const runs = document.createElement('span');
+    runs.className = 'so-badge';
+    runs.textContent = 'RUNS ' + order.runCount;
+    runs.dataset.soRuns = String(order.runCount);
+    const outcome = document.createElement('span');
+    outcome.className = 'so-badge ' + soOutcomeClass(order.lastOutcome);
+    outcome.textContent = badgeLabel(order.lastOutcome);
+    outcome.dataset.soOutcome = order.lastOutcome;
+    row.append(trigger, capability, tier, status, runs, outcome);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'so-row';
+    for (const [action, label, disabled] of [
+      ['invoke-standing-order', 'Invoke now', order.enabled !== true || order.runnable !== true],
+      ['toggle-standing-order', order.enabled ? 'Pause' : 'Enable', false],
+      ['revoke-standing-order', 'Revoke', false],
+      ['trace-standing-order', 'Trace', false],
+    ]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'small';
+      button.dataset.action = action;
+      button.dataset.orderId = order.orderId;
+      button.textContent = label;
+      if (disabled) button.disabled = true;
+      buttons.append(button);
+    }
+    const note = document.createElement('p');
+    note.className = 'meta';
+    note.textContent = order.lastRunAt === null
+      ? 'never run'
+      : 'last run ' + order.lastRunAt + (order.lastRunId ? ' (' + order.lastRunId + ')' : '');
+    item.append(head, row, buttons, note);
+    els.standingOrdersList.append(item);
+  }
+}
+
+async function refreshStandingOrders() {
+  try {
+    const view = await api('/api/standing-orders');
+    state.standingOrders = view;
+    renderStandingOrders(view);
+  } catch (error) {
+    if (els.soStatus) els.soStatus.textContent = 'The standing orders could not be read: ' + String(error?.message || error);
+  }
+}
+
+// T-44 Package 2: the agenda panel. The horizon badge is the colour the brief names, and a completed card
+// has its Complete button disabled rather than removed, so the card does not change shape under the
+// pointer that just pressed it.
+function agendaHorizonClass(bucket) {
+  if (bucket === 'overdue') return 'agenda-badge--overdue';
+  if (bucket === 'today') return 'agenda-badge--today';
+  if (bucket === 'completed') return 'agenda-badge--completed';
+  if (bucket === 'dismissed') return 'agenda-badge--dismissed';
+  return 'agenda-badge--upcoming';
+}
+
+function renderAgenda(view) {
+  const summary = view?.summary ?? {};
+  if (els.agendaOverdueCount) els.agendaOverdueCount.textContent = String(summary.overdueCount ?? 0);
+  if (els.agendaTodayCount) els.agendaTodayCount.textContent = String(summary.todayCount ?? 0);
+  if (els.agendaUpcomingCount) {
+    els.agendaUpcomingCount.textContent = String((summary.upcomingCount ?? 0) + (summary.unscheduledCount ?? 0));
+  }
+  if (els.agendaCompletedCount) els.agendaCompletedCount.textContent = String(summary.completedCount ?? 0);
+  if (els.agendaDerivedCount) els.agendaDerivedCount.textContent = String(summary.derivedActionCount ?? 0);
+  const items = Array.isArray(view?.items) ? view.items : [];
+  const derived = Array.isArray(view?.derivedItems) ? view.derivedItems : [];
+  if (els.agendaStatus) {
+    els.agendaStatus.textContent = view?.available === false
+      ? 'This build holds no agenda.'
+      : (summary.totalCommitments ?? 0) + ' commitment(s): ' + (summary.overdueCount ?? 0) + ' overdue, '
+        + (summary.todayCount ?? 0) + ' today, ' + (summary.derivedCount ?? 0) + ' reading(s) from other stores.'
+        + (view?.lockdownActive === true ? ' Lockdown is engaged, so nothing may be changed.' : '');
+  }
+  if (els.agendaList) {
+    els.agendaList.replaceChildren();
+    for (const item of items) {
+      const li = document.createElement('li');
+      li.className = 'agenda-card';
+      li.dataset.agendaId = item.itemId;
+      li.dataset.horizon = item.horizonBucket;
+      li.dataset.status = item.status;
+
+      const head = document.createElement('div');
+      head.className = 'agenda-head';
+      const title = document.createElement('span');
+      title.className = 'agenda-title';
+      title.textContent = item.title;
+      const id = document.createElement('span');
+      id.className = 'agenda-id';
+      id.textContent = item.itemId;
+      head.append(title, id);
+
+      const row = document.createElement('div');
+      row.className = 'agenda-row';
+      const horizon = document.createElement('span');
+      horizon.className = 'agenda-badge ' + agendaHorizonClass(item.horizonBucket);
+      horizon.dataset.agendaHorizon = item.horizonBucket;
+      horizon.textContent = badgeLabel(item.horizonBucket);
+      const priority = document.createElement('span');
+      priority.className = 'agenda-badge';
+      priority.textContent = badgeLabel(item.priority);
+      const category = document.createElement('span');
+      category.className = 'agenda-badge';
+      category.textContent = badgeLabel(item.category);
+      row.append(horizon, priority, category);
+      if (item.linkedArtifactId) {
+        const link = document.createElement('span');
+        link.className = 'agenda-badge agenda-link';
+        link.dataset.agendaLink = item.linkedArtifactId;
+        link.textContent = 'LINKED ' + item.linkedArtifactId;
+        row.append(link);
+      }
+
+      const buttons = document.createElement('div');
+      buttons.className = 'agenda-row';
+      const complete = document.createElement('button');
+      complete.type = 'button';
+      complete.className = 'small';
+      complete.dataset.action = 'complete-agenda-item';
+      complete.dataset.agendaId = item.itemId;
+      complete.textContent = 'Complete';
+      complete.disabled = item.status === 'completed';
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button';
+      dismiss.className = 'small';
+      dismiss.dataset.action = 'dismiss-agenda-item';
+      dismiss.dataset.agendaId = item.itemId;
+      dismiss.textContent = 'Dismiss';
+      dismiss.disabled = item.status === 'dismissed';
+      const trace = document.createElement('button');
+      trace.type = 'button';
+      trace.className = 'small';
+      trace.dataset.action = 'trace-agenda-item';
+      trace.dataset.agendaId = item.itemId;
+      trace.textContent = 'Trace';
+      buttons.append(complete, dismiss, trace);
+
+      li.append(head, row, buttons);
+      if (item.dueAt) {
+        const due = document.createElement('p');
+        due.className = 'meta';
+        due.textContent = 'due ' + item.dueAt + (item.completedAt ? ' · completed ' + item.completedAt : '');
+        li.append(due);
+      }
+      els.agendaList.append(li);
+    }
+  }
+  if (els.derivedAgendaList) {
+    els.derivedAgendaList.replaceChildren();
+    for (const item of derived) {
+      const li = document.createElement('li');
+      li.dataset.derivedId = item.itemId;
+      li.dataset.source = item.source;
+      const head = document.createElement('div');
+      head.className = 'agenda-head';
+      const title = document.createElement('span');
+      title.className = 'agenda-title';
+      title.textContent = item.title;
+      head.append(title);
+      const row = document.createElement('div');
+      row.className = 'agenda-row';
+      const source = document.createElement('span');
+      source.className = 'agenda-badge';
+      source.textContent = badgeLabel(item.source);
+      const bucket = document.createElement('span');
+      bucket.className = 'agenda-badge agenda-badge--upcoming';
+      bucket.textContent = badgeLabel(item.horizonBucket);
+      row.append(source, bucket);
+      if (item.linkedArtifactId) {
+        const link = document.createElement('span');
+        link.className = 'agenda-badge agenda-link';
+        link.textContent = String(item.linkedArtifactId);
+        row.append(link);
+      }
+      li.append(head, row);
+      els.derivedAgendaList.append(li);
+    }
+  }
+}
+
+async function refreshAgenda() {
+  try {
+    const view = await api('/api/agenda');
+    state.agenda = view;
+    renderAgenda(view);
+  } catch (error) {
+    if (els.agendaStatus) els.agendaStatus.textContent = 'The agenda could not be read: ' + String(error?.message || error);
+  }
+}
+
+// The four standing-order buttons on a card, and the evaluation bar. Each one posts to the route and
+// re-reads the list afterwards, so the card an owner sees after a press is the ledger as it stands now
+// rather than a local guess at what the press did.
+if (els.standingOrdersList) {
+  els.standingOrdersList.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    const orderId = button.dataset.orderId;
+    const action = button.dataset.action;
+    if (action === 'trace-standing-order') {
+      // The same trace the Memory Timeline renders: the chain for an order reaches its runs and the
+      // operations they performed, so the button opens the record rather than a second copy of it.
+      await openTrace(orderId, button).catch(() => {});
+      return;
+    }
+    button.disabled = true;
+    try {
+      if (action === 'toggle-standing-order') await api('/api/standing-orders/' + encodeURIComponent(orderId) + '/toggle', { method: 'POST', body: {} });
+      else if (action === 'revoke-standing-order') await api('/api/standing-orders/' + encodeURIComponent(orderId) + '/revoke', { method: 'POST', body: {} });
+      else if (action === 'invoke-standing-order') await api('/api/standing-orders/' + encodeURIComponent(orderId) + '/invoke', { method: 'POST', body: {} });
+      if (els.soStatus) els.soStatus.textContent = 'Standing order ' + orderId + ': ' + action.replace('-standing-order', '') + ' sent.';
+    } catch (error) {
+      if (els.soCreateRefusal) {
+        els.soCreateRefusal.hidden = false;
+        els.soCreateRefusal.textContent = 'Refused: ' + String(error?.message || error);
+      }
+    } finally {
+      await refreshStandingOrders();
+    }
+  });
+}
+
+if (els.btnSoCreate) {
+  els.btnSoCreate.addEventListener('click', async () => {
+    const title = (els.soTitleInput?.value ?? '').trim();
+    const capabilityId = els.soCapabilitySelect?.value ?? '';
+    els.btnSoCreate.disabled = true;
+    if (els.soCreateRefusal) els.soCreateRefusal.hidden = true;
+    try {
+      const order = await api('/api/standing-orders', {
+        method: 'POST',
+        body: { title, eventType: els.soTriggerSelect?.value ?? 'manual_invoke', capabilityId },
+      });
+      if (els.soTitleInput) els.soTitleInput.value = '';
+      if (els.soCreateStatus) els.soCreateStatus.textContent = 'Created ' + order.orderId + '.';
+    } catch (error) {
+      if (els.soCreateRefusal) {
+        els.soCreateRefusal.hidden = false;
+        els.soCreateRefusal.textContent = 'Refused: ' + String(error?.message || error);
+      }
+      if (els.soCreateStatus) els.soCreateStatus.textContent = '';
+    } finally {
+      els.btnSoCreate.disabled = false;
+      await refreshStandingOrders();
+    }
+  });
+}
+
+async function evaluateStandingOrders(eventType) {
+  if (els.soEvalStatus) els.soEvalStatus.textContent = 'Evaluating ' + eventType + '…';
+  try {
+    const result = await api('/api/standing-orders/evaluate', { method: 'POST', body: { eventType } });
+    if (els.soEvalStatus) {
+      els.soEvalStatus.textContent = eventType + ': ' + (result.matchedCount ?? 0) + ' matched, '
+        + (result.summary?.ran ?? 0) + ' ran, ' + (result.summary?.skipped ?? 0) + ' skipped, '
+        + (result.summary?.halted ?? 0) + ' halted.';
+    }
+  } catch (error) {
+    if (els.soEvalStatus) els.soEvalStatus.textContent = 'Evaluation refused: ' + String(error?.message || error);
+  } finally {
+    await refreshStandingOrders();
+  }
+}
+
+if (els.btnSoEvaluate) {
+  els.btnSoEvaluate.addEventListener('click', () => {
+    void evaluateStandingOrders(els.soEvalTriggerSelect?.value ?? 'workspace_dirty');
+  });
+}
+if (els.btnSoEvaluateDirty) {
+  els.btnSoEvaluateDirty.addEventListener('click', () => { void evaluateStandingOrders('workspace_dirty'); });
+}
+
+if (els.btnAgendaCreate) {
+  els.btnAgendaCreate.addEventListener('click', async () => {
+    const title = (els.agendaTitleInput?.value ?? '').trim();
+    const linkedArtifactId = (els.agendaLinkInput?.value ?? '').trim();
+    els.btnAgendaCreate.disabled = true;
+    try {
+      const item = await api('/api/agenda', {
+        method: 'POST',
+        body: {
+          title,
+          priority: els.agendaPrioritySelect?.value ?? 'normal',
+          category: els.agendaCategorySelect?.value ?? 'commitment',
+          ...(linkedArtifactId ? { linkedArtifactId } : {}),
+        },
+      });
+      if (els.agendaTitleInput) els.agendaTitleInput.value = '';
+      if (els.agendaLinkInput) els.agendaLinkInput.value = '';
+      if (els.agendaAddStatus) els.agendaAddStatus.textContent = 'Added ' + item.itemId + '.';
+    } catch (error) {
+      if (els.agendaAddStatus) els.agendaAddStatus.textContent = 'Refused: ' + String(error?.message || error);
+    } finally {
+      els.btnAgendaCreate.disabled = false;
+      await refreshAgenda();
+    }
+  });
+}
+
+if (els.agendaList) {
+  els.agendaList.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    const itemId = button.dataset.agendaId;
+    const action = button.dataset.action;
+    if (action === 'trace-agenda-item') {
+      await openTrace(itemId, button).catch(() => {});
+      return;
+    }
+    button.disabled = true;
+    try {
+      const verb = action === 'complete-agenda-item' ? 'complete' : 'dismiss';
+      await api('/api/agenda/' + encodeURIComponent(itemId) + '/' + verb, { method: 'POST', body: {} });
+      if (els.agendaAddStatus) els.agendaAddStatus.textContent = itemId + ' ' + (verb === 'complete' ? 'completed' : 'dismissed') + '.';
+    } catch (error) {
+      if (els.agendaAddStatus) els.agendaAddStatus.textContent = 'Refused: ' + String(error?.message || error);
+    } finally {
+      await refreshAgenda();
+    }
+  });
 }
 
 function dismissCommandDispatch() {

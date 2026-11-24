@@ -275,7 +275,9 @@ describe('T-44 agenda: the command grammar', () => {
   test('the five lines route by literal match, and an empty argument is refused rather than guessed', () => {
     assert.deepEqual(
       (({ kind, action, targetView }) => ({ kind, action, targetView }))(routeLine('schedule review phase 2 telemetry')),
-      { kind: 'agenda', action: 'agenda.create', targetView: 'briefing' },
+      // The agenda panel is inside the approvals view, beside the Briefings panel it extends, so that is
+      // the view the deck switches to; `target` names the panel inside it.
+      { kind: 'agenda', action: 'agenda.create', targetView: 'approvals' },
     );
     assert.equal(routeLine('remind me to call the supplier').argument, 'call the supplier');
     assert.equal(routeLine('schedule review phase 2 telemetry').argument, 'review phase 2 telemetry');
@@ -283,11 +285,15 @@ describe('T-44 agenda: the command grammar', () => {
     const shown = routeLine('show agenda');
     assert.equal(shown.kind, 'agenda');
     assert.equal(shown.route, '/api/agenda');
-    assert.equal(shown.targetView, 'briefing');
+    assert.equal(shown.targetView, 'approvals');
+    assert.equal(shown.targetPanel, '#briefing-agenda-panel');
     const orders = routeLine('standing orders');
     assert.equal(orders.kind, 'standing_order');
     assert.equal(orders.route, '/api/standing-orders');
-    assert.equal(orders.targetView, 'policy-autonomy');
+    // The standing-orders panel sits beside the safety latch on the system view, so an owner reading what
+    // is armed can see what is stopped in the same place.
+    assert.equal(orders.targetView, 'system');
+    assert.equal(orders.targetPanel, '#standing-orders-panel');
     // The matcher's rule, stated as a test so a reader can check it: a phrase matches when the line IS
     // the phrase or BEGINS with it followed by a separator - never when it merely contains it. A prefix
     // matches only at the start. Both halves matter, and both are tested here.
