@@ -346,5 +346,42 @@ code, which is the kind of defect a suite built only from the brief's acceptance
 missed.
 
 The three numbers that matter for a release are the ones a reader should check rather than trust:
-**4,393 tests / 4,391 pass / 0 fail**, **191 capabilities plain and 210 rooted, both pinned**, and
+**4,395 tests / 4,393 pass / 0 fail**, **191 capabilities plain and 210 rooted, both pinned**, and
 **fourteen wired browser suites**.
+
+### The green run
+
+Hosted CI run **45433737366 = success**, on head `a4eb83d`, with every one of the fourteen suites
+reporting its own annotation and no suite skipped for want of a browser. The walk that cost the most to
+make honest was the fourteenth, and its own summary is the clearest statement of what this milestone
+proves:
+
+```
+templates 3 ids=morning_briefing,workspace_security_audit,pre_release_readiness
+dag       system.inspect_ports || system.inspect_processes -> git.status_detailed
+run       pbr_9f33f456e7274c10 status=verified steps=3 receipts=3
+trace     complete=True namesEveryOperation=True
+watchpoint breached=wp_efe96067311043c6 value=1 state=breached
+watchpoint nominal=wp_2da30d4c715c4a7a state=nominal
+lockdown  launch=423 LOCKDOWN_ACTIVE evaluate=423 LOCKDOWN_ACTIVE create=423 runsUnchanged=True
+overlay   initial=OVERLAY: OFF on=OVERLAY: TACTICAL persisted=True off=OVERLAY: OFF
+router    playbook=playbook.launch watchpoint=watchpoint.evaluate overlay=hud
+contrast  worst=6.72:1 over 135 samples
+viewports 6 measured (both postures)
+console 0 page 0 requests 0 reloadAborts 25
+screenshots 15 lastPhase complete
+```
+
+Two numbers in that block are the ones to read twice. **135 samples** is six viewport-and-posture pairs —
+three widths, each measured with the deck in both postures — because the compact posture hides elements
+and a hidden element has no colour to measure. And **reloadAborts 25** is the honest count of what five
+reloads cancel: the page's event stream and its one in-flight `refresh()` batch of twenty-three owner
+reads. The walk classifies a cancellation as a cancellation and pins its ceiling; it does not wave the
+list through, and it still requires zero failed requests.
+
+Getting there took four hosted rounds, and each round found a defect the Node suite could not:
+the inline handler that eight suites tripped over (§4.7), the `\b` anchor against concatenated text
+(§4.8), a receipt field the walk asserted but the deck has never rendered, and the reload cancellations
+above. Three of the four were in the tests rather than the product, which is the pattern to expect from a
+suite that is being written against a surface for the first time: a wrong assertion fails loudly and
+looks exactly like a defect until it is read.

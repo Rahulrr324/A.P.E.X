@@ -3503,9 +3503,26 @@ engines against the real composed application and a real git repository;
 `tests/e2e/t45-playbooks-watchpoints-overlay.spec.mjs` is the fourteenth wired browser suite and the first
 that measures contrast in two postures of the same deck.
 
-**Full suite: 4,393 tests / 4,391 pass / 0 fail / 2 skipped** (the two conditional browser checks that
-skip loudly without a binary). Suite growth from T-44: +33 tests, no existing test removed or made
+**Full suite: 4,395 tests / 4,393 pass / 0 fail / 2 skipped** (the two conditional browser checks that
+skip loudly without a binary). Suite growth from T-44: +35 tests, no existing test removed or made
 conditional.
+
+**Hosted CI run 45433737366 = success**, head `a4eb83d`, all fourteen suites annotation-reported and none
+skipped for want of a browser. The fourteenth walk's own summary: three templates with the right DAG, one
+launch whose three steps each named a real operation and whose trace names the run, two watchpoints
+settling to BREACHED and NOMINAL **from the same measured value**, 423 from a launch, an evaluation and a
+create under the latch with nothing written, an overlay persisted across a reload, the router's three
+lines reporting `playbook.launch` / `watchpoint.evaluate` / `hud`, and contrast at a worst of **6.72:1
+over 135 samples** across six viewport-and-posture pairs.
+
+It took four hosted rounds. Each found a defect the Node suite could not: one inline `onsubmit` handler
+that the deck's own content policy blocks (and that `form-action 'none'` made unnecessary, so eight suites
+went red on one attribute); a `\b` anchor that cannot match at the start of a UUID inside concatenated
+`textContent`; a receipt field (`Action`) the walk asserted and the deck has never rendered, since
+`Capability` carries `actionInvoked`; and twenty-three `ERR_ABORTED` reads that were a reload cancelling
+the page's in-flight `refresh()` batch rather than twenty-three failed requests. Three of the four were in
+the tests rather than the product — the pattern to expect from a suite written against a surface for the
+first time.
 
 Eight defects were found and closed in the course of the work. The last two were found by hosted CI and by
 a local DOM harness after the Node suite was already green — one inline `onsubmit` handler that the deck's
