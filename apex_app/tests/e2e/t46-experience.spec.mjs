@@ -510,6 +510,25 @@ async function measureMobile(page) {
         deckDirection: deckStyle?.flexDirection ?? null,
         stageOrder: orderOf(stageNode),
         stageDisplay: stageStyle?.display ?? null,
+        stageBox: stageNode ? {
+          top: Math.round(stageNode.getBoundingClientRect().top),
+          bottom: Math.round(stageNode.getBoundingClientRect().bottom),
+          height: Math.round(stageNode.getBoundingClientRect().height),
+        } : null,
+        stageChildren: stageNode ? [...stageNode.children].map((node) => {
+          const box = node.getBoundingClientRect();
+          return {
+            tag: node.tagName.toLowerCase(), id: node.id || null, order: orderOf(node),
+            top: Math.round(box.top), bottom: Math.round(box.bottom), height: Math.round(box.height),
+          };
+        }) : null,
+        deckChildren: deckNode ? [...deckNode.children].map((node) => {
+          const box = node.getBoundingClientRect();
+          return {
+            tag: node.tagName.toLowerCase(), id: node.id || null, order: orderOf(node),
+            top: Math.round(box.top), bottom: Math.round(box.bottom), height: Math.round(box.height),
+          };
+        }) : null,
         deckOrder: orderOf(deckNode),
         coreWrapOrder: orderOf(document.querySelector('.core-wrap')),
       },

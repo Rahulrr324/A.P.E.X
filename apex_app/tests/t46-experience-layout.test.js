@@ -292,8 +292,10 @@ describe('T-46 STEP 1: the Core leads', () => {
     // Measured by the hosted run: #exec-comms-headline was 713px of single-line sentence - wider than
     // the 544px Core at 1600x900 - and the "Core is the widest element" gate named it. A bounded
     // measure is both the layout fix and the better line length.
-    assert.match(UI_CSS, /#exec-comms-panel, #exec-comms-panel p, #exec-comms-panel \.exec-comms-line \{ max-width: 46ch; \}/);
-    assert.match(UI_CSS, /#conversation-panel \{ max-width: 66ch; \}/);
+    // The bound is the Core's own fit: a character count alone measured 526px on a laptop whose reticle
+    // is 425px, so the panel's message line was still wider than the Core.
+    assert.match(UI_CSS, /#exec-comms-panel, #exec-comms-panel p, #exec-comms-panel \.exec-comms-line \{[^}]*max-width: min\(46ch, calc\(var\(--core-fit, 24rem\) \* 1px\)\)/);
+    assert.match(UI_CSS, /#conversation-panel, #conversation-panel p \{[^}]*max-width: min\(66ch, calc\(var\(--core-fit, 24rem\) \* 1px\)\)/);
     // And the caption is bounded by the Core it captions: at a flat 34rem it was 526px of paragraph
     // under a 425px reticle on a laptop, so the widest thing in the deck was the sentence about the Core.
     assert.match(UI_CSS, /\.core-caption \{[^}]*max-width: min\(32rem, calc\(var\(--core-fit, 24rem\) \* 1px\)\)/);

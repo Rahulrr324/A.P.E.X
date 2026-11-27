@@ -1593,8 +1593,13 @@ body { display: flex; flex-direction: column; min-height: 0; }
    at a readable measure instead of the stage's full width - 713px of single-line sentence was, by
    measurement, the widest thing in the deck and it outgrew the Core at both desktop viewports.
    A bounded measure is also the better reading: 70 characters, not 140. */
-#exec-comms-panel, #exec-comms-panel p, #exec-comms-panel .exec-comms-line { max-width: 46ch; }
-#conversation-panel { max-width: 66ch; }
+/* The bound is the Core's own fit, not a character count: 66ch measured 526px on a laptop whose
+   reticle is 425px, so the panel's message line was still the widest thing in the deck. Whatever the
+   Core is, prose is not wider than it. The ch value stays as the readable maximum. */
+#exec-comms-panel, #exec-comms-panel p, #exec-comms-panel .exec-comms-line {
+  max-width: min(46ch, calc(var(--core-fit, 24rem) * 1px));
+}
+#conversation-panel, #conversation-panel p { max-width: min(66ch, calc(var(--core-fit, 24rem) * 1px)); }
 
 /* The rails are columns of panels beside the Core. Each panel scrolls inside itself, so a rail never
    grows the band and never hides its last row. */
