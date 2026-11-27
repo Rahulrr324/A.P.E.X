@@ -881,6 +881,14 @@ jobs:
           failures = list(run.get('failures') or [])
           failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
           failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          # A soft assertion does not throw, so it never reaches run.failures - the first version of
+          # this publisher printed `notice` on a run whose gates had failed, which is worse than no
+          # annotation at all. The gates are read from gatesJudged, which the spec fills for every gate.
+          failed_gates = [entry for entry in (run.get('gatesJudged') or []) if entry.get('ok') is not True]
+          failures += [{'phase': 'gate', 'message': str(entry.get('gate')) + ' — ' + str(entry.get('detail'))}
+                       for entry in failed_gates]
+          parts.append('gates ' + str(len(run.get('gatesJudged') or []) - len(failed_gates))
+                       + '/' + str(len(run.get('gatesJudged') or [])) + ' passed')
           level = 'error' if failures else 'notice'
           if failures:
               def failure_text(failure):

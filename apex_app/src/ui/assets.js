@@ -1703,8 +1703,14 @@ body[data-motion="reduced"] #hud-grid { opacity: 0.25; }
    that assertion is for. */
 #core-reticle {
   width: min(34rem, 100%, calc(var(--core-fit, 24rem) * 1px));
+  /* T-46 STEP 1: the reticle is a flex item of .core-wrap, and a column flex item's automatic minimum
+     is content-based - so with height: auto the box took the WIDTH it had been given (357px) as its
+     height and stopped being square. It is its own size now: flex-shrink 0, an explicit 1/1, and
+     height:auto derived from the width by aspect-ratio. The width is the only thing that varies. */
+  flex: 0 0 auto;
   aspect-ratio: 1 / 1;
   height: auto;
+  min-height: 0;
   transition: filter var(--motion-posture) ease;
 }
 #core-reticle .reticle-azimuth { transform-origin: 120px 120px; animation: spin var(--reticle-spin-azimuth) linear infinite; }

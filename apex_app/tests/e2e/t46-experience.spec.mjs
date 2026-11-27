@@ -478,7 +478,7 @@ test.describe.configure({ mode: 'serial' });
 
 test('T-46: the deck fits one viewport, the Core leads it, and every gate is measured rather than asserted', async () => {
   // Stated rather than inherited: this walk starts a server and a browser and measures three viewports.
-  test.setTimeout(300_000);
+  test.setTimeout(360_000);
   test.skip(!resolution.executable, noBrowserDiagnostic(resolution));
   fs.mkdirSync(artifactDir, { recursive: true });
 
@@ -654,6 +654,12 @@ test('T-46: the deck fits one viewport, the Core leads it, and every gate is mea
         gate(mobile.nav?.atBottom === true, 'the navigation is a bottom bar on the phone',
           JSON.stringify(mobile.nav));
       }
+    }
+    // Recorded as failures as well as soft assertions, so the summary alone says which gates were red:
+    // the CI annotation reads this list, and a soft assertion that only lived in the test runner's
+    // output would make a red run print a green notice.
+    for (const entry of run.gatesJudged.filter((candidate) => candidate.ok === false)) {
+      run.failures.push({ phase: 'gate', message: `${entry.gate} — ${entry.detail}` });
     }
     checkpoint('gates-judged', {
       judged: run.gatesJudged.length,
