@@ -152,7 +152,9 @@ describe('T-46 STEP 1: the phone layout', () => {
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage \{[^}]*display: flex;[^}]*flex-direction: column/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage > \* \{ flex: 0 0 auto; width: 100%; \}/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.rail \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
-    assert.match(UI_CSS, /body\[data-layout="mobile"\] nav\.nav \{[^}]*order: 5/);
+    // 6, not 5: the deck is 1 and the bar 4, and equal orders fall back to document order - the bar is
+    // first in the document for Tab, so the same number painted it above the navigation.
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] nav\.nav \{[^}]*order: 6/);
   });
 
   test('the layout flag matches the stylesheet breakpoint', () => {
@@ -294,7 +296,9 @@ describe('T-46 STEP 1: the Core leads', () => {
     assert.match(UI_CSS, /#conversation-panel \{ max-width: 66ch; \}/);
     // And the caption is bounded by the Core it captions: at a flat 34rem it was 526px of paragraph
     // under a 425px reticle on a laptop, so the widest thing in the deck was the sentence about the Core.
-    assert.match(UI_CSS, /\.core-caption \{ max-width: min\(32rem, calc\(var\(--core-fit, 24rem\) \* 1px\)\)/);
+    assert.match(UI_CSS, /\.core-caption \{[^}]*max-width: min\(32rem, calc\(var\(--core-fit, 24rem\) \* 1px\)\)/);
+    assert.equal((UI_CSS.match(/\.core-caption \{/g) ?? []).length, 1,
+      'one caption rule: a duplicate would let the older max-width win');
   });
 
   test('the stage gives the Core the spare height and the panels their own scroll', () => {

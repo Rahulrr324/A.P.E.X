@@ -450,11 +450,23 @@ async function measureMobile(page) {
   return page.evaluate(() => {
     const core = document.querySelector('.core-wrap')?.getBoundingClientRect() ?? null;
     const deck = document.querySelector('.deck')?.getBoundingClientRect() ?? null;
+    // The diagnosis, not the verdict: a phone gate that fails has to say whether the layout flag was
+    // set, what the deck's display actually resolved to, and what order each child was given. Three
+    // hosted runs failed this gate on numbers alone, and the numbers could not tell the three
+    // possibilities (flag not set, display not flex, order not applied) apart.
+    const deckNode = document.querySelector('.deck');
+    const deckStyle = deckNode ? getComputedStyle(deckNode) : null;
+    const orderOf = (node) => (node && getComputedStyle(node).order) || null;
     const rails = [...document.querySelectorAll('.deck .rail')].map((node) => {
       const box = node.getBoundingClientRect();
-      return { label: node.getAttribute('aria-label'), top: Math.round(box.top), bottom: Math.round(box.bottom), width: Math.round(box.width), left: Math.round(box.left) };
+      return {
+        label: node.getAttribute('aria-label'), top: Math.round(box.top), bottom: Math.round(box.bottom),
+        width: Math.round(box.width), left: Math.round(box.left), order: orderOf(node),
+      };
     });
-    const stage = document.querySelector('.deck .stage')?.getBoundingClientRect() ?? null;
+    const stageNode = document.querySelector('.deck .stage');
+    const stageStyle = stageNode ? getComputedStyle(stageNode) : null;
+    const stage = stageNode ? stageNode.getBoundingClientRect() : null;
     const nav = document.querySelector('nav.nav');
     const navBox = nav ? nav.getBoundingClientRect() : null;
     const navStyle = nav ? getComputedStyle(nav) : null;
@@ -490,6 +502,17 @@ async function measureMobile(page) {
       clientWidth: doc.clientWidth,
       horizontalOverflow: doc.scrollWidth > doc.clientWidth + 1,
       documentScrolls: doc.scrollHeight > window.innerHeight + 1,
+      diagnose: {
+        layoutFlag: document.body.dataset.layout ?? null,
+        matchMedia720: typeof window.matchMedia === 'function'
+          ? window.matchMedia('(max-width: 720px)').matches : 'no matchMedia',
+        deckDisplay: deckStyle?.display ?? null,
+        deckDirection: deckStyle?.flexDirection ?? null,
+        stageOrder: orderOf(stageNode),
+        stageDisplay: stageStyle?.display ?? null,
+        deckOrder: orderOf(deckNode),
+        coreWrapOrder: orderOf(document.querySelector('.core-wrap')),
+      },
     };
   });
 }
@@ -668,7 +691,8 @@ test('T-46: the deck fits one viewport, the Core leads it, and every gate is mea
         gate(mobile.horizontalOverflow === false, 'no horizontal scroll on the phone',
           `${mobile.scrollWidth} > ${mobile.clientWidth}`);
         gate(mobile.coreFirst === true, 'the Core is the first thing in the deck on the phone',
-          JSON.stringify(mobile.rails.map((rail) => rail.top)));
+          'rail tops ' + JSON.stringify(mobile.rails.map((rail) => rail.top))
+          + ', core ' + JSON.stringify(mobile.core) + ', diagnose ' + JSON.stringify(mobile.diagnose));
         gate(mobile.stacked === true, 'the cards are stacked full-width under the Core on the phone',
           `belowCore ${mobile.belowCore}, fullWidth ${mobile.fullWidth}`);
         gate(mobile.nav?.atBottom === true, 'the navigation is a bottom bar on the phone',

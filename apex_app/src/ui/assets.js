@@ -1254,7 +1254,11 @@ h3 { margin: .8rem 0 .4rem; font-size: .85rem; color: var(--gold); }
 .core-center { fill: rgba(0,229,255,0.18); stroke: var(--cyan); stroke-width: 1.5; }
 .core-segments path { fill: none; stroke: var(--cyan); stroke-width: 2; opacity: 0.55; stroke-linecap: round; }
 .core-state { font-family: var(--font-display); letter-spacing: .18em; color: var(--cyan); }
-.core-caption { color: var(--muted); font-size: .82rem; text-align: center; max-width: 24rem; }
+/* T-46 STEP 1: the caption is bounded by the Core it captions. A flat max-width let it be 526px of
+   paragraph under a 425px reticle on a laptop, so the widest thing in the deck was the sentence
+   describing the Core - the hosted walk named it. This is the rule that wins; the T-46 block's
+   duplicate was an earlier edit that landed beside it. */
+.core-caption { color: var(--muted); font-size: .82rem; text-align: center; margin: 0; max-width: min(32rem, calc(var(--core-fit, 24rem) * 1px)); }
 body[data-core-state="idle"] .core-halo { animation: breathe 3.2s ease-in-out infinite; }
 body[data-core-state="thinking"] .core-ring.outer { animation-duration: 4s; stroke: var(--gold); }
 body[data-core-state="awaiting_approval"] .core-ring.outer { stroke: var(--gold); stroke-dasharray: 2 8; }
@@ -1411,7 +1415,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
      order:-2 on .stage and .core-wrap above is what does that; this only keeps the deck before the
      bar and the navigation. */
   body[data-layout="mobile"] .shell > .deck { order: 1; }
-  body[data-layout="mobile"] nav.nav { order: 5; }
+  body[data-layout="mobile"] nav.nav { order: 6; }
   /* The rails stack in one column: two of them side by side at 390px would be 180px each, and their
      headings would wrap to three lines. */
   body[data-layout="mobile"] .rail { grid-template-columns: minmax(0, 1fr); }
@@ -1426,7 +1430,10 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
      paints over whatever is under it, and "fits the viewport" would then be true and a lie at once.
      Everything is in flow, so the deck's own scroll region ends at the bar rather than under it. */
   body[data-layout="mobile"] nav.nav {
-    order: 4;
+    /* 6, not 5: the deck is 1, the bar 4, and the navigation last. Equal orders fall back to document
+       order - and the bar is FIRST in the document because it is first for Tab - so giving them the
+       same number painted the bar above the navigation. */
+    order: 6;
     flex: 0 0 auto;
     padding: .3rem .4rem; gap: .25rem;
     background: rgba(5, 8, 15, 0.97); border-top: 1px solid var(--line-strong); border-bottom: 0;
@@ -1580,7 +1587,7 @@ body { display: flex; flex-direction: column; min-height: 0; }
 /* T-46 STEP 1: the caption sits UNDER the Core and is bounded by it. At 34rem it was 526px of
    paragraph on a laptop whose reticle is 425px - so the widest thing in the deck was the sentence
    describing the Core, not the Core. Bounding it to the fit is also the better typography. */
-.core-caption { max-width: min(32rem, calc(var(--core-fit, 24rem) * 1px)); text-align: center; margin: 0; }
+
 .stage > #exec-comms-panel, .stage > #conversation-panel { overflow-y: auto; max-height: 22vh; }
 /* T-46 STEP 1: a line of prose is not a competitor for width. The exec-comms headline and its body run
    at a readable measure instead of the stage's full width - 713px of single-line sentence was, by
