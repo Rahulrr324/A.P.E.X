@@ -300,6 +300,13 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
       step('sensor-indicator', run.sensor);
 
       // ---- a trusted handoff, staged and claimed ----------------------------------------------
+      // The ladder walk leaves the measures popover OPEN (it was opened for the last rung), and an open
+      // panel covers the navigation - the hosted run's click on the Presence tab resolved to the button
+      // and then sat behind the panel. Close it the way an owner does, with the trigger itself.
+      if ((await page.locator('#measures-trigger').getAttribute('aria-expanded')) === 'true') {
+        await page.locator('#measures-trigger').click();
+      }
+      await expect(page.locator('#measures-panel')).toBeHidden();
       await page.locator('nav .nav-item[data-view="presence"]').click();
       await expect(page.locator('body')).toHaveAttribute('data-view', 'presence');
       const sourceOption = page.locator('#handoff-source option', { hasText: 'owner laptop' });
