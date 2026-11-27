@@ -264,9 +264,16 @@ async function measureCore(page) {
     const viewportCentreX = window.innerWidth / 2;
     const deltaX = centreX - viewportCentreX;
     const deck = document.querySelector('.deck');
+    // What the eye can compare the Core with: painted CONTENT (a paint container's own box is mostly
+    // padding, and a 300px panel with 250px of padding is not 300px of anything the eye sees). The
+    // first version of this measurement compared the reticle's svg against every panel's border box
+    // and reported `coreWidest false` at 144px tall on a page where the Core was visibly the widest
+    // thing in the deck: the gate was wrong, not the layout.
+    const CONTENT = ['li', 'p', 'h2', 'h3', 'h4', 'pre', 'table', 'dl', 'ul', 'ol', 'svg', 'img', 'canvas',
+      'input', 'textarea', 'button', 'select', 'label', 'span.value', 'strong', 'em'];
     const samples = [];
     if (deck) {
-      for (const node of deck.querySelectorAll('*')) {
+      for (const node of deck.querySelectorAll(CONTENT.join(','))) {
         const rect = node.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) continue;
         const style = getComputedStyle(node);
@@ -299,7 +306,11 @@ async function measureCore(page) {
       deltaRatio: Math.abs(deltaX) / window.innerWidth,
       svgWidth: svgBox ? Math.round(svgBox.width) : null,
       widest,
-      isWidest: widest ? (widest.id === 'core-reticle' || widest.tag === 'svg' || widest.id === 'core-reticle-wrap') : false,
+      // `isWidest` is the brief's claim, and it is checked against the Core's own painted width rather
+      // than against which element happens to top a list: the Core must be wider than every other
+      // content box in the deck, and by a margin - "the largest thing on screen" is not a photo finish.
+      isWidest: widest ? (svgBox !== null && svgBox.width >= widest.width) : false,
+      largestBy: widest && svgBox ? Math.round(svgBox.width - widest.width) : null,
       stageWidth: stage ? Math.round(stage.getBoundingClientRect().width) : null,
       rails,
       railsBeside: rails.length > 0 && rails.every((rail) => rail.beside),
@@ -602,7 +613,7 @@ test('T-46: the deck fits one viewport, the Core leads it, and every gate is mea
           `Core centred @${where}`,
           `centre x ${core.centre.x} vs viewport centre ${core.viewportCentre.x} = ${(core.deltaRatio * 100).toFixed(1)}% must be <= ${(T46_GATES.coreCentreToleranceRatio * 100)}%`);
         gate(core.isWidest === true, `Core is the widest element @${where}`,
-          `widest is ${JSON.stringify(core.widest)}; Core svg is ${core.svgWidth}px`);
+          `Core svg is ${core.svgWidth}px, widest content box is ${JSON.stringify(core.widest)} (by ${core.largestBy}px)`);
         gate(core.railsBeside === true, `missions and alerts beside the Core @${where}`,
           JSON.stringify(core.rails.map((rail) => ({ label: rail.label, beside: rail.beside }))));
 

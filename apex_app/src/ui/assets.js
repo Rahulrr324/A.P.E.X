@@ -101,13 +101,11 @@ export const UI_PAGE = `<!doctype html>
       <option value="synthesis">Synthesis</option>
       <option value="quiet">Quiet</option>
     </select>
-    <!-- T-45 Package 3: the compact tactical overlay. A posture, not a mode: a mode changes palette, motion
-         and contrast; this changes what the deck puts on screen, and the strip it reveals is the five
-         numbers an owner watching a live system needs without the full chrome. -->
-    <button id="btn-hud-overlay-toggle" type="button" class="quiet small" aria-pressed="false"
-            aria-controls="tactical-overlay-strip" title="Compact tactical overlay: the live core state, mode, latch and counts on one strip">OVERLAY: OFF</button>
     <!-- T-46 STEP 1: the popover. It is a panel, not a modal: it never traps focus, Escape closes it and
-         returns focus to this button, and everything it carries is also reachable from the System view. -->
+         returns focus to this button, and everything it carries is also reachable from the System view.
+         The overlay toggle moved INTO it in the second pass: the band keeps two buttons and two
+         selects, and the toggle is one click away behind a button that is itself one click away. A HUD's
+         status band is not a toolbox. -->
     <button id="measures-trigger" type="button" class="hud-chip" aria-expanded="false"
             aria-controls="measures-panel" aria-keyshortcuts="Escape">
       Measures
@@ -154,6 +152,16 @@ export const UI_PAGE = `<!doctype html>
     </div>
   </div>
   <div class="measures-group">
+    <p class="measures-key">Posture</p>
+    <div class="measures-row">
+      <!-- T-45 Package 3: the compact tactical overlay. A posture, not a mode: a mode changes palette,
+           motion and contrast; this changes what the deck puts on screen, and the strip it reveals is
+           the five numbers an owner watching a live system needs without the full chrome. -->
+      <button id="btn-hud-overlay-toggle" type="button" class="quiet small" aria-pressed="false"
+              aria-controls="tactical-overlay-strip" title="Compact tactical overlay: the live core state, mode, latch and counts on one strip">OVERLAY: OFF</button>
+    </div>
+  </div>
+  <div class="measures-group">
     <p class="measures-key">Session</p>
     <div class="measures-row">
       <button id="new-session" type="button" class="quiet small">New session</button>
@@ -187,6 +195,49 @@ export const UI_PAGE = `<!doctype html>
      hidden to achieve it: every panel is still in the band, every panel can still be scrolled to its
      last row, and every view is still reachable from this navigation and Ctrl+K. -->
 <div class="shell">
+<!-- T-46 STEP 1 (2026-11-19): the command bar is the FIRST child of the shell in document order, and
+     the LAST thing painted in it. The two orders are deliberate and different:
+       * document order is focus order, and the bar is how the owner reaches everything else - so Tab
+         reaches it before the fifteen workspace tabs, which is the contract T-32 pinned and this
+         milestone is not allowed to break;
+       * paint order is set by CSS (order: 3 on the bar, 1 on the navigation, 2 on the deck), so the bar
+         is docked under the deck where a command line belongs.
+     The bar used to sit outside the shell entirely, after every panel in the document - which is why
+     typing meant scrolling past the whole deck to find it. -->
+<section class="command-bar" data-depth-plane="z1" aria-label="Command dispatch">
+  <!-- T-40 Step 3: what the bar accepts, read from the router at the moment it is opened. Nothing in this
+       panel is written by hand: every row is a route the router will actually take, with the live ECP
+       decision for the capability behind it. It is not a modal and traps nothing. -->
+  <div id="hud-command-help" class="panel hud-help" data-depth-plane="z3" role="region"
+       aria-labelledby="hud-command-help-title" hidden>
+    <div class="row">
+      <h3 id="hud-command-help-title">Command reference</h3>
+      <button id="hud-help-close" type="button" class="quiet small">Close</button>
+    </div>
+    <p id="hud-command-help-state" class="meta" role="status" aria-live="polite">Reading the command catalogue…</p>
+    <table class="hud-help-table">
+      <caption class="visually-hidden">Commands the command bar accepts</caption>
+      <thead><tr><th scope="col">Type</th><th scope="col">Route</th><th scope="col">Governance</th></tr></thead>
+      <tbody id="hud-command-help-rows"></tbody>
+    </table>
+    <h4>Keys</h4>
+    <ul id="hud-command-help-keys" class="work"></ul>
+    <p class="meta">Clicking a command fills the bar with it. Pressing Escape closes this panel and leaves whatever you had typed in place.</p>
+  </div>
+  <form id="chat-form">
+    <label for="chat-text" class="visually-hidden">Message</label>
+    <textarea id="chat-text" rows="2" maxlength="4000" placeholder="Command APEX, or ask for a verified read"></textarea>
+    <div class="row">
+      <button id="send" type="submit">Send</button>
+      <span id="activity" class="meta" role="status"></span>
+    </div>
+    <!-- T-37 Step 3: the dispatch receipt. The router answers with a structured record - route kind,
+         capability, ECP decision, whether it verified - and this renders that record. It never
+         guesses: a refused line shows the refusal, and an unmatched line says it went to the
+         pipeline rather than pretending the router understood it. -->
+    <dl id="dispatch-receipt" class="facts" hidden></dl>
+  </form>
+</section>
 <nav class="nav" aria-label="Primary">
   <button type="button" data-view="deck" class="nav-item active" aria-current="page">Deck</button>
   <button type="button" data-view="conversations" class="nav-item">Conversations</button>
@@ -314,44 +365,7 @@ export const UI_PAGE = `<!doctype html>
     
   </aside>
 </main>
-<!-- T-46 STEP 1: the command bar is the last child of the shell, docked under the deck. It used to sit
-     before the shell in document order, which is why the owner scrolled past every panel to reach it;
-     it is inside the shell now, ordered after the deck, and the band above it is the only thing that
-     scrolls. The order in the DOM is also the order Tab visits, so the bar still follows the deck. -->
-<section class="command-bar" data-depth-plane="z1" aria-label="Command dispatch">
-  <!-- T-40 Step 3: what the bar accepts, read from the router at the moment it is opened. Nothing in this
-       panel is written by hand: every row is a route the router will actually take, with the live ECP
-       decision for the capability behind it. It is not a modal and traps nothing. -->
-  <div id="hud-command-help" class="panel hud-help" data-depth-plane="z3" role="region"
-       aria-labelledby="hud-command-help-title" hidden>
-    <div class="row">
-      <h3 id="hud-command-help-title">Command reference</h3>
-      <button id="hud-help-close" type="button" class="quiet small">Close</button>
-    </div>
-    <p id="hud-command-help-state" class="meta" role="status" aria-live="polite">Reading the command catalogue…</p>
-    <table class="hud-help-table">
-      <caption class="visually-hidden">Commands the command bar accepts</caption>
-      <thead><tr><th scope="col">Type</th><th scope="col">Route</th><th scope="col">Governance</th></tr></thead>
-      <tbody id="hud-command-help-rows"></tbody>
-    </table>
-    <h4>Keys</h4>
-    <ul id="hud-command-help-keys" class="work"></ul>
-    <p class="meta">Clicking a command fills the bar with it. Pressing Escape closes this panel and leaves whatever you had typed in place.</p>
-  </div>
-  <form id="chat-form">
-    <label for="chat-text" class="visually-hidden">Message</label>
-    <textarea id="chat-text" rows="2" maxlength="4000" placeholder="Command APEX, or ask for a verified read"></textarea>
-    <div class="row">
-      <button id="send" type="submit">Send</button>
-      <span id="activity" class="meta" role="status"></span>
-    </div>
-    <!-- T-37 Step 3: the dispatch receipt. The router answers with a structured record - route kind,
-         capability, ECP decision, whether it verified - and this renders that record. It never
-         guesses: a refused line shows the refusal, and an unmatched line says it went to the
-         pipeline rather than pretending the router understood it. -->
-    <dl id="dispatch-receipt" class="facts" hidden></dl>
-  </form>
-</section>
+
 </div>
 <section class="workspace" id="workspace">
   <section class="view" data-view="conversations" data-depth-plane="z3">
@@ -1396,7 +1410,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
      paints over whatever is under it, and "fits the viewport" would then be true and a lie at once.
      Everything is in flow, so the deck's own scroll region ends at the bar rather than under it. */
   body[data-layout="mobile"] nav.nav {
-    order: 5;
+    order: 4;
     flex: 0 0 auto;
     padding: .3rem .4rem; gap: .25rem;
     background: rgba(5, 8, 15, 0.97); border-top: 1px solid var(--line-strong); border-bottom: 0;
@@ -1429,6 +1443,9 @@ body { display: flex; flex-direction: column; min-height: 0; }
 /* The shell holds the navigation, the command strip and the deck; the workspace views are its
    siblings. Both scroll the same way, so switching between Deck and System does not change the shape
    of the screen. */
+.shell > nav.nav { order: 1; }
+.shell > .deck { order: 2; }
+.shell > .command-bar { order: 3; }
 .shell, .workspace {
   flex: 1 1 auto;
   min-height: 0;
@@ -1539,9 +1556,8 @@ body { display: flex; flex-direction: column; min-height: 0; }
   overflow: hidden;
 }
 .core {
-  width: min(30rem, 100%, calc(var(--core-fit, 24rem) * 1px));
+  width: min(34rem, 100%, calc(var(--core-fit, 24rem) * 1px));
   height: auto;
-  max-height: 100%;
   filter: drop-shadow(0 0 18px rgba(0, 229, 255, 0.25));
 }
 .core-state { font-size: 1.15rem; }
@@ -1678,7 +1694,19 @@ body[data-motion="reduced"] #hud-grid { opacity: 0.25; }
 
 /* The reticle's five layers. Each one is a real element with its own geometry and its own motion,
    driven by the posture variables above rather than by a state-specific rule per layer. */
-#core-reticle { width: min(260px, 70vw); aspect-ratio: 1 / 1; height: auto; transition: filter var(--motion-posture) ease; }
+/* T-46 STEP 1 (2026-11-19): the reticle takes the space its stage actually has, so the Core leads the
+   deck instead of sitting in it at a fixed 260px. --core-fit is measured by the client from the stage's
+   own box (see measureCoreFit); the 24rem fallback is what a page with no client still gets.
+   The square is kept by bounding the WIDTH. An earlier version of this rule also capped max-height,
+   which squashed the 260px-wide box to 144px tall and made the reticle a rectangle - the T-32 walk
+   caught it ("the reticle is square at desktop: Expected 144 Received 260"), which is exactly what
+   that assertion is for. */
+#core-reticle {
+  width: min(34rem, 100%, calc(var(--core-fit, 24rem) * 1px));
+  aspect-ratio: 1 / 1;
+  height: auto;
+  transition: filter var(--motion-posture) ease;
+}
 #core-reticle .reticle-azimuth { transform-origin: 120px 120px; animation: spin var(--reticle-spin-azimuth) linear infinite; }
 #core-reticle .reticle-telemetry { transform-origin: 120px 120px; animation: spin var(--reticle-spin-telemetry) linear infinite reverse; }
 #core-reticle .reticle-ack { opacity: 0; transition: opacity var(--motion-ack) ease; }

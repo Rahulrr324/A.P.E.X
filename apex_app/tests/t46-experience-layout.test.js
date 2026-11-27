@@ -109,14 +109,23 @@ describe('T-46 STEP 1: the shell', () => {
     assert.match(UI_PAGE, /id="sensor-privacy-indicator"[^>]*data-audio="disabled"[^>]*data-camera="disabled"/);
   });
 
-  test('the command bar is the last child of the shell, after the deck', () => {
+  test('the command bar is inside the shell, first in document order and last in paint order', () => {
     const shell = UI_PAGE.indexOf('<div class="shell">');
-    const deck = UI_PAGE.indexOf('<main id="main-content"');
     const bar = UI_PAGE.indexOf('class="command-bar"');
+    const nav = UI_PAGE.indexOf('<nav class="nav"');
+    const deck = UI_PAGE.indexOf('<main id="main-content"');
     const shellClose = UI_PAGE.indexOf('</div>\n<section class="workspace"');
-    assert.ok(shell > -1 && deck > -1 && bar > -1 && shellClose > -1, 'all four markers exist');
-    assert.ok(bar > deck && bar < shellClose, 'the bar follows the deck inside the shell');
-    assert.match(UI_CSS, /\.command-bar \{[^}]*order: 3/, 'the bar is ordered after the band');
+    assert.ok(shell > -1 && bar > -1 && nav > -1 && deck > -1 && shellClose > -1, 'all markers exist');
+    // Document order is focus order. The bar comes first inside the shell so Tab reaches the command
+    // line before the fifteen workspace tabs - the contract T-32 pinned in T-32 and T-46 must not break.
+    assert.ok(shell < bar && bar < nav && nav < deck && deck < shellClose,
+      'the bar precedes the navigation and the deck in the document');
+    assert.ok(UI_PAGE.indexOf('id="chat-text"') < UI_PAGE.indexOf('<nav class="nav"'),
+      'the command input is focusable before the tabs');
+    // Paint order is CSS, and it is the opposite: navigation, then deck, then the docked bar.
+    assert.match(UI_CSS, /\.shell > nav\.nav \{ order: 1; \}/);
+    assert.match(UI_CSS, /\.shell > \.deck \{ order: 2; \}/);
+    assert.match(UI_CSS, /\.shell > \.command-bar \{ order: 3; \}/);
     assert.match(UI_CSS, /\.command-bar \{[^}]*border-top: 1px solid var\(--line\)/,
       'the docked bar draws its own top edge');
   });
@@ -255,8 +264,14 @@ describe('T-46 STEP 1: the measures popover', () => {
 
 describe('T-46 STEP 1: the Core leads', () => {
   test('the Core is sized from the space it has, not from a constant', () => {
-    assert.match(UI_CSS, /\.core \{[^}]*width: min\(30rem, 100%, calc\(var\(--core-fit, 24rem\) \* 1px\)\)/,
-      'the Core takes the smaller of its column and its measured fit');
+    // The reticle's own rule is the one that wins (an id beats a class), so the fit is pinned there -
+    // and it is a WIDTH bound only. An earlier version also capped max-height, which squashed the square
+    // reticle into a 260x144 rectangle; the T-32 walk caught it, and this assertion is what would catch
+    // it again before the hosted run does.
+    assert.match(UI_CSS, /#core-reticle \{[^}]*width: min\(34rem, 100%, calc\(var\(--core-fit, 24rem\) \* 1px\)\)/,
+      'the reticle takes the smaller of its column and its measured fit');
+    assert.equal(/max-height/.test(UI_CSS.slice(UI_CSS.indexOf('#core-reticle {'), UI_CSS.indexOf('}', UI_CSS.indexOf('#core-reticle {')))), false,
+      'the fit never caps the height, so the reticle stays square');
     assert.match(UI_CLIENT, /function measureCoreFit\(\)/);
     assert.match(UI_CLIENT, /setProperty\('--core-fit'/);
   });
