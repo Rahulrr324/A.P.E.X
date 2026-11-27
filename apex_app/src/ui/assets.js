@@ -1377,10 +1377,16 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   }
   body[data-layout="mobile"] .stage {
     order: -2;
-    grid-template-rows: auto auto auto;
+    /* T-46 STEP 1: one column. The stage's three children (the Core, the exec-comms panel and the
+       conversation panel) were flowing into a single row, so the Core shared its row with two panels
+       and started 267px right of the left edge - the rails then began above the Core's bottom and the
+       "Core first" gate failed with [280, 483]. One column, and the Core is the first row. */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
     overflow: visible;
     padding: .4rem;
   }
+  body[data-layout="mobile"] .stage > * { grid-column: 1 / -1; }
   body[data-layout="mobile"] .core { width: min(62vw, 15rem); }
   body[data-layout="mobile"] .core-wrap { order: -2; }
   body[data-layout="mobile"] .rail {
@@ -1569,6 +1575,12 @@ body { display: flex; flex-direction: column; min-height: 0; }
 .core-state { font-size: 1.15rem; }
 .core-caption { max-width: 34rem; text-align: center; margin: 0; }
 .stage > #exec-comms-panel, .stage > #conversation-panel { overflow-y: auto; max-height: 22vh; }
+/* T-46 STEP 1: a line of prose is not a competitor for width. The exec-comms headline and its body run
+   at a readable measure instead of the stage's full width - 713px of single-line sentence was, by
+   measurement, the widest thing in the deck and it outgrew the Core at both desktop viewports.
+   A bounded measure is also the better reading: 70 characters, not 140. */
+#exec-comms-panel, #exec-comms-panel p, #exec-comms-panel .exec-comms-line { max-width: 46ch; }
+#conversation-panel { max-width: 66ch; }
 
 /* The rails are columns of panels beside the Core. Each panel scrolls inside itself, so a rail never
    grows the band and never hides its last row. */

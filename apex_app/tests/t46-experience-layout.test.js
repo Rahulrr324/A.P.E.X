@@ -141,6 +141,11 @@ describe('T-46 STEP 1: the phone layout', () => {
       'the phone has rules of its own rather than one override');
     // The three things the brief names, each a rule rather than an intention.
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.core \{ width: min\(62vw, 15rem\); \}/);
+    // The stage is ONE column on a phone. Without this the Core shared its grid row with the two
+    // side panels, started 267px right of the left edge, and the "Core is first" gate failed with the
+    // rails beginning above the Core's bottom.
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage > \* \{ grid-column: 1 \/ -1; \}/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.rail \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] nav\.nav \{[^}]*order: 5/);
   });
@@ -274,6 +279,14 @@ describe('T-46 STEP 1: the Core leads', () => {
       'the fit never caps the height, so the reticle stays square');
     assert.match(UI_CLIENT, /function measureCoreFit\(\)/);
     assert.match(UI_CLIENT, /setProperty\('--core-fit'/);
+  });
+
+  test('prose runs at a readable measure, so it cannot outgrow the Core', () => {
+    // Measured by the hosted run: #exec-comms-headline was 713px of single-line sentence - wider than
+    // the 544px Core at 1600x900 - and the "Core is the widest element" gate named it. A bounded
+    // measure is both the layout fix and the better line length.
+    assert.match(UI_CSS, /#exec-comms-panel, #exec-comms-panel p, #exec-comms-panel \.exec-comms-line \{ max-width: 46ch; \}/);
+    assert.match(UI_CSS, /#conversation-panel \{ max-width: 66ch; \}/);
   });
 
   test('the stage gives the Core the spare height and the panels their own scroll', () => {
