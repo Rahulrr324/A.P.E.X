@@ -74,6 +74,11 @@ apex_app/reports/screenshots/t36/
 apex_app/reports/t36-cold-boot-unseeded.json
 apex_app/reports/screenshots/t37/
 apex_app/reports/t37-neural-council-router.json
+# T-46 STEP 0 (2026-11-19): the experience walk's evidence has the same treatment. The PNGs and the
+# JSON summary are written by the hosted browser job and uploaded as a workflow artifact; the
+# baseline numbers live in reports/T46_EXPERIENCE_BASELINE.md, which IS source.
+apex_app/artifacts/t46/
+apex_app/reports/t46-experience.json
 playwright-report/
 apex_app/playwright-report/
 blob-report/

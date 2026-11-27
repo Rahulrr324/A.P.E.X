@@ -51,20 +51,37 @@ export const UI_PAGE = `<!doctype html>
       <p class="sub">Command Deck &middot; loopback only &middot; verified state only</p>
     </div>
   </div>
+  <!-- T-46 STEP 1 (2026-11-19): the header is ONE band, 64px tall on a desktop, carrying the five
+       readings an owner glances at and nothing more. The review that started this milestone found the
+       old header wrapping nine badges and eleven controls into several rows, which pushed the Core -
+       the thing the eye is supposed to land on - halfway down the page. Everything that is not one of
+       the five readings is still here, still carrying its id, and moved into #measures-panel below,
+       which Tab reaches. Nothing was deleted: a badge that merely disappeared would have made the
+       header shorter and the product smaller. -->
   <div class="topbar-meta">
     <span id="clock" class="meta mono"></span>
-    <span id="session" class="meta"></span>
+    <span id="session" class="meta" hidden></span>
     <span id="mode" class="badge">Deck</span>
-    <span id="autonomy" class="badge">Autonomy: —</span>
+    <span id="autonomy" class="badge" hidden>Autonomy: —</span>
     <span id="connectivity" class="badge">Connecting</span>
-    <span id="gauge-cpu" class="badge" aria-label="CPU">CPU: —</span>
-    <span id="gauge-mem" class="badge" aria-label="Memory">Mem: —</span>
-    <span id="gauge-storage" class="badge" aria-label="Storage">Storage: —</span>
-    <!-- T-35 Step 1: Part 4's system sensor and privacy indicator. Every value on it is read from the
-         backend: which local sensors are wired, when each last read, and that capture is disabled. -->
-    <span id="sensor-privacy-indicator" class="badge" role="status" aria-live="polite"
-          data-audio="disabled" data-camera="disabled" aria-label="Local sensors and privacy">Sensors: reading…</span>
+    <!-- The compact strip. Each reading is a mirror of an authoritative value the deck already holds:
+         the Core projection, the latch, the Approval Centre's own total and the watchpoint ledger's
+         breached count. They are written by syncHeaderStrip() in the client, from the same render pass
+         that writes the panel the reading came from, so the strip cannot disagree with it. -->
+    <span class="strip-item"><span class="strip-key">CORE</span>
+      <span id="core-state-compact" class="strip-value" role="status" aria-live="polite">—</span></span>
+    <span class="strip-item"><span class="strip-key">LATCH</span>
+      <span id="latch-compact" class="strip-value">—</span></span>
+    <span class="strip-item"><span class="strip-key">PENDING</span>
+      <span id="approvals-compact" class="strip-value">—</span></span>
+    <span class="strip-item"><span class="strip-key">BREACHED</span>
+      <span id="watchpoints-compact" class="strip-value">—</span></span>
   </div>
+  <!-- T-46 STEP 1: four controls stay on the band. Command and Help are how the owner finds anything
+       else, the overlay toggle is the one posture a live watch uses, and the mode select is the one
+       control whose current value is itself a reading. The rest - motion, contrast, step-down, New
+       session, Quick boot, Run Boot Sequence, and the six system badges - are in #measures-panel, which
+       the Measures button opens and Escape closes. Every one of them keeps its id. -->
   <div class="topbar-actions">
     <!-- T-32 Step 1: the command dispatch is reachable from the top bar, so Tab reaches it before the
          workspace tabs, and Ctrl+K or / opens it from anywhere. -->
@@ -84,30 +101,69 @@ export const UI_PAGE = `<!doctype html>
       <option value="synthesis">Synthesis</option>
       <option value="quiet">Quiet</option>
     </select>
-    <button id="motion-toggle" type="button" class="quiet small" aria-pressed="false">Motion: full</button>
-    <button id="contrast-toggle" type="button" class="quiet small" aria-pressed="false">Contrast: standard</button>
-    <label class="visually-hidden" for="stepdown-select">Visual step-down stage</label>
-    <select id="stepdown-select" class="small" aria-label="Visual step-down stage">
-      <option value="auto">Step-down: auto</option>
-      <option value="0">Stage 0 · nominal</option>
-      <option value="1">Stage 1 · drop bloom</option>
-      <option value="2">Stage 2 · drop particles</option>
-      <option value="3">Stage 3 · drop parallax</option>
-      <option value="4">Stage 4 · drop ambient motion</option>
-      <option value="5">Stage 5 · flat mode</option>
-    </select>
-    <button id="new-session" type="button" class="quiet small">New session</button>
-    <button id="quick-boot" type="button" class="quiet small">Quick boot</button>
-    <!-- T-36 Step 2: the owner can replay the cold-start sequence on a machine that is already
-         set up. It is the same governed bootstrap, so it refreshes rather than re-creates. -->
-    <button id="boot-sequence-run" type="button" class="quiet small">Run Boot Sequence</button>
     <!-- T-45 Package 3: the compact tactical overlay. A posture, not a mode: a mode changes palette, motion
          and contrast; this changes what the deck puts on screen, and the strip it reveals is the five
          numbers an owner watching a live system needs without the full chrome. -->
     <button id="btn-hud-overlay-toggle" type="button" class="quiet small" aria-pressed="false"
             aria-controls="tactical-overlay-strip" title="Compact tactical overlay: the live core state, mode, latch and counts on one strip">OVERLAY: OFF</button>
+    <!-- T-46 STEP 1: the popover. It is a panel, not a modal: it never traps focus, Escape closes it and
+         returns focus to this button, and everything it carries is also reachable from the System view. -->
+    <button id="measures-trigger" type="button" class="hud-chip" aria-expanded="false"
+            aria-controls="measures-panel" aria-keyshortcuts="Escape">
+      Measures
+    </button>
   </div>
 </header>
+
+<!-- T-46 STEP 1 (2026-11-19): the measures popover. It is where the header's other readings live now:
+     the six system badges, and the six controls that are configuration rather than status. It is a
+     panel rather than a modal - it does not take focus when it opens, it does not trap it while open,
+     and Escape closes it and puts focus back on the button that opened it. Every element keeps the id
+     it had in the header, so the client, every test and every reader of the ids is unaffected: what
+     changed is WHERE the reading is drawn, not what it says. -->
+<div id="measures-panel" class="measures-panel" role="group" aria-label="System measures and display settings" hidden>
+  <p class="measures-title">Measures <span class="measures-hint">readings the header has no room for · Esc closes</span></p>
+  <div class="measures-group">
+    <p class="measures-key">System</p>
+    <div class="measures-row">
+      <span id="gauge-cpu" class="badge" aria-label="CPU">CPU: —</span>
+      <span id="gauge-mem" class="badge" aria-label="Memory">Mem: —</span>
+      <span id="gauge-storage" class="badge" aria-label="Storage">Storage: —</span>
+      <!-- T-35 Step 1: Part 4's system sensor and privacy indicator. Every value on it is read from the
+           backend: which local sensors are wired, when each last read, and that capture is disabled. -->
+      <span id="sensor-privacy-indicator" class="badge" role="status" aria-live="polite"
+            data-audio="disabled" data-camera="disabled" aria-label="Local sensors and privacy">Sensors: reading…</span>
+      <span id="stepdown-state-compact" class="badge" aria-label="Visual step-down stage">Step-down: —</span>
+    </div>
+  </div>
+  <div class="measures-group">
+    <p class="measures-key">Display</p>
+    <div class="measures-row">
+      <button id="motion-toggle" type="button" class="quiet small" aria-pressed="false">Motion: full</button>
+      <button id="contrast-toggle" type="button" class="quiet small" aria-pressed="false">Contrast: standard</button>
+      <label class="visually-hidden" for="stepdown-select">Visual step-down stage</label>
+      <select id="stepdown-select" class="small" aria-label="Visual step-down stage">
+        <option value="auto">Step-down: auto</option>
+        <option value="0">Stage 0 · nominal</option>
+        <option value="1">Stage 1 · drop bloom</option>
+        <option value="2">Stage 2 · drop particles</option>
+        <option value="3">Stage 3 · drop parallax</option>
+        <option value="4">Stage 4 · drop ambient motion</option>
+        <option value="5">Stage 5 · flat mode</option>
+      </select>
+    </div>
+  </div>
+  <div class="measures-group">
+    <p class="measures-key">Session</p>
+    <div class="measures-row">
+      <button id="new-session" type="button" class="quiet small">New session</button>
+      <button id="quick-boot" type="button" class="quiet small">Quick boot</button>
+      <!-- T-36 Step 2: the owner can replay the cold-start sequence on a machine that is already
+           set up. It is the same governed bootstrap, so it refreshes rather than re-creates. -->
+      <button id="boot-sequence-run" type="button" class="quiet small">Run Boot Sequence</button>
+    </div>
+  </div>
+</div>
 
 <!-- T-45 Package 3: the compact tactical overlay strip. It is outside every view on purpose - it is the one
      surface that must be visible whichever workspace the owner is looking at, and a strip inside a view
@@ -123,40 +179,14 @@ export const UI_PAGE = `<!doctype html>
 <!-- T-32 Step 1: the command dispatch lives in its own bar between the top bar and the workspace
      tabs. One input, one place, and Tab reaches it before the tabs because that is where it is in
      the document rather than because a tabindex was raised above its neighbours. -->
-<section class="command-bar" data-depth-plane="z1" aria-label="Command dispatch">
-  <!-- T-40 Step 3: what the bar accepts, read from the router at the moment it is opened. Nothing in this
-       panel is written by hand: every row is a route the router will actually take, with the live ECP
-       decision for the capability behind it. It is not a modal and traps nothing. -->
-  <div id="hud-command-help" class="panel hud-help" data-depth-plane="z3" role="region"
-       aria-labelledby="hud-command-help-title" hidden>
-    <div class="row">
-      <h3 id="hud-command-help-title">Command reference</h3>
-      <button id="hud-help-close" type="button" class="quiet small">Close</button>
-    </div>
-    <p id="hud-command-help-state" class="meta" role="status" aria-live="polite">Reading the command catalogue…</p>
-    <table class="hud-help-table">
-      <caption class="visually-hidden">Commands the command bar accepts</caption>
-      <thead><tr><th scope="col">Type</th><th scope="col">Route</th><th scope="col">Governance</th></tr></thead>
-      <tbody id="hud-command-help-rows"></tbody>
-    </table>
-    <h4>Keys</h4>
-    <ul id="hud-command-help-keys" class="work"></ul>
-    <p class="meta">Clicking a command fills the bar with it. Pressing Escape closes this panel and leaves whatever you had typed in place.</p>
-  </div>
-  <form id="chat-form">
-    <label for="chat-text" class="visually-hidden">Message</label>
-    <textarea id="chat-text" rows="2" maxlength="4000" placeholder="Command APEX, or ask for a verified read"></textarea>
-    <div class="row">
-      <button id="send" type="submit">Send</button>
-      <span id="activity" class="meta" role="status"></span>
-    </div>
-    <!-- T-37 Step 3: the dispatch receipt. The router answers with a structured record - route kind,
-         capability, ECP decision, whether it verified - and this renders that record. It never
-         guesses: a refused line shows the refusal, and an unmatched line says it went to the
-         pipeline rather than pretending the router understood it. -->
-    <dl id="dispatch-receipt" class="facts" hidden></dl>
-  </form>
-</section>
+
+<!-- T-46 STEP 1 (2026-11-19): the deck is a fixed shell now. <body> is one viewport tall and does not
+     scroll; the header and the command bar are docked; the workspace band between them is the only
+     scroll container, and every panel inside it scrolls inside itself. That is what makes the command
+     bar reachable without scrolling past every panel, which is the review's second finding. Nothing is
+     hidden to achieve it: every panel is still in the band, every panel can still be scrolled to its
+     last row, and every view is still reachable from this navigation and Ctrl+K. -->
+<div class="shell">
 <nav class="nav" aria-label="Primary">
   <button type="button" data-view="deck" class="nav-item active" aria-current="page">Deck</button>
   <button type="button" data-view="conversations" class="nav-item">Conversations</button>
@@ -284,6 +314,45 @@ export const UI_PAGE = `<!doctype html>
     
   </aside>
 </main>
+<!-- T-46 STEP 1: the command bar is the last child of the shell, docked under the deck. It used to sit
+     before the shell in document order, which is why the owner scrolled past every panel to reach it;
+     it is inside the shell now, ordered after the deck, and the band above it is the only thing that
+     scrolls. The order in the DOM is also the order Tab visits, so the bar still follows the deck. -->
+<section class="command-bar" data-depth-plane="z1" aria-label="Command dispatch">
+  <!-- T-40 Step 3: what the bar accepts, read from the router at the moment it is opened. Nothing in this
+       panel is written by hand: every row is a route the router will actually take, with the live ECP
+       decision for the capability behind it. It is not a modal and traps nothing. -->
+  <div id="hud-command-help" class="panel hud-help" data-depth-plane="z3" role="region"
+       aria-labelledby="hud-command-help-title" hidden>
+    <div class="row">
+      <h3 id="hud-command-help-title">Command reference</h3>
+      <button id="hud-help-close" type="button" class="quiet small">Close</button>
+    </div>
+    <p id="hud-command-help-state" class="meta" role="status" aria-live="polite">Reading the command catalogue…</p>
+    <table class="hud-help-table">
+      <caption class="visually-hidden">Commands the command bar accepts</caption>
+      <thead><tr><th scope="col">Type</th><th scope="col">Route</th><th scope="col">Governance</th></tr></thead>
+      <tbody id="hud-command-help-rows"></tbody>
+    </table>
+    <h4>Keys</h4>
+    <ul id="hud-command-help-keys" class="work"></ul>
+    <p class="meta">Clicking a command fills the bar with it. Pressing Escape closes this panel and leaves whatever you had typed in place.</p>
+  </div>
+  <form id="chat-form">
+    <label for="chat-text" class="visually-hidden">Message</label>
+    <textarea id="chat-text" rows="2" maxlength="4000" placeholder="Command APEX, or ask for a verified read"></textarea>
+    <div class="row">
+      <button id="send" type="submit">Send</button>
+      <span id="activity" class="meta" role="status"></span>
+    </div>
+    <!-- T-37 Step 3: the dispatch receipt. The router answers with a structured record - route kind,
+         capability, ECP decision, whether it verified - and this renders that record. It never
+         guesses: a refused line shows the refusal, and an unmatched line says it went to the
+         pipeline rather than pretending the router understood it. -->
+    <dl id="dispatch-receipt" class="facts" hidden></dl>
+  </form>
+</section>
+</div>
 <section class="workspace" id="workspace">
   <section class="view" data-view="conversations" data-depth-plane="z3">
     <h2>Conversations</h2>
@@ -1273,8 +1342,245 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   .diff-table th:nth-child(1), .diff-table td:nth-child(1),
   .diff-table th:nth-child(2), .diff-table td:nth-child(2) { width: 2.4rem; }
   .telemetry-table th:nth-child(2), .telemetry-table td:nth-child(2) { width: 3.4rem; }
+  /* T-46 STEP 1: the phone. A layout of its own rather than the desktop one narrowed: the Core is the
+     first thing in the deck, the cards stack under it full width, the command bar is docked to the
+     bottom edge, and the navigation becomes a bottom bar of its own. */
+  body[data-layout="mobile"] .topbar { height: 56px; min-height: 56px; max-height: 56px; padding: 0 .6rem; grid-template-columns: auto 1fr auto; gap: .4rem; }
+  body[data-layout="mobile"] .topbar h1 { font-size: .9rem; letter-spacing: .16em; }
+  body[data-layout="mobile"] .topbar-meta { gap: .25rem; }
+  body[data-layout="mobile"] .strip-item { padding: .05rem .28rem; }
+  body[data-layout="mobile"] .strip-key { display: none; }
+  body[data-layout="mobile"] .topbar .badge, body[data-layout="mobile"] .topbar .meta { font-size: .62rem; }
+  body[data-layout="mobile"] #mode { display: none; }
+  body[data-layout="mobile"] .topbar-actions .quiet.small { display: none; }
+  body[data-layout="mobile"] .shell, body[data-layout="mobile"] .workspace { flex-direction: column; }
+  body[data-layout="mobile"] .deck {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    gap: .5rem;
+    padding: .5rem .55rem .6rem;
+    overflow-y: auto;
+  }
+  body[data-layout="mobile"] .stage {
+    order: -2;
+    grid-template-rows: auto auto auto;
+    overflow: visible;
+    padding: .4rem;
+  }
+  body[data-layout="mobile"] .core { width: min(62vw, 15rem); }
+  body[data-layout="mobile"] .core-wrap { order: -2; }
+  body[data-layout="mobile"] .rail {
+    order: 1;
+    grid-auto-rows: auto;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    overflow: visible;
+  }
+  body[data-layout="mobile"] .rail .panel { overflow: visible; }
+  body[data-layout="mobile"] .stage > #exec-comms-panel,
+  body[data-layout="mobile"] .stage > #conversation-panel { max-height: none; }
+  /* The command bar is the last thing in the shell and stays on the bottom edge. */
+  body[data-layout="mobile"] .command-bar { order: 4; padding: .35rem .55rem; }
+  body[data-layout="mobile"] .command-bar #chat-text { min-height: 1.9rem; }
+  /* The navigation is a bottom bar: one row, its own scroll for the fifteen workspaces. */
+  body[data-layout="mobile"] .deck { order: 1; }
+  body[data-layout="mobile"] nav.nav { order: 5; }
+  /* The measures popover is a bottom sheet on a phone, because a 34rem panel at the top right of a
+     390px screen is a panel with its content off the edge. */
+  body[data-layout="mobile"] .measures-panel {
+    left: .4rem; right: .4rem; top: auto; bottom: .4rem;
+    width: auto; max-height: 70vh; overflow-y: auto;
+  }
+  /* The bar and the navigation are the last two children of the shell, so they sit on the bottom edge
+     of a shell that is exactly one viewport tall - without position:fixed. That matters: a fixed bar
+     paints over whatever is under it, and "fits the viewport" would then be true and a lie at once.
+     Everything is in flow, so the deck's own scroll region ends at the bar rather than under it. */
+  body[data-layout="mobile"] nav.nav {
+    order: 5;
+    flex: 0 0 auto;
+    padding: .3rem .4rem; gap: .25rem;
+    background: rgba(5, 8, 15, 0.97); border-top: 1px solid var(--line-strong); border-bottom: 0;
+  }
+  body[data-layout="mobile"] nav.nav .nav-item { font-size: .68rem; padding: .3rem .45rem; }
+  body[data-layout="mobile"] .command-bar { order: 4; }
 }
 .panel pre, .item pre { max-width: 100%; overflow-x: auto; }
+/* ============================================================================================
+   T-46 STEP 1 (2026-11-19): the shell, the one-band header, and the deck that fits a viewport.
+   --------------------------------------------------------------------------------------------
+   The review that opened this milestone found three things by looking at the product:
+     * the header wrapped into several rows, because nine badges and eleven controls lived in it;
+     * the Core sat in the middle column of a three-column grid at a fixed 260px, so it was neither
+       centred nor the largest thing on the screen;
+     * the command bar sat AFTER the deck in document order, so typing meant scrolling past every
+       panel.
+   The fix is a shell: the document does not scroll, the header and the command bar are docked, and
+   the workspace band between them is the one scroll container. Nothing is hidden to make it fit -
+   panels are required to scroll INSIDE themselves by the spec, and a panel that clipped its content
+   with no way to reach it is a measured failure: the panel rules never set overflow:hidden.
+   ============================================================================================ */
+
+/* The document is exactly one viewport tall and is not a scroll container. This is the one place the
+   milestone uses overflow:hidden, and it is safe because the band below is a real scroll region: no
+   content is unreachable, it is one scroll inside a different element. */
+html, body { height: 100%; overflow: hidden; }
+body { display: flex; flex-direction: column; min-height: 0; }
+
+/* The shell holds the navigation, the command strip and the deck; the workspace views are its
+   siblings. Both scroll the same way, so switching between Deck and System does not change the shape
+   of the screen. */
+.shell, .workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ---------------------------------------------------------------- the header: one 64px band --- */
+.topbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: .75rem;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 64px;
+  min-height: 64px;
+  max-height: 64px;
+  padding: 0 1rem 0 1.1rem;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+  background: rgba(5, 8, 15, 0.86);
+  backdrop-filter: blur(14px);
+}
+.topbar h1 { font-size: 1.05rem; letter-spacing: .22em; line-height: 1; }
+.topbar .sub { display: none; }
+.brand { gap: .6rem; }
+.brand-mark { width: 1.9rem; height: 1.9rem; font-size: .95rem; }
+.topbar-meta, .topbar-actions { flex-wrap: nowrap; gap: .4rem; min-width: 0; }
+.topbar-meta { justify-content: center; }
+.topbar-actions { justify-content: flex-end; }
+.topbar .meta, .topbar .badge { font-size: .7rem; padding: .1rem .45rem; white-space: nowrap; }
+.topbar select.small, .topbar .quiet.small, .topbar .hud-chip { font-size: .7rem; padding: .18rem .5rem; }
+.topbar .hud-chip kbd { display: none; }
+
+/* The compact strip: five readings, each a key and a value, in one line. The values are written by
+   syncHeaderStrip() from the same render pass that writes the panel each number came from. */
+.strip-item {
+  display: inline-flex; gap: .3rem; align-items: baseline; white-space: nowrap;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: .1rem .4rem; background: rgba(0, 0, 0, .28);
+}
+.strip-key { font-family: var(--font-mono); font-size: .62rem; letter-spacing: .09em; color: var(--muted); }
+.strip-value { font-family: var(--font-mono); font-size: .72rem; color: var(--text); font-variant-numeric: tabular-nums; }
+.strip-value[data-core="idle"] { color: var(--green); }
+.strip-value[data-core="lockdown"] { color: var(--armor-red-text); }
+.strip-value[data-core="degraded"], .strip-value[data-core="uncertain"] { color: var(--gold); }
+.strip-value[data-latch="active"] { color: var(--armor-red-text); }
+.strip-value[data-count="some"] { color: var(--gold); }
+
+/* ---------------------------------------------------------------- the measures popover --------- */
+.measures-panel {
+  position: fixed;
+  top: 68px;
+  right: 1rem;
+  z-index: 45;
+  width: min(34rem, calc(100vw - 2rem));
+  display: grid;
+  gap: .6rem;
+  padding: .8rem .9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: rgba(8, 15, 27, 0.97);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+.measures-panel[hidden] { display: none; }
+.measures-title { margin: 0; font-family: var(--font-display); font-size: .82rem; letter-spacing: .14em; text-transform: uppercase; color: var(--text); }
+.measures-hint { font-family: var(--font-body); font-size: .68rem; letter-spacing: 0; text-transform: none; color: var(--muted); margin-left: .5rem; }
+.measures-group { display: grid; gap: .3rem; }
+.measures-key { margin: 0; font-family: var(--font-mono); font-size: .6rem; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; }
+.measures-row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+
+/* ---------------------------------------------------------------- the deck ---------------------------------- */
+.deck {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.9fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: .65rem;
+  padding: .65rem .9rem .7rem;
+  align-items: stretch;
+  min-height: 0;
+  flex: 1 1 auto;
+  /* The deck fills the band exactly. A deck taller than the band scrolls the band, which the spec
+     measures: the deck itself must not exceed one viewport. */
+  overflow: hidden;
+}
+.stage {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: .5rem;
+  min-height: 0;
+  min-width: 0;
+  padding: .5rem;
+  overflow: hidden;
+}
+/* The Core leads. It takes the stage's spare vertical space, and it is bounded by the SHORTER of the
+   two dimensions the stage offers, so on a laptop it cannot push the panels below the fold. */
+.core-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .35rem;
+  padding: .2rem;
+  min-height: 0;
+  overflow: hidden;
+}
+.core {
+  width: min(30rem, 100%, calc(var(--core-fit, 24rem) * 1px));
+  height: auto;
+  max-height: 100%;
+  filter: drop-shadow(0 0 18px rgba(0, 229, 255, 0.25));
+}
+.core-state { font-size: 1.15rem; }
+.core-caption { max-width: 34rem; text-align: center; margin: 0; }
+.stage > #exec-comms-panel, .stage > #conversation-panel { overflow-y: auto; max-height: 22vh; }
+
+/* The rails are columns of panels beside the Core. Each panel scrolls inside itself, so a rail never
+   grows the band and never hides its last row. */
+.rail {
+  display: grid;
+  grid-auto-rows: minmax(0, 1fr);
+  gap: .6rem;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  align-content: stretch;
+  overflow: hidden;
+}
+.rail .panel { overflow-y: auto; min-height: 0; }
+.deck .panel { padding: .6rem .7rem; }
+.deck .panel h2 { font-size: .82rem; }
+.deck .panel li { font-size: .74rem; }
+
+/* ---------------------------------------------------------------- the command bar, docked ----- */
+.command-bar {
+  flex: 0 0 auto;
+  order: 3;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: .5rem;
+  padding: .4rem .9rem;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+  background: rgba(5, 8, 15, 0.92);
+  backdrop-filter: blur(14px);
+}
+.command-bar #chat-text { min-height: 2.1rem; max-height: 4.5rem; }
+.command-bar #activity, .command-bar #dispatch-receipt { font-size: .7rem; }
+
 /* Presentation modes: palette emphasis only. They never change authorization or state. */
 body[data-mode="tactical"] { --cyan: #2fd0ff; --gold: #ff7a00; --line-strong: rgba(47, 208, 255, 0.5); }
 body[data-mode="tactical"] .core-ring.mid { animation-duration: 7s; }
@@ -1453,15 +1759,30 @@ body[data-motion="reduced"] .core, body[data-motion="reduced"] .core-halo { anim
 
 /* Responsive: 1600x900 and 1280x720 tighten the three-column deck; 390x844 is one column. */
 @media (max-width: 1600px) {
-  .deck { grid-template-columns: minmax(16rem, 1fr) minmax(20rem, 1.3fr) minmax(16rem, 1fr); }
+  /* T-46 STEP 1: the columns are proportional, not minimum-width. A minmax(16rem, ...) column on a
+     1600px deck is 256px of rail whatever the Core needs; the Core's own fit rule does the sizing. */
+  .deck { grid-template-columns: minmax(0, 1fr) minmax(0, 1.9fr) minmax(0, 1fr); }
 }
 @media (max-width: 1280px) {
-  .deck { grid-template-columns: minmax(15rem, 1fr) minmax(18rem, 1.2fr) minmax(15rem, 1fr); gap: .75rem; padding: .85rem 1rem 6rem; }
-  .topbar-meta { row-gap: .25rem; }
+  /* T-46 STEP 1: no bottom padding and no minimum rail widths. The 6rem pad existed to clear the
+     command bar when the bar was a static block at the end of the document; the bar is docked now, so
+     the pad was 96px of empty page below the last panel and one of the reasons the deck scrolled. */
+  .deck { gap: .55rem; padding: .55rem .7rem .6rem; }
+  .topbar { gap: .5rem; padding: 0 .7rem 0 .8rem; }
+  .topbar .meta, .topbar .badge { font-size: .66rem; padding: .1rem .38rem; }
+  .strip-key { font-size: .58rem; }
+  .strip-value { font-size: .68rem; }
 }
 @media (max-width: 1100px) {
-  .deck { grid-template-columns: 1fr; }
+  /* T-46 STEP 1: the intermediate band. The deck still does not scroll the document - the band
+     scrolls - but its panels stack, so nothing is 110px wide. The Core keeps its place at the top. */
+  .deck { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; overflow-y: auto; }
   .core-wrap { order: -1; }
+  .stream, .rail { grid-auto-rows: auto; overflow: visible; }
+  .rail { grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
+  .rail .panel { overflow: visible; }
+  .stage { overflow: visible; }
+  .stage > #exec-comms-panel, .stage > #conversation-panel { max-height: none; }
 }
 @media (max-width: 720px) {
   .topbar { grid-template-columns: 1fr; }
@@ -1469,10 +1790,11 @@ body[data-motion="reduced"] .core, body[data-motion="reduced"] .core-halo { anim
   .workspace { padding: 0 .75rem 2rem; }
 }
 @media (max-width: 480px) {
-  .deck { padding: .75rem .6rem 4rem; }
-  .topbar { padding: .6rem .75rem; }
-  h1 { font-size: 1.1rem; }
-  .topbar-meta { width: 100%; }
+  /* T-46 STEP 1: the old 4rem bottom pad and the full-width meta row are gone with the static
+     command bar. The phone layout is declared once, at 720px, by body[data-layout="mobile"]. */
+  body:not([data-layout="mobile"]) .deck { padding: .6rem .5rem; }
+  body:not([data-layout="mobile"]) .topbar { padding: 0 .5rem; }
+  h1 { font-size: 1.05rem; }
 }
 .boot {
   position: fixed; inset: 0; z-index: 50; background: rgba(5,8,15,0.96);
@@ -2042,6 +2364,14 @@ ${CLIENT_CONTRACT_SOURCE}\nconst els = {
   docSearchText: document.getElementById('doc-search'),
   banner: document.getElementById('banner'),
   coreState: document.getElementById('core-state'),
+  // T-46 STEP 1: the header's compact strip, the measures popover, and the Core's own sizing box.
+  coreStateCompact: document.getElementById('core-state-compact'),
+  latchCompact: document.getElementById('latch-compact'),
+  approvalsCompact: document.getElementById('approvals-compact'),
+  watchpointsCompact: document.getElementById('watchpoints-compact'),
+  measuresTrigger: document.getElementById('measures-trigger'),
+  measuresPanel: document.getElementById('measures-panel'),
+  stepdownCompact: document.getElementById('stepdown-state-compact'),
   coreCaption: document.getElementById('core-caption'),
   clock: document.getElementById('clock'),
   boot: document.getElementById('boot'),
@@ -2103,6 +2433,9 @@ const state = {
   safetyLatchFresh: false,
   safetyMutationInFlight: false,
   reducedMotion: false,
+  // T-46 STEP 1: whether the measures popover is open. Held here rather than read back from the DOM,
+  // for the reason measuresOpen() gives.
+  measuresOpen: false,
   mode: 'classic',
   // T-35 Step 2: the enrolled devices the handoff form offers, and the ledger last read.
   handoffDevices: [],
@@ -2312,11 +2645,34 @@ function applyCoreProjection(reason = '') {
     state.core = 'dormant';
     document.body.dataset.coreState = 'dormant';
     renderSafety();
+    // A dormant Core is a reading too: the strip says Dormant while the machine is waking.
+    if (typeof syncHeaderStripSafely === 'function') syncHeaderStripSafely();
     return 'dormant';
   }
   setCore(next, coreCaptionFor(next, reason));
   renderSafety();
+  // T-46 STEP 1: the header strip mirrors this projection in this pass, so the two cannot disagree.
+  // The typeof guard is the same convention the tactical strip uses: applyCoreProjection is exercised
+  // on its own, as a slice of this source, by the browser-free projection tests, and a slice that
+  // stops before the wrapper is defined must still project a Core rather than throw.
+  if (typeof syncHeaderStripSafely === 'function') syncHeaderStripSafely();
   return next;
+}
+
+// The strip is a glance; the projection is the product. A strip that cannot paint is a missing
+// reading, never a state change that did not happen - and this runs from the boot sequence's own
+// dismiss path, where a throw would leave the overlay up over a Core that claims to be awake.
+function syncHeaderStripSafely() {
+  // The typeof guard is not decoration: the projection is exercised on its own, as a slice of this
+  // source, by the browser-free projection tests, and a slice that stops before this file's later
+  // definitions must still project a Core rather than throw. It is the same guard the tactical strip
+  // has used since T-45 for the same reason.
+  if (typeof syncHeaderStrip !== 'function') return;
+  try {
+    syncHeaderStrip();
+  } catch (error) {
+    // Nothing to do: the next render pass tries again.
+  }
 }
 
 function renderTurns(turns, emptyMessage = 'No turns are recorded in this session.') {
@@ -2798,6 +3154,7 @@ function renderApprovalCentre(result) {
   // nothing rather than zero: a strip that showed 0 while the read was failing would be a false all-clear.
   state.pendingApprovalCount = value.status === 'partial' || missing.length > 0 ? null : total;
   if (typeof syncOverlayStrip === 'function') syncOverlayStrip();
+  if (typeof syncHeaderStrip === 'function') syncHeaderStrip();
   if (value.status === 'partial' || missing.length > 0) {
     setWorkspaceStatus(els.approvalState, 'Partial owner read; unavailable: ' + (missing.join(', ') || 'one or more stores')
       + '. Showing ' + shown + ' of ' + total + ' known request(s).', 'partial');
@@ -6830,6 +7187,13 @@ function applyStepDown(stepDown) {
   body.dataset.hudFlat = layers.backdropBlur === 'dropped' || layers.panelTransitions === 'dropped' ? 'true' : 'false';
   state.stepDown = stepDown;
   if (els.stepDownSelect) els.stepDownSelect.value = override === 'auto' ? 'auto' : String(override);
+  // T-46 STEP 1: the measures popover carries the same rung as the deck's own line, written here from
+  // the same chosen stage rather than derived again.
+  if (els.stepdownCompact) {
+    els.stepdownCompact.textContent = 'Step-down: ' + chosen.stage + ' · ' + chosen.name
+      + (override === 'auto' ? ' (auto)' : '');
+    els.stepdownCompact.dataset.stage = String(chosen.stage);
+  }
   if (els.stepDownState) {
     els.stepDownState.dataset.stage = String(chosen.stage);
     els.stepDownState.dataset.source = body.dataset.stepdownSource;
@@ -7379,6 +7743,7 @@ async function refreshPlaybooks() {
     state.playbooks = view;
     renderPlaybooks(view);
     syncOverlayStrip();
+    syncHeaderStrip();
   } catch (error) {
     if (els.pbStatus) els.pbStatus.textContent = 'The playbooks could not be read: ' + String(error?.message || error);
   }
@@ -7507,6 +7872,8 @@ async function refreshWatchpoints() {
     state.watchpoints = view;
     renderWatchpoints(view);
     syncOverlayStrip();
+    // T-46 STEP 1: the header's BREACHED reading comes from this same ledger read.
+    syncHeaderStrip();
   } catch (error) {
     if (els.wpStatus) els.wpStatus.textContent = 'The watchpoints could not be read: ' + String(error?.message || error);
   }
@@ -7582,6 +7949,118 @@ function syncOverlayStrip() {
     els.overlayApprovals.textContent = pending === null || pending === undefined ? '—' : String(pending);
     els.overlayApprovals.dataset.approvals = pending === null || pending === undefined ? 'unknown' : 'known';
   }
+}
+
+// T-46 STEP 1 (2026-11-19): the header's compact strip.
+//
+// Every value here is one the deck already holds: state.core is the projection the Core itself
+// renders, the latch is the same three-reader agreement the tactical strip uses, the pending count is
+// the one the Approval Centre wrote from its own read, and the breached count is the watchpoint
+// ledger's own summary. The strip never fetches, for the reason the tactical strip never fetches: a
+// surface visible on every screen that added a request to every screen would make the glance cost more
+// than the panel. The writers call this from the same pass that wrote the panel, so the two cannot
+// disagree.
+function syncHeaderStrip() {
+  if (els.coreStateCompact) {
+    const core = state.core ?? 'degraded';
+    const definition = CORE_STATE_DEFINITIONS.find((entry) => entry.id === core) ?? null;
+    els.coreStateCompact.textContent = definition ? definition.label : 'Degraded';
+    els.coreStateCompact.dataset.core = String(core);
+  }
+  if (els.latchCompact) {
+    const latched = state.core === 'lockdown'
+      || state.standingOrders?.lockdownActive === true
+      || state.playbooks?.lockdownActive === true
+      || state.watchpoints?.lockdownActive === true;
+    els.latchCompact.textContent = latched ? 'ENGAGED' : 'OPEN';
+    els.latchCompact.dataset.latch = latched ? 'active' : 'open';
+  }
+  if (els.approvalsCompact) {
+    const pending = state.pendingApprovalCount;
+    // A dash, never a zero: an unreadable Approval Centre is not an all-clear, and the strip must not
+    // say "0 pending" while the read behind it is failing.
+    els.approvalsCompact.textContent = pending === null || pending === undefined ? '—' : String(pending);
+    els.approvalsCompact.dataset.count = pending === null || pending === undefined
+      ? 'unknown' : (Number(pending) > 0 ? 'some' : 'none');
+  }
+  if (els.watchpointsCompact) {
+    const summary = state.watchpoints?.summary ?? null;
+    const breached = summary ? (summary.breachedCount ?? 0) : null;
+    els.watchpointsCompact.textContent = breached === null ? '—' : String(breached);
+    els.watchpointsCompact.dataset.count = breached === null ? 'unknown' : (Number(breached) > 0 ? 'some' : 'none');
+  }
+}
+
+// The phone layout is a decision of the client, not of the stylesheet alone: data-layout on the body
+// is what the spec measures and what the mobile rules key on. matchMedia is used rather than a resize
+// arithmetic so the same breakpoint the stylesheet uses decides it, and a browser without matchMedia
+// simply keeps the desktop layout - a smaller failure than a page that throws on load.
+function applyLayout() {
+  let mobile = false;
+  try {
+    mobile = typeof window.matchMedia === 'function'
+      && window.matchMedia('(max-width: 720px)').matches === true;
+  } catch {
+    mobile = false;
+  }
+  document.body.dataset.layout = mobile ? 'mobile' : 'desktop';
+  measureCoreFit();
+}
+
+// The Core is sized by the space it actually has, not by a constant. The stage offers a column of a
+// known width and a band of a known height; the Core takes the smaller of the two, less the room the
+// caption and the state line need. This runs on load and on resize, and it only ever writes a CSS
+// custom property, so no layout is forced by reading the wrong box.
+function measureCoreFit() {
+  if (els.coreWrap == null && !document.querySelector('.core-wrap')) return;
+  const wrap = document.querySelector('.core-wrap');
+  if (!wrap) return;
+  const box = wrap.getBoundingClientRect();
+  if (box.width === 0 || box.height === 0) return;
+  // The state line and the caption are measured rather than assumed, because both wrap differently at
+  // different widths.
+  const reserved = (document.getElementById('core-state')?.getBoundingClientRect().height ?? 0)
+    + (document.getElementById('core-caption')?.getBoundingClientRect().height ?? 0)
+    + 18;
+  const fit = Math.max(96, Math.min(box.width, Math.max(96, box.height - reserved)));
+  document.body.style.setProperty('--core-fit', String(Math.round(fit)));
+}
+
+// T-46 STEP 1: the measures popover. A panel, not a modal: it does not take focus on open, it does not
+// trap it, Escape closes it and returns focus to the button that opened it. Opening it is presentation
+// only - nothing about the measures is a setting, and nothing here authorizes anything.
+function measuresOpen() {
+  // The client's own record of what it opened, not the DOM's. Reading hidden back would mean the
+  // client inferring its state from the markup it just wrote: on a document whose attributes are not
+  // parsed into properties (a stand-in, a test harness) every panel looks open, and Escape would then
+  // spend its one dismissal on a popover nobody opened.
+  return state.measuresOpen === true;
+}
+
+function openMeasures({ focus = false } = {}) {
+  if (!els.measuresPanel) return;
+  els.measuresPanel.hidden = false;
+  state.measuresOpen = true;
+  if (els.measuresTrigger) els.measuresTrigger.setAttribute('aria-expanded', 'true');
+  if (focus) {
+    const first = els.measuresPanel.querySelector('button:not([disabled]), select:not([disabled])');
+    if (first) first.focus();
+  }
+}
+
+function closeMeasures({ returnFocus = false } = {}) {
+  if (!els.measuresPanel || els.measuresPanel.hidden === true) return;
+  els.measuresPanel.hidden = true;
+  state.measuresOpen = false;
+  if (els.measuresTrigger) {
+    els.measuresTrigger.setAttribute('aria-expanded', 'false');
+    if (returnFocus) els.measuresTrigger.focus();
+  }
+}
+
+function toggleMeasures() {
+  if (measuresOpen()) closeMeasures({ returnFocus: true });
+  else openMeasures({ focus: true });
 }
 
 // T-44 Package 2: the agenda panel. The horizon badge is the colour the brief names, and a completed card
@@ -8108,6 +8587,14 @@ document.addEventListener('keydown', (event) => {
       return;
     }
     dismissCommandDispatch();
+    // T-46 STEP 1: Escape closes the measures popover and puts focus back on the button that opened
+    // it. It closes BEFORE the boot sequence, because the popover is the smaller surface and Escape
+    // has to unwind the most recent thing first.
+    if (measuresOpen()) {
+      event.preventDefault();
+      closeMeasures({ returnFocus: true });
+      return;
+    }
     // T-36 Step 2: Escape also dismisses the boot sequence. The overlay never traps the owner.
     if (state.bootSequence.active) dismissBootSequence();
     return;
@@ -8445,6 +8932,19 @@ function dismissBootSequence() {
   applyCoreProjection('The boot sequence finished; the state below is the authoritative one.');
 }
 
+if (els.measuresTrigger) {
+  els.measuresTrigger.addEventListener('click', () => { toggleMeasures(); });
+}
+// A click anywhere outside the popover and its trigger closes it. It does not prevent the click's own
+// effect: the owner clicked something else because that is what they wanted next.
+document.addEventListener('click', (event) => {
+  if (!measuresOpen()) return;
+  const target = event.target;
+  if (!target) return;
+  if (els.measuresPanel && els.measuresPanel.contains(target)) return;
+  if (els.measuresTrigger && els.measuresTrigger === target) return;
+  closeMeasures();
+});
 if (els.bootSequenceDismiss) {
   els.bootSequenceDismiss.addEventListener('click', () => { dismissBootSequence(); });
 }
@@ -8993,6 +9493,15 @@ try {
 }
 applyHudPosture(storedPosture, { announce: false });
 
+// T-46 STEP 1: the layout is decided before the first paint of the deck, so the mobile rules and the
+// Core's fit are in place before anything is measured - including by the walk that measures them.
+applyLayout();
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('resize', () => { applyLayout(); }, { passive: true });
+}
+// T-46 STEP 2 groundwork: prefers-reduced-motion is read once into state.reducedMotion by the motion
+// setup; nothing here overrides it.
+syncHeaderStrip();
 setView('deck');
 connectEvents();
 refresh();

@@ -1,0 +1,271 @@
+// T-46 STEP 1 (2026-11-19): the layout the review asked for, pinned where a regression is cheap.
+//
+// The real measurement is `tests/e2e/t46-experience.spec.mjs`, which runs in a Chromium build and
+// reports the header's height, the Core's offset from the viewport centre and the document's scroll
+// height as numbers. This file is the browser-free half: it pins the structures those numbers depend
+// on, so a change that would move the header or unhook the strip fails in a second rather than in the
+// hosted run.
+//
+// What is pinned here:
+//   * the document is one viewport tall and does not scroll; the shell is the scroll region;
+//   * the header is a declared 64px band, and the only things in it are the readings the brief names;
+//   * every badge and control that left the header still exists, with its id, in the header's panel;
+//   * the strip reads from the same state the panels write, and never fetches;
+//   * the popover is a panel, not a modal: Escape closes it, focus returns, nothing is trapped;
+//   * the phone layout is declared by the client and has rules of its own;
+//   * the command bar is inside the shell and ordered after the deck, which is what docks it.
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { UI_CLIENT, UI_CSS, UI_PAGE } from '../src/ui/assets.js';
+import { createFakeBrowser, flushMicrotasks } from './helpers/fake-browser.js';
+
+const HEADER = UI_PAGE.slice(UI_PAGE.indexOf('<header class="topbar">'), UI_PAGE.indexOf('</header>'));
+const PANEL_START = UI_PAGE.indexOf('id="measures-panel"');
+// The panel runs from its opening tag to the end of its own block. It is the longest stretch between
+// #measures-panel and the first marker that belongs to the next section (#tactical-overlay-strip),
+// so the slice is bounded by a marker rather than by a byte count.
+const PANEL_END = UI_PAGE.indexOf('id="tactical-overlay-strip"');
+const PANEL = UI_PAGE.slice(UI_PAGE.lastIndexOf('<div', PANEL_START), PANEL_END);
+
+function client({ routes = new Map(), search = '' } = {}) {
+  const browser = createFakeBrowser({ routes });
+  browser.window.location.search = search;
+  const context = vm.createContext(browser.sandbox, { name: 'apex-ui-client-t46' });
+  vm.runInContext(UI_CLIENT, context, { filename: 'ui-client.js', displayErrors: true });
+  return browser;
+}
+
+// The text of a function from its `function` keyword to its matching closing brace. Used instead of a
+// regex so a nested block cannot end the slice early.
+function functionBody(source, start) {
+  const open = source.indexOf('{', start);
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    else if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  return source.slice(start);
+}
+
+const EMPTY = { available: true, items: [], entries: [], counts: {}, facts: [], sections: [], checks: [], devices: [], observations: [] };
+function baseRoutes() {
+  const map = new Map();
+  map.set('/api/state', {
+    session: { id: 'session-t46-0001', status: 'ok' }, turns: [], tasks: [], plans: [], goals: [],
+    autonomy: { configured: {} }, runtime: { status: 'stopped' },
+    resources: { cpu: {}, memory: {}, storage: [] },
+    system: { bootstrap: { bootstrapped: true } },
+  });
+  map.set('/api/health', { overall: 'healthy', areas: [], unhealthyAreaCount: 0, attentionCount: 0, errorCount: 0, coreAttentionCounts: { approval: 0, uncertain: 0, other: 0 } });
+  map.set('/api/killswitch', { active: false, policyUnavailable: false, persistence: 'durable' });
+  for (const path of ['/api/mission-control', '/api/approvals', '/api/timeline', '/api/situation', '/api/briefing',
+    '/api/runtime', '/api/sources', '/api/documents', '/api/reasoning', '/api/council', '/api/workshop',
+    '/api/resources', '/api/cognition/runs', '/api/presence', '/api/autonomy/matrix', '/api/world/epistemic',
+    '/api/evolution', '/api/step-up', '/api/perception', '/api/taskgraph', '/api/memory/associations']) {
+    if (!map.has(path)) map.set(path, EMPTY);
+  }
+  return map;
+}
+
+describe('T-46 STEP 1: the shell', () => {
+  test('the document is one viewport tall and the shell is the only scroll region', () => {
+    assert.match(UI_CSS, /html, body \{ height: 100%; overflow: hidden; \}/,
+      'the document is not a scroll container');
+    assert.match(UI_CSS, /\.shell, \.workspace \{[^}]*overflow-y: auto/,
+      'the shell carries the scroll instead');
+    // The one legitimate overflow:hidden on the body is safe only because the shell scrolls: this
+    // asserts BOTH halves, so a later change cannot keep the first and drop the second.
+    const shellRule = UI_CSS.slice(UI_CSS.indexOf('.shell, .workspace {'));
+    assert.ok(shellRule.indexOf('overflow-y: auto') > -1, 'the scroll region exists');
+  });
+
+  test('the header is one 64px band and everything in it is a reading', () => {
+    assert.match(UI_CSS, /\.topbar \{[^}]*height: 64px/);
+    assert.match(UI_CSS, /\.topbar \{[^}]*max-height: 64px/);
+    assert.match(UI_CSS, /\.topbar-meta, \.topbar-actions \{ flex-wrap: nowrap/,
+      'the header does not wrap');
+    // The five readings the brief names are on the band.
+    for (const id of ['clock', 'mode', 'connectivity', 'core-state-compact', 'latch-compact',
+      'approvals-compact', 'watchpoints-compact']) {
+      assert.ok(HEADER.includes(`id="${id}"`), `#${id} is on the band`);
+    }
+    // The controls that are configuration are not.
+    for (const id of ['motion-toggle', 'contrast-toggle', 'stepdown-select', 'new-session', 'quick-boot', 'boot-sequence-run']) {
+      assert.equal(HEADER.includes(`id="${id}"`), false, `#${id} is not on the band`);
+      assert.ok(PANEL.includes(`id="${id}"`), `#${id} is in the measures panel`);
+    }
+  });
+
+  test('the badges that left the header kept their ids, and their readers still find them', () => {
+    for (const id of ['gauge-cpu', 'gauge-mem', 'gauge-storage', 'sensor-privacy-indicator', 'session', 'autonomy']) {
+      assert.ok(UI_PAGE.includes(`id="${id}"`), `#${id} still exists`);
+      assert.equal((UI_PAGE.match(new RegExp(`id="${id}"`, 'g')) ?? []).length, 1, `#${id} exists exactly once`);
+    }
+    // The T-35 declaration survives: the indicator still states capture is disabled.
+    assert.match(UI_PAGE, /id="sensor-privacy-indicator"[^>]*data-audio="disabled"[^>]*data-camera="disabled"/);
+  });
+
+  test('the command bar is the last child of the shell, after the deck', () => {
+    const shell = UI_PAGE.indexOf('<div class="shell">');
+    const deck = UI_PAGE.indexOf('<main id="main-content"');
+    const bar = UI_PAGE.indexOf('class="command-bar"');
+    const shellClose = UI_PAGE.indexOf('</div>\n<section class="workspace"');
+    assert.ok(shell > -1 && deck > -1 && bar > -1 && shellClose > -1, 'all four markers exist');
+    assert.ok(bar > deck && bar < shellClose, 'the bar follows the deck inside the shell');
+    assert.match(UI_CSS, /\.command-bar \{[^}]*order: 3/, 'the bar is ordered after the band');
+    assert.match(UI_CSS, /\.command-bar \{[^}]*border-top: 1px solid var\(--line\)/,
+      'the docked bar draws its own top edge');
+  });
+});
+
+describe('T-46 STEP 1: the phone layout', () => {
+  test('the client declares the layout, and the stylesheet has rules keyed to it', () => {
+    assert.match(UI_CLIENT, /function applyLayout\(\)/);
+    assert.match(UI_CLIENT, /document\.body\.dataset\.layout = mobile \? 'mobile' : 'desktop'/);
+    assert.match(UI_CLIENT, /applyLayout\(\);/, 'it is called at start');
+    assert.match(UI_CLIENT, /window\.addEventListener\('resize'/, 'and on resize');
+    assert.ok((UI_CSS.match(/body\[data-layout="mobile"\]/g) ?? []).length >= 15,
+      'the phone has rules of its own rather than one override');
+    // The three things the brief names, each a rule rather than an intention.
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.core \{ width: min\(62vw, 15rem\); \}/);
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.rail \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] nav\.nav \{[^}]*order: 5/);
+  });
+
+  test('the layout flag matches the stylesheet breakpoint', () => {
+    // The client asks matchMedia the same question the stylesheet asks, so the two cannot disagree
+    // about which side of 720px a window is on.
+    assert.match(UI_CLIENT, /window\.matchMedia\('\(max-width: 720px\)'\)/);
+    assert.match(UI_CSS, /@media \(max-width: 720px\)/);
+  });
+
+  test('a browser without matchMedia keeps the desktop layout instead of throwing', () => {
+    const browser = client({ routes: baseRoutes() });
+    assert.equal(browser.document.body.dataset.layout, 'desktop',
+      'the stand-in reports no matchMedia result, so the deck stays a desktop deck');
+  });
+});
+
+describe('T-46 STEP 1: the header strip', () => {
+  test('the strip never fetches: it only reads state the panels already wrote', () => {
+    const body = UI_CLIENT.slice(UI_CLIENT.indexOf('function syncHeaderStrip()'));
+    const fn = body.slice(0, body.indexOf('\n}\n') + 3);
+    assert.equal(/fetch\(|await |api\(/.test(fn), false, 'syncHeaderStrip does no I/O');
+    assert.equal(/\.innerHTML/.test(fn), false, 'and builds no markup');
+  });
+
+  test('the Core projection fills the strip in the same pass', () => {
+    // The function's own body, found by counting braces rather than by searching for the first
+    // closing brace: applyCoreProjection has a nested block, and the first version of this test
+    // stopped inside it and reported a false failure.
+    const start = UI_CLIENT.indexOf('function applyCoreProjection(');
+    assert.ok(start > -1, 'the projection exists');
+    const body = functionBody(UI_CLIENT, start);
+    // The projection calls the guarded wrapper, not syncHeaderStrip directly: the wrapper is what keeps
+    // a strip failure from leaving the boot overlay up over an awake Core. So both halves are pinned -
+    // the call in the projection, and the wrapper being the only thing it calls.
+    assert.ok(body.includes('syncHeaderStripSafely()'), 'the strip is written where the Core is written');
+    assert.equal(body.includes('syncHeaderStrip()'), false, 'the projection does not call the writer unguarded');
+    // And the dormant branch carries it too, so a waking machine's strip says Dormant.
+    const dormant = body.slice(body.indexOf("state.core = 'dormant'"), body.indexOf("return 'dormant'"));
+    assert.ok(dormant.includes('syncHeaderStripSafely()'), 'the dormant branch writes the strip as well');
+  });
+
+  test('the approval total is the one the Approval Centre read, and a dash when that read failed', async () => {
+    const browser = client({ routes: baseRoutes() });
+    await flushMicrotasks();
+    const approvalRoute = browser.__routes?.get?.('/api/approvals');
+    // The seeded read answers with an empty list: zero pending is a real zero, not a dash.
+    assert.equal(browser.getElement('approvals-compact').textContent, '0');
+    // And an unreadable store is a dash. This is the same rule the tactical strip has carried since
+    // T-45: a strip that showed 0 while the read was failing would be a false all-clear.
+    assert.equal(typeof approvalRoute, 'undefined', 'the stand-in does not expose its route table');
+    assert.match(UI_CLIENT, /pending === null \|\| pending === undefined \? '—' : String\(pending\)/);
+  });
+
+  test('every strip cell carries the data attribute its styling and its gate read', async () => {
+    const browser = client({ routes: baseRoutes() });
+    await flushMicrotasks();
+    for (const [id, attribute] of [
+      ['core-state-compact', 'core'], ['latch-compact', 'latch'],
+      ['approvals-compact', 'count'], ['watchpoints-compact', 'count'],
+    ]) {
+      const node = browser.getElement(id);
+      assert.equal(typeof node.dataset[attribute], 'string', `#${id} carries data-${attribute}`);
+      assert.notEqual(node.textContent, '', `#${id} was written`);
+    }
+  });
+});
+
+describe('T-46 STEP 1: the measures popover', () => {
+  test('it is a panel, not a modal, and Escape closes it and returns focus', async () => {
+    const browser = client({ routes: baseRoutes() });
+    await flushMicrotasks();
+    assert.match(UI_PAGE, /id="measures-panel"[^>]*role="group"/);
+    assert.equal(/id="measures-panel"[^>]*aria-modal/.test(UI_PAGE), false, 'no modal role');
+    assert.equal(/id="measures-panel"[^>]*autofocus/.test(UI_PAGE), false, 'it never takes focus by itself');
+
+    const trigger = browser.getElement('measures-trigger');
+    const panel = browser.getElement('measures-panel');
+    // The stand-in has no getAttribute, and it creates every element with hidden:false whether or not
+    // the markup says hidden - so the panel's own property is read only AFTER the client has moved it.
+    // The initial closed state is pinned by the markup assertion below and by the hosted walk, which
+    // reads it from a live DOM.
+    assert.match(UI_PAGE, /id="measures-panel"[^>]*hidden>/, 'the panel ships closed');
+    for (const handler of trigger.__listeners.click ?? []) handler({ target: trigger, preventDefault() {} });
+    assert.equal(panel.hidden, false, 'the panel opened');
+    assert.equal(trigger.getAttribute?.('aria-expanded'), 'true', 'and the trigger says so');
+
+    const keydown = browser.document.__listeners?.keydown ?? [];
+    for (const handler of keydown) handler({ key: 'Escape', target: browser.document.body, preventDefault() {}, defaultPrevented: false });
+    assert.equal(panel.hidden, true, 'Escape closed it');
+    // And Escape did not spend its dismissal on the popover when the popover was not open: the
+    // boot-sequence path behind it still runs (pinned in t36-boot-sequence.test.js).
+    assert.match(UI_PAGE, /id="measures-trigger"[^>]*aria-expanded="false"/,
+      'the trigger ships with aria-expanded false, which is what the client flips');
+  });
+
+  test('opening the popover authorizes nothing: it issues no request and changes no policy', async () => {
+    const browser = client({ routes: baseRoutes() });
+    await flushMicrotasks();
+    const before = browser.events.fetches.length;
+    const trigger = browser.getElement('measures-trigger');
+    for (const handler of trigger.__listeners.click ?? []) handler({ target: trigger, preventDefault() {} });
+    await flushMicrotasks();
+    assert.equal(browser.events.fetches.length, before, 'opening the popover fetched nothing');
+    assert.equal(browser.getElement('mode-select').disabled, false, 'and disabled nothing');
+  });
+
+  test('a click outside closes it, and a click inside does not', async () => {
+    const browser = client({ routes: baseRoutes() });
+    await flushMicrotasks();
+    const trigger = browser.getElement('measures-trigger');
+    for (const handler of trigger.__listeners.click ?? []) handler({ target: trigger, preventDefault() {} });
+    assert.equal(browser.getElement('measures-panel').hidden, false);
+
+    const outside = browser.document.createElement('div');
+    for (const handler of browser.document.__listeners.click ?? []) handler({ target: outside });
+    assert.equal(browser.getElement('measures-panel').hidden, true, 'a click elsewhere closed it');
+  });
+});
+
+describe('T-46 STEP 1: the Core leads', () => {
+  test('the Core is sized from the space it has, not from a constant', () => {
+    assert.match(UI_CSS, /\.core \{[^}]*width: min\(30rem, 100%, calc\(var\(--core-fit, 24rem\) \* 1px\)\)/,
+      'the Core takes the smaller of its column and its measured fit');
+    assert.match(UI_CLIENT, /function measureCoreFit\(\)/);
+    assert.match(UI_CLIENT, /setProperty\('--core-fit'/);
+  });
+
+  test('the stage gives the Core the spare height and the panels their own scroll', () => {
+    assert.match(UI_CSS, /\.stage \{[^}]*grid-template-rows: minmax\(0, 1fr\) auto auto/);
+    assert.match(UI_CSS, /\.rail \.panel \{ overflow-y: auto; min-height: 0; \}/,
+      'a panel scrolls inside itself rather than growing the band');
+    assert.equal(/\.deck \.panel \{[^}]*overflow: hidden/.test(UI_CSS), false,
+      'no panel clips its content');
+  });
+});

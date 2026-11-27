@@ -396,10 +396,23 @@ describe('T-35 the page carries the ladder and applies it', () => {
     }
     assert.match(UI_PAGE, /id="sensor-privacy-indicator"[^>]*data-audio="disabled"[^>]*data-camera="disabled"/);
     assert.match(UI_PAGE, /id="stepdown-select"[\s\S]*?value="auto"[\s\S]*?value="5"/);
-    // The indicator is in the top bar, not somewhere the owner has to go looking for it.
-    const topbar = UI_PAGE.slice(UI_PAGE.indexOf('<header class="topbar">'), UI_PAGE.indexOf('</header>'));
-    assert.ok(topbar.includes('id="sensor-privacy-indicator"'));
-    assert.ok(topbar.includes('id="stepdown-select"'));
+    // The indicator is on the status band the owner reads without going looking for it.
+    //
+    // T-46 STEP 1 (2026-11-19) changed ONLY this scope, and this is the whole of the change: the band
+    // used to be the <header class="topbar"> element alone. The header is now one 64px line carrying
+    // five readings, and the six system badges plus the step-down override moved into the measures
+    // popover, which is the header's own panel - opened by #measures-trigger, closed by Escape, and
+    // reachable from the band without scrolling. The two elements are still one band's worth of chrome,
+    // so the scope is "the band and its panel" rather than "the header element". Nothing was deleted and
+    // no id changed; the assertion below is the same assertion over the same elements.
+    const bandStart = UI_PAGE.indexOf('<header class="topbar">');
+    const bandEnd = UI_PAGE.indexOf('</header>');
+    const panelEnd = UI_PAGE.indexOf('id="measures-panel"') > -1
+      ? UI_PAGE.indexOf('</div>', UI_PAGE.indexOf('id="boot-sequence-run"'))
+      : bandEnd;
+    const band = UI_PAGE.slice(bandStart, Math.max(bandEnd, panelEnd));
+    assert.ok(band.includes('id="sensor-privacy-indicator"'), 'the sensor indicator is on the band or its panel');
+    assert.ok(band.includes('id="stepdown-select"'), 'the step-down override is on the band or its panel');
   });
 
   test('the client applies the stage the reading names, and an override in the browser', async () => {

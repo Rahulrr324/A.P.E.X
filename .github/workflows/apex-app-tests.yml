@@ -829,6 +829,75 @@ jobs:
               sys.exit(1)
           PY
 
+      # T-46 STEP 0 (2026-11-19): the experience walk publishes its own annotation. It is the only
+      # suite whose subject is the layout, so the annotation carries the numbers a review can disagree
+      # with: the header's height and row count, the Core's offset from the viewport centre, the
+      # document's scroll height against the viewport's, and whether the command bar was on screen
+      # without scrolling - at each of the three viewports. A red run names the gate that failed and the
+      # measurement that failed it, because "Expected: true Received: false" does not tell an owner
+      # which pixel moved.
+      - name: Publish the T-46 experience result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't46-experience.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t46-experience-pass::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          gates = run.get('gates') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"platform {run.get('platform')}",
+              f"headerMax {gates.get('headerMaxHeightPx')}px coreTolerance {int((gates.get('coreCentreToleranceRatio') or 0) * 100)}%",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          for row in (run.get('baseline') or []):
+              parts.append(
+                  f"{row.get('viewport')} {row.get('width')}x{row.get('height')}"
+                  f" header {row.get('headerHeight')}px/{row.get('headerRows')}row"
+                  f" coreX {((row.get('coreCentre') or {}).get('x'))} delta {round((row.get('coreDeltaRatio') or 0) * 100, 1)}%"
+                  f" coreWidest {row.get('coreIsWidest')}"
+                  f" scroll {row.get('scrollHeight')}/{row.get('innerHeight')}"
+                  f" scrolls {row.get('documentScrolls')}"
+                  f" deck {row.get('deckHeight')}px"
+                  f" barOnScreen {row.get('commandBarOnScreen')} ({row.get('commandBarPosition')})"
+              )
+          contrast = run.get('contrast') or {}
+          if contrast.get('minimum') is not None:
+              parts.append(f"contrast worst={round(contrast['minimum'], 2)}:1 over {contrast.get('samples')} samples")
+          behaviour = run.get('behaviour') or {}
+          if behaviour:
+              hb = behaviour.get('heartbeat') or {}
+              parts.append(
+                  f"heartbeat beats={hb.get('beats')} firstMs={hb.get('firstBeatMs')}"
+                  f" degradedMs={behaviour.get('degradedAfterMs')}"
+                  f" recovered={behaviour.get('recoveredConnectivity')}"
+              )
+          parts.append(f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {run.get('abortedStreams')}")
+          parts.append(f"lastPhase {run.get('lastPhase')}")
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              # Room rather than 200 characters: an assertion's whole message can be the phrase
+              # "Expected: true Received: false", and truncating it names the phase while hiding the cause.
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:1200] for failure in failures[:6]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t46-experience-pass::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
       # T-42 Step 4: the publisher above is not allowed to be the only witness. If it throws before
       # printing (as it did on run 45099159487, where a missing binding raised NameError and the
       # annotation that would have named the failing assertion was never written), this step still
@@ -895,6 +964,8 @@ jobs:
             apex_app/reports/t44-standing-orders-agenda.json
             apex_app/reports/screenshots/t45
             apex_app/reports/t45-playbooks-watchpoints-overlay.json
+            apex_app/reports/t46-experience.json
+            apex_app/artifacts/t46
           if-no-files-found: warn
           retention-days: 14
 
