@@ -144,8 +144,13 @@ describe('T-46 STEP 1: the phone layout', () => {
     // The stage is ONE column on a phone. Without this the Core shared its grid row with the two
     // side panels, started 267px right of the left edge, and the "Core is first" gate failed with the
     // rails beginning above the Core's bottom.
-    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
-    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage > \* \{ grid-column: 1 \/ -1; \}/);
+    // The deck and the stage are flex COLUMNS on a phone. A one-column grid put the stage's three
+    // children in one row anyway (auto-placement puts each in a column of its own when no columns are
+    // declared), and the hosted walk measured the Core starting 267px right of the left edge with the
+    // rails above its bottom. A flex column has one axis and no placement to disagree with.
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.deck \{[^}]*display: flex;[^}]*flex-direction: column/);
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage \{[^}]*display: flex;[^}]*flex-direction: column/);
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage > \* \{ flex: 0 0 auto; width: 100%; \}/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.rail \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] nav\.nav \{[^}]*order: 5/);
   });
@@ -287,6 +292,9 @@ describe('T-46 STEP 1: the Core leads', () => {
     // measure is both the layout fix and the better line length.
     assert.match(UI_CSS, /#exec-comms-panel, #exec-comms-panel p, #exec-comms-panel \.exec-comms-line \{ max-width: 46ch; \}/);
     assert.match(UI_CSS, /#conversation-panel \{ max-width: 66ch; \}/);
+    // And the caption is bounded by the Core it captions: at a flat 34rem it was 526px of paragraph
+    // under a 425px reticle on a laptop, so the widest thing in the deck was the sentence about the Core.
+    assert.match(UI_CSS, /\.core-caption \{ max-width: min\(32rem, calc\(var\(--core-fit, 24rem\) \* 1px\)\)/);
   });
 
   test('the stage gives the Core the spare height and the panels their own scroll', () => {

@@ -1369,24 +1369,28 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   body[data-layout="mobile"] .topbar-actions .quiet.small { display: none; }
   body[data-layout="mobile"] .shell, body[data-layout="mobile"] .workspace { flex-direction: column; }
   body[data-layout="mobile"] .deck {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: none;
+    /* A flex column, not a one-column grid: with a grid the three children are placed by
+       order-modified document order into rows, and the hosted walk measured the rails beginning above
+       the Core's bottom twice. A flex column has one axis and no placement to disagree with. */
+    display: flex;
+    flex-direction: column;
     gap: .5rem;
     padding: .5rem .55rem .6rem;
     overflow-y: auto;
   }
   body[data-layout="mobile"] .stage {
     order: -2;
-    /* T-46 STEP 1: one column. The stage's three children (the Core, the exec-comms panel and the
-       conversation panel) were flowing into a single row, so the Core shared its row with two panels
-       and started 267px right of the left edge - the rails then began above the Core's bottom and the
-       "Core first" gate failed with [280, 483]. One column, and the Core is the first row. */
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: none;
+    /* T-46 STEP 1: the stage is a flex column too, so the Core, the exec-comms panel and the
+       conversation panel are one below another rather than three columns of one grid row. The first
+       version shared a row, so the Core started 267px right of the left edge and the rails began above
+       its bottom. */
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
     overflow: visible;
     padding: .4rem;
   }
-  body[data-layout="mobile"] .stage > * { grid-column: 1 / -1; }
+  body[data-layout="mobile"] .stage > * { flex: 0 0 auto; width: 100%; }
   body[data-layout="mobile"] .core { width: min(62vw, 15rem); }
   body[data-layout="mobile"] .core-wrap { order: -2; }
   body[data-layout="mobile"] .rail {
@@ -1573,7 +1577,10 @@ body { display: flex; flex-direction: column; min-height: 0; }
   filter: drop-shadow(0 0 18px rgba(0, 229, 255, 0.25));
 }
 .core-state { font-size: 1.15rem; }
-.core-caption { max-width: 34rem; text-align: center; margin: 0; }
+/* T-46 STEP 1: the caption sits UNDER the Core and is bounded by it. At 34rem it was 526px of
+   paragraph on a laptop whose reticle is 425px - so the widest thing in the deck was the sentence
+   describing the Core, not the Core. Bounding it to the fit is also the better typography. */
+.core-caption { max-width: min(32rem, calc(var(--core-fit, 24rem) * 1px)); text-align: center; margin: 0; }
 .stage > #exec-comms-panel, .stage > #conversation-panel { overflow-y: auto; max-height: 22vh; }
 /* T-46 STEP 1: a line of prose is not a competitor for width. The exec-comms headline and its body run
    at a readable measure instead of the stage's full width - 713px of single-line sentence was, by
