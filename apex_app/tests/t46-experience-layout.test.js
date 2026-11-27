@@ -17,6 +17,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import fs from 'node:fs';
 import { UI_CLIENT, UI_CSS, UI_PAGE } from '../src/ui/assets.js';
 import { createFakeBrowser, flushMicrotasks } from './helpers/fake-browser.js';
 
@@ -317,5 +318,69 @@ describe('T-46 STEP 1: the Core leads', () => {
       'a panel scrolls inside itself rather than growing the band');
     assert.equal(/\.deck \.panel \{[^}]*overflow: hidden/.test(UI_CSS), false,
       'no panel clips its content');
+  });
+});
+
+describe('T-46: the measuring instrument is checked as code, not only as a run', () => {
+  // The spec's page-side code runs in the BROWSER, where a mistake is a page error and not a lint
+  // warning - and the first version of the phone gate called core.closest() on a DOMRect, which threw
+  // on the laptop viewport and cost a 15-minute hosted run to find. These two tests catch that class of
+  // mistake locally, in a second.
+  const specPath = new URL('./e2e/t46-experience.spec.mjs', import.meta.url);
+  const spec = fs.readFileSync(specPath, 'utf8');
+  const code = spec.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  test('no DOM method is called on a value that only ever held a DOMRect', () => {
+    const sources = new Map();
+    for (const match of code.matchAll(/const\s+(\w+)\s*=\s*([^;\n]+)/g)) {
+      const [, name, rhs] = match;
+      if (!sources.has(name)) sources.set(name, new Set());
+      sources.get(name).add(/getBoundingClientRect/.test(rhs) ? 'rect' : 'other');
+    }
+    const rects = [...sources.entries()].filter(([, set]) => set.size === 1 && set.has('rect')).map(([name]) => name);
+    const misuse = [];
+    for (const name of rects) {
+      for (const match of code.matchAll(new RegExp(`\\b${name}\\.(closest|querySelector|querySelectorAll|getAttribute|setAttribute|children)\\b`, 'g'))) {
+        misuse.push(`${name}.${match[1]}`);
+      }
+    }
+    assert.deepEqual(misuse, [], `a DOMRect has no DOM methods: ${misuse.join(', ')}`);
+  });
+
+  test('every page-side measure function is syntactically a function', async () => {
+    // The blocks are handed to page.evaluate as source. A syntax error there is a page error on the
+    // host, never a local one, so each one is parsed here.
+    for (const name of ['measureHeader', 'measureCore', 'measureDocument', 'measureCommandBar',
+      'measurePanelInteriors', 'measureMobile', 'measureContrast']) {
+      assert.ok(spec.includes(`async function ${name}(`), `#${name} exists`);
+    }
+    // Every page.evaluate(() => { ... }) body is handed to the BROWSER as source: it is the only code in
+    // this file that a local syntax check cannot see. Each one is parsed here, as a function body. The
+    // bodies are delimited by brace matching, not by a regex, because a regex stops at the first inner
+    // closing brace and then reports a real block as truncated.
+    const bodies = [];
+    let at = 0;
+    while ((at = spec.indexOf('page.evaluate(', at)) !== -1) {
+      const open = spec.indexOf('{', spec.indexOf('=>', at));
+      if (open === -1) { at += 14; continue; }
+      let depth = 0;
+      let end = -1;
+      for (let k = open; k < spec.length; k += 1) {
+        if (spec[k] === '{') depth += 1;
+        else if (spec[k] === '}') { depth -= 1; if (depth === 0) { end = k; break; } }
+      }
+      if (end === -1) { at += 14; continue; }
+      // An async arrow's body may use await, and only an async function may. The head between the
+      // opening parenthesis of evaluate and the arrow is what says which.
+      const head = spec.slice(at, open);
+      bodies.push({ body: spec.slice(open + 1, end), isAsync: /\basync\b/.test(head) });
+      at = end;
+    }
+    assert.ok(bodies.length >= 6, `found the page-side bodies (${bodies.length})`);
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+    for (const { body, isAsync } of bodies) {
+      assert.doesNotThrow(() => new (isAsync ? AsyncFunction : Function)(body),
+        'a page-side body parses as JavaScript');
+    }
   });
 });

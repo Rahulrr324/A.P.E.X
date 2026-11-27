@@ -491,8 +491,12 @@ async function measureMobile(page) {
       // with it. The first version of this check required the Core to be above the stage that CONTAINS
       // it, which is not a property any layout can have; the hosted run reported the correct layout
       // (stage 64..983, rails at 991 and 1,424, Core at 71) and a failing gate for four rounds.
+      // `core` here is a DOMRect and has no closest(); the wrapper is looked up by selector. (The first
+      // version wrote core.closest('.core-wrap') and the whole measuring pass threw on the laptop
+      // viewport - a reminder that this code runs in the page, where a mistake is a page error and not
+      // a lint warning.)
       coreFirst: core ? [...document.querySelectorAll('.deck > .rail, .deck .stage > *')]
-        .filter((node) => node !== core.closest('.core-wrap'))
+        .filter((node) => node !== document.querySelector('.core-wrap'))
         .every((node) => Math.round(core.top) <= node.getBoundingClientRect().top + 4) : false,
       nav: navBox ? {
         top: Math.round(navBox.top),
