@@ -150,6 +150,11 @@ describe('T-46 STEP 1: the phone layout', () => {
     // rails above its bottom. A flex column has one axis and no placement to disagree with.
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.deck \{[^}]*display: flex;[^}]*flex-direction: column/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage \{[^}]*display: flex;[^}]*flex-direction: column/);
+    // flex: 0 0 auto is not decoration. As a flex item of the deck the stage's basis was 0 and it never
+    // grew: it measured 250px while its own content measured 1,336px, painted the Core 106px past its
+    // bottom edge, and the rails - placed below its BOX - landed on top of the Core.
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage \{[^}]*flex: 0 0 auto/);
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.rail \{[^}]*flex: 0 0 auto/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage > \* \{ flex: 0 0 auto; width: 100%; \}/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.rail \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
     // 6, not 5: the deck is 1 and the bar 4, and equal orders fall back to document order - the bar is

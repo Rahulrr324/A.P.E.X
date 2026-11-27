@@ -1385,11 +1385,15 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   body[data-layout="mobile"] .stage {
     order: -2;
     /* T-46 STEP 1: the stage is a flex column too, so the Core, the exec-comms panel and the
-       conversation panel are one below another rather than three columns of one grid row. The first
-       version shared a row, so the Core started 267px right of the left edge and the rails began above
-       its bottom. */
+       conversation panel are one below another rather than three columns of one grid row.
+       flex: 0 0 auto is the whole of the fix that took four hosted runs to find: as a flex item of the
+       deck, the stage's default basis was 0 and it did not grow, so it measured 250px while its own
+       content measured 1,336px. overflow:visible then painted the Core 106px past the stage's bottom
+       edge and the rails - positioned below the stage's BOX - landed on top of it. A box that is the
+       full size of what it contains cannot paint over its neighbour. */
     display: flex;
     flex-direction: column;
+    flex: 0 0 auto;
     gap: .5rem;
     overflow: visible;
     padding: .4rem;
@@ -1399,6 +1403,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   body[data-layout="mobile"] .core-wrap { order: -2; }
   body[data-layout="mobile"] .rail {
     order: 1;
+    flex: 0 0 auto;
     grid-auto-rows: auto;
     grid-template-columns: minmax(0, 1fr);
     width: 100%;
