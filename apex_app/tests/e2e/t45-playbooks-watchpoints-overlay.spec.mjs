@@ -550,7 +550,12 @@ test('T-45: three routines run through the ECP, watchpoints judge live readings,
     // popover - a status band carrying eleven controls was the finding this milestone answers - and the
     // panel ships closed, so the toggle is opened through the product's own button first. The assertions
     // below are untouched: the button's text, its pressed state and the strip are all still the same.
-    await page.locator('#measures-trigger').click();
+    // Open-if-closed: this block runs twice (overlay on, then off), and a plain click on an open
+    // popover CLOSES it - so the second run's toggle would be hidden and never actionable.
+    // aria-expanded is the product's own state, so this reads what an owner sees.
+    if ((await page.locator('#measures-trigger').getAttribute('aria-expanded')) !== 'true') {
+      await page.locator('#measures-trigger').click();
+    }
     await page.locator('#btn-hud-overlay-toggle').click();
     await expect(page.locator('body')).toHaveAttribute('data-hud-posture', 'overlay', { timeout: 10_000 });
     const on = await posture(page);
@@ -582,7 +587,12 @@ test('T-45: three routines run through the ECP, watchpoints judge live readings,
 
     // Back off, and the button says OFF again.
     // T-46 STEP 1: same reason as above - the toggle lives in the measures popover, which an owner opens.
-    await page.locator('#measures-trigger').click();
+    // Open-if-closed: this block runs twice (overlay on, then off), and a plain click on an open
+    // popover CLOSES it - so the second run's toggle would be hidden and never actionable.
+    // aria-expanded is the product's own state, so this reads what an owner sees.
+    if ((await page.locator('#measures-trigger').getAttribute('aria-expanded')) !== 'true') {
+      await page.locator('#measures-trigger').click();
+    }
     await page.locator('#btn-hud-overlay-toggle').click();
     await expect(page.locator('body')).toHaveAttribute('data-hud-posture', 'full', { timeout: 10_000 });
     const off = await posture(page);

@@ -81,7 +81,8 @@ has a gate above that fails until it is fixed.
 
 The additive rule says an old test may only change where it pinned the old layout, and that every such
 change is listed with its reason. This is that list. **Five assertions in three spec files, one scope in
-one unit test.** No test was deleted, no assertion was dropped, and no element lost its id.
+one unit test** — and, after the first hosted run, four of those five sites became open-if-closed rather
+than a bare click, because a popover's trigger toggles. No test was deleted, no assertion was dropped, and no element lost its id.
 
 ### `apex_app/tests/t35-stepdown.test.js` — 1 change
 
@@ -101,12 +102,23 @@ does; every assertion after it is untouched.
 
 ### `apex_app/tests/e2e/t35-stepdown-handoff-doctor.spec.mjs` — 2 changes
 
-Same cause for `#stepdown-select`. **Changed:** the same one-line `#measures-trigger` click at the two
-places the walk selects a stage (the ladder walk, and the return to `auto`). **Reason:** identical.
+Same cause for `#stepdown-select`. **Changed:** a `#measures-trigger` click at the two places the walk
+selects a stage (the ladder walk, and the return to `auto`). **Reason:** identical.
+
+Both sites then needed a second, smaller change, and the hosted run is why. The ladder walk calls
+`setStage` once per rung — six times — and a click on an **open** popover closes it. Rungs 0 and 1 passed;
+rung 2 closed the panel and the `selectOption` after it waited on a hidden select until Playwright tore
+the browser down (`stages walked 0`, `Target page, context or browser has been closed`). **Changed:** the
+bare click became open-if-closed — click only when `aria-expanded` is not `true`, which is the product's
+own state — plus a `toBeVisible` on the select so a future regression fails where it happens, not 90
+seconds later in the teardown. The assertions that follow are untouched.
 
 ### `apex_app/tests/e2e/t45-playbooks-watchpoints-overlay.spec.mjs` — 3 changes
 
-Same cause for `#btn-hud-overlay-toggle`, which moved into the popover's Posture group. **Changed:** (a)
+Same cause for `#btn-hud-overlay-toggle`, which moved into the popover's Posture group. The two blocks
+run back to back (overlay on, then off), so a bare click is a toggle here too and the second block's
+toggle was hidden — the same defect as t35's ladder walk, found by reading rather than by waiting for a
+run. **Changed:** (a)
 a `#measures-trigger` click before the toggle that turns the overlay on; (b) the same before the toggle
 that turns it off; (c) the toggle's selector removed from one contrast sample list, because a control
 inside a panel that ships closed has no rendered colour to measure — the popover's own controls are
