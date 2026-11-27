@@ -486,9 +486,14 @@ async function measureMobile(page) {
       stacked: belowCore && fullWidth,
       belowCore,
       fullWidth,
-      // The Core must be the first thing in the deck's flow on a phone, above the rails and the stage.
-      coreFirst: core ? [...document.querySelectorAll('.deck .rail, .deck .stage')]
-        .every((node) => node.getBoundingClientRect().top >= Math.round(core.top) - 4) : false,
+      // "The Core at the top" is the brief's phrase, and this is what it means in geometry: the Core
+      // starts ABOVE every other element in the deck - the rails, and the panels that share the stage
+      // with it. The first version of this check required the Core to be above the stage that CONTAINS
+      // it, which is not a property any layout can have; the hosted run reported the correct layout
+      // (stage 64..983, rails at 991 and 1,424, Core at 71) and a failing gate for four rounds.
+      coreFirst: core ? [...document.querySelectorAll('.deck > .rail, .deck .stage > *')]
+        .filter((node) => node !== core.closest('.core-wrap'))
+        .every((node) => Math.round(core.top) <= node.getBoundingClientRect().top + 4) : false,
       nav: navBox ? {
         top: Math.round(navBox.top),
         bottom: Math.round(navBox.bottom),
@@ -709,9 +714,11 @@ test('T-46: the deck fits one viewport, the Core leads it, and every gate is mea
       if (mobile) {
         gate(mobile.horizontalOverflow === false, 'no horizontal scroll on the phone',
           `${mobile.scrollWidth} > ${mobile.clientWidth}`);
-        gate(mobile.coreFirst === true, 'the Core is the first thing in the deck on the phone',
-          'rail tops ' + JSON.stringify(mobile.rails.map((rail) => rail.top))
-          + ', core ' + JSON.stringify(mobile.core) + ', diagnose ' + JSON.stringify(mobile.diagnose));
+        gate(mobile.coreFirst === true, 'the Core is at the top of the deck on the phone',
+          'core top ' + (mobile.core ? mobile.core.top : 'absent')
+          + ', rail tops ' + JSON.stringify(mobile.rails.map((rail) => rail.top))
+          + ', stage panel tops ' + JSON.stringify((mobile.diagnose.stageChildren ?? [])
+            .filter((child) => child.id).map((child) => [child.id, child.top])));
         gate(mobile.stacked === true, 'the cards are stacked full-width under the Core on the phone',
           `belowCore ${mobile.belowCore}, fullWidth ${mobile.fullWidth}`);
         gate(mobile.nav?.atBottom === true, 'the navigation is a bottom bar on the phone',
