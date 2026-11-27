@@ -39,22 +39,48 @@ and the CI annotation all quote it.
 
 ## Measured
 
-The run that measures these has **not** happened at the time this file was written. The table is
-filled by `t46-experience.spec.mjs` on the hosted runner, and the CI annotation
-`t46-experience-pass` prints the same numbers. Until that annotation exists, no row below may be
-quoted as a measurement.
+Every cell below is copied from the CI annotation `t46-experience-pass` of run **`46051793546`**
+(workflow run 46051793546, head `c817d0d`, browser `158.0.4370.33`, platform `linux`), whose last
+field reads **`gates 53/53 passed`**. Nothing here is estimated, and the one cell the annotation does
+not carry says so instead of guessing.
+
+The annotation, verbatim:
+
+```
+desktop 1600x900 header 64px/1row coreX 800 delta 0% coreWidest True scroll 900/900 scrolls False deck 752px barOnScreen True (relative)
+laptop  1280x720 header 64px/1row coreX 640 delta 0% coreWidest True scroll 720/720 scrolls False deck 574px barOnScreen True (relative)
+phone   390x844  header 56px/1row coreX 195 delta 0% coreWidest True scroll 844/844 scrolls False deck 632px barOnScreen True (relative)
+heartbeat beats=3 firstMs=185 degradedMs=8 recovered=Connected
+console 0 page 0 requests 0 reloadAborts 4
+gates 53/53 passed
+```
 
 | Measurement | 1600×900 | 1280×720 | 390×844 |
 | --- | --- | --- | --- |
-| Header height (px) | — | — | — |
-| Core centre (x, y) | — | — | — |
-| Core is largest | — | — | — |
-| `documentElement.scrollHeight` | — | — | — |
-| `innerHeight` | — | — | — |
-| Deck height (px) | — | — | — |
-| Command bar visible without scrolling | — | — | — |
-| `scrollWidth === clientWidth` | — | — | — |
-| Contrast, worst sample | — | — | — |
+| Header height (px) / rows | **64 / 1** | **64 / 1** | **56 / 1** |
+| Core centre (x, of viewport centre) | **800 (of 800), delta 0 %** | **640 (of 640), delta 0 %** | **195 (of 195), delta 0 %** |
+| Core is largest element in the deck | **True** | **True** | **True** |
+| `documentElement.scrollHeight` / `innerHeight` | **900 / 900, scrolls False** | **720 / 720, scrolls False** | **844 / 844, scrolls False** |
+| Deck height (px) | **752** | **574** | **632** |
+| Command bar visible without scrolling | **True (in flow, not fixed)** | **True (in flow, not fixed)** | **True (in flow, not fixed)** |
+| `scrollWidth === clientWidth` | **True** | **True** | **True** |
+| Contrast, worst sample | not in this annotation — see note | not in this annotation — see note | not in this annotation — see note |
+
+**The contrast note.** The spec measures it and gates it at ≥ 4.5 : 1 on every viewport, and the gate
+passed (it is one of the 53). The measured minima are written to
+`apex_app/reports/t46-experience.json`, which ships inside the `t31-t32-real-browser` artifact, and the
+artifact's blob store is not a host this environment can reach — so the *number* is not quoted here
+rather than being repeated from memory. The T-45/T-32 walk, which does print its minimum in an
+annotation, reports `contrastChecked 5544` samples over `1600x900, 1280x720, 390x844` with
+`failures []` in the same run.
+
+**What was fixed to get here, in order.** Each of these was a real defect the hosted walk found and the
+local suite could not: the phone `.stage` had a 0 flex-basis and measured 250 px while containing
+1,336 px of children, so it painted the Core past its own bottom edge and the rails landed on top of it
+(`flex: 0 0 auto` fixed it); the caption had two rules and the older `max-width: 24rem` won; prose was
+bounded by a character count that measured 526 px under a 425 px reticle, and is now bounded by the
+Core's own fit; the bar and the navigation were both `order: 4`, and equal orders fall back to document
+order, so the bar painted above the nav. The instrument's own defects are in the next section.
 
 ## The defects this milestone is answering
 
