@@ -155,6 +155,9 @@ describe('T-46 STEP 1: the phone layout', () => {
     // bottom edge, and the rails - placed below its BOX - landed on top of the Core.
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage \{[^}]*flex: 0 0 auto/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.rail \{[^}]*flex: 0 0 auto/);
+    // The side panels are bounded on a phone: unbounded they measured 811px and 141px, so an owner
+    // scrolled past a paragraph to reach their alerts.
+    assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage > #exec-comms-panel,[\s\S]{0,120}max-height: 34vh; overflow-y: auto;/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.stage > \* \{ flex: 0 0 auto; width: 100%; \}/);
     assert.match(UI_CSS, /body\[data-layout="mobile"\] \.rail \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
     // 6, not 5: the deck is 1 and the bar 4, and equal orders fall back to document order - the bar is

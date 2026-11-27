@@ -1410,8 +1410,12 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
     overflow: visible;
   }
   body[data-layout="mobile"] .rail .panel { overflow: visible; }
+  /* T-46 STEP 1: on a phone the two side panels keep a bounded height and scroll inside themselves.
+     Unbounded they measured 811px and 141px, which put the Core's own captions between the Core and the
+     mission list - and an owner had to scroll past a paragraph to reach their alerts. The Core's state
+     and caption are NOT in these panels: they stay directly under the Core, which is the reading. */
   body[data-layout="mobile"] .stage > #exec-comms-panel,
-  body[data-layout="mobile"] .stage > #conversation-panel { max-height: none; }
+  body[data-layout="mobile"] .stage > #conversation-panel { max-height: 34vh; overflow-y: auto; }
   /* The command bar is the last thing in the shell and stays on the bottom edge. */
   body[data-layout="mobile"] .command-bar { order: 4; padding: .35rem .55rem; }
   body[data-layout="mobile"] .command-bar #chat-text { min-height: 1.9rem; }
