@@ -546,6 +546,11 @@ test('T-45: three routines run through the ECP, watchpoints judge live readings,
     expect(initial.button).toBe('OVERLAY: OFF');
     expect(initial.stripHidden).toBe(true);
 
+    // T-46 STEP 1 (2026-11-19) changed ONLY this line. The overlay toggle moved into the measures
+    // popover - a status band carrying eleven controls was the finding this milestone answers - and the
+    // panel ships closed, so the toggle is opened through the product's own button first. The assertions
+    // below are untouched: the button's text, its pressed state and the strip are all still the same.
+    await page.locator('#measures-trigger').click();
     await page.locator('#btn-hud-overlay-toggle').click();
     await expect(page.locator('body')).toHaveAttribute('data-hud-posture', 'overlay', { timeout: 10_000 });
     const on = await posture(page);
@@ -576,6 +581,8 @@ test('T-45: three routines run through the ECP, watchpoints judge live readings,
     expect(afterReload.stripHidden).toBe(false);
 
     // Back off, and the button says OFF again.
+    // T-46 STEP 1: same reason as above - the toggle lives in the measures popover, which an owner opens.
+    await page.locator('#measures-trigger').click();
     await page.locator('#btn-hud-overlay-toggle').click();
     await expect(page.locator('body')).toHaveAttribute('data-hud-posture', 'full', { timeout: 10_000 });
     const off = await posture(page);
@@ -677,7 +684,11 @@ test('T-45: three routines run through the ECP, watchpoints judge live readings,
           '#sentinel-watchpoints-list li button[data-action="toggle-watchpoint"]',
           '#btn-wp-create',
           '#btn-wp-evaluate',
-          '#btn-hud-overlay-toggle',
+          // T-46 STEP 1 removed '#btn-hud-overlay-toggle' from this list, and that is the whole of the
+          // change: the toggle lives in the measures popover now, and a control inside a panel that ships
+          // closed is display:none - it has no rendered colour, so asking for its contrast would be
+          // asking a question the page cannot answer. The popover's own controls are measured by the
+          // T-46 walk, which opens the panel and audits it while it is on screen.
         ]);
         // The overlay strip is only on screen in the compact posture, so it is measured only there.
         const stripMeasured = wanted === 'overlay'

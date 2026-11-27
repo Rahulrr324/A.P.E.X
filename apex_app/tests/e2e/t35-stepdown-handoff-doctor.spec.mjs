@@ -125,6 +125,10 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
       step('auto-stage', run.stages.auto);
 
       const setStage = async (stage) => {
+        // T-46 STEP 1 (2026-11-19) changed ONLY this line. The step-down override moved into the
+        // measures popover (the header's own panel, which ships closed). Opening it through the
+        // product's button is the same first click an owner makes; everything below is unchanged.
+        await page.locator('#measures-trigger').click();
         await page.locator('#stepdown-select').selectOption(String(stage));
         await expect(page.locator('body')).toHaveAttribute('data-stepdown-stage', String(stage));
         await expect(page.locator('#stepdown-state')).toHaveAttribute('data-stage', String(stage));
@@ -221,6 +225,7 @@ test.describe('T-35 step-down ladder, handoff envelopes and doctor, in a real br
       await shot('stage-5-flat');
 
       // Back to auto, so the rest of the walk runs on the machine's own reading.
+      await page.locator('#measures-trigger').click();
       await page.locator('#stepdown-select').selectOption('auto');
       await expect(page.locator('body')).toHaveAttribute('data-stepdown-source', 'auto');
 

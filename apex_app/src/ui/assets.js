@@ -1396,9 +1396,15 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   /* The command bar is the last thing in the shell and stays on the bottom edge. */
   body[data-layout="mobile"] .command-bar { order: 4; padding: .35rem .55rem; }
   body[data-layout="mobile"] .command-bar #chat-text { min-height: 1.9rem; }
-  /* The navigation is a bottom bar: one row, its own scroll for the fifteen workspaces. */
-  body[data-layout="mobile"] .deck { order: 1; }
+  /* The navigation is a bottom bar: one row, its own scroll for the fifteen workspaces. The deck is
+     ordered FIRST and its stage above the rails, so the Core is the first thing in the deck - the
+     order:-2 on .stage and .core-wrap above is what does that; this only keeps the deck before the
+     bar and the navigation. */
+  body[data-layout="mobile"] .shell > .deck { order: 1; }
   body[data-layout="mobile"] nav.nav { order: 5; }
+  /* The rails stack in one column: two of them side by side at 390px would be 180px each, and their
+     headings would wrap to three lines. */
+  body[data-layout="mobile"] .rail { grid-template-columns: minmax(0, 1fr); }
   /* The measures popover is a bottom sheet on a phone, because a 34rem panel at the top right of a
      390px screen is a panel with its content off the edge. */
   body[data-layout="mobile"] .measures-panel {
@@ -1574,7 +1580,11 @@ body { display: flex; flex-direction: column; min-height: 0; }
   min-width: 0;
   padding: 0;
   align-content: stretch;
-  overflow: hidden;
+  /* T-46 STEP 1: the RAIL scrolls. A column of two panels - two active missions and a task graph - is
+     720px of content in a 720px column, and overflow:hidden here clipped 24 elements the owner could
+     not reach. The rail is the scroll container and each panel keeps its own; both are measured. */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .rail .panel { overflow-y: auto; min-height: 0; }
 .deck .panel { padding: .6rem .7rem; }
@@ -8046,17 +8056,37 @@ function applyLayout() {
 // caption and the state line need. This runs on load and on resize, and it only ever writes a CSS
 // custom property, so no layout is forced by reading the wrong box.
 function measureCoreFit() {
-  if (els.coreWrap == null && !document.querySelector('.core-wrap')) return;
   const wrap = document.querySelector('.core-wrap');
   if (!wrap) return;
-  const box = wrap.getBoundingClientRect();
+  // T-46 STEP 1: the measurement is the STAGE's first track, not the wrap's own box. The wrap is a
+  // grid item that fills its track, so once the Core is inside it the wrap reports whatever the last
+  // fit produced - measuring it fed the previous answer back in, which is why the hosted run saw the
+  // reticle at 357px on one pass and 187px on the next. The track is the space the Core is allowed.
+  const stage = wrap.closest('.stage');
+  const probe = stage ?? wrap.parentElement ?? wrap;
+  const box = probe.getBoundingClientRect();
   if (box.width === 0 || box.height === 0) return;
   // The state line and the caption are measured rather than assumed, because both wrap differently at
   // different widths.
   const reserved = (document.getElementById('core-state')?.getBoundingClientRect().height ?? 0)
     + (document.getElementById('core-caption')?.getBoundingClientRect().height ?? 0)
     + 18;
-  const fit = Math.max(96, Math.min(box.width, Math.max(96, box.height - reserved)));
+  // The stage's padding is part of the box and not part of the room: subtract it before fitting.
+  let horizontalPadding = 0;
+  let verticalPadding = 0;
+  if (stage && typeof window.getComputedStyle === 'function') {
+    try {
+      const style = window.getComputedStyle(stage);
+      horizontalPadding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+      verticalPadding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    } catch {
+      horizontalPadding = 0;
+      verticalPadding = 0;
+    }
+  }
+  const width = Math.max(96, box.width - horizontalPadding);
+  const room = Math.max(96, box.height - verticalPadding - reserved);
+  const fit = Math.max(96, Math.min(width, room));
   document.body.style.setProperty('--core-fit', String(Math.round(fit)));
 }
 

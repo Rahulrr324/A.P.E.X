@@ -648,6 +648,11 @@ test.describe('T-32 HUD experience', () => {
       const full = await read();
       expect(full.motion).toBe('full');
       expect(full.azimuthAnimation).toBe('spin');
+      // T-46 STEP 1 (2026-11-19) changed ONLY this line. The motion toggle moved into the measures
+      // popover, which is the header's own panel and ships closed; a closed panel is display:none, so
+      // the toggle is not clickable until the owner opens it. This opens it through the product's own
+      // button - the same two clicks an owner makes - and evaluates the toggle exactly as before.
+      await page.locator('#measures-trigger').click();
       await page.locator('#motion-toggle').click();
       await expect(page.locator('body')).toHaveAttribute('data-motion', 'reduced');
       const reduced = await read();

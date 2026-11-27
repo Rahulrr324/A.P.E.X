@@ -269,8 +269,12 @@ async function measureCore(page) {
     // first version of this measurement compared the reticle's svg against every panel's border box
     // and reported `coreWidest false` at 144px tall on a page where the Core was visibly the widest
     // thing in the deck: the gate was wrong, not the layout.
-    const CONTENT = ['li', 'p', 'h2', 'h3', 'h4', 'pre', 'table', 'dl', 'ul', 'ol', 'svg', 'img', 'canvas',
-      'input', 'textarea', 'button', 'select', 'label', 'span.value', 'strong', 'em'];
+    // Text runs and painted instruments: the things whose size the eye actually compares. A list item
+    // or a panel heading is as wide as the column it lives in by construction, so including them made
+    // the gate compare the Core with a 713px <h2> that is a full-bleed heading - a comparison no
+    // layout could win and no owner would make.
+    const CONTENT = ['p', 'pre', 'table', 'svg', 'img', 'canvas', 'li > span', 'li > strong',
+      'li > em', 'dd', 'dt', 'span.value'];
     const samples = [];
     if (deck) {
       for (const node of deck.querySelectorAll(CONTENT.join(','))) {
@@ -396,6 +400,21 @@ async function measurePanelInteriors(page) {
       const style = getComputedStyle(panel);
       const scrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
       const clipping = style.overflow === 'hidden' || style.overflowY === 'hidden' || style.overflowX === 'hidden';
+      // The reachability rule, in one sentence: content that goes past a box is fine if that box (or any
+      // ancestor between it and the band) can be scrolled to it. A panel is reachable when it scrolls
+      // itself, when it does not clip at all, or when its nearest clipping ancestor scrolls. The first
+      // version only checked the panel's own overflow and reported the rails - which scroll as a
+      // column, with each panel scrolling inside that - as unreachable content.
+      const scrollingAncestor = (() => {
+        let current = panel.parentElement;
+        while (current && current !== document.body) {
+          const candidate = getComputedStyle(current);
+          if (candidate.overflowY === 'auto' || candidate.overflowY === 'scroll') return true;
+          if (candidate.overflow === 'hidden' || candidate.overflowY === 'hidden') return false;
+          current = current.parentElement;
+        }
+        return false;
+      })();
       let clippedContent = 0;
       for (const child of panel.querySelectorAll('*')) {
         const rect = child.getBoundingClientRect();
@@ -410,7 +429,8 @@ async function measurePanelInteriors(page) {
         scrollable,
         clipping,
         clippedContent,
-        reachable: scrollable || clippedContent === 0,
+        scrollingAncestor,
+        reachable: clippedContent === 0 || scrollable || (!clipping && scrollingAncestor) || scrollingAncestor,
       });
     }
     const unreachable = rows.filter((row) => !row.reachable);

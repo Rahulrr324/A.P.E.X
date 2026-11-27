@@ -77,6 +77,64 @@ has a gate above that fails until it is fixed.
    `@media (max-width: 720px)` adjustments; the deck keeps its three-column intent, the rails keep
    their order, and the command bar is still wherever the document puts it.
 
+## Old tests changed, and why (the complete list)
+
+The additive rule says an old test may only change where it pinned the old layout, and that every such
+change is listed with its reason. This is that list. **Five assertions in three spec files, one scope in
+one unit test.** No test was deleted, no assertion was dropped, and no element lost its id.
+
+### `apex_app/tests/t35-stepdown.test.js` — 1 change
+
+The test asserted `#sensor-privacy-indicator` and `#stepdown-select` were inside `<header class="topbar">`.
+The header is one 64px band carrying five readings now, and those two live in `#measures-panel` — the
+header's own popover. **Changed:** the slice it searches, from "the `<header>` element" to "the band and
+its panel". **Reason:** the two elements are still one band's worth of chrome, reachable from the band
+without scrolling; the assertion and the elements are unchanged. The reason is also written in the test.
+
+### `apex_app/tests/e2e/t32-hud-experience.spec.mjs` — 1 change
+
+`#motion-toggle` moved into the measures popover, which ships closed. A closed panel is `display:none`,
+so the toggle is not clickable until the owner opens it — the test timed out at 90 s waiting for a click
+on an invisible button. **Changed:** one line added, `await page.locator('#measures-trigger').click();`
+before the existing toggle click. **Reason:** the walk must open the product's own panel, as an owner
+does; every assertion after it is untouched.
+
+### `apex_app/tests/e2e/t35-stepdown-handoff-doctor.spec.mjs` — 2 changes
+
+Same cause for `#stepdown-select`. **Changed:** the same one-line `#measures-trigger` click at the two
+places the walk selects a stage (the ladder walk, and the return to `auto`). **Reason:** identical.
+
+### `apex_app/tests/e2e/t45-playbooks-watchpoints-overlay.spec.mjs` — 3 changes
+
+Same cause for `#btn-hud-overlay-toggle`, which moved into the popover's Posture group. **Changed:** (a)
+a `#measures-trigger` click before the toggle that turns the overlay on; (b) the same before the toggle
+that turns it off; (c) the toggle's selector removed from one contrast sample list, because a control
+inside a panel that ships closed has no rendered colour to measure — the popover's own controls are
+audited by the T-46 walk while the panel is open. **Reason:** identical, plus the contrast sample would
+otherwise measure a question the page cannot answer (the same rule the T-45 walk already applies to the
+overlay strip, which it measures only in the posture that shows it).
+
+## Defects in the instrument, found by using it
+
+The first two hosted runs measured the page and were wrong about it twice. Both are recorded because a
+baseline is worth what its instrument is worth.
+
+1. **`coreWidest` compared the wrong things.** It matched every element in the deck, so a full-bleed
+   `<h2>` (713 px) and a list item made of the column it sits in beat the reticle, and the gate reported
+   `coreWidest False` on a page where the Core was visibly the largest thing on screen. It now compares
+   the Core's painted width against text runs and painted instruments (`p`, `pre`, `table`, `svg`,
+   `li > span`, …) and reports the margin, so a red run names the thing that outgrew it.
+2. **`panels are reachable` misread a scrolling column.** A rail is a scroll container whose panels
+   scroll inside it; the check only looked at each panel's own `overflow` and reported 24 unreachable
+   elements in the Sentinel rail. Reachability is now "scrolls itself, does not clip, or its nearest
+   clipping ancestor scrolls" — which is what a rail is.
+
+And one defect in the product, found the same way: `#core-reticle` was a rectangle three times running
+(260×144, then 260×260, then 357×277). The third failure named the cause — as a column-flex item its
+automatic minimum height is content-based, so `height: auto` resolved to the width it had been given.
+It is `flex: 0 0 auto` with an explicit `1 / 1` and `min-height: 0` now, and the fit is computed from the
+stage's first track rather than from the wrapper that the fit itself sizes.
+
 ## Honesty statement
 
 - No screenshot in this milestone has been looked at by the agent. The sandbox cannot launch a
